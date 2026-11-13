@@ -44,7 +44,7 @@ fn tool_script(definition: &ToolDefinition) -> Vec<GatedStep> {
         id: ToolCallId::new("pure-read-call"),
         tool_id: definition.id.clone(),
         name: definition.name.clone(),
-        arguments: serde_json::json!({}),
+        arguments: serde_json::json!({"arguments":{}}),
     };
     vec![
         GatedStep::Emit(ModelEvent::Started),
@@ -59,7 +59,7 @@ fn tool_script(definition: &ToolDefinition) -> Vec<GatedStep> {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(0),
             call_id: call.id.clone(),
-            arguments_delta: "{}".into(),
+            arguments_delta: "{\"arguments\":{}}".into(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(0),

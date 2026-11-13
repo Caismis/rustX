@@ -168,9 +168,11 @@ fn context_with_environment(
         plane.dir.path().join("workspace"),
         CapabilityRevision::new(1),
         Arc::new(ToolRegistry::new()), // deliberately inactive in the parent's model surface
-        Arc::new(crate::capabilities::AvailableToolCatalog::new(vec![
-            registration,
-        ])),
+        Arc::new(crate::capabilities::AvailableToolCatalog::new(
+            ToolRegistry::from_registrations([registration])
+                .unwrap()
+                .validated_registrations(),
+        )),
         Arc::new(SkillSnapshot::new(Vec::new())),
         None,
         None,
@@ -204,6 +206,7 @@ fn context_with_environment(
         ApprovalMode::Plan,
     );
     context.native = Some(Arc::new(NativeInvocationServices {
+        task: None,
         lifecycle,
         runtime: crate::tools::runtime::ConversationToolRuntime::new(
             plane.conversation_id.clone(),

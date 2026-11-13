@@ -1,3 +1,4 @@
+import { parseModelToolCall } from '../../../protocol/app-server/model-tool-call';
 import type { RuntimeClientAgent, SubagentState, ForegroundToolExecution } from '../../../protocol/app-server/v78';
 import type { TranslationKey } from '../locale/translation';
 
@@ -28,8 +29,7 @@ const states: Record<string, Pick<AgentToolItem, 'status' | 'tone'>> = {
 /** Adapt recorded native ToolResult JSON, never text diagnostics or live Agent state.
  * A successful RPC is a receipt; it does not establish that the child succeeded. */
 export function subagentToolDetails(tool: ForegroundToolExecution): AgentToolDetails {
-  let input: Record<string, unknown> | undefined;
-  try { input = object(JSON.parse(tool.state.arguments)); } catch { /* Partial streaming arguments. */ }
+  const input = parseModelToolCall(tool.state.arguments)?.arguments;
   const task = string(input?.task) ?? string(input?.message);
   const target = string(input?.agent_id);
   const details: AgentToolDetails = { target, task, items: [] };

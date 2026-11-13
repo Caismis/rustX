@@ -811,7 +811,7 @@ fn durable_history_fixture() -> DurableHistoryFixture {
         id: ToolCallId::new("child-call-1"),
         tool_id: ToolId::new("tool-read"),
         name: "read".to_owned(),
-        arguments: serde_json::json!({"path": "README.md"}),
+        arguments: serde_json::json!({"arguments":{"path": "README.md"}}),
     };
     let assistant = MessageBlock::Assistant(AssistantMessageBlock {
         id: MessageId::new("child-assistant"),
@@ -2476,12 +2476,12 @@ async fn incremental_projection_independent_snapshot_capture() {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(3),
             call_id: call_id.clone(),
-            arguments_delta: "{".into(),
+            arguments_delta: "{\"arguments\":".into(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(3),
             call_id: call_id.clone(),
-            arguments_delta: "}".into(),
+            arguments_delta: "{}}".into(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(3),
@@ -2489,7 +2489,7 @@ async fn incremental_projection_independent_snapshot_capture() {
                 id: call_id,
                 tool_id: definition.id,
                 name: definition.name,
-                arguments: serde_json::json!({}),
+                arguments: serde_json::json!({"arguments": {}}),
             },
         }),
         GatedStep::Emit(ModelEvent::Completed {
@@ -3840,7 +3840,7 @@ async fn canonical_history_has_one_owner_at_a_time() {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(0),
             call_id: call_id.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: "{\"arguments\":{}}".to_owned(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(0),
@@ -3848,7 +3848,7 @@ async fn canonical_history_has_one_owner_at_a_time() {
                 id: call_id,
                 tool_id: definition.id.clone(),
                 name: definition.name.clone(),
-                arguments: serde_json::json!({}),
+                arguments: serde_json::json!({"arguments": {}}),
             },
         }),
         GatedStep::Emit(ModelEvent::Completed {
@@ -6619,7 +6619,7 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(0),
             call_id: call_a.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: "{\"arguments\":{}}".to_owned(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(0),
@@ -6627,7 +6627,7 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
                 id: call_a.clone(),
                 tool_id: definition_a.id.clone(),
                 name: definition_a.name.clone(),
-                arguments: serde_json::json!({}),
+                arguments: serde_json::json!({"arguments": {}}),
             },
         }),
         GatedStep::Emit(ModelEvent::ToolCallStarted {
@@ -6641,7 +6641,7 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(1),
             call_id: call_b.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: "{\"arguments\":{}}".to_owned(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(1),
@@ -6649,7 +6649,7 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
                 id: call_b.clone(),
                 tool_id: definition_b.id.clone(),
                 name: definition_b.name.clone(),
-                arguments: serde_json::json!({}),
+                arguments: serde_json::json!({"arguments": {}}),
             },
         }),
         GatedStep::Emit(ModelEvent::Completed {

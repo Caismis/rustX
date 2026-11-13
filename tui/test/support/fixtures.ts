@@ -499,7 +499,7 @@ export function toolCallBlock(
     id: callId,
     tool_id: toolId,
     name,
-    arguments: args,
+    arguments: { arguments: args },
   };
 }
 

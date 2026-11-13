@@ -124,6 +124,7 @@ fn execution_policy(
         subagent_context: None,
         workflow_output: None,
         last_permission_reminder_mode: None,
+        permission_task_message: None,
         approval_mode: rustx::runtime::ApprovalMode::FullAccess,
     }
 }

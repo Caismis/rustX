@@ -231,6 +231,7 @@ impl WorkflowRuntime {
                 services.lifecycle.approval_mode(),
             );
         let view = crate::agent::PreToolView {
+            task: services.task.as_deref(),
             conversation_id: &run.run_id.conversation_id,
             execution: services.execution.clone(),
             invocation_id: &id,

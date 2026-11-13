@@ -148,7 +148,7 @@ mod tests {
             id: crate::runtime::identity::ToolCallId::new("declaration"),
             tool_id: definition().id,
             name: "present".into(),
-            arguments,
+            arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
         };
         let crate::tools::executor::PreflightOutcome::Ready(prepared) =
             fixture.registry.preflight(&call).unwrap()
@@ -246,7 +246,7 @@ mod tests {
                 id: crate::runtime::identity::ToolCallId::new("bad"),
                 tool_id: definition().id,
                 name: "present".into(),
-                arguments,
+                arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
             };
             assert!(matches!(
                 fixture.registry.preflight(&call),
@@ -267,7 +267,9 @@ mod tests {
             id: crate::runtime::identity::ToolCallId::new("gated-present"),
             tool_id: definition().id,
             name: "present".into(),
-            arguments: serde_json::json!({"files":[{"path":"ok.txt"}]}),
+            arguments: crate::scripted_suites::common::tool_call_envelope(
+                serde_json::json!({"files":[{"path":"ok.txt"}]}),
+            ),
         };
         let crate::tools::executor::PreflightOutcome::Ready(prepared) =
             fixture.registry.preflight(&call).unwrap()

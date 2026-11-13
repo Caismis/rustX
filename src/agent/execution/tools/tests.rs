@@ -228,7 +228,7 @@ async fn live_tool_progress_reaches_the_observer_before_settlement() {
         id: ToolCallId::new("call-1"),
         tool_id: ToolId::new("tool-progress"),
         name: "progress".to_owned(),
-        arguments: serde_json::json!({}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({})),
     };
     let adapter = Arc::new(ScriptedAdapter::new(vec![
         tool_call_script(&call),
@@ -380,10 +380,10 @@ async fn plan_write_refuses_when_authorized_plan_target_is_replaced_before_execu
         id: ToolCallId::new("call-plan"),
         tool_id: ToolId::new("tool-write"),
         name: "write".to_owned(),
-        arguments: serde_json::json!({
+        arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({
             "path": "PLAN.md",
             "content": "authorized plan body\n"
-        }),
+        })),
     };
     let adapter = Arc::new(ScriptedAdapter::new(vec![
         tool_call_script(&call),

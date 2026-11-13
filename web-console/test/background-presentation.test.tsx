@@ -15,7 +15,7 @@ afterEach(() => { cleanup(); vi.useRealTimers(); });
 const receipt = { job_id: 'job-one', state: 'starting', tool: 'bash', output_path: '/workspace/output.txt', note: 'Native execution continuation instructions' };
 function tool(value: unknown = receipt, name = 'bash', id = 'tool-bash'): ForegroundToolExecution {
   return { committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'assistant' }, block_index: 0 }, assembly_complete: true, message_id: 'assistant', block_index: 0, call_id: 'call-one', name, tool_id: id,
-    state: { type: 'settled', arguments: '{"command":"sleep 5","execution_mode":"background"}', result: { status: { type: 'success' }, duration_ms: '0', content: [{ type: 'json', value: value as never }] } } };
+    state: { type: 'settled', arguments: '{"arguments":{"command":"sleep 5"},"execution_mode":"background"}', result: { status: { type: 'success' }, duration_ms: '0', content: [{ type: 'json', value: value as never }] } } };
 }
 
 it('renders a successful background launch as a static command receipt, without process-exit facts', () => {

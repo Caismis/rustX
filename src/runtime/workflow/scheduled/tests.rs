@@ -222,13 +222,14 @@ chat_reasoning_replay = "omit"
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
-    let registration = ToolRegistration::plain(definition.clone(), executor);
+    let registry =
+        ToolRegistry::from_registrations([ToolRegistration::plain(definition.clone(), executor)])
+            .unwrap();
     let available = if input.metadata {
         AvailableToolCatalog::metadata([definition])
     } else {
-        AvailableToolCatalog::new(vec![registration.clone()])
+        AvailableToolCatalog::new(registry.validated_registrations())
     };
-    let registry = ToolRegistry::from_registrations([registration]).unwrap();
     let skills = SkillSnapshot::new(Vec::new());
     let availability = CapabilityAvailability::default();
     let mut catalog = WorkflowCatalog::new([program(input)]).unwrap();

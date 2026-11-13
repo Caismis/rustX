@@ -198,7 +198,9 @@ mod tests {
             id: crate::runtime::identity::ToolCallId::new("image"),
             tool_id: definition().id,
             name: "read_image".into(),
-            arguments: serde_json::json!({"path":path}),
+            arguments: crate::scripted_suites::common::tool_call_envelope(
+                serde_json::json!({"path":path}),
+            ),
         };
         let PreflightOutcome::Ready(prepared) = fixture.registry.preflight(&call).unwrap() else {
             panic!("foreground")

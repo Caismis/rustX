@@ -55,7 +55,7 @@ it('confirms a deferred model body after attachment before sending with the sele
  expect(server.requests.filter(row => row.request.method === 'inbound/queue')).toHaveLength(1);
 });
 
-it('opts into carrying removed auxiliary references only for picker selections', async () => {
+it('ordinary queued and attached selections preserve explicit auxiliary intent without recovery authorization', async () => {
   const attach = server.client.attach('A');
   const opening = await server.waitFor('thread/resume', 1);
   const config = { model: 'replacement', auxiliary: { mode: 'explicit' as const, model: 'old-summary' } };
@@ -63,7 +63,8 @@ it('opts into carrying removed auxiliary references only for picker selections',
   server.reply(opening);
   await attach;
   const picker = await server.waitFor('session/setModel', 1);
-  expect(picker.params).toMatchObject({ config, recover_unavailable_auxiliary: true });
+  expect(picker.params).toMatchObject({ config });
+  expect(picker.params).not.toHaveProperty('recover_unavailable_auxiliary');
   await chosen;
 
   await server.client.setAgentModel('A', config);

@@ -10,8 +10,8 @@ export function chatFlowFixture(server: Server, current: RuntimeClientSnapshot) 
     started_at: '2026-11-03T01:00:00Z', ended_at: null };
   const user: MessageBlock = { role: 'user', source: 'human', id: 'flow-user', content: [{ type: 'text', text: '梳理对话流的布局，让思考、工具调用和最终回复更容易阅读。' }] };
   const calls = [
-    { id: 'flow-read', tool_id: 'tool-read', name: 'read', arguments: { path: 'src/components/conversation/a-long-file-name-for-the-message-stream.tsx' } },
-    { id: 'flow-bash', tool_id: 'tool-bash', name: 'bash', arguments: { command: 'pnpm test -- conversation' } },
+    { id: 'flow-read', tool_id: 'tool-read', name: 'read', arguments: { arguments: { path: 'src/components/conversation/a-long-file-name-for-the-message-stream.tsx' } } },
+    { id: 'flow-bash', tool_id: 'tool-bash', name: 'bash', arguments: { arguments: { command: 'pnpm test -- conversation' } } },
   ];
   const answer: Extract<MessageBlock, { role: 'assistant' }> = { role: 'assistant', id: 'flow-work', content: [
     { type: 'reasoning', text: '**先核对布局与交互**\n\n保持消息顺序，分别检查工具行、回复间距，以及触屏上的展开反馈。' },

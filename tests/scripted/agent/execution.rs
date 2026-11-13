@@ -1638,7 +1638,7 @@ async fn opaque_continuation_is_never_inspected() {
                     "summary": [],
                     "encrypted_content": "opaque-bytes"
                 }),
-                serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
+                serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{\"arguments\":{}}"}),
             ],
         },
     );

@@ -4328,6 +4328,7 @@ impl WorkflowRuntime {
             admission::agent_entry_authorize_arguments(&agent.profile, &spec.admission.task);
         let workspace_root = services.runtime.workspace().root();
         let view = crate::agent::PreToolView {
+            task: services.task.as_deref(),
             conversation_id: &run.run_id.conversation_id,
             execution: services.execution.clone(),
             invocation_id: &invocation_id,
@@ -5219,6 +5220,7 @@ chat_reasoning_replay = "omit"
         let attempt_id = context.attempt_id().expect("workflow test attempt").clone();
         context.native = Some(std::sync::Arc::new(
             crate::tools::invocation::NativeInvocationServices {
+                task: None,
                 lifecycle: crate::agent::AttemptLifecycle::default()
                     .with_approval_mode(approval_mode),
                 runtime: crate::tools::runtime::ConversationToolRuntime::new(

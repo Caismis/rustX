@@ -1,3 +1,4 @@
+import { parseModelToolCall } from '../../../../protocol/app-server/model-tool-call';
 import { ToolCard } from '../../presentation/agent/ToolCard';
 import { IconGoalOutline16 } from '../../presentation/primitives/icons';
 import { toolCard } from '../../bindings/tools';
@@ -13,8 +14,7 @@ export function goalActivityLabel(tx: Translate, tool: ForegroundToolExecution):
   const success = tool.state.type === 'settled' && tool.state.result.status.type === 'success';
   if (operation === 'start') return success ? tx('agent:copy.goal-started') : tx('agent:copy.starting-goal');
   if (operation === 'check') return success ? tx('agent:copy.goal-checked') : tx('agent:copy.checking-goal');
-  let action: unknown;
-  try { action = JSON.parse(tool.state.arguments)?.action; } catch { /* Arguments may still be assembling. */ }
+  const action = parseModelToolCall(tool.state.arguments)?.arguments.action;
   return success && action === 'complete' ? tx('agent:copy.goal-completed') : success && action === 'blocked' ? tx('agent:copy.goal-blocked') : tx('agent:copy.updating-goal');
 }
 

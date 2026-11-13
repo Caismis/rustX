@@ -759,7 +759,7 @@ impl CapabilityCoordinator {
             // executable authority; bootstrap never exposes the base catalog.
             Arc::new(ToolRegistry::new()),
             Arc::new(AvailableToolCatalog::new(
-                config.base_tool_registry.registrations(),
+                config.base_tool_registry.validated_registrations(),
             )),
             initial_skills,
             None,
@@ -1982,14 +1982,26 @@ impl CapabilityCoordinator {
         // Tools are composed alongside it from the extension set its invoking
         // generation froze into `ResolvedSubagentSpec` — never from its
         // ordinary selection, and never from a document it reads itself.
-        let available_tools = AvailableToolCatalog::new(registrations.clone())
-            .with_resource_sources(resource_bindings.keys().cloned().collect());
-        registrations.extend(crate::tools::mcp::resource_definitions(
-            resource_bindings.clone(),
-        ));
+        let available_registry = match ToolRegistry::from_registrations(registrations) {
+            Ok(registry) => registry,
+            Err(error) => {
+                retire_candidate_runtimes(mcp_runtimes).await;
+                return Err(CapabilityPreparationError::ToolActivation(
+                    error.to_string(),
+                ));
+            }
+        };
+        let available_tools =
+            AvailableToolCatalog::new(available_registry.validated_registrations())
+                .with_resource_sources(resource_bindings.keys().cloned().collect());
         let candidate_registry = match ToolRegistry::from_registrations(
-            registrations
-                .into_iter()
+            available_tools
+                .registrations()
+                .iter()
+                .cloned()
+                .chain(crate::tools::mcp::resource_definitions(
+                    resource_bindings.clone(),
+                ))
                 .chain(self.inner.extension_tools.registrations().iter().cloned()),
         ) {
             Ok(registry) => registry,
@@ -3616,10 +3628,11 @@ body
                         )
                     })
                     .collect::<Vec<_>>();
-                candidate.available_tools =
-                    Arc::new(AvailableToolCatalog::new(registrations.clone()));
-                candidate.candidate_registry =
-                    Arc::new(ToolRegistry::from_registrations(registrations).unwrap());
+                let registry = ToolRegistry::from_registrations(registrations).unwrap();
+                candidate.available_tools = Arc::new(AvailableToolCatalog::new(
+                    registry.validated_registrations(),
+                ));
+                candidate.candidate_registry = Arc::new(registry);
                 candidate
                     .availability
                     .insert(source.clone(), CapabilitySourceState::Ready);

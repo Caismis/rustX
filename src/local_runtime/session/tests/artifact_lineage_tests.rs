@@ -35,6 +35,7 @@ fn complete_turn(store: &SqliteConversationStore, conversation: &ConversationId,
         event: kind,
     };
     let mut snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt.clone(),
             turn: TurnId::new(format!("native-step-{index}")),

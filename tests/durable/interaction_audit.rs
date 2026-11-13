@@ -278,6 +278,7 @@ fn start_request(
 ) -> RequestId {
     let head = store.load_head().expect("head");
     let mut snapshot = RequestSnapshot::new(
+        rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt_id.clone(),
             turn: turn.clone(),

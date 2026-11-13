@@ -20,6 +20,7 @@ use crate::tools::types::{
 /// history mutation nor model-call authority on a fixed-program caller.
 #[derive(Clone)]
 pub(crate) struct NativeInvocationServices {
+    pub task: Option<std::sync::Arc<crate::runtime::permission::PermissionTaskEvidence>>,
     pub lifecycle: crate::agent::AttemptLifecycle,
     pub runtime: crate::tools::runtime::ConversationToolRuntime,
     pub clock: std::sync::Arc<dyn MonotonicClock>,

@@ -276,6 +276,8 @@ pub struct AgentExecutionResult {
     pub permission_reminder_emitted: Option<crate::runtime::types::ApprovalMode>,
     /// Reminder eligibility was still pending at settlement (never consumed).
     pub permission_reminder_unconsumed_pending: bool,
+    /// Latest native task identity handed back with the settled execution.
+    pub permission_task_message: Option<MessageId>,
 }
 
 impl AgentExecutionResult {
@@ -336,6 +338,8 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     pub(crate) approval_mode: crate::runtime::types::ApprovalMode,
     /// Mode last successfully injected on this conversation, when known.
     pub(crate) last_permission_reminder_mode: Option<crate::runtime::types::ApprovalMode>,
+    /// Canonical task identity retained by the conversation owner.
+    pub(crate) permission_task_message: Option<MessageId>,
 }
 
 /// One agent attempt execution.
@@ -472,6 +476,11 @@ pub struct AgentExecution<'a> {
     terminal_emitted: bool,
     /// Sparse permission-mode reminder eligibility for this attempt.
     pub(crate) permission_reminder: crate::runtime::permission::PermissionReminderState,
+    /// Canonical opening task, refreshed at each new Human safe boundary.
+    pub(crate) permission_task:
+        Option<std::sync::Arc<crate::runtime::permission::PermissionTaskEvidence>>,
+    /// One-shot task handoff, resolved after the native Attempt start commits.
+    pub(crate) inherited_permission_task_message: Option<MessageId>,
 }
 
 #[cfg(test)]

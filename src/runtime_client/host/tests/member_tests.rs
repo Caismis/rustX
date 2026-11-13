@@ -66,7 +66,7 @@ fn member_messages() -> [MessageBlock; 2] {
                 id: ToolCallId::new("host-member-call"),
                 tool_id: ToolId::new("host-member-tool"),
                 name: "native-proposal".into(),
-                arguments: serde_json::json!({"ordinal":u64::MAX,"text":"水"}),
+                arguments: serde_json::json!({"arguments":{"ordinal":u64::MAX,"text":"水"}}),
             })],
         }),
         MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {

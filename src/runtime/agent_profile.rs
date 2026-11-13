@@ -838,7 +838,9 @@ mod composition_tests {
                 id: crate::runtime::identity::ToolCallId::new("root-cannot-call-child-tool"),
                 tool_id: crate::runtime::identity::ToolId::new("tool-grep"),
                 name: "grep".into(),
-                arguments: serde_json::json!({"pattern": "review"}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({"pattern": "review"})
+                ),
             }),
             Err(crate::tools::executor::ToolPreflightError::UnknownTool { .. })
         ));

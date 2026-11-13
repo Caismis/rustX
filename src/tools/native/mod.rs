@@ -63,6 +63,7 @@ pub(crate) use goal::NAMES as GOAL_TOOL_NAMES;
 pub(crate) use goal::registrations as goal_tool_registrations;
 mod grep;
 mod input;
+mod mutation;
 mod present;
 mod read;
 mod read_image;

@@ -35,8 +35,10 @@ Effective `deny` cannot be overridden by elevation, review, or Full Access.
 
 ## Elevation
 
-`elevation_reason` is optional runtime metadata on every model-facing tool
-schema. A nonblank reason requests human escalation for the exact frozen
+Every model-facing tool call uses `{arguments: {...}, elevation_reason?: ...}`.
+Model-selectable tools also require an outer `execution_mode`. Business schemas
+remain independent of these outer runtime fields, including same-named business
+properties. A nonblank elevation reason requests human escalation for the exact frozen
 invocation. It never reaches business executors and never becomes a persistent
 grant.
 
@@ -59,10 +61,10 @@ read-only. Plan elevates unproven Bash; Automatic reviews it.
 Adopted rules: bounded AST walk over simple commands / pipelines / `&&` `||` `;`
 sequences; dynamic expansions (command/process/parameter/arithmetic/brace) and
 unsupported compounds fail closed; data-driven per-command `safeFlags` /
-allow-any / multiword / git-subcommand policies; known write options (`sed -i`,
-`find -delete/-exec`, `tree -o`, dangerous git globals); safe env-assignment and
+allow-any / multiword policies; known write options (`sed -i`,
+`find -delete/-exec`, `tree -o`); safe env-assignment and
 input-redirect allowlists; `command` / `builtin` / `noglob` wrapper stripping;
-`cd`+`git` combination rejected.
+conservative refusal for executable behavior that cannot be proven from argv.
 
 Intentional differences from ZCode:
 
@@ -71,8 +73,10 @@ Intentional differences from ZCode:
 - Path-qualified executables (`/usr/bin/sed …`) are unproven.
 - brush `[[ … ]]` ExtendedTest / brace-group / subshell / function / loop /
   conditional compounds are unsupported → unproven.
-- Optional ZCode git *runtime* FS probes (bare repo / redirected `.git`) are not
-  wired into `analyze_bash_readonly` yet; argv/flag policy still applies.
+- Git is always unproven: repository configuration can execute textconv, clean
+  filters, signature verifiers and other helpers even for nominal read commands.
+  Full Access retains normal Git behavior and real patch output; Plan requires
+  elevation and Automatic requires review.
 - Windows CMD dialect handling is omitted (rustX Bash is POSIX).
 - Bare `env` is command-only read-only; `env …` wrappers stay unproven.
 
@@ -86,6 +90,10 @@ P01–P22 mapping and remaining gaps: `docs/permission-modes-p01-p22.md`.
 Automatic-mode `Review` uses the shared #543 Auxiliary model selection (default
 lowest Profile). The reviewer returns a strict `{decision, explanation}` JSON
 object (`allow`|`deny`). Invalid, timed-out, or unavailable review fails closed.
+Native review facts include the canonical task's Human/Agent provenance or the
+admitted scheduled Claim, business arguments, mutation target, matrix decision
+and structured Bash analysis. Missing or oversized evidence fails closed;
+model-authored explanations never establish user authority.
 A nonblank `elevation_reason` may escalate a denial or reviewer failure to
 human Ask for the exact frozen invocation.
 
@@ -93,13 +101,14 @@ human Ask for the exact frozen invocation.
 
 A bounded permission-mode reminder is appended to native context only:
 
-1. before the first model request of a new admitted execution;
+1. before the first model request in a context with no consumed reminder;
 2. before the first request after a successfully committed compaction;
-3. when a changed mode becomes effective at the next independent admission
-   (covered by (1) for that new admission).
+3. when a different mode becomes effective at a model-request boundary.
 
 Eligibility is consumed only at successful model-request-start commit, so
 pre-start cancellation cannot lose it and retries do not duplicate it.
+Reconstruction uses the last committed primary request's mode and context
+activation. Unchanged context and mode remain quiet across ordinary resumes.
 
 ## Settlement
 

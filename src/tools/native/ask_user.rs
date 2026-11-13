@@ -466,7 +466,7 @@ mod tests {
                 id: crate::runtime::identity::ToolCallId::new("ask-user-test"),
                 tool_id: ToolId::new("tool-ask-user"),
                 name: ASK_USER_NAME.to_owned(),
-                arguments,
+                arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
             }),
             Ok(PreflightOutcome::Ready(_))
         )
@@ -566,30 +566,14 @@ mod tests {
             "../../../tests/fixtures/ask_user/schema-before.json"
         ))
         .unwrap();
-        let mut original_definition = definition();
-        original_definition.input_schema = before.clone();
-        let compiled_before = crate::tools::schema::compile_model_definition(&original_definition)
-            .expect("baseline definition compiles for model adapters");
-        // Issue #544: model-facing compilation adds elevation_reason; strip it
-        // so this delta contract stays about pattern/guidance-only changes.
-        let mut compiled_before_schema = compiled_before.input_schema;
-        compiled_before_schema
-            .pointer_mut("/properties")
-            .and_then(serde_json::Value::as_object_mut)
-            .expect("properties")
-            .remove("elevation_reason");
-        compiled_before_schema
-            .as_object_mut()
-            .unwrap()
-            .remove("$defs");
-        assert_eq!(compiled_before_schema, before);
-        let mut after = registry().model_definitions().remove(0).input_schema;
-        after
-            .pointer_mut("/properties")
-            .and_then(serde_json::Value::as_object_mut)
-            .expect("properties")
-            .remove("elevation_reason");
-        after.as_object_mut().unwrap().remove("$defs");
+        let baseline =
+            crate::tools::schema::compile_model_definition(&crate::tools::types::ToolDefinition {
+                input_schema: before.clone(),
+                ..definition()
+            })
+            .unwrap();
+        assert!(baseline.input_schema["properties"]["arguments"].is_object());
+        let mut after = registry().definitions().remove(0).input_schema;
         let captured_after: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/ask_user/schema-after.json"
         ))
@@ -929,7 +913,7 @@ mod tests {
 
     #[test]
     fn reserved_runtime_metadata_rejection_is_bounded_without_echoing_the_private_key() {
-        let mut arguments = valid(1);
+        let mut arguments = serde_json::json!({"arguments": valid(1)});
         let private_key = format!("__rustx_{}", "private-key-秘密字段".repeat(1024));
         arguments
             .as_object_mut()

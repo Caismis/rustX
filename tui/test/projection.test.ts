@@ -294,7 +294,7 @@ describe("presentation projection", () => {
               call_id: "call-proposed",
               tool_id: "tool-read",
               name: "Read",
-              arguments: "{}",
+              arguments: '{"arguments":{}}',
               complete: true,
             },
           ],
@@ -1405,7 +1405,7 @@ it('T14 T19 canonical Tool result commitment is separate from execution-terminal
     {type:'attempt_started',attempt_id:'a1',execution_settings:null,model:attemptModel('alpha/model-a')},
     {type:'assistant_message_started',attempt_id:'a1',message_id:'m1'},
     {type:'tool_call_started',position:0,foreground_position:0,attempt_id:'a1',message_id:'m1',block_index:0,call:{id:'call',tool_id:'tool',name:'native Tool'}},
-    {type:'tool_call_assembled',position:0,foreground_position:0,attempt_id:'a1',message_id:'m1',block_index:0,call:{id:'call',tool_id:'tool',name:'native Tool',arguments:'{}'},arguments_json:'{}'},
+    {type:'tool_call_assembled',position:0,foreground_position:0,attempt_id:'a1',message_id:'m1',block_index:0,call:{id:'call',tool_id:'tool',name:'native Tool',arguments:{arguments:{}}},arguments_json:'{"arguments":{}}'},
     {type:'tool_execution_started',attempt_id:'a1',tool_call_id:'call',tool_id:'tool',occurrence},
   ]);
   const committed=fold(started,[{result_deferred:false,type:'tool_result_committed',attempt_id:'a1',occurrence,result,result_metadata_ref:null}]);

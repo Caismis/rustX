@@ -63,10 +63,8 @@ pub struct ToolDefinition {
 ///   execution.
 /// - `ModelSelectable` — the model must explicitly choose foreground or
 ///   background execution for each invocation through the required
-///   `execution_mode` invocation field. That field is reserved by the
-///   runtime only under this policy; registration rejects a `ModelSelectable`
-///   tool whose canonical schema already defines it. Only Bash retains this
-///   authored selector.
+///   outer `execution_mode` invocation field. Runtime metadata is separate
+///   from the business object, whose same-named properties stay tool-owned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
@@ -1063,11 +1061,10 @@ pub enum ToolResultContent {
 ///
 /// One model request receives these compiled definitions, never the
 /// canonical [`ToolDefinition`]: runtime execution, replay, and origin
-/// policy never reach provider adapters. For a `ModelSelectable` tool the
-/// compiled `input_schema` is the canonical schema decorated with the
-/// required runtime-owned `execution_mode` invocation field and the compiled
-/// `description` carries the runtime-owned reminder that the field is
-/// mandatory; the stored canonical definition remains untouched.
+/// policy never reach provider adapters. The compiled schema wraps business
+/// inputs in `arguments`, separate from runtime metadata. `ModelSelectable`
+/// requires the outer `execution_mode`; the stored canonical business schema
+/// remains untouched.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelToolDefinition {
     /// Identity of the tool within the capability set.

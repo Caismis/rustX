@@ -1,3 +1,4 @@
+import { modelToolCall } from '../../../../protocol/app-server/model-tool-call';
 import {traceInspectionHead} from '../../client/trace';
 import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey} from '../../../../protocol/app-server/trace-identity';
 import type { TraceDisplayBlock } from '../../client/trace-content';
@@ -388,7 +389,7 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   const error = result.outcome !== 'success';
   const artifacts = [...new Map([...record.attachments, ...result.attachments, ...blockArtifacts(result.blocks)].map(artifact => [artifact.artifact_id, artifact])).values()];
   const imageRead = !error && record.tool?.tool_id === READ_IMAGE_TOOL && artifacts.some(artifact => artifact.image);
-  const args = detail?.arguments?.value;
+  const args = modelToolCall(detail?.arguments?.value)?.arguments;
   const path = args && typeof args === 'object' && 'path' in args && typeof args.path === 'string' ? args.path : undefined;
   const imageName = imageRead ? readImageName(path) ?? tx('tools:tool-card.read-image') : undefined;
   const blocks = imageRead ? result.blocks.filter(block => block.type !== 'text' || block.text.truncated || block.text.text !== READ_IMAGE_RECEIPT) : result.blocks;

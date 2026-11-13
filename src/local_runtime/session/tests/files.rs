@@ -45,7 +45,9 @@ async fn managed_images_materialize_exact_clone_fork_branch_cuts() {
         id: crate::runtime::identity::ToolCallId::new("source-call"),
         tool_id: crate::runtime::identity::ToolId::new("tool-read-image"),
         name: "read_image".into(),
-        arguments: serde_json::json!({"path":path}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(
+            serde_json::json!({"path":path}),
+        ),
     };
     let PreflightOutcome::Ready(prepared) = fixture.registry.preflight(&call).unwrap() else {
         panic!()

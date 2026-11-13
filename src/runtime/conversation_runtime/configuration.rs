@@ -1012,9 +1012,6 @@ impl ConversationRuntime {
             (&state.resources, &state.model),
             (&resources, &state.model),
         );
-        if state.effective_approval_mode != approval_mode {
-            state.last_permission_reminder_mode = None;
-        }
         state.effective_approval_mode = approval_mode;
         let availability = resources.capability_availability().clone();
         state.resources = resources;

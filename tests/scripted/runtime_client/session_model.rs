@@ -217,12 +217,14 @@ fn parked_tool_turn(
     ]
 }
 
-const ALPHA_CALL: ScriptedCall = ScriptedCall {
-    id: "call-1",
-    tool_id: "tool-alpha",
-    name: "alpha",
-    arguments: serde_json::Value::Null,
-};
+fn alpha_call() -> ScriptedCall {
+    ScriptedCall {
+        id: "call-1",
+        tool_id: "tool-alpha",
+        name: "alpha",
+        arguments: serde_json::json!({}),
+    }
+}
 
 /// Builds the runtime under test over an explicit session model authority.
 async fn runtime(model: SessionModelState, policy: SessionContextPolicy) -> RuntimeClientHost {
@@ -289,7 +291,7 @@ async fn a_model_update_after_admission_affects_only_future_attempts() {
     let alpha = Provider::new(
         ALPHA,
         "model-a",
-        vec![parked_tool_turn(&ALPHA_CALL, receiver), one_turn_stop()],
+        vec![parked_tool_turn(&alpha_call(), receiver), one_turn_stop()],
     )
     .output(4096)
     .params(serde_json::json!({"temperature": 0.1, "provider_tag": "alpha"}));
@@ -528,7 +530,7 @@ async fn a_transient_retry_after_live_selection_keeps_the_admitted_invocation() 
 /// The same canonical history is presented to two models: A's window
 /// comfortably holds it, B's does not. The attempt on A performs exactly one
 /// provider request; the attempt on B performs a summary request *and* the
-/// turn, proving the second attempt planned against B's 4 000-token window
+/// turn, proving the second attempt planned against B's 8 000-token window
 /// and not against A's.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_attempt_plans_compaction_with_its_own_model_window() {
@@ -556,7 +558,7 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
             one_turn_stop(),
         ],
     )
-    .window(4_000)
+    .window(8_000)
     .output(256);
 
     let host = runtime(
@@ -570,8 +572,10 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     .await;
     let (attachment, subscription) = attach(&host);
 
-    // A long inbound turn: comfortably inside A's window, well past B's.
-    let long = "compaction pressure ".repeat(600);
+    // Each inbound plus the compiled invocation envelopes fits B's window;
+    // two inbound turns exceed it. Compaction can therefore retain the fresh
+    // turn and summarize prior history, rather than reject uncompactable input.
+    let long = "compaction pressure ".repeat(1_000);
     submit(&attachment, 1, &long);
     receive_until(&host, &subscription, |event| {
         event
@@ -657,7 +661,7 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
             one_turn_stop(),
         ],
     )
-    .window(4_000)
+    .window(8_000)
     .output(300)
     .params(serde_json::json!({"temperature": 0.25, "provider_tag": "alpha"}));
 
@@ -671,10 +675,10 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     )
     .await;
     let (attachment, subscription) = attach(&host);
-    // The first turn fits the 4 000-token window; the second pushes the
-    // accumulated history past the soft input limit and forces exactly one
-    // compaction.
-    let long = "compaction pressure ".repeat(600);
+    // One turn plus the compiled invocation envelopes fits the 8 000-token
+    // window. The second pushes accumulated history past the soft input limit,
+    // while leaving enough room for the fresh turn after exactly one compaction.
+    let long = "compaction pressure ".repeat(1_000);
     submit(&attachment, 1, &long);
     receive_until(&host, &subscription, |event| {
         event
@@ -736,7 +740,7 @@ async fn explicit_summary_mode_is_resolved_once_and_frozen_at_admission() {
         ALPHA,
         "model-a",
         vec![
-            parked_tool_turn(&ALPHA_CALL, receiver),
+            parked_tool_turn(&alpha_call(), receiver),
             vec![
                 FakeStep::Emit(ModelEvent::Started),
                 FakeStep::Emit(ModelEvent::Failed {
@@ -882,7 +886,7 @@ async fn profiles_freeze_at_admission_through_continuation_compaction_and_retry(
         ALPHA,
         "model-a",
         vec![
-            parked_tool_turn(&ALPHA_CALL, receiver),
+            parked_tool_turn(&alpha_call(), receiver),
             overflow,
             one_turn_stop(),
             one_turn_stop(),

@@ -1,3 +1,4 @@
+import { parseModelToolCall } from '../../../../protocol/app-server/model-tool-call';
 import { useEffect, useRef, useState } from 'react';
 import { findNodeAtLocation, getNodeValue, parseTree, type ParseError } from 'jsonc-parser';
 import type { ForegroundToolExecution, ScheduleHeader, ScheduleSpec } from '../../../../protocol/app-server/v78';
@@ -58,7 +59,7 @@ function CreatedTask({ tool }: { tool: ForegroundToolExecution }) {
       if (original.tool.tool_id !== 'native.schedule_command' || original.tool.committed_result?.status.type !== 'success') return;
       const input = original.content.find(binding => binding.path.join('.') === 'state.arguments');
       const args = original.tool.state.arguments || (input ? await readContentText(cache, input.content_ref, current) : '');
-      const mutation: unknown = JSON.parse(args).mutation;
+      const mutation = parseModelToolCall(args)?.arguments.mutation;
       if (!mutation || typeof mutation !== 'object' || !('type' in mutation)
         || !['create', 'create_workflow'].includes(String(mutation.type))) return;
       const binding = original.content.find(binding => binding.path.join('.') === 'committed_result.content.0.value');

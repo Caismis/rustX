@@ -1042,18 +1042,7 @@ impl ExtensionToolPlane {
         registry: &mut crate::tools::executor::ToolRegistry,
     ) -> Result<(), crate::tools::executor::ToolRegistryError> {
         for registration in &self.registrations {
-            let crate::tools::executor::ToolRegistration {
-                definition,
-                executor,
-                normalizer,
-                ..
-            } = registration.clone();
-            registry.register_with_execution_metadata(
-                definition,
-                executor,
-                normalizer,
-                crate::tools::deadline::ForegroundPolicy::Leaf,
-            )?;
+            registry.register_registration(registration.clone())?;
         }
         Ok(())
     }

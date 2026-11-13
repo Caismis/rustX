@@ -56,6 +56,7 @@ pub(crate) fn default_execution_policy() -> crate::agent::execution::AgentExecut
         // attempt lifecycle (`inert` / [`full_access_lifecycle`] are Full
         // Access; Plan fixtures must opt in).
         last_permission_reminder_mode: None,
+        permission_task_message: None,
         approval_mode: rustx::runtime::ApprovalMode::FullAccess,
     }
 }

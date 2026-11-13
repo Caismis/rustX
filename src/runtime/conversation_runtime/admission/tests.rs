@@ -196,7 +196,9 @@ async fn headless_tool_cycle_with_zero_attachments() {
                     id: ToolCallId::new(call_id),
                     tool_id: definition.id.clone(),
                     name: definition.name.clone(),
-                    arguments: serde_json::json!({"text": "hi"}),
+                    arguments: crate::scripted_suites::common::tool_call_envelope(
+                        serde_json::json!({"text": "hi"}),
+                    ),
                 },
             }),
             FakeStep::Emit(ModelEvent::Completed {

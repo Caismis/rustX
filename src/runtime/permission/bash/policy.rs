@@ -2,12 +2,10 @@
 
 use super::callbacks::{is_sed_in_place_option, run_danger_callback};
 use super::commands::{
-    GIT_READONLY_SUBCOMMAND_POLICIES, READONLY_ALLOW_ANY_ARG_COMMANDS, READONLY_COMMAND_POLICIES,
-    sorted_multiword_policies,
+    READONLY_ALLOW_ANY_ARG_COMMANDS, READONLY_COMMAND_POLICIES, sorted_multiword_policies,
 };
 use super::direct::{evaluate_direct_readonly_argv, is_find_write_option};
 use super::flags_walk::is_argv_allowed_by_policy;
-use super::git::{has_dangerous_git_global_option, is_git_read_only_command};
 use super::io::{
     are_env_assignments_allowed, are_redirects_allowed, argv_contains_dev_tcp_udp,
     is_unsafe_windows_unc_path, strip_safe_command_wrappers,
@@ -28,12 +26,6 @@ pub fn evaluate_bash_readonly_policy(command: &BashCommandInvocation) -> Option<
     }
     if argv[0].contains('/') {
         return None;
-    }
-    if argv[0] == "git" {
-        return Some(is_git_read_only_command(
-            &argv,
-            &GIT_READONLY_SUBCOMMAND_POLICIES,
-        ));
     }
     if let Some(direct) = evaluate_direct_readonly_argv(&argv) {
         return Some(direct);
@@ -66,25 +58,17 @@ pub fn has_known_bash_write_option(command: &BashCommandInvocation) -> bool {
         Some("sed") => argv.iter().any(|w| is_sed_in_place_option(w)),
         Some("find") => argv.iter().any(|w| is_find_write_option(w)),
         Some("tree") => tree_output(&argv),
-        Some("git") => has_dangerous_git_global_option(&argv),
         _ => false,
     }
 }
 
 #[must_use]
-pub fn analysis_contains_git_and_directory_change(commands: &[BashCommandInvocation]) -> bool {
-    let mut git = false;
-    let mut dir = false;
-    for command in commands {
-        let argv = strip_safe_command_wrappers(&command.argv);
-        let name = argv
+pub fn analysis_contains_git(commands: &[BashCommandInvocation]) -> bool {
+    commands.iter().any(|command| {
+        strip_safe_command_wrappers(&command.argv)
             .first()
-            .map(String::as_str)
-            .unwrap_or(command.name.as_str());
-        git |= name == "git";
-        dir |= matches!(name, "cd" | "pushd" | "popd");
-    }
-    git && dir
+            .is_some_and(|name| name == "git")
+    })
 }
 
 fn evaluate_prefix(argv: &[String]) -> Option<bool> {

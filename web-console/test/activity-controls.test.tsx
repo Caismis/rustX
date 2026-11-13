@@ -106,7 +106,7 @@ it('Job stopping needs a second press, stays pending until native publication, a
 it('native Tool renderers explicitly distinguish Jobs and durable Agents', () => {
   for (const [name, domain] of [['job_wait', 'job'], ['send_message', 'agent'], ['subagent', 'agent']] as const) {
     const ui = render(<Tool tool={{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'assistant'},block_index:0},assembly_complete:true, message_id: 'assistant', block_index: 0, call_id: `call-${name}`, tool_id: `tool-${name}`, name,
-      state: { type: 'settled', arguments: JSON.stringify(domain === 'job' ? { job_id: 'job-a' } : { agent_id: 'agent-a' }), result: { status: { type: 'success' }, duration_ms: "0" } } }}/>);
+      state: { type: 'settled', arguments: JSON.stringify({ arguments: domain === 'job' ? { job_id: 'job-a' } : { agent_id: 'agent-a' } }), result: { status: { type: 'success' }, duration_ms: "0" } } }}/>);
     expect(ui.container.querySelector(`[data-activity-domain="${domain}"]`)).toBeTruthy();
     ui.unmount();
   }

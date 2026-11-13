@@ -325,6 +325,8 @@ pub struct PreToolView<'a> {
     pub mutation_target: Option<&'a std::path::Path>,
     /// Effective resource permission for the active mode.
     pub resource_permission: ResourcePermissionValue,
+    /// Native task provenance, never inferred from tool arguments.
+    pub task: Option<&'a crate::runtime::permission::PermissionTaskEvidence>,
 }
 
 impl PreToolView<'_> {
@@ -1008,6 +1010,7 @@ mod tests {
         arguments: &'a serde_json::Value,
     ) -> PreToolView<'a> {
         PreToolView {
+            task: None,
             conversation_id,
             execution: crate::runtime::interaction::InteractionExecution::Attempt {
                 attempt_id: attempt_id.clone(),

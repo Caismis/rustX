@@ -55,7 +55,7 @@ export async function selectSessionModel(client: AppServerClient, id: string, se
     return;
   }
   const target = client.target(id);
-  await client.setAgentModel(id, selection, true);
+  await client.setAgentModel(id, selection);
   const current = client.getSnapshot();
   if (current.generation === generation && current.endpoint === endpoint && sameTarget(current.views[id]?.target, target)) {
     modelPreferences().select(endpoint ?? '', selection);

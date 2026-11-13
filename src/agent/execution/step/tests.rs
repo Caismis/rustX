@@ -457,7 +457,7 @@ async fn cancellation_before_continuation_start_stops_the_tool_turn() {
         id: ToolCallId::new("call-1"),
         tool_id: ToolId::new("tool-alpha"),
         name: "alpha".to_owned(),
-        arguments: serde_json::json!({}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({})),
     };
     let adapter = Arc::new(ScriptedAdapter::new(vec![
         tool_call_script(&call),
@@ -625,7 +625,7 @@ async fn cancellation_at_turn_boundary_stops_next_model_request_without_mailbox(
         id: ToolCallId::new("call-1"),
         tool_id: ToolId::new("tool-alpha"),
         name: "alpha".to_owned(),
-        arguments: serde_json::json!({}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({})),
     };
     let adapter = Arc::new(ScriptedAdapter::new(vec![tool_call_script(&call)]));
     let mut tools = ToolRegistry::new();
@@ -726,7 +726,7 @@ async fn cancellation_after_drain_append_stops_before_the_next_turn() {
         id: ToolCallId::new("call-1"),
         tool_id: ToolId::new("tool-alpha"),
         name: "alpha".to_owned(),
-        arguments: serde_json::json!({}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({})),
     };
     let adapter = Arc::new(ScriptedAdapter::new(vec![tool_call_script(&call)]));
     let mut tools = ToolRegistry::new();
@@ -939,7 +939,9 @@ async fn terminal_inbound_after_snapshot_can_never_join_the_first_batch() {
         id: ToolCallId::new("call-bg"),
         tool_id: ToolId::new("tool-bg"),
         name: "bg".to_owned(),
-        arguments: serde_json::json!({"execution_mode": "background"}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(
+            serde_json::json!({"execution_mode": "background"}),
+        ),
     };
     let adapter = Arc::new(ScriptedAdapter::new(vec![
         tool_call_script(&call),

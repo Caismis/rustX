@@ -221,6 +221,7 @@ pub(super) async fn headless_runtime(
 }
 
 pub(super) struct HeadlessRuntimeOptions {
+    pub(super) approval_mode: ApprovalMode,
     pub(super) skill_discovery: crate::skills::SkillDiscoveryConfig,
     pub(super) estimator: Arc<dyn TokenEstimator>,
     pub(super) policy: crate::context::SessionContextPolicy,
@@ -240,6 +241,7 @@ pub(super) struct HeadlessRuntimeOptions {
 impl Default for HeadlessRuntimeOptions {
     fn default() -> Self {
         Self {
+            approval_mode: ApprovalMode::FullAccess,
             skill_discovery: crate::skills::SkillDiscoveryConfig::default(),
             estimator: Arc::new(DefaultTokenEstimator),
             policy: crate::context::SessionContextPolicy {
@@ -389,7 +391,7 @@ pub(super) async fn headless_runtime_with_options(
         // Headless fixtures that are not permission tests use Full Access so
         // fake Builtin tools are not Plan-elevated into Denied (Issue #544).
         // Plan/Automatic fixtures must set the mode explicitly.
-        approval_mode: ApprovalMode::FullAccess,
+        approval_mode: options.approval_mode,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -1232,7 +1234,7 @@ pub(super) fn cause_probe_registry_and_script(
         FakeStep::Emit(crate::model::event::ModelEvent::ToolCallArgumentsDelta {
             block_index: crate::message::types::ContentBlockIndex::new(0),
             call_id: call_id.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: "{\"arguments\":{}}".to_owned(),
         }),
         FakeStep::Emit(crate::model::event::ModelEvent::ToolCallCompleted {
             block_index: crate::message::types::ContentBlockIndex::new(0),
@@ -1240,7 +1242,9 @@ pub(super) fn cause_probe_registry_and_script(
                 id: call_id,
                 tool_id: definition.id,
                 name: definition.name,
-                arguments: serde_json::json!({}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({}),
+                ),
             },
         }),
         FakeStep::Emit(crate::model::event::ModelEvent::Completed {
@@ -1724,7 +1728,9 @@ pub(super) fn assistant_tool_block(id: &str, call: &str) -> MessageBlock {
                 id: crate::runtime::identity::ToolCallId::new(call),
                 tool_id: crate::runtime::identity::ToolId::new("tool-a"),
                 name: "alpha".to_owned(),
-                arguments: serde_json::json!({}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({}),
+                ),
             },
         )],
     })

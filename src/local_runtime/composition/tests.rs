@@ -61,7 +61,10 @@ fn mcp_call_script(tool_id: &ToolId, arguments: serde_json::Value) -> Vec<FakeSt
                 id: call_id,
                 tool_id: tool_id.clone(),
                 name: TOOL_NAME.to_owned(),
-                arguments,
+                arguments: serde_json::Value::Object(serde_json::Map::from_iter([(
+                    "arguments".to_owned(),
+                    arguments,
+                )])),
             },
         }),
         FakeStep::Emit(ModelEvent::Completed {
@@ -308,7 +311,7 @@ async fn named_subagent_and_mcp_share_one_frozen_parent_generation() {
         id: ToolCallId::new("mcp-call-163"),
         tool_id: fixture.tool_id.clone(),
         name: TOOL_NAME.to_owned(),
-        arguments: serde_json::json!({}),
+        arguments: serde_json::json!({"arguments":{}}),
     };
     let ledger = fixture
         .runtime
@@ -400,7 +403,7 @@ async fn malformed_mcp_arguments_remain_a_normal_preflight_rejection() {
             id: expected_call_id.clone(),
             tool_id: fixture.tool_id.clone(),
             name: TOOL_NAME.to_owned(),
-            arguments: serde_json::json!({"unexpected": true}),
+            arguments: serde_json::json!({"arguments":{"unexpected": true}}),
         }
     );
     let tool_result = ledger

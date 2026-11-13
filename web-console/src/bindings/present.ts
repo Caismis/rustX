@@ -1,3 +1,4 @@
+import { parseModelToolCall } from '../../../protocol/app-server/model-tool-call';
 import { canonicalLocatorKey } from '../../../protocol/app-server/content-identity';
 import type { CanonicalContentLocator, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage, TurnProcessView } from '../../../protocol/app-server/v78';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
@@ -7,8 +8,7 @@ import type { PresentRowView } from '../presentation/agent/PresentRow';
 
 /** Raw arguments can be partial while a call streams; then they show verbatim. */
 function declaredPaths(raw: string): string {
-  let args: unknown;
-  try { args = JSON.parse(raw); } catch { return raw; }
+  const args = parseModelToolCall(raw)?.arguments;
   if (typeof args !== 'object' || args === null || !('files' in args) || !Array.isArray(args.files)) return raw;
   return args.files.flatMap((file: unknown) =>
     typeof file === 'object' && file !== null && 'path' in file && typeof file.path === 'string' ? [file.path] : []).join(', ');

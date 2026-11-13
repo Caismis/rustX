@@ -114,11 +114,14 @@ export async function mcpStartupGate(workspace: string, signal: AbortSignal, too
   };
 }
 
-/** Model-facing startup_echo schema after elevation metadata wrap (`$defs.rustx_business`). */
+/** Exact model-facing envelope; the MCP business schema keeps its own resource. */
 export const startupToolSchema = {
+  $id: 'urn:rustx:invocation',
+  $schema: 'http://json-schema.org/draft-07/schema#',
   type: 'object',
+  additionalProperties: false,
   properties: {
-    message: { type: 'string' },
+    arguments: { $ref: 'json-schema:///' },
     elevation_reason: {
       type: ['string', 'null'],
       maxLength: 512,
@@ -126,14 +129,24 @@ export const startupToolSchema = {
         'Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool\'s business executor.',
     },
   },
-  required: ['message'],
-  $defs: {
-    rustx_business: {
-      type: 'object',
-      properties: {
-        message: { type: 'string' },
+  required: ['arguments'],
+  definitions: {
+    'json-schema:///': {
+      $id: 'json-schema:///',
+      $schema: 'https://json-schema.org/draft/2020-12/schema',
+      allOf: [{ $ref: 'json-schema:///#/definitions/schema0' }],
+      definitions: {
+        schema0: { allOf: [{ $ref: 'json-schema:///#/x-rustx-schema-nodes/schema0' }] },
+        schema1: { allOf: [{ $ref: 'json-schema:///#/x-rustx-schema-nodes/schema1' }] },
       },
-      required: ['message'],
+      'x-rustx-schema-nodes': {
+        schema0: {
+          type: 'object',
+          properties: { message: { $ref: 'json-schema:///#/definitions/schema1' } },
+          required: ['message'],
+        },
+        schema1: { type: 'string' },
+      },
     },
   },
 };

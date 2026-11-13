@@ -625,12 +625,11 @@ chat_reasoning_replay = "omit"
         // admitted with read and grep only. `write` is therefore
         // generation-only authority.
         let available = crate::capabilities::AvailableToolCatalog::new(
-            ["read", "grep", "write"]
-                .into_iter()
-                .map(|name| {
-                    ToolRegistration::plain(capability_definition(name), Arc::new(NeverRuns))
-                })
-                .collect(),
+            ToolRegistry::from_registrations(["read", "grep", "write"].into_iter().map(|name| {
+                ToolRegistration::plain(capability_definition(name), Arc::new(NeverRuns))
+            }))
+            .unwrap()
+            .validated_registrations(),
         );
         let mut registry = ToolRegistry::new();
         for name in ["read", "grep"] {

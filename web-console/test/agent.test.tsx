@@ -223,12 +223,12 @@ it('pending approval restores after browser absence; accepted response cannot se
  expect(screen.queryByRole('button', { name: 'Allow once' })).toBeNull();
 });
 it('Tool identity selects presentation; running, terminal failures, cancellation and uncertainty stay native', () => {
- const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'call', tool_id: 'tool-bash', name: 'shell', state: { type: 'running', arguments: '{"command":"pwd"}' } };
+ const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'call', tool_id: 'tool-bash', name: 'shell', state: { type: 'running', arguments: "{\"arguments\":{\"command\":\"pwd\"}}" } };
  const ui = render(<Tool tool={tool}/>);
  expect(ui.container.querySelector('[data-tool-renderer="bash"]')).toBeTruthy();
  expect(screen.getByLabelText('Tool status').textContent).toBe('running');
  for (const [status, expected] of [[{ type: 'success' }, 'success'], [{ type: 'failed', error: 'native failure' }, 'failure'], [{ type: 'cancelled', reason: 'user_requested', phase: 'during_execution' }, 'cancelled'], [{ type: 'outcome_unknown', detail: 'not proven' }, 'uncertain']] as const) {
-   tool.state = { type: 'settled', arguments: '{}', result: { status, duration_ms: "1" } };
+   tool.state = { type: 'settled', arguments: "{\"arguments\":{}}", result: { status, duration_ms: "1" } };
    ui.rerender(<Tool tool={{ ...tool }}/>); expect(screen.getByLabelText('Tool status').textContent).toBe(expected);
  }
  tool.tool_id = 'mcp.read'; tool.name = 'read';
@@ -237,8 +237,8 @@ it('Tool identity selects presentation; running, terminal failures, cancellation
 });
 it('reasoning and Tool rows remain at native canonical positions while live state changes', () => {
  const s = running();
- const call = { id: 'call', tool_id: 'tool-bash', name: 'bash', arguments: { command: 'pwd' } };
- const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:1},assembly_complete:true, message_id: 'a', block_index: 1, call_id: call.id, tool_id: call.tool_id, name: call.name, state: { type: 'assembled', arguments: '{"command":"pwd"}' } };
+ const call = { id: 'call', tool_id: 'tool-bash', name: 'bash', arguments: { arguments: { command: 'pwd' } } };
+ const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:1},assembly_complete:true, message_id: 'a', block_index: 1, call_id: call.id, tool_id: call.tool_id, name: call.name, state: { type: 'assembled', arguments: "{\"arguments\":{\"command\":\"pwd\"}}" } };
  s.transcript.entries = [{ cursor: '10', tool_calls: [tool], item: { type: 'message', message: { role: 'assistant', id: 'a', content: [{ type: 'reasoning', text: 'First reason' }, { type: 'tool_call', ...call }, { type: 'text', text: 'After call' }] } } }];
  s.attempt!.foreground = [{ ...tool, state: { type: 'running', arguments: tool.state.arguments } }];
  const ui = render(<AgentTranscript snapshot={s}/>);
@@ -261,10 +261,10 @@ it('an acknowledged Stop requires no observation reread', async () => {
 
 it('live foreground overlays only its exact canonical occurrence when historical Attempts reuse a provider call ID', () => {
  const s = running();
- const old: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'assistant-A'},block_index:1},assembly_complete:true, message_id: 'assistant-A', block_index: 1, call_id: 'call-1', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'old-result' }] } } };
- const current: ForegroundToolExecution = { ...old, occurrence:{locator:{type:'by_message_id',message_id:'assistant-B'},block_index:1},message_id: 'assistant-B', state: { type: 'assembled', arguments: '{}' } };
- s.transcript.entries = [old, current].map((tool, index) => ({ cursor: String(index + 1), tool_calls: [tool], item: { type: 'message', message: { role: 'assistant', id: tool.message_id!, content: [{ type: 'reasoning', text: `Reason ${index}` }, { type: 'tool_call', id: tool.call_id!, tool_id: tool.tool_id!, name: tool.name, arguments: {} }] } } }));
- s.attempt!.foreground = [{ ...current, state: { type: 'running', arguments: '{}' } }];
+ const old: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'assistant-A'},block_index:1},assembly_complete:true, message_id: 'assistant-A', block_index: 1, call_id: 'call-1', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: "{\"arguments\":{}}", result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'old-result' }] } } };
+ const current: ForegroundToolExecution = { ...old, occurrence:{locator:{type:'by_message_id',message_id:'assistant-B'},block_index:1},message_id: 'assistant-B', state: { type: 'assembled', arguments: "{\"arguments\":{}}" } };
+ s.transcript.entries = [old, current].map((tool, index) => ({ cursor: String(index + 1), tool_calls: [tool], item: { type: 'message', message: { role: 'assistant', id: tool.message_id!, content: [{ type: 'reasoning', text: `Reason ${index}` }, { type: 'tool_call', id: tool.call_id!, tool_id: tool.tool_id!, name: tool.name, arguments: { arguments: {} } }] } } }));
+ s.attempt!.foreground = [{ ...current, state: { type: 'running', arguments: "{\"arguments\":{}}" } }];
  const ui = render(<AgentTranscript snapshot={s}/>);
  const oldRow = within(ui.container.querySelector('[data-chat-anchor-key="message:assistant-A"]')! as HTMLElement);
  const newRow = within((ui.container.querySelector('[data-chat-anchor-key="message:assistant-B"]')! as HTMLElement));
@@ -275,7 +275,7 @@ it('live foreground overlays only its exact canonical occurrence when historical
  expect(newRow.queryByText('old-result')).toBeNull();
  expect(oldRow.getByLabelText('Tool status').textContent).toBe('success');
  // Canonical settlement of this same occurrence wins over lagging live state.
- s.transcript.entries![1].tool_calls = [{ ...current, state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'new-result' }] } } }];
+ s.transcript.entries![1].tool_calls = [{ ...current, state: { type: 'settled', arguments: "{\"arguments\":{}}", result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'new-result' }] } } }];
  ui.rerender(<AgentTranscript snapshot={{ ...s }}/>);
  expect(newRow.getByLabelText('Tool status').textContent).toBe('success');
  fireEvent.click(newRow.getByRole('button', { name: /bash/ }));
@@ -283,18 +283,18 @@ it('live foreground overlays only its exact canonical occurrence when historical
  expect(newRow.queryByText('old-result')).toBeNull();
  s.transcript.entries![1].tool_calls = [current];
  // A historical unresolved occurrence also cannot borrow B's live state.
- s.transcript.entries![0].tool_calls = [{ ...old, state: { type: 'assembled', arguments: '{}' } }];
+ s.transcript.entries![0].tool_calls = [{ ...old, state: { type: 'assembled', arguments: "{\"arguments\":{}}" } }];
  ui.rerender(<AgentTranscript snapshot={{ ...s }}/>);
  expect(oldRow.getByLabelText('Tool status').textContent).toBe('assembled');
  expect(newRow.getByLabelText('Tool status').textContent).toBe('running');
 });
 it('native Goal activity uses shared tool details and retains outcome diagnostics', () => {
- const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'running', arguments: '{}' } };
+ const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'goal-call', tool_id: 'native.create_goal', name: 'create_goal', state: { type: 'running', arguments: "{\"arguments\":{}}" } };
  const ui = render(<Tool tool={tool}/>);
  expect(screen.getByText('Starting Goal')).toBeTruthy();
  expect(screen.getByLabelText('Tool status').textContent).toBe('running');
  expect(ui.container.querySelector('[data-tool-renderer="generic"]')).toBeTruthy();
- for (const [name, args, label] of [['create_goal', '{}', 'Goal started'], ['update_goal', '{"action":"complete"}', 'Goal completed'], ['update_goal', '{"action":"blocked"}', 'Goal blocked'], ['get_goal', '{}', 'Goal checked']] as const) {
+ for (const [name, args, label] of [['create_goal', '{"arguments":{}}', 'Goal started'], ['update_goal', '{"arguments":{"action":"complete"}}', 'Goal completed'], ['update_goal', '{"arguments":{"action":"blocked"}}', 'Goal blocked'], ['get_goal', '{"arguments":{}}', 'Goal checked']] as const) {
    const execution: ForegroundToolExecution = { ...tool, tool_id: `native.${name}`, name, state: { type: 'settled', arguments: args, result: { status: { type: 'success' }, duration_ms: "0" } } };
    ui.rerender(<Tool tool={execution}/>);
    expect(screen.getByText(label)).toBeTruthy();
@@ -305,7 +305,7 @@ it('native Goal activity uses shared tool details and retains outcome diagnostic
    fireEvent.click(screen.getByRole('button', { expanded: true }));
  }
  for (const status of [{ type: 'failed', error: 'native rejection' }, { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' }, { type: 'outcome_unknown', detail: 'unknown' }] as const) {
-   ui.rerender(<Tool tool={{ ...tool, state: { type: 'settled', arguments: '{}', result: { status, duration_ms: "0" } } }}/>);
+   ui.rerender(<Tool tool={{ ...tool, state: { type: 'settled', arguments: "{\"arguments\":{}}", result: { status, duration_ms: "0" } } }}/>);
    expect(screen.queryByText('Goal started')).toBeNull();
    expect(screen.getByLabelText('Tool status').textContent).toBe(status.type === 'failed' ? 'failure' : status.type === 'outcome_unknown' ? 'uncertain' : 'cancelled');
  }
@@ -315,7 +315,7 @@ it('native Goal activity uses shared tool details and retains outcome diagnostic
 });
 
 it('Bash description is safe collapsed text while expanded detail retains command', () => {
- const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'description-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'running', arguments: JSON.stringify({ command: 'printf authoritative', description: '<img src=x onerror=alert(1)>' }) } };
+ const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'description-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'running', arguments: JSON.stringify({ arguments: { command: 'printf authoritative', description: '<img src=x onerror=alert(1)>' } }) } };
  const ui = render(<Tool tool={tool}/>);
  expect(screen.getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
  expect(ui.container.querySelector('img')).toBeNull();
@@ -326,7 +326,7 @@ it('Bash description is safe collapsed text while expanded detail retains comman
  expect(view.input).toBe('printf authoritative');
 });
 it.each(['running', 'success', 'failure', 'cancelled'] as const)('Bash keeps its execution reason as the row summary when %s', lifecycle => {
- const args = JSON.stringify({ command: "python3 - <<'PY'\nimport openpyxl\nPY", description: '检查 Excel 依赖是否可用\nAdditional detail' });
+ const args = JSON.stringify({ arguments: { command: "python3 - <<'PY'\nimport openpyxl\nPY", description: '检查 Excel 依赖是否可用\nAdditional detail' } });
  const tool: ForegroundToolExecution = { committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'reason' }, block_index: 0 }, assembly_complete: true,
   message_id: 'reason', block_index: 0, call_id: 'reason-call', tool_id: 'tool-bash', name: 'bash', state: lifecycle === 'running' ? { type: 'running', arguments: args }
    : { type: 'settled', arguments: args, result: { status: lifecycle === 'success' ? { type: 'success' } : lifecycle === 'cancelled' ? { type: 'cancelled', reason: 'user_requested', phase: 'during_execution' } : { type: 'failed', error: 'Native command failed' }, duration_ms: '1' } } };
@@ -342,7 +342,7 @@ it.each(['running', 'success', 'failure', 'cancelled'] as const)('Bash keeps its
 });
 it('Bash without a description keeps the row quiet and exposes the command only in its details', () => {
  const tool: ForegroundToolExecution = { committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'missing-description' }, block_index: 0 }, assembly_complete: true,
-  message_id: 'missing-description', block_index: 0, call_id: 'missing-description', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: JSON.stringify({ command: 'python3 generate_report.py' }), result: { status: { type: 'failed', error: 'Native error' }, duration_ms: '1' } } };
+  message_id: 'missing-description', block_index: 0, call_id: 'missing-description', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: JSON.stringify({ arguments: { command: 'python3 generate_report.py' } }), result: { status: { type: 'failed', error: 'Native error' }, duration_ms: '1' } } };
  const ui = render(<Tool tool={tool}/>), row = ui.getByRole('button', { expanded: false });
  expect(toolCard(tool).summary).toBe(''); expect(row.textContent).toBe('bash');
  fireEvent.click(row);
@@ -350,7 +350,7 @@ it('Bash without a description keeps the row quiet and exposes the command only 
  expect(ui.container.textContent).toContain('Native error');
 });
 it('replayed image reads use the saved image and keep extra result text', () => {
- const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ path: '/workspace/sample.png' }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'Read static PNG image' }, { type: 'image', artifact_id: 'artifact_1' }, { type: 'text', text: 'Extra result text' }] } } };
+ const tool: ForegroundToolExecution = {committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:0},assembly_complete:true, message_id: 'a', block_index: 0, call_id: 'image-call', tool_id: 'tool-read-image', name: 'read_image', state: { type: 'settled', arguments: JSON.stringify({ arguments: { path: '/workspace/sample.png' } }), result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'Read static PNG image' }, { type: 'image', artifact_id: 'artifact_1' }, { type: 'text', text: 'Extra result text' }] } } };
  const openFile = vi.fn();
  const ui = render(<FileLinks value={openFile}><Tool tool={JSON.parse(JSON.stringify(tool))}/></FileLinks>);
  expect(ui.container.querySelector('[data-tool-renderer="image"]')).toBeTruthy();
@@ -371,7 +371,7 @@ it('keeps the trace inspector reachable for an image read with a deferred result
   const tool: ForegroundToolExecution = {
     occurrence, block_index: 0, call_id: 'image', tool_id: 'tool-read-image', name: 'read_image',
     assembly_complete: true, committed_result_deferred: true,
-    state: { type: 'running', arguments: '{"path":"/workspace/sample.png"}' },
+    state: { type: 'running', arguments: "{\"arguments\":{\"path\":\"/workspace/sample.png\"}}" },
   };
   const inspect = vi.fn(async () => {});
   render(<ToolInspectionContext value={inspect}><Tool tool={tool}/></ToolInspectionContext>);
@@ -609,7 +609,7 @@ it.each(['menu', 'slash'] as const)('%s reselects the current model with its com
   const before = server.client.getSnapshot().views.A.snapshot;
   await chooseCurrent();
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toEqual({ target: server.target('A'), config: configured, recover_unavailable_auxiliary: true });
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
   expect(server.client.getSnapshot().views.A.snapshot).toBe(before);
   if (surface === 'slash') expect((screen.getByRole('textbox', { name: 'Message' }) as HTMLInputElement).value).toBe('/model');
   ui.rerender(surface === 'menu' ? <Control/> : <SlashControl/>);
@@ -658,7 +658,7 @@ it('a Draft equivalent choice stays local, while a deliberate current-model choi
   expect(server.client.getSnapshot().views.A.modelIntent?.config).toEqual(configured);
   await act(async () => { server.reply(opening); await attaching; });
   const mutation = await server.waitFor('session/setModel', 1);
-  expect(mutation.params).toEqual({ target: server.target('A'), config: configured, recover_unavailable_auxiliary: true });
+  expect(mutation.params).toEqual({ target: server.target('A'), config: configured });
   await act(async () => server.reply(mutation));
   expect(count('session/setModel')).toBe(1);
 });

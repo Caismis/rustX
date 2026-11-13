@@ -344,7 +344,7 @@ pub(super) fn tool_call_script(call: &ToolCall) -> Vec<ModelEvent> {
         ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(0),
             call_id: call.id.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: serde_json::to_string(&call.arguments).unwrap(),
         },
         ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(0),

@@ -572,7 +572,7 @@ async fn requested_fact_commits_before_the_prompt_reaches_a_client() {
             _ => None,
         })
         .expect("the canonical Assistant proposed the approved call");
-    assert_eq!(canonical, scripted_arguments());
+    assert_eq!(canonical, common::tool_call_envelope(scripted_arguments()));
     assert_eq!(*arguments_digest, interaction_arguments_digest(&canonical));
 }
 

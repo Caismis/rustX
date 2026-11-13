@@ -1194,6 +1194,7 @@ impl AgentExecution<'_> {
                 let mut subagent = subagent.clone();
                 subagent.native = Some(Arc::new(
                     crate::tools::invocation::NativeInvocationServices {
+                        task: self.permission_task.clone(),
                         lifecycle: self.lifecycle.clone(),
                         runtime: self.tool_runtime.clone(),
                         clock: self.monotonic_clock.clone(),
@@ -1329,6 +1330,7 @@ impl AgentExecution<'_> {
 
 /// Owned pre-tool facts for one parallel authorization future.
 struct ParallelAuthFacts {
+    task: Option<Arc<crate::runtime::permission::PermissionTaskEvidence>>,
     slot_index: usize,
     conversation_id: crate::runtime::identity::ConversationId,
     attempt_id: AttemptId,
@@ -1377,6 +1379,7 @@ impl ParallelAuthFacts {
                 execution.permission_reminder.mode,
             );
         Self {
+            task: execution.permission_task.clone(),
             slot_index,
             conversation_id: execution.request.conversation_id.clone(),
             attempt_id: execution.request.attempt_id.clone(),
@@ -1405,6 +1408,7 @@ async fn authorize_owned(
     facts: &ParallelAuthFacts,
 ) -> Result<Option<ToolExecutionResult>, InteractionFailure> {
     let view = PreToolView {
+        task: facts.task.as_deref(),
         conversation_id: &facts.conversation_id,
         execution: crate::runtime::interaction::InteractionExecution::Attempt {
             attempt_id: facts.attempt_id.clone(),

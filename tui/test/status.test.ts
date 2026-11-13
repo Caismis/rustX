@@ -94,7 +94,7 @@ describe("working status", () => {
             foreground: [
               foreground("call-1", "tool-bash", "bash", {
                 type: "running",
-                arguments: "{}",
+                arguments: "{\"arguments\":{}}",
               }),
             ],
           }),
@@ -112,7 +112,7 @@ describe("working status", () => {
             foreground: [
               foreground("call-1", "tool-bash", "bash", {
                 type: "assembled",
-                arguments: "{}",
+                arguments: "{\"arguments\":{}}",
               }),
             ],
           }),
@@ -634,7 +634,7 @@ describe("activity area", () => {
         foreground: [
           foreground("call-1", "tool-bash", "bash", {
             type: "settled",
-            arguments: '{"command":"sleep 999"}',
+            arguments: "{\"arguments\":{\"command\":\"sleep 999\"}}",
             result: toolResult({ status: { type: "timed_out" } }),
           }),
         ],
@@ -660,7 +660,7 @@ describe("activity area", () => {
               id: "call-1",
               tool_id: "tool-bash",
               name: "bash",
-              arguments: { command: "ls" },
+              arguments: { arguments: { command: "ls" } },
             },
           ],
         },
@@ -669,7 +669,7 @@ describe("activity area", () => {
         foreground: [
           {...foreground("call-1", "tool-bash", "bash", {
             type: "running",
-            arguments: '{"command":"ls"}',
+            arguments: "{\"arguments\":{\"command\":\"ls\"}}",
           }),message_id:"m1",occurrence:{locator:{type:"by_message_id",message_id:"m1"},block_index:0}},
         ],
       }),

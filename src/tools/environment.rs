@@ -16,6 +16,10 @@
 //!
 //! The runtime owns the baseline keys (`PATH`, `HOME`, `LANG`, `LC_ALL`)
 //! and the Skill environment overlay keys (`VIRTUAL_ENV`, `NODE_PATH`).
+//! The Git configuration namespace (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_*`,
+//! `GIT_CONFIG_VALUE_*`, `GIT_CONFIG_PARAMETERS`) and Git pager/editor keys
+//! are also runtime-owned so authorized entries cannot bypass or be silently
+//! discarded by the composed Git defaults.
 //! These cannot be supplied as conflicting ordinary authorized entries:
 //! [`ToolEnvironment::from_authorized`] rejects them with
 //! [`ToolEnvironmentError::RuntimeOwnedKey`]. There is no ambiguous
@@ -35,8 +39,18 @@ use std::collections::BTreeMap;
 /// The runtime-owned baseline keys: they are composed by
 /// [`ToolEnvironment::child_environment`] and cannot be supplied as
 /// conflicting authorized entries.
-pub const RUNTIME_OWNED_KEYS: [&str; 6] =
-    ["PATH", "HOME", "LANG", "LC_ALL", "VIRTUAL_ENV", "NODE_PATH"];
+pub const RUNTIME_OWNED_KEYS: [&str; 10] = [
+    "PATH",
+    "HOME",
+    "LANG",
+    "LC_ALL",
+    "VIRTUAL_ENV",
+    "NODE_PATH",
+    "GIT_CONFIG_PARAMETERS",
+    "GIT_CONFIG_COUNT",
+    "GIT_PAGER",
+    "GIT_EDITOR",
+];
 
 /// An environment configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,7 +189,10 @@ impl ToolEnvironment {
             if key.is_empty() || key.contains('=') || key.contains('\0') {
                 return Err(ToolEnvironmentError::InvalidKey(key));
             }
-            if RUNTIME_OWNED_KEYS.contains(&key.as_str()) {
+            if RUNTIME_OWNED_KEYS.contains(&key.as_str())
+                || key.starts_with("GIT_CONFIG_KEY_")
+                || key.starts_with("GIT_CONFIG_VALUE_")
+            {
                 return Err(ToolEnvironmentError::RuntimeOwnedKey(key));
             }
             if let Some(existing) = sorted.insert(key.clone(), value.clone())
@@ -255,28 +272,22 @@ impl ToolEnvironment {
                 entries.push((key.clone(), value.clone()));
             }
         }
-        // Bash readonly proofs inspect argv only. Force the same execution
-        // contract for Git: repo-local `diff.external` / textconv helpers and
-        // host GIT_* overrides must not escape the proof by launching side
-        // effects under an otherwise-readonly `git diff`/`git show`.
-        apply_git_readonly_execution_guards(&mut entries);
+        // Keep ordinary Git output intact while controlling the shared child
+        // environment. Git still requires authorization: argv alone cannot
+        // exclude repository-configured helpers.
+        apply_git_execution_environment(&mut entries);
         entries
     }
 }
 
-/// Overrides that keep Git's process boundary aligned with argv-only readonly
-/// classification.
-///
-/// Empty `GIT_EXTERNAL_DIFF` / empty orderFile paths are not "unset": Git treats
-/// them as a command or path and breaks ordinary `git diff`. Prefer
-/// `diff.external=true` (no-op) and `diff.orderFile=/dev/null`, and force
-/// `core.fsmonitor=false` so repo-local helpers cannot fire under argv-readonly
-/// classification. Authorized overlay entries that already set these keys win.
-fn apply_git_readonly_execution_guards(entries: &mut Vec<(String, String)>) {
+/// Deterministic child defaults, not a proof that a Git command is read-only.
+/// In particular, clean filters, textconv, external diff and signing helpers
+/// remain repository-configurable and require normal permission admission.
+fn apply_git_execution_environment(entries: &mut Vec<(String, String)>) {
     const GUARDS: &[(&str, &str)] = &[
-        ("GIT_CONFIG_COUNT", "6"),
-        ("GIT_CONFIG_KEY_0", "diff.external"),
-        ("GIT_CONFIG_VALUE_0", "true"),
+        ("GIT_CONFIG_COUNT", "5"),
+        ("GIT_CONFIG_KEY_0", "core.useBuiltinFSMonitor"),
+        ("GIT_CONFIG_VALUE_0", "false"),
         ("GIT_CONFIG_KEY_1", "diff.orderFile"),
         ("GIT_CONFIG_VALUE_1", "/dev/null"),
         ("GIT_CONFIG_KEY_2", "core.editor"),
@@ -285,15 +296,13 @@ fn apply_git_readonly_execution_guards(entries: &mut Vec<(String, String)>) {
         ("GIT_CONFIG_VALUE_3", "cat"),
         ("GIT_CONFIG_KEY_4", "core.fsmonitor"),
         ("GIT_CONFIG_VALUE_4", "false"),
-        ("GIT_CONFIG_KEY_5", "core.useBuiltinFSMonitor"),
-        ("GIT_CONFIG_VALUE_5", "false"),
         ("GIT_PAGER", "cat"),
         ("GIT_EDITOR", "true"),
+        ("GIT_CONFIG_PARAMETERS", ""),
     ];
     for (key, value) in GUARDS {
-        if !entries.iter().any(|(existing, _)| existing == key) {
-            entries.push(((*key).to_owned(), (*value).to_owned()));
-        }
+        entries.retain(|(existing, _)| existing != key);
+        entries.push(((*key).to_owned(), (*value).to_owned()));
     }
 }
 
@@ -312,9 +321,12 @@ mod tests {
                 ("HOME".to_owned(), "/ws".to_owned()),
                 ("LANG".to_owned(), String::from("C.UTF-8")),
                 ("LC_ALL".to_owned(), String::from("C.UTF-8")),
-                ("GIT_CONFIG_COUNT".to_owned(), "6".to_owned()),
-                ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
-                ("GIT_CONFIG_VALUE_0".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "5".to_owned()),
+                (
+                    "GIT_CONFIG_KEY_0".to_owned(),
+                    "core.useBuiltinFSMonitor".to_owned()
+                ),
+                ("GIT_CONFIG_VALUE_0".to_owned(), "false".to_owned()),
                 ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
                 ("GIT_CONFIG_VALUE_1".to_owned(), "/dev/null".to_owned()),
                 ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
@@ -323,13 +335,9 @@ mod tests {
                 ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
                 ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
                 ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
-                (
-                    "GIT_CONFIG_KEY_5".to_owned(),
-                    "core.useBuiltinFSMonitor".to_owned()
-                ),
-                ("GIT_CONFIG_VALUE_5".to_owned(), "false".to_owned()),
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_PARAMETERS".to_owned(), String::new()),
             ]
         );
     }
@@ -388,6 +396,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn indexed_git_configuration_is_rejected_even_beyond_composed_indices() {
+        for key in [
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_KEY_4",
+            "GIT_CONFIG_VALUE_4",
+            "GIT_CONFIG_KEY_17",
+            "GIT_CONFIG_VALUE_17",
+        ] {
+            assert_eq!(
+                ToolEnvironment::from_authorized([(key.to_owned(), "value".to_owned())]),
+                Err(ToolEnvironmentError::RuntimeOwnedKey(key.to_owned())),
+                "{key} belongs to the runtime-owned Git configuration namespace"
+            );
+        }
+    }
+
     /// The overlay composes deterministically: Python bin first, then Node
     /// .bin, then the baseline; `VIRTUAL_ENV` and `NODE_PATH` are set; no
     /// ecosystem dependencies add no overlay.
@@ -413,9 +439,9 @@ mod tests {
                 ("VIRTUAL_ENV".to_owned(), "/env/python/abc".to_owned()),
                 ("NODE_PATH".to_owned(), "/env/node/def/node_modules".to_owned()),
                 ("MY_VAR".to_owned(), "1".to_owned()),
-                ("GIT_CONFIG_COUNT".to_owned(), "6".to_owned()),
-                ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
-                ("GIT_CONFIG_VALUE_0".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "5".to_owned()),
+                ("GIT_CONFIG_KEY_0".to_owned(), "core.useBuiltinFSMonitor".to_owned()),
+                ("GIT_CONFIG_VALUE_0".to_owned(), "false".to_owned()),
                 ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
                 ("GIT_CONFIG_VALUE_1".to_owned(), "/dev/null".to_owned()),
                 ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
@@ -424,10 +450,9 @@ mod tests {
                 ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
                 ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
                 ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
-                ("GIT_CONFIG_KEY_5".to_owned(), "core.useBuiltinFSMonitor".to_owned()),
-                ("GIT_CONFIG_VALUE_5".to_owned(), "false".to_owned()),
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_PARAMETERS".to_owned(), String::new()),
             ]
         );
         assert_eq!(
@@ -438,9 +463,12 @@ mod tests {
                 ("LANG".to_owned(), "C.UTF-8".to_owned()),
                 ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
                 ("MY_VAR".to_owned(), "1".to_owned()),
-                ("GIT_CONFIG_COUNT".to_owned(), "6".to_owned()),
-                ("GIT_CONFIG_KEY_0".to_owned(), "diff.external".to_owned()),
-                ("GIT_CONFIG_VALUE_0".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "5".to_owned()),
+                (
+                    "GIT_CONFIG_KEY_0".to_owned(),
+                    "core.useBuiltinFSMonitor".to_owned()
+                ),
+                ("GIT_CONFIG_VALUE_0".to_owned(), "false".to_owned()),
                 ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
                 ("GIT_CONFIG_VALUE_1".to_owned(), "/dev/null".to_owned()),
                 ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
@@ -449,13 +477,9 @@ mod tests {
                 ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
                 ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
                 ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
-                (
-                    "GIT_CONFIG_KEY_5".to_owned(),
-                    "core.useBuiltinFSMonitor".to_owned()
-                ),
-                ("GIT_CONFIG_VALUE_5".to_owned(), "false".to_owned()),
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_PARAMETERS".to_owned(), String::new()),
             ],
             "no ecosystem dependencies means no unnecessary overlay"
         );
@@ -479,69 +503,170 @@ mod tests {
         );
     }
 
-    /// Ordinary `git status`/`git diff` succeed under the readonly guards, and
-    /// a repo-local fsmonitor hook is not executed.
-    #[test]
-    fn git_readonly_guards_keep_ordinary_diff_and_suppress_fsmonitor() {
-        let root = tempfile::tempdir().expect("tempdir");
-        let repo = root.path().join("repo");
-        std::fs::create_dir_all(&repo).expect("repo");
-        let marker = root.path().join("fsmonitor-fired");
-        let hook = root.path().join("fsmonitor.sh");
-        std::fs::write(
-            &hook,
-            format!("#!/bin/sh\necho fired > '{}'\nexit 0\n", marker.display()),
-        )
-        .expect("hook");
-        #[cfg(unix)]
-        {
+    struct GitFixture {
+        _root: tempfile::TempDir,
+        repo: std::path::PathBuf,
+        marker: std::path::PathBuf,
+        helper: std::path::PathBuf,
+    }
+
+    impl GitFixture {
+        fn new() -> Self {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&hook).expect("meta").permissions();
-            perms.set_mode(0o755);
-            std::fs::set_permissions(&hook, perms).expect("chmod");
+            let root = tempfile::tempdir().expect("temporary Git fixture");
+            let repo = root.path().join("repo");
+            std::fs::create_dir(&repo).expect("repo");
+            let marker = root.path().join("helper-fired");
+            let helper = root.path().join("helper.sh");
+            std::fs::write(
+                &helper,
+                format!("#!/bin/sh\necho fired > '{}'\ncat\n", marker.display()),
+            )
+            .expect("helper");
+            std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755))
+                .expect("executable helper");
+            let fixture = Self {
+                _root: root,
+                repo,
+                marker,
+                helper,
+            };
+            assert!(fixture.run(&["init", "-q"]).status.success());
+            std::fs::write(fixture.repo.join("file.txt"), "hello\n").expect("file");
+            assert!(fixture.run(&["add", "file.txt"]).status.success());
+            assert!(
+                fixture
+                    .run(&[
+                        "-c",
+                        "user.name=Test",
+                        "-c",
+                        "user.email=test@example.com",
+                        "commit",
+                        "-qm",
+                        "initial",
+                    ])
+                    .status
+                    .success()
+            );
+            fixture
         }
-        let run = |args: &[&str]| {
+
+        fn run(&self, args: &[&str]) -> std::process::Output {
             std::process::Command::new("git")
                 .args(args)
-                .current_dir(&repo)
+                .current_dir(&self.repo)
                 .env_clear()
-                .envs(
-                    ToolEnvironment::new()
-                        .child_environment(&repo)
-                        .into_iter()
-                        .chain([("GIT_CONFIG_GLOBAL".to_owned(), "/dev/null".to_owned())])
-                        .chain([("GIT_CONFIG_NOSYSTEM".to_owned(), "1".to_owned())]),
-                )
+                .envs(ToolEnvironment::new().child_environment(&self.repo))
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
                 .output()
                 .unwrap_or_else(|error| panic!("git {args:?}: {error}"))
-        };
-        assert!(
-            run(&["init", "-q"]).status.success(),
-            "git init must succeed under child_environment"
-        );
-        // Force a local fsmonitor that would fire without the readonly guards.
-        assert!(
-            run(&["config", "core.fsmonitor", &hook.display().to_string(),])
-                .status
-                .success()
-        );
-        std::fs::write(repo.join("file.txt"), "hello\n").expect("file");
-        assert!(run(&["add", "file.txt"]).status.success());
-        let status = run(&["status", "--porcelain"]);
+        }
+
+        fn configure_helper(&self, key: &str) {
+            assert!(
+                self.run(&["config", key, &self.helper.display().to_string()])
+                    .status
+                    .success()
+            );
+        }
+    }
+
+    /// Ordinary authorized Git commands retain real patches. Explicit helper
+    /// flags can preserve output, but never establish readonly authorization.
+    #[test]
+    fn git_environment_preserves_real_patches_without_claiming_readonly() {
+        let fixture = GitFixture::new();
+        fixture.configure_helper("core.fsmonitor");
+        std::fs::write(fixture.repo.join("file.txt"), "updated\n").unwrap();
+        let status = fixture.run(&["status", "--porcelain"]);
         assert!(
             status.status.success(),
-            "git status failed: {}",
+            "{}",
             String::from_utf8_lossy(&status.stderr)
         );
-        let diff = run(&["diff", "--cached"]);
+        assert!(String::from_utf8_lossy(&status.stdout).contains(" M file.txt"));
+        let diff = fixture.run(&["diff"]);
         assert!(
             diff.status.success(),
-            "git diff failed: {}",
+            "{}",
             String::from_utf8_lossy(&diff.stderr)
         );
+        let patch = String::from_utf8_lossy(&diff.stdout);
         assert!(
-            !marker.exists(),
-            "repo-local fsmonitor must not fire under readonly guards"
+            patch.contains("a/file.txt") && patch.contains("-hello") && patch.contains("+updated")
         );
+        std::fs::write(fixture.repo.join(".gitattributes"), "file.txt diff=probe\n").unwrap();
+        for key in ["diff.external", "diff.probe.textconv"] {
+            fixture.configure_helper(key);
+        }
+        for args in [
+            vec!["diff", "--no-ext-diff", "--no-textconv"],
+            vec!["show", "--no-ext-diff", "--no-textconv", "HEAD"],
+            vec!["log", "--no-ext-diff", "--no-textconv", "-p", "-1"],
+        ] {
+            let command = format!("git {}", args.join(" "));
+            assert!(matches!(
+                crate::runtime::permission::analyze_bash_readonly(&command).class,
+                crate::runtime::permission::BashReadonlyClass::Unproven { .. }
+            ));
+            let result = fixture.run(&args);
+            assert!(
+                result.status.success(),
+                "{command}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            let patch = String::from_utf8_lossy(&result.stdout);
+            assert!(
+                patch.contains("a/file.txt") && patch.contains("hello"),
+                "{command}: {patch}"
+            );
+        }
+        assert!(
+            !fixture.marker.exists(),
+            "explicit diff flags and fsmonitor default suppress these particular helpers"
+        );
+    }
+
+    /// Clean conversion remains configurable even when external diff and
+    /// textconv are disabled. An argv-only Git proof would authorize this code.
+    #[test]
+    fn git_clean_filters_require_authorization_even_with_diff_helper_flags() {
+        let fixture = GitFixture::new();
+        fixture.configure_helper("filter.probe.clean");
+        std::fs::write(
+            fixture.repo.join(".gitattributes"),
+            "file.txt filter=probe\n",
+        )
+        .unwrap();
+        let path = fixture.repo.join("file.txt");
+        std::fs::write(&path, "world\n").unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(2))
+            .unwrap();
+        for args in [
+            vec!["status", "--porcelain"],
+            vec!["diff", "--no-ext-diff", "--no-textconv"],
+        ] {
+            let command = format!("git {}", args.join(" "));
+            assert!(matches!(
+                crate::runtime::permission::analyze_bash_readonly(&command).class,
+                crate::runtime::permission::BashReadonlyClass::Unproven { .. }
+            ));
+            let result = fixture.run(&args);
+            assert!(
+                result.status.success(),
+                "{command}: {}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(
+                fixture.marker.exists(),
+                "{command} invokes configured clean conversion"
+            );
+            std::fs::remove_file(&fixture.marker).unwrap();
+        }
     }
 }

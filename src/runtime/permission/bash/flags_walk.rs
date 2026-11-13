@@ -85,7 +85,6 @@ pub fn is_argv_allowed_by_policy(
                             && value.starts_with('-')
                             && value.len() > 1
                             && is_option_like(value)
-                            && !(command_name == "git" && flag == "--sort")
                         {
                             return false;
                         }
@@ -97,12 +96,8 @@ pub fn is_argv_allowed_by_policy(
                     }
                 }
             }
-            if let Some((short_flag, kind, value)) = short_attached(word, safe_flags) {
-                if value.starts_with('-')
-                    && value.len() > 1
-                    && is_option_like(value)
-                    && !(command_name == "git" && short_flag == "--sort")
-                {
+            if let Some((_, kind, value)) = short_attached(word, safe_flags) {
+                if value.starts_with('-') && value.len() > 1 && is_option_like(value) {
                     return false;
                 }
                 if !matches_kind(value, kind) {

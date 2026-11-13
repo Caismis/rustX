@@ -168,7 +168,9 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
                 id: call_id,
                 tool_id: definition.id,
                 name: definition.name,
-                arguments: serde_json::json!({"text": "hi"}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({"text": "hi"}),
+                ),
             },
         }),
         FakeStep::Emit(ModelEvent::Completed {
@@ -2259,7 +2261,9 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
                 id: call_id,
                 tool_id: definition.id,
                 name: definition.name,
-                arguments: serde_json::json!({"command": "sleep 30"}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({"command": "sleep 30"}),
+                ),
             },
         }),
         FakeStep::Emit(crate::model::event::ModelEvent::Completed {

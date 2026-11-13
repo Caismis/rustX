@@ -25,8 +25,8 @@ const todoSection = (subject: string): RuntimeClientStatusSection =>
 const user = (id: string, cursor: string, text = `Ask ${id}`): RuntimeClientTranscriptEntry =>
   ({ cursor, item: { type: 'message', message: { role: 'user', id, source: 'human', content: [{ type: 'text', text }] } } });
 const assistant = (id: string, cursor: string, text = `Answer ${id}`): RuntimeClientTranscriptEntry =>
-  ({ cursor, item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text }, { type: 'tool_call', id: `call-${id}`, tool_id: 'bash', name: 'bash', arguments: {} }] } },
-    tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:id},block_index:1},assembly_complete:true, message_id: id, block_index: 1, call_id: `call-${id}`, tool_id: 'bash', name: 'bash', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'native tool output' }] } } }] });
+  ({ cursor, item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text }, { type: 'tool_call', id: `call-${id}`, tool_id: 'bash', name: 'bash', arguments: { arguments: {} } }] } },
+    tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:id},block_index:1},assembly_complete:true, message_id: id, block_index: 1, call_id: `call-${id}`, tool_id: 'bash', name: 'bash', state: { type: 'settled', arguments: "{\"arguments\":{}}", result: { status: { type: 'success' }, duration_ms: "1", content: [{ type: 'text', text: 'native tool output' }] } } }] });
 /** A canonical ToolResult entry. Its standalone body is suppressed by ordinary Web
  * rendering — the native call projection already draws the result beside the call —
  * yet it keeps its authoritative transcript position. */

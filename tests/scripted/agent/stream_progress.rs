@@ -190,6 +190,7 @@ async fn make_execution(setup: ExecutionSetup<'_>) -> AgentExecution<'_> {
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
             last_permission_reminder_mode: None,
+            permission_task_message: None,
             approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         context_runtime(),
@@ -612,10 +613,10 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
     let policies = rustx::tools::NativeToolPolicies::default();
     let fixture = common::native_fixture_with(Vec::new(), policies);
     let content = "0123456789abcdef".repeat(4096);
-    let arguments = serde_json::json!({
+    let arguments = common::tool_call_envelope(serde_json::json!({
         "path": "large.txt",
         "content": content,
-    });
+    }));
     let arguments_json = serde_json::to_string(&arguments).expect("serialize write arguments");
     let call = ToolCall {
         id: ToolCallId::new("call-write-168"),

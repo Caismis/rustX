@@ -58,7 +58,7 @@ fn assert_resource_helpers_require_approval(snapshot: &crate::capabilities::Capa
                 id: crate::runtime::identity::ToolCallId::new("child-resource"),
                 tool_id: definition.id.clone(),
                 name: definition.name.clone(),
-                arguments,
+                arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
             })
             .unwrap()
         else {

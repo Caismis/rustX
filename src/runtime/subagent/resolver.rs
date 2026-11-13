@@ -1733,11 +1733,15 @@ mod tests {
         AvailableToolCatalog::new(
             definitions
                 .into_iter()
-                .map(|definition| {
-                    crate::tools::executor::ToolRegistration::plain(
-                        definition,
-                        std::sync::Arc::new(UnusedExecutor),
-                    )
+                .flat_map(|definition| {
+                    crate::tools::executor::ToolRegistry::from_registrations([
+                        crate::tools::executor::ToolRegistration::plain(
+                            definition,
+                            std::sync::Arc::new(UnusedExecutor),
+                        ),
+                    ])
+                    .unwrap()
+                    .validated_registrations()
                 })
                 .collect(),
         )

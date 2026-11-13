@@ -15,6 +15,8 @@ mod matrix;
 mod mode;
 mod reminder;
 mod resource;
+mod task;
+pub use task::PermissionTaskEvidence;
 pub(crate) mod review;
 
 pub use bash::{BashReadonlyAnalysis, BashReadonlyClass, analyze_bash_readonly};

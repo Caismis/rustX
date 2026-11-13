@@ -114,7 +114,7 @@ fn preflight(
             id: ToolCallId::new("call-preflight"),
             tool_id: definition.id,
             name: name.to_owned(),
-            arguments,
+            arguments: common::tool_call_envelope(arguments),
         })
         .expect("identity resolves")
 }
@@ -366,7 +366,7 @@ fn native_tools_preserve_legal_execution_policies_and_fixed_job_control_policy()
                 id: ToolCallId::new("policy-call"),
                 tool_id: ToolId::new("tool-read"),
                 name: "read".to_owned(),
-                arguments,
+                arguments: support::fake::scripted_call_envelope("read", &arguments),
             })
             .expect("policy preflight");
         let PreflightOutcome::Ready(prepared) = outcome else {
@@ -1005,7 +1005,7 @@ async fn native_admission_pins_policy_axes_and_exposure_across_candidate_changes
         id: ToolCallId::new("frozen"),
         tool_id: rustx::runtime::identity::ToolId::new("tool-bash"),
         name: "bash".into(),
-        arguments: serde_json::json!({"command":"true","execution_mode":"foreground"}),
+        arguments: serde_json::json!({"arguments":{"command":"true"},"execution_mode":"foreground"}),
     };
     let PreflightOutcome::Ready(before) = frozen.tool_registry().preflight(&call).unwrap() else {
         panic!("ready");
@@ -1506,9 +1506,7 @@ async fn malformed_ask_user_rejects_before_interaction_publication() {
 /// registry preflight path.
 #[test]
 fn ask_user_is_one_plain_questionnaire_schema() {
-    use rustx::tools::{
-        ToolExecutionPolicy, validate_canonical_schema, validate_execution_metadata_contract,
-    };
+    use rustx::tools::validate_canonical_schema;
 
     let fixture = common::native_fixture();
     let ask_user = definition(&fixture, "ask_user").input_schema;
@@ -1519,27 +1517,4 @@ fn ask_user_is_one_plain_questionnaire_schema() {
     assert!(ask_user.get("oneOf").is_none());
     assert_eq!(ask_user["additionalProperties"], false);
     validate_canonical_schema(&ask_user).expect("the questionnaire root is canonical");
-    validate_execution_metadata_contract(ToolExecutionPolicy::ForegroundOnly, &ask_user)
-        .expect("the fixed foreground policy preserves the ordinary root");
-
-    // Every model-selectable native tool matches the decoratable root profile.
-    for name in ["read", "write", "edit", "glob", "grep", "bash"] {
-        let schema = definition(&fixture, name).input_schema;
-        validate_execution_metadata_contract(ToolExecutionPolicy::ModelSelectable, &schema)
-            .unwrap_or_else(|error| panic!("{name} must stay ModelSelectable-eligible: {error}"));
-        for keyword in schema.as_object().expect("root object").keys() {
-            assert!(
-                rustx::tools::is_decoratable_root_keyword(keyword),
-                "{name} uses root keyword {keyword:?}, outside the profile"
-            );
-        }
-        // Native contracts are generated with inlined subschemas, so the
-        // reference ban costs them nothing either.
-        for keyword in rustx::tools::REFERENCE_APPLICATOR_KEYWORDS {
-            assert!(
-                !schema.to_string().contains(keyword),
-                "{name} must stay reference-free for ModelSelectable: {keyword}"
-            );
-        }
-    }
 }

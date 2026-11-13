@@ -68,7 +68,7 @@ impl ToolExecutor for EditTool {
     }
 }
 
-fn run_edit(
+pub(super) fn run_edit(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
@@ -84,7 +84,11 @@ fn run_edit(
     if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
         return failed_result(error);
     }
-    let bytes = match std::fs::read(bound.path()) {
+    let target = match bound.commit_target(false) {
+        Ok(target) => target,
+        Err(error) => return failed_result(error),
+    };
+    let bytes = match target.read() {
         Ok(bytes) => bytes,
         Err(error) => {
             return failed_result(format!("cannot read {}: {error}", bound.path().display()));
@@ -119,7 +123,6 @@ fn run_edit(
     if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
         return failed_result(error);
     }
-    let target = bound.commit_target();
     if let Err(error) = atomic_commit(&target, updated.as_bytes()) {
         return failed_result(error);
     }

@@ -46,14 +46,11 @@ macro_rules! zcode_port_mod {
 }
 
 zcode_port_mod!(
-    callbacks, commands, direct, flags, flags_walk, git, io, parse, policy, types
+    callbacks, commands, direct, flags, flags_walk, io, parse, policy, types
 );
 
 use parse::analyze_bash_command;
-use policy::{
-    analysis_contains_git_and_directory_change, evaluate_bash_readonly_policy,
-    has_known_bash_write_option,
-};
+use policy::{analysis_contains_git, evaluate_bash_readonly_policy, has_known_bash_write_option};
 use serde::{Deserialize, Serialize};
 
 /// Structured classification of one Bash command for permission admission.
@@ -135,9 +132,10 @@ pub fn analyze_bash_readonly(command: &str) -> BashReadonlyAnalysis {
             reason: "no simple commands to classify".to_owned(),
         });
     }
-    if analysis_contains_git_and_directory_change(&ast.commands) {
+    if analysis_contains_git(&ast.commands) {
         return facts(BashReadonlyClass::Unproven {
-            reason: "git combined with directory change is not proven read-only".to_owned(),
+            reason: "Git helpers and repository configuration are not bound to the read-only proof"
+                .to_owned(),
         });
     }
 
@@ -220,11 +218,6 @@ mod tests {
             "hostname",
             "hostname -f",
             "hostname --fqdn",
-            "git status",
-            "git log --oneline",
-            "git log -n 5 --graph --stat",
-            "git show --stat HEAD",
-            "git branch -a",
             "rg -n foo src",
             "find . -name '*.rs'",
             "head -n 20 README.md",
@@ -264,6 +257,12 @@ mod tests {
             "ls | rm",
             "curl http://x",
             "git commit -am x",
+            "git show HEAD",
+            "git log -p -1",
+            "git diff",
+            "git show --no-textconv HEAD",
+            "git log --no-ext-diff -p -1",
+            "git diff -- --no-ext-diff --no-textconv",
             "env rm -rf /",
             "git branch feature",
             "git tag v1.0.0",
@@ -317,6 +316,38 @@ mod tests {
             "touch approval-probe.flag",
         ] {
             assert_unproven(command);
+        }
+    }
+
+    #[test]
+    fn git_requires_configuration_bound_authorization_even_with_helper_flags() {
+        for command in [
+            "git status",
+            "git status --porcelain",
+            "git diff",
+            "git diff --cached --no-ext-diff --no-textconv",
+            "git diff --no-ext-diff --no-textconv",
+            "git show --no-ext-diff --no-textconv HEAD",
+            "git log --no-ext-diff --no-textconv --oneline",
+            "git log --no-ext-diff --no-textconv --format=pretty_alias",
+            "git branch -a",
+            "git tag --list",
+            "git remote -v",
+            "git grep needle",
+            "git ls-files --cached",
+            "git rev-parse --show-toplevel",
+            "git --version",
+            "command git status",
+            "ls | git show --no-ext-diff --no-textconv HEAD",
+        ] {
+            let analysis = analyze_bash_readonly(command);
+            let BashReadonlyClass::Unproven { reason } = analysis.class else {
+                panic!("{command} bypassed configuration-bound authorization");
+            };
+            assert!(
+                reason.contains("repository configuration"),
+                "{command}: {reason}"
+            );
         }
     }
 

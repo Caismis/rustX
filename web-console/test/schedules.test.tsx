@@ -547,7 +547,7 @@ it('opens a canonical creation card through its original task binding, independe
   const result = { status: { type: 'success' as const }, duration_ms: '0', content: [{ type: 'json' as const, value: { status: 'applied', receipt: { id: task().id, spec: task().spec } } }] };
   const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'create-task' }, block_index: 0 },
     block_index: 0, assembly_complete: true, name: 'schedule_command', tool_id: 'native.schedule_command', committed_result: result, committed_result_deferred: false,
-    state: { type: 'settled', arguments: JSON.stringify({ mutation: { type: 'create', title: task().title } }), result } };
+    state: { type: 'settled', arguments: JSON.stringify({ arguments: { mutation: { type: 'create', title: task().title } } }), result } };
   f.server.handlers.set('session/tracePage', request => {
     if (request.method !== 'session/tracePage') throw Error('original Tool');
     return { type: 'checkpoint_page', page: { read_cut: cut, cursor: cut.revision, domain: request.params.domain, total: '1',

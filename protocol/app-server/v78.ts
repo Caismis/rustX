@@ -8942,10 +8942,8 @@ export type SubagentWaitReason =
  *   execution.
  * - `ModelSelectable` — the model must explicitly choose foreground or
  *   background execution for each invocation through the required
- *   `execution_mode` invocation field. That field is reserved by the
- *   runtime only under this policy; registration rejects a `ModelSelectable`
- *   tool whose canonical schema already defines it. Only Bash retains this
- *   authored selector.
+ *   outer `execution_mode` invocation field. Runtime metadata is separate
+ *   from the business object, whose same-named properties stay tool-owned.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ToolExecutionPolicy".

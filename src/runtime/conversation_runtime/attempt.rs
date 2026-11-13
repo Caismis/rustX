@@ -95,15 +95,16 @@ impl RuntimeInner {
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
+        let (record_changes, last_permission_reminder_mode, permission_task_message) = {
+            let state = self.state.lock().expect("coordinator lock");
+            (
+                state.parent_turn_permits.is_none(),
+                state.last_permission_reminder_mode,
+                state.permission_task_message.clone(),
+            )
+        };
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
-            workspace_changes: if self
-                .state
-                .lock()
-                .expect("coordinator lock")
-                .parent_turn_permits
-                .is_none()
-                && self.workflow_output.is_none()
-            {
+            workspace_changes: if record_changes && self.workflow_output.is_none() {
                 crate::workspace_changes::ChangeRecording::start(
                     attempt_id.clone(),
                     self.tool_runtime.workspace().root().to_owned(),
@@ -157,11 +158,8 @@ impl RuntimeInner {
                 }),
             workflow_output: self.workflow_output.clone(),
             approval_mode,
-            last_permission_reminder_mode: self
-                .state
-                .lock()
-                .expect("coordinator lock")
-                .last_permission_reminder_mode,
+            last_permission_reminder_mode,
+            permission_task_message,
         };
         let workspace_changes = execution_policy.workspace_changes.clone();
         let auxiliary_invocation = model.summary_invocation().clone();
@@ -304,6 +302,7 @@ impl RuntimeInner {
                 fanout.child_settled();
             }
             state.conversation = Some(result.conversation);
+            state.permission_task_message = result.permission_task_message;
             match (
                 result.permission_reminder_emitted,
                 result.permission_reminder_unconsumed_pending,

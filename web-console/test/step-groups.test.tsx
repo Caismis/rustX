@@ -12,7 +12,7 @@ import { projectionHead } from './fixture';
 afterEach(() => { cleanup(); act(() => { localeController.setLocale('en'); conversationPreferences().update({ transcriptMode: 'detailed' }, false); }); });
 
 const owner = (outcome: TurnProcessView['outcome'] = 'completed'): TurnProcessView => ({attempt_id_source:null, conversation_id: 'c', attempt_id: 'a', final_message_locator:null,final_message_id_deferred:false,final_message_id_source:null,final_message_id: 'final', outcome, control_cursor: '1', message_count: 4, tool_call_count: 3 });
-const call = (id: string, name: string): AssistantContentBlock => ({ type: 'tool_call', id, tool_id: `tool-${name}`, name, arguments: {} });
+const call = (id: string, name: string): AssistantContentBlock => ({ type: 'tool_call', id, tool_id: `tool-${name}`, name, arguments: { arguments: {} } });
 const assistant = (id: string, process: TurnProcessView, content: AssistantContentBlock[]): RuntimeClientTranscriptEntry =>
   ({ cursor: id, turn_process: process, item: { type: 'message', message: { role: 'assistant', id, content } } });
 const result = (id: string, process: TurnProcessView): RuntimeClientTranscriptEntry =>
@@ -100,7 +100,7 @@ it('carries disclosure into a process group that merges across published message
 it('keeps an expanded live ToolCard open when its second message merges into an earlier durable process group', () => {
   act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
   const process = owner('running');
-  const execution = (message: string, id: string): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: 0 }, message_id: message, block_index: 0, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: JSON.stringify({ path: message + '.txt' }) } });
+  const execution = (message: string, id: string): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: 0 }, message_id: message, block_index: 0, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: JSON.stringify({ arguments: { path: message + '.txt' } }) } });
   const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call');
   const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99', tool_calls: [firstTool] };
   const live = { ...snapshot(), conversation_id: 'c', transcript: { entries: [first] }, attempt: { attempt_id: 'a', phase: { type: 'running' as const }, turn: 1, foreground: [secondTool], in_flight: { message_id: 'second', blocks: [{ type: 'tool_call' as const, block_index: 0, call_id: 'second-call', tool_id: 'tool-read', name: 'read', arguments: secondTool.state.arguments }] } } };
@@ -123,7 +123,7 @@ it('keeps Tool disclosure and focus through revoked and renewed attachment admis
   const server = new Server(); await server.attached('A');
   try {
     const process = owner('running');
-    const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'first' }, block_index: 0 }, message_id: 'first', block_index: 0, call_id: 'read-1', tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '{}' } };
+    const tool: ForegroundToolExecution = { occurrence: { locator: { type: 'by_message_id', message_id: 'first' }, block_index: 0 }, message_id: 'first', block_index: 0, call_id: 'read-1', tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: "{\"arguments\":{}}" } };
     const entry = { ...assistant('first', process, [call('read-1', 'read')]), cursor: '1', tool_calls: [tool] };
     const value = { ...snapshot(), conversation_id: 'c', transcript: { entries: [entry] } };
     const source = () => ({ client: server.client, target: server.client.target('A'), epoch: server.client.getSnapshot().generation, cut: () => server.client.getSnapshot().views.A?.checkpoint?.read_cut, owned: () => server.client.isAttachmentObservationCurrent('A', server.client.getSnapshot().views.A?.attachmentObservation) });
@@ -150,7 +150,7 @@ it('keeps Tool disclosure and focus through revoked and renewed attachment admis
 it.each([false, true].flatMap(compacted => [false, true].map(descriptorOnly => ({ compacted, descriptorOnly }))))('retains a focused process member through publication (compaction: $compacted; descriptor only: $descriptorOnly)', ({ compacted, descriptorOnly }) => {
   act(() => conversationPreferences().update({ transcriptMode: 'standard' }));
   const process = owner('running');
-  const execution = (message: string, id: string, index = 0): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: index }, message_id: message, block_index: index, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: '{}' } });
+  const execution = (message: string, id: string, index = 0): ForegroundToolExecution => ({ occurrence: { locator: { type: 'by_message_id', message_id: message }, block_index: index }, message_id: message, block_index: index, call_id: id, tool_id: 'tool-read', name: 'read', assembly_complete: true, committed_result_deferred: false, state: { type: 'running', arguments: "{\"arguments\":{}}" } });
   const firstTool = execution('first', 'first-call'), secondTool = execution('second', 'second-call', 1);
   const secondTools = descriptorOnly ? Array.from({ length: 20 }, (_, index) => ({ ...execution('second', index === 0 ? 'second-call' : 'extra-call-' + index, index + 1), state: { type: 'running' as const, arguments: JSON.stringify({ path: 'x'.repeat(920) }) } })) : [secondTool];
   const first = { ...assistant('first', process, [call('first-call', 'read')]), cursor: '99', tool_calls: [firstTool] };

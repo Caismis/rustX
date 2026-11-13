@@ -215,6 +215,8 @@ impl<'a> AgentExecution<'a> {
                 .for_model(request.model.primary().capabilities()),
         );
         Ok(Self {
+            permission_task: None,
+            inherited_permission_task_message: runtime_policy.permission_task_message,
             admitted_tools,
             conversation,
             generation_policy: frozen_generation_policy(&request),

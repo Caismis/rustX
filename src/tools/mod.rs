@@ -55,12 +55,10 @@ pub use locator::LocatorError;
 pub use managed_output::{BackgroundOutput, ManagedOutputError, ManagedToolOutput, ResultSpill};
 pub use runtime::ConversationToolRuntime;
 pub use schema::{
-    DECORATABLE_ROOT_INSTANCE_KEYWORDS, EXECUTION_MODE_DESCRIPTION,
-    EXECUTION_MODE_DESCRIPTION_REMINDER, EXECUTION_MODE_FIELD, EXECUTION_MODE_VALUES,
-    ExecutionModeClaim, REFERENCE_APPLICATOR_KEYWORDS, ROOT_ANNOTATION_KEYWORDS,
-    RUNTIME_PROPERTY_PREFIX, SchemaError, compile_model_definition, is_decoratable_root_keyword,
-    is_reserved_property, resolve_invocation_metadata, validate_business_arguments,
-    validate_canonical_schema, validate_execution_metadata_contract,
+    ARGUMENTS_FIELD, EXECUTION_MODE_DESCRIPTION, EXECUTION_MODE_DESCRIPTION_REMINDER,
+    EXECUTION_MODE_FIELD, EXECUTION_MODE_VALUES, RUNTIME_PROPERTY_PREFIX, SchemaError,
+    compile_model_definition, is_reserved_property, resolve_invocation_metadata,
+    validate_business_arguments, validate_canonical_schema,
 };
 // The task list is split at the authority boundary rather than exported as
 // one surface. What a consumer may hold is the *derived* list and the rules

@@ -96,10 +96,10 @@ async fn dispatch_big_background_bash(
         id: ToolCallId::new("call-big"),
         tool_id: ToolId::new("tool-bash"),
         name: "bash".to_owned(),
-        arguments: serde_json::json!({
+        arguments: common::tool_call_envelope(serde_json::json!({
             "execution_mode": "background",
             "command": BIG_OUTPUT_COMMAND,
-        }),
+        })),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     let PreflightOutcome::Ready(prepared) = outcome else {

@@ -22,7 +22,7 @@
 //! What the suite *asserts* is published API: the tool's replies, and the
 //! committed list through `ConversationToolRuntime::todo_snapshot`.
 
-use super::super::support::todo::TodoPlane;
+use super::super::{common, support::todo::TodoPlane};
 use rustx::durable::CanonicalStore;
 
 use rustx::tools::todo::{TodoSnapshot, TodoStatus};
@@ -169,11 +169,11 @@ async fn a_rejected_call_leaves_the_list_untouched() {
             id: rustx::runtime::identity::ToolCallId::new("call-unknown-field"),
             tool_id: rustx::runtime::identity::ToolId::new(rustx::tools::todo::TODO_TOOL_ID),
             name: "todo".to_owned(),
-            arguments: serde_json::json!({
+            arguments: common::tool_call_envelope(serde_json::json!({
                 "action": "create",
                 "subject": "Ship",
                 "priority": "high",
-            }),
+            })),
         })
         .expect("identity resolves");
     let rustx::tools::executor::PreflightOutcome::Rejected { error, .. } = outcome else {
@@ -461,7 +461,7 @@ async fn a_new_tool_runtime_rebuilds_the_list_from_conversation_history() {
                             rustx::tools::todo::TODO_TOOL_ID,
                         ),
                         name: "todo".into(),
-                        arguments: serde_json::json!({}),
+                        arguments: common::tool_call_envelope(serde_json::json!({})),
                     },
                 )],
             },

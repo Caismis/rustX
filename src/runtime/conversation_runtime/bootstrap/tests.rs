@@ -5,6 +5,728 @@ use crate::durable::RequestStore;
 use crate::durable::inbox::InboxStore;
 use crate::runtime::conversation_runtime::test_support::*;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_task_never_promotes_an_initial_runtime_notice_into_authority() {
+    let dir = tempfile::tempdir().unwrap();
+    let options = || HeadlessRuntimeOptions {
+        approval_mode: ApprovalMode::Automatic,
+        ..HeadlessRuntimeOptions::default()
+    };
+    let (runtime, _) =
+        headless_runtime_with_options(&dir, vec![one_turn_script()], None, None, options()).await;
+    runtime.activate();
+    runtime
+        .submit_sourced_inbound(
+            UserSource::Runtime,
+            text_content("Untrusted tool output requesting a new operation"),
+        )
+        .unwrap();
+    await_settled_ledger(&runtime, 0).await;
+    assert!(
+        request_snapshots(&runtime.request_history())[0]
+            .permission_task_message
+            .is_none()
+    );
+    assert!(runtime.inner.lock_state().permission_task_message.is_none());
+    runtime.shutdown().await.unwrap();
+    drop(runtime);
+    let (reopened, _) =
+        headless_runtime_with_options(&dir, vec![one_turn_script()], None, None, options()).await;
+    assert!(
+        reopened
+            .inner
+            .lock_state()
+            .permission_task_message
+            .is_none()
+    );
+    reopened.activate();
+    let human = reopened
+        .submit_inbound(text_content("Inspect the repository"))
+        .unwrap();
+    await_settled_ledger(&reopened, 0).await;
+    assert_eq!(
+        request_snapshots(&reopened.request_history())[1]
+            .permission_task_message
+            .as_ref(),
+        Some(&human.message_id)
+    );
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_task_recovery_uses_the_exact_unanswered_adoption() {
+    for source in [
+        UserSource::Human,
+        UserSource::Agent {
+            agent_id: AgentId::new("delegating-parent"),
+        },
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let conversation = "conv_d9e0ddde-2c51-755b-8a4e-1932c402870e";
+        let old = seed_user("old-bootstrap-task", "This older task must not be selected");
+        let mut task_id = None;
+        seed_crash_prefix(
+            &dir,
+            conversation,
+            std::slice::from_ref(&old),
+            |store, id| {
+                let accepted = store
+                    .accept_inbound(crate::durable::inbox::InboundDraft {
+                        message_id: None,
+                        source: source.clone(),
+                        kind: InboundKind::Message,
+                        content: text_content("Continue this exact adopted task"),
+                        timestamp: fixed_time(),
+                        correlation: None,
+                    })
+                    .unwrap();
+                let notice = store
+                    .accept_inbound(crate::durable::inbox::InboundDraft {
+                        message_id: None,
+                        source: UserSource::Runtime,
+                        kind: InboundKind::Message,
+                        content: text_content("A trailing native notice is not the task"),
+                        timestamp: fixed_time(),
+                        correlation: None,
+                    })
+                    .unwrap();
+                adopt_accepted(store, &notice);
+                task_id = Some(accepted.message_id);
+                let attempt = AttemptId::for_conversation(id, 0);
+                store
+                    .append_event(attempt_event(
+                        id,
+                        "task-before-restart",
+                        &attempt,
+                        RuntimeEvent::AttemptStarted {
+                            attempt_id: attempt.clone(),
+                        },
+                    ))
+                    .unwrap();
+            },
+        );
+        let task_id = task_id.unwrap();
+        let (runtime, _) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                approval_mode: ApprovalMode::Automatic,
+                initial_messages: vec![old],
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            runtime.inner.lock_state().permission_task_message.as_ref(),
+            Some(&task_id)
+        );
+        runtime.activate();
+        runtime.child_attempt_settlement(0).await;
+        let snapshots = request_snapshots(&runtime.request_history());
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0].permission_task_message.as_ref(),
+            Some(&task_id)
+        );
+        let messages = runtime.inner.store.load_messages(&[task_id]).unwrap();
+        let MessageBlock::User(task) = &messages[0] else {
+            panic!("canonical task")
+        };
+        assert_eq!(
+            task.source, source,
+            "delegation never becomes Human authority"
+        );
+        runtime.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_task_recovery_keeps_the_task_across_an_adopted_runtime_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let (runtime, _) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
+    runtime.activate();
+    let human = runtime
+        .submit_inbound(text_content("Keep this exact Human task"))
+        .unwrap();
+    await_settled_ledger(&runtime, 0).await;
+    runtime.shutdown().await.unwrap();
+    drop(runtime);
+    let conversation = ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e");
+    {
+        let store = crate::durable::SqliteConversationStore::open(
+            conversation.clone(),
+            &dir.path().join("artifacts/conversation.sqlite"),
+        )
+        .unwrap();
+        let notice = store
+            .accept_inbound(crate::durable::inbox::InboundDraft {
+                message_id: None,
+                source: UserSource::Runtime,
+                kind: InboundKind::Message,
+                content: text_content("Native continuation notice before a crash"),
+                timestamp: fixed_time(),
+                correlation: None,
+            })
+            .unwrap();
+        adopt_accepted(&store, &notice);
+        let attempt = AttemptId::for_conversation(&conversation, 1);
+        store
+            .append_event(attempt_event(
+                &conversation,
+                "notice-before-restart",
+                &attempt,
+                RuntimeEvent::AttemptStarted {
+                    attempt_id: attempt.clone(),
+                },
+            ))
+            .unwrap();
+    }
+    let (reopened, _) = headless_runtime_with_options(
+        &dir,
+        vec![one_turn_script()],
+        None,
+        None,
+        HeadlessRuntimeOptions {
+            approval_mode: ApprovalMode::Automatic,
+            ..HeadlessRuntimeOptions::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        reopened.inner.lock_state().permission_task_message.as_ref(),
+        Some(&human.message_id)
+    );
+    reopened.activate();
+    await_settled_ledger(&reopened, 0).await;
+    assert_eq!(
+        request_snapshots(&reopened.request_history())[1]
+            .permission_task_message
+            .as_ref(),
+        Some(&human.message_id)
+    );
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_task_preserves_established_intent_across_idle_agent_attempts() {
+    for source in [
+        UserSource::Human,
+        UserSource::Agent {
+            agent_id: AgentId::new("original-delegating-parent"),
+        },
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, _) = headless_runtime(
+            &dir,
+            vec![one_turn_script(), one_turn_script(), one_turn_script()],
+            None,
+            None,
+        )
+        .await;
+        runtime.activate();
+        let established = runtime
+            .submit_sourced_inbound(source, text_content("Keep this established task"))
+            .unwrap();
+        await_settled_ledger(&runtime, 0).await;
+        runtime
+            .submit_sourced_inbound(
+                UserSource::Agent {
+                    agent_id: AgentId::new("later-agent"),
+                },
+                text_content("A later Agent input cannot replace the task"),
+            )
+            .unwrap();
+        await_settled_ledger(&runtime, 1).await;
+        assert_eq!(
+            request_snapshots(&runtime.request_history())[1]
+                .permission_task_message
+                .as_ref(),
+            Some(&established.message_id)
+        );
+        let human = runtime
+            .submit_inbound(text_content("A new Human task replaces the previous task"))
+            .unwrap();
+        await_settled_ledger(&runtime, 2).await;
+        assert_eq!(
+            request_snapshots(&runtime.request_history())[2]
+                .permission_task_message
+                .as_ref(),
+            Some(&human.message_id)
+        );
+        runtime.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_task_recovery_preserves_an_established_task_across_agent_adoption() {
+    for source in [
+        UserSource::Human,
+        UserSource::Agent {
+            agent_id: AgentId::new("original-delegating-parent"),
+        },
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, _) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
+        runtime.activate();
+        let established = runtime
+            .submit_sourced_inbound(source.clone(), text_content("Keep this established task"))
+            .unwrap();
+        await_settled_ledger(&runtime, 0).await;
+        runtime.shutdown().await.unwrap();
+        drop(runtime);
+        let conversation = ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e");
+        {
+            let store = crate::durable::SqliteConversationStore::open(
+                conversation.clone(),
+                &dir.path().join("artifacts/conversation.sqlite"),
+            )
+            .unwrap();
+            let attempt = AttemptId::for_conversation(&conversation, 1);
+            store
+                .append_event(attempt_event(
+                    &conversation,
+                    "agent-adoption-before-restart",
+                    &attempt,
+                    RuntimeEvent::AttemptStarted {
+                        attempt_id: attempt.clone(),
+                    },
+                ))
+                .unwrap();
+            let delegated = store
+                .accept_inbound(crate::durable::inbox::InboundDraft {
+                    message_id: None,
+                    source: UserSource::Agent {
+                        agent_id: AgentId::new("another-delegating-agent"),
+                    },
+                    kind: InboundKind::Message,
+                    content: text_content("A later Agent input cannot replace the task"),
+                    timestamp: fixed_time(),
+                    correlation: None,
+                })
+                .unwrap();
+            adopt_accepted(&store, &delegated);
+        }
+        let (reopened, _) = headless_runtime_with_options(
+            &dir,
+            vec![one_turn_script()],
+            None,
+            None,
+            HeadlessRuntimeOptions {
+                approval_mode: ApprovalMode::Automatic,
+                ..HeadlessRuntimeOptions::default()
+            },
+        )
+        .await;
+        assert_eq!(
+            reopened.inner.lock_state().permission_task_message.as_ref(),
+            Some(&established.message_id)
+        );
+        reopened.activate();
+        await_settled_ledger(&reopened, 0).await;
+        assert_eq!(
+            request_snapshots(&reopened.request_history())[1]
+                .permission_task_message
+                .as_ref(),
+            Some(&established.message_id)
+        );
+        let messages = reopened
+            .inner
+            .store
+            .load_messages(&[established.message_id])
+            .unwrap();
+        let MessageBlock::User(task) = &messages[0] else {
+            panic!("canonical task")
+        };
+        assert_eq!(task.source, source);
+        reopened.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_task_pointer_survives_reopen_and_is_replaced_by_new_human_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = UserSource::Agent {
+        agent_id: AgentId::new("delegating-parent"),
+    };
+    let (runtime, _) = headless_runtime(&dir, vec![one_turn_script()], None, None).await;
+    runtime.activate();
+    let delegated = runtime
+        .submit_sourced_inbound(source.clone(), text_content("Inspect the delegated task"))
+        .unwrap();
+    await_settled_ledger(&runtime, 0).await;
+    let delegated_id = request_snapshots(&runtime.request_history())[0]
+        .permission_task_message
+        .clone()
+        .unwrap();
+    assert_eq!(delegated_id, delegated.message_id);
+    assert_eq!(
+        runtime.inner.lock_state().permission_task_message.as_ref(),
+        Some(&delegated_id)
+    );
+    runtime.shutdown().await.unwrap();
+    drop(runtime);
+    let (reopened, _) = headless_runtime_with_options(
+        &dir,
+        vec![one_turn_script(), one_turn_script(), one_turn_script()],
+        None,
+        None,
+        HeadlessRuntimeOptions {
+            approval_mode: ApprovalMode::Automatic,
+            ..HeadlessRuntimeOptions::default()
+        },
+    )
+    .await;
+    assert_eq!(
+        reopened.inner.lock_state().permission_task_message.as_ref(),
+        Some(&delegated_id)
+    );
+    reopened.activate();
+    reopened
+        .submit_sourced_inbound(
+            UserSource::Runtime,
+            text_content("Native continuation notice"),
+        )
+        .unwrap();
+    await_settled_ledger(&reopened, 0).await;
+    let snapshots = request_snapshots(&reopened.request_history());
+    assert_eq!(
+        snapshots[1].permission_task_message.as_ref(),
+        Some(&delegated_id)
+    );
+    let messages = reopened
+        .inner
+        .store
+        .load_messages(std::slice::from_ref(&delegated_id))
+        .unwrap();
+    let MessageBlock::User(task) = &messages[0] else {
+        panic!("canonical task")
+    };
+    assert_eq!(task.source, source);
+    let human = reopened
+        .submit_inbound(text_content(
+            "The new Human request replaces the delegated task",
+        ))
+        .unwrap();
+    await_settled_ledger(&reopened, 1).await;
+    let human_id = request_snapshots(&reopened.request_history())[2]
+        .permission_task_message
+        .clone()
+        .unwrap();
+    assert_ne!(human_id, delegated_id);
+    assert_eq!(human_id, human.message_id);
+    reopened
+        .submit_sourced_inbound(
+            UserSource::Runtime,
+            text_content("Continue the current native task"),
+        )
+        .unwrap();
+    await_settled_ledger(&reopened, 2).await;
+    assert_eq!(
+        request_snapshots(&reopened.request_history())[3]
+            .permission_task_message
+            .as_ref(),
+        Some(&human_id)
+    );
+    let messages = reopened.inner.store.load_messages(&[human_id]).unwrap();
+    let MessageBlock::User(task) = &messages[0] else {
+        panic!("canonical task")
+    };
+    assert_eq!(task.source, UserSource::Human);
+    reopened.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() {
+    for reopen in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let (runtime, model) =
+            headless_runtime(&dir, vec![one_turn_script(), one_turn_script()], None, None).await;
+        {
+            let mut state = runtime.inner.lock_state();
+            let mut config = crate::local_runtime::config::CurrentRuntimeConfig::from_toml_slice(
+                b"agent_id='agent-a'\n[context]\nreserve_tokens=0\nkeep_recent_tokens=0\n[agent.model]\nmodel='scripted/scripted'\n",
+            ).unwrap();
+            config.approval_mode = ApprovalMode::FullAccess;
+            let configuration = crate::runtime::resources::RuntimeConfiguration {
+                config: Arc::new(config),
+                models: state.model.registry().unwrap().clone(),
+                resource_definitions: Vec::new(),
+                resource_diagnostics: Vec::new(),
+                authored: crate::local_runtime::configuration::generation::AuthoredConfiguration {
+                    component_revisions: std::collections::BTreeMap::new(),
+                    source_revisions: std::collections::BTreeMap::new(),
+                    effective:
+                        crate::local_runtime::configuration::settings::SourceDocumentView::default(),
+                    provenance: std::collections::BTreeMap::new(),
+                },
+            };
+            state.resources = Arc::new(
+                state
+                    .resources
+                    .as_ref()
+                    .clone()
+                    .with_configuration(configuration),
+            );
+        }
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("First request in mode A"))
+            .unwrap();
+        await_settled_ledger(&runtime, 0).await;
+        for mode in [ApprovalMode::Plan, ApprovalMode::FullAccess] {
+            assert_eq!(
+                runtime
+                    .apply_execution_policy(|current| {
+                        let mut next = current.clone();
+                        let mut config = current.config.as_ref().clone();
+                        config.approval_mode = mode;
+                        next.config = Arc::new(config);
+                        Some(next)
+                    })
+                    .unwrap(),
+                crate::runtime::configuration_commit::StagedOutcome::Committed
+            );
+        }
+        assert_eq!(
+            runtime.inner.lock_state().last_permission_reminder_mode,
+            Some(ApprovalMode::FullAccess)
+        );
+        let (runtime, model, after) = if reopen {
+            runtime.shutdown().await.unwrap();
+            drop(runtime);
+            drop(model);
+            let (runtime, model) =
+                headless_runtime(&dir, vec![one_turn_script()], None, None).await;
+            runtime.activate();
+            (runtime, model, 0)
+        } else {
+            (runtime, model, 1)
+        };
+        runtime
+            .submit_inbound(text_content("Next request still uses mode A"))
+            .unwrap();
+        await_settled_ledger(&runtime, after).await;
+        assert!(
+            !model
+                .requests()
+                .last()
+                .unwrap()
+                .effective_system_prompt
+                .contains(&crate::runtime::permission::permission_reminder_text(
+                    ApprovalMode::FullAccess
+                )),
+            "unobserved A-to-B-to-A changes must stay quiet, reopen={reopen}"
+        );
+        runtime.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one ordered compaction/start/reconstruction scenario"
+)]
+async fn permission_reminder_survives_compaction_then_cancel_or_failed_request_start() {
+    use crate::agent::execution::test_sync::StartBoundaryPause;
+    for (cancel, reopen) in [(true, false), (true, true), (false, true)] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("artifacts")).unwrap();
+        let conversation = ConversationId::new("conv_d9e0ddde-2c51-755b-8a4e-1932c402870e");
+        let store = Arc::new(
+            crate::durable::SqliteConversationStore::open(
+                conversation.clone(),
+                &dir.path().join("artifacts/conversation.sqlite"),
+            )
+            .unwrap(),
+        );
+        let (runtime, model) = headless_runtime_over_store_with(
+            &dir,
+            conversation.as_str(),
+            store.clone(),
+            vec![
+                one_turn_script(),
+                text_turn_script("committed summary"),
+                one_turn_script(),
+            ],
+            None,
+        )
+        .await;
+        runtime.activate();
+        runtime
+            .submit_inbound(text_content("First native user request"))
+            .unwrap();
+        await_settled_ledger(&runtime, 0).await;
+        runtime.compact_context(None).await.unwrap();
+        let mut paused = if cancel {
+            let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+            runtime
+                .inner
+                .probe
+                .lock()
+                .unwrap()
+                .get_or_insert_with(CoordinatorProbe::default)
+                .start_boundary_pause = Some(pause);
+            pre_start
+        } else {
+            store.arm_request_start_fault_script([
+                crate::durable::sqlite::RequestStartFaultOperation::BeforeContextAppend,
+            ]);
+            None
+        };
+        runtime
+            .submit_inbound(text_content("This request will never start"))
+            .unwrap();
+        if let Some(pause) = paused.as_mut() {
+            pause.await_park(1).await;
+            runtime
+                .cancel_current_attempt(&AttemptId::for_conversation(&conversation, 1))
+                .unwrap();
+            pause.release();
+        }
+        await_settled_ledger(&runtime, 1).await;
+        assert_eq!(
+            model.requests().len(),
+            2,
+            "only the first request and actual compaction ran"
+        );
+        assert_eq!(request_snapshots(&runtime.request_history()).len(), 1);
+        assert_eq!(
+            runtime.inner.lock_state().last_permission_reminder_mode,
+            None
+        );
+        let (runtime, model, after) = if reopen {
+            let shutdown = runtime.shutdown().await;
+            if cancel {
+                shutdown.unwrap();
+            } else {
+                assert!(
+                    matches!(shutdown, Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement { detail }) if detail.contains("durable authority"))
+                );
+            }
+            drop(runtime);
+            drop(model);
+            let (runtime, model) = headless_runtime_over_store_with(
+                &dir,
+                conversation.as_str(),
+                store.clone(),
+                vec![one_turn_script()],
+                None,
+            )
+            .await;
+            assert_eq!(
+                runtime.inner.lock_state().last_permission_reminder_mode,
+                None
+            );
+            runtime.activate();
+            (runtime, model, 0)
+        } else {
+            (runtime, model, 2)
+        };
+        runtime
+            .submit_inbound(text_content(
+                "Next actual request needs the new-context reminder",
+            ))
+            .unwrap();
+        await_settled_ledger(&runtime, after).await;
+        assert!(
+            model
+                .requests()
+                .last()
+                .unwrap()
+                .effective_system_prompt
+                .contains(&crate::runtime::permission::permission_reminder_text(
+                    ApprovalMode::FullAccess
+                )),
+            "committed compaction must remain eligible, cancel={cancel}, reopen={reopen}"
+        );
+        runtime.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn permission_reminder_reconstructs_from_primary_request_and_context_activation() {
+    for compact in [false, true] {
+        for changed_mode in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let mut scripts = vec![one_turn_script(), one_turn_script()];
+            if compact {
+                scripts.push(text_turn_script("committed summary"));
+            }
+            let (runtime, model) = headless_runtime(&dir, scripts, None, None).await;
+            runtime.activate();
+            for attempt in 0..2 {
+                runtime
+                    .submit_inbound(text_content("native user task"))
+                    .unwrap();
+                await_settled_ledger(&runtime, attempt).await;
+            }
+            let reminder =
+                crate::runtime::permission::permission_reminder_text(ApprovalMode::FullAccess);
+            assert!(
+                model.requests()[0]
+                    .effective_system_prompt
+                    .contains(&reminder)
+            );
+            assert!(
+                !model.requests()[1]
+                    .effective_system_prompt
+                    .contains(&reminder)
+            );
+            if compact {
+                runtime.compact_context(None).await.unwrap();
+            }
+            runtime.shutdown().await.unwrap();
+            drop(runtime);
+            drop(model);
+            let mode = if changed_mode {
+                ApprovalMode::Plan
+            } else {
+                ApprovalMode::FullAccess
+            };
+            let (reopened, model) = headless_runtime_with_options(
+                &dir,
+                vec![one_turn_script()],
+                None,
+                None,
+                HeadlessRuntimeOptions {
+                    approval_mode: mode,
+                    ..HeadlessRuntimeOptions::default()
+                },
+            )
+            .await;
+            assert_eq!(
+                reopened.inner.lock_state().last_permission_reminder_mode,
+                if compact {
+                    None
+                } else {
+                    Some(ApprovalMode::FullAccess)
+                }
+            );
+            reopened.activate();
+            reopened
+                .submit_inbound(text_content("resume the native user task"))
+                .unwrap();
+            await_settled_ledger(&reopened, 0).await;
+            assert_eq!(
+                model.requests()[0]
+                    .effective_system_prompt
+                    .contains(&crate::runtime::permission::permission_reminder_text(mode)),
+                compact || changed_mode
+            );
+            assert_eq!(
+                request_snapshots(&reopened.request_history())
+                    .last()
+                    .unwrap()
+                    .permission_mode,
+                mode
+            );
+            reopened.shutdown().await.unwrap();
+        }
+    }
+}
+
 /// The runtime rejects a `SubagentRegistry` that belongs to another
 /// conversation's ownership domain before anything is claimed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1939,6 +2661,7 @@ async fn class_c_restart_issues_no_provider_request_of_its_own() {
                 ))
                 .expect("attempt started");
             let mut snapshot = crate::model::RequestSnapshot::new(
+                crate::runtime::types::ApprovalMode::FullAccess,
                 crate::model::RequestIdentity {
                     attempt_id: dead.clone(),
                     turn: crate::runtime::identity::TurnId::new("0"),
@@ -2075,6 +2798,7 @@ async fn class_e_restart_issues_no_replacement_request() {
                 ))
                 .expect("attempt started");
             let mut snapshot = crate::model::RequestSnapshot::new(
+                crate::runtime::types::ApprovalMode::FullAccess,
                 crate::model::RequestIdentity {
                     attempt_id: dead.clone(),
                     turn: crate::runtime::identity::TurnId::new("0"),

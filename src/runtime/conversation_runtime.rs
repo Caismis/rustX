@@ -799,6 +799,8 @@ struct CoordinatorState {
     /// conversation. Cleared only when the next admission must re-emit
     /// (mode change, first admission, or post-compaction).
     last_permission_reminder_mode: Option<ApprovalMode>,
+    /// Exact canonical task input retained for the next continuation.
+    permission_task_message: Option<crate::runtime::identity::MessageId>,
     /// The latest requested runtime control mode.
     /// Monotonic control-plane revision; idempotent requests do not advance it.
     /// The one canonical conversation state, owned by the coordinator

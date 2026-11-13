@@ -2314,7 +2314,10 @@ async fn approval_allow_executes_the_exact_prepared_invocation() {
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0].id, ToolCallId::new("call-a"));
     assert_eq!(calls[0].tool_id, ToolId::new("tool-alpha"));
-    assert_eq!(calls[0].arguments, serde_json::json!({}));
+    assert_eq!(
+        calls[0].arguments,
+        common::tool_call_envelope(serde_json::json!({}))
+    );
     let messages = tool_messages(&result);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].tool_call_id, calls[0].id);
@@ -2584,9 +2587,15 @@ async fn observer_sees_the_exact_committed_result_and_changes_nothing() {
         .collect::<Vec<_>>();
     assert_eq!(calls.len(), 2);
     assert_eq!(calls[0].id, ToolCallId::new("call-a"));
-    assert_eq!(calls[0].arguments, serde_json::json!({}));
+    assert_eq!(
+        calls[0].arguments,
+        common::tool_call_envelope(serde_json::json!({}))
+    );
     assert_eq!(calls[1].id, ToolCallId::new("call-b"));
-    assert_eq!(calls[1].arguments, serde_json::json!({}));
+    assert_eq!(
+        calls[1].arguments,
+        common::tool_call_envelope(serde_json::json!({}))
+    );
 }
 
 /// A consumer distinguishes the native rustX Read capability from an

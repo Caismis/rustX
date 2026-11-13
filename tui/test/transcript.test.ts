@@ -393,7 +393,7 @@ describe("durable transcript audits", () => {
         call_id: "call-proposed",
         tool_id: "tool-read",
         name: "Read",
-        arguments: '{"file_path":".agents/skills/read/SKILL.md"}',
+        arguments: '{"arguments":{"file_path":".agents/skills/read/SKILL.md"}}',
         complete: true,
       },
     ],

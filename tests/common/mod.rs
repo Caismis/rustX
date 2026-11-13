@@ -1219,7 +1219,7 @@ pub async fn run_tool_with_cancellation(
         id: ToolCallId::new("call-m5"),
         tool_id: definition.id,
         name: name.to_owned(),
-        arguments,
+        arguments: tool_call_envelope(arguments),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     let PreflightOutcome::Ready(prepared) = outcome else {
@@ -1964,4 +1964,23 @@ pub fn native_domain_catalog(
         panic!("bounded native catalog page");
     };
     native_catalog_page(page)
+}
+
+/// Compile this suite's business-call DSL to the current invocation envelope.
+pub fn tool_call_envelope(arguments: serde_json::Value) -> serde_json::Value {
+    let mut business = arguments;
+    let mode = business
+        .as_object_mut()
+        .and_then(|fields| fields.remove("execution_mode"));
+    let reason = business
+        .as_object_mut()
+        .and_then(|fields| fields.remove("elevation_reason"));
+    let mut envelope = serde_json::json!({"arguments":business});
+    if let Some(mode) = mode {
+        envelope["execution_mode"] = mode;
+    }
+    if let Some(reason) = reason {
+        envelope["elevation_reason"] = reason;
+    }
+    envelope
 }

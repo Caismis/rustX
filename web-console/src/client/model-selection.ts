@@ -43,7 +43,7 @@ export class ModelSelection {
         if (!current()) throw new Error('Model selection retired with its connection.');
         const selection = this.port.state().views[id].modelIntent!.config;
         this.port.setSession(id, { modelIntent: { config: selection, phase: 'applying' } });
-        await this.setAgentModel(id, selection, true);
+        await this.setAgentModel(id, selection);
         if (!current()) throw new Error('Model selection retired with its connection.');
         await this.repairAgentModel(id);
         if (!current()) throw new Error('Model selection retired with its connection.');

@@ -969,9 +969,16 @@ describe("CommandDispatcher", () => {
       if (profile === null) delete expected.profile;
       else expected.profile = profile;
       assert.deepEqual(paramsOf(set, "session/setModel").config, expected);
-      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
-      h.transport.respond(set.id, domainReceipt('model',[{ ...current, configured: expected }]));
-      assert.equal((await command).kind, "transient");
+      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, undefined);
+      h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+      const readback = await nextRequest(h, "session/model");
+      h.transport.respond(readback.id, domainReceipt("model", [{ ...current, configured: expected }]));
+      const outcome = await command;
+      assert.equal(outcome.kind, "transient");
+      if (outcome.kind === "transient") {
+        assert.equal(outcome.level, "info");
+        assert.match(outcome.text, /profile/);
+      }
       assert.equal(h.transport.log.count("session/setModel"), 1);
       assert.deepEqual(
         h.session.state,
@@ -990,7 +997,7 @@ describe("CommandDispatcher", () => {
     h.transport.respond(read.id, domainReceipt('model',[current]));
     const set = await nextRequest(h, "session/setModel");
     assert.deepEqual(paramsOf(set, "session/setModel").config, current.configured);
-    assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
+    assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, undefined);
     let acknowledged = false;
     void choosing.then(() => { acknowledged = true; });
     await Promise.resolve();
@@ -1123,7 +1130,7 @@ describe("CommandDispatcher", () => {
         request_params: { summary_tag: "keep" },
         max_output_tokens: 256,
       });
-      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, true);
+      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, undefined);
       h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
       const confirmed = await nextRequest(h, "session/model");
       h.transport.respond(
@@ -1188,8 +1195,16 @@ describe("CommandDispatcher", () => {
         model: "alpha/summary",
         profile: expectedProfile,
       });
-      h.transport.respond(set.id, domainReceipt("model", [{ ...current, configured: { ...current.configured, auxiliary: { mode: "explicit", model: "alpha/summary", profile: expectedProfile } } }]));
-      assert.equal((await changing).kind, "transient");
+      assert.equal(paramsOf(set, "session/setModel").recover_unavailable_auxiliary, undefined);
+      h.transport.respond(set.id, { type: "model_set", settings_revision: "1" });
+      const readback = await nextRequest(h, "session/model");
+      h.transport.respond(readback.id, domainReceipt("model", [{ ...current, configured: { ...current.configured, auxiliary: { mode: "explicit", model: "alpha/summary", profile: expectedProfile } } }]));
+      const outcome = await changing;
+      assert.equal(outcome.kind, "transient");
+      if (outcome.kind === "transient") {
+        assert.equal(outcome.level, "info");
+        assert.match(outcome.text, /Session auxiliary profile strategy/);
+      }
     });
   }
 

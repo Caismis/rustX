@@ -1201,7 +1201,9 @@ fn job_control_is_never_background_dispatchable() {
         id: ToolCallId::new("call-x"),
         tool_id: ToolId::new("tool-job_status"),
         name: "job_status".to_owned(),
-        arguments: serde_json::json!({"execution_mode": "background", "job_id": "exec_00000000-0000-7000-8000-000000000001"}),
+        arguments: common::tool_call_envelope(
+            serde_json::json!({"execution_mode": "background", "job_id": "exec_00000000-0000-7000-8000-000000000001"}),
+        ),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     assert!(

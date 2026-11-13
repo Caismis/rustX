@@ -63,7 +63,7 @@ impl ToolExecutor for WriteTool {
     }
 }
 
-fn run_write(
+pub(super) fn run_write(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
@@ -79,21 +79,16 @@ fn run_write(
     if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
         return failed_result(error);
     }
-    if let Some(parent) = bound.path().parent()
-        && let Err(error) = std::fs::create_dir_all(parent)
-    {
-        return failed_result(format!(
-            "cannot create parent directories for {}: {error}",
-            bound.path().display()
-        ));
-    }
+    let target = match bound.commit_target(true) {
+        Ok(target) => target,
+        Err(error) => return failed_result(error),
+    };
     if let Some(changes) = &context.workspace_changes {
         changes.capture(bound.path());
     }
     if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
         return failed_result(error);
     }
-    let target = bound.commit_target();
     if let Err(error) = atomic_commit(&target, input.content.as_bytes()) {
         return failed_result(error);
     }

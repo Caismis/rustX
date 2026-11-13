@@ -385,6 +385,12 @@ impl RuntimeInner {
         );
         context.native = Some(Arc::new(
             crate::tools::invocation::NativeInvocationServices {
+                task: Some(Arc::new(
+                    crate::runtime::permission::PermissionTaskEvidence::ScheduledClaim {
+                        claim: serde_json::to_value(&claim.start)
+                            .expect("native scheduled Claim serialization"),
+                    },
+                )),
                 lifecycle: crate::agent::AttemptLifecycle::inert()
                     .with_native_interaction(self.interaction.clone())
                     .with_approval_mode_and_reviewer(approval, reviewer),

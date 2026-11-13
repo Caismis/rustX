@@ -333,7 +333,7 @@ async fn cold_load_preserves_unknown_external_tool_outcome_without_replay() {
             let assistant = MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("assistant"), content: vec![AssistantContentBlock::ToolCall(ToolCall {
                     id: ToolCallId::new("call"), tool_id: ToolId::new("tool-write"), name: "write".into(),
-                    arguments: serde_json::json!({"path":"must-not-exist", "content":"never replay"}),
+                    arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({"path":"must-not-exist", "content":"never replay"})),
                 })],
             });
             store.append_canonical_with_event(&assistant, envelope("assistant", RuntimeEvent::AssistantMessageCommitted { message_id: MessageId::new("assistant") })).unwrap();

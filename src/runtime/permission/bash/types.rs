@@ -121,11 +121,4 @@ pub enum DangerCallbackId {
     Xargs,
     Docker,
     Gh,
-    GitBranch,
-    GitRevisionFormat,
-    GitReflog,
-    GitLsRemote,
-    GitRemoteShow,
-    GitTag,
-    GitRemoteOnlyVerbose,
 }

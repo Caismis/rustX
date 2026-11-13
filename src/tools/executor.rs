@@ -38,8 +38,7 @@ use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::managed_output::ManagedToolOutput;
 use crate::tools::schema::{
-    EXECUTION_MODE_FIELD, SchemaError, compile_model_definition, resolve_invocation_metadata,
-    validate_business_arguments, validate_canonical_schema, validate_execution_metadata_contract,
+    SchemaError, compile_tool_contract, resolve_invocation_metadata, validate_with,
 };
 use crate::tools::todo::TodoWriter;
 use crate::tools::types::{
@@ -629,18 +628,6 @@ pub enum ToolRegistryError {
     InvalidIdentity(String),
     /// The canonical input schema is invalid or not a root object schema.
     InvalidSchema(String),
-    /// The canonical input schema claims a reserved `__rustx_*` property.
-    ReservedProperty(String),
-    /// The tool is `ModelSelectable` and its canonical input schema cannot
-    /// carry the runtime-owned `execution_mode` selector: it either claims
-    /// the reserved top-level name itself or shapes its root with a
-    /// composition keyword rustX cannot decorate soundly.
-    ModelSelectableSchema {
-        /// The model-facing name of the rejected tool.
-        name: String,
-        /// The precise schema-level reason.
-        reason: String,
-    },
     /// The canonical schema cannot carry the runtime-owned elevation metadata.
     ModelSchema {
         /// The model-facing name of the rejected tool.
@@ -676,17 +663,11 @@ impl core::fmt::Display for ToolRegistryError {
                     "tool {name:?} cannot compile its model-facing schema: {reason}"
                 )
             }
-            Self::ModelSelectableSchema { name, reason } => write!(
-                f,
-                "tool {name:?} cannot be registered as ModelSelectable, because rustX must inject \
-                 the model's per-invocation {EXECUTION_MODE_FIELD:?} selector into its root \
-                 schema: {reason}"
-            ),
             Self::ReservedName(name) => write!(
                 f,
                 "model-facing tool name {name:?} is reserved for Workflow Agent terminalization"
             ),
-            Self::ReservedProperty(_) | Self::InvalidPolicy(_) => {
+            Self::InvalidPolicy(_) => {
                 write!(f, "the tool registration violates a registry rule")
             }
         }
@@ -778,7 +759,7 @@ pub struct PreparedInvocation {
 ///
 /// The registry is a correctness boundary: it validates every registration
 /// (duplicate ids, duplicate model-facing names, invalid identities,
-/// invalid JSON Schema, reserved runtime-property collisions, invalid
+/// invalid JSON Schema, invalid
 /// policy combinations, and the fixed intrinsic policies of
 /// `execution`) and resolves model-issued calls unambiguously. There
 /// is no ID-first/name-fallback behavior: a canonical call whose id and name
@@ -801,9 +782,18 @@ impl std::fmt::Debug for ToolRegistry {
 
 impl Clone for ToolRegistry {
     fn clone(&self) -> Self {
-        Self::from_registrations(self.entries.iter().cloned())
-            .expect("a validated registry clones without registration errors")
+        Self {
+            entries: self.entries.clone(),
+            by_id: self.by_id.clone(),
+            by_name: self.by_name.clone(),
+        }
     }
+}
+
+struct CompiledToolContract {
+    definition: ToolDefinition,
+    model: ModelToolDefinition,
+    validator: jsonschema::Validator,
 }
 
 /// One registered definition, executor, and business-argument normalizer.
@@ -817,6 +807,7 @@ pub(crate) type BusinessArgumentNormalizer =
 /// derives the immutable active registry.
 #[derive(Clone)]
 pub(crate) struct ToolRegistration {
+    contract: Option<Arc<CompiledToolContract>>,
     foreground: crate::tools::deadline::ForegroundPolicy,
     pub(crate) definition: ToolDefinition,
     pub(crate) executor: Arc<dyn ToolExecutor>,
@@ -826,6 +817,17 @@ pub(crate) struct ToolRegistration {
     /// Per-server permission objects for multi-source native resource helpers.
     pub(crate) resource_permission_targets:
         BTreeMap<String, crate::runtime::permission::ResourcePermissionSet>,
+}
+
+/// A registration whose business and model-facing contracts were captured
+/// atomically by `ToolRegistry`. Only the registry can issue this proof.
+#[derive(Debug, Clone)]
+pub(crate) struct ValidatedToolRegistration(ToolRegistration);
+
+impl ValidatedToolRegistration {
+    pub(crate) fn into_registration(self) -> ToolRegistration {
+        self.0
+    }
 }
 
 impl std::fmt::Debug for ToolRegistration {
@@ -855,6 +857,7 @@ impl ToolRegistration {
         >,
     ) -> Self {
         Self {
+            contract: None,
             foreground,
             definition,
             executor,
@@ -891,7 +894,7 @@ impl ToolRegistration {
     }
 
     /// Prepares a fixed foreground invocation against an exact frozen
-    /// definition. Runtime metadata is never accepted as business input.
+    /// definition. These are business inputs, with no runtime envelope to decode.
     pub(crate) fn prepare_fixed(
         &self,
         id: crate::tools::types::ToolInvocationId,
@@ -910,19 +913,6 @@ impl ToolRegistration {
         ) {
             return Err("background-only capability is not a foreground leaf".into());
         }
-        if arguments.as_object().is_some_and(|fields| {
-            fields.keys().any(|key| {
-                crate::tools::schema::is_reserved_property(key)
-                    || key == EXECUTION_MODE_FIELD
-                    || key == crate::tools::schema::ELEVATION_REASON_FIELD
-            })
-        }) {
-            return Ok(PreflightOutcome::Rejected {
-                tool_id: expected.id.clone(),
-                origin: expected.origin.clone(),
-                error: "fixed invocation arguments contain execution metadata".into(),
-            });
-        }
         Ok(ToolRegistry::prepare_arguments(
             entry,
             id,
@@ -935,6 +925,7 @@ impl ToolRegistration {
     /// arguments use the canonical schema unchanged.
     pub(crate) fn plain(definition: ToolDefinition, executor: Arc<dyn ToolExecutor>) -> Self {
         Self {
+            contract: None,
             foreground: crate::tools::deadline::ForegroundPolicy::Leaf,
             definition,
             executor,
@@ -968,21 +959,24 @@ impl ToolRegistry {
         &mut self,
         registration: ToolRegistration,
     ) -> Result<(), ToolRegistryError> {
-        let resource_permissions = registration.resource_permissions;
-        let resource_permission_targets = registration.resource_permission_targets;
-        self.register_with_execution_metadata(
-            registration.definition,
-            registration.executor,
-            registration.normalizer,
-            registration.foreground,
-        )?;
-        let last = self
-            .entries
-            .last_mut()
-            .expect("register always pushes one entry");
-        last.resource_permissions = resource_permissions;
-        last.resource_permission_targets = resource_permission_targets;
-        Ok(())
+        let ToolRegistration {
+            foreground,
+            definition,
+            executor,
+            normalizer,
+            resource_permissions,
+            resource_permission_targets,
+            contract,
+        } = registration;
+        self.insert_registration(
+            definition,
+            executor,
+            normalizer,
+            foreground,
+            resource_permissions,
+            resource_permission_targets,
+            contract,
+        )
     }
 
     /// Creates an empty registry.
@@ -1000,9 +994,8 @@ impl ToolRegistry {
     /// Registration validates the definition before insertion: duplicate
     /// `ToolId`s and duplicate model-facing names are rejected, empty
     /// identities are rejected, the canonical input schema must be a valid
-    /// root object schema with no reserved `__rustx_*` property, a
-    /// `ModelSelectable` tool may not claim the reserved `execution_mode`
-    /// property, `workflow_output` is reserved for Workflow Agent
+    /// root object schema. Runtime metadata lives in a separate envelope.
+    /// `workflow_output` is reserved for Workflow Agent
     /// terminalization, and the runtime intrinsics are fixed to
     /// foreground-only, sequential execution; `ask_user` is also fixed to
     /// approval-never.
@@ -1047,6 +1040,31 @@ impl ToolRegistry {
         normalizer: BusinessArgumentNormalizer,
         foreground: crate::tools::deadline::ForegroundPolicy,
     ) -> Result<(), ToolRegistryError> {
+        self.insert_registration(
+            definition,
+            executor,
+            normalizer,
+            foreground,
+            None,
+            BTreeMap::new(),
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    fn insert_registration(
+        &mut self,
+        definition: ToolDefinition,
+        executor: Arc<dyn ToolExecutor>,
+        normalizer: BusinessArgumentNormalizer,
+        foreground: crate::tools::deadline::ForegroundPolicy,
+        resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+        resource_permission_targets: BTreeMap<
+            String,
+            crate::runtime::permission::ResourcePermissionSet,
+        >,
+        cached: Option<Arc<CompiledToolContract>>,
+    ) -> Result<(), ToolRegistryError> {
         #[cfg(test)]
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::AuthorityMutation,
@@ -1075,31 +1093,22 @@ impl ToolRegistry {
         if self.by_name.contains_key(&definition.name) {
             return Err(ToolRegistryError::DuplicateName(definition.name.clone()));
         }
-        validate_canonical_schema(&definition.input_schema).map_err(|error| match error {
-            SchemaError::InvalidSchema(message) | SchemaError::NotRootObjectSchema(message) => {
-                ToolRegistryError::InvalidSchema(format!("{}: {message}", definition.name))
-            }
-            SchemaError::ReservedProperty(property) => {
-                ToolRegistryError::ReservedProperty(property)
-            }
-            other => ToolRegistryError::InvalidSchema(other.to_string()),
-        })?;
-        // `execution_mode` is reserved, and the root schema must be
-        // decoratable, only while the effective execution policy is
-        // ModelSelectable. Both checks therefore belong here — the bounded
-        // layer that owns the effective policy and the compiled model-facing
-        // schema together — and not in the policy-unaware canonical schema
-        // validation above, which must keep accepting composed roots such as
-        // the `ask_user` intrinsic's and arbitrary MCP server schemas.
-        validate_execution_metadata_contract(definition.execution_policy, &definition.input_schema)
-            .map_err(|error| ToolRegistryError::ModelSelectableSchema {
-                name: definition.name.clone(),
-                reason: error.to_string(),
-            })?;
-        compile_model_definition(&definition).map_err(|reason| ToolRegistryError::ModelSchema {
-            name: definition.name.clone(),
-            reason,
-        })?;
+        let contract =
+            if let Some(contract) = cached.filter(|contract| contract.definition == definition) {
+                contract
+            } else {
+                let (model, validator) = compile_tool_contract(&definition).map_err(|reason| {
+                    ToolRegistryError::ModelSchema {
+                        name: definition.name.clone(),
+                        reason,
+                    }
+                })?;
+                Arc::new(CompiledToolContract {
+                    definition: definition.clone(),
+                    model,
+                    validator,
+                })
+            };
         if crate::tools::native::is_domain_control(&definition.name)
             && definition.execution_policy
                 != crate::tools::types::ToolExecutionPolicy::ForegroundOnly
@@ -1130,12 +1139,13 @@ impl ToolRegistry {
         self.by_name
             .insert(definition.name.clone(), self.entries.len());
         self.entries.push(ToolRegistration {
+            contract: Some(contract),
             foreground,
             definition,
             executor,
             normalizer,
-            resource_permissions: None,
-            resource_permission_targets: BTreeMap::new(),
+            resource_permissions,
+            resource_permission_targets,
         });
         Ok(())
     }
@@ -1191,6 +1201,17 @@ impl ToolRegistry {
         self.entries.clone()
     }
 
+    /// Copies registrations together with proof that their executable
+    /// contracts were captured. Available catalogs require this boundary,
+    /// including when source-qualified tools share a model-facing name.
+    pub(crate) fn validated_registrations(&self) -> Vec<ValidatedToolRegistration> {
+        self.entries
+            .iter()
+            .cloned()
+            .map(ValidatedToolRegistration)
+            .collect()
+    }
+
     /// The canonical definitions of every registered tool in registration
     /// order.
     #[must_use]
@@ -1217,19 +1238,22 @@ impl ToolRegistry {
     /// are what one model request receives; the canonical schemas are never
     /// sent.
     ///
-    /// # Panics
+    /// Compilation is captured atomically during registration; observation
+    /// clones that result without schema resolution or I/O.
     ///
-    /// Panics only when a registered canonical schema would fail its own
-    /// registration validation — including the `ModelSelectable`
-    /// `execution_mode` reservation — which is impossible by construction.
+    /// # Panics
+    /// Panics if an internal registry entry lacks its registered contract.
     #[must_use]
     pub fn model_definitions(&self) -> Vec<ModelToolDefinition> {
         self.entries
             .iter()
             .map(|entry| {
-                compile_model_definition(&entry.definition).expect(
-                    "registered canonical schemas always compile into model-facing definitions",
-                )
+                entry
+                    .contract
+                    .as_ref()
+                    .expect("registry entries hold compiled contracts")
+                    .model
+                    .clone()
             })
             .collect()
     }
@@ -1323,8 +1347,18 @@ impl ToolRegistry {
                 };
             }
         };
-        if let Err(error) = validate_business_arguments(&entry.definition.input_schema, &normalized)
-        {
+        let Some(contract) = entry
+            .contract
+            .as_ref()
+            .filter(|contract| contract.definition == entry.definition)
+        else {
+            return PreflightOutcome::Rejected {
+                tool_id: entry.definition.id.clone(),
+                origin: entry.definition.origin.clone(),
+                error: "tool contract was not captured for this definition".into(),
+            };
+        };
+        if let Err(error) = validate_with(&contract.validator, &normalized) {
             return PreflightOutcome::Rejected {
                 tool_id: entry.definition.id.clone(),
                 origin: entry.definition.origin.clone(),
@@ -1492,7 +1526,23 @@ mod tests {
             id: ToolCallId::new("call-1"),
             tool_id: ToolId::new(tool_id),
             name: name.to_owned(),
-            arguments,
+            arguments: {
+                let mut business = arguments;
+                let mode = business
+                    .as_object_mut()
+                    .and_then(|map| map.remove("execution_mode"));
+                let reason = business
+                    .as_object_mut()
+                    .and_then(|map| map.remove("elevation_reason"));
+                let mut call = json!({"arguments":business});
+                if let Some(mode) = mode {
+                    call["execution_mode"] = mode;
+                }
+                if let Some(reason) = reason {
+                    call["elevation_reason"] = reason;
+                }
+                call
+            },
         }
     }
 
@@ -1620,9 +1670,9 @@ mod tests {
         );
     }
 
-    /// Invalid schemas and reserved properties are rejected at registration.
+    /// Invalid schemas are rejected while business names remain tool-owned.
     #[test]
-    fn invalid_schemas_and_reserved_properties_are_rejected() {
+    fn invalid_schemas_are_rejected_and_business_names_are_independent() {
         let mut registry = ToolRegistry::new();
         assert!(
             register(
@@ -1646,7 +1696,7 @@ mod tests {
                     json!({"type": "object", "properties": {"__rustx_secret": {"type": "string"}}})
                 ),
             )
-            .is_err()
+            .is_ok()
         );
     }
 
@@ -1717,188 +1767,80 @@ mod tests {
         .expect("fixed foreground-only intrinsic policy is accepted");
     }
 
-    /// A `ModelSelectable` tool whose canonical schema cannot carry the
-    /// injected `execution_mode` selector is rejected at registration, so it
-    /// can never reach a model request. Registration is the boundary that
-    /// keeps a tool out of the "registers fine, rejects every correct call"
-    /// state, whichever way it would get there: a bare `required` entry is
-    /// as fatal as a declared property, and any root keyword outside the
-    /// decoratable profile — composition, cardinality, whole-instance, or a
-    /// dependency spelling from an older draft — is refused outright. Every
-    /// one of these schemas stays legal under a fixed execution policy.
-    /// One labelled canonical schema that a `ModelSelectable` tool may not
-    /// carry, spanning both routes into the dead state: a claim on the
-    /// reserved name, and a root keyword outside the decoratable profile.
-    fn undecoratable_registration_cases() -> [(&'static str, serde_json::Value); 7] {
-        [
-            (
-                "declared property",
-                json!({"type": "object", "properties": {"execution_mode": {"type": "string"}}}),
-            ),
-            (
-                "bare required entry",
-                json!({
-                    "type": "object",
-                    "properties": {"command": {"type": "string"}},
-                    "required": ["command", "execution_mode"],
-                }),
-            ),
-            (
-                "composed root",
-                json!({
-                    "type": "object",
-                    "properties": {"command": {"type": "string"}},
-                    "allOf": [{"required": ["execution_mode"]}],
-                }),
-            ),
-            (
-                "cardinality assertion",
-                json!({
-                    "type": "object",
-                    "properties": {"command": {"type": "string"}},
-                    "required": ["command"],
-                    "maxProperties": 1,
-                }),
-            ),
-            (
-                "whole-instance assertion",
-                json!({"type": "object", "const": {"command": "ls"}}),
-            ),
-            (
-                "draft-7 dependencies",
-                json!({
-                    "$schema": "http://json-schema.org/draft-07/schema#",
-                    "type": "object",
-                    "properties": {"command": {"type": "string"}},
-                    "dependencies": {"command": ["execution_mode"]},
-                }),
-            ),
-            (
-                "nested root reference",
-                json!({
-                    "type": "object",
-                    "properties": {
-                        "command": {"type": "string"},
-                        "child": {"$ref": "#"},
-                    },
-                    "required": ["command"],
-                    "additionalProperties": false,
-                }),
-            ),
-        ]
-    }
-
     #[test]
-    fn undecoratable_model_selectable_schemas_are_rejected_at_registration() {
-        let cases = undecoratable_registration_cases();
-        for (label, schema) in &cases {
-            let mut registry = ToolRegistry::new();
-            let Err(error) = register(
-                &mut registry,
-                definition(
-                    "tool-sel",
-                    "sel",
-                    ToolExecutionPolicy::ModelSelectable,
-                    schema.clone(),
-                ),
-            ) else {
-                panic!("{label} must be rejected");
-            };
-            let ToolRegistryError::ModelSelectableSchema { name, reason } = &error else {
-                panic!("expected a ModelSelectable schema rejection for {label}, got {error:?}");
-            };
-            assert_eq!(name, "sel");
-            assert!(
-                reason.contains("execution_mode") || reason.contains("$ref"),
-                "{label} names the selector or the offending keyword: {reason}"
-            );
-            assert!(
-                reason.contains("rename")
-                    || reason.contains("decoratable root profile")
-                    || reason.contains("Inline"),
-                "{label} tells the human what to do: {reason}"
-            );
-            let message = error.to_string();
-            assert!(message.contains("sel") && message.contains("ModelSelectable"));
-            assert!(
-                registry.model_definitions().is_empty(),
-                "{label} never reaches a model request"
-            );
-        }
-
-        for (index, policy) in [
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolExecutionPolicy::BackgroundOnly,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            for (offset, (label, schema)) in cases.iter().enumerate() {
-                let mut registry = ToolRegistry::new();
-                let result = register(
-                    &mut registry,
-                    definition(
-                        &format!("tool-fixed-{index}-{offset}"),
-                        &format!("fixed-{index}-{offset}"),
-                        policy,
-                        schema.clone(),
-                    ),
-                );
-                result.unwrap_or_else(|error| panic!("{label} under {policy:?}: {error}"));
-                assert_eq!(
-                    registry.model_definitions().len(),
-                    1,
-                    "{label} under {policy:?}"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn elevation_compilation_rejection_is_atomic_for_every_execution_policy() {
+    fn metadata_envelopes_accept_legal_business_schemas_for_every_policy() {
         for policy in [
             ToolExecutionPolicy::ForegroundOnly,
             ToolExecutionPolicy::BackgroundOnly,
             ToolExecutionPolicy::ModelSelectable,
         ] {
-            for schema in [
-                json!({"type": "object", "const": {"elevation_reason": "business"}}),
-                json!({"type": "object", "enum": [{"elevation_reason": "business"}]}),
-                json!({"type": "object", "properties": {"elevation_reason": {}}}),
-                json!({"type": "object", "required": ["elevation_reason"]}),
-                json!({"type": "object", "$defs": {"rustx_business": {}}}),
-                json!({"type": "object", "propertyNames": {"pattern": "^business"}}),
-                json!({"type": "object", "maxProperties": u64::MAX}),
-                json!({"type": "object", "minProperties": u64::MAX}),
-                json!({"type": "object", "patternProperties": {"^e": {"type": "integer"}}}),
-                json!({"type": "object", "properties": {"child": {"$dynamicRef": "#"}}}),
-                json!({"$id": "urn:root", "type": "object", "properties": {"child": {"$ref": "urn:root"}}}),
-                json!({"type": "object", "properties": {"child": {"$id": "urn:child", "type": "object"}}}),
-                json!({"$schema": "http://json-schema.org/draft-04/schema#", "type": "object", "properties": {"child": {"id": "#node", "type": "object"}}}),
+            for (schema, business) in [
+                (json!({"type":"object","enum":[{}]}), json!({})),
+                (
+                    json!({"type":"object","properties":{"command":{"type":"string"}},"required":["command"],"propertyNames":{"pattern":"^[a-z]+$"}}),
+                    json!({"command":"status"}),
+                ),
+                (
+                    json!({"type":"object","patternProperties":{"^e":{"type":"integer"}}}),
+                    json!({"elevation_reason":1}),
+                ),
+                (
+                    json!({"type":"object","properties":{"execution_mode":{"type":"integer"},"elevation_reason":{"type":"boolean"}},"required":["execution_mode","elevation_reason"],"additionalProperties":false}),
+                    json!({"execution_mode":1,"elevation_reason":true}),
+                ),
             ] {
                 let mut registry = ToolRegistry::new();
-                let result = register(
-                    &mut registry,
-                    definition("rejected", "rejected", policy, schema),
+                register(&mut registry, definition("x", "x", policy, schema)).unwrap();
+                let mut envelope = json!({"arguments":business,"elevation_reason":"ask"});
+                if policy == ToolExecutionPolicy::ModelSelectable {
+                    envelope["execution_mode"] = json!("foreground");
+                }
+                assert!(
+                    jsonschema::Validator::new(&registry.model_definitions()[0].input_schema)
+                        .unwrap()
+                        .is_valid(&envelope)
                 );
-                assert!(result.is_err());
-                assert!(registry.entries.is_empty());
-                assert!(registry.by_id.is_empty());
-                assert!(registry.by_name.is_empty());
-                assert!(registry.model_definitions().is_empty());
-                register(
-                    &mut registry,
-                    definition(
-                        "rejected",
-                        "rejected",
-                        policy,
-                        json!({"type": "object", "properties": {}}),
-                    ),
-                )
-                .unwrap();
-                assert_eq!(registry.model_definitions().len(), 1);
+                let mut request = call("x", "x", json!({}));
+                request.arguments = envelope;
+                let PreflightOutcome::Ready(prepared) = registry.preflight(&request).unwrap()
+                else {
+                    panic!("valid wrapped business call rejected")
+                };
+                assert_eq!(prepared.invocation.arguments, business);
+                assert_eq!(prepared.elevation_reason.as_deref(), Some("ask"));
             }
         }
+    }
+
+    #[test]
+    fn malformed_schema_registration_is_atomic() {
+        let mut registry = ToolRegistry::new();
+        assert!(
+            register(
+                &mut registry,
+                definition(
+                    "x",
+                    "x",
+                    ToolExecutionPolicy::ForegroundOnly,
+                    json!({"type":"object","properties":{"x":{"type":7}}})
+                )
+            )
+            .is_err()
+        );
+        assert!(registry.is_empty());
+        assert!(registry.by_id.is_empty());
+        assert!(registry.by_name.is_empty());
+        register(
+            &mut registry,
+            definition(
+                "x",
+                "x",
+                ToolExecutionPolicy::ForegroundOnly,
+                object_schema(),
+            ),
+        )
+        .unwrap();
+        assert_eq!(registry.model_definitions().len(), 1);
     }
 
     /// A valid foreground model-selectable selection is extracted and
@@ -2151,13 +2093,9 @@ mod tests {
             ),
         )
         .expect("register");
-        let outcome = registry
-            .preflight(&call(
-                "tool-a",
-                "alpha",
-                json!({"__rustx_execution": "foreground"}),
-            ))
-            .expect("preflight outcome");
+        let mut request = call("tool-a", "alpha", json!({}));
+        request.arguments["__rustx_execution"] = json!("foreground");
+        let outcome = registry.preflight(&request).unwrap();
         let PreflightOutcome::Rejected { error, .. } = outcome else {
             panic!("expected rejection");
         };

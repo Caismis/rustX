@@ -238,6 +238,21 @@ impl AgentExecution<'_> {
         if let Err(error) = self.validate_pending_fresh_inbound() {
             return Err(Self::context_failure_terminal(&error));
         }
+        // Initial delegated input retains its canonical source. Only a new
+        // Human Message may replace an already-established task thereafter.
+        if self.permission_task.is_none() {
+            self.permission_task =
+                self.pending_fresh_inbound
+                    .as_ref()
+                    .and_then(|fresh| {
+                        fresh.message_ids().iter().rev().find_map(|id| {
+                            self.conversation.ledger().get(id).and_then(
+                                crate::runtime::permission::PermissionTaskEvidence::canonical,
+                            )
+                        })
+                    })
+                    .map(Arc::new);
+        }
         // Native inbound sequence order is retained by FreshInboundTurn.
         // The most recent Human Message replaces the current request's unused
         // Goal-create authorization. No Human in this batch leaves it intact:
@@ -263,6 +278,11 @@ impl AgentExecution<'_> {
                 attempt_id,
             } = &origin
             {
+                if let Some(message) = self.conversation.ledger().get(message_id) {
+                    self.permission_task =
+                        crate::runtime::permission::PermissionTaskEvidence::canonical(message)
+                            .map(Arc::new);
+                }
                 *self
                     .schedule_authorization
                     .get_mut()
@@ -706,6 +726,7 @@ impl AgentExecution<'_> {
         })?;
         let primary = self.request.model.primary();
         let mut snapshot = RequestSnapshot::new(
+            self.permission_reminder.mode,
             RequestIdentity {
                 attempt_id: self.request.attempt_id.clone(),
                 turn: TurnId::new(self.turn.to_string()),
@@ -734,6 +755,11 @@ impl AgentExecution<'_> {
                 .collect(),
         );
         snapshot.history_cut = history.cut.clone();
+        snapshot.permission_task_message = self
+            .permission_task
+            .as_deref()
+            .and_then(crate::runtime::permission::PermissionTaskEvidence::message_id)
+            .cloned();
         if let Some(frozen_carryover) = self.logical_step.frozen_carryover.as_ref() {
             snapshot.unresolved_output_carryover_source =
                 Some(frozen_carryover.full.source_stream_id.clone());

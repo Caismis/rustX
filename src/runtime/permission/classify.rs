@@ -155,4 +155,56 @@ mod tests {
         let (kind, _) = classify_tool_kind("read", &ToolOrigin::Builtin, &hints);
         assert_eq!(kind, BuiltinToolKind::NativeRead);
     }
+    #[test]
+    fn git_helper_configuration_cannot_bypass_mode_authorization() {
+        use crate::runtime::permission::{
+            ElevationReason, ExecutionPermissionMode, PermissionDecisionKind, PermissionFacts,
+            ResourcePermissionValue, evaluate_permission,
+        };
+        for command in [
+            "git status",
+            "git diff --no-ext-diff --no-textconv",
+            "git show --no-ext-diff --no-textconv HEAD",
+            "git log --no-ext-diff --no-textconv --format=pretty_alias",
+        ] {
+            let (kind, bash) = classify_tool_kind(
+                "bash",
+                &ToolOrigin::Builtin,
+                &ClassificationHints {
+                    workspace_root: None,
+                    mutation_target: None,
+                    bash_command: Some(command),
+                },
+            );
+            assert_eq!(kind, BuiltinToolKind::BashOther, "{command}");
+            assert!(matches!(bash, Some(BashReadonlyClass::Unproven { .. })));
+            let mut facts = PermissionFacts {
+                mode: ExecutionPermissionMode::Plan,
+                kind,
+                resource: ResourcePermissionValue::Default,
+                elevation_reason: None,
+                bash,
+            };
+            assert_eq!(
+                evaluate_permission(&facts).kind,
+                PermissionDecisionKind::Deny
+            );
+            facts.elevation_reason = ElevationReason::new("inspect repository changes");
+            assert_eq!(
+                evaluate_permission(&facts).kind,
+                PermissionDecisionKind::Ask
+            );
+            facts.elevation_reason = None;
+            facts.mode = ExecutionPermissionMode::Automatic;
+            assert_eq!(
+                evaluate_permission(&facts).kind,
+                PermissionDecisionKind::Review
+            );
+            facts.mode = ExecutionPermissionMode::FullAccess;
+            assert_eq!(
+                evaluate_permission(&facts).kind,
+                PermissionDecisionKind::Allow
+            );
+        }
+    }
 }

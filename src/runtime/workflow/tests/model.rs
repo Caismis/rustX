@@ -434,6 +434,7 @@ fn setup_with_executor(
     .with_test_workflow(program);
     context.native = Some(Arc::new(
         crate::tools::invocation::NativeInvocationServices {
+            task: None,
             lifecycle: crate::agent::AttemptLifecycle::inert(),
             runtime: crate::tools::runtime::ConversationToolRuntime::new(
                 plane.conversation_id.clone(),

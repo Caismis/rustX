@@ -580,9 +580,20 @@ pub struct ScriptedCall {
     pub arguments: serde_json::Value,
 }
 
+/// Compiles the high-level scripted business-call DSL to current provider wire
+/// shape. `workflow_output` is a terminal protocol, not a registered capability.
+#[must_use]
+pub fn scripted_call_envelope(name: &str, arguments: &serde_json::Value) -> serde_json::Value {
+    if name == "workflow_output" {
+        return arguments.clone();
+    }
+    super::super::common::tool_call_envelope(arguments.clone())
+}
+
 /// Builds the canonical events of one scripted tool call at `block_index`.
 #[must_use]
 pub fn tool_call_events(index: u32, call: &ScriptedCall) -> Vec<ModelEvent> {
+    let arguments = scripted_call_envelope(call.name, &call.arguments);
     vec![
         ModelEvent::ToolCallStarted {
             block_index: rustx::message::types::ContentBlockIndex::new(index),
@@ -595,7 +606,7 @@ pub fn tool_call_events(index: u32, call: &ScriptedCall) -> Vec<ModelEvent> {
         ModelEvent::ToolCallArgumentsDelta {
             block_index: rustx::message::types::ContentBlockIndex::new(index),
             call_id: ToolCallId::new(call.id),
-            arguments_delta: serde_json::to_string(&call.arguments).expect("serialize arguments"),
+            arguments_delta: serde_json::to_string(&arguments).expect("serialize arguments"),
         },
         ModelEvent::ToolCallCompleted {
             block_index: rustx::message::types::ContentBlockIndex::new(index),
@@ -603,7 +614,7 @@ pub fn tool_call_events(index: u32, call: &ScriptedCall) -> Vec<ModelEvent> {
                 id: ToolCallId::new(call.id),
                 tool_id: rustx::runtime::identity::ToolId::new(call.tool_id),
                 name: call.name.to_owned(),
-                arguments: call.arguments.clone(),
+                arguments,
             },
         },
     ]

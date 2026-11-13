@@ -747,7 +747,7 @@ export class CommandDispatcher {
       const configured = { ...current.configured };
       if (clear) delete configured.profile;
       else if (profile !== undefined) configured.profile = profile;
-      const updated = await session.modelSet(configured, true);
+      const updated = await session.modelSet(configured);
       return transient("info", withModelOutcomeNotice(session, `Session model profile -> ${updated.configured.profile ?? "model default"}; future independent attempts. Running attempts stay frozen.`));
     }
     if (/^auxiliary(?:\s|$)/.test(argument)) {
@@ -760,7 +760,7 @@ export class CommandDispatcher {
           ...current.configured,
           auxiliary: { mode: "session", profile: { mode: "lowest" } },
         };
-        const updated = await session.modelSet(configured, true);
+        const updated = await session.modelSet(configured);
         return transient(
           "info",
           withModelOutcomeNotice(
@@ -790,7 +790,7 @@ export class CommandDispatcher {
             ...(prev?.max_output_tokens != null ? { max_output_tokens: prev.max_output_tokens } : {}),
           },
         };
-        const updated = await session.modelSet(configured, true);
+        const updated = await session.modelSet(configured);
         return transient(
           "info",
           withModelOutcomeNotice(
@@ -820,7 +820,7 @@ export class CommandDispatcher {
           ...current.configured,
           auxiliary: { ...base, profile },
         };
-        const updated = await session.modelSet(configured, true);
+        const updated = await session.modelSet(configured);
         return transient(
           "info",
           withModelOutcomeNotice(
@@ -886,7 +886,7 @@ export class CommandDispatcher {
         requestParams: {},
         auxiliary: current.auxiliary,
       };
-      const updated = await session.modelSet(replacement, true);
+      const updated = await session.modelSet(replacement);
       const auxiliaryRecovered =
         current.auxiliary?.mode === "explicit" && updated.configured.auxiliary?.mode !== "explicit";
       const selectionNote = auxiliaryRecovered

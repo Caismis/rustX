@@ -1287,7 +1287,9 @@ fn selectable_bash_call(
         id: rustx::runtime::identity::ToolCallId::new("call-bash-selectable"),
         tool_id: bash.id.clone(),
         name: "bash".to_owned(),
-        arguments: serde_json::json!({"execution_mode": mode, "command": "echo selectable"}),
+        arguments: crate::common::tool_call_envelope(
+            serde_json::json!({"execution_mode": mode, "command": "echo selectable"}),
+        ),
     }
 }
 
@@ -1417,7 +1419,7 @@ async fn model_selectable_bash_rejects_unusable_execution_mode() {
                 id: ToolCallId::new("call-bash-selectable"),
                 tool_id: bash.id.clone(),
                 name: "bash".to_owned(),
-                arguments,
+                arguments: crate::common::tool_call_envelope(arguments),
             })
             .expect("preflight outcome");
         let PreflightOutcome::Rejected { error, .. } = outcome else {

@@ -6,7 +6,7 @@ const locator = {type:'by_ledger_position' as const,position:73};
 const tool: ForegroundToolExecution = {
   occurrence:{locator,block_index:9},block_index:9,name:'bash',assembly_complete:true,
   committed_result_deferred:true,
-  state:{type:'running',arguments:'{"command":"original"}'},
+  state:{type:'running',arguments:"{\"arguments\":{\"command\":\"original\"}}"},
   committed_result:{status:{type:'success'},content:[],duration_ms:'7'},
 };
 const descriptor = (tools=[tool]):RuntimeClientMessageDescriptor => ({locator,role:'assistant',kind:'message',

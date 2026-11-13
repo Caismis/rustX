@@ -58,92 +58,7 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     normalized
 }
 
-/// One filesystem target prepared for a native whole-file mutation.
-///
-/// The path is resolved once, before any parent directory or temporary-file
-/// side effect. Write/Edit pass this same value through to `atomic_commit`,
-/// so the ownership decision and the committed target cannot diverge merely
-/// because a final or ancestor symlink is involved.
-#[derive(Debug)]
-pub struct MutationTarget {
-    path: PathBuf,
-}
-
-impl MutationTarget {
-    /// The effective absolute host path that will be replaced.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-/// The native mutation target prepared once and bound to an authorized
-/// Write/Edit invocation.
-///
-/// Classification, execute, and commit all use this same held target. If the
-/// filesystem facts behind the interpreted path change after binding, the
-/// old authorization cannot continue.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BoundMutationTarget {
-    /// Absolute, lexically normalized request path before symlink following.
-    interpreted: PathBuf,
-    /// Effective host path authorized for mutation.
-    effective: PathBuf,
-}
-
-impl BoundMutationTarget {
-    /// The effective absolute host path authorized for mutation.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.effective
-    }
-
-    /// Re-resolves the interpreted path and refuses when the effective target
-    /// or managed-output ownership no longer matches the bound authorization.
-    pub fn ensure_still_authorized(&self, tool_output: &ManagedToolOutput) -> Result<(), String> {
-        let current = resolve_effective_path(&self.interpreted)?;
-        if current != self.effective {
-            return Err(format!(
-                "mutation target changed since authorization (authorized {}, now {})",
-                self.effective.display(),
-                current.display()
-            ));
-        }
-        tool_output
-            .ensure_model_mutation_allowed(&self.effective)
-            .map_err(|error| error.to_string())?;
-        Ok(())
-    }
-
-    /// The commit handle for the still-authorized effective path.
-    #[must_use]
-    pub fn commit_target(&self) -> MutationTarget {
-        MutationTarget {
-            path: self.effective.clone(),
-        }
-    }
-}
-
-/// Resolves and authorizes one native mutation target before side effects.
-///
-/// This is deliberately not a workspace sandbox. `ManagedToolOutput` owns
-/// the only model-mutation exception: its runtime-owned namespace is
-/// read-only even though Read/Grep/Glob can inspect it.
-/// `interpreted` is the already absolute, lexically normalized result of
-/// [`interpret_path`].
-pub fn bind_mutation_target(
-    interpreted: &Path,
-    tool_output: &ManagedToolOutput,
-) -> Result<BoundMutationTarget, String> {
-    let effective = resolve_effective_path(interpreted)?;
-    tool_output
-        .ensure_model_mutation_allowed(&effective)
-        .map_err(|error| error.to_string())?;
-    Ok(BoundMutationTarget {
-        interpreted: interpreted.to_path_buf(),
-        effective,
-    })
-}
+pub use super::mutation::{BoundMutationTarget, atomic_commit, bind_mutation_target};
 
 /// Binds the Write/Edit mutation target for one prepared invocation, or
 /// returns `None` for non-mutation tools.
@@ -165,36 +80,6 @@ pub fn bind_invocation_mutation_target(
         .ok_or_else(|| "write/edit invocation is missing a path".to_owned())?;
     let interpreted = interpret_path(workspace_root, requested);
     Ok(Some(bind_mutation_target(&interpreted, tool_output)?))
-}
-
-/// The one file-mutation commit of the native tool plane.
-///
-/// Write and Edit both replace a whole file with a whole new content
-/// snapshot, so they share one commit: a uniquely named temporary file is
-/// created inside the target's own directory, the complete content is
-/// written to it, and it is renamed over the target. A reader of the target
-/// therefore observes either the previous file or the complete new one, and
-/// a failed commit leaves no temporary file behind.
-///
-/// The caller must pass the still-authorized target produced from a
-/// [`BoundMutationTarget`] so the path that passed ownership checks is the
-/// path committed here; ordinary write-through semantics are retained
-/// without replacing a link.
-pub fn atomic_commit(target: &MutationTarget, content: &[u8]) -> Result<(), String> {
-    let parent = target
-        .path
-        .parent()
-        .ok_or_else(|| format!("{} has no parent directory", target.path.display()))?;
-    let temp = create_temp_in(parent)?;
-    if let Err(error) = std::fs::write(&temp, content) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(format!("cannot write {}: {error}", temp.display()));
-    }
-    if let Err(error) = std::fs::rename(&temp, &target.path) {
-        let _ = std::fs::remove_file(&temp);
-        return Err(format!("cannot persist {}: {error}", target.path.display()));
-    }
-    Ok(())
 }
 
 /// Resolves all existing symlink components and preserves the effective
@@ -260,28 +145,6 @@ fn canonicalize_deepest_existing(path: &Path) -> std::io::Result<PathBuf> {
         .map(std::ffi::OsStr::to_os_string)
         .unwrap_or_default();
     Ok(canonicalize_deepest_existing(parent)?.join(file_name))
-}
-
-/// Creates a unique temporary file inside `parent` for the atomic commit.
-fn create_temp_in(parent: &Path) -> Result<PathBuf, String> {
-    for attempt in 0..100u32 {
-        let candidate = parent.join(format!(".rustx-tool-tmp-{}-{attempt}", std::process::id()));
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(_) => return Ok(candidate),
-            Err(error) if attempt >= 99 => {
-                return Err(format!(
-                    "cannot create a temporary file in {}: {error}",
-                    parent.display()
-                ));
-            }
-            Err(_) => {}
-        }
-    }
-    Err("temporary file creation exhausted its attempts".to_owned())
 }
 
 /// A normalized failed tool result. A business-level failure of a native

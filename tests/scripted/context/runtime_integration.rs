@@ -472,7 +472,7 @@ fn stateless_state() -> ProviderContinuationState {
                 "id": "rs_1",
                 "encrypted_content": "opaque"
             }),
-            serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{}"}),
+            serde_json::json!({"type":"function_call", "id":"fc_1", "call_id":"call-1", "name":"alpha", "arguments":"{\"arguments\":{}}"}),
         ],
     })
 }
