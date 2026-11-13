@@ -1411,7 +1411,11 @@ fn guarded(diagnostic: &str) -> PythonSelection {
 }
 
 fn selection_from_guard(specific: Option<PathBuf>, diagnostic: &str) -> PythonSelection {
-    match specific.or_else(fallback_guard) {
+    finish_guard(specific.or_else(fallback_guard), diagnostic)
+}
+
+fn finish_guard(created: Option<PathBuf>, diagnostic: &str) -> PythonSelection {
+    match created.or_else(provisioned_guard) {
         Some(directory) => PythonSelection {
             path_prefix: vec![directory],
             virtual_env: None,
@@ -1426,6 +1430,21 @@ fn selection_from_guard(specific: Option<PathBuf>, diagnostic: &str) -> PythonSe
         },
     }
 }
+
+/// Scripts shipped with rustX. They participate in `PATH` lookup for `sh`,
+/// `/usr/bin/env`, and `#!/usr/bin/env python3` when no runtime directory can
+/// be created. The diagnostic comes from `RUSTX_PYTHON_GUARD_MESSAGE`.
+fn provisioned_guard() -> Option<PathBuf> {
+    let directory = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/python-guard"));
+    let usable = ["python", "python3"].into_iter().all(|name| {
+        std::fs::metadata(directory.join(name))
+            .ok()
+            .is_some_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    });
+    usable.then_some(directory)
+}
+
+pub(crate) const GUARD_MESSAGE_KEY: &str = "RUSTX_PYTHON_GUARD_MESSAGE";
 
 fn fallback_guard() -> Option<PathBuf> {
     static GUARD: OnceLock<PathBuf> = OnceLock::new();
@@ -1484,19 +1503,6 @@ fn install_process_guard(parents: &[PathBuf], diagnostic: &str) -> Option<PathBu
         }
     }
     None
-}
-
-/// Bash rejects these command names when no guard directory can be created.
-/// A directory guard remains the lookup path for `/usr/bin/env python3`.
-pub(crate) fn shell_guard_functions(diagnostic: &str) -> [(String, String); 2] {
-    let body = format!(
-        "() {{ printf '%s\\n' '{}' >&2\n return 127\n}}",
-        shell_line(diagnostic)
-    );
-    [
-        ("BASH_FUNC_python%%".to_owned(), body.clone()),
-        ("BASH_FUNC_python3%%".to_owned(), body),
-    ]
 }
 
 fn claim_fresh_directory(directory: &Path) -> Option<PathBuf> {
@@ -2745,12 +2751,26 @@ mod tests {
     }
 
     fn run_bash(entries: &[(String, String)], program: &str) -> std::process::Output {
-        let mut bash = std::process::Command::new("/bin/bash");
-        bash.arg("-c").arg(program).env_clear();
+        run_program(entries, "/bin/bash", &["-c", program])
+    }
+
+    fn run_program(
+        entries: &[(String, String)],
+        program: &str,
+        args: &[&str],
+    ) -> std::process::Output {
+        let mut command = std::process::Command::new(program);
+        command.args(args).env_clear();
         for (key, value) in entries {
-            bash.env(key, value);
+            command.env(key, value);
         }
-        bash.output().expect("bash")
+        command.output().expect("program")
+    }
+
+    fn assert_guard_rejected(output: &std::process::Output) {
+        assert_eq!(output.status.code(), Some(127), "{output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("disk full"));
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("99"));
     }
 
     #[test]
@@ -2787,13 +2807,9 @@ mod tests {
     }
 
     #[test]
-    fn no_guard_directory_rejects_python_names_and_keeps_other_commands() {
-        let selection = PythonSelection {
-            path_prefix: Vec::new(),
-            virtual_env: None,
-            diagnostic: "disk full".to_owned(),
-            guard_unavailable: true,
-        };
+    fn no_guard_directory_rejects_path_lookup_and_keeps_other_commands() {
+        let selection = super::finish_guard(None, "disk full");
+        assert!(!selection.guard_unavailable);
         let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
         let entries = crate::tools::execution_environment::compose(
             &host,
@@ -2801,21 +2817,39 @@ mod tests {
             &selection,
         )
         .expect("composition stays available");
+        let path = entries
+            .iter()
+            .find(|(key, _)| key == "PATH")
+            .map(|(_, value)| value.as_str())
+            .expect("PATH");
+        assert!(path.contains("assets/python-guard"));
+        assert!(path.contains("/usr/bin"));
         assert!(
             entries
                 .iter()
-                .any(|(key, value)| key == "PATH" && value.contains("/usr/bin"))
+                .any(|(key, value)| { key == super::GUARD_MESSAGE_KEY && value == "disk full" })
         );
-        assert!(
-            entries
-                .iter()
-                .all(|(_, value)| !value.contains("not Unicode"))
+        assert_guard_rejected(&run_bash(&entries, "python3 -c 'print(99)'"));
+        assert_guard_rejected(&run_program(
+            &entries,
+            "/usr/bin/env",
+            &["python3", "-c", "print(99)"],
+        ));
+        assert_guard_rejected(&run_program(
+            &entries,
+            "/bin/sh",
+            &["-c", "python3 -c 'print(99)'"],
+        ));
+        let script_dir = tempfile::tempdir().expect("script");
+        let script = script_dir.path().join("tool");
+        write_executable(&script, "#!/usr/bin/env python3\nprint(99)\n");
+        assert_guard_rejected(&run_program(&entries, &script.display().to_string(), &[]));
+        let listed = run_program(
+            &entries,
+            "/bin/sh",
+            &["-c", "ls /bin/sh >/dev/null && printf ok"],
         );
-        let python = run_bash(&entries, "python3 -c 'print(99)'");
-        assert_eq!(python.status.code(), Some(127));
-        assert!(String::from_utf8_lossy(&python.stderr).contains("disk full"));
-        let listed = run_bash(&entries, "ls /bin/sh >/dev/null && printf ok");
-        assert!(listed.status.success());
+        assert!(listed.status.success(), "{listed:?}");
         assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
     }
 
