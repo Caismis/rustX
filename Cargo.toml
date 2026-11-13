@@ -68,10 +68,11 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 futures-util = "0.3"
 tracing = "0.1"
 async-openai = { version = "0.41", default-features = true, features = ["chat-completion", "responses", "middleware", "byot"] }
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls", "blocking"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 eventsource-stream = "0.2"
 tower = { version = "0.5", features = ["util"] }
-jsonschema = "0.26"
+# Schemas never acquire host file/network authority from a reference URI.
+jsonschema = { version = "0.26", default-features = false }
 # Reuse the validator's resource resolver when compiling invocation envelopes.
 referencing = "=0.26.2"
 # The native-search substrate behind Glob and Grep. These are implementation

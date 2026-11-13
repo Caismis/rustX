@@ -201,6 +201,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
             approval_mode: rustx::runtime::ApprovalMode::FullAccess,
             last_permission_reminder_mode: None,
             permission_task_message: None,
+            recovered_permission_task_message: None,
         },
         context_runtime,
         &fixture.runtime,

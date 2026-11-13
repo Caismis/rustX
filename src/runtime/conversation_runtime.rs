@@ -799,7 +799,7 @@ struct CoordinatorState {
     /// conversation. Cleared only when the next admission must re-emit
     /// (mode change, first admission, or post-compaction).
     last_permission_reminder_mode: Option<ApprovalMode>,
-    /// Exact canonical task input retained for the next continuation.
+    /// Exact canonical task input committed by the latest primary request start.
     permission_task_message: Option<crate::runtime::identity::MessageId>,
     /// The latest requested runtime control mode.
     /// Monotonic control-plane revision; idempotent requests do not advance it.
@@ -875,6 +875,8 @@ struct CoordinatorState {
     /// external outcome (Class C), where continuing would risk duplicating an
     /// external side effect rustX cannot observe.
     recovered_continuation: Option<AttemptProvenance>,
+    /// Candidate provenance of the recovered turn, not committed task authority.
+    recovered_permission_task_message: Option<MessageId>,
     /// The coordinator-owned transient admission-cycle retry bookkeeping
     /// (Issue #63). The absorbing `DurabilityFailed` fact itself is NOT
     /// stored here: it lives in exactly one place, the runtime-owned

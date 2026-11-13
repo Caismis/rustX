@@ -274,7 +274,7 @@ pub struct AgentExecutionResult {
     pub durable_failure_kind: Option<DurableFailureKind>,
     /// Final reminder consumption identity for the current context activation.
     pub permission_reminder_consumed: Option<crate::runtime::types::ApprovalMode>,
-    /// Latest native task identity handed back with the settled execution.
+    /// Native task identity of the last successful primary request start.
     pub permission_task_message: Option<MessageId>,
 }
 
@@ -336,8 +336,10 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     pub(crate) approval_mode: crate::runtime::types::ApprovalMode,
     /// Mode last successfully injected on this conversation, when known.
     pub(crate) last_permission_reminder_mode: Option<crate::runtime::types::ApprovalMode>,
-    /// Canonical task identity retained by the conversation owner.
+    /// Canonical task identity committed by the last primary request start.
     pub(crate) permission_task_message: Option<MessageId>,
+    /// One-shot candidate from an outstanding native adoption during recovery.
+    pub(crate) recovered_permission_task_message: Option<MessageId>,
 }
 
 /// One agent attempt execution.
@@ -477,8 +479,10 @@ pub struct AgentExecution<'a> {
     /// Canonical opening task, refreshed at each new Human safe boundary.
     pub(crate) permission_task:
         Option<std::sync::Arc<crate::runtime::permission::PermissionTaskEvidence>>,
-    /// One-shot task handoff, resolved after the native Attempt start commits.
-    pub(crate) inherited_permission_task_message: Option<MessageId>,
+    /// Task identity committed by the last successful primary request start.
+    pub(crate) committed_permission_task_message: Option<MessageId>,
+    /// One-shot recovered adoption candidate, resolved after Attempt start.
+    pub(crate) recovered_permission_task_message: Option<MessageId>,
 }
 
 #[cfg(test)]

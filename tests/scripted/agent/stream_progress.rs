@@ -191,6 +191,7 @@ async fn make_execution(setup: ExecutionSetup<'_>) -> AgentExecution<'_> {
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
             last_permission_reminder_mode: None,
             permission_task_message: None,
+            recovered_permission_task_message: None,
             approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         context_runtime(),

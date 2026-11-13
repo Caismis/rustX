@@ -53,6 +53,203 @@ async fn permission_task_never_promotes_an_initial_runtime_notice_into_authority
     reopened.shutdown().await.unwrap();
 }
 
+/// Capture the actual native authorization input; the executor stays unreachable.
+#[derive(Default)]
+struct PermissionTaskCapture {
+    tasks: std::sync::Mutex<Vec<crate::runtime::permission::PermissionTaskEvidence>>,
+}
+
+impl PreToolPolicy for PermissionTaskCapture {
+    fn evaluate<'a>(
+        &'a self,
+        view: &'a PreToolView<'a>,
+        _cancellation: &'a crate::runtime::cancellation::ExecutionCancellation,
+    ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
+        Box::pin(async move {
+            self.tasks
+                .lock()
+                .unwrap()
+                .push(view.task.expect("native task evidence").clone());
+            Ok(PreToolDecision::Deny {
+                reason: "permission task identity capture".to_owned(),
+            })
+        })
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "real cancellation/reconstruction matrix with native authorization evidence"
+)]
+async fn permission_task_commits_only_when_the_primary_request_starts() {
+    use crate::agent::execution::test_sync::StartBoundaryPause;
+    for recovered_candidate in [false, true] {
+        for reopen in [false, true] {
+            for source in [
+                UserSource::Runtime,
+                UserSource::Agent {
+                    agent_id: AgentId::new("later-agent"),
+                },
+            ] {
+                let dir = tempfile::tempdir().unwrap();
+                let (tool, _, _) = CauseProbeTool::new();
+                let (registry, tool_script) = cause_probe_registry_and_script(Arc::new(tool));
+                let (runtime, _) = headless_runtime(
+                    &dir,
+                    vec![one_turn_script(), tool_script.clone(), one_turn_script()],
+                    Some(registry.clone()),
+                    None,
+                )
+                .await;
+                runtime.activate();
+                let established = runtime
+                    .submit_inbound(text_content("Task A is the committed Human authority"))
+                    .unwrap();
+                await_settled_ledger(&runtime, 0).await;
+                let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
+                let mut pre_start = pre_start.unwrap();
+                let (runtime, cancel_ordinal, settled_count) = if recovered_candidate {
+                    runtime.shutdown().await.unwrap();
+                    let conversation = runtime.conversation_id().clone();
+                    drop(runtime);
+                    let candidate = {
+                        let store = crate::durable::SqliteConversationStore::open(
+                            conversation.clone(),
+                            &dir.path().join("artifacts/conversation.sqlite"),
+                        )
+                        .unwrap();
+                        let accepted = store
+                            .accept_inbound(crate::durable::inbox::InboundDraft {
+                                message_id: None,
+                                source: UserSource::Human,
+                                kind: InboundKind::Message,
+                                content: text_content("Task B was adopted before the crash"),
+                                timestamp: fixed_time(),
+                                correlation: None,
+                            })
+                            .unwrap();
+                        adopt_accepted(&store, &accepted);
+                        let attempt = AttemptId::for_conversation(&conversation, 1);
+                        store
+                            .append_event(attempt_event(
+                                &conversation,
+                                "candidate-before-restart",
+                                &attempt,
+                                RuntimeEvent::AttemptStarted {
+                                    attempt_id: attempt.clone(),
+                                },
+                            ))
+                            .unwrap();
+                        accepted.message_id
+                    };
+                    let (runtime, _) = headless_runtime(
+                        &dir,
+                        vec![tool_script.clone(), one_turn_script()],
+                        Some(registry.clone()),
+                        Some(CoordinatorProbe {
+                            start_boundary_pause: Some(pause),
+                            ..CoordinatorProbe::default()
+                        }),
+                    )
+                    .await;
+                    assert_eq!(
+                        runtime
+                            .inner
+                            .lock_state()
+                            .recovered_permission_task_message
+                            .as_ref(),
+                        Some(&candidate)
+                    );
+                    runtime.activate();
+                    (runtime, 2, 0)
+                } else {
+                    runtime
+                        .inner
+                        .probe
+                        .lock()
+                        .unwrap()
+                        .get_or_insert_with(CoordinatorProbe::default)
+                        .start_boundary_pause = Some(pause);
+                    runtime
+                        .submit_inbound(text_content("Task B is cancelled before request start"))
+                        .unwrap();
+                    (runtime, 1, 1)
+                };
+                pre_start.await_park(1).await;
+                assert_eq!(request_snapshots(&runtime.request_history()).len(), 1);
+                runtime
+                    .cancel_current_attempt(&AttemptId::for_conversation(
+                        runtime.conversation_id(),
+                        cancel_ordinal,
+                    ))
+                    .unwrap();
+                pre_start.release();
+                await_settled_ledger(&runtime, settled_count).await;
+                assert_eq!(
+                    runtime.inner.lock_state().permission_task_message.as_ref(),
+                    Some(&established.message_id),
+                    "pre-start cancellation cannot commit the prepared task"
+                );
+                let (runtime, after) = if reopen {
+                    runtime.shutdown().await.unwrap();
+                    drop(runtime);
+                    let (runtime, _) = headless_runtime(
+                        &dir,
+                        vec![tool_script.clone(), one_turn_script()],
+                        Some(registry.clone()),
+                        None,
+                    )
+                    .await;
+                    runtime.activate();
+                    (runtime, 0)
+                } else {
+                    (runtime, settled_count + 1)
+                };
+                assert_eq!(
+                    runtime.inner.lock_state().permission_task_message.as_ref(),
+                    Some(&established.message_id)
+                );
+                let capture = Arc::new(PermissionTaskCapture::default());
+                runtime.install_test_pre_tool_policy(capture.clone());
+                runtime
+                    .submit_sourced_inbound(
+                        source.clone(),
+                        text_content("Continue the current task"),
+                    )
+                    .unwrap();
+                await_settled_ledger(&runtime, after).await;
+                let snapshots = request_snapshots(&runtime.request_history());
+                assert_eq!(snapshots.len(), 3);
+                for snapshot in &snapshots {
+                    assert_eq!(
+                        snapshot.permission_task_message.as_ref(),
+                        Some(&established.message_id),
+                        "recovered_candidate={recovered_candidate}, reopen={reopen}, source={source:?}"
+                    );
+                }
+                {
+                    let tasks = capture.tasks.lock().unwrap();
+                    assert_eq!(
+                        tasks.len(),
+                        1,
+                        "the actual pre-tool owner saw one invocation"
+                    );
+                    let crate::runtime::permission::PermissionTaskEvidence::CanonicalInput {
+                        message,
+                    } = &tasks[0]
+                    else {
+                        panic!("canonical Human authority must remain canonical")
+                    };
+                    assert_eq!(message.id, established.message_id);
+                    assert_eq!(message.source, UserSource::Human);
+                }
+                runtime.shutdown().await.unwrap();
+            }
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permission_task_recovery_uses_the_exact_unanswered_adoption() {
     for source in [
@@ -118,8 +315,13 @@ async fn permission_task_recovery_uses_the_exact_unanswered_adoption() {
             },
         )
         .await;
+        assert!(runtime.inner.lock_state().permission_task_message.is_none());
         assert_eq!(
-            runtime.inner.lock_state().permission_task_message.as_ref(),
+            runtime
+                .inner
+                .lock_state()
+                .recovered_permission_task_message
+                .as_ref(),
             Some(&task_id)
         );
         runtime.activate();

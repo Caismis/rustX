@@ -4,13 +4,13 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
-    sync::{Arc, LazyLock, Mutex},
+    sync::LazyLock,
 };
 
-use referencing::{Draft, Registry, Resolver, Resource, Retrieve, Uri};
+use referencing::{Draft, Registry, Resolver, Resource};
 use serde_json::{Map, Value, json};
 
-use super::SchemaError;
+use super::{SchemaError, build_validator};
 
 /// A canonical validator and its closed model-facing resource graph.
 pub(super) struct CompiledBusiness {
@@ -19,26 +19,23 @@ pub(super) struct CompiledBusiness {
     pub validator: jsonschema::Validator,
 }
 
-/// Validate the original business schema and capture its resources once.
+/// Validate the owner-supplied business document and freeze its bundled resources.
 ///
 /// The caller places `resources` in a Draft 7 `definitions` object and
 /// references `root_uri` from `arguments`. Business validation uses the returned
-/// unchanged canonical validator. Both share one frozen capture of external
-/// resources and never retrieve those resources during an invocation.
+/// unchanged canonical validator. Both use only resource bytes supplied in the
+/// document. Missing resources fail without file or network access, including
+/// during registration; URI contents cannot grant host resource authority.
 pub(super) fn compile_business_resources(
     canonical: &Value,
 ) -> Result<CompiledBusiness, SchemaError> {
-    let retriever = SchemaRetriever::default();
     // Validate the unchanged document, including structural errors in siblings
-    // ignored by legacy $ref evaluation. Both compilations share frozen I/O.
-    let validator = jsonschema::options()
-        .with_retriever(retriever.clone())
-        .build(canonical)
-        .map_err(invalid_schema)?;
+    // ignored by legacy $ref evaluation. Both compilations are strictly no-I/O.
+    let validator = build_validator(canonical).map_err(invalid_schema)?;
     let resource = Resource::from_contents(canonical.clone()).map_err(invalid_schema)?;
     let root_uri = resource.id().unwrap_or("json-schema:///").to_owned();
     let registry = Registry::options()
-        .retriever(Box::new(retriever))
+        .retriever(Box::new(referencing::DefaultRetriever))
         .try_new(root_uri.clone(), resource)
         .map_err(invalid_schema)?;
     let resolver = registry.try_resolver(&root_uri).map_err(invalid_schema)?;
@@ -82,55 +79,11 @@ static METASCHEMA_VALIDATORS: LazyLock<BTreeMap<Draft, Result<jsonschema::Valida
         ]
         .into_iter()
         .map(|(draft, schema)| {
-            let validator = jsonschema::options()
-                .with_retriever(referencing::DefaultRetriever)
-                .build(schema)
-                .map_err(|error| error.to_string());
+            let validator = build_validator(schema).map_err(|error| error.to_string());
             (draft, validator)
         })
         .collect()
     });
-
-/// Match the HTTP/file schemes supported by the existing JSON Schema engine.
-/// Its default retriever is private, while `referencing`'s default does no I/O.
-#[derive(Clone, Default)]
-struct SchemaRetriever {
-    resources: Arc<Mutex<HashMap<String, Value>>>,
-}
-
-impl Retrieve for SchemaRetriever {
-    fn retrieve(&self, uri: &Uri<&str>) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-        let mut resources = self
-            .resources
-            .lock()
-            .map_err(|_| "schema resource capture lock poisoned")?;
-        if let Some(resource) = resources.get(uri.as_str()) {
-            return Ok(resource.clone());
-        }
-        let resource = match uri.scheme().as_str() {
-            "http" | "https" => {
-                // Registration also runs inside Tokio. A blocking reqwest client
-                // owns a runtime, so create and drop it on a separate thread.
-                std::thread::scope(|scope| {
-                    scope
-                        .spawn(
-                            || -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
-                                Ok(reqwest::blocking::get(uri.as_str())?.json::<Value>()?)
-                            },
-                        )
-                        .join()
-                        .map_err(|_| "schema resource retrieval thread panicked")?
-                })
-            }
-            "file" => Ok(serde_json::from_reader(std::fs::File::open(
-                uri.path().as_str(),
-            )?)?),
-            scheme => Err(format!("unsupported schema resource URI scheme {scheme:?}").into()),
-        }?;
-        resources.insert(uri.as_str().to_owned(), resource.clone());
-        Ok(resource)
-    }
-}
 
 struct ResourceNodes<'a> {
     original_root: &'a Value,
@@ -520,9 +473,8 @@ mod tests {
     }
 
     fn assert_projection(canonical: &Value, values: &[Value]) {
-        let original = jsonschema::Validator::new(canonical).expect("canonical schema validates");
-        let compiled =
-            jsonschema::Validator::new(&envelope(canonical)).expect("envelope validates");
+        let original = build_validator(canonical).expect("canonical schema validates");
+        let compiled = build_validator(&envelope(canonical)).expect("envelope validates");
         for business in values {
             for reason in [
                 None,
@@ -801,8 +753,8 @@ mod tests {
     }
 
     #[test]
-    fn frozen_external_resources_keep_legacy_bounds_and_recursive_scope() {
-        for target in [
+    fn owner_bundled_resources_keep_legacy_bounds_and_recursive_scope() {
+        for mut target in [
             json!({
                 "$schema": "http://json-schema.org/draft-04/schema#", "type": "object",
                 "properties": {"amount": {
@@ -818,17 +770,26 @@ mod tests {
                 }, "required": ["amount"], "additionalProperties": false,
             }),
         ] {
-            let directory = tempfile::tempdir().unwrap();
-            let path = directory.path().join("business.json");
-            std::fs::write(&path, target.to_string()).unwrap();
+            let uri = "https://example.test/owner-captured-business.json";
+            let id = if target["$schema"] == "http://json-schema.org/draft-04/schema#" {
+                "id"
+            } else {
+                "$id"
+            };
+            target[id] = json!(uri);
+            // The outer metaschema validates bundled schema positions. Use a
+            // Draft 4 container that accepts both the legacy boolean bounds and
+            // the explicitly identified modern recursive resource. Putting a
+            // Draft 4 boolean exclusiveMinimum under a modern $defs would make
+            // the unchanged canonical document itself invalid in this engine.
             let canonical = json!({
-                "$schema": "https://json-schema.org/draft/2020-12/schema", "type": "object",
-                "$ref": format!("file://{}", path.display()),
+                "$schema": "http://json-schema.org/draft-04/schema#", "type": "object",
+                "$ref": uri, "definitions": {"captured": target},
             });
+            let original = build_validator(&canonical).expect("valid owner-supplied bundle");
             let business = compile_business_resources(&canonical).unwrap();
             let compiled = envelope_for(&business);
-            std::fs::remove_file(path).unwrap();
-            let validator = jsonschema::Validator::new(&compiled).unwrap();
+            let validator = build_validator(&compiled).unwrap();
             for value in [
                 json!({}),
                 json!({"amount": 1}),
@@ -836,54 +797,82 @@ mod tests {
                 json!({"amount": 2, "child": {"amount": 1}}),
                 json!({"amount": 2, "child": {"amount": 2}}),
             ] {
+                let valid = value.get("amount") == Some(&json!(2))
+                    && (value.get("child").is_none()
+                        || (id == "$id" && value["child"]["amount"] == 2));
+                assert_eq!(
+                    original.is_valid(&value),
+                    valid,
+                    "canonical: {target}, {value}"
+                );
+                assert_eq!(business.validator.is_valid(&value), valid);
                 assert_eq!(
                     validator.is_valid(&json!({"arguments": value})),
-                    business.validator.is_valid(&value),
-                    "external dialect or recursive scope changed: {target}, {value}",
+                    valid,
+                    "bundled dialect or recursive scope changed: {target}, {value}",
                 );
             }
         }
     }
 
     #[tokio::test]
-    async fn external_resources_are_captured_once_and_closed_inside_async_registration() {
-        use std::io::{Read, Write};
-
-        let directory = tempfile::tempdir().expect("external schema directory");
+    async fn owner_captured_resources_are_frozen_without_host_retrieval() {
+        let directory = tempfile::tempdir().expect("owner resource directory");
         let path = directory.path().join("business.json");
+        let file_uri = format!("file://{}", path.display());
+        let http_uri = "https://schema.example.test/business.json";
         let target = json!({"type": "object", "required": ["command"], "properties": {
             "command": {"type": "string"},
         }, "additionalProperties": false});
-        std::fs::write(&path, target.to_string()).expect("write external file");
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("local schema server");
-        let address = listener.local_addr().expect("server address");
-        let body = target.to_string();
-        let server = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("one schema request");
-            stream
-                .set_read_timeout(Some(std::time::Duration::from_secs(5)))
-                .expect("read timeout");
-            let mut request = [0; 4096];
-            assert!(stream.read(&mut request).expect("schema HTTP request") > 0);
-            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("schema response");
-        });
+        std::fs::write(&path, target.to_string()).expect("write owner resource");
+        // Capturing bytes is an explicit owner operation, outside compilation.
+        // URI identities alone never trigger another read of this file.
+        let captured: Value = serde_json::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
+        let mut file_resource = captured.clone();
+        file_resource["$id"] = json!(file_uri);
+        let mut http_resource = captured;
+        http_resource["$id"] = json!(http_uri);
         let canonical = json!({"type": "object", "allOf": [
-            {"$ref": format!("file://{}", path.display())},
-            {"$ref": format!("http://{address}/business.json")},
-        ]});
-        let business = compile_business_resources(&canonical).expect("capture external resources");
+            {"$ref": file_uri}, {"$ref": http_uri},
+        ], "$defs": {"file": file_resource, "http": http_resource}});
+        let business = compile_business_resources(&canonical).expect("compile captured resources");
         let compiled = envelope_for(&business);
-        server.join().expect("server served one request");
-        std::fs::remove_file(&path).expect("remove original external schema");
+        // Mutating and removing the original has no effect on either artifact.
+        std::fs::write(&path, r#"{"type":"object","required":["replacement"]}"#).unwrap();
+        std::fs::remove_file(&path).unwrap();
         assert!(business.validator.is_valid(&json!({"command": "status"})));
         assert!(!business.validator.is_valid(&json!({"command": 1})));
-        // Both the external file and server are now gone. Rebuilding validators
-        // from the captured graph must still succeed without retrieval.
         for _ in 0..2 {
-            let validator =
-                jsonschema::Validator::new(&compiled).expect("closed envelope validates");
+            let validator = build_validator(&compiled).expect("closed envelope validates");
             assert!(validator.is_valid(&json!({"arguments": {"command": "status"}})));
             assert!(!validator.is_valid(&json!({"arguments": {"command": 1}})));
+        }
+    }
+
+    #[test]
+    fn uncaptured_file_and_network_resources_are_rejected_before_host_access() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("private.json");
+        let marker = "local-content-must-not-leave-76fc114a";
+        std::fs::write(&path, json!({"x-private-marker": marker}).to_string()).unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        for uri in [
+            format!("file://{}", path.display()),
+            format!("http://{}/private.json", listener.local_addr().unwrap()),
+            format!("https://{}/private.json", listener.local_addr().unwrap()),
+        ] {
+            let canonical = json!({"type": "object", "$ref": uri});
+            // Catalog structure is observable without authorizing this resource.
+            validate_declaration(&canonical).unwrap();
+            let error = compile_business_resources(&canonical)
+                .err()
+                .expect("URI is not resource-read authority");
+            assert!(error.to_string().contains("does not fetch resources"));
+            assert!(!error.to_string().contains(marker));
+            assert!(
+                matches!(listener.accept(), Err(error) if error.kind() == std::io::ErrorKind::WouldBlock)
+            );
         }
     }
 
@@ -991,7 +980,7 @@ mod tests {
                 "$schema": dialect, "type": "object",
                 "if": {"$ref": "#/missing"}, "unevaluatedProperties": false,
             });
-            assert!(jsonschema::Validator::new(&invalid).is_err());
+            assert!(build_validator(&invalid).is_err());
             assert!(compile_business_resources(&invalid).is_err());
         }
     }
@@ -1027,18 +1016,41 @@ mod tests {
     }
 
     #[test]
-    fn unused_external_declarations_are_not_retrieved_by_the_closed_envelope() {
+    fn unused_external_declarations_do_not_authorize_host_resource_reads() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("unused.json");
-        std::fs::write(&path, r##"{"$ref":"#/missing"}"##).unwrap();
+        let marker = "inactive-resource-still-needs-owner-capture";
+        std::fs::write(&path, json!({"x-private-marker": marker}).to_string()).unwrap();
         let canonical = json!({
             "type": "object", "properties": {"value": {"type": "integer"}},
             "$defs": {"unused": {"$ref": format!("file://{}", path.display())}},
         });
-        let original = jsonschema::Validator::new(&canonical).unwrap();
+        // Registry discovery can resolve declarations before evaluation. An
+        // inactive reference still cannot confer permission to retrieve bytes.
+        let error = compile_business_resources(&canonical)
+            .err()
+            .expect("uncaptured declaration must not read the host");
+        assert!(error.to_string().contains("does not fetch resources"));
+        assert!(!error.to_string().contains(marker));
+    }
+
+    #[test]
+    fn owner_bundled_inactive_resources_are_not_executed_or_disclosed() {
+        let uri = "file:///owner-captured/unused.json";
+        let marker = "inactive-owner-bytes-do-not-enter-model-definition";
+        let canonical = json!({
+            "type": "object", "properties": {"value": {"type": "integer"}},
+            "$defs": {
+                "unused": {"$ref": uri},
+                "captured": {"$id": uri, "required": ["not-required-by-root"],
+                    "$ref": "#/missing", "x-owner-marker": marker},
+            },
+        });
+        let original = build_validator(&canonical).unwrap();
         let business = compile_business_resources(&canonical).unwrap();
-        std::fs::remove_file(path).unwrap();
-        let compiled = jsonschema::Validator::new(&envelope_for(&business)).unwrap();
+        let model_schema = envelope_for(&business);
+        assert!(!model_schema.to_string().contains(marker));
+        let compiled = build_validator(&model_schema).unwrap();
         for value in [json!({}), json!({"value": 1}), json!({"value": "bad"})] {
             assert_eq!(
                 compiled.is_valid(&json!({"arguments": value})),

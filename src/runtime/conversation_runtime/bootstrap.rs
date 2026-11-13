@@ -848,7 +848,11 @@ impl ConversationRuntime {
             }
         };
 
-        let (last_permission_reminder_mode, permission_task_message) = match recovery
+        let (
+            last_permission_reminder_mode,
+            permission_task_message,
+            recovered_permission_task_message,
+        ) = match recovery
             .latest_primary_request()
             .map(|request_id| {
                 let snapshot = store.load_request_snapshot(request_id)?;
@@ -861,7 +865,8 @@ impl ConversationRuntime {
             })
             .transpose()
             .and_then(|evidence| {
-                let (mode, mut task) = evidence.unwrap_or((None, None));
+                let (mode, task) = evidence.unwrap_or((None, None));
+                let mut candidate = None;
                 if let Some(id) = recovery.continuation_task_message() {
                     let messages = store.load_messages(std::slice::from_ref(id))?;
                     let Some(crate::message::MessageBlock::User(message)) =
@@ -882,14 +887,15 @@ impl ConversationRuntime {
                             "recovered permission task has no Human or delegated provenance".into(),
                         ));
                     }
-                    // Match the live safe-boundary rule: only a new Human
-                    // replaces an established task. Delegated input supplies
-                    // an initial task, never erases the task frozen at start.
+                    // Recover only the candidate for the unanswered turn. A
+                    // Human can replace the established task, while Agent
+                    // input supplies only an initial task. Neither becomes
+                    // committed authority until a primary request starts.
                     if task.is_none() || message.source == crate::message::UserSource::Human {
-                        task = Some(id.clone());
+                        candidate = Some(id.clone());
                     }
                 }
-                Ok((mode, task))
+                Ok((mode, task, candidate))
             }) {
             Ok(evidence) => evidence,
             Err(error) => {
@@ -1005,6 +1011,7 @@ impl ConversationRuntime {
                 effective_approval_mode: config.approval_mode,
                 last_permission_reminder_mode,
                 permission_task_message,
+                recovered_permission_task_message,
                 conversation: Some(conversation),
                 current_attempt: None,
                 scheduled: None,

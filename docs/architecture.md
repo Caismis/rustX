@@ -2645,10 +2645,16 @@ business schemas. For valid metadata, the compilation contract is:
 canonical(B) ⇔ compiled({arguments: B, ...runtime_metadata})
 ```
 
-Registration atomically captures external resources, the canonical validator,
-and the compiled model definition. Catalog observation, active selection,
-cloning and individual calls reuse those captured artifacts without fetching
-resources again. Catalog declaration checks validate structure without I/O;
+Schema compilation never reads host files or network resources. The native
+resource owner supplies the complete document, including any captured resource
+bytes bundled under `definitions` or `$defs` with their original resource IDs.
+A `file:`, HTTP or HTTPS URI is only an identity, never permission to retrieve
+or disclose its target. References to resources absent from that document fail
+before host access; the engine's built-in metaschemas remain available.
+Registration atomically freezes those supplied resources, the canonical
+validator and the compiled model definition. Catalog observation, active
+selection, cloning and individual calls reuse those artifacts without schema
+I/O. Catalog declaration checks validate structure without resolving references;
 executable admission performs full compilation. Duplicate identities, invalid
 schemas, invalid policies and background-capable controls fail registration.
 The `workflow_output` terminal protocol is separate from ordinary capabilities
@@ -2671,8 +2677,13 @@ an ancestor's pathname after the last check cannot redirect the commit.
 Automatic review receives bounded native facts: canonical task provenance or
 an admitted scheduled Claim, prepared invocation details, the effective matrix
 reason and structured Bash analysis. Model arguments and escalation reasons
-cannot establish Human intent. Canonical task identities persist in request
-snapshots and recover through exact message/adoption references. Reminder
+cannot establish Human intent. The successful primary request-start transaction
+commits the canonical task identity in its request snapshot. New Human inputs
+and recovered unanswered adoptions are candidates until that transaction
+succeeds; a cancelled pre-start attempt retains the prior committed task in
+both live settlement and reconstruction. Agent input can establish an initial
+task, while Runtime input cannot. Scheduled execution derives its task evidence
+from its own admitted Claim rather than this conversation task pointer. Reminder
 consumption is reconstructed from the latest primary request's frozen mode
 and context activation; unchanged context resumes stay quiet, while a
 compaction without a subsequent request start leaves the reminder pending.

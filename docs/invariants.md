@@ -3943,10 +3943,14 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   the business root. For valid metadata, `canonical(B)` equals
   `compiled({arguments:B,...metadata})`, including finite objects,
   property-name constraints, compositions and recursive references.
-- Registration captures the canonical validator, external resources and model
-  definition atomically. Observation, cloning, selected catalogs and individual
-  calls reuse that capture without external schema I/O. Structural catalog
-  checks do no I/O; executable admission still rejects invalid contracts.
+- Schema compilation has no host file or network authority. Native resource
+  owners supply resource bytes in a self-contained document; bundled resource
+  IDs preserve reference semantics but never authorize retrieval. Missing
+  resources fail before host access, regardless of URI scheme or tool origin.
+  Registration freezes the canonical validator, supplied resources and model
+  definition atomically. Observation, cloning, selected catalogs and calls reuse
+  that capture without schema I/O. Structural catalog checks do not resolve
+  references; executable admission still rejects invalid contracts.
 - Git is `Unproven`: argv-only analysis cannot exclude repository-configured
   helpers. Plan, Automatic and FullAccess apply their ordinary permission
   decisions. Child Git environment defaults preserve real patch output, and
@@ -3957,9 +3961,13 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   the mutation to another tree.
 - Automatic review inspects bounded native task provenance, prepared invocation
   facts and structured Bash analysis. Model-authored task claims and elevation
-  reasons never substitute for Human authority. Runtime reconstruction retains
-  exact canonical task identities through request snapshots and unresolved
-  native adoptions rather than guessing from historical text.
+  reasons never substitute for Human authority. A successful primary request
+  start commits the current canonical task identity in its request snapshot.
+  A new Human input or unresolved native adoption supplies a request candidate;
+  cancellation before request start cannot replace the committed task. Live
+  settlement and reconstruction retain that same committed identity rather
+  than guessing from historical text. Agent input establishes only an initial
+  task; Runtime input cannot establish task authority.
 - Reminder consumption belongs to successful primary request starts. Recovery
   uses the latest request's frozen mode and context activation; a successful
   compaction followed by cancellation or failed start remains pending. Mode

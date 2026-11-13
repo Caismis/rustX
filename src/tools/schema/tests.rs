@@ -40,7 +40,7 @@ fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
         json!({"literal":{"$ref":"#/definitions/value"},"value":1}),
     ];
     for schema in cases {
-        let canonical = Validator::new(&schema).unwrap();
+        let canonical = build_validator(&schema).unwrap();
         for policy in [
             ToolExecutionPolicy::ForegroundOnly,
             ToolExecutionPolicy::BackgroundOnly,
@@ -49,7 +49,7 @@ fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
             let original = definition(policy, schema.clone());
             let compiled = compile_model_definition(&original).unwrap();
             assert_eq!(original.input_schema, schema);
-            let model = Validator::new(&compiled.input_schema).unwrap();
+            let model = build_validator(&compiled.input_schema).unwrap();
             for business in &values {
                 for reason in [None, Some(json!(null)), Some(json!("Request elevation"))] {
                     let mut envelope = json!({"arguments":business});
@@ -196,4 +196,31 @@ fn invalid_schema_is_rejected_before_it_can_be_hidden_by_reference_rewriting() {
                 .is_err()
         );
     }
+}
+
+#[test]
+fn business_validation_never_reads_a_schema_reference_from_the_host() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("private.json");
+    let marker = "business-validation-must-not-read-local-content";
+    std::fs::write(&path, json!({"x-private-marker": marker}).to_string()).unwrap();
+    let schema = json!({"type": "object", "$ref": format!("file://{}", path.display())});
+    let error = validate_business_arguments(&schema, &json!({})).unwrap_err();
+    assert!(matches!(error, SchemaError::InvalidSchema(_)));
+    assert!(error.to_string().contains("does not fetch resources"));
+    assert!(!error.to_string().contains(marker));
+    assert!(
+        compile_model_definition(&definition(ToolExecutionPolicy::ForegroundOnly, schema)).is_err()
+    );
+}
+
+#[test]
+fn dependency_defaults_cannot_reintroduce_schema_host_access() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("private.json");
+    std::fs::write(&path, r#"{"x-private-marker":"do-not-read"}"#).unwrap();
+    let schema = json!({"type": "object", "$ref": format!("file://{}", path.display())});
+    // This intentionally bypasses our explicit builder. The dependency feature
+    // boundary also protects owner paths that construct their own validator.
+    assert!(Validator::new(&schema).is_err());
 }

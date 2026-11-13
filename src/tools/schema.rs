@@ -122,6 +122,19 @@ fn validate_root_shape(schema: &Value) -> Result<(), SchemaError> {
     Ok(())
 }
 
+/// Builds a validator using only resource bytes already supplied by its native
+/// owner. A schema URI identifies a resource; it never authorizes file or
+/// network access. Bundled resources and the engine's built-in metaschemas
+/// remain available, while missing resources fail before any host I/O.
+pub(crate) fn build_validator(
+    schema: &Value,
+) -> Result<Validator, Box<jsonschema::ValidationError<'static>>> {
+    jsonschema::options()
+        .with_retriever(referencing::DefaultRetriever)
+        .build(schema)
+        .map_err(Box::new)
+}
+
 /// Validates the authored business schema without introducing runtime names.
 ///
 /// # Errors
@@ -131,8 +144,8 @@ pub fn validate_canonical_schema(schema: &Value) -> Result<(), SchemaError> {
     envelope::validate_declaration(schema)
 }
 
-/// Compiles a definition and its frozen canonical validator in one resource
-/// capture. Registry observation and calls never retrieve a schema again.
+/// Compiles an owner-supplied, self-contained definition and its frozen
+/// canonical validator. Compilation, observation and calls do no schema I/O.
 pub(crate) fn compile_tool_contract(
     definition: &ToolDefinition,
 ) -> Result<(ModelToolDefinition, Validator), SchemaError> {
@@ -163,7 +176,8 @@ pub(crate) fn compile_tool_contract(
         "type":"object", "definitions":business.resources,
         "properties":properties, "required":required, "additionalProperties":false
     });
-    Validator::new(&input_schema).map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
+    build_validator(&input_schema)
+        .map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
     Ok((
         ModelToolDefinition {
             id: definition.id.clone(),
@@ -255,7 +269,7 @@ pub fn resolve_invocation_metadata(
 /// Returns invalid-schema or business-validation errors.
 pub fn validate_business_arguments(schema: &Value, arguments: &Value) -> Result<(), SchemaError> {
     let validator =
-        Validator::new(schema).map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
+        build_validator(schema).map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
     validate_with(&validator, arguments)
 }
 

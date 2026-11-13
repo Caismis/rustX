@@ -95,12 +95,18 @@ impl RuntimeInner {
             )
             .expect("admission validated this model against the session context policy");
         let context_runtime = context_runtime.with_runtime_resources(&resources);
-        let (record_changes, last_permission_reminder_mode, permission_task_message) = {
-            let state = self.state.lock().expect("coordinator lock");
+        let (
+            record_changes,
+            last_permission_reminder_mode,
+            permission_task_message,
+            recovered_permission_task_message,
+        ) = {
+            let mut state = self.state.lock().expect("coordinator lock");
             (
                 state.parent_turn_permits.is_none(),
                 state.last_permission_reminder_mode,
                 state.permission_task_message.clone(),
+                state.recovered_permission_task_message.take(),
             )
         };
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
@@ -160,6 +166,7 @@ impl RuntimeInner {
             approval_mode,
             last_permission_reminder_mode,
             permission_task_message,
+            recovered_permission_task_message,
         };
         let workspace_changes = execution_policy.workspace_changes.clone();
         let auxiliary_invocation = model.summary_invocation().clone();

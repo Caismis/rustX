@@ -114,12 +114,7 @@ impl SettledExecution<'_> {
             durable_failure: self.execution.durable_failure,
             durable_failure_kind: self.execution.durable_failure_kind,
             permission_reminder_consumed: self.execution.permission_reminder.consumed_mode(),
-            permission_task_message: self
-                .execution
-                .permission_task
-                .as_deref()
-                .and_then(crate::runtime::permission::PermissionTaskEvidence::message_id)
-                .cloned(),
+            permission_task_message: self.execution.committed_permission_task_message,
         }
     }
 }
@@ -156,7 +151,12 @@ impl<'a> AgentExecution<'a> {
     fn bind_permission_task(&mut self) {
         // Opening-input attribution requires the now-committed AttemptStarted.
         if self.durable_failure.is_none() {
-            let inherited = self.inherited_permission_task_message.take();
+            // A recovered adoption is a candidate for this request, not a
+            // replacement for the last committed task until request start.
+            let inherited = self
+                .recovered_permission_task_message
+                .take()
+                .or_else(|| self.committed_permission_task_message.clone());
             let opening = self
                 .store
                 .presentation_frontier()
