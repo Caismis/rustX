@@ -80,6 +80,24 @@ fn code_definition(script: &str, extra: Value) -> WorkflowDefinition {
 /// Real Node may be installed outside Bash's baseline PATH. Tests admit that
 /// interpreter through a private path prefix; Skills do not.
 fn code_context(plane: &WorkflowTestPlane) -> crate::runtime::subagent::NativeExecutionContext {
+    let workspace = plane.dir.path().join("workspace");
+    let bin = workspace.join(".venv/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    if !bin.join("python3").exists() {
+        let output = std::process::Command::new("python3")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output()
+            .expect("Code tests require python3");
+        assert!(
+            output.status.success(),
+            "python3 did not report its executable"
+        );
+        let executable = String::from_utf8(output.stdout).unwrap();
+        let executable = executable.trim();
+        std::os::unix::fs::symlink(executable, bin.join("python3")).unwrap();
+        std::os::unix::fs::symlink(executable, bin.join("python")).unwrap();
+    }
+    crate::tools::workspace_python::publish_ready_for_test(&workspace);
     let output = std::process::Command::new("node")
         .args(["-p", "process.execPath"])
         .output()

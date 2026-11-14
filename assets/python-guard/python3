@@ -1,0 +1,3 @@
+#!/bin/sh
+printf '%s\n' "${RUSTX_PYTHON_GUARD_MESSAGE:-Workspace Python is not ready}" >&2
+exit 127

@@ -2913,9 +2913,11 @@ while True:
         // its post-escape state, and stays alive. The shell clears the
         // injected EXIT trap (best-effort only, and the user command may
         // legally replace it), waits for the helper's post-escape write, then
-        // exits so the invocation can settle its owned group normally.
+        // exits so the invocation can settle its owned group normally. The
+        // explicit host interpreter keeps this containment fixture independent
+        // of the Workspace Python guard for an unprepared workspace.
         let command = format!(
-            "trap - EXIT; python3 {} {} {} >/dev/null 2>&1 & echo $! > {}; \
+            "trap - EXIT; /usr/bin/python3 {} {} {} >/dev/null 2>&1 & echo $! > {}; \
              while [ ! -f {} ]; do sleep 0.05; done; exit 0",
             helper_path.display(),
             pre_path.display(),

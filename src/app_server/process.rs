@@ -225,6 +225,15 @@ async fn serve_transport(
     host: AppServerHost,
     shutdown: CancellationToken,
 ) -> io::Result<()> {
+    crate::tools::workspace_python::start_admit_watcher(shutdown.clone());
+    serve_transport_inner(options, host, shutdown).await
+}
+
+async fn serve_transport_inner(
+    options: Request,
+    host: AppServerHost,
+    shutdown: CancellationToken,
+) -> io::Result<()> {
     if options.listen == "stdio" {
         let _connection = host
             .admit_connection(false)
@@ -406,8 +415,13 @@ async fn run(options: Request) -> Result<(), String> {
                 None => (&mut scheduler).await,
             }
         };
-        let (failures, reaper_result, scheduler_result, _) =
-            tokio::join!(host.drain(), reaper, scheduler_completion, source_watch);
+        let (failures, reaper_result, scheduler_result, _, ()) = tokio::join!(
+            host.drain(),
+            reaper,
+            scheduler_completion,
+            source_watch,
+            crate::tools::workspace_python::shutdown()
+        );
         shutdown.cancel();
         if !transport_finished {
             match (&mut serving).await {

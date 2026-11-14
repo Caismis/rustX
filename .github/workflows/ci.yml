@@ -570,10 +570,10 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
     runs-on: macos-latest
-    # Run 39068563822 spent 58m compiling before tests; 70m killed live tests.
+    # Run 43460497372 spent 80m building; 100m cut off the test/coverage tail.
     # Allow the full execution/coverage tail plus runner variance; see
     # docs/issue-480/ci-budget.md. Individual test deadlines stay unchanged.
-    timeout-minutes: 100
+    timeout-minutes: 150
     env:
       VERIFICATION_PROFILE: full
       # Job-local build metadata only: assertions, overflow checks, unwind,
@@ -881,6 +881,7 @@ jobs:
           test/document-integration.test.ts
           test/workbench-host.test.ts
           test/terminal-lifecycle.test.ts
+          test/terminal-process.test.ts
           test/office-macos-lifecycle.test.ts
           test/office-macos.test.ts
       - name: macOS sandbox diagnostics on failure

@@ -1870,8 +1870,17 @@ tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
                            artifact ids with streaming spooling (genuine
                            semantic artifacts only — never textual overflow)
-tools/environment.rs       ToolEnvironment: the explicit authorized child
-                           environment (no wholesale parent inheritance)
+tools/environment.rs       ToolEnvironment: excluded executors use a fixed
+                           PATH and workspace HOME; native Bash carries a
+                           frozen host-derived command environment
+tools/execution_environment.rs
+                           Captures the launched host once and composes native
+                           Agent, Workflow, and Subagent Bash
+tools/workspace_python.rs  One Workspace `.venv`: reuse a valid environment,
+                           or create it with uv >= 0.10.0 without blocking
+                           registration or model turns; process/host drain owns
+                           cancellation and joins; original root identity and
+                           input generation fence execution and Ready
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            background executions (lifecycle state machine,
                            dispatch ownership commit, cancel-vs-complete

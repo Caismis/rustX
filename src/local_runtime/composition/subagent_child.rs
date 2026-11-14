@@ -30,6 +30,15 @@ use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ToolDefinition;
 use std::sync::Arc;
 
+/// Rebuilds the parent-frozen native baseline. `PATH`, `HOME`, `LANG`, and
+/// `LC_ALL` are configured overrides here. Excluded executors still install
+/// their own baseline through `child_environment`.
+pub(crate) fn configured_child_environment(
+    entries: Vec<(String, String)>,
+) -> Result<ToolEnvironment, CurrentRuntimeConfigError> {
+    ToolEnvironment::from_configured(entries).map_err(CurrentRuntimeConfigError::Environment)
+}
+
 /// The cancellable-owned-work guard of one child preparation (Issue #145).
 ///
 /// External capability composition is no longer a cheap synchronous
@@ -599,15 +608,14 @@ impl LocalConversationCore {
 
             // 5-6. The child conversation tool runtime over the authoritative
             // project workspace selected by the parent and the exact
-            // spawn-incarnation-private runtime root. The child authorizes no
-            // environment entries. Its durable Message Ledger/Event Journal is
-            // deliberately one level above that physical root: execution
-            // artifacts can be discarded after settlement while the conversation
-            // identity remains inspectable.
-            let base_environment =
-                ToolEnvironment::from_authorized(spec.resolved.environment.clone())
-                    .map_err(CurrentRuntimeConfigError::Environment)
-                    .map_err(LocalRuntimeError::RuntimeConfig)?;
+            // spawn-incarnation-private runtime root. The frozen entries are
+            // the configured native baseline, including PATH and HOME. Its
+            // durable Message Ledger/Event Journal is deliberately one level
+            // above that physical root: execution artifacts can be discarded
+            // after settlement while the conversation identity remains
+            // inspectable.
+            let base_environment = configured_child_environment(spec.resolved.environment.clone())
+                .map_err(LocalRuntimeError::RuntimeConfig)?;
             let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
                 &spec.workspace,
                 child_conversation_store_path(

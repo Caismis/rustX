@@ -1658,3 +1658,18 @@ async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
         "the child refuses rather than looking a server up for itself: {error:?}"
     );
 }
+
+#[test]
+fn configured_baseline_keys_survive_child_reconstruction() {
+    let entries = vec![
+        ("HOME".to_owned(), "/home/ada".to_owned()),
+        ("LANG".to_owned(), "C.UTF-8".to_owned()),
+        ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+        ("PATH".to_owned(), "/usr/local/bin:/usr/bin".to_owned()),
+        ("TOKEN".to_owned(), "kept".to_owned()),
+    ];
+    let environment =
+        super::configured_child_environment(entries.clone()).expect("configured baseline");
+    assert_eq!(environment.authorized_entries(), entries.as_slice());
+    assert!(crate::tools::environment::ToolEnvironment::from_authorized(entries).is_err());
+}

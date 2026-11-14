@@ -1,34 +1,54 @@
 //! The explicit tool execution environment.
 //!
-//! Native subprocess tools construct an explicit child environment instead
-//! of inheriting the parent process environment wholesale: only runtime-
-//! approved basics plus entries explicitly authorized through the runtime's
-//! tool environment configuration are visible to child processes. Parent-
-//! process secrets are absent unless explicitly provided to the tool
-//! environment. This is deliberately not a production secrets manager.
+//! Excluded executors — Managed Python, manual terminals, generic
+//! `command/exec`, and MCP — compose [`ToolEnvironment::child_environment`]:
+//! a fixed `PATH` and a workspace `HOME`, plus authorized entries.
+//! [`ToolEnvironment::from_authorized`] rejects `PATH`, `HOME`, `LANG`, and
+//! `LC_ALL` so those callers cannot replace that baseline.
+//!
+//! Native Agent Bash, Workflow Bash, and Subagent Bash do not use that
+//! baseline. They inherit the captured execution host, apply configured
+//! `[environment]` overrides (including those four keys, via
+//! [`ToolEnvironment::from_configured`]), then select the Workspace default
+//! Python. The frozen result is stored on the invocation clone as
+//! [`PreparedCommand`] and is omitted from [`std::fmt::Debug`].
 //!
 //! `ToolEnvironment` configures only the executed tool process. It never configures
 //! supervisor ownership, cancellation, settlement, tracing, fault injection, or
 //! physical authority. Internal-looking names remain ordinary child data; private
 //! supervisor configuration travels through a separate runtime-owned channel.
 //!
-//! # Reserved runtime-owned keys
-//!
-//! The runtime owns the baseline keys (`PATH`, `HOME`, `LANG`, `LC_ALL`).
-//! These cannot be supplied as conflicting ordinary authorized entries:
-//! [`ToolEnvironment::from_authorized`] rejects them with
-//! [`ToolEnvironmentError::RuntimeOwnedKey`]. There is no ambiguous
-//! "silently ignore the authorized override" behavior.
-//!
 //! Skills do not contribute to this environment. Discovery, selection, and
 //! catalog publication leave the child environment unchanged.
 
 use std::collections::BTreeMap;
 
-/// The runtime-owned baseline keys: they are composed by
-/// [`ToolEnvironment::child_environment`] and cannot be supplied as
-/// conflicting authorized entries.
+/// Keys owned by [`ToolEnvironment::child_environment`].
+/// [`ToolEnvironment::from_authorized`] rejects them.
+/// [`ToolEnvironment::from_configured`] accepts them as host-baseline overrides
+/// for native Agent Bash.
 pub const RUNTIME_OWNED_KEYS: [&str; 4] = ["PATH", "HOME", "LANG", "LC_ALL"];
+
+/// A command environment frozen for one native Bash invocation.
+///
+/// Debug output reports only the entry count. Values stay on the invocation
+/// clone and are not written to journals or model context by this type.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum PreparedCommand {
+    /// The exact environment the supervisor will apply.
+    Entries(std::sync::Arc<Vec<(String, String)>>),
+    /// A bounded composition failure; never proceed with an unguarded host PATH.
+    Closed(&'static str),
+}
+
+impl std::fmt::Debug for PreparedCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Entries(entries) => write!(formatter, "Entries({} redacted)", entries.len()),
+            Self::Closed(reason) => write!(formatter, "Closed({reason})"),
+        }
+    }
+}
 
 /// An environment configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,14 +84,14 @@ impl std::error::Error for ToolEnvironmentError {}
 
 /// The explicit tool execution environment of one conversation runtime.
 ///
-/// The environment is deterministic: entries are stored sorted by key, so a
-/// constructed child environment is reproducible. The Bash executor composes
-/// the runtime-approved basics (`PATH`, `HOME`, `LANG`, `LC_ALL`) plus the
-/// explicitly authorized entries; nothing from the parent process environment
-/// is inherited wholesale. Skill discovery never adds entries.
+/// The environment is deterministic: entries are stored sorted by key.
+/// [`Self::child_environment`] is the excluded-executor baseline.
+/// Native Bash uses [`PreparedCommand`] instead. Skill discovery never adds entries.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolEnvironment {
     authorized: Vec<(String, String)>,
+    /// Set only on a per-invocation clone, never on the shared capability snapshot.
+    prepared: Option<PreparedCommand>,
     /// Test-only interpreter locations outside the baseline `PATH`.
     /// Production Skill and capability preparation never populate this.
     #[cfg(test)]
@@ -85,6 +105,7 @@ impl ToolEnvironment {
     pub fn new() -> Self {
         Self {
             authorized: Vec::new(),
+            prepared: None,
             #[cfg(test)]
             path_prefixes: Vec::new(),
         }
@@ -107,12 +128,34 @@ impl ToolEnvironment {
     pub fn from_authorized(
         entries: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, ToolEnvironmentError> {
+        Self::collect(entries, false)
+    }
+
+    /// Configuration entries for native Agent Bash, including `PATH` and `HOME`.
+    ///
+    /// Generic `command/exec` keeps using [`Self::from_authorized`], which
+    /// rejects those keys. [`Self::child_environment`] still installs its own
+    /// baseline first, so excluded executors ignore a configured override.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same key and duplicate errors as [`Self::from_authorized`].
+    pub fn from_configured(
+        entries: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self, ToolEnvironmentError> {
+        Self::collect(entries, true)
+    }
+
+    fn collect(
+        entries: impl IntoIterator<Item = (String, String)>,
+        allow_baseline_keys: bool,
+    ) -> Result<Self, ToolEnvironmentError> {
         let mut sorted: BTreeMap<String, String> = BTreeMap::new();
         for (key, value) in entries {
             if key.is_empty() || key.contains('=') || key.contains('\0') {
                 return Err(ToolEnvironmentError::InvalidKey(key));
             }
-            if RUNTIME_OWNED_KEYS.contains(&key.as_str()) {
+            if !allow_baseline_keys && RUNTIME_OWNED_KEYS.contains(&key.as_str()) {
                 return Err(ToolEnvironmentError::RuntimeOwnedKey(key));
             }
             if let Some(existing) = sorted.insert(key.clone(), value.clone())
@@ -123,9 +166,26 @@ impl ToolEnvironment {
         }
         Ok(Self {
             authorized: sorted.into_iter().collect(),
+            prepared: None,
             #[cfg(test)]
             path_prefixes: Vec::new(),
         })
+    }
+
+    /// Attaches a frozen Bash command environment to this invocation clone.
+    #[must_use]
+    pub(crate) fn with_prepared_command(mut self, prepared: PreparedCommand) -> Self {
+        self.prepared = Some(prepared);
+        self
+    }
+
+    pub(crate) fn prepared_command(&self) -> Option<&PreparedCommand> {
+        self.prepared.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn path_prefixes(&self) -> &[String] {
+        &self.path_prefixes
     }
 
     /// The explicitly authorized entries in deterministic sorted order.
@@ -273,5 +333,29 @@ mod tests {
                 ("MY_VAR".to_owned(), "1".to_owned()),
             ]
         );
+    }
+
+    #[test]
+    fn configured_baseline_keys_do_not_change_the_excluded_child_baseline() {
+        let environment = ToolEnvironment::from_configured([
+            ("PATH".to_owned(), "/custom/bin".to_owned()),
+            ("HOME".to_owned(), "/users/ada".to_owned()),
+            ("MY_VAR".to_owned(), "1".to_owned()),
+        ])
+        .expect("configured");
+        assert_eq!(
+            environment.child_environment(std::path::Path::new("/ws")),
+            vec![
+                ("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned()),
+                ("HOME".to_owned(), "/ws".to_owned()),
+                ("LANG".to_owned(), "C.UTF-8".to_owned()),
+                ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+                ("MY_VAR".to_owned(), "1".to_owned()),
+            ]
+        );
+        let frozen = environment.with_prepared_command(super::PreparedCommand::Entries(
+            std::sync::Arc::new(vec![("SECRET_TOKEN".to_owned(), "super-secret".to_owned())]),
+        ));
+        assert!(!format!("{frozen:?}").contains("super-secret"));
     }
 }

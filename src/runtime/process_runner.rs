@@ -779,6 +779,7 @@ impl RunnerTestControl {
 /// intent. The child is reaped by the runner.
 pub(crate) struct SupervisedCommandRunner {
     child: tokio::process::Child,
+    _environment_snapshot: tempfile::NamedTempFile,
     stream: tokio::net::unix::OwnedWriteHalf,
     incoming: tokio::net::unix::OwnedReadHalf,
     event_reader: SupervisorEventReader,
@@ -939,10 +940,13 @@ impl SupervisedCommandRunner {
         let mut supervisor = tokio::process::Command::new(&supervisor_path);
         supervisor.current_dir(&spec.cwd);
         supervisor.env_clear();
+        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
+            &spec.command_environment,
+        )
+        .map_err(RunnerSpawnError::ControlChannel)?;
         supervisor.env(
-            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-            serde_json::to_string(&spec.command_environment)
-                .map_err(|error| RunnerSpawnError::ControlChannel(error.to_string()))?,
+            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            environment_snapshot.path(),
         );
         if let Some(control) = &control {
             control.diagnostics.configure(&mut supervisor);
@@ -1016,6 +1020,7 @@ impl SupervisedCommandRunner {
         Ok((
             Self {
                 child,
+                _environment_snapshot: environment_snapshot,
                 stream,
                 incoming,
                 event_reader: SupervisorEventReader::default(),
@@ -1724,6 +1729,48 @@ pub(crate) async fn run_supervised_command(
     })
 }
 
+/// Runs one direct argv through the same supervisor as Bash.
+///
+/// The program is not a shell command. Callers pass the executable and its
+/// arguments; the supervisor still clears the process environment and applies
+/// only `spec.command_environment`.
+#[cfg(unix)]
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) async fn run_supervised_program(
+    spec: SupervisedCommandSpec,
+    program: ProgramInvocation,
+) -> Result<CapturedProcessResult, String> {
+    #[cfg(test)]
+    crate::local_runtime::static_effects::observe(
+        crate::local_runtime::static_effects::Effect::Process,
+    );
+    let (mut runner, stdout_pipe, stderr_pipe) =
+        SupervisedCommandRunner::spawn_program(&spec, None, Some(&program))
+            .map_err(|error| error.to_string())?;
+    let stdout_task = stdout_pipe.map(|pipe| tokio::spawn(capture_bounded(pipe)));
+    let stderr_task = stderr_pipe.map(|pipe| tokio::spawn(capture_bounded(pipe)));
+    let termination = runner.settle().await;
+    let stdout = await_capture(stdout_task).await?;
+    let stderr = await_capture(stderr_task).await?;
+    let exit_code = match (&termination.intent, termination.exit_status) {
+        (ProcessOutcomeIntent::Completed, Some(status)) => {
+            use std::os::unix::process::ExitStatusExt;
+            if status.signal().is_some() {
+                None
+            } else {
+                status.code()
+            }
+        }
+        _ => None,
+    };
+    Ok(CapturedProcessResult {
+        exit_code,
+        intent: termination.intent,
+        stdout,
+        stderr,
+    })
+}
+
 /// Reads one child pipe up to the bounded capture limit, retaining a
 /// deterministic truncation marker when the stream exceeds it.
 #[cfg(unix)]
@@ -1817,6 +1864,20 @@ mod tests {
         )
         .await
         .expect("rustX must reap the direct supervisor child");
+    }
+
+    #[tokio::test]
+    async fn large_environment_reaches_the_real_supervisor_as_individual_entries() {
+        let mut command = spec(
+            "printf '%s' \"$LARGE_099\"; test -z \"${RUSTX_COMMAND_ENVIRONMENT_FILE+x}\"",
+            CancellationSignal::new(),
+        );
+        command
+            .command_environment
+            .extend((0..100).map(|i| (format!("LARGE_{i:03}"), "x".repeat(1510))));
+        let captured = super::run_supervised_command(command, None).await.unwrap();
+        assert_eq!(captured.exit_code, Some(0), "{captured:?}");
+        assert_eq!(captured.stdout, vec![b'x'; 1510]);
     }
 
     // ---- Issue #145: the nested containment gate ----

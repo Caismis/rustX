@@ -209,6 +209,19 @@ impl WorkflowRuntime {
                 },
             )?;
         }
+        let mut environment = context
+            .resources()
+            .capability()
+            .effective_environment()
+            .clone();
+        if definition.name == crate::tools::native::BASH_TOOL_NAME
+            && matches!(prepared.origin, crate::tools::types::ToolOrigin::Builtin)
+        {
+            environment = crate::tools::execution_environment::freeze_bash(
+                &environment,
+                services.runtime.workspace(),
+            );
+        }
         let view = crate::agent::PreToolView {
             conversation_id: &run.run_id.conversation_id,
             execution: services.execution.clone(),
@@ -288,7 +301,7 @@ impl WorkflowRuntime {
                     &progress,
                     services.runtime.artifacts(),
                     services.runtime.tool_output(),
-                    context.resources().capability().effective_environment(),
+                    &environment,
                 );
                 native_context.stdout_capture = stdout;
                 let requester = services

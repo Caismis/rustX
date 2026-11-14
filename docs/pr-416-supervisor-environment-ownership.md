@@ -16,9 +16,10 @@ the blocking before-TERM gate, tracing, and older failure seams. Interactive
 supervision had the same direct forwarding pattern.
 
 `SupervisedCommandSpec.command_environment` now carries only child data. Both
-runner spawn paths clear the supervisor environment and encode child entries
-in `RUSTX_COMMAND_ENVIRONMENT`. Only the final Bash/server launch decodes that
-payload and applies it after `env_clear()`. Payload keys never become supervisor
+runner spawn paths clear the supervisor environment and store child entries
+in an owner-only private JSON snapshot retained through settlement.
+`RUSTX_COMMAND_ENVIRONMENT_FILE` carries only its pathname. Only the final
+Bash/server launch decodes that payload and applies it after `env_clear()`. Payload keys never become supervisor
 environment keys. No name filter, fallback, global reservation, or ambient
 configuration lookup is involved. Malformed/missing transport refuses launch.
 
@@ -39,7 +40,7 @@ baseline/overlay keys are unchanged.
 | Keys | Owner / authority |
 | --- | --- |
 | `RUSTX_SUPERVISOR_ROLE`, `RUSTX_SUPERVISOR_COMMAND` | Runtime-private Bash supervisor configuration |
-| `RUSTX_COMMAND_ENVIRONMENT` | Runtime-private opaque command-data transport; decoded only for child spawn |
+| `RUSTX_COMMAND_ENVIRONMENT_FILE` | Runtime-private opaque command-data transport; decoded only for child spawn |
 | `RUSTX_SUPERVISOR_ANCHOR_PID_FILE` | Test-only Bash observation |
 | `RUSTX_TEST_FAIL_SIGNAL`, `RUSTX_TEST_FAIL_WAIT`, `RUSTX_TEST_FAIL_BASH_SPAWN`, `RUSTX_TEST_FAIL_SIGTERM_HANDLER`, `RUSTX_TEST_FORCE_ANCHOR_LOSS`, `RUSTX_TEST_OUTER_BARRIER_DIR`, `RUSTX_TEST_FAIL_CONTAINMENT` | Test-only Bash supervisor fault/gate controls |
 | `RUSTX_TEST_SUPERVISION_TRACE`, `RUSTX_TEST_BEFORE_TERM_SOCKET` | Explicit trusted diagnostic fixture controls; compiled for external integration tests |

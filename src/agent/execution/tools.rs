@@ -19,6 +19,7 @@ use crate::runtime::interaction::InteractionFailure;
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::deadline::ToolProgressCapability;
+use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
 };
@@ -68,6 +69,8 @@ struct CallSlot {
     /// The canonical registry-resolved typed origin of the tool.
     origin: ToolOrigin,
     prepared: Option<PreparedInvocation>,
+    /// Native Bash environment frozen before permission approval.
+    command_environment: Option<ToolEnvironment>,
     result: Option<ToolExecutionResult>,
     /// The authoritative per-call executor-start frontier. Once true, this
     /// call can never receive a `BeforeStart` cancellation result.
@@ -422,6 +425,7 @@ impl AgentExecution<'_> {
                     tool_id: prepared.invocation.tool_id.clone(),
                     origin: prepared.origin.clone(),
                     prepared: Some(prepared),
+                    command_environment: None,
                     result: None,
                     executor_started: false,
                     execution_facts: Vec::new(),
@@ -435,6 +439,7 @@ impl AgentExecution<'_> {
                     tool_id,
                     origin,
                     prepared: None,
+                    command_environment: None,
                     result: Some(failed_result(&error)),
                     executor_started: false,
                     execution_facts: Vec::new(),
@@ -447,6 +452,7 @@ impl AgentExecution<'_> {
         // committed batch settle in canonical call order before the existing
         // sequential/parallel start frontier advances. The original
         // PreparedInvocation remains in every slot unchanged.
+        self.freeze_bash_environments(&mut slots);
         self.resolve_pre_tool_decisions(&mut slots)
             .await
             .map_err(CanonicalCommitError::Interaction)?;
@@ -487,6 +493,7 @@ impl AgentExecution<'_> {
                             .expect("unsettled slots are preflighted");
                         let invocation = prepared.invocation.clone();
                         let progress_capability = prepared.progress_capability;
+                        let environment = self.invocation_environment(&slots[index]);
                         let (_, result, facts) = self
                             .run_single_call(
                                 index,
@@ -494,6 +501,7 @@ impl AgentExecution<'_> {
                                 progress_capability,
                                 todo_writer.clone(),
                                 occurrences[index].clone(),
+                                environment,
                             )
                             .await;
                         slots[index].result = Some(result);
@@ -547,12 +555,14 @@ impl AgentExecution<'_> {
                                 .prepared
                                 .as_ref()
                                 .expect("unsettled slots are preflighted");
+                            let environment = self.invocation_environment(slot);
                             futures.push(Box::pin(self.run_single_call(
                                 index + slot_index,
                                 prepared.invocation.clone(),
                                 prepared.progress_capability,
                                 todo_writer.clone(),
                                 occurrences[index + slot_index].clone(),
+                                environment,
                             )));
                         }
                     }
@@ -737,6 +747,31 @@ impl AgentExecution<'_> {
     /// cancellation is observable; an owner cancellation produces the
     /// existing cancelled result slot and closes the later tool-start
     /// frontier.
+    fn freeze_bash_environments(&self, slots: &mut [CallSlot]) {
+        for slot in slots {
+            if slot.result.is_some() {
+                continue;
+            }
+            let Some(prepared) = slot.prepared.as_ref() else {
+                continue;
+            };
+            if prepared.invocation.tool_name == crate::tools::native::BASH_TOOL_NAME
+                && matches!(slot.origin, ToolOrigin::Builtin)
+            {
+                slot.command_environment = Some(crate::tools::execution_environment::freeze_bash(
+                    self.capability.snapshot().effective_environment(),
+                    self.tool_runtime.workspace(),
+                ));
+            }
+        }
+    }
+
+    fn invocation_environment(&self, slot: &CallSlot) -> ToolEnvironment {
+        slot.command_environment
+            .clone()
+            .unwrap_or_else(|| self.capability.snapshot().effective_environment().clone())
+    }
+
     async fn resolve_pre_tool_decisions(
         &self,
         slots: &mut [CallSlot],
@@ -960,18 +995,26 @@ impl AgentExecution<'_> {
         progress_capability: ToolProgressCapability,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: crate::message::types::ToolCallOccurrenceRef,
+        environment: ToolEnvironment,
     ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
         let (result, facts) = match invocation.mode {
             ToolInvocationMode::Foreground => {
-                self.run_foreground(&invocation, progress_capability, todos, &occurrence)
-                    .await
+                self.run_foreground(
+                    &invocation,
+                    progress_capability,
+                    todos,
+                    &occurrence,
+                    environment,
+                )
+                .await
             }
             // A detached execution outlives this batch, so it is handed no
             // task-list authority: nothing it does can land in the snapshot
             // this batch is about to commit.
-            ToolInvocationMode::Background => {
-                (self.dispatch_background(&invocation).await, Vec::new())
-            }
+            ToolInvocationMode::Background => (
+                self.dispatch_background(&invocation, environment).await,
+                Vec::new(),
+            ),
         };
         (call_index, result, facts)
     }
@@ -1023,6 +1066,7 @@ impl AgentExecution<'_> {
         progress_capability: ToolProgressCapability,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: &crate::message::types::ToolCallOccurrenceRef,
+        environment: ToolEnvironment,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
         use crate::tools::invocation::InvocationFact;
         let call_id = invocation
@@ -1045,7 +1089,7 @@ impl AgentExecution<'_> {
             &progress,
             self.tool_runtime.artifacts(),
             self.tool_runtime.tool_output(),
-            self.capability.snapshot().effective_environment(),
+            &environment,
         );
         let context = match self.lifecycle.native_questionnaire_requester(
             self.request.attempt_id.clone(),
@@ -1186,14 +1230,15 @@ impl AgentExecution<'_> {
     /// accepted result exactly when conversation ownership commits. A
     /// rolled-back dispatch produces a cancelled result slot for the
     /// originating attempt, never a detached execution.
-    async fn dispatch_background(&self, invocation: &ToolInvocation) -> ToolExecutionResult {
+    async fn dispatch_background(
+        &self,
+        invocation: &ToolInvocation,
+        environment: ToolEnvironment,
+    ) -> ToolExecutionResult {
         let executor = self.tool_registry().executor(&invocation.tool_id);
-        // The attempt's effective ToolEnvironment is captured at prepare
-        // time, before the background ownership commit: the detached
-        // execution retains exactly this immutable environment for its
-        // whole lifetime, even after this attempt terminates and later
-        // revisions activate.
-        let environment = self.capability.snapshot().effective_environment().clone();
+        // Native Bash arrives with the environment frozen before approval.
+        // Other tools keep the attempt snapshot captured at prepare time.
+        // The detached execution retains exactly this immutable environment.
         let Some(mcp_leases) = self.capability.mcp_leases() else {
             return failed_result("the admitted MCP generation is already physically retired");
         };

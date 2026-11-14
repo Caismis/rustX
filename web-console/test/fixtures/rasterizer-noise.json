@@ -4144,5 +4144,76 @@
     "captureSha256": "2fddb0a1853a242c9017eae9c52ca2a2bd80714a25a86c2532c64677e21ab5fa",
     "regions": [{"label": "Profile panel corner coverage", "x": 26, "y": 360, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 1}],
     "pixels": [[26, 360, [82, 83, 84, 255], [83, 84, 84, 255]]]
+  },
+  {
+    "reference": "model-profiles-zh-dark-linux.png",
+    "evidence": "Pinned Playwright 1.63.0 Chromium image bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7. FULL CI run 43499868422, job 132146747931, browser-evidence-shard-1 artifact 14075757937 produced exactly these two CodeMirror focus-ring bottom-right corner observations. A local fresh-context capture reproduced the same PNG bytes. A fixed 20-context instrumented measurement then produced 19 exact-reference captures and one byte-identical CI variant (repeat16), without retries of a comparison. Complete post-capture measurements for both outcomes are retained in the paired Brotli fixtures: all 19 nodes and ancestors have identical unrounded bounds, scroll offsets, full computed styles and pseudo-styles; viewport 1440x1000, DPR 1, visual viewport, font readiness, active textbox and semantic state also match without normalization. Modal bounds are (384,116,672,768), editor bounds (409,474,618,144); outline is rgb(103,158,254), 2px solid, offset -1px. Their Unicode sorted-key state SHA256, excluding only pngSha256, is f391a138caff8886e28ebbfe74fb219884f19f8e92ac0cf6e0b0ed3d544867b0. CI and local trace CSS are byte-identical (144 STYLE nodes SHA256 de82ddda1ac9e8601cd9eb3ac99c5ec9dd40932172263ee2c67ac91a670a294c); serialized modal state differs only in per-context React Aria ID seeds with unchanged associations. The internal Chromium cause is not established. Only these two disjoint 1x1 sites receive their separately observed delta bounds 8 and 25; all other pixels and every other reference remain strict. The reference, comparator and exact frame stabilization are unchanged.",
+    "referenceSha256": "d8a2ac48af584d6a792cbad5337af0dda06f901daa8c37481dba2c6b5489f6cf",
+    "capture": "model-profiles-zh-dark-noise-43499868422-linux.png",
+    "captureSha256": "e8fb98e3a19c412d9bcdb2ef2054aecde356474e046d3440bb0081f5ce2fb906",
+    "geometry": {
+      "baseline": {
+        "file": "model-profiles-zh-dark-baseline-geometry.json.br",
+        "sha256": "4699defe6698904c0c28e10d1d227460fa5d733d3b6b84a134013caedf1e570b"
+      },
+      "variant": {
+        "file": "model-profiles-zh-dark-variant-geometry.json.br",
+        "sha256": "5164bdf35d08c83646aee2ff2d9cd0b38fbe982c576347f7ddbf85e8b934df1f"
+      }
+    },
+    "regions": [
+      {
+        "label": "JSON editor focus corner coverage at 642,499",
+        "x": 642,
+        "y": 499,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 8
+      },
+      {
+        "label": "JSON editor focus corner coverage at 642,500",
+        "x": 642,
+        "y": 500,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 25
+      }
+    ],
+    "pixels": [
+      [
+        642,
+        499,
+        [
+          99,
+          152,
+          246,
+          255
+        ],
+        [
+          103,
+          158,
+          254,
+          255
+        ]
+      ],
+      [
+        642,
+        500,
+        [
+          67,
+          88,
+          128,
+          255
+        ],
+        [
+          74,
+          103,
+          153,
+          255
+        ]
+      ]
+    ]
   }
 ]

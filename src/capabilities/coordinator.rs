@@ -1009,7 +1009,11 @@ impl CapabilityCoordinator {
                 .filter(|(id, _)| !python_ids.contains(*id))
                 .map(|(id, binding)| (id.clone(), binding.clone()))
                 .collect(),
-            base_environment: crate::tools::environment::ToolEnvironment::from_authorized(
+            // The published environment is the configured native baseline.
+            // `PATH`, `HOME`, `LANG`, and `LC_ALL` are valid there.
+            // `from_authorized` rejects them and panics when a child
+            // rematerializes admitted sources for a nested agent.
+            base_environment: crate::tools::environment::ToolEnvironment::from_configured(
                 capability
                     .effective_environment()
                     .authorized_entries()
@@ -2895,6 +2899,12 @@ mod tests {
     /// A minimal coordinator with one active Skill candidate so commits
     /// are real semantic changes (an empty candidate is a no-op).
     fn coordinator() -> (tempfile::TempDir, CapabilityCoordinator) {
+        coordinator_with(ToolEnvironment::new())
+    }
+
+    fn coordinator_with(
+        environment: ToolEnvironment,
+    ) -> (tempfile::TempDir, CapabilityCoordinator) {
         let dir = tempfile::tempdir().expect("temp dir");
         let workspace_root = dir.path().join("workspace");
         std::fs::create_dir_all(&workspace_root).expect("workspace");
@@ -2926,7 +2936,7 @@ body
                 workspace.root().join(".agents/skills"),
             ),
             mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: ToolEnvironment::new(),
+            base_environment: environment,
             environment_store_root: dir.path().join("skill-env"),
         })
         .expect("coordinator");
@@ -2935,6 +2945,49 @@ body
 
     async fn prepare(coordinator: &CapabilityCoordinator) -> super::PreparedCapabilityCandidate {
         coordinator.prepare_candidate().await.expect("prepare")
+    }
+
+    #[tokio::test]
+    async fn admitted_source_rematerialization_keeps_configured_baseline_keys() {
+        let environment = ToolEnvironment::from_configured([
+            ("HOME".to_owned(), "/home/ada".to_owned()),
+            ("LANG".to_owned(), "C.UTF-8".to_owned()),
+            ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+            ("PATH".to_owned(), "/usr/local/bin:/usr/bin".to_owned()),
+            ("TOKEN".to_owned(), "kept".to_owned()),
+        ])
+        .expect("configured baseline");
+        let (_dir, coordinator) = coordinator_with(environment);
+        let published = coordinator.commit(prepare(&coordinator).await).unwrap();
+        let resources = crate::runtime::resources::RuntimeResourceSnapshot::new(
+            crate::runtime::identity::RuntimeResourceRevision::new(1),
+            Vec::new(),
+            None,
+            crate::context::assembly::ContextAssembly::new(),
+            published,
+        );
+        let cancellation = crate::runtime::cancellation::CancellationSignal::new();
+        let admitted = coordinator
+            .prepare_admitted_sources(&resources, std::collections::BTreeSet::new(), &cancellation)
+            .await
+            .expect("configured PATH and HOME remain a valid published environment");
+        let entries = admitted.effective_environment.authorized_entries();
+        assert!(
+            entries
+                .iter()
+                .any(|(key, value)| { key == "PATH" && value == "/usr/local/bin:/usr/bin" })
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(key, value)| key == "HOME" && value == "/home/ada")
+        );
+        assert!(
+            entries
+                .iter()
+                .any(|(key, value)| key == "TOKEN" && value == "kept")
+        );
+        admitted.retire_uncommitted().await;
     }
 
     #[tokio::test]

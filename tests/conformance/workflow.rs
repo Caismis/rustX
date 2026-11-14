@@ -1804,6 +1804,23 @@ impl Driver {
             toml::to_string(&toml::toml! { [agent] workflows = enabled }).unwrap(),
         )
         .unwrap();
+        let venv = std::process::Command::new("uv")
+            .args([
+                "venv",
+                "--quiet",
+                "--no-project",
+                "--no-config",
+                "--python",
+                "python3",
+                &workspace.join(".venv").display().to_string(),
+            ])
+            .status()
+            .expect("uv venv");
+        assert!(
+            venv.success(),
+            "the reference workspace needs a default Python environment"
+        );
+        rustx::tools::workspace_python::prepare_now(&workspace).await;
 
         let paths = LaunchFixture {
             config: root.path().join("rustx.toml"),

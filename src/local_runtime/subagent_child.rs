@@ -197,6 +197,9 @@ pub async fn run_subagent_child() -> i32 {
         Ok(spec) => spec,
         Err(code) => return code,
     };
+    if let Ok(root) = spec.runtime_root() {
+        let _ = crate::tools::execution_environment::install_child_snapshot(&root);
+    }
     // From here on there is exactly one owner of the raw transports. Every
     // other child-side owner — the semantic driver and every nested
     // supervised process unit — reaches the parent only through it.
