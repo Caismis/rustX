@@ -695,6 +695,134 @@ describe('Workflow run snapshot reader and fencing', () => {
     expect([...settled.byViewId.values()].every(node => node.activeCount === 0 && node.status === 'incomplete')).toBe(true);
   });
 
+  it('pins current selectedVisitKey before active visits under per-node overflow and overrides opener target', () => {
+    const run = workflowRun();
+    const opener = { block: run.instances[1].block, node: 'worker', visit: 0 };
+    const current = { block: run.instances[1].block, node: 'worker', visit: 1 };
+    run.instances = Array.from({ length: 220 }, (_, visit) => ({
+      ...run.instances[1],
+      node: 'worker',
+      visit,
+      state: visit >= 2 ? { type: 'running' } : { type: 'settled', outcome: 'completed' },
+    }));
+    const overlay = aggregateRunOverlay({
+      run,
+      runId: run.id,
+      selectedVisit: opener,
+      selectedVisitKey: visitIdentityKey(current),
+      maxVisitsPerNode: 10,
+    });
+    const worker = overlay.byViewId.get(qualifiedNodeViewId(current.block.definition.blocks, 'worker'))!;
+    expect(worker.visitCount).toBe(220);
+    expect(worker.visits).toHaveLength(10);
+    expect(worker.visits.some(visit => visit.key === visitIdentityKey(current))).toBe(true);
+    expect(worker.visits.some(visit => visit.key === visitIdentityKey(opener))).toBe(false);
+  });
+
+  it('commits dedup sets atomically so a mid-batch page failure does not poison caller state on retry', async () => {
+    const run = baseRunId('88');
+    const cut: CheckpointReadCut = { conversation_id: 'conv-1', revision: '10', through: '10', domain_revisions: {}, collection_cuts: {} };
+    const total = 128;
+    const allNodes: WorkflowTraceNode[] = Array.from({ length: total }, (_, idx) => ({
+      id: `wn-atomic-${idx}`,
+      instance: { block: { run, definition: { workflow_id: 'atomic_flow', blocks: ['outer', 'body'] }, invocations: [0, idx + 1] }, node: 'worker', visit: 0 },
+      kind: 'tool',
+      state: { type: 'settled', outcome: 'completed' },
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '10' },
+      input: null,
+      output: null,
+      input_preview: null,
+      output_preview: null,
+      input_omitted: false,
+      output_omitted: false,
+    }));
+    const root: TraceRecord = {
+      id: 'trace:88',
+      position: '88',
+      location: { attempt_id: 'a1', step_id: 's1' },
+      kind: 'workflow',
+      state: 'completed',
+      timing: { started_at: '2026-11-14T00:00:00Z', ended_at: null, duration_ms: null },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: 'trace.records.88.workflow.nodes', revision: '10', total: String(total), loaded: '0', next_offset: '0' }],
+      has_detail: false,
+      truncated: false,
+    };
+
+    let failAt96 = true;
+    const offsetsCalled: number[] = [];
+    const reader: TraceFieldReader = {
+      value: vi.fn(),
+      content: vi.fn(),
+      page: vi.fn(async (_cut, domain, offset): Promise<CheckpointPage> => {
+        offsetsCalled.push(offset);
+        if (offset === 96 && failAt96) throw new Error('transient page 96 failure');
+        const slice = allNodes.slice(offset, offset + 32);
+        const next = offset + slice.length;
+        return {
+          cursor: '10',
+          read_cut: cut,
+          domain,
+          total: String(total),
+          collections: [],
+          next_offset: next < total ? String(next) : null,
+          items: slice.map((node, i) => ({
+            offset: String(offset + i),
+            identity: node.id,
+            value: node as unknown as Record<string, unknown>,
+            content: [],
+            deferred: false,
+            body_complete: true,
+          })),
+        };
+      }),
+    };
+
+    const committedIds = new Set<string>();
+    const committedVisits = new Set<string>();
+    const initial = await readBoundedTraceWorkflowNodes(reader, cut, root, () => true, 128, {
+      startOffset: 0,
+      maxPages: 2,
+      expectedRunId: run,
+      seenIds: committedIds,
+      seenVisits: committedVisits,
+    });
+    expect(initial).not.toBeNull();
+    expect(initial!.nodes).toHaveLength(64);
+    expect(initial!.nextOffset).toBe(64);
+    for (const node of initial!.nodes) {
+      committedIds.add(node.id);
+      committedVisits.add(visitIdentityKey(node.instance));
+    }
+
+    await expect(readBoundedTraceWorkflowNodes(reader, cut, root, () => true, 128, {
+      startOffset: 64,
+      maxPages: 2,
+      expectedRunId: run,
+      seenIds: committedIds,
+      seenVisits: committedVisits,
+    })).rejects.toThrow('transient page 96 failure');
+
+    // Caller's committed dedup sets must remain untouched (still 64 entries, not 96).
+    expect(committedIds.size).toBe(64);
+    expect(committedVisits.size).toBe(64);
+
+    failAt96 = false;
+    const retried = await readBoundedTraceWorkflowNodes(reader, cut, root, () => true, 128, {
+      startOffset: 64,
+      maxPages: 2,
+      expectedRunId: run,
+      seenIds: committedIds,
+      seenVisits: committedVisits,
+    });
+    expect(retried).not.toBeNull();
+    expect(retried!.nodes).toHaveLength(64);
+    expect(retried!.nextOffset).toBeNull();
+    expect(offsetsCalled).toEqual([0, 32, 64, 96, 64, 96]);
+  });
+
   it('measures admitted maximum nested graph and long repeated history with deterministic work bounds', async () => {
     const run = baseRunId();
     const doc = runBoundsDocument('maximum');

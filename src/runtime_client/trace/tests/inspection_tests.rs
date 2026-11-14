@@ -798,15 +798,18 @@ fn workflow_start_detail_exposes_typed_run_identity_even_when_native_id_is_omitt
     );
     let workflow_id = crate::runtime::workflow::WorkflowId::parse("escaped_only").unwrap();
     let started = store
-        .append_event(event(
-            &store,
-            E::WorkflowStarted {
-                tool_call_id: None,
-                workflow_id: workflow_id.clone(),
-                run_id: run.clone(),
-            },
-            0,
-        ))
+        .publish_workflow_start(
+            event(
+                &store,
+                E::WorkflowStarted {
+                    tool_call_id: None,
+                    workflow_id: workflow_id.clone(),
+                    run_id: run.clone(),
+                },
+                0,
+            ),
+            &crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone()),
+        )
         .unwrap();
     let cut = TraceProjection::new(&store).unwrap().history_cut().unwrap();
     let record_id = format!("trace:{}", started.sequence);

@@ -466,8 +466,11 @@ mod large_source_tests {
     fn issue552_load_captures_exact_source_revision_and_presentation_distinct_from_program_digest()
     {
         let dir = tempfile::TempDir::new().unwrap();
-        let workspace = dir.path().join("workspace");
-        let user_root = dir.path().join("user");
+        // The workspace argument is canonical authority; model the production
+        // binding point instead of passing an aliased temporary root (e.g. /var -> /private/var on macOS).
+        let root = dir.path().canonicalize().unwrap();
+        let workspace = root.join("workspace");
+        let user_root = root.join("user");
         let wf_dir = workspace.join(".agents/workflows");
         std::fs::create_dir_all(&wf_dir).unwrap();
         std::fs::create_dir_all(&user_root).unwrap();
@@ -497,6 +500,12 @@ editor:
         std::fs::write(&wf_path, rev1_yaml).unwrap();
         let cat1 = load(Some(&workspace), &user_root).unwrap();
         let wf_id = WorkflowId::parse("sample").unwrap();
+        assert!(
+            cat1.discovery_diagnostics.is_empty() && cat1.invalid().is_empty(),
+            "diagnostics={:?} invalid={:?}",
+            cat1.discovery_diagnostics,
+            cat1.invalid()
+        );
         let prog1 = cat1.get(&wf_id).expect("sample workflow admitted");
         let snap1 = prog1.run_snapshot();
         assert_eq!(
@@ -529,6 +538,12 @@ editor:
 ";
         std::fs::write(&wf_path, rev2_yaml).unwrap();
         let cat2 = load(Some(&workspace), &user_root).unwrap();
+        assert!(
+            cat2.discovery_diagnostics.is_empty() && cat2.invalid().is_empty(),
+            "diagnostics={:?} invalid={:?}",
+            cat2.discovery_diagnostics,
+            cat2.invalid()
+        );
         let prog2 = cat2.get(&wf_id).expect("sample workflow reloaded");
         let snap2 = prog2.run_snapshot();
 
@@ -553,6 +568,32 @@ editor:
                 .and_then(|e| e.nodes.first())
                 .and_then(|n| n.title.as_deref()),
             Some("Rev 2 Moved")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn issue552_uncanonicalized_alias_boundary_produces_outside_workspace_diagnostic() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let workspace = root.join("workspace");
+        let user_root = root.join("user");
+        std::fs::create_dir_all(workspace.join(".agents/workflows")).unwrap();
+        std::fs::create_dir_all(&user_root).unwrap();
+        std::fs::write(workspace.join(".agents/workflows/sample.yaml"), MINIMAL).unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+
+        let rejected = load(Some(&alias), &user_root).unwrap();
+        let wf_id = WorkflowId::parse("sample").unwrap();
+        assert!(rejected.get(&wf_id).is_none());
+        assert!(
+            rejected
+                .discovery_diagnostics
+                .iter()
+                .any(|diag| diag.to_string().contains("outside workspace boundary")),
+            "{:?}",
+            rejected.discovery_diagnostics
         );
     }
 }

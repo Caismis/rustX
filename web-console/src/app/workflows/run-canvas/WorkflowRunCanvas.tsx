@@ -239,6 +239,7 @@ export function WorkflowRunCanvas({
   resolvedTrace,
   traceStatus,
   traceError,
+  onRetryTrace,
   onClose,
   createTransport,
   onResolveRunId,
@@ -251,6 +252,7 @@ export function WorkflowRunCanvas({
   resolvedTrace?: ResolvedWorkflowTraceContext | null;
   traceStatus?: TraceContextStatus;
   traceError?: string;
+  onRetryTrace?: () => void;
   onClose: () => void;
   createTransport?: (target: WorkflowRunCanvasTarget) => WorkflowRunSnapshotTransport | null;
   organizeFn?: (doc: WorkflowDocument) => Promise<WorkflowDocument>;
@@ -263,7 +265,7 @@ export function WorkflowRunCanvas({
   // The conversation owner restores focus only for an explicit, still-owned close.
   useModalFocus(true, dialogRef, onClose, false);
 
-  const [pagedTraceNodes, setPagedTraceNodes] = useState<{
+  const [committedTrace, setCommittedTrace] = useState<{
     ownerKey: string;
     runIdentityKey: string;
     cut: CheckpointReadCut;
@@ -272,19 +274,29 @@ export function WorkflowRunCanvas({
     incomplete: boolean;
     nextOffset: number | null;
     total: string;
+    seenIds: ReadonlySet<string>;
+    seenVisits: ReadonlySet<string>;
     loadingMore?: boolean;
-    failed?: boolean;
   } | null>(null);
-  const traceDedupeRef = useRef<{ ownerKey: string; seenIds: Set<string>; seenVisits: Set<string> }>({
-    ownerKey: '',
-    seenIds: new Set(),
-    seenVisits: new Set(),
-  });
+  const [traceLoadState, setTraceLoadState] = useState<
+    | { readonly ownerKey: string; readonly runIdentityKey: string; readonly status: 'loading' }
+    | { readonly ownerKey: string; readonly runIdentityKey: string; readonly status: 'ready' }
+    | {
+      readonly ownerKey: string;
+      readonly runIdentityKey: string;
+      readonly status: 'error';
+      readonly message: string;
+      readonly scope: 'initial' | 'page';
+      readonly knownTotal?: string;
+    }
+    | null
+  >(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [traceRetryCount, setTraceRetryCount] = useState(0);
 
   const [selection, setSelection] = useState<Selection>(() => selectionFromVisit(target.selectedVisit));
-  const [selectedVisitKey, setSelectedVisitKey] = useState<string | undefined>(() =>
-    target.selectedVisit ? visitIdentityKey(target.selectedVisit) : undefined);
+  const [selectedVisit, setSelectedVisit] = useState<WorkflowNodeInstance | undefined>(() => target.selectedVisit);
+  const selectedVisitKey = selectedVisit ? visitIdentityKey(selectedVisit) : undefined;
   const [focusNonce, setFocusNonce] = useState(0);
   const [visitTab, setVisitTab] = useState<'overview' | 'input' | 'output'>('overview');
 
@@ -304,17 +316,17 @@ export function WorkflowRunCanvas({
   const runIdentityKey = JSON.stringify([
     target.conversationId,
     target.runId ? workflowKey(target.runId) : (target.traceRoot?.id ?? resolvedTrace?.traceRoot.id ?? target.workflowId ?? ''),
-    openTraceCutKey,
   ]);
   const pageIdentity = JSON.stringify([
     target.conversationId,
     target.runId ? workflowKey(target.runId) : (effectiveTraceRoot?.id ?? target.workflowId ?? ''),
     effectiveTraceCut ? checkpointReadCutKey(effectiveTraceCut) : null,
+    readerIdentityToken(effectiveTraceReader),
   ]);
-  const pagedForExactCut = pagedTraceNodes?.ownerKey === pageIdentity ? pagedTraceNodes : null;
-  // During an in-flight cut advancement on the same open run, keep the last coherent (nodes, cut, reader) triple together.
-  const pagedForCurrent = pagedForExactCut
-    ?? (pagedTraceNodes?.runIdentityKey === runIdentityKey ? pagedTraceNodes : null);
+  const committedForExactCut = committedTrace?.ownerKey === pageIdentity ? committedTrace : null;
+  // During an in-flight or failed cut advancement on the same open run, keep the last coherent (nodes, cut, reader) triple together.
+  const committedForCurrent = committedForExactCut
+    ?? (committedTrace?.runIdentityKey === runIdentityKey ? committedTrace : null);
   const [exactVisitLookup, setExactVisitLookup] = useState<
     | { readonly ownerKey: string; readonly status: 'ready'; readonly node: WorkflowTraceNode | null }
     | { readonly ownerKey: string; readonly status: 'error'; readonly message: string }
@@ -326,11 +338,11 @@ export function WorkflowRunCanvas({
     readonly workflowId?: string;
     readonly error?: string;
   } | null>(null);
-  const useStaticTargetTrace = Boolean(target.traceNodes && !pagedForCurrent && !pagedForExactCut);
-  const effectiveTraceNodes = useStaticTargetTrace ? target.traceNodes : pagedForCurrent?.nodes;
-  const coherentTraceCut = useStaticTargetTrace ? target.traceCut : (pagedForCurrent?.cut ?? effectiveTraceCut);
-  const coherentTraceReader = useStaticTargetTrace ? target.traceReader : (pagedForCurrent?.reader ?? effectiveTraceReader);
-  const traceIncomplete = useStaticTargetTrace ? (target.traceIncomplete ?? false) : (pagedForCurrent?.incomplete ?? false);
+  const useStaticTargetTrace = Boolean(target.traceNodes && !committedForCurrent && !committedForExactCut);
+  const effectiveTraceNodes = useStaticTargetTrace ? target.traceNodes : committedForCurrent?.nodes;
+  const coherentTraceCut = useStaticTargetTrace ? target.traceCut : (committedForCurrent?.cut ?? effectiveTraceCut);
+  const coherentTraceReader = useStaticTargetTrace ? target.traceReader : (committedForCurrent?.reader ?? effectiveTraceReader);
+  const traceIncomplete = useStaticTargetTrace ? (target.traceIncomplete ?? false) : (committedForCurrent?.incomplete ?? false);
   const coherentCutKey = coherentTraceCut ? checkpointReadCutKey(coherentTraceCut) : null;
   // Never carry a pre-opened selectedTraceNode across a cut advancement.
   const targetSelectedTraceNodeAtCut = target.selectedTraceNode
@@ -378,16 +390,19 @@ export function WorkflowRunCanvas({
   const ownedPageIdentity = useRef(pageIdentity);
   ownedPageIdentity.current = pageIdentity;
   const lifetime = useRef(0);
+  const lifetimeAtRender = lifetime.current;
   const pagingButton = useRef<HTMLButtonElement | null>(null);
   const pagingFocus = useRef<string | null>(null);
+  const retryTraceButton = useRef<HTMLButtonElement | null>(null);
+  const retryTraceFocus = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (pagingFocus.current !== pageIdentity || pagedForExactCut?.loadingMore
-      || pagedForExactCut?.nextOffset !== null) return;
+    if (pagingFocus.current !== pageIdentity || committedForExactCut?.loadingMore
+      || committedForExactCut?.nextOffset !== null) return;
     pagingFocus.current = null;
     if (document.activeElement === document.body) {
       dialogRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
     }
-  }, [pageIdentity, pagedForExactCut?.loadingMore, pagedForExactCut?.nextOffset]);
+  }, [pageIdentity, committedForExactCut?.loadingMore, committedForExactCut?.nextOffset]);
 
   // Closing or retiring the owning view releases pending reads and layouts.
   useEffect(() => {
@@ -404,7 +419,7 @@ export function WorkflowRunCanvas({
   const targetVisitKey = target.selectedVisit ? visitIdentityKey(target.selectedVisit) : undefined;
   useEffect(() => {
     setSelection(selectionFromVisit(target.selectedVisit));
-    setSelectedVisitKey(targetVisitKey);
+    setSelectedVisit(target.selectedVisit);
     setVisitTab('overview');
     setFocusNonce(value => value + 1);
   }, [targetIdentity, targetVisitKey]);
@@ -502,94 +517,99 @@ export function WorkflowRunCanvas({
   // Bounded initial/updated trace batch (2 pages = <= 64 nodes) when opened from unexpanded Trace, Chat, or advancing cut.
   useEffect(() => {
     if ((target.traceNodes && !hasNewerResolvedTrace) || !effectiveTraceRoot || !effectiveTraceReader || !effectiveTraceCut) {
-      if (!hasNewerResolvedTrace) setPagedTraceNodes(null);
+      if (!hasNewerResolvedTrace) {
+        setCommittedTrace(null);
+        setTraceLoadState(null);
+      }
       return;
     }
     let active = true;
     const batchOwnerKey = pageIdentity;
+    const batchRunIdentityKey = runIdentityKey;
+    const fetchRoot = effectiveTraceRoot;
     const fetchCut = effectiveTraceCut;
     const fetchReader = effectiveTraceReader;
-    const owned = () => active && ownedPageIdentity.current === batchOwnerKey;
-    const seenIds = new Set<string>();
-    const seenVisits = new Set<string>();
-    traceDedupeRef.current = { ownerKey: batchOwnerKey, seenIds, seenVisits };
-    void readBoundedTraceWorkflowNodes(fetchReader, fetchCut, effectiveTraceRoot, owned, DEFAULT_MAX_TRACE_NODES, {
+    const admittedLifetime = lifetime.current;
+    const knownTotal = fetchRoot.collections.find(item => item.domain.endsWith('.workflow.nodes'))?.total;
+    const owned = () => active
+      && lifetime.current === admittedLifetime
+      && ownedPageIdentity.current === batchOwnerKey;
+
+    setTraceLoadState({ ownerKey: batchOwnerKey, runIdentityKey: batchRunIdentityKey, status: 'loading' });
+
+    void readBoundedTraceWorkflowNodes(fetchReader, fetchCut, fetchRoot, owned, DEFAULT_MAX_TRACE_NODES, {
       startOffset: 0,
       maxPages: DEFAULT_TRACE_BATCH_PAGES,
       expectedRunId: target.runId,
-      seenIds,
-      seenVisits,
     })
       .then(result => {
-        if (!owned()) return;
-        setPagedTraceNodes(result
-          ? {
-            ownerKey: batchOwnerKey,
-            runIdentityKey,
-            cut: fetchCut,
-            reader: fetchReader,
-            nodes: result.nodes,
-            incomplete: result.incomplete,
-            nextOffset: result.nextOffset,
-            total: result.total,
-          }
-          : {
-            ownerKey: batchOwnerKey,
-            runIdentityKey,
-            cut: fetchCut,
-            reader: fetchReader,
-            nodes: [],
-            incomplete: false,
-            nextOffset: null,
-            total: '0',
-            failed: true,
-          });
+        if (!owned() || !result) return;
+        setCommittedTrace({
+          ownerKey: batchOwnerKey,
+          runIdentityKey: batchRunIdentityKey,
+          cut: fetchCut,
+          reader: fetchReader,
+          nodes: result.nodes,
+          incomplete: result.incomplete,
+          nextOffset: result.nextOffset,
+          total: result.total,
+          seenIds: result.seenIds,
+          seenVisits: result.seenVisits,
+        });
+        setTraceLoadState({ ownerKey: batchOwnerKey, runIdentityKey: batchRunIdentityKey, status: 'ready' });
       })
-      .catch(() => {
-        if (owned()) {
-          setPagedTraceNodes({
-            ownerKey: batchOwnerKey,
-            runIdentityKey,
-            cut: fetchCut,
-            reader: fetchReader,
-            nodes: [],
-            incomplete: false,
-            nextOffset: null,
-            total: '0',
-            failed: true,
-          });
-        }
+      .catch(error => {
+        if (!owned()) return;
+        setTraceLoadState({
+          ownerKey: batchOwnerKey,
+          runIdentityKey: batchRunIdentityKey,
+          status: 'error',
+          message: error instanceof Error ? error.message : String(error),
+          scope: 'initial',
+          knownTotal,
+        });
       });
     return () => { active = false; };
-  }, [pageIdentity, runIdentityKey, hasNewerResolvedTrace, target.traceNodes, effectiveTraceRoot, effectiveTraceReader, effectiveTraceCut, target.runId]);
+  }, [
+    pageIdentity,
+    runIdentityKey,
+    hasNewerResolvedTrace,
+    target.traceNodes,
+    effectiveTraceRoot,
+    effectiveTraceReader,
+    effectiveTraceCut,
+    target.runId,
+    traceRetryCount,
+  ]);
 
   const loadMoreTraceVisits = () => {
-    if (!pagedForExactCut || pagedForExactCut.nextOffset === null || pagedForExactCut.loadingMore) return;
+    if (!committedForExactCut || committedForExactCut.nextOffset === null || committedForExactCut.loadingMore) return;
     if (!effectiveTraceRoot) return;
-    const currentOffset = pagedForExactCut.nextOffset;
+    const currentOffset = committedForExactCut.nextOffset;
     const batchIdentity = pageIdentity;
-    const batchCut = pagedForExactCut.cut;
-    const batchReader = pagedForExactCut.reader;
-    const dedupe = traceDedupeRef.current.ownerKey === batchIdentity
-      ? traceDedupeRef.current
-      : { ownerKey: batchIdentity, seenIds: new Set<string>(), seenVisits: new Set<string>() };
-    traceDedupeRef.current = dedupe;
-    setPagedTraceNodes(current => current && current.ownerKey === batchIdentity ? { ...current, loadingMore: true } : current);
-    const admittedLifetime = lifetime.current;
-    const owned = () => lifetime.current === admittedLifetime && ownedPageIdentity.current === batchIdentity;
+    const batchRunIdentityKey = runIdentityKey;
+    const batchCut = committedForExactCut.cut;
+    const batchReader = committedForExactCut.reader;
+    const batchSeenIds = committedForExactCut.seenIds;
+    const batchSeenVisits = committedForExactCut.seenVisits;
+    const knownTotal = committedForExactCut.total;
+    const owned = () => lifetime.current === lifetimeAtRender && ownedPageIdentity.current === batchIdentity;
+    if (!owned()) return;
+    setCommittedTrace(current => current && current.ownerKey === batchIdentity ? { ...current, loadingMore: true } : current);
+    setTraceLoadState({ ownerKey: batchIdentity, runIdentityKey: batchRunIdentityKey, status: 'loading' });
     void readBoundedTraceWorkflowNodes(batchReader, batchCut, effectiveTraceRoot, owned, DEFAULT_MAX_TRACE_NODES, {
       startOffset: currentOffset,
       maxPages: DEFAULT_TRACE_BATCH_PAGES,
       expectedRunId: target.runId ?? resolvedRunId,
-      seenIds: dedupe.seenIds,
-      seenVisits: dedupe.seenVisits,
+      seenIds: batchSeenIds,
+      seenVisits: batchSeenVisits,
     })
       .then(result => {
         if (!owned() || !result) return;
         if (result.nextOffset === null && document.activeElement === pagingButton.current) {
           pagingFocus.current = batchIdentity;
         }
-        setPagedTraceNodes(current => {
+        setCommittedTrace(current => {
           if (!current || current.ownerKey !== batchIdentity) return current;
           return {
             ownerKey: batchIdentity,
@@ -600,16 +620,26 @@ export function WorkflowRunCanvas({
             incomplete: result.incomplete,
             nextOffset: result.nextOffset,
             total: result.total,
+            seenIds: result.seenIds,
+            seenVisits: result.seenVisits,
             loadingMore: false,
           };
         });
+        setTraceLoadState({ ownerKey: batchIdentity, runIdentityKey: batchRunIdentityKey, status: 'ready' });
       })
-      .catch(() => {
-        if (owned()) {
-          setPagedTraceNodes(current => current && current.ownerKey === batchIdentity
-            ? { ...current, loadingMore: false, failed: true }
-            : current);
-        }
+      .catch(error => {
+        if (!owned()) return;
+        setCommittedTrace(current => current && current.ownerKey === batchIdentity
+          ? { ...current, loadingMore: false }
+          : current);
+        setTraceLoadState({
+          ownerKey: batchIdentity,
+          runIdentityKey: batchRunIdentityKey,
+          status: 'error',
+          message: error instanceof Error ? error.message : String(error),
+          scope: 'page',
+          knownTotal,
+        });
       });
   };
 
@@ -635,7 +665,7 @@ export function WorkflowRunCanvas({
     selectedTraceNode: targetSelectedTraceNodeAtCut,
     pendingInteractions: activeRun ? pendingInteractions : undefined,
     sceneNodes,
-    selectedVisit: target.selectedVisit,
+    selectedVisitKey: selectedVisitKey ?? null,
     traceIncomplete,
   }), [
     resolvedRunId,
@@ -644,7 +674,7 @@ export function WorkflowRunCanvas({
     targetSelectedTraceNodeAtCut,
     pendingInteractions,
     sceneNodes,
-    target.selectedVisit,
+    selectedVisitKey,
     traceIncomplete,
   ]);
 
@@ -661,48 +691,54 @@ export function WorkflowRunCanvas({
   }, [selection, selectedPath]);
 
   const baseSelectedOverlay = selectedViewId ? baseOverlay.byViewId.get(selectedViewId) : undefined;
-  const targetMatchesSelectedView = Boolean(
-    target.selectedVisit
+  const selectedMatchesView = Boolean(
+    selectedVisit
     && selectedViewId
     && ((sceneNodes
-      ? resolveSceneNodeId(sceneNodes, target.selectedVisit)
+      ? resolveSceneNodeId(sceneNodes, selectedVisit)
       : (selection?.kind === 'start'
-        ? viewId(blockPathFromDefinition(target.selectedVisit.block.definition), 'start')
-        : qualifiedNodeViewId(target.selectedVisit.block.definition.blocks, target.selectedVisit.node))) === selectedViewId),
+        ? viewId(blockPathFromDefinition(selectedVisit.block.definition), 'start')
+        : qualifiedNodeViewId(selectedVisit.block.definition.blocks, selectedVisit.node))) === selectedViewId),
   );
   const selectedMissingVisitInstance = useMemo<WorkflowNodeInstance | undefined>(() => {
     if (baseSelectedOverlay) {
-      if (selectedVisitKey && selectedVisitKey === targetVisitKey && targetMatchesSelectedView && target.selectedVisit) {
-        const targetVisitRecord = baseSelectedOverlay.visits.find(item => item.key === targetVisitKey);
-        if (targetVisitRecord) return targetVisitRecord.traceNode ? undefined : targetVisitRecord.instance;
-        const inNodes = effectiveTraceNodes?.some(item => visitIdentityKey(item.instance) === targetVisitKey);
+      if (selectedVisit && selectedVisitKey && selectedMatchesView) {
+        const currentVisitRecord = baseSelectedOverlay.visits.find(item => item.key === selectedVisitKey);
+        if (currentVisitRecord) return currentVisitRecord.traceNode ? undefined : currentVisitRecord.instance;
+        const inNodes = effectiveTraceNodes?.some(item => visitIdentityKey(item.instance) === selectedVisitKey);
         const inSelected = targetSelectedTraceNodeAtCut
-          && visitIdentityKey(targetSelectedTraceNodeAtCut.instance) === targetVisitKey;
-        return !inNodes && !inSelected ? target.selectedVisit : undefined;
+          && visitIdentityKey(targetSelectedTraceNodeAtCut.instance) === selectedVisitKey;
+        return !inNodes && !inSelected ? selectedVisit : undefined;
       }
       const baseVisit = defaultVisitForNode(baseSelectedOverlay, selectedVisitKey);
       return baseVisit && !baseVisit.traceNode ? baseVisit.instance : undefined;
     }
-    if (targetMatchesSelectedView && target.selectedVisit) {
-      const key = visitIdentityKey(target.selectedVisit);
-      const inNodes = effectiveTraceNodes?.some(item => visitIdentityKey(item.instance) === key);
+    if (selectedMatchesView && selectedVisit && selectedVisitKey) {
+      const inNodes = effectiveTraceNodes?.some(item => visitIdentityKey(item.instance) === selectedVisitKey);
       const inSelected = targetSelectedTraceNodeAtCut
-        && visitIdentityKey(targetSelectedTraceNodeAtCut.instance) === key;
-      if (!inNodes && !inSelected) return target.selectedVisit;
+        && visitIdentityKey(targetSelectedTraceNodeAtCut.instance) === selectedVisitKey;
+      if (!inNodes && !inSelected) return selectedVisit;
     }
     return undefined;
   }, [
     baseSelectedOverlay,
+    selectedVisit,
     selectedVisitKey,
-    targetVisitKey,
-    targetMatchesSelectedView,
-    target.selectedVisit,
+    selectedMatchesView,
     effectiveTraceNodes,
     targetSelectedTraceNodeAtCut,
   ]);
 
+  const currentTraceError = traceLoadState?.ownerKey === pageIdentity && traceLoadState.status === 'error'
+    ? traceLoadState
+    : null;
   const awaitingInitialTraceBatch = Boolean(
-    !useStaticTargetTrace && effectiveTraceRoot && effectiveTraceReader && coherentTraceCut && !pagedForCurrent,
+    !useStaticTargetTrace
+    && effectiveTraceRoot
+    && effectiveTraceReader
+    && coherentTraceCut
+    && !committedForCurrent
+    && !currentTraceError,
   );
   const exactLookupCut = !awaitingInitialTraceBatch ? coherentTraceCut : undefined;
   const exactLookupReader = !awaitingInitialTraceBatch ? coherentTraceReader : undefined;
@@ -782,7 +818,7 @@ export function WorkflowRunCanvas({
       selectedTraceNode: resolvedSelectedTraceNode,
       pendingInteractions: activeRun ? pendingInteractions : undefined,
       sceneNodes,
-      selectedVisit: target.selectedVisit,
+      selectedVisitKey: selectedVisitKey ?? null,
       traceIncomplete,
     }), [
     resolvedSelectedTraceNode,
@@ -793,17 +829,16 @@ export function WorkflowRunCanvas({
     effectiveTraceNodes,
     pendingInteractions,
     sceneNodes,
-    target.selectedVisit,
+    selectedVisitKey,
     traceIncomplete,
   ]);
 
   const selectedOverlay = selectedViewId ? overlay.byViewId.get(selectedViewId) : undefined;
   const currentVisit = useMemo<NormalizedVisitRecord | undefined>(() => {
     if (selectedOverlay) return defaultVisitForNode(selectedOverlay, selectedVisitKey);
-    if (target.selectedVisit && selectedViewId && targetMatchesSelectedView) {
-      const key = visitIdentityKey(target.selectedVisit);
-      const traceMatch = effectiveTraceNodes?.find(item => visitIdentityKey(item.instance) === key)
-        ?? (resolvedSelectedTraceNode && visitIdentityKey(resolvedSelectedTraceNode.instance) === key
+    if (selectedVisit && selectedVisitKey && selectedViewId && selectedMatchesView) {
+      const traceMatch = effectiveTraceNodes?.find(item => visitIdentityKey(item.instance) === selectedVisitKey)
+        ?? (resolvedSelectedTraceNode && visitIdentityKey(resolvedSelectedTraceNode.instance) === selectedVisitKey
           ? resolvedSelectedTraceNode
           : undefined);
       if (traceMatch) {
@@ -811,10 +846,10 @@ export function WorkflowRunCanvas({
           block: inst.block,
           node: inst.node,
           visit: inst.visit!,
-        }) === key);
+        }) === selectedVisitKey);
         const state = effectiveTraceVisitState(traceMatch.state, activeRun, liveInst);
         return {
-          key,
+          key: selectedVisitKey,
           viewId: selectedViewId,
           order: 0,
           instance: traceMatch.instance,
@@ -829,9 +864,9 @@ export function WorkflowRunCanvas({
     return undefined;
   }, [
     selectedOverlay,
+    selectedVisit,
     selectedVisitKey,
-    target.selectedVisit,
-    targetMatchesSelectedView,
+    selectedMatchesView,
     resolvedSelectedTraceNode,
     activeRun,
     selectedViewId,
@@ -845,14 +880,14 @@ export function WorkflowRunCanvas({
       const nextViewId = qualifiedNodeViewId((next.path ?? []).flatMap(s => [s.node, 'body']), next.id);
       const nextOverlay = overlay.byViewId.get(nextViewId);
       const picked = defaultVisitForNode(nextOverlay, selectedVisitKey);
-      setSelectedVisitKey(picked?.key);
+      setSelectedVisit(picked?.instance);
     } else if (next?.kind === 'start') {
       const nextViewId = viewId(next.path ?? [], 'start');
       const nextOverlay = overlay.byViewId.get(nextViewId);
       const picked = defaultVisitForNode(nextOverlay, selectedVisitKey);
-      setSelectedVisitKey(picked?.key);
+      setSelectedVisit(picked?.instance);
     } else {
-      setSelectedVisitKey(undefined);
+      setSelectedVisit(undefined);
     }
   };
 
@@ -911,9 +946,51 @@ export function WorkflowRunCanvas({
     }
   })();
 
+  const hostTraceError = !effectiveTraceRoot && !effectiveTraceNodes && traceStatus === 'error'
+    ? (traceError ?? tx('workflows:run-canvas.trace-unavailable'))
+    : null;
+  const traceErrorBanner = currentTraceError
+    ? {
+      text: currentTraceError.knownTotal && currentTraceError.knownTotal !== '0'
+        ? tx('workflows:run-canvas.trace-error-with-total', { p0: currentTraceError.knownTotal, p1: currentTraceError.message })
+        : tx('workflows:run-canvas.trace-error', { p0: currentTraceError.message }),
+      onRetry: () => {
+        if (lifetime.current !== lifetimeAtRender
+          || ownedIdentity.current !== targetIdentity
+          || ownedPageIdentity.current !== currentTraceError.ownerKey) return;
+        if (currentTraceError.scope === 'page') {
+          loadMoreTraceVisits();
+        } else {
+          setTraceRetryCount(c => c + 1);
+        }
+      },
+    }
+    : hostTraceError
+      ? {
+        text: tx('workflows:run-canvas.trace-error', { p0: hostTraceError }),
+        onRetry: onRetryTrace
+          ? () => {
+            if (!currentOwned()) return;
+            onRetryTrace();
+          }
+          : undefined,
+      }
+      : null;
+
   const childRef = durableChildRef(currentVisit);
   const canOpenChild = !!scope?.openWorkflow && !!childRef;
-  const lifetimeAtRender = lifetime.current;
+  const retryFocusScope = `${lifetimeAtRender}:${targetIdentity}`;
+  const hasRetryTraceAction = Boolean(traceErrorBanner?.onRetry);
+  useLayoutEffect(() => {
+    if (retryTraceFocus.current !== retryFocusScope || hasRetryTraceAction) return;
+    retryTraceFocus.current = null;
+    if (document.activeElement === document.body) {
+      const fallbackFocus = dialogRef.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
+        ?? dialogRef.current?.querySelector<HTMLElement>('[data-modal-autofocus]')
+        ?? dialogRef.current;
+      fallbackFocus?.focus({ preventScroll: true });
+    }
+  }, [retryFocusScope, hasRetryTraceAction]);
   const currentOwned = useMemo(
     () => () => lifetime.current === lifetimeAtRender && ownedIdentity.current === targetIdentity,
     [targetIdentity, lifetimeAtRender],
@@ -924,16 +1001,16 @@ export function WorkflowRunCanvas({
       ? (!exactVisitState ? 'loading' : exactVisitState.status === 'error' ? 'error' : 'ready')
       : awaitingInitialTraceBatch
         ? 'loading'
-        : pagedForExactCut?.failed
+        : currentTraceError
           ? 'error'
           : (effectiveTraceNodes || effectiveTraceRoot ? 'ready' : traceStatus);
   const fieldPanelTraceError = !currentVisit?.traceNode && exactVisitState?.status === 'error'
     ? exactVisitState.message
-    : (!currentVisit?.traceNode && pagedForExactCut?.failed ? tx('workflows:run-canvas.unavailable') : traceError);
-  const fieldPanelReader = currentVisit?.traceNode && currentVisit.traceNode === targetSelectedTraceNodeAtCut && !pagedForCurrent
+    : (!currentVisit?.traceNode && currentTraceError ? currentTraceError.message : traceError);
+  const fieldPanelReader = currentVisit?.traceNode && currentVisit.traceNode === targetSelectedTraceNodeAtCut && !committedForCurrent
     ? (target.traceReader ?? coherentTraceReader)
     : coherentTraceReader;
-  const fieldPanelCut = currentVisit?.traceNode && currentVisit.traceNode === targetSelectedTraceNodeAtCut && !pagedForCurrent
+  const fieldPanelCut = currentVisit?.traceNode && currentVisit.traceNode === targetSelectedTraceNodeAtCut && !committedForCurrent
     ? (target.traceCut ?? coherentTraceCut)
     : coherentTraceCut;
 
@@ -996,20 +1073,38 @@ export function WorkflowRunCanvas({
         </button>}
       </p>}
 
+      {traceErrorBanner && <p role="alert" className={`${css.banner} ${css.bannerError}`}>
+        <span>{traceErrorBanner.text}</span>
+        {traceErrorBanner.onRetry && <button
+          type="button"
+          ref={retryTraceButton}
+          className={css.actionButton}
+          onClick={() => {
+            if (!currentOwned()) return;
+            if (document.activeElement === retryTraceButton.current) {
+              retryTraceFocus.current = retryFocusScope;
+            }
+            traceErrorBanner.onRetry!();
+          }}
+        >
+          {tx('workflows:run-canvas.retry-trace')}
+        </button>}
+      </p>}
+
       {(overlay.omittedInstances > 0 || overlay.traceIncomplete || liveDisconnectedNotice) && <p role="status" className={css.banner}>
         <span>
           {liveDisconnectedNotice
             ? tx('workflows:run-canvas.live-disconnected')
-            : pagedForExactCut && pagedForExactCut.nextOffset !== null
-              ? `${tx('workflows:run-canvas.partial-coverage', { p0: String(pagedForExactCut.nodes.length), p1: pagedForExactCut.total })} · ${tx('workflows:run-canvas.omitted-notice')}`
+            : committedForCurrent && committedForCurrent.nextOffset !== null
+              ? `${tx('workflows:run-canvas.partial-coverage', { p0: String(committedForCurrent.nodes.length), p1: committedForCurrent.total })} · ${tx('workflows:run-canvas.omitted-notice')}`
               : tx('workflows:run-canvas.omitted-notice')}
         </span>
-        {pagedForExactCut && pagedForExactCut.nextOffset !== null && (
+        {committedForExactCut && committedForExactCut.nextOffset !== null && (
           <button
             type="button"
             className={css.actionButton}
             ref={pagingButton}
-            disabled={pagedForExactCut.loadingMore}
+            disabled={committedForExactCut.loadingMore}
             onClick={loadMoreTraceVisits}
           >
             {tx('workflows:run-canvas.load-more')}
@@ -1064,7 +1159,13 @@ export function WorkflowRunCanvas({
           <div className={css.inspectorScroll}>
             {selection?.kind === 'note' ? <p className={css.muted}>{tx('workflows:run-canvas.synthetic-note')}</p>
               : !selectedOverlay?.visits.length && !currentVisit ? <p className={css.muted}>
-                {selection?.kind === 'node' ? tx('workflows:run-canvas.visits-empty') : tx('workflows:run-canvas.select-node-hint')}
+                {selection?.kind === 'node'
+                  ? (awaitingInitialTraceBatch
+                    ? tx('workflows:run-canvas.trace-loading')
+                    : currentTraceError
+                      ? (traceErrorBanner?.text ?? tx('workflows:run-canvas.trace-unavailable'))
+                      : tx('workflows:run-canvas.visits-empty'))
+                  : tx('workflows:run-canvas.select-node-hint')}
               </p> : <>
                 {selectedOverlay && selectedOverlay.visits.length > 0 && <div>
                   <h4 className={css.sectionLabel}>{tx('workflows:run-canvas.visits-tab')} ({selectedOverlay.visits.length}{selectedOverlay.omittedVisits > 0 ? ` / ${selectedOverlay.visitCount}` : ''})</h4>
@@ -1084,7 +1185,7 @@ export function WorkflowRunCanvas({
                           aria-selected={isSelected}
                           className={css.visitButton}
                           data-run-visit-key={visit.key}
-                          onClick={() => setSelectedVisitKey(visit.key)}
+                          onClick={() => setSelectedVisit(visit.instance)}
                         >
                           <span>
                             {tx('workflows:run-canvas.visit-item', { p0: String(visit.instance.visit + 1) })}

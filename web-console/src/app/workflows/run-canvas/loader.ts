@@ -30,6 +30,8 @@ export interface BoundedTraceNodesResult {
   readonly incomplete: boolean;
   readonly nextOffset: number | null;
   readonly total: string;
+  readonly seenIds: ReadonlySet<string>;
+  readonly seenVisits: ReadonlySet<string>;
 }
 
 function isValidTraceNode(value: unknown): value is WorkflowTraceNode {
@@ -58,17 +60,17 @@ export async function readBoundedTraceWorkflowNodes(
     readonly startOffset?: number;
     readonly maxPages?: number;
     readonly expectedRunId?: WorkflowRunId;
-    readonly seenIds?: Set<string>;
-    readonly seenVisits?: Set<string>;
+    readonly seenIds?: ReadonlySet<string>;
+    readonly seenVisits?: ReadonlySet<string>;
   },
 ): Promise<BoundedTraceNodesResult | null> {
+  const seenIds = new Set<string>(options?.seenIds);
+  const seenVisits = new Set<string>(options?.seenVisits);
   const collection = root.collections.find(item => item.domain.endsWith('.workflow.nodes'));
-  if (!collection) return { nodes: [], incomplete: false, nextOffset: null, total: '0' };
-  if (collection.total === '0') return { nodes: [], incomplete: false, nextOffset: null, total: '0' };
+  if (!collection) return { nodes: [], incomplete: false, nextOffset: null, total: '0', seenIds, seenVisits };
+  if (collection.total === '0') return { nodes: [], incomplete: false, nextOffset: null, total: '0', seenIds, seenVisits };
 
   const collected: WorkflowTraceNode[] = [];
-  const seenIds = options?.seenIds ?? new Set<string>();
-  const seenVisits = options?.seenVisits ?? new Set<string>();
   const startOffset = options?.startOffset ?? 0;
   const maxPages = Math.max(1, options?.maxPages ?? Math.ceil(maxNodes / 32));
   let offset: number | null = startOffset;
@@ -109,6 +111,8 @@ export async function readBoundedTraceWorkflowNodes(
       incomplete: offset !== null,
       nextOffset: offset,
       total: collection.total,
+      seenIds,
+      seenVisits,
     }
     : null;
 }

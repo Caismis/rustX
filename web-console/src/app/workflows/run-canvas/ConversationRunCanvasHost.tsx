@@ -95,6 +95,7 @@ export function ConversationRunCanvasHost({
 }: ConversationRunCanvasHostProps) {
   const [openState, setOpenState] = useState<AdmittedCanvasState | null>(null);
   const [traceResolution, setTraceResolution] = useState<TraceResolutionState | null>(null);
+  const [traceRetryCount, setTraceRetryCount] = useState(0);
   const openSeqRef = useRef(0);
   const triggerRef = useRef<HTMLElement | null>(null);
 
@@ -259,6 +260,7 @@ export function ConversationRunCanvasHost({
     targetHasCompleteTrace,
     hasNewerTraceFrontier,
     traceFrontierKey,
+    traceRetryCount,
   ]);
 
   const close = useCallback(() => {
@@ -285,6 +287,18 @@ export function ConversationRunCanvasHost({
     setOpenState(state => state?.scope === currentScope && state.openSeq === activeOpenSeq && !state.target.runId
       ? { ...state, target: { ...state.target, runId } }
       : state);
+  }, [currentScope, activeOpenSeq]);
+
+  const retryTrace = useCallback(() => {
+    const latest = latestScope.current;
+    if (activeOpenSeq === null
+      || latestOpenSeq.current !== activeOpenSeq
+      || latest.scope !== currentScope
+      || !latest.valid
+      || !latest.checkLive()) {
+      return;
+    }
+    setTraceRetryCount(c => c + 1);
   }, [currentScope, activeOpenSeq]);
 
   const contextValue = useMemo(() => {
@@ -384,6 +398,7 @@ export function ConversationRunCanvasHost({
             ? 'ready'
             : (targetHasCompleteTrace ? 'ready' : (matchingTraceResolution?.status ?? 'unavailable'))}
           traceError={matchingTraceResolution?.error}
+          onRetryTrace={retryTrace}
           onClose={close}
           createTransport={createTransport}
         />

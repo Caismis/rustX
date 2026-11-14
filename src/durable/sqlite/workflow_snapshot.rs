@@ -1010,4 +1010,39 @@ mod tests {
                 .is_none()
         );
     }
+
+    #[test]
+    fn ordinary_append_event_rejects_workflow_started_without_leaving_rows() {
+        let conv = ConversationId::generate();
+        let store = SqliteConversationStore::in_memory(conv.clone()).expect("in-memory store");
+        let wf_id = WorkflowId::parse("review").expect("workflow id");
+        let run_id = make_run_id(&conv, "attempt-reject-append", 0);
+        let env = started_envelope(&conv, &wf_id, &run_id, "evt-start-reject");
+        let cut_before = store.observation_read_cut().expect("cut_before");
+
+        let err = store
+            .append_event(env)
+            .expect_err("ordinary append_event must reject WorkflowStarted");
+        assert!(matches!(err, ConversationStoreError::InvalidReference(_)));
+        assert_eq!(table_count(&store, "events"), 0);
+        assert_eq!(table_count(&store, "workflow_definition_snapshots"), 0);
+        assert_eq!(table_count(&store, "workflow_snapshot_chunks"), 0);
+        assert_eq!(table_count(&store, "workflow_run_snapshots"), 0);
+        assert!(store.read_events(None, 16).unwrap().events.is_empty());
+        let cut = store.observation_read_cut().expect("cut");
+        assert_eq!(cut, cut_before);
+        assert_eq!(cut.read.journal, 0);
+        assert!(
+            store
+                .observation_workflow_trace_sequence(&cut, &run_id)
+                .expect("trace sequence")
+                .is_none()
+        );
+        assert!(
+            store
+                .observation_workflow_run_snapshot_header(&cut, &run_id)
+                .expect("snapshot header")
+                .is_none()
+        );
+    }
 }

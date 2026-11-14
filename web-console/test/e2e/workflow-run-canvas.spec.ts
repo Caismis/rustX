@@ -210,3 +210,97 @@ test('run inspection preserves the real authoring editor invalid field, undo his
   await expect(literal).toHaveValue('"unclosed');
   await expect(node).toHaveClass(/selected/);
 });
+
+for (const width of [1440, 390]) {
+  test(`retry trace recovers from initial batch error while keeping focus contained, layout/snapshot un-reloaded, and viewport stable at ${width}px`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', msg => {
+      if (['error', 'warning'].includes(msg.type())) errors.push(msg.text());
+    });
+
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`${origin}/test/fixtures/workflow-run-canvas.html?traceFailOnce=1`);
+    await expect(page).toHaveTitle('Workflow run canvas fixture');
+
+    const opener = page.getByRole('button', { name: 'Inspect worker on run graph', exact: true }).last();
+    await opener.click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId('rf__wrapper')).toBeVisible();
+    await expect(dialog.locator('.react-flow__node')).toHaveCount(6);
+    await expect(dialog.getByRole('region', { name: 'Workflow canvas', exact: true })).toHaveAttribute('aria-busy', 'false');
+
+    // Initial trace failure shows visible alert and Retry trace button without failing snapshot or eager I/O.
+    const alert = dialog.getByRole('alert').filter({ hasText: 'Injected initial trace batch failure' });
+    await expect(alert).toBeVisible();
+    const retryButton = dialog.getByRole('button', { name: 'Retry trace', exact: true });
+    await expect(retryButton).toBeVisible();
+    expect(await page.evaluate(() => window.runCanvasFixture.snapshotReads())).toEqual({ headers: 1, chunks: 1 });
+    expect(await page.evaluate(() => window.runCanvasFixture.valueReads())).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    // Zoom in so camera transform is non-default, wait for animation frames / idle aria-busy witness, and capture layout instance + transform.
+    const viewport = dialog.locator('.react-flow__viewport');
+    const zoomLevel = dialog.getByRole('button', { name: 'Zoom', exact: true });
+    await dialog.getByRole('button', { name: 'Zoom in', exact: true }).click();
+    await expect(zoomLevel).not.toHaveText('100%');
+    await expect(dialog.getByRole('region', { name: 'Workflow canvas', exact: true })).toHaveAttribute('aria-busy', 'false');
+    await page.evaluate(() => new Promise<void>(resolve => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    const transformBefore = await viewport.evaluate(el => el.style.transform);
+    expect(transformBefore).toBeTruthy();
+    await page.evaluate(() => {
+      (window as unknown as { __runCanvasFlowEl?: Element | null }).__runCanvasFlowEl = document.querySelector('[role="dialog"] .react-flow');
+    });
+
+    // Focus Retry trace and activate via Enter; focus must stay inside modal (tab/dialog), never fall to BODY or #root.
+    await retryButton.focus();
+    await expect(retryButton).toBeFocused();
+    await page.keyboard.press('Enter');
+
+    await expect(retryButton).toHaveCount(0);
+    await expect(alert).toHaveCount(0);
+    await expect(dialog.locator('[data-run-node-status="completed"]').first()).toBeVisible();
+
+    const focusState = await page.evaluate(() => {
+      const active = document.activeElement;
+      const dialogEl = document.querySelector('[role="dialog"]');
+      const rootEl = document.getElementById('root');
+      const flowSame = dialogEl?.querySelector('.react-flow') === (window as unknown as { __runCanvasFlowEl?: Element | null }).__runCanvasFlowEl;
+      return {
+        onBody: active === document.body,
+        inBackground: !!active && !!rootEl && rootEl.contains(active),
+        inDialog: !!active && !!dialogEl && dialogEl.contains(active),
+        selectedTabOrDialogFocused: !!active && (active.matches('[role="tab"][aria-selected="true"]') || active === dialogEl || !!active.closest('[role="dialog"]')),
+        flowSame,
+        overflow: document.documentElement.scrollWidth > window.innerWidth,
+      };
+    });
+    expect(focusState).toEqual({
+      onBody: false,
+      inBackground: false,
+      inDialog: true,
+      selectedTabOrDialogFocused: true,
+      flowSame: true,
+      overflow: false,
+    });
+
+    // Snapshot was not reloaded, pan/zoom transform stayed identical, and zero eager values were read.
+    expect(await page.evaluate(() => window.runCanvasFixture.snapshotReads())).toEqual({ headers: 1, chunks: 1 });
+    expect(await viewport.evaluate(el => el.style.transform)).toBe(transformBefore);
+    expect(await page.evaluate(() => window.runCanvasFixture.valueReads())).toEqual([]);
+
+    // Opening Output after Retry recovery triggers a single lazy value read cleanly.
+    await dialog.getByRole('tab', { name: 'Output' }).click();
+    await expect(dialog.getByRole('tabpanel')).toContainText('lazy-output-e2e');
+    expect(await page.evaluate(() => window.runCanvasFixture.valueReads())).toHaveLength(1);
+    expect(await viewport.evaluate(el => el.style.transform)).toBe(transformBefore);
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(opener).toBeFocused();
+    expect(errors).toEqual([]);
+  });
+}

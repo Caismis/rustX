@@ -910,7 +910,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "3cbd63b2923b9166b339a022963bde5bad6fb4dea5c0c82df9878a0659c60fd3"
+      "local_sha256": "3795f8a61a99719a0211e7b21ade72203fb01248792ac3235dfda18ef32b4e09"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",

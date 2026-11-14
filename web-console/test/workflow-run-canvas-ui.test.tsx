@@ -1898,4 +1898,1039 @@ describe('WorkflowRunCanvas UI and integration', () => {
     );
     await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('conversation changed'));
   });
+
+  it('retains user-selected visit2 over opener visit1 across 128/192/256 nested-loop paging without camera or focus steal', async () => {
+    const base = statusSource().document!;
+    const doc: WorkflowFileDocument = structuredClone(base);
+    doc.block.nodes = {
+      workflow_start: { type: 'start' },
+      outer: {
+        type: 'loop',
+        loop_count: 3,
+        break_condition: null,
+        body: {
+          nodes: {
+            outer_start: { type: 'start' },
+            inner: {
+              type: 'loop',
+              loop_count: 100,
+              break_condition: null,
+              body: {
+                nodes: {
+                  inner_start: { type: 'start' },
+                  worker: { type: 'template', variables: {}, template: 'nested visit' },
+                },
+                edges: [{ from: 'inner_start', port: 'next', to: 'worker' }],
+              },
+              loop_variables: [],
+            },
+          },
+          edges: [{ from: 'outer_start', port: 'next', to: 'inner' }],
+        },
+        loop_variables: [],
+      },
+      done: { type: 'return', outputs: [] },
+    };
+    doc.block.edges = [
+      { from: 'workflow_start', port: 'next', to: 'outer' },
+      { from: 'outer', port: 'next', to: 'done' },
+    ];
+
+    const runId = baseRunId('404', 'conv-retain');
+    const cut = cutFor('conv-retain');
+    const transport = makeTransport(doc, runId, { workflowId: 'nested_3x100' });
+    const organizeSpy = vi.fn(async (d: WorkflowFileDocument) => d);
+
+    const blocks = ['outer', 'body', 'inner', 'body'];
+    const allVisits: WorkflowTraceNode[] = [];
+    for (let o = 1; o <= 3; o++) {
+      for (let i = 1; i <= 100; i++) {
+        const ordinal = (o - 1) * 100 + i;
+        const id = `wn-nested-${ordinal}`;
+        allVisits.push({
+          id,
+          instance: {
+            block: { run: runId, definition: { workflow_id: 'nested_3x100', blocks }, invocations: [0, o, i] },
+            node: 'worker',
+            visit: 0,
+          },
+          kind: 'template',
+          state: { type: 'settled', outcome: 'completed' },
+          timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '5' },
+          input: { type: 'value', field: 'arguments', domain: `in-${id}`, item_offset: 0, path: [], encoded_bytes: String(nodeBodyBytes(`in-${id}`)) },
+          output: { type: 'value', field: 'result', domain: `out-${id}`, item_offset: 0, path: [], encoded_bytes: String(nodeBodyBytes(`out-${id}`)) },
+          input_preview: null,
+          output_preview: null,
+          input_omitted: false,
+          output_omitted: false,
+        });
+      }
+    }
+
+    const traceDomain = 'trace.records.404.workflow.nodes';
+    const valueSpy = vi.fn(async (_cut: CheckpointReadCut, source: Parameters<TraceFieldReader['value']>[1]): Promise<CheckpointValueChunk> => {
+      const bytes = Buffer.from(JSON.stringify(nodeBody(source.domain)), 'utf8');
+      return {
+        representation: 'canonical_json_v1',
+        cut,
+        domain: source.domain,
+        item_offset: source.item_offset,
+        path: [...source.path],
+        offset: 0,
+        bytes_base64: bytes.toString('base64'),
+        next_offset: null,
+        readable_end: bytes.length,
+      };
+    });
+    const reader: TraceFieldReader = {
+      value: valueSpy,
+      content: vi.fn(),
+      page: vi.fn(async (_cut, domain, offset): Promise<CheckpointPage> => {
+        const slice = allVisits.slice(offset, offset + 32);
+        const next = offset + slice.length;
+        return {
+          domain,
+          cursor: cut.revision,
+          read_cut: cut,
+          total: String(allVisits.length),
+          collections: [],
+          next_offset: next < allVisits.length ? String(next) : null,
+          items: slice.map((node, idx) => ({
+            offset: String(offset + idx),
+            identity: node.id,
+            value: node as unknown as Record<string, unknown>,
+            content: [],
+            deferred: false,
+            body_complete: true,
+          })),
+        };
+      }),
+    };
+    const traceRoot: TraceRecord = {
+      id: 'trace:404',
+      position: '404',
+      location: { attempt_id: 'a404', step_id: 's1' },
+      kind: 'workflow',
+      state: 'completed',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '100' },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: traceDomain, revision: cut.revision, total: String(allVisits.length), loaded: '0', next_offset: '0' }],
+      native_id: null,
+      originating_tool_call_id: null,
+      has_detail: false,
+      truncated: false,
+    };
+
+    const visit1 = allVisits[0]!;
+    const visit2 = allVisits[1]!;
+    const visit1Key = visitIdentityKey(visit1.instance);
+    const visit2Key = visitIdentityKey(visit2.instance);
+
+    render(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-retain',
+          runId,
+          workflowId: 'nested_3x100',
+          sourceMode: 'history',
+          selectedVisit: visit1.instance,
+          traceRoot,
+          traceCut: cut,
+          traceReader: reader,
+          transport,
+        }}
+        onClose={vi.fn()}
+        organizeFn={organizeSpy}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(dialog.querySelectorAll('[data-run-visit-key]')).toHaveLength(64));
+    const flowBefore = dialog.querySelector('.react-flow');
+    expect(flowBefore).toBeTruthy();
+
+    // Explicitly choose visit 2 (overriding opener visit 1).
+    const visit2Button = dialog.querySelector<HTMLButtonElement>(`[data-run-visit-key="${CSS.escape(visit2Key)}"]`)!;
+    expect(visit2Button).toBeTruthy();
+    fireEvent.click(visit2Button);
+    expect(visit2Button.getAttribute('aria-selected')).toBe('true');
+
+    // Page to 128, 192, and 256 visits (> 200 per-node retention cap).
+    const loadMoreBtn = screen.getByRole('button', { name: 'Load more trace visits' });
+    loadMoreBtn.focus();
+    fireEvent.click(loadMoreBtn);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('128 of 300'));
+    expect(dialog.querySelectorAll('[data-run-visit-key]').length).toBe(128);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more trace visits' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('192 of 300'));
+    expect(dialog.querySelectorAll('[data-run-visit-key]').length).toBe(192);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load more trace visits' }));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('256 of 300'));
+
+    // Per-node list is bounded <= 200, visit 2 remains retained and selected, opener visit 1 is not forced over visit 2.
+    const retainedButtons = dialog.querySelectorAll('[data-run-visit-key]');
+    expect(retainedButtons.length).toBe(200);
+    const retainedVisit2 = dialog.querySelector<HTMLElement>(`[data-run-visit-key="${CSS.escape(visit2Key)}"]`);
+    expect(retainedVisit2).toBeTruthy();
+    expect(retainedVisit2?.getAttribute('aria-selected')).toBe('true');
+    expect(dialog.querySelector(`[data-run-visit-key="${CSS.escape(visit1Key)}"]`)).toBeNull();
+
+    // No camera / layout / focus steal.
+    expect(dialog.querySelector('.react-flow')).toBe(flowBefore);
+    expect(organizeSpy).toHaveBeenCalledTimes(0);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Load more trace visits' }));
+
+    // Details / I/O identity remains visit 2.
+    expect(valueSpy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+    await waitFor(() => expect(valueSpy).toHaveBeenCalledTimes(1));
+    expect(valueSpy.mock.calls[0]?.[1].domain).toBe('out-wn-nested-2');
+    await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('out-wn-nested-2'));
+  });
+
+  it('recovers cleanly on retry after page 96 fails mid-batch without false duplicate errors', async () => {
+    const doc = makeNestedDoc();
+    const runId = baseRunId('405', 'conv-retry-page');
+    const cut = cutFor('conv-retry-page');
+    const transport = makeTransport(doc, runId);
+    const total = 128;
+    const allVisits = Array.from({ length: total }, (_, idx) =>
+      makeTraceNode(`wn-batch-${idx}`, runId, idx + 1, 0, { type: 'settled', outcome: 'completed' }),
+    );
+    const traceDomain = 'trace.records.405.workflow.nodes';
+    const traceRoot: TraceRecord = {
+      id: 'trace:405',
+      position: '405',
+      location: { attempt_id: 'a405', step_id: 's1' },
+      kind: 'workflow',
+      state: 'completed',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '50' },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: traceDomain, revision: cut.revision, total: String(total), loaded: '0', next_offset: '0' }],
+      native_id: JSON.stringify(runId),
+      originating_tool_call_id: null,
+      has_detail: false,
+      truncated: false,
+    };
+
+    let failAt96 = true;
+    const pageOffsets: number[] = [];
+    const reader: TraceFieldReader = {
+      value: vi.fn(),
+      content: vi.fn(),
+      page: vi.fn(async (_cut, domain, offset): Promise<CheckpointPage> => {
+        pageOffsets.push(offset);
+        if (offset === 96 && failAt96) throw new Error('injected page 96 error');
+        const slice = allVisits.slice(offset, offset + 32);
+        const next = offset + slice.length;
+        return {
+          domain,
+          cursor: cut.revision,
+          read_cut: cut,
+          total: String(total),
+          collections: [],
+          next_offset: next < total ? String(next) : null,
+          items: slice.map((node, i) => ({
+            offset: String(offset + i),
+            identity: node.id,
+            value: node as unknown as Record<string, unknown>,
+            content: [],
+            deferred: false,
+            body_complete: true,
+          })),
+        };
+      }),
+    };
+
+    render(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-retry-page',
+          runId,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          selectedVisit: allVisits[0]!.instance,
+          traceRoot,
+          traceCut: cut,
+          traceReader: reader,
+          transport,
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('64 of 128'));
+    expect(pageOffsets).toEqual([0, 32]);
+
+    // Trigger batch 2: offset 64 succeeds, offset 96 fails -> surfaces trace error alert and leaves committed offset at 64.
+    fireEvent.click(screen.getByRole('button', { name: 'Load more trace visits' }));
+    await waitFor(() => expect(pageOffsets).toEqual([0, 32, 64, 96]));
+    const batchAlert = await screen.findByRole('alert');
+    expect(batchAlert.textContent).toContain('injected page 96 error');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load more trace visits' }).hasAttribute('disabled')).toBe(false));
+    expect(screen.getByRole('status').textContent).toContain('64 of 128');
+
+    // Recover network and retry: starts cleanly at 64, 96, clears alert, and commits all 128 visits with no false duplicate error.
+    failAt96 = false;
+    fireEvent.click(screen.getByRole('button', { name: 'Load more trace visits' }));
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Load more trace visits' })).toBeNull());
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(pageOffsets).toEqual([0, 32, 64, 96, 64, 96]);
+    expect(document.body.querySelectorAll('[data-run-visit-key]').length).toBe(128);
+  });
+
+  it('recovers visits and paging through real Trajectory + ConversationRunCanvasHost when opened before initial read completes', async () => {
+    const doc = makeNestedDoc();
+    if (doc.block.nodes.outer.type === 'loop') doc.block.nodes.outer.loop_count = 70;
+    const server = new Server();
+    await server.attached('A');
+    const attTarget = server.client.getSnapshot().views.A!.target!;
+    const convId = attTarget.conversation_id;
+    const runId = baseRunId('406', convId);
+    const cut = cutFor(convId);
+    const transport = makeTransport(doc, runId, { workflowId: 'nested_flow' });
+    const header = await transport.readHeader(() => true);
+    const chunk = await transport.readChunk(0, 65536, () => true);
+    server.handlers.set('conversation/workflowRunSnapshotHeader', () => ({ type: 'workflow_run_snapshot_header', header }));
+    server.handlers.set('conversation/workflowRunSnapshotChunk', () => ({ type: 'workflow_run_snapshot_chunk', chunk }));
+
+    const total = 70;
+    const allNodes = Array.from({ length: total }, (_, idx) =>
+      makeTraceNode(`wn-held-${idx}`, runId, idx + 1, 0, { type: 'settled', outcome: 'completed' }),
+    );
+    const traceDomain = 'trace.records.406.workflow.nodes';
+    const detailDomain = 'trace.records.406.detail';
+    const traceRoot: TraceRecord = {
+      id: 'trace:406',
+      position: '406',
+      location: { attempt_id: 'a406', step_id: 's1' },
+      kind: 'workflow',
+      state: 'completed',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '50' },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: traceDomain, revision: cut.revision, total: String(total), loaded: '0', next_offset: '0' }],
+      native_id: null,
+      originating_tool_call_id: null,
+      has_detail: true,
+      truncated: false,
+    };
+
+    const heldReads: Array<() => void> = [];
+    let holdInitialReads = true;
+    const reader: TraceFieldReader = {
+      value: vi.fn(),
+      content: vi.fn(),
+      page: vi.fn(async (reqCut, domain, offset): Promise<CheckpointPage> => {
+        if (domain === detailDomain) {
+          return {
+            domain,
+            cursor: reqCut.revision,
+            read_cut: reqCut,
+            total: '1',
+            collections: [],
+            next_offset: null,
+            items: [{
+              offset: '0',
+              identity: traceRoot.id,
+              value: {
+                id: traceRoot.id,
+                kind: 'workflow',
+                record: traceRoot,
+                content: { type: 'workflow', run_id: runId, workflow_id: 'nested_flow' },
+              } as unknown as Record<string, unknown>,
+              content: [],
+              deferred: true,
+              body_complete: false,
+            }],
+          };
+        }
+        const slice = allNodes.slice(offset, offset + 32);
+        const next = offset + slice.length;
+        const page: CheckpointPage = {
+          domain,
+          cursor: reqCut.revision,
+          read_cut: reqCut,
+          total: String(total),
+          collections: [],
+          next_offset: next < total ? String(next) : null,
+          items: slice.map((node, i) => ({
+            offset: String(offset + i),
+            identity: node.id,
+            value: node as unknown as Record<string, unknown>,
+            content: [],
+            deferred: false,
+            body_complete: true,
+          })),
+        };
+        if (holdInitialReads && offset === 0) {
+          return new Promise(resolve => {
+            heldReads.push(() => resolve(page));
+          });
+        }
+        return page;
+      }),
+    };
+
+    const cache: TraceCache = {
+      epoch: 1,
+      page: { records: [traceRoot], next_cursor: null, read_cut: cut },
+      readCuts: { [traceRoot.id]: cut },
+      fields: reader,
+      details: {},
+    };
+
+    try {
+      const ui = render(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          attachmentTarget={attTarget}
+          ownerCurrent
+        >
+          <Trajectory cache={cache} loadEarlier={vi.fn()} onSelect={vi.fn()} onLoadDetail={vi.fn()} />
+        </ConversationRunCanvasHost>,
+      );
+
+      // Expand workflow row so Trajectory starts loading nodes (held at offset 0).
+      fireEvent.click(ui.container.querySelector('[data-trace-id="trace:406"] button[aria-expanded]')!);
+      await waitFor(() => expect(heldReads.length).toBeGreaterThanOrEqual(1));
+
+      // Open root run canvas BEFORE the Trajectory read completes.
+      fireEvent.click(screen.getByRole('button', { name: 'View run graph' }));
+      const dialog = await screen.findByRole('dialog');
+      await waitFor(() => expect(dialog.querySelectorAll('.react-flow__node').length).toBeGreaterThan(0));
+
+      // Release held reads and confirm canvas recovers visits and paging (not stuck at empty []).
+      holdInitialReads = false;
+      await act(async () => {
+        for (const release of heldReads.splice(0)) release();
+      });
+
+      const workerViewId = viewId([{ node: 'outer' }], 'node', 'worker');
+      await waitFor(() => expect(dialog.querySelector(`[data-id="${CSS.escape(workerViewId)}"] [data-run-node-status="completed"]`)).toBeTruthy());
+      fireEvent.click(dialog.querySelector(`.react-flow__node[data-id="${CSS.escape(workerViewId)}"]`)!);
+      await waitFor(() => expect(dialog.querySelectorAll('[data-run-visit-key]')).toHaveLength(64));
+
+      // Remaining page (64..69) is also recoverable via Load more.
+      const loadMore = within(dialog).getByRole('button', { name: 'Load more trace visits' });
+      fireEvent.click(loadMore);
+      await waitFor(() => expect(dialog.querySelectorAll('[data-run-visit-key]')).toHaveLength(70));
+    } finally {
+      server.client.disconnect();
+    }
+  });
+
+  it('surfaces cold trace failure with independent trace retry and preserves coherent cut/total on refresh failure while fencing held responses', async () => {
+    const doc = makeNestedDoc();
+    const runId = baseRunId('407', 'conv-trace-err');
+    const cut1: CheckpointReadCut = { conversation_id: 'conv-trace-err', revision: '1', through: '1', domain_revisions: {}, collection_cuts: {}, activation_id: 'act-1' };
+    const cut2: CheckpointReadCut = { ...cut1, revision: '2', through: '2', activation_id: 'act-1' };
+    const cut3: CheckpointReadCut = { ...cut1, revision: '3', through: '3', activation_id: 'act-2' };
+    const transport = makeTransport(doc, runId, { hasSourcePresentation: false });
+    const readHeaderSpy = vi.spyOn(transport, 'readHeader');
+    const organizeSpy = vi.fn(async (d: WorkflowFileDocument) => d);
+
+    const total = 70;
+    const allNodes = Array.from({ length: total }, (_, idx) =>
+      makeTraceNode(`wn-err-${idx}`, runId, idx + 1, 0, { type: 'settled', outcome: 'completed' }),
+    );
+    const traceDomain = 'trace.records.407.workflow.nodes';
+    const traceRoot = (rev: string): TraceRecord => ({
+      id: 'trace:407',
+      position: '407',
+      location: { attempt_id: 'a407', step_id: 's1' },
+      kind: 'workflow',
+      state: 'completed',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '50' },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: traceDomain, revision: rev, total: String(total), loaded: '0', next_offset: '0' }],
+      native_id: JSON.stringify(runId),
+      originating_tool_call_id: null,
+      has_detail: false,
+      truncated: false,
+    });
+
+    let failCut1 = true;
+    const valueSpy = vi.fn(async (reqCut: CheckpointReadCut, field: Parameters<TraceFieldReader['value']>[1]): Promise<CheckpointValueChunk> => {
+      const bytes = Buffer.from(JSON.stringify({ domain: field.domain, cutRev: reqCut.revision }), 'utf8');
+      return {
+        representation: 'canonical_json_v1',
+        cut: reqCut,
+        domain: field.domain,
+        item_offset: field.item_offset,
+        path: [...field.path],
+        offset: 0,
+        bytes_base64: bytes.toString('base64'),
+        next_offset: null,
+        readable_end: bytes.length,
+      };
+    });
+    const reader1: TraceFieldReader = {
+      value: valueSpy,
+      content: vi.fn(),
+      page: vi.fn(async (reqCut, domain, offset): Promise<CheckpointPage> => {
+        if (failCut1) throw new Error('trace page read failed at cut 1');
+        const slice = allNodes.slice(offset, offset + 32);
+        const next = offset + slice.length;
+        return {
+          domain,
+          cursor: reqCut.revision,
+          read_cut: reqCut,
+          total: String(total),
+          collections: [],
+          next_offset: next < total ? String(next) : null,
+          items: slice.map((node, i) => ({
+            offset: String(offset + i),
+            identity: node.id,
+            value: node as unknown as Record<string, unknown>,
+            content: [],
+            deferred: false,
+            body_complete: true,
+          })),
+        };
+      }),
+    };
+
+    // Part A: Cold root with snapshot success + initial trace rejection shows root-visible error + Retry,
+    // and Retry reruns ONLY trace (no snapshot reload, no relayout, no eager value reads).
+    const ui = render(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-trace-err',
+          runId,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          traceRoot: traceRoot('1'),
+          traceCut: cut1,
+          traceReader: reader1,
+          transport,
+        }}
+        onClose={vi.fn()}
+        organizeFn={organizeSpy}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog');
+    await waitFor(() => expect(dialog.querySelectorAll('.react-flow__node').length).toBeGreaterThan(0));
+    const flowBefore = dialog.querySelector('.react-flow');
+    expect(readHeaderSpy).toHaveBeenCalledTimes(1);
+    expect(organizeSpy).toHaveBeenCalledTimes(1);
+    expect(valueSpy).not.toHaveBeenCalled();
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('trace page read failed at cut 1');
+    expect(alert.textContent).toContain('70');
+    const retryTraceBtn = within(alert).getByRole('button', { name: 'Retry trace' });
+
+    failCut1 = false;
+    fireEvent.click(retryTraceBtn);
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('64 of 70'));
+    expect(readHeaderSpy).toHaveBeenCalledTimes(1);
+    expect(organizeSpy).toHaveBeenCalledTimes(1);
+    expect(dialog.querySelector('.react-flow')).toBe(flowBefore);
+    expect(valueSpy).not.toHaveBeenCalled();
+
+    // Part B: Refresh failure on cut2 preserves last committed coherent cut1/reader1/nodes1 and total 70.
+    const failingCut2Reader: TraceFieldReader = {
+      value: vi.fn(async () => { throw new Error('must not mix cut2 reader with cut1 nodes'); }),
+      content: vi.fn(),
+      page: vi.fn(async () => { throw new Error('cut 2 refresh failed'); }),
+    };
+    ui.rerender(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-trace-err',
+          runId,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          traceRoot: traceRoot('1'),
+          traceCut: cut1,
+          traceReader: reader1,
+          transport,
+        }}
+        resolvedTrace={{ traceRoot: traceRoot('2'), traceCut: cut2, traceReader: failingCut2Reader }}
+        traceStatus="ready"
+        onClose={vi.fn()}
+        organizeFn={organizeSpy}
+      />,
+    );
+
+    const refreshAlert = await screen.findByRole('alert');
+    expect(refreshAlert.textContent).toContain('cut 2 refresh failed');
+    // Committed partial coverage from cut1 (64 of 70) is preserved without synthesizing total '0'.
+    expect(screen.getByRole('status').textContent).toContain('64 of 70');
+
+    // Selecting a node and opening Output uses coherent cut1 + reader1 (never mixes cut2).
+    const workerViewId = viewId([{ node: 'outer' }], 'node', 'worker');
+    fireEvent.click(dialog.querySelector(`.react-flow__node[data-id="${CSS.escape(workerViewId)}"]`)!);
+    fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+    await waitFor(() => expect(valueSpy).toHaveBeenCalledTimes(1));
+    expect(valueSpy.mock.calls[0]?.[0]).toEqual(cut1);
+
+    // Part C: Held old cut/activation rejection AND held old cut success remain fenced when cut3 supersedes held cut2.
+    fireEvent.click(screen.getByRole('tab', { name: 'Summary' }));
+    const heldResponses: Array<{ reject: (err: Error) => void; resolve: (page: CheckpointPage) => void }> = [];
+    const heldCut2Reader: TraceFieldReader = {
+      value: valueSpy,
+      content: vi.fn(),
+      page: vi.fn(async () => new Promise<CheckpointPage>((resolve, reject) => {
+        heldResponses.push({ resolve, reject });
+      })),
+    };
+    const cut3Total = 72;
+    const cut3Nodes = Array.from({ length: cut3Total }, (_, idx) =>
+      makeTraceNode(`wn-err-cut3-${idx}`, runId, idx + 1, 0, { type: 'settled', outcome: 'completed' }),
+    );
+    const cut3Root: TraceRecord = {
+      ...traceRoot('3'),
+      collections: [{ domain: traceDomain, revision: '3', total: String(cut3Total), loaded: '0', next_offset: '0' }],
+    };
+    const cut3Reader: TraceFieldReader = {
+      value: valueSpy,
+      content: vi.fn(),
+      page: vi.fn(async (reqCut, domain, offset): Promise<CheckpointPage> => {
+        const slice = cut3Nodes.slice(offset, offset + 32);
+        const next = offset + slice.length;
+        return {
+          domain,
+          cursor: reqCut.revision,
+          read_cut: reqCut,
+          total: String(cut3Total),
+          collections: [],
+          next_offset: next < cut3Total ? String(next) : null,
+          items: slice.map((node, i) => ({
+            offset: String(offset + i),
+            identity: node.id,
+            value: node as unknown as Record<string, unknown>,
+            content: [],
+            deferred: false,
+            body_complete: true,
+          })),
+        };
+      }),
+    };
+
+    const cut2b: CheckpointReadCut = { ...cut2, revision: '2b', through: '2b' };
+    const cut2c: CheckpointReadCut = { ...cut2, revision: '2c', through: '2c' };
+    ui.rerender(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-trace-err',
+          runId,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          traceRoot: traceRoot('1'),
+          traceCut: cut1,
+          traceReader: reader1,
+          transport,
+        }}
+        resolvedTrace={{ traceRoot: traceRoot('2b'), traceCut: cut2b, traceReader: heldCut2Reader }}
+        traceStatus="ready"
+        onClose={vi.fn()}
+        organizeFn={organizeSpy}
+      />,
+    );
+    await waitFor(() => expect(heldResponses).toHaveLength(1));
+
+    // Queue a second superseded cut whose held request resolves AFTER cut3 succeeds.
+    ui.rerender(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-trace-err',
+          runId,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          traceRoot: traceRoot('1'),
+          traceCut: cut1,
+          traceReader: reader1,
+          transport,
+        }}
+        resolvedTrace={{ traceRoot: traceRoot('2c'), traceCut: cut2c, traceReader: heldCut2Reader }}
+        traceStatus="ready"
+        onClose={vi.fn()}
+        organizeFn={organizeSpy}
+      />,
+    );
+    await waitFor(() => expect(heldResponses).toHaveLength(2));
+
+    // Supersede both with cut3 (act-2) before either cut2b or cut2c settles.
+    ui.rerender(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-trace-err',
+          runId,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          traceRoot: traceRoot('1'),
+          traceCut: cut1,
+          traceReader: reader1,
+          transport,
+        }}
+        resolvedTrace={{ traceRoot: cut3Root, traceCut: cut3, traceReader: cut3Reader }}
+        traceStatus="ready"
+        onClose={vi.fn()}
+        organizeFn={organizeSpy}
+      />,
+    );
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('64 of 72'));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+
+    // Late rejection from cut2b and late success from cut2c must both be ignored, preserving cut3 state.
+    await act(async () => {
+      heldResponses[0]!.reject(new Error('stale cut2b failure'));
+      heldResponses[1]!.resolve({
+        domain: traceDomain,
+        cursor: cut2c.revision,
+        read_cut: cut2c,
+        total: String(total),
+        collections: [],
+        next_offset: null,
+        items: allNodes.slice(0, 10).map((node, i) => ({
+          offset: String(i),
+          identity: node.id,
+          value: node as unknown as Record<string, unknown>,
+          content: [],
+          deferred: false,
+          body_complete: true,
+        })),
+      });
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('status').textContent).toContain('64 of 72');
+  });
+
+  it('omits stale selectedTraceNode when opening a late node row during held cut2 refresh so cut2 exact lookup resolves updated header and lazy output', async () => {
+    const doc = makeNestedDoc();
+    if (doc.block.nodes.outer.type === 'loop') doc.block.nodes.outer.loop_count = 70;
+    const server = new Server();
+    await server.attached('A');
+    const attTarget = server.client.getSnapshot().views.A!.target!;
+    const convId = attTarget.conversation_id;
+    const runId = baseRunId('408', convId);
+    const cut1: CheckpointReadCut = { conversation_id: convId, revision: '1', through: '1', domain_revisions: {}, collection_cuts: {}, activation_id: 'act-1' };
+    const cut2: CheckpointReadCut = { ...cut1, revision: '2', through: '2', activation_id: 'act-1' };
+    const transport = makeTransport(doc, runId, { workflowId: 'nested_flow' });
+    const header = await transport.readHeader(() => true);
+    const chunk = await transport.readChunk(0, 65536, () => true);
+    const snapHeaderSpy = vi.fn(() => ({ type: 'workflow_run_snapshot_header' as const, header }));
+    server.handlers.set('conversation/workflowRunSnapshotHeader', snapHeaderSpy);
+    server.handlers.set('conversation/workflowRunSnapshotChunk', () => ({ type: 'workflow_run_snapshot_chunk', chunk }));
+
+    const total = 70;
+    const targetIdx = 68;
+    const cut1Nodes: WorkflowTraceNode[] = Array.from({ length: total }, (_, idx) => {
+      const base = makeTraceNode(`wn-ref-${idx}`, runId, idx + 1, 0, { type: 'settled', outcome: 'completed' });
+      if (idx !== targetIdx) return base;
+      return {
+        ...base,
+        state: { type: 'waiting', reason: 'review' },
+        output: null,
+        output_preview: null,
+        output_omitted: true,
+      };
+    });
+    const cut2OutputRef = {
+      type: 'value' as const,
+      field: 'result' as const,
+      domain: 'out-wn-ref-68-cut2',
+      item_offset: 68,
+      path: [],
+      encoded_bytes: String(nodeBodyBytes('out-wn-ref-68-cut2')),
+    };
+    const cut2Nodes: WorkflowTraceNode[] = cut1Nodes.map((node, idx) => (idx === targetIdx
+      ? {
+        ...node,
+        state: { type: 'settled', outcome: 'completed' },
+        output: cut2OutputRef,
+        output_preview: null,
+        output_omitted: false,
+      }
+      : node));
+
+    const traceDomain = 'trace.records.408.workflow.nodes';
+    const detailDomain = 'trace.records.408.detail';
+    const makeRoot = (rev: string): TraceRecord => ({
+      id: 'trace:408',
+      position: '408',
+      location: { attempt_id: 'a408', step_id: 's1' },
+      kind: 'workflow',
+      state: rev === '1' ? 'running' : 'completed',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: null, duration_ms: '50' },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: traceDomain, revision: rev, total: String(total), loaded: '0', next_offset: '0' }],
+      native_id: null,
+      originating_tool_call_id: null,
+      has_detail: true,
+      truncated: false,
+    });
+    const traceRoot1 = makeRoot('1');
+    const traceRoot2 = makeRoot('2');
+
+    let refreshHeld = false;
+    let releaseCut2Refresh = null as (() => void) | null;
+    const cut2PageOffsets: number[] = [];
+    const exactLookupCalls: Array<{ cut: CheckpointReadCut; visitKey: string }> = [];
+    const valueSpy = vi.fn(async (reqCut: CheckpointReadCut, source: Parameters<TraceFieldReader['value']>[1]): Promise<CheckpointValueChunk> => {
+      const bytes = Buffer.from(JSON.stringify(nodeBody(source.domain)), 'utf8');
+      return {
+        representation: 'canonical_json_v1',
+        cut: reqCut,
+        domain: source.domain,
+        item_offset: source.item_offset,
+        path: [...source.path],
+        offset: 0,
+        bytes_base64: bytes.toString('base64'),
+        next_offset: null,
+        readable_end: bytes.length,
+      };
+    });
+
+    const reader: TraceFieldReader = {
+      value: valueSpy,
+      content: vi.fn(),
+      workflowNode: vi.fn(async (reqCut, instance) => {
+        exactLookupCalls.push({ cut: reqCut, visitKey: visitIdentityKey(instance) });
+        if (reqCut.revision === '2' && visitIdentityKey(instance) === visitIdentityKey(cut2Nodes[targetIdx]!.instance)) {
+          return cut2Nodes[targetIdx]!;
+        }
+        return null;
+      }),
+      page: vi.fn(async (reqCut, domain, offset): Promise<CheckpointPage> => {
+        if (domain === detailDomain) {
+          const root = reqCut.revision === '2' ? traceRoot2 : traceRoot1;
+          return {
+            domain,
+            cursor: reqCut.revision,
+            read_cut: reqCut,
+            total: '1',
+            collections: [],
+            next_offset: null,
+            items: [{
+              offset: '0',
+              identity: root.id,
+              value: {
+                id: root.id,
+                kind: 'workflow',
+                record: root,
+                content: { type: 'workflow', run_id: runId, workflow_id: 'nested_flow' },
+              } as unknown as Record<string, unknown>,
+              content: [],
+              deferred: true,
+              body_complete: false,
+            }],
+          };
+        }
+        const sourceNodes = reqCut.revision === '2' ? cut2Nodes : cut1Nodes;
+        const slice = sourceNodes.slice(offset, offset + 32);
+        const next = offset + slice.length;
+        const page: CheckpointPage = {
+          domain,
+          cursor: reqCut.revision,
+          read_cut: reqCut,
+          total: String(total),
+          collections: [],
+          next_offset: next < total ? String(next) : null,
+          items: slice.map((node, i) => ({
+            offset: String(offset + i),
+            identity: node.id,
+            value: node as unknown as Record<string, unknown>,
+            content: [],
+            deferred: false,
+            body_complete: true,
+          })),
+        };
+        if (reqCut.revision === '2' && offset === 0 && !refreshHeld) {
+          // First cut2 offset=0 read comes from Trajectory useWorkflowNodes refresh; hold it so old cut1 rows stay visible.
+          refreshHeld = true;
+          return new Promise(resolve => {
+            releaseCut2Refresh = () => resolve(page);
+          });
+        }
+        if (reqCut.revision === '2') cut2PageOffsets.push(offset);
+        return page;
+      }),
+    };
+
+    const cache1: TraceCache = {
+      epoch: 1,
+      page: { records: [traceRoot1], next_cursor: null, read_cut: cut1 },
+      readCuts: { [traceRoot1.id]: cut1 },
+      fields: reader,
+      details: {},
+    };
+    const cache2: TraceCache = {
+      epoch: 1,
+      page: { records: [traceRoot2], next_cursor: null, read_cut: cut2 },
+      readCuts: { [traceRoot2.id]: cut2 },
+      fields: reader,
+      details: {},
+    };
+
+    try {
+      const ui = render(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          attachmentTarget={attTarget}
+          ownerCurrent
+        >
+          <Trajectory cache={cache1} loadEarlier={vi.fn()} onSelect={vi.fn()} onLoadDetail={vi.fn()} />
+        </ConversationRunCanvasHost>,
+      );
+
+      // Expand workflow row and wait for all 70 cut1 node rows to populate.
+      fireEvent.click(ui.container.querySelector('[data-trace-id="trace:408"] button[aria-expanded]')!);
+      await waitFor(() => expect(ui.container.querySelector('[data-workflow-node="wn-ref-68"] button')).toBeTruthy());
+
+      // Advance readCut to cut2 and hold Trajectory useWorkflowNodes refresh while old cut1 rows stay rendered.
+      ui.rerender(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          attachmentTarget={attTarget}
+          ownerCurrent
+        >
+          <Trajectory cache={cache2} loadEarlier={vi.fn()} onSelect={vi.fn()} onLoadDetail={vi.fn()} />
+        </ConversationRunCanvasHost>,
+      );
+      await waitFor(() => expect(releaseCut2Refresh).toBeTypeOf('function'));
+
+      // Open graph directly from late old node row #69 while useWorkflowNodes refresh is still held.
+      const lateRowButton = ui.container.querySelector<HTMLElement>('[data-workflow-node="wn-ref-68"] button')!;
+      fireEvent.click(lateRowButton);
+
+      const dialog = await screen.findByRole('dialog');
+      // Canvas loads only bounded initial cut2 batch (0, 32) and performs exact workflowNode lookup for visit 69 at cut2.
+      await waitFor(() => expect(exactLookupCalls).toHaveLength(1));
+      expect(cut2PageOffsets).toEqual([0, 32]);
+      const lateVisitKey = visitIdentityKey(cut2Nodes[targetIdx]!.instance);
+      expect(exactLookupCalls[0]).toEqual({ cut: cut2, visitKey: lateVisitKey });
+
+      // Old cut1 unsettled/omitted header was not retagged at cut2; selected visit stays #69 with completed cut2 header.
+      const selectedOption = dialog.querySelector(`[data-run-visit-key="${CSS.escape(lateVisitKey)}"]`);
+      expect(selectedOption?.getAttribute('aria-selected')).toBe('true');
+      expect(within(dialog).queryByText(/Waiting for/i)).toBeNull();
+      expect(valueSpy).not.toHaveBeenCalled();
+
+      // Opening Output reads cut2 + new reference lazily and renders cut2 value (never cut1 output_omitted).
+      fireEvent.click(within(dialog).getByRole('tab', { name: 'Output' }));
+      await waitFor(() => expect(valueSpy).toHaveBeenCalledTimes(1));
+      expect(valueSpy.mock.calls[0]?.[0]).toEqual(cut2);
+      expect(valueSpy.mock.calls[0]?.[1]).toEqual(cut2OutputRef);
+      await waitFor(() => expect(dialog.textContent).toContain('out-wn-ref-68-cut2'));
+      expect(snapHeaderSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      const finishRefresh = releaseCut2Refresh as (() => void) | null;
+      finishRefresh?.();
+      server.client.disconnect();
+    }
+  });
+
+  it('keeps keyboard focus inside the modal when focused Retry trace button vanishes on retry', async () => {
+    const doc = makeNestedDoc();
+    const runId = baseRunId('409', 'conv-trace-focus');
+    const cut: CheckpointReadCut = { conversation_id: 'conv-trace-focus', revision: '1', through: '1', domain_revisions: {}, collection_cuts: {} };
+    const transport = makeTransport(doc, runId, { hasSourcePresentation: false });
+    const traceDomain = 'trace.records.409.workflow.nodes';
+    const traceRoot: TraceRecord = {
+      id: 'trace:409',
+      position: '409',
+      location: { attempt_id: 'a409', step_id: 's1' },
+      kind: 'workflow',
+      state: 'completed',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '50' },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: traceDomain, revision: '1', total: '2', loaded: '0', next_offset: '0' }],
+      native_id: JSON.stringify(runId),
+      originating_tool_call_id: null,
+      has_detail: false,
+      truncated: false,
+    };
+    const nodes = [
+      makeTraceNode('wn-focus-0', runId, 1, 0, { type: 'settled', outcome: 'completed' }),
+      makeTraceNode('wn-focus-1', runId, 2, 0, { type: 'settled', outcome: 'completed' }),
+    ];
+
+    let attempt = 0;
+    let releaseRetry!: (page: CheckpointPage) => void;
+    const reader: TraceFieldReader = {
+      value: vi.fn(),
+      content: vi.fn(),
+      page: vi.fn(async (reqCut, domain) => {
+        attempt += 1;
+        if (attempt === 1) throw new Error('initial trace failure');
+        return new Promise<CheckpointPage>(resolve => {
+          releaseRetry = resolve;
+          void reqCut;
+          void domain;
+        });
+      }),
+    };
+
+    render(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-trace-focus',
+          runId,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          traceRoot,
+          traceCut: cut,
+          traceReader: reader,
+          transport,
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const dialog = await screen.findByRole('dialog');
+    const retryTraceBtn = await screen.findByRole('button', { name: 'Retry trace' });
+    retryTraceBtn.focus();
+    expect(document.activeElement).toBe(retryTraceBtn);
+
+    fireEvent.click(retryTraceBtn);
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Retry trace' })).toBeNull());
+    // While retrying (loading state after Retry trace unmounts), focus must remain inside the modal, not body.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+
+    await act(async () => {
+      releaseRetry({
+        domain: traceDomain,
+        cursor: cut.revision,
+        read_cut: cut,
+        total: '2',
+        collections: [],
+        next_offset: null,
+        items: nodes.map((node, i) => ({
+          offset: String(i),
+          identity: node.id,
+          value: node as unknown as Record<string, unknown>,
+          content: [],
+          deferred: false,
+          body_complete: true,
+        })),
+      });
+    });
+    expect(document.activeElement).not.toBe(document.body);
+    expect(dialog.contains(document.activeElement)).toBe(true);
+  });
 });

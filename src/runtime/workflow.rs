@@ -146,6 +146,16 @@ pub struct WorkflowBlockInstance {
     pub invocations: Vec<u32>,
 }
 
+impl WorkflowBlockInstance {
+    /// True when block nesting matches the compiler/executor contract: root plus up to
+    /// `MAX_BLOCK_DEPTH` two-segment nested bodies (`invocations.len() == blocks.len() / 2 + 1`).
+    pub(crate) fn has_valid_nesting(&self) -> bool {
+        self.definition.blocks.len().is_multiple_of(2)
+            && self.definition.blocks.len() <= 2 * MAX_BLOCK_DEPTH
+            && self.invocations.len() == self.definition.blocks.len() / 2 + 1
+    }
+}
+
 /// One concrete node visit in an owning block instance.
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, schemars::JsonSchema,

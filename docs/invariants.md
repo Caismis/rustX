@@ -8439,8 +8439,9 @@ read repair never loads a cold runtime or repeats semantic work. See the
   `WorkflowStarted`, content-addressed `(workflow_id, program_digest, source_revision)`
   definition chunks (<= 65,536 bytes per chunk, 16 MiB document bound), and
   `workflow_run_snapshots` (`ON DELETE CASCADE` on `events(sequence)`) atomically;
-  any write failure rolls back all four tables cleanly, and optional observability
-  failures never alter execution outcomes.
+  ordinary `append_event` refuses `RuntimeEvent::WorkflowStarted` so starts cannot
+  bypass snapshot capture, any write failure rolls back all four tables cleanly, and
+  optional observability failures never alter execution outcomes.
 - **Cut- and conversation-authorized reads.** Live (`conversation/workflowRunSnapshot*`)
   and cold (`session/workflowRunSnapshot*`) snapshot reads enforce
   `run_id.conversation_id` equality, `ObservationReadCut` (`committed_sequence <=

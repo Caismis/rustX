@@ -1958,3 +1958,398 @@ async fn issue552_workflow_trace_locator_routes_exact_reads_without_execution_or
     })
     .await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue552_cold_workflow_trace_node_retains_host_operation_and_association_across_waiter_drop_and_eof()
+ {
+    bounded(async {
+        use tokio::io::AsyncWriteExt as _;
+
+        struct ReleaseGateOnDrop(Arc<crate::runtime::conversation_runtime::Gate>);
+        impl Drop for ReleaseGateOnDrop {
+            fn drop(&mut self) {
+                self.0.release();
+            }
+        }
+
+        for use_eof in [false, true] {
+            let mut f = Fixture::with_session_count(None, 1).await;
+            f.install_scheduled_workflow("Cold trace node ownership");
+            let clock = Clock::new();
+            f.manager.schedule_clock = clock.clone();
+
+            let conv0 = f.id(0).await;
+            let resident = f.load(0).await.unwrap().unwrap();
+            let runtime = resident.inspect_runtime().unwrap();
+            let created = schedule_create_workflow(&f, "cold-node-ownership").await;
+            clock.add(60);
+            let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+                start,
+                ..
+            }) = f
+                .manager
+                .schedule_operation(
+                    &f.sessions[0].id,
+                    &f.sessions[0].active_node,
+                    ScheduleOperation::Admit {
+                        id: created.id,
+                        expected_revision: created.revision,
+                    },
+                )
+                .await
+                .unwrap()
+            else {
+                panic!("expected WorkflowAdmitted");
+            };
+            let _ = wait_scheduled_settled(&f, &runtime, &start.id).await;
+            drop(runtime);
+            drop(resident);
+            f.manager.unload(&conv0).await.unwrap();
+
+            let connection = Arc::new(AppServerConnection::new(f.host.clone()));
+            initialize(&connection).await;
+            let MethodResult::SessionTraceHistory {
+                page: hist_page, ..
+            } = call(
+                &connection,
+                31_000,
+                Method::SessionTraceHistory {
+                    session_id: f.sessions[0].id.clone(),
+                    node_id: None,
+                    before: None,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!("cold trace history");
+            };
+            let cut = hist_page.read_cut.unwrap();
+            let domain = hist_page
+                .records
+                .iter()
+                .find(|record| record.kind == crate::observation::trace::TraceKind::Workflow)
+                .unwrap()
+                .collections
+                .iter()
+                .find(|frontier| frontier.domain.ends_with(".workflow.nodes"))
+                .unwrap()
+                .domain
+                .clone();
+            let MethodResult::CheckpointPage { page } = call(
+                &connection,
+                31_001,
+                Method::SessionTracePage {
+                    session_id: f.sessions[0].id.clone(),
+                    node_id: None,
+                    cut: cut.clone(),
+                    domain,
+                    offset: 0,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!("cold workflow node page");
+            };
+            let first_node: crate::durable::observation::WorkflowTraceNode =
+                crate::observation::structural_json::decode(page.items[0].value.clone().unwrap())
+                    .unwrap();
+
+            let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+            let _release_gate = ReleaseGateOnDrop(gate.clone());
+            f.manager
+                .session_controller()
+                .install_trace_observation_read_gate(gate.clone());
+            gate.arm();
+
+            let request = Request {
+                jsonrpc: JsonRpcVersion::V2,
+                id: RequestId::Integer(31_002),
+                call: Method::SessionWorkflowTraceNode {
+                    session_id: f.sessions[0].id.clone(),
+                    node_id: None,
+                    cut,
+                    instance: first_node.instance,
+                },
+            };
+
+            let serving = if use_eof {
+                let (mut input, reader) = tokio::io::duplex(65536);
+                let (writer, _output) = tokio::io::duplex(65536);
+                let serving = tokio::spawn(crate::app_server::transport::stdio::serve(
+                    connection.clone(),
+                    reader,
+                    writer,
+                    tokio_util::sync::CancellationToken::new(),
+                ));
+                input
+                    .write_all(format!("{}\n", serde_json::to_string(&request).unwrap()).as_bytes())
+                    .await
+                    .unwrap();
+                let entered_gate = gate.clone();
+                tokio::task::spawn_blocking(move || entered_gate.wait_entered())
+                    .await
+                    .unwrap();
+                drop(input);
+                Some(serving)
+            } else {
+                let worker = connection.clone();
+                let waiter = tokio::spawn(async move { worker.handle_request(request).await });
+                let entered_gate = gate.clone();
+                tokio::task::spawn_blocking(move || entered_gate.wait_entered())
+                    .await
+                    .unwrap();
+                waiter.abort();
+                assert!(waiter.await.unwrap_err().is_cancelled());
+                None
+            };
+
+            assert_eq!(*f.host.request_operations().borrow(), 1);
+            assert!(
+                f.host
+                    .forced_resources(false)
+                    .contains("pending_protocol_operations=1")
+            );
+            let duplicate = connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(31_002),
+                    call: Method::ServerInfo {},
+                })
+                .await;
+            assert!(matches!(
+                duplicate,
+                Response::Failure(Failure {
+                    error: RpcError {
+                        data: Some(ErrorData::DuplicateRequestId),
+                        ..
+                    },
+                    ..
+                })
+            ));
+
+            f.host.begin_drain();
+            let host = f.host.clone();
+            let mut drain = Box::pin(host.drain());
+            assert!(futures_util::poll!(&mut drain).is_pending());
+            assert!(f.host.finish_drain().is_err());
+
+            gate.release();
+            assert!(drain.await.is_empty());
+            if let Some(serving) = serving {
+                serving.await.unwrap().unwrap();
+            }
+            assert_eq!(*f.host.request_operations().borrow(), 0);
+            assert!(
+                f.host
+                    .forced_resources(false)
+                    .contains("pending_protocol_operations=0")
+            );
+            let after_release = connection
+                .handle_request(Request {
+                    jsonrpc: JsonRpcVersion::V2,
+                    id: RequestId::Integer(31_002),
+                    call: Method::ServerInfo {},
+                })
+                .await;
+            let expected_error = if use_eof {
+                ErrorData::StaleAttachment
+            } else {
+                ErrorData::ServerDraining
+            };
+            assert!(matches!(
+                after_release,
+                Response::Failure(Failure {
+                    error: RpcError {
+                        data: Some(data),
+                        ..
+                    },
+                    ..
+                }) if data == expected_error
+            ));
+            connection.close();
+            f.host.finish_drain().unwrap();
+            f.close().await;
+        }
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn issue552_maximum_depth_eight_visit_matches_between_paged_and_exact_lookup_at_same_cut() {
+    bounded(async {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../web-console/test/fixtures/workflow-run-bounds.json"
+        ))
+        .unwrap();
+        let mut f = Fixture::with_session_count(None, 1).await;
+        f.install_scheduled_workflow_definition(&fixtures["maximum"]);
+        let clock = Clock::new();
+        f.manager.schedule_clock = clock.clone();
+
+        let conv0 = f.id(0).await;
+        let resident = f.load(0).await.unwrap().unwrap();
+        let runtime = resident.inspect_runtime().unwrap();
+        let created = schedule_create_workflow(&f, "max-depth-eight").await;
+        clock.add(60);
+        let ScheduleOperationResult::Admission(ScheduleAdmission::WorkflowAdmitted {
+            start, ..
+        }) = f
+            .manager
+            .schedule_operation(
+                &f.sessions[0].id,
+                &f.sessions[0].active_node,
+                ScheduleOperation::Admit {
+                    id: created.id,
+                    expected_revision: created.revision,
+                },
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("expected WorkflowAdmitted");
+        };
+        let settled = wait_scheduled_settled(&f, &runtime, &start.id).await;
+        assert!(matches!(
+            settled.start.state,
+            ScheduledWorkflowState::Settled {
+                outcome: ScheduledWorkflowOutcome::Completed,
+                ..
+            }
+        ));
+
+        let connection = AppServerConnection::new(f.host.clone());
+        initialize(&connection).await;
+        let target = attach(&connection, &f, 0).await;
+        let MethodResult::TraceWorkflowLocation {
+            location: Some(location),
+        } = call(
+            &connection,
+            32_000,
+            Method::TraceLocateWorkflow {
+                target: target.clone(),
+                run_id: start.run_id.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("live trace locate");
+        };
+        let live_cut = location.page.read_cut.unwrap();
+        let domain = location
+            .page
+            .records
+            .iter()
+            .find(|record| record.id == location.record_id)
+            .unwrap()
+            .collections
+            .iter()
+            .find(|frontier| frontier.domain.ends_with(".workflow.nodes"))
+            .unwrap()
+            .domain
+            .clone();
+
+        let mut offset = 0_u64;
+        let mut deepest = None;
+        let mut next_id = 32_001_i64;
+        loop {
+            let MethodResult::CheckpointPage { page } = call(
+                &connection,
+                next_id,
+                Method::ConversationCheckpointPage {
+                    target: target.clone(),
+                    agent_id: None,
+                    cut: live_cut.clone(),
+                    domain: domain.clone(),
+                    offset,
+                    limit: 32,
+                },
+            )
+            .await
+            else {
+                panic!("paged workflow nodes");
+            };
+            next_id += 1;
+            for item in page.items {
+                let node: crate::durable::observation::WorkflowTraceNode =
+                    crate::observation::structural_json::decode(item.value.unwrap()).unwrap();
+                if node.instance.node == "start_d8" {
+                    deepest = Some(node);
+                }
+            }
+            match page.next_offset {
+                Some(next) => offset = next,
+                None => break,
+            }
+        }
+        let deepest = deepest.expect("start_d8 present in maximum-depth run");
+        assert_eq!(deepest.instance.block.definition.blocks.len(), 16);
+        assert_eq!(deepest.instance.block.invocations.len(), 9);
+
+        let MethodResult::WorkflowTraceNode {
+            node: Some(live_exact),
+        } = call(
+            &connection,
+            next_id,
+            Method::ConversationWorkflowTraceNode {
+                target: target.clone(),
+                agent_id: None,
+                cut: live_cut,
+                instance: deepest.instance.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("live ConversationWorkflowTraceNode for start_d8");
+        };
+        next_id += 1;
+        assert_eq!(live_exact, deepest);
+
+        drop(runtime);
+        drop(resident);
+        call(&connection, next_id, Method::SessionDetach { target }).await;
+        next_id += 1;
+        f.manager.unload(&conv0).await.unwrap();
+
+        let MethodResult::SessionTraceHistory {
+            page: cold_page, ..
+        } = call(
+            &connection,
+            next_id,
+            Method::SessionTraceHistory {
+                session_id: f.sessions[0].id.clone(),
+                node_id: None,
+                before: None,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("cold trace history");
+        };
+        next_id += 1;
+        let cold_cut = cold_page.read_cut.unwrap();
+        let MethodResult::WorkflowTraceNode {
+            node: Some(cold_exact),
+        } = call(
+            &connection,
+            next_id,
+            Method::SessionWorkflowTraceNode {
+                session_id: f.sessions[0].id.clone(),
+                node_id: None,
+                cut: cold_cut,
+                instance: deepest.instance.clone(),
+            },
+        )
+        .await
+        else {
+            panic!("cold SessionWorkflowTraceNode for start_d8");
+        };
+        assert_eq!(cold_exact, deepest);
+
+        connection.close();
+        f.close().await;
+    })
+    .await;
+}

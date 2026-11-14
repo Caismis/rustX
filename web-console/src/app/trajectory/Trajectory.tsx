@@ -165,23 +165,38 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
     if (item) open(item, facet);
   };
   const runCanvas = useWorkflowRunCanvas();
+  const completeWorkflowNodes = useCallback((loaded: import('./workflow').WorkflowNodes | undefined, rootId: string) => {
+    const cacheCut = cache.readCuts?.[rootId];
+    return loaded
+      && !loaded.loading
+      && !loaded.error
+      && (!cacheCut || JSON.stringify(loaded.cut) === JSON.stringify(cacheCut))
+      ? loaded
+      : undefined;
+  }, [cache.readCuts]);
   const openNodeCanvas = useCallback((node: import('./workflow').WorkflowTraceNode, source: import('./workflow').WorkflowNodes, trigger: HTMLElement | null) => {
+    const cacheCut = cache.readCuts?.[source.root.id];
+    const completeSource = completeWorkflowNodes(source, source.root.id);
+    const traceRoot = completeSource?.root ?? records.find(record => record.id === source.root.id) ?? source.root;
     runCanvas?.openRunCanvas({
       runId: node.instance.block.run,
       workflowId: node.instance.block.definition.workflow_id,
       conversationId: node.instance.block.run.conversation_id,
       selectedVisit: node.instance,
-      selectedTraceNode: node,
-      traceRoot: source.root,
-      traceNodes: source.nodes,
-      traceReader: source.reader,
-      traceCut: source.cut,
+      // Omit the prior-cut header when adopting a newer cut so exact lookup fetches fresh state/refs.
+      selectedTraceNode: completeSource ? node : undefined,
+      traceRoot,
+      traceNodes: completeSource?.nodes,
+      traceReader: completeSource?.reader ?? cache.fields ?? source.reader,
+      traceCut: completeSource?.cut ?? cacheCut ?? source.cut,
       sourceMode: 'history',
     }, trigger);
-  }, [runCanvas]);
+  }, [runCanvas, records, cache.readCuts, cache.fields, completeWorkflowNodes]);
   const openRootCanvas = useCallback((root: import('../../../../protocol/app-server/v78').TraceRecord, trigger: HTMLElement | null) => {
     const loaded = workflowNodes.get(root.id);
-    const cut = loaded?.cut ?? cache.readCuts?.[root.id];
+    const cacheCut = cache.readCuts?.[root.id];
+    const completeLoaded = completeWorkflowNodes(loaded, root.id);
+    const cut = completeLoaded?.cut ?? cacheCut ?? loaded?.cut;
     const detailPage = cache.details[root.id]?.page;
     const detailHead = cut && detailPage && JSON.stringify(detailPage.read_cut) === JSON.stringify(cut)
       ? traceInspectionHead(detailPage, root.id)
@@ -191,12 +206,12 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
       ...(workflow ? { runId: workflow.run_id, workflowId: workflow.workflow_id } : {}),
       conversationId: workflow?.run_id.conversation_id ?? cut?.conversation_id ?? '',
       traceRoot: root,
-      traceNodes: loaded?.nodes,
-      traceReader: loaded?.reader ?? cache.fields,
+      traceNodes: completeLoaded?.nodes,
+      traceReader: completeLoaded?.reader ?? cache.fields,
       traceCut: cut,
       sourceMode: 'history',
     }, trigger);
-  }, [runCanvas, workflowNodes, cache.details, cache.fields, cache.readCuts]);
+  }, [runCanvas, workflowNodes, cache.details, cache.fields, cache.readCuts, completeWorkflowNodes]);
   const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, workflows: workflowMap, openedWorkflows,
     openWorkflowNodeCanvas: runCanvas ? openNodeCanvas : undefined,
     openWorkflowRootCanvas: runCanvas ? openRootCanvas : undefined,

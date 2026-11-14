@@ -154,6 +154,7 @@ export function aggregateRunOverlay(options: {
   readonly pendingInteractions?: readonly RuntimeClientInteractionHeader[];
   readonly sceneNodes?: readonly SceneNode[];
   readonly selectedVisit?: WorkflowNodeInstance | null;
+  readonly selectedVisitKey?: string | null;
   readonly maxVisitsPerNode?: number;
   readonly traceIncomplete?: boolean;
 }): RunOverlaySummary {
@@ -167,7 +168,9 @@ export function aggregateRunOverlay(options: {
   const reviewKeys = run && !runSettled
     ? pendingReviewVisitKeys(options.pendingInteractions, targetRunId)
     : new Set<string>();
-  const selectedKey = options.selectedVisit ? visitIdentityKey(options.selectedVisit) : undefined;
+  const selectedKey = options.selectedVisitKey !== undefined
+    ? (options.selectedVisitKey ?? undefined)
+    : (options.selectedVisit ? visitIdentityKey(options.selectedVisit) : undefined);
   let incompleteIdentity = false;
 
   const liveByKey = new Map<string, WorkflowInstanceView>();

@@ -31,9 +31,10 @@ pub trait JournalStore: Send + Sync + 'static {
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
     /// Appends one standalone execution fact after validating every durable
     /// reference and lifecycle terminal rule. Canonical-message,
-    /// compaction-completion, request-start, and background-publication facts
-    /// must use their specialized combined transition; this method rejects
-    /// them so a reference event cannot be split from its durable authority.
+    /// compaction-completion, request-start, workflow-start, and
+    /// background-publication facts must use their specialized combined
+    /// transition; this method rejects them so a reference event cannot be
+    /// split from its durable authority.
     fn append_event(
         &self,
         event: RuntimeEventEnvelope,

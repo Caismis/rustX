@@ -73,14 +73,13 @@ fn validate_instance(
     let run = validate_run_id(conversation_id, &instance.block.run)?;
     if instance.node.is_empty()
         || instance.node.len() > INSTANCE_JSON_MAX
-        || instance.block.definition.blocks.len() > crate::runtime::workflow::MAX_BLOCK_DEPTH * 2
+        || !instance.block.has_valid_nesting()
         || instance
             .block
             .definition
             .blocks
             .iter()
             .any(|part| part.is_empty() || part.len() > INSTANCE_JSON_MAX)
-        || instance.block.invocations.len() > crate::runtime::workflow::MAX_BLOCK_DEPTH
     {
         return Err(ConversationStoreError::InvalidReference(
             "Workflow node instance exceeds admitted bounds".into(),
@@ -396,6 +395,25 @@ mod tests {
     use crate::events::RuntimeEvent as E;
     use crate::runtime::workflow::{WorkflowExecutionOutcome as Outcome, WorkflowId};
 
+    fn append_workflow_event(
+        store: &crate::durable::SqliteConversationStore,
+        event_id: &str,
+        event: crate::events::RuntimeEvent,
+    ) -> u64 {
+        let envelope = envelope(store.conversation_id(), event_id, None, event);
+        match &envelope.event {
+            crate::events::RuntimeEvent::WorkflowStarted { workflow_id, .. } => {
+                let snapshot =
+                    crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone());
+                store
+                    .publish_workflow_start(envelope, &snapshot)
+                    .unwrap()
+                    .sequence
+            }
+            _ => store.append_event(envelope).unwrap().sequence,
+        }
+    }
+
     #[test]
     fn workflow_nodes_keep_real_visits_original_cuts_and_bounded_bodies() {
         let store = store();
@@ -407,15 +425,7 @@ mod tests {
         let mut ordinal = 0;
         let mut append = |event| {
             ordinal += 1;
-            store
-                .append_event(envelope(
-                    store.conversation_id(),
-                    &format!("wf-trace-{ordinal}"),
-                    None,
-                    event,
-                ))
-                .unwrap()
-                .sequence
+            append_workflow_event(&store, &format!("wf-trace-{ordinal}"), event)
         };
         let start = append(E::WorkflowStarted {
             tool_call_id: None,
@@ -519,15 +529,7 @@ mod tests {
         let mut ordinal = 0;
         let mut append = |event| {
             ordinal += 1;
-            owner
-                .append_event(envelope(
-                    &conversation,
-                    &format!("reopen-node-{ordinal}"),
-                    None,
-                    event,
-                ))
-                .unwrap()
-                .sequence
+            append_workflow_event(&owner, &format!("reopen-node-{ordinal}"), event)
         };
         let start = append(E::WorkflowStarted {
             tool_call_id: None,
@@ -611,10 +613,7 @@ mod tests {
                 }
                 _ => format!("agent-trace-{ordinal}"),
             };
-            owner
-                .append_event(envelope(&conversation, &id, None, event))
-                .unwrap()
-                .sequence
+            append_workflow_event(&owner, &id, event)
         };
         let start = append(E::WorkflowStarted {
             tool_call_id: None,
@@ -777,17 +776,21 @@ mod workflow_tests {
             invocation: 1,
         };
         let append = |run: &WorkflowRunId, ordinal| {
+            let workflow_id = WorkflowId::parse("located").unwrap();
             store
-                .append_event(envelope(
-                    &conversation,
-                    &format!("locate-run-{ordinal}"),
-                    None,
-                    RuntimeEvent::WorkflowStarted {
-                        tool_call_id: None,
-                        workflow_id: WorkflowId::parse("located").unwrap(),
-                        run_id: run.clone(),
-                    },
-                ))
+                .publish_workflow_start(
+                    envelope(
+                        &conversation,
+                        &format!("locate-run-{ordinal}"),
+                        None,
+                        RuntimeEvent::WorkflowStarted {
+                            tool_call_id: None,
+                            workflow_id: workflow_id.clone(),
+                            run_id: run.clone(),
+                        },
+                    ),
+                    &crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id),
+                )
                 .unwrap()
                 .sequence
         };
@@ -876,17 +879,21 @@ mod workflow_tests {
             attempt_id: AttemptId::new("\"".repeat(256)),
         };
         run.invocation = 9;
+        let workflow_id = WorkflowId::parse("start_only_flow").unwrap();
         let start = owner
-            .append_event(envelope(
-                &conversation,
-                "start-only-1",
-                None,
-                RuntimeEvent::WorkflowStarted {
-                    tool_call_id: None,
-                    workflow_id: WorkflowId::parse("start_only_flow").unwrap(),
-                    run_id: run.clone(),
-                },
-            ))
+            .publish_workflow_start(
+                envelope(
+                    &conversation,
+                    "start-only-1",
+                    None,
+                    RuntimeEvent::WorkflowStarted {
+                        tool_call_id: None,
+                        workflow_id: workflow_id.clone(),
+                        run_id: run.clone(),
+                    },
+                ),
+                &crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id),
+            )
             .unwrap()
             .sequence;
         let cut = owner.observation_read_cut().unwrap();
@@ -920,15 +927,23 @@ mod workflow_tests {
         let mut ordinal = 0;
         let mut append = |event| {
             ordinal += 1;
-            owner
-                .append_event(envelope(
-                    &conversation,
-                    &format!("exact-visit-{ordinal}"),
-                    None,
-                    event,
-                ))
-                .unwrap()
-                .sequence
+            let envelope = envelope(
+                &conversation,
+                &format!("exact-visit-{ordinal}"),
+                None,
+                event,
+            );
+            match &envelope.event {
+                RuntimeEvent::WorkflowStarted { workflow_id, .. } => {
+                    let snapshot =
+                        crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone());
+                    owner
+                        .publish_workflow_start(envelope, &snapshot)
+                        .unwrap()
+                        .sequence
+                }
+                _ => owner.append_event(envelope).unwrap().sequence,
+            }
         };
         append(RuntimeEvent::WorkflowStarted {
             tool_call_id: None,
@@ -999,6 +1014,144 @@ mod workflow_tests {
         too_long.node = "n".repeat(super::INSTANCE_JSON_MAX + 1);
         assert!(matches!(
             owner.observation_workflow_node(&settled_cut, &too_long),
+            Err(crate::durable::ConversationStoreError::InvalidReference(_))
+        ));
+    }
+
+    #[test]
+    fn admitted_depth_eight_visit_matches_between_paged_and_exact_lookup_at_same_cut() {
+        use crate::durable::ConversationStore;
+        use crate::durable::sqlite::test_support::store;
+        use crate::events::RuntimeEvent as E;
+        use crate::runtime::workflow::{
+            MAX_BLOCK_DEPTH, WorkflowBlockInstance, WorkflowDefinitionPath,
+            WorkflowExecutionOutcome as Outcome, WorkflowNodeInstance, WorkflowProgram,
+        };
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../web-console/test/fixtures/workflow-run-bounds.json"
+        ))
+        .unwrap();
+        let document: crate::workflow_file::WorkflowFileDocument =
+            serde_json::from_value(fixtures["maximum"].clone()).unwrap();
+        let workflow_id = WorkflowId::parse("maximum").unwrap();
+        let program =
+            WorkflowProgram::compile_document(workflow_id.clone(), "sha256:max-depth", document)
+                .unwrap();
+
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let mut run = crate::runtime::workflow::test_instance("maximum", "start_d8")
+            .block
+            .run;
+        run.conversation_id = store.conversation_id().clone();
+        let start = store
+            .publish_workflow_start(
+                envelope(
+                    store.conversation_id(),
+                    "max-depth-start",
+                    None,
+                    E::WorkflowStarted {
+                        tool_call_id: None,
+                        workflow_id: workflow_id.clone(),
+                        run_id: run.clone(),
+                    },
+                ),
+                program.run_snapshot(),
+            )
+            .unwrap()
+            .sequence;
+
+        let depth_eight_blocks: Vec<String> = (0..MAX_BLOCK_DEPTH)
+            .flat_map(|depth| [format!("loop_d{depth}"), "body".to_owned()])
+            .collect();
+        assert_eq!(depth_eight_blocks.len(), 16);
+        let depth_eight_invocations: Vec<u32> = std::iter::once(0)
+            .chain(std::iter::repeat_n(1, MAX_BLOCK_DEPTH))
+            .collect();
+        assert_eq!(depth_eight_invocations.len(), 9);
+        let deepest = WorkflowNodeInstance {
+            block: WorkflowBlockInstance {
+                run,
+                definition: WorkflowDefinitionPath {
+                    workflow_id,
+                    blocks: depth_eight_blocks,
+                },
+                invocations: depth_eight_invocations,
+            },
+            node: "start_d8".into(),
+            visit: 0,
+        };
+        store
+            .append_event(envelope(
+                store.conversation_id(),
+                "max-depth-node-start",
+                None,
+                E::WorkflowNodeStarted {
+                    instance: deepest.clone(),
+                },
+            ))
+            .unwrap();
+        store
+            .append_event(envelope(
+                store.conversation_id(),
+                "max-depth-node-settled",
+                None,
+                E::WorkflowNodeSettled {
+                    instance: deepest.clone(),
+                    outcome: Outcome::Completed,
+                },
+            ))
+            .unwrap();
+
+        let cut = store.observation_read_cut().unwrap();
+        let paged = store
+            .observation_workflow_nodes(&cut, start, 0, 32)
+            .unwrap();
+        assert_eq!(paged.nodes.len(), 1);
+        assert_eq!(paged.nodes[0].instance, deepest);
+        let exact = store
+            .observation_workflow_node(&cut, &deepest)
+            .unwrap()
+            .expect("depth-8 start_d8 must resolve at exact lookup");
+        assert_eq!(exact, paged.nodes[0]);
+        assert_invalid_depth_eight_variants(&store, &cut, &deepest);
+    }
+
+    fn assert_invalid_depth_eight_variants(
+        store: &crate::durable::sqlite::SqliteConversationStore,
+        cut: &crate::durable::observation::ObservationReadCut,
+        deepest: &crate::runtime::workflow::WorkflowNodeInstance,
+    ) {
+        let mut over_depth = deepest.clone();
+        over_depth
+            .block
+            .definition
+            .blocks
+            .extend(["loop_d8".to_owned(), "body".to_owned()]);
+        over_depth.block.invocations.push(1);
+        assert!(matches!(
+            store.observation_workflow_node(cut, &over_depth),
+            Err(crate::durable::ConversationStoreError::InvalidReference(_))
+        ));
+
+        let mut over_invocations = deepest.clone();
+        over_invocations.block.invocations.push(1);
+        assert!(matches!(
+            store.observation_workflow_node(cut, &over_invocations),
+            Err(crate::durable::ConversationStoreError::InvalidReference(_))
+        ));
+
+        let mut under_invocations = deepest.clone();
+        under_invocations.block.invocations.pop();
+        assert!(matches!(
+            store.observation_workflow_node(cut, &under_invocations),
+            Err(crate::durable::ConversationStoreError::InvalidReference(_))
+        ));
+
+        let mut odd_blocks = deepest.clone();
+        odd_blocks.block.definition.blocks.pop();
+        assert!(matches!(
+            store.observation_workflow_node(cut, &odd_blocks),
             Err(crate::durable::ConversationStoreError::InvalidReference(_))
         ));
     }

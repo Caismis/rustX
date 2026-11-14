@@ -32,6 +32,7 @@ import type { TraceCache } from '../../src/client/trace';
 import { applyTheme } from '../../src/app/appearance';
 import { WorkflowRunPanel } from '../../src/app/agent/WorkflowRunPanel';
 import { ConversationRunCanvasHost } from '../../src/app/workflows/run-canvas/ConversationRunCanvasHost';
+import { RpcFailure } from '../../src/client/errors';
 import { Server, snapshot } from '../fixture';
 import { statusSource } from '../workflow-fixtures';
 import { localeController, type LocaleId } from '../../src/locale/controller';
@@ -174,6 +175,10 @@ const initialRun: WorkflowRunView = {
 };
 
 const unavailable = params.has('unavailable');
+const traceFailOnce = params.has('traceFailOnce');
+let snapshotHeaderReads = 0;
+let snapshotChunkReads = 0;
+let tracePageAttempt = 0;
 
 const server = new Server();
 const s = snapshot('A');
@@ -184,6 +189,7 @@ await server.attached('A');
 const attachedTarget: AttachmentTarget = server.client.getSnapshot().views['A']!.target!;
 
 server.handlers.set('conversation/workflowRunSnapshotHeader', () => {
+  snapshotHeaderReads += 1;
   return {
     type: 'workflow_run_snapshot_header' as const,
     header: unavailable
@@ -202,6 +208,7 @@ server.handlers.set('conversation/workflowRunSnapshotHeader', () => {
 });
 
 server.handlers.set('conversation/workflowRunSnapshotChunk', () => {
+  snapshotChunkReads += 1;
   return {
     type: 'workflow_run_snapshot_chunk' as const,
     chunk: unavailable ? null : { offset: 0, data: sourceBase64, next_offset: null },
@@ -259,6 +266,13 @@ server.handlers.set('conversation/checkpointPage', request => {
   const { domain, offset = 0, limit = 32 } = request.params as { domain: string; offset?: number; limit?: number };
   if (domain !== traceDomain) {
     throw new Error(`Unexpected checkpointPage domain: ${domain}`);
+  }
+  if (traceFailOnce && offset === 0 && tracePageAttempt === 0) {
+    tracePageAttempt += 1;
+    throw new RpcFailure({ code: -32000, message: 'Injected initial trace batch failure' });
+  }
+  if (traceFailOnce && offset === 0) {
+    tracePageAttempt += 1;
   }
   const pageSize = Math.min(32, Math.max(1, limit));
   const slice = liveTraceNodes.slice(offset, offset + pageSize);
@@ -420,6 +434,7 @@ function App() {
       },
       setTheme: switchTheme,
       valueReads: () => [...valueReads],
+      snapshotReads: () => ({ headers: snapshotHeaderReads, chunks: snapshotChunkReads }),
       authorState: () => {
         const { document, drafts, past, future, notice, uncertain } = authorEditor.getSnapshot().context;
         return { document, drafts, past, future, notice, uncertain, writes: authorWrites };
@@ -470,6 +485,7 @@ declare global {
       setLocale(locale: LocaleId): void;
       setTheme(theme: 'light' | 'dark'): void;
       valueReads(): string[];
+      snapshotReads(): { headers: number; chunks: number };
       authorState(): unknown;
     };
   }

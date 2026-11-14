@@ -106,6 +106,27 @@ pub(crate) fn compute_snapshot_digest(
 }
 
 #[cfg(test)]
+pub(crate) fn test_run_snapshot(workflow_id: WorkflowId) -> WorkflowRunDefinitionSnapshot {
+    let document: WorkflowFileDocument = serde_json::from_value(serde_json::json!({
+        "description": "test workflow",
+        "block": {
+            "input": { "type": "object", "properties": {}, "additionalProperties": false },
+            "nodes": {
+                "start": { "type": "start" },
+                "done": { "type": "return", "outputs": [] }
+            },
+            "edges": [{ "from": "start", "to": "done" }]
+        }
+    }))
+    .expect("valid minimal test workflow document");
+    super::WorkflowProgram::compile_document(workflow_id, "sha256:test-run-snapshot", document)
+        .expect("compile minimal test workflow")
+        .run_snapshot()
+        .as_ref()
+        .clone()
+}
+
+#[cfg(test)]
 mod tests {
     #[test]
     fn inspection_bounds_fixture_is_admissible() {

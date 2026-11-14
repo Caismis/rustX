@@ -4,21 +4,29 @@ use crate::durable::observation::WorkflowNodeTraceState;
 use crate::runtime::workflow::read_model::{WorkflowRunView, WorkflowState, WorkflowWait};
 
 fn append(inner: &Arc<super::super::ClientInner>, event: RuntimeEvent, ordinal: u64) -> u64 {
-    let committed = inner
-        .store
-        .append_event(RuntimeEventEnvelope {
-            tool_occurrence: None,
-            observation: None,
-            schema_version: EVENT_SCHEMA_VERSION,
-            event_id: EventId::new(format!("workflow-live-{ordinal}")),
-            sequence: 0,
-            conversation_id: inner.conversation_id.clone(),
-            attempt_id: None,
-            turn_id: None,
-            timestamp: chrono::DateTime::UNIX_EPOCH,
-            event,
-        })
-        .unwrap();
+    let envelope = RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: EventId::new(format!("workflow-live-{ordinal}")),
+        sequence: 0,
+        conversation_id: inner.conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp: chrono::DateTime::UNIX_EPOCH,
+        event,
+    };
+    let committed = match &envelope.event {
+        RuntimeEvent::WorkflowStarted { workflow_id, .. } => {
+            let snapshot =
+                crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone());
+            inner
+                .store
+                .publish_workflow_start(envelope, &snapshot)
+                .unwrap()
+        }
+        _ => inner.store.append_event(envelope).unwrap(),
+    };
     committed.sequence
 }
 

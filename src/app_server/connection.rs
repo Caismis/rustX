@@ -947,6 +947,7 @@ impl AppServerConnection {
                 | Method::SessionTraceContentRead { .. }
                 | Method::SessionWorkflowRunSnapshotHeader { .. }
                 | Method::SessionWorkflowRunSnapshotChunk { .. }
+                | Method::SessionWorkflowTraceNode { .. }
                 | Method::SessionHistoryContentRead { .. }
                 | Method::SessionHistoryPage { .. }
                 | Method::SessionHistoryValueRead { .. }
@@ -1078,11 +1079,11 @@ impl AppServerConnection {
                 )
                 .await;
         }
-        let _physical_association = physical_association;
         let request_owner = self
             .host
             .admit_request(request_lane, std::convert::identity)
             .map_err(host_error)?;
+        let _physical_association = physical_association;
         // Source observation may await the Session catalog. Only an admitted
         // request owns that work; a draining host must refuse without it.
         self.observe_repair_source(&method).await;
