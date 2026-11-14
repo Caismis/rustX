@@ -1,3 +1,4 @@
+import { useContext } from 'react';
 import { createHash } from 'node:crypto';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +9,7 @@ import type {
   CheckpointValueChunk,
   ContentChunk,
   ContentRef,
+  MethodResult,
   RuntimeClientInteractionHeader,
   TraceRecord,
   WorkflowFileDocument,
@@ -2932,5 +2934,811 @@ describe('WorkflowRunCanvas UI and integration', () => {
     });
     expect(document.activeElement).not.toBe(document.body);
     expect(dialog.contains(document.activeElement)).toBe(true);
+  });
+
+  it('preserves explicit late selected visit without falling back to sibling I/O, selection, or child ref across pending, error, and null exact lookups', async () => {
+    const doc = makeNestedDoc();
+    if (doc.block.nodes.outer.type === 'loop') doc.block.nodes.outer.loop_count = 70;
+    const run = baseRunId('70', 'conv-strict-visit');
+    const cut1: CheckpointReadCut = { conversation_id: 'conv-strict-visit', revision: '1', through: '1', domain_revisions: {}, collection_cuts: {}, activation_id: 'act-1' };
+    const cut2: CheckpointReadCut = { conversation_id: 'conv-strict-visit', revision: '2', through: '2', domain_revisions: {}, collection_cuts: {}, activation_id: 'act-1' };
+    const cut3: CheckpointReadCut = { conversation_id: 'conv-strict-visit', revision: '3', through: '3', domain_revisions: {}, collection_cuts: {}, activation_id: 'act-1' };
+    const cut4: CheckpointReadCut = { conversation_id: 'conv-strict-visit', revision: '4', through: '4', domain_revisions: {}, collection_cuts: {}, activation_id: 'act-1' };
+    const transport = makeTransport(doc, run, { hasSourcePresentation: false });
+
+    const makeReviewNode = (
+      iter: number,
+      rev: string,
+      opts?: { childAgentId?: string; childActivationId?: string },
+    ): WorkflowTraceNode => {
+      const outputDomain = `out-review-${iter}`;
+      const encodedBytes = String(new TextEncoder().encode(JSON.stringify(`${outputDomain}/rev${rev}`)).length);
+      return {
+        id: `wn-${iter}`,
+        instance: {
+          block: { run, definition: { workflow_id: 'nested_flow', blocks: ['outer', 'body'] }, invocations: [0, iter] },
+          node: 'worker',
+          visit: 0,
+        },
+        kind: 'template',
+        state: { type: 'settled', outcome: 'completed' },
+        timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '10' },
+        input: null,
+        output: { type: 'value', field: 'result', domain: outputDomain, item_offset: 0, path: [], encoded_bytes: encodedBytes },
+        input_preview: null,
+        output_preview: null,
+        input_omitted: false,
+        output_omitted: false,
+        ...(opts?.childActivationId ? { child: opts.childActivationId, child_agent_id: opts.childAgentId } : {}),
+      };
+    };
+
+    const visit69Cut1 = makeReviewNode(68, '1');
+    const visit69Cut2 = makeReviewNode(68, '2', { childAgentId: 'child-agent-68', childActivationId: 'child-act-68' });
+    const traceRoot: TraceRecord = {
+      id: 'trace:700',
+      position: '700',
+      location: { attempt_id: 'att-70', step_id: 'step-1' },
+      kind: 'workflow',
+      state: 'running',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: null, duration_ms: null },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: 'trace.records.700.workflow.nodes', revision: '1', total: '70', loaded: '0', next_offset: '0' }],
+      native_id: null,
+      originating_tool_call_id: null,
+      has_detail: true,
+      truncated: false,
+    };
+    const makePrefixPage = (cut: CheckpointReadCut, offset: number): CheckpointPage => {
+      const start = offset === 0 ? 0 : 32;
+      const slice = Array.from({ length: 32 }, (_, idx) => {
+        const iter = start + idx;
+        return makeReviewNode(
+          iter,
+          cut.revision,
+          iter === 63 ? { childAgentId: 'child-agent-63', childActivationId: 'child-act-63' } : undefined,
+        );
+      });
+      return {
+        domain: 'trace.records.700.workflow.nodes',
+        cursor: cut.revision,
+        read_cut: cut,
+        total: '70',
+        collections: [],
+        next_offset: offset === 0 ? '32' : '64',
+        items: slice.map((node, i) => ({
+          offset: String(offset + i),
+          identity: node.id,
+          value: node as unknown as Record<string, unknown>,
+          content: [],
+          deferred: false,
+          body_complete: true,
+        })),
+      };
+    };
+
+    const valueCalls: string[] = [];
+    const exactLookupCalls: Array<{ rev: string; visitKey: string }> = [];
+    let releaseCut2Lookup!: (node: WorkflowTraceNode | null) => void;
+    let rejectCut3Lookup!: (err: Error) => void;
+    let releaseCut4Lookup!: (node: WorkflowTraceNode | null) => void;
+
+    const makeReader = (): TraceFieldReader => ({
+      page: vi.fn(async (cut, _domain, offset) => makePrefixPage(cut, offset)),
+      workflowNode: vi.fn(async (cut, instance) => {
+        exactLookupCalls.push({ rev: cut.revision, visitKey: visitIdentityKey(instance) });
+        if (cut.revision === '1') return visit69Cut1;
+        if (cut.revision === '2') {
+          return new Promise<WorkflowTraceNode | null>(resolve => { releaseCut2Lookup = resolve; });
+        }
+        if (cut.revision === '3') {
+          return new Promise<WorkflowTraceNode | null>((_resolve, reject) => { rejectCut3Lookup = reject; });
+        }
+        return new Promise<WorkflowTraceNode | null>(resolve => { releaseCut4Lookup = resolve; });
+      }),
+      value: vi.fn(async (cut, field) => {
+        valueCalls.push(`${field.domain}:${cut.revision}`);
+        const payload = `${field.domain}/rev${cut.revision}`;
+        const bytes = new TextEncoder().encode(JSON.stringify(payload));
+        let bin = '';
+        for (const b of bytes) bin += String.fromCharCode(b);
+        return {
+          representation: 'canonical_json_v1' as const,
+          cut,
+          ...field,
+          offset: 0,
+          bytes_base64: btoa(bin),
+          next_offset: null,
+          readable_end: bytes.length,
+        };
+      }),
+      content: vi.fn(),
+    });
+    const reader1 = makeReader();
+    const reader2 = makeReader();
+    const reader3 = makeReader();
+    const reader4 = makeReader();
+    const openWorkflowSpy = vi.fn();
+    const subScope = {
+      client: new Server().client,
+      agents: [],
+      metrics: {},
+      metricErrors: {},
+      opened: [],
+      openWorkflow: openWorkflowSpy,
+      close: vi.fn(),
+      open: vi.fn(),
+    };
+
+    try {
+      const ui = render(
+        <SubagentContext.Provider value={subScope}>
+          <WorkflowRunCanvas
+            target={{
+              conversationId: 'conv-strict-visit',
+              runId: run,
+              workflowId: 'nested_flow',
+              sourceMode: 'history',
+              selectedVisit: visit69Cut1.instance,
+              selectedTraceNode: visit69Cut1,
+              traceRoot,
+              traceCut: cut1,
+              traceReader: reader1,
+              transport,
+            }}
+            onClose={vi.fn()}
+            organizeFn={organizeDocument}
+          />
+        </SubagentContext.Provider>,
+      );
+
+      await waitFor(() => expect(reader1.page).toHaveBeenCalledTimes(2));
+      fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+      await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('out-review-68/rev1'));
+      expect(valueCalls).toEqual(['out-review-68:1']);
+
+      // Advance to cut2 (initial 64 loaded, missing iter 68) while exact workflowNode(cut2, visit69) is HELD.
+      ui.rerender(
+        <SubagentContext.Provider value={subScope}>
+          <WorkflowRunCanvas
+            target={{
+              conversationId: 'conv-strict-visit',
+              runId: run,
+              workflowId: 'nested_flow',
+              sourceMode: 'history',
+              selectedVisit: visit69Cut1.instance,
+              selectedTraceNode: visit69Cut1,
+              traceRoot,
+              traceCut: cut1,
+              traceReader: reader1,
+              transport,
+            }}
+            resolvedTrace={{ traceRoot, traceCut: cut2, traceReader: reader2 }}
+            traceStatus="ready"
+            onClose={vi.fn()}
+            organizeFn={organizeDocument}
+          />
+        </SubagentContext.Provider>,
+      );
+
+      await waitFor(() => expect(reader2.page).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(releaseCut2Lookup).toBeTypeOf('function'));
+      expect(exactLookupCalls).toContainEqual({ rev: '2', visitKey: visitIdentityKey(visit69Cut1.instance) });
+
+      // Sibling body out-review-63 MUST NOT be requested, and NO sibling visit option may be marked selected.
+      expect(valueCalls).toEqual(['out-review-68:1']);
+      expect(screen.getByRole('tabpanel').textContent).not.toContain('out-review-63');
+      const selectedOptionsDuringPending = screen
+        .getAllByRole('option')
+        .filter(el => el.getAttribute('aria-selected') === 'true');
+      expect(selectedOptionsDuringPending).toHaveLength(0);
+      expect(screen.getByRole('tab', { name: 'Output' }).getAttribute('aria-selected')).toBe('true');
+      expect(screen.queryByRole('button', { name: 'Open subagent conversation' })).toBeNull();
+
+      // Release exact lookup for visit 69 at cut2 -> ONLY out-review-68:2 read & displayed.
+      await act(async () => { releaseCut2Lookup(visit69Cut2); });
+      await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('out-review-68/rev2'));
+      expect(valueCalls).toEqual(['out-review-68:1', 'out-review-68:2']);
+      const visit69Option = document.querySelector(`[data-run-visit-key="${CSS.escape(visitIdentityKey(visit69Cut1.instance))}"]`);
+      expect(visit69Option?.getAttribute('aria-selected')).toBe('true');
+
+      // Summary shows exact visit 69 childRef (never sibling 64).
+      fireEvent.click(screen.getByRole('tab', { name: 'Summary' }));
+      const openChildBtn = await screen.findByRole('button', { name: 'Open subagent conversation' });
+      fireEvent.click(openChildBtn);
+      expect(openWorkflowSpy).toHaveBeenLastCalledWith('child-agent-68', 'child-act-68', 'worker');
+
+      // Exact lookup ERROR at cut3 while Output tab is open -> no sibling fallback, no sibling childRef, alert visible.
+      fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+      await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('out-review-68/rev2'));
+      const callsBeforeCut3 = valueCalls.length;
+      ui.rerender(
+        <SubagentContext.Provider value={subScope}>
+          <WorkflowRunCanvas
+            target={{
+              conversationId: 'conv-strict-visit',
+              runId: run,
+              workflowId: 'nested_flow',
+              sourceMode: 'history',
+              selectedVisit: visit69Cut1.instance,
+              selectedTraceNode: visit69Cut1,
+              traceRoot,
+              traceCut: cut1,
+              traceReader: reader1,
+              transport,
+            }}
+            resolvedTrace={{ traceRoot, traceCut: cut3, traceReader: reader3 }}
+            traceStatus="ready"
+            onClose={vi.fn()}
+            organizeFn={organizeDocument}
+          />
+        </SubagentContext.Provider>,
+      );
+      await waitFor(() => expect(rejectCut3Lookup).toBeTypeOf('function'));
+      await act(async () => { rejectCut3Lookup(new Error('Exact node lookup failed')); });
+      await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('Exact node lookup failed'));
+      expect(valueCalls.slice(callsBeforeCut3)).toEqual([]);
+      expect(screen.getAllByRole('option').filter(el => el.getAttribute('aria-selected') === 'true')).toHaveLength(0);
+      expect(screen.getByRole('tab', { name: 'Output' }).getAttribute('aria-selected')).toBe('true');
+      fireEvent.click(screen.getByRole('tab', { name: 'Summary' }));
+      expect(screen.queryByRole('button', { name: 'Open subagent conversation' })).toBeNull();
+
+      // Exact lookup NULL at cut4 while Output tab is open -> no sibling fallback, unavailable shown, no sibling childRef.
+      fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+      const callsBeforeCut4 = valueCalls.length;
+      ui.rerender(
+        <SubagentContext.Provider value={subScope}>
+          <WorkflowRunCanvas
+            target={{
+              conversationId: 'conv-strict-visit',
+              runId: run,
+              workflowId: 'nested_flow',
+              sourceMode: 'history',
+              selectedVisit: visit69Cut1.instance,
+              selectedTraceNode: visit69Cut1,
+              traceRoot,
+              traceCut: cut1,
+              traceReader: reader1,
+              transport,
+            }}
+            resolvedTrace={{ traceRoot, traceCut: cut4, traceReader: reader4 }}
+            traceStatus="ready"
+            onClose={vi.fn()}
+            organizeFn={organizeDocument}
+          />
+        </SubagentContext.Provider>,
+      );
+      await waitFor(() => expect(releaseCut4Lookup).toBeTypeOf('function'));
+      await act(async () => { releaseCut4Lookup(null); });
+      await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('unavailable at this read cut'));
+      expect(valueCalls.slice(callsBeforeCut4)).toEqual([]);
+      expect(valueCalls.some(v => v.includes('out-review-63'))).toBe(false);
+      expect(screen.getAllByRole('option').filter(el => el.getAttribute('aria-selected') === 'true')).toHaveLength(0);
+      expect(screen.getByRole('tab', { name: 'Output' }).getAttribute('aria-selected')).toBe('true');
+      fireEvent.click(screen.getByRole('tab', { name: 'Summary' }));
+      expect(screen.queryByRole('button', { name: 'Open subagent conversation' })).toBeNull();
+    } finally {
+      subScope.client.disconnect();
+    }
+  });
+
+  it('retains pinned explicit late selectedVisit when clicking the same qualified canvas node before overlay commits while allowing switches to other nodes', async () => {
+    const doc = makeNestedDoc();
+    if (doc.block.nodes.outer.type === 'loop') doc.block.nodes.outer.loop_count = 70;
+    const run = baseRunId('71', 'conv-same-node-click');
+    const cut: CheckpointReadCut = { conversation_id: 'conv-same-node-click', revision: '1', through: '1', domain_revisions: {}, collection_cuts: {}, activation_id: 'act-1' };
+    const transport = makeTransport(doc, run, { hasSourcePresentation: false });
+
+    const makeNode = (iter: number, nodeId = 'worker'): WorkflowTraceNode => {
+      const outputDomain = `out-${nodeId}-${iter}`;
+      const encodedBytes = String(new TextEncoder().encode(JSON.stringify(outputDomain)).length);
+      return {
+        id: `wn-${nodeId}-${iter}`,
+        instance: {
+          block: { run, definition: { workflow_id: 'nested_flow', blocks: ['outer', 'body'] }, invocations: [0, iter] },
+          node: nodeId,
+          visit: 0,
+        },
+        kind: nodeId === 'childStep' ? 'agent' : 'template',
+        state: { type: 'settled', outcome: 'completed' },
+        timing: { started_at: '2026-10-20T00:00:00Z', ended_at: '2026-10-20T00:00:01Z', duration_ms: '10' },
+        input: null,
+        output: { type: 'value', field: 'result', domain: outputDomain, item_offset: 0, path: [], encoded_bytes: encodedBytes },
+        input_preview: null,
+        output_preview: null,
+        input_omitted: false,
+        output_omitted: false,
+      };
+    };
+
+    const iter69 = makeNode(68);
+    const traceRoot: TraceRecord = {
+      id: 'trace:710',
+      position: '710',
+      location: { attempt_id: 'att-71', step_id: 'step-1' },
+      kind: 'workflow',
+      state: 'completed',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: null, duration_ms: null },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: 'trace.records.710.workflow.nodes', revision: '1', total: '70', loaded: '0', next_offset: '0' }],
+      native_id: null,
+      originating_tool_call_id: null,
+      has_detail: false,
+      truncated: false,
+    };
+
+    const prefix64 = [
+      ...Array.from({ length: 63 }, (_, i) => makeNode(i)),
+      makeNode(63, 'childStep'),
+    ];
+    let releaseFirstPage!: () => void;
+    let releaseExact69!: (node: WorkflowTraceNode | null) => void;
+    const exactLookups: string[] = [];
+    const valueCalls: string[] = [];
+
+    const reader: TraceFieldReader = {
+      page: vi.fn(async (_reqCut, _domain, offset) => {
+        const items = prefix64.slice(offset, offset + 32).map((node, i) => ({
+          offset: String(offset + i),
+          identity: node.id,
+          value: node as unknown as Record<string, unknown>,
+          content: [],
+          deferred: false,
+          body_complete: true,
+        }));
+        const page: CheckpointPage = {
+          domain: 'trace.records.710.workflow.nodes',
+          cursor: '1',
+          read_cut: cut,
+          total: '70',
+          collections: [],
+          next_offset: offset === 0 ? '32' : '64',
+          items,
+        };
+        if (offset === 0) {
+          return new Promise<CheckpointPage>(resolve => { releaseFirstPage = () => resolve(page); });
+        }
+        return page;
+      }),
+      workflowNode: vi.fn(async (_reqCut, instance) => {
+        exactLookups.push(visitIdentityKey(instance));
+        return new Promise<WorkflowTraceNode | null>(resolve => { releaseExact69 = resolve; });
+      }),
+      value: vi.fn(async (reqCut, field) => {
+        valueCalls.push(field.domain);
+        const bytes = new TextEncoder().encode(JSON.stringify(field.domain));
+        let bin = '';
+        for (const b of bytes) bin += String.fromCharCode(b);
+        return {
+          representation: 'canonical_json_v1' as const,
+          cut: reqCut,
+          ...field,
+          offset: 0,
+          bytes_base64: btoa(bin),
+          next_offset: null,
+          readable_end: bytes.length,
+        };
+      }),
+      content: vi.fn(),
+    };
+
+    render(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-same-node-click',
+          runId: run,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          selectedVisit: iter69.instance,
+          traceRoot,
+          traceCut: cut,
+          traceReader: reader,
+          transport,
+        }}
+        onClose={vi.fn()}
+        organizeFn={organizeDocument}
+      />,
+    );
+
+    const workerId = viewId([{ node: 'outer' }], 'node', 'worker');
+    const childStepId = viewId([{ node: 'outer' }], 'node', 'childStep');
+    const workerCanvasNode = await waitFor(() => {
+      const el = document.querySelector(`.react-flow__node[data-id="${workerId}"]`);
+      expect(el).not.toBeNull();
+      return el!;
+    });
+
+    // Click THE SAME qualified canvas node while initial batch is STILL HELD (no overlay visits yet!).
+    await waitFor(() => expect(releaseFirstPage).toBeTypeOf('function'));
+    fireEvent.click(workerCanvasNode);
+
+    // Release initial 64 pages; exact lookup MUST STILL target iter69 (not cleared to default sibling).
+    await act(async () => { releaseFirstPage(); });
+    await waitFor(() => expect(releaseExact69).toBeTypeOf('function'));
+    expect(exactLookups).toEqual([visitIdentityKey(iter69.instance)]);
+
+    // Click THE SAME qualified canvas node again while iter69 is still missing from overlay -> MUST remain pinned to iter69!
+    fireEvent.click(workerCanvasNode);
+    await act(async () => { releaseExact69(iter69); });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('out-worker-68'));
+    expect(valueCalls).toEqual(['out-worker-68']);
+
+    // Explicitly switch to Visit #1 (iteration 1 -> iter 1 in initial prefix), then click same worker node -> stays Visit #1 (never reverts to target.selectedVisit iter69!).
+    const iter1Key = visitIdentityKey(prefix64[1]!.instance);
+    const iter1Option = document.querySelector(`[data-run-visit-key="${CSS.escape(iter1Key)}"]`) as HTMLElement;
+    expect(iter1Option).not.toBeNull();
+    fireEvent.click(iter1Option);
+    await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('out-worker-1'));
+    fireEvent.click(workerCanvasNode);
+    fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('out-worker-1'));
+
+    // Clicking a DIFFERENT qualified canvas node (childStep) switches away to childStep's default visit cleanly.
+    const childStepCanvasNode = document.querySelector(`.react-flow__node[data-id="${childStepId}"]`)!;
+    fireEvent.click(childStepCanvasNode);
+    fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+    await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('out-childStep-63'));
+  });
+
+  it('retains coherent committed and preloaded trace content with visible error and working Retry across real Host frontier refresh failures', async () => {
+    const server = new Server();
+    await server.attached('A');
+    const attTarget = server.client.getSnapshot().views.A!.target!;
+    const convId = attTarget.conversation_id;
+    const doc = makeNestedDoc();
+    const run = baseRunId('801', convId);
+    const cut10: CheckpointReadCut = { conversation_id: convId, revision: '10', through: '10', domain_revisions: {}, collection_cuts: {}, activation_id: null };
+    const cut11: CheckpointReadCut = { conversation_id: convId, revision: '11', through: '11', domain_revisions: {}, collection_cuts: {}, activation_id: null };
+
+    const traceDomain10 = 'trace.records.801.workflow.nodes';
+    const traceDomain11 = 'trace.records.801b.workflow.nodes';
+    const root10: TraceRecord = {
+      id: 'trace:801',
+      position: '801',
+      location: { attempt_id: 'a-10', step_id: 's1' },
+      kind: 'workflow',
+      state: 'running',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: null, duration_ms: null },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: traceDomain10, revision: '10', total: '1', loaded: '0', next_offset: '0' }],
+      native_id: JSON.stringify(run),
+      originating_tool_call_id: null,
+      has_detail: false,
+      truncated: false,
+    };
+    const root11: TraceRecord = {
+      ...root10,
+      state: 'completed',
+      collections: [{ domain: traceDomain11, revision: '11', total: '1', loaded: '0', next_offset: '0' }],
+    };
+    const node10: WorkflowTraceNode = {
+      id: 'wn-10',
+      instance: { block: { run, definition: { workflow_id: 'nested_flow', blocks: ['outer', 'body'] }, invocations: [0, 1] }, node: 'worker', visit: 0 },
+      kind: 'template',
+      state: { type: 'running' },
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: null, duration_ms: null },
+      input: null,
+      output: null,
+      input_preview: null,
+      output_preview: null,
+      input_omitted: false,
+      output_omitted: false,
+    };
+    const out11Bytes = new TextEncoder().encode(JSON.stringify('cut11-output-payload'));
+    const node11: WorkflowTraceNode = {
+      ...node10,
+      state: { type: 'settled', outcome: 'completed' },
+      output: { type: 'value', field: 'result', domain: 'out-cut11', item_offset: 0, path: [], encoded_bytes: String(out11Bytes.length) },
+    };
+
+    const snapTransport = makeTransport(doc, run, { hasSourcePresentation: false });
+    const snapHeader = await snapTransport.readHeader(() => true);
+    const snapChunk = await snapTransport.readChunk(0, 65536, () => true);
+    server.handlers.set('conversation/workflowRunSnapshotHeader', () => ({
+      type: 'workflow_run_snapshot_header' as const,
+      header: snapHeader,
+    }));
+    server.handlers.set('conversation/workflowRunSnapshotChunk', () => ({
+      type: 'workflow_run_snapshot_chunk' as const,
+      chunk: snapChunk,
+    }));
+
+    let locateCalls = 0;
+    server.held.add('session/traceLocateWorkflow');
+    const locateOutcomes = new Map<string, () => MethodResult>();
+    server.handlers.set('session/traceLocateWorkflow', request => {
+      if (request.method !== 'session/traceLocateWorkflow') throw new Error('unexpected method');
+      const outcome = locateOutcomes.get(String(request.id));
+      if (!outcome) throw new Error('missing locate outcome');
+      return outcome();
+    });
+    server.handlers.set('conversation/checkpointPage', request => {
+      if (request.method !== 'conversation/checkpointPage') throw new Error('unexpected method');
+      const isCut11 = request.params.cut.revision === '11';
+      const node = isCut11 ? node11 : node10;
+      return {
+        type: 'checkpoint_page' as const,
+        page: {
+          domain: request.params.domain,
+          cursor: request.params.cut.revision,
+          read_cut: request.params.cut,
+          total: '1',
+          collections: [],
+          next_offset: null,
+          items: [{ offset: '0', identity: node.id, value: node as unknown as Record<string, unknown>, content: [], deferred: false, body_complete: true }],
+        },
+      };
+    });
+    server.handlers.set('conversation/checkpointValueRead', request => {
+      if (request.method !== 'conversation/checkpointValueRead') throw new Error('unexpected method');
+      return {
+        type: 'checkpoint_value_chunk' as const,
+        chunk: {
+          representation: 'canonical_json_v1' as const,
+          cut: request.params.cut,
+          domain: request.params.domain,
+          item_offset: request.params.item_offset,
+          path: request.params.path,
+          offset: 0,
+          bytes_base64: Buffer.from(out11Bytes).toString('base64'),
+          next_offset: null,
+          readable_end: out11Bytes.length,
+        },
+      };
+    });
+
+    const liveRun: WorkflowRunView = {
+      id: run,
+      workflow_id: 'nested_flow',
+      program_digest: 'sha256:host-refresh',
+      resource_revision: '1',
+      state: { type: 'running' },
+      instances: [],
+      omitted_instances: 0,
+      steps_consumed: 1,
+      steps_max: 4096,
+      agents_consumed: 0,
+      model_calls_consumed: 0,
+    };
+
+    try {
+      const ui = render(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          attachmentTarget={attTarget}
+          ownerCurrent
+          liveCheckpointCut={cut10}
+          liveRuns={[liveRun]}
+        >
+          <WorkflowRunPanel run={liveRun} />
+        </ConversationRunCanvasHost>,
+      );
+
+      fireEvent.click(ui.getByRole('button', { name: 'View run graph' }));
+      const req1 = await server.waitFor('session/traceLocateWorkflow', ++locateCalls);
+      locateOutcomes.set(String(req1.id), () => ({
+        type: 'trace_workflow_location',
+        location: { record_id: root10.id, page: { read_cut: cut10, records: [root10], updates: [], next_cursor: null } },
+      }));
+      await act(async () => { server.reply(req1); });
+
+      const workerId = viewId([{ node: 'outer' }], 'node', 'worker');
+      const workerEl = await waitFor(() => {
+        const el = document.querySelector(`.react-flow__node[data-id="${workerId}"]`);
+        expect(el).not.toBeNull();
+        return el!;
+      });
+      const flowBefore = screen.getByRole('dialog').querySelector('.react-flow');
+      fireEvent.click(workerEl);
+      fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+      await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('Output not recorded'));
+
+      // Advance frontier to cut11 -> reject locate -> coherent cut10 MUST remain visible AND error + Retry trace MUST appear!
+      ui.rerender(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          attachmentTarget={attTarget}
+          ownerCurrent
+          liveCheckpointCut={cut11}
+          liveRuns={[{ ...liveRun, state: { type: 'settled', outcome: 'completed' } }]}
+        >
+          <WorkflowRunPanel run={liveRun} />
+        </ConversationRunCanvasHost>,
+      );
+      const req2 = await server.waitFor('session/traceLocateWorkflow', ++locateCalls);
+      locateOutcomes.set(String(req2.id), () => {
+        throw new RpcFailure({ code: -32000, message: 'Frontier cut 11 locate failed' });
+      });
+      await act(async () => { server.reply(req2); });
+
+      const retryBtn = await screen.findByRole('button', { name: 'Retry trace' });
+      expect(screen.getByRole('alert').textContent).toContain('Frontier cut 11 locate failed');
+      expect(screen.getByRole('dialog').querySelector('.react-flow')).toBe(flowBefore);
+      expect(screen.getByRole('tab', { name: 'Output' }).getAttribute('aria-selected')).toBe('true');
+      expect(screen.getByRole('tabpanel').textContent).toContain('Output not recorded');
+
+      // Click Retry without advancing frontier -> locate succeeds cut11 -> error clears & cut11 Output loads cleanly.
+      retryBtn.focus();
+      fireEvent.click(retryBtn);
+      const req3 = await server.waitFor('session/traceLocateWorkflow', ++locateCalls);
+      locateOutcomes.set(String(req3.id), () => ({
+        type: 'trace_workflow_location',
+        location: { record_id: root11.id, page: { read_cut: cut11, records: [root11], updates: [], next_cursor: null } },
+      }));
+      await act(async () => { server.reply(req3); });
+
+      await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('cut11-output-payload'));
+      expect(screen.queryByRole('button', { name: 'Retry trace' })).toBeNull();
+      expect(screen.getByRole('dialog').querySelector('.react-flow')).toBe(flowBefore);
+      expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+      expect(server.requests.filter(r => r.request.method === 'conversation/workflowRunSnapshotHeader')).toHaveLength(1);
+      expect(server.requests.filter(r => r.request.method === 'conversation/workflowRunSnapshotChunk')).toHaveLength(1);
+
+      // Part 2: Trajectory complete preloaded trace opener (targetHasCompleteTrace = true) + frontier refresh failure & Retry.
+      fireEvent.click(screen.getByRole('button', { name: 'Close run graph' }));
+      let openComplete!: (target: WorkflowRunCanvasTarget) => void;
+      function Bridge({ onReady }: { onReady: (fn: (target: WorkflowRunCanvasTarget) => void) => void }) {
+        const ctx = useContext(WorkflowRunCanvasContext);
+        onReady(target => ctx?.openRunCanvas(target));
+        return null;
+      }
+      const reader10: TraceFieldReader = {
+        page: vi.fn(),
+        value: vi.fn(),
+        content: vi.fn(),
+      };
+      ui.rerender(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          attachmentTarget={attTarget}
+          ownerCurrent
+          liveCheckpointCut={cut10}
+          liveRuns={[liveRun]}
+        >
+          <Bridge onReady={fn => { openComplete = fn; }} />
+        </ConversationRunCanvasHost>,
+      );
+      act(() => {
+        openComplete({
+          conversationId: convId,
+          runId: run,
+          workflowId: 'nested_flow',
+          sourceMode: 'history',
+          traceRoot: root10,
+          traceCut: cut10,
+          traceReader: reader10,
+          traceNodes: [node10],
+          selectedVisit: node10.instance,
+          selectedTraceNode: node10,
+        });
+      });
+      await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+      const completeCallsBefore = locateCalls;
+
+      // Advance frontier to cut11 -> targetHasCompleteTrace=true still surfaces locate failure + Retry trace!
+      ui.rerender(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          attachmentTarget={attTarget}
+          ownerCurrent
+          liveCheckpointCut={cut11}
+          liveRuns={[liveRun]}
+        >
+          <Bridge onReady={fn => { openComplete = fn; }} />
+        </ConversationRunCanvasHost>,
+      );
+      const req4 = await server.waitFor('session/traceLocateWorkflow', completeCallsBefore + 1);
+      locateOutcomes.set(String(req4.id), () => {
+        throw new RpcFailure({ code: -32000, message: 'Preloaded trace refresh failed' });
+      });
+      await act(async () => { server.reply(req4); });
+
+      const retryCompleteBtn = await screen.findByRole('button', { name: 'Retry trace' });
+      expect(screen.getByRole('alert').textContent).toContain('Preloaded trace refresh failed');
+
+      fireEvent.click(retryCompleteBtn);
+      const req5 = await server.waitFor('session/traceLocateWorkflow', completeCallsBefore + 2);
+      locateOutcomes.set(String(req5.id), () => ({
+        type: 'trace_workflow_location',
+        location: { record_id: root11.id, page: { read_cut: cut11, records: [root11], updates: [], next_cursor: null } },
+      }));
+      await act(async () => { server.reply(req5); });
+      fireEvent.click(screen.getByRole('tab', { name: 'Output' }));
+      await waitFor(() => expect(screen.getByRole('tabpanel').textContent).toContain('cut11-output-payload'));
+      expect(screen.queryByRole('button', { name: 'Retry trace' })).toBeNull();
+    } finally {
+      server.client.disconnect();
+    }
+  });
+
+  it('does not let an earlier loader batch error hide or misdirect retry of a later Host frontier refresh failure', async () => {
+    const doc = makeNestedDoc();
+    const run = baseRunId('802', 'conv-batch-vs-host');
+    const cut10: CheckpointReadCut = { conversation_id: 'conv-batch-vs-host', revision: '10', through: '10', domain_revisions: {}, collection_cuts: {}, activation_id: null };
+    const cut11: CheckpointReadCut = { conversation_id: 'conv-batch-vs-host', revision: '11', through: '11', domain_revisions: {}, collection_cuts: {}, activation_id: null };
+    const transport = makeTransport(doc, run, { hasSourcePresentation: false });
+
+    const traceRoot10: TraceRecord = {
+      id: 'trace:802',
+      position: '802',
+      location: { attempt_id: 'a-802', step_id: 's1' },
+      kind: 'workflow',
+      state: 'running',
+      timing: { started_at: '2026-10-20T00:00:00Z', ended_at: null, duration_ms: null },
+      calls: [],
+      attachments: [],
+      fields: [],
+      collections: [{ domain: 'trace.records.802.workflow.nodes', revision: '10', total: '2', loaded: '0', next_offset: '0' }],
+      native_id: JSON.stringify(run),
+      originating_tool_call_id: null,
+      has_detail: false,
+      truncated: false,
+    };
+    const reader10: TraceFieldReader = {
+      page: vi.fn(async () => { throw new Error('Old cut10 batch failed'); }),
+      value: vi.fn(),
+      content: vi.fn(),
+    };
+    const onRetryHost = vi.fn();
+
+    const ui = render(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-batch-vs-host',
+          runId: run,
+          workflowId: 'nested_flow',
+          sourceMode: 'live',
+          transport,
+        }}
+        resolvedTrace={{ traceRoot: traceRoot10, traceCut: cut10, traceReader: reader10 }}
+        traceStatus="ready"
+        onRetryTrace={onRetryHost}
+        onClose={vi.fn()}
+        organizeFn={organizeDocument}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain('Old cut10 batch failed'));
+
+    // Later Host frontier refresh to cut11 fails -> alert MUST surface Host error & clicking Retry MUST invoke onRetryHost!
+    ui.rerender(
+      <WorkflowRunCanvas
+        target={{
+          conversationId: 'conv-batch-vs-host',
+          runId: run,
+          workflowId: 'nested_flow',
+          sourceMode: 'live',
+          transport,
+        }}
+        resolvedTrace={{ traceRoot: traceRoot10, traceCut: cut10, traceReader: reader10 }}
+        traceStatus="error"
+        traceError="Latest host refresh cut11 failed"
+        onRetryTrace={onRetryHost}
+        onClose={vi.fn()}
+        organizeFn={organizeDocument}
+      />,
+    );
+
+    expect(screen.getByRole('alert').textContent).toContain('Latest host refresh cut11 failed');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry trace' }));
+    expect(onRetryHost).toHaveBeenCalledTimes(1);
+    expect(reader10.page).toHaveBeenCalledTimes(1);
+    void cut11;
   });
 });

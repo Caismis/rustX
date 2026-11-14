@@ -176,9 +176,11 @@ const initialRun: WorkflowRunView = {
 
 const unavailable = params.has('unavailable');
 const traceFailOnce = params.has('traceFailOnce');
+const frontierRefreshFailOnce = params.has('frontierRefreshFailOnce');
 let snapshotHeaderReads = 0;
 let snapshotChunkReads = 0;
 let tracePageAttempt = 0;
+let frontierLocateAttempt = 0;
 
 const server = new Server();
 const s = snapshot('A');
@@ -256,6 +258,10 @@ function currentTraceRoot(): TraceRecord {
 server.handlers.set('session/traceLocateWorkflow', request => {
   if (request.method !== 'session/traceLocateWorkflow') throw Error('Unexpected locator method');
   if (JSON.stringify(request.params.run_id) !== JSON.stringify(runId)) throw Error('Foreign run lookup');
+  if (frontierRefreshFailOnce && currentTraceCut.revision === '2' && frontierLocateAttempt === 0) {
+    frontierLocateAttempt += 1;
+    throw new RpcFailure({ code: -32000, message: 'Injected frontier refresh failure' });
+  }
   return { type: 'trace_workflow_location' as const, location: {
     record_id: 'trace:1',
     page: { read_cut: currentTraceCut, records: [currentTraceRoot()], next_cursor: null, updates: [] },

@@ -303,4 +303,102 @@ for (const width of [1440, 390]) {
     await expect(opener).toBeFocused();
     expect(errors).toEqual([]);
   });
+
+  test(`frontier refresh failure preserves coherent trace, viewport, focus, and snapshot until explicit Retry recovers at ${width}px`, async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.on('console', msg => {
+      if (['error', 'warning'].includes(msg.type())) errors.push(msg.text());
+    });
+
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`${origin}/test/fixtures/workflow-run-canvas.html?frontierRefreshFailOnce=1`);
+    await expect(page).toHaveTitle('Workflow run canvas fixture');
+
+    const opener = page.getByRole('button', { name: 'View run graph', exact: true });
+    await opener.click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByTestId('rf__wrapper')).toBeVisible();
+    await expect(dialog.locator('.react-flow__node')).toHaveCount(6);
+    await expect(dialog.getByRole('region', { name: 'Workflow canvas', exact: true })).toHaveAttribute('aria-busy', 'false');
+
+    // Select the worker node, then open Output tab on coherent cut 1 before frontier advances.
+    await dialog.locator('.react-flow__node', { hasText: 'worker' }).first().click();
+    const outputTab = dialog.getByRole('tab', { name: 'Output' });
+    await outputTab.click();
+    await expect(dialog.getByRole('tabpanel')).toContainText('lazy-output-e2e');
+    expect(await page.evaluate(() => window.runCanvasFixture.snapshotReads())).toEqual({ headers: 1, chunks: 1 });
+    expect(await page.evaluate(() => window.runCanvasFixture.valueReads())).toHaveLength(1);
+
+    // Non-default zoom transform + wait for zoomIn transition completion (target scale(1.2)) + layout DOM identity capture.
+    const viewport = dialog.locator('.react-flow__viewport');
+    const zoomLevel = dialog.getByRole('button', { name: 'Zoom', exact: true });
+    await dialog.getByRole('button', { name: 'Zoom in', exact: true }).click();
+    await expect(zoomLevel).toHaveText('120%');
+    await expect(viewport).toHaveAttribute('style', /scale\(1\.2\)/);
+    await expect(dialog.getByRole('region', { name: 'Workflow canvas', exact: true })).toHaveAttribute('aria-busy', 'false');
+    await page.evaluate(() => new Promise<void>(resolve => {
+      requestAnimationFrame(() => resolve());
+    }));
+    const transformBefore = await viewport.evaluate(el => el.style.transform);
+    expect(transformBefore).toBeTruthy();
+    await page.evaluate(() => {
+      (window as unknown as { __runCanvasFlowEl?: Element | null }).__runCanvasFlowEl = document.querySelector('[role="dialog"] .react-flow');
+    });
+
+    // Advance frontier -> cut 2 locate fails once -> coherent cut 1 Output & non-default zoom remain intact, alert & Retry appear!
+    await page.evaluate(() => window.runCanvasFixture.completeLiveRun());
+    const alert = dialog.getByRole('alert').filter({ hasText: 'Injected frontier refresh failure' });
+    await expect(alert).toBeVisible();
+    const retryButton = dialog.getByRole('button', { name: 'Retry trace', exact: true });
+    await expect(retryButton).toBeVisible();
+    expect(await outputTab.getAttribute('aria-selected')).toBe('true');
+    await expect(dialog.getByRole('tabpanel')).toContainText('lazy-output-e2e');
+    expect(await page.evaluate(() => window.runCanvasFixture.snapshotReads())).toEqual({ headers: 1, chunks: 1 });
+    expect(await page.evaluate(() => window.runCanvasFixture.valueReads())).toHaveLength(1);
+    expect(await viewport.evaluate(el => el.style.transform)).toBe(transformBefore);
+
+    // Focus Retry trace and activate via Enter -> recovers cut 2 without further frontier advance, focus stays inside dialog, layout/transform unchanged.
+    await retryButton.focus();
+    await expect(retryButton).toBeFocused();
+    await page.keyboard.press('Enter');
+
+    await expect(retryButton).toHaveCount(0);
+    await expect(alert).toHaveCount(0);
+    await expect(dialog.locator('[data-run-node-status="completed"]').first()).toBeVisible();
+
+    const postRetryState = await page.evaluate(() => {
+      const active = document.activeElement;
+      const dialogEl = document.querySelector('[role="dialog"]');
+      const rootEl = document.getElementById('root');
+      const flowSame = dialogEl?.querySelector('.react-flow') === (window as unknown as { __runCanvasFlowEl?: Element | null }).__runCanvasFlowEl;
+      return {
+        onBody: active === document.body,
+        inBackground: !!active && !!rootEl && rootEl.contains(active),
+        inDialog: !!active && !!dialogEl && dialogEl.contains(active),
+        selectedTabOrDialogFocused: !!active && (active.matches('[role="tab"][aria-selected="true"]') || active === dialogEl || !!active.closest('[role="dialog"]')),
+        flowSame,
+        overflow: document.documentElement.scrollWidth > window.innerWidth,
+      };
+    });
+    expect(postRetryState).toEqual({
+      onBody: false,
+      inBackground: false,
+      inDialog: true,
+      selectedTabOrDialogFocused: true,
+      flowSame: true,
+      overflow: false,
+    });
+
+    expect(await outputTab.getAttribute('aria-selected')).toBe('true');
+    await expect(dialog.getByRole('tabpanel')).toContainText('lazy-output-e2e');
+    expect(await page.evaluate(() => window.runCanvasFixture.snapshotReads())).toEqual({ headers: 1, chunks: 1 });
+    expect(await viewport.evaluate(el => el.style.transform)).toBe(transformBefore);
+
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(opener).toBeFocused();
+    expect(errors).toEqual([]);
+  });
 }

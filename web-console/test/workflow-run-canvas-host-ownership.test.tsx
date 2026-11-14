@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import type { ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CheckpointReadCut, MethodResult, Request, TraceRecord, WorkflowRunId } from '../../protocol/app-server/v78';
@@ -27,6 +27,7 @@ vi.mock('../src/app/workflows/run-canvas/WorkflowRunCanvas', () => ({
 }));
 
 afterEach(() => {
+  cleanup();
   capturedCanvasProps.length = 0;
 });
 
@@ -223,6 +224,134 @@ describe('ConversationRunCanvasHost onRetryTrace ownership', () => {
       });
       expect(requestsFor(invC)).toHaveLength(1);
       expect(requestsFor(invB)).toHaveLength(2);
+    } finally {
+      server.client.disconnect();
+    }
+  });
+
+  it('retains prior resolved trace cut while surfacing latest frontier refresh error and fencing superseded frontier/retry attempts', async () => {
+    const server = new Server();
+    await server.attached('A');
+    const attTarget = server.client.getSnapshot().views.A!.target!;
+    const convId = attTarget.conversation_id;
+
+    const runA: WorkflowRunId = { conversation_id: convId, origin: { type: 'tool', attempt_id: 'a-frontier' }, invocation: '10' };
+    const cut10: CheckpointReadCut = { conversation_id: convId, revision: '10', through: '10', domain_revisions: {}, collection_cuts: {}, activation_id: null };
+    const cut11: CheckpointReadCut = { conversation_id: convId, revision: '11', through: '11', domain_revisions: {}, collection_cuts: {}, activation_id: null };
+    const cut12: CheckpointReadCut = { conversation_id: convId, revision: '12', through: '12', domain_revisions: {}, collection_cuts: {}, activation_id: null };
+
+    const locateOutcomes = new Map<string, () => MethodResult>();
+    server.held.add('session/traceLocateWorkflow');
+    server.handlers.set('session/traceLocateWorkflow', request => {
+      if (request.method !== 'session/traceLocateWorkflow') throw new Error('unexpected method');
+      const outcome = locateOutcomes.get(String(request.id));
+      if (!outcome) throw new Error(`missing outcome for ${String(request.id)}`);
+      return outcome();
+    });
+
+    const requestsForRun = () =>
+      server.requests.filter(item => item.request.method === 'session/traceLocateWorkflow' && item.request.params.run_id.invocation === '10');
+
+    let openCanvas!: (target: WorkflowRunCanvasTarget) => void;
+    try {
+      const ui = render(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          expectedActivationId={null}
+          attachmentTarget={attTarget}
+          ownerCurrent
+          liveCheckpointCut={cut10}
+        >
+          <OpenerBridge onReady={open => { openCanvas = open; }} />
+        </ConversationRunCanvasHost>,
+      );
+
+      act(() => {
+        openCanvas({ conversationId: convId, runId: runA, workflowId: 'flow_frontier', sourceMode: 'live' });
+      });
+
+      // 1. Initial traceLocateWorkflow resolves cut10 cleanly.
+      const req1 = await server.waitFor('session/traceLocateWorkflow', 1);
+      const { root: root10, cut: resCut10 } = makeWorkflowRoot('trace:10', '10', convId, null);
+      locateOutcomes.set(String(req1.id), () => ({
+        type: 'trace_workflow_location',
+        location: { record_id: 'trace:10', page: { read_cut: resCut10, records: [root10], updates: [], next_cursor: null } },
+      }));
+      await act(async () => { server.reply(req1); });
+      await waitFor(() => expect(screen.getByTestId('mock-run-canvas').getAttribute('data-trace-status')).toBe('ready'));
+      expect(capturedCanvasProps.at(-1)!.resolvedTrace?.traceCut.revision).toBe('10');
+
+      // 2. Advance frontier to cut11 -> reject locate -> host MUST keep cut10 while setting status='error' and traceError!
+      ui.rerender(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          expectedActivationId={null}
+          attachmentTarget={attTarget}
+          ownerCurrent
+          liveCheckpointCut={cut11}
+        >
+          <OpenerBridge onReady={open => { openCanvas = open; }} />
+        </ConversationRunCanvasHost>,
+      );
+      const req2 = await server.waitFor('session/traceLocateWorkflow', 2);
+      locateOutcomes.set(String(req2.id), () => {
+        throw new RpcFailure({ code: -32000, message: 'cut 11 refresh failed' });
+      });
+      await act(async () => { server.reply(req2); });
+
+      await waitFor(() => expect(screen.getByTestId('mock-run-canvas').getAttribute('data-trace-status')).toBe('error'));
+      expect(screen.getByTestId('mock-run-canvas').getAttribute('data-trace-error')).toContain('cut 11 refresh failed');
+      expect(capturedCanvasProps.at(-1)!.resolvedTrace?.traceCut.revision).toBe('10');
+      const retryAtCut11 = capturedCanvasProps.at(-1)!.onRetryTrace!;
+
+      // 3. Explicit Retry at cut11 issues request #3; re-invoking stale retryAtCut11 while in-flight is suppressed.
+      act(() => { retryAtCut11(); });
+      const req3 = await server.waitFor('session/traceLocateWorkflow', 3);
+      act(() => { retryAtCut11(); });
+      expect(requestsForRun()).toHaveLength(3);
+
+      // 4. Frontier advances to cut12 while req3 is still held -> req3 is superseded; stale retryAtCut11 stays suppressed.
+      ui.rerender(
+        <ConversationRunCanvasHost
+          client={server.client}
+          sessionId="A"
+          conversationId={convId}
+          expectedActivationId={null}
+          attachmentTarget={attTarget}
+          ownerCurrent
+          liveCheckpointCut={cut12}
+        >
+          <OpenerBridge onReady={open => { openCanvas = open; }} />
+        </ConversationRunCanvasHost>,
+      );
+      const req4 = await server.waitFor('session/traceLocateWorkflow', 4);
+      act(() => { retryAtCut11(); });
+      expect(requestsForRun()).toHaveLength(4);
+
+      // Superseded req3 failure/result must NOT overwrite loading state or trigger error for cut12.
+      locateOutcomes.set(String(req3.id), () => {
+        throw new RpcFailure({ code: -32000, message: 'stale cut11 retry failure' });
+      });
+      await act(async () => { server.reply(req3); });
+      expect(screen.getByTestId('mock-run-canvas').getAttribute('data-trace-status')).not.toBe('error');
+      expect(screen.getByTestId('mock-run-canvas').getAttribute('data-trace-error')).toBe('');
+
+      // Resolve cut12 -> trace updates to cut12, traceError clears, stale retryAtCut11 stays suppressed.
+      const { root: root12, cut: resCut12 } = makeWorkflowRoot('trace:12', '12', convId, null);
+      locateOutcomes.set(String(req4.id), () => ({
+        type: 'trace_workflow_location',
+        location: { record_id: 'trace:12', page: { read_cut: resCut12, records: [root12], updates: [], next_cursor: null } },
+      }));
+      await act(async () => { server.reply(req4); });
+      await waitFor(() => expect(screen.getByTestId('mock-run-canvas').getAttribute('data-resolved-root')).toBe('trace:12'));
+      expect(screen.getByTestId('mock-run-canvas').getAttribute('data-trace-status')).toBe('ready');
+      expect(screen.getByTestId('mock-run-canvas').getAttribute('data-trace-error')).toBe('');
+      act(() => { retryAtCut11(); });
+      expect(requestsForRun()).toHaveLength(4);
     } finally {
       server.client.disconnect();
     }

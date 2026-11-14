@@ -97,6 +97,7 @@ export function ConversationRunCanvasHost({
   const [traceResolution, setTraceResolution] = useState<TraceResolutionState | null>(null);
   const [traceRetryCount, setTraceRetryCount] = useState(0);
   const openSeqRef = useRef(0);
+  const locateAttemptRef = useRef(0);
   const triggerRef = useRef<HTMLElement | null>(null);
 
   const currentScope = useMemo(
@@ -199,16 +200,25 @@ export function ConversationRunCanvasHost({
       return;
     }
     let mounted = true;
+    const attemptId = ++locateAttemptRef.current;
     const readOwned = () => latestOpenSeq.current === activeOpenSeq
       && latestScope.current.scope === currentScope
       && latestScope.current.valid
       && latestScope.current.checkLive();
-    const owned = () => mounted && readOwned();
-    setTraceResolution(prev => (
-      prev && prev.scope === currentScope && prev.openSeq === activeOpenSeq && prev.status === 'ready'
-        ? prev
-        : { scope: currentScope, openSeq: activeOpenSeq, status: 'loading' }
-    ));
+    const owned = () => mounted
+      && locateAttemptRef.current === attemptId
+      && readOwned();
+    setTraceResolution(prev => {
+      const retained = prev && prev.scope === currentScope && prev.openSeq === activeOpenSeq
+        ? prev.resolved
+        : undefined;
+      return {
+        scope: currentScope,
+        openSeq: activeOpenSeq,
+        status: 'loading',
+        ...(retained ? { resolved: retained } : {}),
+      };
+    });
     void resolveWorkflowTraceForRun({
       client,
       attachmentTarget,
@@ -223,28 +233,32 @@ export function ConversationRunCanvasHost({
         if (!owned()) return;
         if (resolved) {
           setTraceResolution({ scope: currentScope, openSeq: activeOpenSeq, status: 'ready', resolved });
-        } else if (!targetHasCompleteTrace) {
-          setTraceResolution(prev => (
-            prev && prev.scope === currentScope && prev.openSeq === activeOpenSeq && prev.status === 'ready'
-              ? prev
-              : { scope: currentScope, openSeq: activeOpenSeq, status: 'unavailable' }
-          ));
+        } else {
+          setTraceResolution(prev => {
+            const retained = prev && prev.scope === currentScope && prev.openSeq === activeOpenSeq
+              ? prev.resolved
+              : undefined;
+            return retained || targetHasCompleteTrace
+              ? { scope: currentScope, openSeq: activeOpenSeq, status: 'ready', ...(retained ? { resolved: retained } : {}) }
+              : { scope: currentScope, openSeq: activeOpenSeq, status: 'unavailable' };
+          });
         }
       })
       .catch(error => {
         if (!owned()) return;
-        if (!targetHasCompleteTrace) {
-          setTraceResolution(prev => (
-            prev && prev.scope === currentScope && prev.openSeq === activeOpenSeq && prev.status === 'ready'
-              ? prev
-              : {
-                scope: currentScope,
-                openSeq: activeOpenSeq,
-                status: 'error',
-                error: error instanceof Error ? error.message : String(error),
-              }
-          ));
-        }
+        // Preserve the last coherent committed trace separately from the latest frontier refresh failure.
+        setTraceResolution(prev => {
+          const retained = prev && prev.scope === currentScope && prev.openSeq === activeOpenSeq
+            ? prev.resolved
+            : undefined;
+          return {
+            scope: currentScope,
+            openSeq: activeOpenSeq,
+            status: 'error',
+            ...(retained ? { resolved: retained } : {}),
+            error: error instanceof Error ? error.message : String(error),
+          };
+        });
       });
     return () => { mounted = false; };
   }, [
@@ -289,17 +303,46 @@ export function ConversationRunCanvasHost({
       : state);
   }, [currentScope, activeOpenSeq]);
 
+  const matchingTraceResolution = traceResolution
+    && traceResolution.scope === currentScope
+    && traceResolution.openSeq === activeOpenSeq
+    ? traceResolution
+    : null;
+  const effectiveHostTraceStatus: TraceContextStatus = matchingTraceResolution?.status
+    ?? (targetHasCompleteTrace ? 'ready' : 'unavailable');
+  const latestRetryGate = useRef({
+    scope: currentScope,
+    openSeq: activeOpenSeq,
+    frontierKey: traceFrontierKey,
+    retryCount: traceRetryCount,
+    status: effectiveHostTraceStatus,
+  });
+  latestRetryGate.current = {
+    scope: currentScope,
+    openSeq: activeOpenSeq,
+    frontierKey: traceFrontierKey,
+    retryCount: traceRetryCount,
+    status: effectiveHostTraceStatus,
+  };
+
   const retryTrace = useCallback(() => {
     const latest = latestScope.current;
+    const gate = latestRetryGate.current;
     if (activeOpenSeq === null
       || latestOpenSeq.current !== activeOpenSeq
       || latest.scope !== currentScope
       || !latest.valid
-      || !latest.checkLive()) {
+      || !latest.checkLive()
+      || gate.scope !== currentScope
+      || gate.openSeq !== activeOpenSeq
+      || gate.frontierKey !== traceFrontierKey
+      || gate.retryCount !== traceRetryCount
+      || gate.status !== 'error') {
       return;
     }
+    latestRetryGate.current = { ...gate, status: 'loading' };
     setTraceRetryCount(c => c + 1);
-  }, [currentScope, activeOpenSeq]);
+  }, [currentScope, activeOpenSeq, traceFrontierKey, traceRetryCount]);
 
   const contextValue = useMemo(() => {
     const admittedScope = currentScope;
@@ -366,12 +409,6 @@ export function ConversationRunCanvasHost({
     return null;
   }, [client, currentScope, attachmentTarget, agentId, liveCheckpointCut, sessionId, historyNodeId, historyCut]);
 
-  const matchingTraceResolution = traceResolution
-    && traceResolution.scope === currentScope
-    && traceResolution.openSeq === activeOpenSeq
-    ? traceResolution
-    : null;
-
   const isSourceLiveAttached = Boolean(attachmentTarget) && scopeValidNow;
   const authoritativeLiveRuns = useMemo(() => {
     if (!isSourceLiveAttached) return undefined;
@@ -394,10 +431,8 @@ export function ConversationRunCanvasHost({
           onResolveRunId={resolveRunId}
           pendingInteractions={pendingInteractions}
           resolvedTrace={matchingTraceResolution?.resolved}
-          traceStatus={matchingTraceResolution?.status === 'ready'
-            ? 'ready'
-            : (targetHasCompleteTrace ? 'ready' : (matchingTraceResolution?.status ?? 'unavailable'))}
-          traceError={matchingTraceResolution?.error}
+          traceStatus={effectiveHostTraceStatus}
+          traceError={matchingTraceResolution?.status === 'error' ? matchingTraceResolution.error : undefined}
           onRetryTrace={retryTrace}
           onClose={close}
           createTransport={createTransport}

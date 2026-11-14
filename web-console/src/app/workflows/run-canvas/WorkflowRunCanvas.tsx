@@ -808,7 +808,7 @@ export function WorkflowRunCanvas({
     return () => { active = false; };
   }, [exactVisitKey, exactLookupVisit, exactLookupCut, exactLookupReader, target.conversationId]);
 
-  const resolvedSelectedTraceNode = targetSelectedTraceNodeAtCut ?? exactMatchedTraceNode;
+  const resolvedSelectedTraceNode = exactMatchedTraceNode ?? targetSelectedTraceNodeAtCut;
   const overlay = useMemo(() => resolvedSelectedTraceNode === targetSelectedTraceNodeAtCut
     ? baseOverlay
     : aggregateRunOverlay({
@@ -834,19 +834,35 @@ export function WorkflowRunCanvas({
   ]);
 
   const selectedOverlay = selectedViewId ? overlay.byViewId.get(selectedViewId) : undefined;
+  const explicitSelectedMatchesView = Boolean(
+    selectedVisit
+    && selectedVisitKey
+    && selectedViewId
+    && selectedMatchesView
+    && (resolvedRunId
+      ? sameWorkflowRunId(selectedVisit.block.run, resolvedRunId)
+      : (!target.conversationId || selectedVisit.block.run.conversation_id === target.conversationId)),
+  );
   const currentVisit = useMemo<NormalizedVisitRecord | undefined>(() => {
-    if (selectedOverlay) return defaultVisitForNode(selectedOverlay, selectedVisitKey);
-    if (selectedVisit && selectedVisitKey && selectedViewId && selectedMatchesView) {
+    if (selectedOverlay) {
+      if (explicitSelectedMatchesView) {
+        const exact = selectedOverlay.visits.find(item => item.key === selectedVisitKey);
+        if (exact) return exact;
+      } else {
+        return defaultVisitForNode(selectedOverlay, selectedVisitKey);
+      }
+    }
+    if (explicitSelectedMatchesView && selectedVisit && selectedVisitKey && selectedViewId) {
       const traceMatch = effectiveTraceNodes?.find(item => visitIdentityKey(item.instance) === selectedVisitKey)
         ?? (resolvedSelectedTraceNode && visitIdentityKey(resolvedSelectedTraceNode.instance) === selectedVisitKey
           ? resolvedSelectedTraceNode
           : undefined);
+      const liveInst = activeRun?.instances.find(inst => inst.node != null && inst.visit != null && visitIdentityKey({
+        block: inst.block,
+        node: inst.node,
+        visit: inst.visit,
+      }) === selectedVisitKey);
       if (traceMatch) {
-        const liveInst = activeRun?.instances.find(inst => inst.node != null && inst.visit != null && visitIdentityKey({
-          block: inst.block,
-          node: inst.node,
-          visit: inst.visit!,
-        }) === selectedVisitKey);
         const state = effectiveTraceVisitState(traceMatch.state, activeRun, liveInst);
         return {
           key: selectedVisitKey,
@@ -860,13 +876,25 @@ export function WorkflowRunCanvas({
           ...(liveInst ? { instanceView: liveInst } : {}),
         } satisfies NormalizedVisitRecord;
       }
+      // Preserve the explicitly selected visit identity even while its exact header lookup at this cut is
+      // pending, failed, or unavailable/null so sibling headers, I/O, or child refs are never substituted.
+      return {
+        key: selectedVisitKey,
+        viewId: selectedViewId,
+        order: 0,
+        instance: selectedVisit,
+        kind: liveInst?.kind,
+        state: liveInst ? effectiveTraceVisitState(liveInst.state, activeRun, liveInst) : { type: 'incomplete' },
+        reviewPending: false,
+        ...(liveInst ? { instanceView: liveInst } : {}),
+      } satisfies NormalizedVisitRecord;
     }
     return undefined;
   }, [
     selectedOverlay,
+    explicitSelectedMatchesView,
     selectedVisit,
     selectedVisitKey,
-    selectedMatchesView,
     resolvedSelectedTraceNode,
     activeRun,
     selectedViewId,
@@ -876,15 +904,17 @@ export function WorkflowRunCanvas({
   const selectCanvasElement = (next: Selection) => {
     setSelection(next);
     setVisitTab('overview');
-    if (next?.kind === 'node') {
-      const nextViewId = qualifiedNodeViewId((next.path ?? []).flatMap(s => [s.node, 'body']), next.id);
+    const nextViewId = next?.kind === 'node'
+      ? qualifiedNodeViewId((next.path ?? []).flatMap(s => [s.node, 'body']), next.id)
+      : next?.kind === 'start'
+        ? viewId(next.path ?? [], 'start')
+        : undefined;
+    if (nextViewId) {
+      if (explicitSelectedMatchesView && nextViewId === selectedViewId) {
+        return;
+      }
       const nextOverlay = overlay.byViewId.get(nextViewId);
-      const picked = defaultVisitForNode(nextOverlay, selectedVisitKey);
-      setSelectedVisit(picked?.instance);
-    } else if (next?.kind === 'start') {
-      const nextViewId = viewId(next.path ?? [], 'start');
-      const nextOverlay = overlay.byViewId.get(nextViewId);
-      const picked = defaultVisitForNode(nextOverlay, selectedVisitKey);
+      const picked = defaultVisitForNode(nextOverlay);
       setSelectedVisit(picked?.instance);
     } else {
       setSelectedVisit(undefined);
@@ -946,34 +976,34 @@ export function WorkflowRunCanvas({
     }
   })();
 
-  const hostTraceError = !effectiveTraceRoot && !effectiveTraceNodes && traceStatus === 'error'
+  const hostTraceError = traceStatus === 'error'
     ? (traceError ?? tx('workflows:run-canvas.trace-unavailable'))
     : null;
-  const traceErrorBanner = currentTraceError
+  const traceErrorBanner = hostTraceError
     ? {
-      text: currentTraceError.knownTotal && currentTraceError.knownTotal !== '0'
-        ? tx('workflows:run-canvas.trace-error-with-total', { p0: currentTraceError.knownTotal, p1: currentTraceError.message })
-        : tx('workflows:run-canvas.trace-error', { p0: currentTraceError.message }),
-      onRetry: () => {
-        if (lifetime.current !== lifetimeAtRender
-          || ownedIdentity.current !== targetIdentity
-          || ownedPageIdentity.current !== currentTraceError.ownerKey) return;
-        if (currentTraceError.scope === 'page') {
-          loadMoreTraceVisits();
-        } else {
-          setTraceRetryCount(c => c + 1);
+      text: tx('workflows:run-canvas.trace-error', { p0: hostTraceError }),
+      onRetry: onRetryTrace
+        ? () => {
+          if (!currentOwned()) return;
+          onRetryTrace();
         }
-      },
+        : undefined,
     }
-    : hostTraceError
+    : currentTraceError
       ? {
-        text: tx('workflows:run-canvas.trace-error', { p0: hostTraceError }),
-        onRetry: onRetryTrace
-          ? () => {
-            if (!currentOwned()) return;
-            onRetryTrace();
+        text: currentTraceError.knownTotal && currentTraceError.knownTotal !== '0'
+          ? tx('workflows:run-canvas.trace-error-with-total', { p0: currentTraceError.knownTotal, p1: currentTraceError.message })
+          : tx('workflows:run-canvas.trace-error', { p0: currentTraceError.message }),
+        onRetry: () => {
+          if (lifetime.current !== lifetimeAtRender
+            || ownedIdentity.current !== targetIdentity
+            || ownedPageIdentity.current !== currentTraceError.ownerKey) return;
+          if (currentTraceError.scope === 'page') {
+            loadMoreTraceVisits();
+          } else {
+            setTraceRetryCount(c => c + 1);
           }
-          : undefined,
+        },
       }
       : null;
 
@@ -1217,7 +1247,17 @@ export function WorkflowRunCanvas({
                   <div role="tabpanel" aria-label={visitTab === 'overview' ? tx('trajectory:tab.summary') : visitTab === 'input' ? tx('workflows:run-canvas.input') : tx('workflows:run-canvas.output')}>
                     {visitTab === 'overview' && <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                       <div className={css.inspectorMeta}>
-                        <span>{tx('trajectory:workflow.node-state')}: {currentVisit.state.type === 'incomplete' ? tx('workflows:run-canvas.status.incomplete') : workflowStatus(currentVisit.state, tx)}</span>
+                        {!currentVisit.traceNode && !currentVisit.instanceView ? (
+                          <span role={fieldPanelTraceStatus === 'error' ? 'alert' : 'status'} className={css.muted}>
+                            {fieldPanelTraceStatus === 'loading'
+                              ? tx('workflows:run-canvas.trace-loading')
+                              : fieldPanelTraceStatus === 'error'
+                                ? (fieldPanelTraceError ?? tx('workflows:run-canvas.trace-unavailable'))
+                                : tx('workflows:run-canvas.no-trace-field')}
+                          </span>
+                        ) : (
+                          <span>{tx('trajectory:workflow.node-state')}: {currentVisit.state.type === 'incomplete' ? tx('workflows:run-canvas.status.incomplete') : workflowStatus(currentVisit.state, tx)}</span>
+                        )}
                         {currentVisit.instance.block.invocations.length > 1 && <span>
                           {tx('workflows:run-canvas.iterations', { p0: currentVisit.instance.block.invocations.slice(1).join('.') })}
                         </span>}
