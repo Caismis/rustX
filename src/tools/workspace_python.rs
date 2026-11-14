@@ -770,7 +770,18 @@ impl Owner {
         let path_stamp = stamp(&path).ok_or("the Python interpreter cannot be inspected")?;
         let entry = fixed_interpreter_entry(&path)?;
         let entry_stamp = stamp(&entry).ok_or("the Python interpreter cannot be inspected")?;
-        let interpreter = self.probe_interpreter(root, &entry, host, expected).await?;
+        // File requests can name invocation-sensitive tool shims. Resolve the
+        // launch path while retaining the authored entry's witness. Directory
+        // entries keep their invocation path and virtual-environment context.
+        let invocation = if entry == path {
+            std::fs::canonicalize(&entry)
+                .map_err(|_| "the Python interpreter cannot be inspected")?
+        } else {
+            entry.clone()
+        };
+        let interpreter = self
+            .probe_interpreter(root, &invocation, host, expected)
+            .await?;
         interpreter.check_requirements(Some(pin), requires)?;
         let executable = std::fs::canonicalize(&interpreter.executable)
             .map_err(|_| "the Python interpreter cannot be inspected")?;
@@ -2072,10 +2083,36 @@ pub(crate) mod tests {
         calls: Mutex<Vec<Vec<String>>>,
     }
 
+    impl RecordingSupervisedProbe {
+        fn assert_invoked(&self, program: &Path) {
+            let calls = self.calls.lock().unwrap();
+            assert!(
+                calls.iter().any(|argv| Path::new(&argv[0]) == program),
+                "missing invocation of {program:?}: {calls:?}"
+            );
+        }
+    }
+
     impl ProgramProbe for RecordingSupervisedProbe {
         fn run(&self, request: ProgramRequest) -> BoxFuture<'_, Result<ProgramOutput, String>> {
             self.calls.lock().unwrap().push(request.argv.clone());
-            Box::pin(async move { super::SupervisedProbe.run(request).await })
+            Box::pin(async move {
+                let program = request.argv[0].clone();
+                let result = super::SupervisedProbe.run(request).await;
+                match &result {
+                    Ok(output) if output.status != 0 => eprintln!(
+                        "Workspace Python fixture {program} exited {}: {}",
+                        output.status,
+                        super::bounded_diagnostic("stderr", &output.stderr)
+                    ),
+                    Err(message) => eprintln!(
+                        "Workspace Python fixture {program}: {}",
+                        super::bounded_diagnostic("probe failed", message)
+                    ),
+                    _ => {}
+                }
+                result
+            })
         }
     }
 
@@ -3864,7 +3901,7 @@ pub(crate) mod tests {
                 ("UV_PYTHON_DOWNLOADS", "never"),
             ]);
             let owner = Owner::for_test(
-                Arc::new(super::SupervisedProbe),
+                Arc::new(RecordingSupervisedProbe::default()),
                 Some(Arc::new(host)),
                 None,
                 None,
@@ -3943,12 +3980,8 @@ pub(crate) mod tests {
                 ("UV_OFFLINE", "1"),
                 ("UV_PYTHON_DOWNLOADS", "never"),
             ]);
-            let owner = Owner::for_test(
-                Arc::new(super::SupervisedProbe),
-                Some(Arc::new(host)),
-                None,
-                None,
-            );
+            let probe = Arc::new(RecordingSupervisedProbe::default());
+            let owner = Owner::for_test(probe.clone(), Some(Arc::new(host)), None, None);
             owner.prepare(root.path().to_path_buf()).await;
             assert_eq!(
                 owner.observe(root.path()).virtual_env,
@@ -3960,6 +3993,12 @@ pub(crate) mod tests {
                 python_base_executable(&root.path().join(".venv/bin/python")),
                 python_base_executable(&source.join("bin/python3"))
             );
+            let selected = source.join(if spelling == "relative" {
+                "bin/python3"
+            } else {
+                "bin/python"
+            });
+            probe.assert_invoked(&selected);
             owner.stop().await;
 
             let no_uv = workspace();
@@ -4331,6 +4370,83 @@ pub(crate) mod tests {
         format!("{}:/usr/bin:/bin", uv.parent().unwrap().display())
     }
 
+    fn argv0_sensitive_python(root: &Path) -> (PathBuf, PathBuf) {
+        let launcher = root.join("python-entry");
+        let alias = root.join("pinned-python");
+        write_executable(
+            &launcher,
+            "#!/bin/sh\nif [ \"$0\" != \"$PIN_EXPECTED_PROGRAM\" ]; then echo 'unexpected interpreter invocation path' >&2; exit 73; fi\nexec /usr/bin/python3 \"$@\"\n",
+        );
+        std::os::unix::fs::symlink(&launcher, &alias).unwrap();
+        for (program, status) in [(&alias, 73), (&launcher, 0)] {
+            let output = std::process::Command::new(program)
+                .args(["-I", "-c", "import sys; print(sys.prefix)"])
+                .env_clear()
+                .env("PATH", "/usr/bin:/bin")
+                .env("HOME", root)
+                .env("PIN_EXPECTED_PROGRAM", &launcher)
+                .output()
+                .unwrap();
+            assert_eq!(
+                output.status.code(),
+                Some(status),
+                "{program:?}: {output:?}"
+            );
+        }
+        (launcher, alias)
+    }
+
+    pub(crate) async fn file_pin_invocation_resolves_alias_without_losing_its_witness() {
+        let root = workspace();
+        let (launcher, alias) = argv0_sensitive_python(root.path());
+        std::fs::write(root.path().join(".python-version"), "./pinned-python").unwrap();
+        let no_uv = workspace();
+        for (reuse, path) in [
+            (false, installed_uv_path()),
+            (true, no_uv.path().display().to_string()),
+        ] {
+            assert_eq!(root.path().join(".venv").exists(), reuse);
+            let original = generation_of(root.path());
+            let host = host_from_entries(vec![
+                ("PATH", &path),
+                ("PIN_EXPECTED_PROGRAM", launcher.to_str().unwrap()),
+                ("UV_OFFLINE", "1"),
+                ("UV_PYTHON_DOWNLOADS", "never"),
+            ]);
+            if reuse {
+                assert!(super::find_uv(&host, root.path()).is_none());
+            }
+            let probe = Arc::new(RecordingSupervisedProbe::default());
+            let owner = Owner::for_test(probe.clone(), Some(Arc::new(host)), None, None);
+            owner.prepare(root.path().to_path_buf()).await;
+            assert_eq!(
+                owner.observe(root.path()).virtual_env,
+                Some(root.path().join(".venv")),
+                "reuse={reuse}: {:?}",
+                owner.records.lock().unwrap()
+            );
+            assert_eq!(
+                python_base_executable(&root.path().join(".venv/bin/python")),
+                python_base_executable(Path::new("/usr/bin/python3"))
+            );
+            probe.assert_invoked(&launcher);
+            {
+                let calls = probe.calls.lock().unwrap();
+                assert!(calls.iter().all(|argv| Path::new(&argv[0]) != alias));
+            }
+            if reuse {
+                assert_eq!(generation_of(root.path()), original);
+                let count = probe.calls.lock().unwrap().len();
+                std::fs::rename(&alias, root.path().join("previous-alias")).unwrap();
+                std::os::unix::fs::symlink("/usr/bin/python3", &alias).unwrap();
+                assert!(owner.observe(root.path()).virtual_env.is_none());
+                assert_eq!(probe.calls.lock().unwrap().len(), count);
+                assert_eq!(generation_of(root.path()), original);
+            }
+            owner.stop().await;
+        }
+    }
+
     pub(crate) async fn repaired_path_pin_recovers_without_rewriting_root_inputs() {
         for reuse in [false, true] {
             for unusable in [false, true] {
@@ -4369,7 +4485,7 @@ pub(crate) mod tests {
                     ("UV_PYTHON_DOWNLOADS", "never"),
                 ]);
                 let owner = Owner::for_test(
-                    Arc::new(super::SupervisedProbe),
+                    Arc::new(RecordingSupervisedProbe::default()),
                     Some(Arc::new(host)),
                     None,
                     None,

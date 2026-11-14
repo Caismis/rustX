@@ -76,6 +76,9 @@ ordinary meaning.
   validated executable to uv; adoption compares the requested invocation's
   base executable with the environment's, so macOS launchers can resolve to
   their actual interpreter without accepting a different Python binary.
+  File requests are probed through their resolved invocation path while the
+  authored alias remains in the witness. Directory entries retain their
+  invocation path so their virtual-environment context remains effective.
   Missing, unusable, or changed path-pin interpreters use the existing
   30-second Unavailable cooldown in both creation and adoption. Installing or
   repairing that external interpreter can therefore recover without rewriting

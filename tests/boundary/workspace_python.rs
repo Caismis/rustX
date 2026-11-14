@@ -12,6 +12,11 @@ async fn relative_interpreter_pin_is_bound_to_the_workspace() {
 }
 
 #[tokio::test]
+async fn file_pin_invocation_resolves_alias_without_losing_its_witness() {
+    crate::tools::workspace_python::tests::file_pin_invocation_resolves_alias_without_losing_its_witness().await;
+}
+
+#[tokio::test]
 async fn directory_pins_create_and_reuse_without_uv() {
     crate::tools::workspace_python::tests::directory_pins_create_and_reuse_without_uv().await;
 }
