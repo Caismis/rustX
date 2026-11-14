@@ -65,7 +65,9 @@ ordinary meaning.
   creation and retain its identity across the capacity wait. A fixed path can
   name an executable/launcher or a Python installation/virtual-environment
   directory. Directory requests select `bin/python` when present, otherwise
-  `bin/python3`; a selected invalid entry is diagnosed rather than skipped.
+  `bin/python3` only when the preferred directory entry is absent. A selected
+  invalid entry, including a dangling or cyclic link, is diagnosed rather than
+  skipped; inspection errors also stop preparation.
   This order is fixed across uv versions and also applies to reuse without uv.
   Bare relative directory names emitted by `uv python pin` also resolve from
   the Workspace root; restoring such a directory invalidates an earlier

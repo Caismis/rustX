@@ -1076,10 +1076,10 @@ fn fixed_interpreter_entry(path: &Path) -> Result<PathBuf, &'static str> {
         std::fs::metadata(path).map_err(|_| "the Python interpreter cannot be inspected")?;
     if metadata.is_dir() {
         let python = path.join("bin/python");
-        let entry = if python.exists() {
-            python
-        } else {
-            path.join("bin/python3")
+        let entry = match std::fs::symlink_metadata(&python) {
+            Ok(_) => python,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => path.join("bin/python3"),
+            Err(_) => return Err("the preferred Python installation entry cannot be inspected"),
         };
         if std::fs::metadata(&entry).is_ok_and(|meta| meta.is_file() && meta.mode() & 0o111 != 0) {
             return Ok(entry);
@@ -2067,6 +2067,18 @@ pub(crate) mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct RecordingSupervisedProbe {
+        calls: Mutex<Vec<Vec<String>>>,
+    }
+
+    impl ProgramProbe for RecordingSupervisedProbe {
+        fn run(&self, request: ProgramRequest) -> BoxFuture<'_, Result<ProgramOutput, String>> {
+            self.calls.lock().unwrap().push(request.argv.clone());
+            Box::pin(async move { super::SupervisedProbe.run(request).await })
+        }
+    }
+
     struct Scripted {
         calls: Mutex<Vec<Vec<String>>>,
         version: String,
@@ -2195,6 +2207,15 @@ pub(crate) mod tests {
             std::os::unix::fs::symlink(interpreter, target.join("bin").join(name)).expect("link");
         }
         std::fs::write(target.join("pyvenv.cfg"), "home = /usr\n").expect("pyvenv");
+    }
+
+    fn retained_fixed_interpreter(owner: &Owner, root: &Path) -> Arc<super::FixedInterpreter> {
+        match owner.records.lock().unwrap().get(root) {
+            Some(Record::Ready {
+                fixed: Some(fixed), ..
+            }) => fixed.clone(),
+            other => panic!("expected a retained directory witness, got {other:?}"),
+        }
     }
 
     fn workspace() -> tempfile::TempDir {
@@ -2851,7 +2872,14 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn directory_pin_entry_changes_invalidate_ready_without_new_probes() {
-        for change in ["redirect", "replace", "preferred", "directory-alias"] {
+        for (change, selected) in [
+            ("redirect", "python"),
+            ("replace", "python"),
+            ("preferred", "python3"),
+            ("directory-alias", "python"),
+            ("dangling-preferred", "python3"),
+            ("cyclic-preferred", "python3"),
+        ] {
             let root = workspace();
             let source = root.path().join("source-env");
             std::fs::create_dir_all(source.join("bin")).unwrap();
@@ -2859,11 +2887,8 @@ pub(crate) mod tests {
             let other = root.path().join("other-python");
             write_executable(&base, "#!/bin/sh\nexit 0\n");
             write_executable(&other, "#!/bin/sh\nexit 0\n");
-            let entry = source.join(if change == "preferred" {
-                "bin/python3"
-            } else {
-                "bin/python"
-            });
+            let preferred_change = selected == "python3";
+            let entry = source.join("bin").join(selected);
             std::os::unix::fs::symlink(&base, &entry).unwrap();
             write_linked_venv(&root.path().join(".venv"), &base);
             let directory_alias = root.path().join("source-alias");
@@ -2881,12 +2906,7 @@ pub(crate) mod tests {
             let owner = Owner::for_test(probe.clone(), None, None, None);
             owner.prepare(root.path().to_path_buf()).await;
             assert!(owner.observe(root.path()).virtual_env.is_some());
-            let fixed = match owner.records.lock().unwrap().get(root.path()) {
-                Some(Record::Ready {
-                    fixed: Some(fixed), ..
-                }) => fixed.clone(),
-                other => panic!("expected a retained directory witness, got {other:?}"),
-            };
+            let fixed = retained_fixed_interpreter(&owner, root.path());
             let calls = probe.calls.lock().unwrap().len();
             if change == "directory-alias" {
                 let other_source = root.path().join("other-env");
@@ -2894,8 +2914,13 @@ pub(crate) mod tests {
                 std::os::unix::fs::symlink(&base, other_source.join("bin/python")).unwrap();
                 std::fs::rename(&directory_alias, root.path().join("previous-alias")).unwrap();
                 std::os::unix::fs::symlink(other_source, directory_alias).unwrap();
-            } else if change == "preferred" {
-                std::os::unix::fs::symlink(&base, source.join("bin/python")).unwrap();
+            } else if preferred_change {
+                let target = match change {
+                    "dangling-preferred" => Path::new("missing-python"),
+                    "cyclic-preferred" => Path::new("python"),
+                    _ => &base,
+                };
+                std::os::unix::fs::symlink(target, source.join("bin/python")).unwrap();
             } else {
                 std::fs::rename(&entry, source.join("bin/previous")).unwrap();
                 std::os::unix::fs::symlink(
@@ -2927,6 +2952,19 @@ pub(crate) mod tests {
                 calls,
                 "observation only inspects metadata"
             );
+            if matches!(change, "dangling-preferred" | "cyclic-preferred") {
+                owner.prepare(root.path().to_path_buf()).await;
+                assert!(matches!(
+                    owner.records.lock().unwrap().get(root.path()),
+                    Some(Record::Unavailable { .. })
+                ));
+                assert!(
+                    probe.calls.lock().unwrap()[calls..]
+                        .iter()
+                        .all(|argv| Path::new(&argv[0]) != entry)
+                );
+                assert_eq!(generation_of(root.path()), original);
+            }
             owner.stop().await;
         }
     }
@@ -3946,12 +3984,24 @@ pub(crate) mod tests {
     }
 
     pub(crate) async fn invalid_directory_pins_fail_without_changing_the_target() {
-        for kind in ["empty", "nonexecutable", "not-python"] {
+        for kind in ["empty", "nonexecutable", "not-python", "dangling", "cyclic"] {
             for reuse in [false, true] {
                 let root = workspace();
                 let source = root.path().join("source-env");
                 std::fs::create_dir_all(source.join("bin")).unwrap();
-                if kind != "empty" {
+                if matches!(kind, "dangling" | "cyclic") {
+                    std::os::unix::fs::symlink(
+                        if kind == "dangling" {
+                            "missing-python"
+                        } else {
+                            "python"
+                        },
+                        source.join("bin/python"),
+                    )
+                    .unwrap();
+                    std::os::unix::fs::symlink("/usr/bin/python3", source.join("bin/python3"))
+                        .unwrap();
+                } else if kind != "empty" {
                     write_executable(&source.join("bin/python"), "#!/bin/sh\nexit 0\n");
                     if kind == "nonexecutable" {
                         std::fs::set_permissions(
@@ -3981,12 +4031,8 @@ pub(crate) mod tests {
                     ("UV_OFFLINE", "1"),
                     ("UV_PYTHON_DOWNLOADS", "never"),
                 ]);
-                let owner = Owner::for_test(
-                    Arc::new(super::SupervisedProbe),
-                    Some(Arc::new(host)),
-                    None,
-                    None,
-                );
+                let probe = Arc::new(RecordingSupervisedProbe::default());
+                let owner = Owner::for_test(probe.clone(), Some(Arc::new(host)), None, None);
                 tokio::time::timeout(
                     super::PROBE_TIMEOUT * 4,
                     owner.prepare(root.path().to_path_buf()),
@@ -4002,6 +4048,29 @@ pub(crate) mod tests {
                 }
                 assert_eq!(generation_of(root.path()), original);
                 assert!(owner.observe(root.path()).virtual_env.is_none());
+                {
+                    let calls = probe.calls.lock().unwrap();
+                    assert!(
+                        calls
+                            .iter()
+                            .all(|argv| Path::new(&argv[0]) != source.join("bin/python3")),
+                        "no fallback interpreter probe: {calls:?}"
+                    );
+                    assert!(
+                        calls
+                            .iter()
+                            .all(|argv| !argv.iter().any(|arg| arg == "venv")),
+                        "no creation dispatch: {calls:?}"
+                    );
+                    if matches!(kind, "dangling" | "cyclic") {
+                        assert!(
+                            calls
+                                .iter()
+                                .all(|argv| Path::new(&argv[0]) != source.join("bin/python")),
+                            "invalid selected entry fails before probing: {calls:?}"
+                        );
+                    }
+                }
                 owner.stop().await;
             }
         }
