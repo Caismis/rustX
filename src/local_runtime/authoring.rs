@@ -1,9 +1,6 @@
 //! Strict TOML layers and explicit native composition. No dynamic value merge.
 use super::{
-    config::{
-        ContextPolicyDocument, CurrentRuntimeConfig, InvocationPolicyDocument, McpServerDocument,
-        McpTransportType, NativePolicyOverrideDocument,
-    },
+    config::{ContextPolicyDocument, CurrentRuntimeConfig, McpServerDocument, McpTransportType},
     configuration::Origin,
 };
 use crate::model::catalog::{ModelProfileId, ModelRef};
@@ -104,11 +101,6 @@ pub struct RuntimeLayer<P = crate::model::authoring::Provider, E = AuthoredEnvir
     pub tool_deadline_policy: Option<ToolDeadlineLayer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_startup_policy: Option<McpStartupPolicyLayer>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mcp_tool_policies:
-        Option<BTreeMap<crate::runtime::identity::McpServerId, InvocationPolicyDocument>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_tools: Option<NativeToolsLayer>,
     /// Tool environment entries. Native authoring holds the literal values
     /// ([`AuthoredEnvironment`]); every projection that leaves native authority
     /// holds the identities alone ([`EnvironmentIdentities`]), because a
@@ -133,8 +125,6 @@ impl<P, E> Default for RuntimeLayer<P, E> {
             model_timeout_policy: None,
             tool_deadline_policy: None,
             mcp_startup_policy: None,
-            mcp_tool_policies: None,
-            native_tools: None,
             environment: None,
             subagents: None,
         }
@@ -167,8 +157,6 @@ impl<P, E> RuntimeLayer<P, E> {
             model_timeout_policy: self.model_timeout_policy,
             tool_deadline_policy: self.tool_deadline_policy,
             mcp_startup_policy: self.mcp_startup_policy,
-            mcp_tool_policies: self.mcp_tool_policies,
-            native_tools: self.native_tools,
             environment: self.environment.map(environment),
             subagents: self.subagents,
         }
@@ -237,13 +225,7 @@ pub struct ModelLayer {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<ModelOutput>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub summary_model: Option<AuxiliaryModelAuthoring>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title_model: Option<AuxiliaryModelAuthoring>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub classification_model: Option<AuxiliaryModelAuthoring>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub btw_model: Option<AuxiliaryModelAuthoring>,
+    pub auxiliary: Option<AuxiliaryModelAuthoring>,
 }
 partial!(ContextLayer {
     reserve_tokens: u64,
@@ -262,14 +244,6 @@ partial!(SubagentsLayer {
     max_concurrent: usize
 });
 
-partial!(NativeToolsLayer {
-    read: NativePolicyOverrideDocument,
-    write: NativePolicyOverrideDocument,
-    edit: NativePolicyOverrideDocument,
-    glob: NativePolicyOverrideDocument,
-    grep: NativePolicyOverrideDocument,
-    bash: NativePolicyOverrideDocument
-});
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ModelOutput {
@@ -314,12 +288,50 @@ impl IdleLiveness {
 }
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
+pub enum AuxiliaryProfileAuthoring {
+    Lowest {},
+    ModelDefault {},
+    Explicit { id: ModelProfileId },
+}
+impl Default for AuxiliaryProfileAuthoring {
+    fn default() -> Self {
+        Self::Lowest {}
+    }
+}
+impl AuxiliaryProfileAuthoring {
+    fn resolve(self) -> crate::model::AuxiliaryProfileSelection {
+        match self {
+            Self::Lowest {} => crate::model::AuxiliaryProfileSelection::Lowest,
+            Self::ModelDefault {} => crate::model::AuxiliaryProfileSelection::ModelDefault,
+            Self::Explicit { id } => crate::model::AuxiliaryProfileSelection::Explicit { id },
+        }
+    }
+    fn from_policy(policy: &crate::model::AuxiliaryProfileSelection) -> Self {
+        match policy {
+            crate::model::AuxiliaryProfileSelection::Lowest => Self::Lowest {},
+            crate::model::AuxiliaryProfileSelection::ModelDefault => Self::ModelDefault {},
+            crate::model::AuxiliaryProfileSelection::Explicit { id } => {
+                Self::Explicit { id: id.clone() }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(tag = "mode", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuxiliaryModelAuthoring {
-    Session {},
+    Session {
+        #[serde(default)]
+        profile: AuxiliaryProfileAuthoring,
+        #[serde(default)]
+        request_params: AuthoredRequestParams,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_output_tokens: Option<ModelOutput>,
+    },
     Explicit {
         model: ModelRef,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        profile: Option<ModelProfileId>,
+        #[serde(default)]
+        profile: AuxiliaryProfileAuthoring,
         #[serde(default)]
         request_params: AuthoredRequestParams,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -329,7 +341,15 @@ pub enum AuxiliaryModelAuthoring {
 impl AuxiliaryModelAuthoring {
     fn resolve(self) -> AuxiliaryModelPolicy {
         match self {
-            Self::Session {} => AuxiliaryModelPolicy::Session,
+            Self::Session {
+                profile,
+                request_params,
+                max_output_tokens,
+            } => AuxiliaryModelPolicy::Session {
+                profile: profile.resolve(),
+                request_params: request_params.0,
+                max_output_tokens: max_output_tokens.and_then(ModelOutput::resolve),
+            },
             Self::Explicit {
                 model,
                 profile,
@@ -337,9 +357,33 @@ impl AuxiliaryModelAuthoring {
                 max_output_tokens,
             } => AuxiliaryModelPolicy::Explicit {
                 model,
-                profile,
+                profile: profile.resolve(),
                 request_params: request_params.0,
                 max_output_tokens: max_output_tokens.and_then(ModelOutput::resolve),
+            },
+        }
+    }
+    fn from_policy(policy: &AuxiliaryModelPolicy) -> Self {
+        match policy {
+            AuxiliaryModelPolicy::Session {
+                profile,
+                request_params,
+                max_output_tokens,
+            } => Self::Session {
+                profile: AuxiliaryProfileAuthoring::from_policy(profile),
+                request_params: AuthoredRequestParams(request_params.clone()),
+                max_output_tokens: max_output_tokens.map(|tokens| ModelOutput::Limit { tokens }),
+            },
+            AuxiliaryModelPolicy::Explicit {
+                model,
+                profile,
+                request_params,
+                max_output_tokens,
+            } => Self::Explicit {
+                model: model.clone(),
+                profile: AuxiliaryProfileAuthoring::from_policy(profile),
+                request_params: AuthoredRequestParams(request_params.clone()),
+                max_output_tokens: max_output_tokens.map(|tokens| ModelOutput::Limit { tokens }),
             },
         }
     }
@@ -368,6 +412,10 @@ pub struct McpAuthoring {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub cwd: Option<PathBuf>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tools: BTreeMap<String, crate::local_runtime::config::McpToolPermissionDocument>,
 }
 impl McpAuthoring {
     pub(super) fn resolve(self) -> McpServerDocument {
@@ -381,6 +429,8 @@ impl McpAuthoring {
             args: self.args,
             env: self.env,
             cwd: self.cwd,
+            permissions: self.permissions,
+            tools: self.tools,
         }
     }
 }
@@ -458,16 +508,6 @@ impl AgentProfileLayer {
         }
     }
 }
-impl Copy for NativeToolsLayer {}
-
-impl NativeToolsLayer {
-    fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
-        replace_units!(self, layer, "native_tools.", origin, origins;
-            read, write, edit, glob, grep, bash
-        );
-    }
-}
-
 macro_rules! apply {
     ($layer:ident, $target:ident, $($field:ident),* $(,)?) => { $(if let Some(value) = $layer.$field { $target.$field = value; })* }
 }
@@ -488,66 +528,7 @@ pub(super) fn serialize_profile_model<S: serde::Serializer>(
             max_output_tokens: model
                 .max_output_tokens
                 .map(|tokens| ModelOutput::Limit { tokens }),
-            summary_model: Some(match &model.summary_model {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
-                    model,
-                    profile,
-                    request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
-                    model: model.clone(),
-                    profile: profile.clone(),
-                    request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
-                },
-            }),
-            title_model: Some(match &model.title_model {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
-                    model,
-                    profile,
-                    request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
-                    model: model.clone(),
-                    profile: profile.clone(),
-                    request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
-                },
-            }),
-            classification_model: Some(match model.classification_model.as_ref() {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
-                    model,
-                    profile,
-                    request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
-                    model: model.clone(),
-                    profile: profile.clone(),
-                    request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
-                },
-            }),
-            btw_model: Some(match model.btw_model.as_ref() {
-                AuxiliaryModelPolicy::Session => AuxiliaryModelAuthoring::Session {},
-                AuxiliaryModelPolicy::Explicit {
-                    model,
-                    profile,
-                    request_params,
-                    max_output_tokens,
-                } => AuxiliaryModelAuthoring::Explicit {
-                    model: model.clone(),
-                    profile: profile.clone(),
-                    request_params: AuthoredRequestParams(request_params.clone()),
-                    max_output_tokens: max_output_tokens
-                        .map(|tokens| ModelOutput::Limit { tokens }),
-                },
-            }),
+            auxiliary: Some(AuxiliaryModelAuthoring::from_policy(&model.auxiliary)),
         })
         .serialize(serializer)
 }
@@ -569,17 +550,8 @@ impl ModelLayer {
         model.profile = self.profile;
         model.max_output_tokens = self.max_output_tokens.and_then(ModelOutput::resolve);
         model.request_params = self.request_params.unwrap_or_default().0;
-        if let Some(summary) = self.summary_model {
-            model.summary_model = summary.resolve();
-        }
-        if let Some(title) = self.title_model {
-            model.title_model = title.resolve();
-        }
-        if let Some(classification) = self.classification_model {
-            model.classification_model = Box::new(classification.resolve());
-        }
-        if let Some(btw) = self.btw_model {
-            model.btw_model = Box::new(btw.resolve());
+        if let Some(auxiliary) = self.auxiliary {
+            model.auxiliary = auxiliary.resolve();
         }
         Ok(model)
     }
@@ -623,10 +595,7 @@ impl RuntimeLayer {
             "agent.model.profile",
             "agent.model.request_params",
             "agent.model.max_output_tokens",
-            "agent.model.summary_model",
-            "agent.model.title_model",
-            "agent.model.classification_model",
-            "agent.model.btw_model",
+            "agent.model.auxiliary",
             "context.reserve_tokens",
             "context.keep_recent_tokens",
             "context.summary_output_cap",
@@ -644,12 +613,6 @@ impl RuntimeLayer {
             "subagents.max_concurrent",
             "agent.agents",
             "agent.workflows",
-            "native_tools.read",
-            "native_tools.write",
-            "native_tools.edit",
-            "native_tools.glob",
-            "native_tools.grep",
-            "native_tools.bash",
         ] {
             // An omitted member of a replaced object is defaulted within
             // the winning object. Its source is that object, never the
@@ -667,11 +630,6 @@ impl RuntimeLayer {
         }
         map(origins, "environment", config.environment.keys());
         map(origins, "mcp_servers", config.mcp_servers.keys());
-        map(
-            origins,
-            "mcp_tool_policies",
-            config.mcp_tool_policies.keys(),
-        );
     }
 
     pub fn overlay(&mut self, layer: Self, origin: &Origin, origins: &mut Origins) {
@@ -692,18 +650,6 @@ impl RuntimeLayer {
                 .get_or_insert_default()
                 .overlay(agent, origin, origins);
         }
-        if let Some(policies) = layer.native_tools {
-            self.native_tools
-                .get_or_insert_default()
-                .overlay(policies, origin, origins);
-        }
-        named(
-            &mut self.mcp_tool_policies,
-            layer.mcp_tool_policies,
-            "mcp_tool_policies",
-            origin,
-            origins,
-        );
         named(
             &mut self.environment,
             layer.environment,
@@ -746,7 +692,6 @@ impl RuntimeLayer {
             schema_version,
             agent_id,
             approval_mode,
-            mcp_tool_policies,
             environment
         );
         if let Some(layer) = self.agent {
@@ -793,11 +738,6 @@ impl RuntimeLayer {
             let mut subagents = config.subagents;
             apply!(layer, subagents, max_concurrent);
             config.subagents = subagents;
-        }
-        if let Some(layer) = self.native_tools {
-            let mut policies = config.native_tools;
-            apply!(layer, policies, read, write, edit, glob, grep, bash);
-            config.native_tools = policies;
         }
         Ok(config)
     }
@@ -970,11 +910,7 @@ tokens = 1024
     }
     #[test]
     fn both_scopes_author_runtime_policies_but_process_bindings_are_not_config() {
-        for text in [
-            "approval_mode = 'policy'",
-            "native_tools = {}",
-            "mcp_tool_policies = {}",
-        ] {
+        for text in ["approval_mode = 'plan'"] {
             for workspace in [false, true] {
                 super::super::configuration::capture::parse_layer(
                     std::path::Path::new("rustx.toml"),
@@ -982,6 +918,25 @@ tokens = 1024
                     workspace,
                 )
                 .unwrap();
+            }
+        }
+        // Issue #544: tool-level execution overlays are obsolete and rejected.
+        for text in [
+            "native_tools = {}",
+            "mcp_tool_policies = {}",
+            "[native_tools.bash]\nexecution = 'model_selectable'",
+            "[mcp_tool_policies.docs]\nexecution = 'foreground_only'",
+        ] {
+            for workspace in [false, true] {
+                assert!(
+                    super::super::configuration::capture::parse_layer(
+                        std::path::Path::new("rustx.toml"),
+                        text.as_bytes(),
+                        workspace,
+                    )
+                    .is_err(),
+                    "obsolete execution authoring must fail: {text}"
+                );
             }
         }
         for text in [
@@ -1007,24 +962,16 @@ tokens = 1024
 model = "p/m"
 profile = "fast"
 request_params = '{"future":{"nested":[1,"text",{"new":true},null]},"text":"x","flag":false,"temperature":0.7}'
-[agent.model.summary_model]
+[agent.model.auxiliary]
 mode = "explicit"
 model = "p/s"
-profile = "summary"
+profile = { mode = "explicit", id = "summary" }
 request_params = '''
 {"vendor": ["text", [1, 2], {"arbitrary": "yes", "unset": null}]}
 '''
-[agent.model.summary_model.max_output_tokens]
+[agent.model.auxiliary.max_output_tokens]
 mode = "limit"
 tokens = 256
-[agent.model.title_model]
-mode = "explicit"
-model = "p/t"
-profile = "short"
-request_params = '{"title_tag": [null, "exact"]}'
-[agent.model.title_model.max_output_tokens]
-mode = "limit"
-tokens = 128
 "#;
 
     #[test]
@@ -1036,30 +983,35 @@ tokens = 128
             model.request_params["future"]["nested"][3],
             serde_json::Value::Null
         );
-        let summary = model.summary_selection().unwrap();
-        assert_eq!(summary.profile.as_ref().unwrap().as_str(), "summary");
-        assert_eq!(summary.max_output_tokens, Some(256));
+        let crate::model::session::AuxiliaryModelPolicy::Explicit {
+            model: auxiliary_model,
+            profile,
+            request_params,
+            max_output_tokens,
+        } = &model.auxiliary
+        else {
+            panic!("expected explicit auxiliary");
+        };
+        assert_eq!(auxiliary_model.as_str(), "p/s");
         assert_eq!(
-            summary.request_params["vendor"][2]["unset"],
-            serde_json::Value::Null
+            profile,
+            &crate::model::AuxiliaryProfileSelection::Explicit {
+                id: crate::model::catalog::ModelProfileId::parse("summary").unwrap(),
+            }
         );
-        let title = model.title_selection().unwrap();
-        assert_eq!(title.model.as_str(), "p/t");
-        assert_eq!(title.profile.unwrap().as_str(), "short");
-        assert_eq!(title.max_output_tokens, Some(128));
+        assert_eq!(*max_output_tokens, Some(256));
         assert_eq!(
-            title.request_params["title_tag"],
-            serde_json::json!([null, "exact"])
+            request_params["vendor"][2]["unset"],
+            serde_json::Value::Null
         );
         // Named Agent documents use the same selection authoring.
         let written = crate::toml_authoring::write(&config.agent).unwrap();
         let table = written.parse::<toml::Table>().unwrap();
         assert!(table["model"]["request_params"].is_str(), "{written}");
         assert!(
-            table["model"]["summary_model"]["request_params"].is_str(),
+            table["model"]["auxiliary"]["request_params"].is_str(),
             "{written}"
         );
-        assert!(table["model"]["title_model"]["request_params"].is_str());
         assert_eq!(table["model"]["profile"].as_str(), Some("fast"));
         let again: super::super::config::AgentProfileDocument =
             crate::toml_authoring::parse(written.as_bytes()).unwrap();
@@ -1075,11 +1027,7 @@ tokens = 128
         let json = serde_json::to_value(&config.agent).unwrap();
         assert_eq!(json["model"]["profile"], "fast");
         assert_eq!(
-            json["model"]["title_model"]["request_params"]["title_tag"],
-            serde_json::json!([null, "exact"])
-        );
-        assert_eq!(
-            json["model"]["summary_model"]["request_params"]["vendor"][2]["unset"],
+            json["model"]["auxiliary"]["request_params"]["vendor"][2]["unset"],
             serde_json::Value::Null
         );
         assert_eq!(
@@ -1106,12 +1054,12 @@ tokens = 128
         for (prefix, path) in [
             ("[agent.model]\nmodel = 'p/m'", "agent.model.request_params"),
             (
-                "[agent.model]\nmodel = 'p/m'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'p/s'",
-                "agent.model.summary_model.request_params",
+                "[agent.model]\nmodel = 'p/m'\n[agent.model.auxiliary]\nmode = 'explicit'\nmodel = 'p/s'",
+                "agent.model.auxiliary.request_params",
             ),
             (
-                "[agent.model]\nmodel = 'p/m'\n[agent.model.title_model]\nmode = 'explicit'\nmodel = 'p/t'",
-                "agent.model.title_model.request_params",
+                "[agent.model]\nmodel = 'p/m'\n[agent.model.auxiliary]\nmode = 'explicit'\nmodel = 'p/t'",
+                "agent.model.auxiliary.request_params",
             ),
         ] {
             for (json, reason) in [

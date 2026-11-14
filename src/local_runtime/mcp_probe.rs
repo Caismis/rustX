@@ -246,10 +246,10 @@ fn capture(
         .get(id)
         .and_then(|value| value.as_ref().ok())
         .ok_or(SettingsError::Invalid)?;
-    let mut bindings = super::config::resolve_mcp_bindings(
-        &BTreeMap::from([(id.clone(), definition.clone().resolve())]),
-        &BTreeMap::new(),
-    )
+    let mut bindings = super::config::resolve_mcp_bindings(&BTreeMap::from([(
+        id.clone(),
+        definition.clone().resolve(),
+    )]))
     .map_err(|_| SettingsError::Invalid)?;
     let mut binding = bindings.remove(id).ok_or(SettingsError::Invalid)?;
     binding

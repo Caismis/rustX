@@ -151,6 +151,13 @@ async fn t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_ar
             [crate::runtime::configuration_commit::ConfigurationDomain::Instructions]
         );
         assert!(changes[0].tools.is_empty());
+        assert_eq!(
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(runtime)
+                .unwrap()
+                .approval_mode,
+            crate::runtime::ApprovalMode::Plan,
+            "configuration fixtures start on Plan so FullAccess is a real mode transition"
+        );
     }
     write(
         &fixture,
@@ -306,6 +313,11 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
             .unwrap()
             .admitted_attempt
             .unwrap();
+        assert_eq!(
+            captured.approval_mode,
+            crate::runtime::ApprovalMode::Plan,
+            "old attempt freezes Plan before the FullAccess transition"
+        );
         write(
             &fixture,
             0,
@@ -360,8 +372,10 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         .unwrap();
         assert_eq!(
             later.approval_mode,
-            crate::runtime::ApprovalMode::FullAccess
+            crate::runtime::ApprovalMode::FullAccess,
+            "new attempt captures FullAccess after the mode transition"
         );
+        assert_ne!(later.approval_mode, captured.approval_mode);
         assert!(later.generation > captured.generation);
         assert_ne!(later.model_timeout, captured.model_timeout);
         fixture.gates[1].release();

@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::tools::executor::{ToolRegistration, ToolRegistry};
+use crate::tools::executor::{ToolRegistration, ToolRegistry, ValidatedToolRegistration};
 use crate::tools::types::ToolDefinition;
 
 /// Startup activation controls supplied by current runtime/project settings
@@ -145,9 +145,14 @@ impl AvailableToolCatalog {
         }
     }
 
-    /// Creates an available catalog in deterministic registration order.
+    /// Creates an available catalog from captured executable contracts in
+    /// deterministic registration order. This projection performs no I/O.
     #[must_use]
-    pub(crate) fn new(registrations: Vec<ToolRegistration>) -> Self {
+    pub(crate) fn new(registrations: Vec<ValidatedToolRegistration>) -> Self {
+        let registrations: Vec<_> = registrations
+            .into_iter()
+            .map(ValidatedToolRegistration::into_registration)
+            .collect();
         Self {
             tools: registrations
                 .iter()
@@ -246,6 +251,7 @@ pub(crate) fn select_tools(
     // intentionally hide ordinary tools (an empty or a strict
     // allowlist), but it must never hide an identity collision with a
     // runtime-owned protocol name.
+    let mut captured = Vec::with_capacity(available.len() + extensions.len());
     for registration in available.iter().chain(extensions) {
         if let crate::tools::ToolOrigin::Host { namespace, name } = &registration.definition.origin
         {
@@ -274,17 +280,33 @@ pub(crate) fn select_tools(
         // Validate each available capability even when activation hides it.
         // A one-entry registry reuses native registration validation without
         // treating same-name, source-qualified available tools as collisions.
-        ToolRegistry::from_registrations([registration.clone()])
+        let validated = ToolRegistry::from_registrations([registration.clone()])
             .map_err(|error| format!("available Tool selection is invalid: {error}"))?;
+        captured.extend(validated.validated_registrations());
     }
+    // Available tools also execute as fixed Workflow leaves. Keep the exact
+    // captured validators rather than discarding them after validation, and
+    // reuse the same capture when projecting the model-facing active set.
+    let extensions = captured.split_off(available.len());
     let available_catalog = AvailableToolCatalog::new(
         available
             .iter()
-            .filter(|entry| !crate::runtime::agent_profile::is_profile_composed(&entry.definition))
-            .cloned()
+            .zip(&captured)
+            .filter(|(entry, _)| {
+                !crate::runtime::agent_profile::is_profile_composed(&entry.definition)
+            })
+            .map(|(_, validated)| validated.clone())
             .collect(),
     )
     .with_resource_sources(resource_bindings.keys().cloned().collect());
+    let available = captured
+        .into_iter()
+        .map(ValidatedToolRegistration::into_registration)
+        .collect::<Vec<_>>();
+    let extensions = extensions
+        .into_iter()
+        .map(ValidatedToolRegistration::into_registration)
+        .collect::<Vec<_>>();
     let definitions = available
         .iter()
         .map(|registration| &registration.definition)
@@ -341,11 +363,7 @@ pub(crate) fn select_tools(
                 .filter(|registration| plugin_tools.contains(&registration.definition.name))
                 .cloned(),
         )
-        .chain(
-            resource_tools
-                .into_iter()
-                .map(|(definition, executor)| ToolRegistration::plain(definition, executor)),
-        );
+        .chain(resource_tools);
     let active = ToolRegistry::from_registrations(registrations)
         .map_err(|error| format!("active Tool selection is invalid: {error}"))?;
     Ok((available_catalog, active, profile))
@@ -443,8 +461,8 @@ mod tests {
         ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistration, ToolRegistry,
     };
     use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionResult, ToolExecutionStatus,
-        ToolInvocation, ToolOrigin, ToolReplayPolicy,
+        ToolDefinition, ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin,
+        ToolReplayPolicy,
     };
 
     struct NoopTool;
@@ -488,8 +506,6 @@ mod tests {
                 "additionalProperties": false
             }),
             execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin,
         }
@@ -575,6 +591,132 @@ mod tests {
             .sources
             .insert(source, SourceToolSelection::Exact(vec!["missing".into()]));
         assert!(select_tools(&registrations(), &[], &intent).is_err());
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Frozen contracts are checked through both available and active owners.
+    fn available_catalog_retains_captured_mcp_contract_for_workflow_fixed_calls() {
+        use crate::runtime::identity::ToolCallId;
+        use crate::tools::executor::PreflightOutcome;
+        use crate::tools::types::{ToolCall, ToolInvocationId};
+
+        for selected in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("business.json");
+            std::fs::write(
+                &path,
+                serde_json::json!({
+                    "type": "object", "properties": {
+                        "elevation_reason": {"type": "integer"},
+                        "execution_mode": {"type": "string"},
+                    },
+                    "required": ["elevation_reason", "execution_mode"],
+                    "additionalProperties": false,
+                })
+                .to_string(),
+            )
+            .unwrap();
+            let server_id = crate::runtime::identity::McpServerId::new("search");
+            let mut definition = definition(
+                "search",
+                ToolOrigin::Mcp {
+                    server_id: server_id.clone(),
+                },
+            );
+            let mut intent = profile(&[]);
+            if selected {
+                intent.profile.tools.sources.insert(
+                    crate::capabilities::ToolSourceId::Mcp(server_id),
+                    crate::capabilities::selection::SourceToolSelection::All,
+                );
+            }
+            let uri = url::Url::from_file_path(&path).unwrap().to_string();
+            definition.input_schema = serde_json::json!({
+                "type": "object", "$ref": uri,
+            });
+            // An available declaration is compiled before active projection.
+            // Neither selected nor unselected tools can grant host-file access.
+            let error = select_tools(
+                &[ToolRegistration::plain(
+                    definition.clone(),
+                    Arc::new(NoopTool),
+                )],
+                &[],
+                &intent,
+            )
+            .expect_err("a reference URI does not authorize resource retrieval");
+            assert!(error.contains("does not fetch resources"));
+
+            // Resource bytes are captured by the owner, outside compilation,
+            // and delivered with their original identity in a closed document.
+            let mut captured: serde_json::Value =
+                serde_json::from_reader(std::fs::File::open(&path).unwrap()).unwrap();
+            captured["$id"] = serde_json::json!(uri);
+            definition.input_schema = serde_json::json!({
+                "type": "object", "$ref": uri, "$defs": {"captured": captured},
+            });
+            let registration = ToolRegistration::plain(definition.clone(), Arc::new(NoopTool));
+            std::fs::remove_file(path).unwrap();
+            let (available, active) = select_tools(&[registration], &[], &intent).unwrap();
+            let business = serde_json::json!({
+                "elevation_reason": 1, "execution_mode": "authored business value",
+            });
+            let invocation_id = ToolInvocationId::Workflow {
+                node: Box::new(crate::runtime::workflow::test_instance("review", "search")),
+                retry: 0,
+            };
+            let prepared = available
+                .registration(&definition)
+                .unwrap()
+                .prepare_fixed(invocation_id.clone(), &definition, &business)
+                .unwrap();
+            let PreflightOutcome::Ready(prepared) = prepared else {
+                panic!("available Workflow leaf must retain its captured contract");
+            };
+            assert_eq!(prepared.invocation.arguments, business);
+            assert_eq!(prepared.elevation_reason, None);
+            let invalid = serde_json::json!({
+                "elevation_reason": "not an integer", "execution_mode": "authored business value",
+            });
+            assert!(matches!(
+                available
+                    .registration(&definition)
+                    .unwrap()
+                    .prepare_fixed(invocation_id, &definition, &invalid)
+                    .unwrap(),
+                PreflightOutcome::Rejected { .. }
+            ));
+            if selected {
+                // Reprojection and model observation must reuse the same frozen
+                // owner-supplied resource capture without host retrieval.
+                let active = ToolRegistry::from_registrations(active.registrations()).unwrap();
+                assert_eq!(active.model_definitions().len(), 1);
+                assert!(matches!(
+                    active
+                        .preflight(&ToolCall {
+                            id: ToolCallId::new("model-call"),
+                            tool_id: definition.id.clone(),
+                            name: definition.name.clone(),
+                            arguments: serde_json::json!({"arguments": business}),
+                        })
+                        .unwrap(),
+                    PreflightOutcome::Ready(_)
+                ));
+                assert!(matches!(
+                    active
+                        .preflight(&ToolCall {
+                            id: ToolCallId::new("invalid-model-call"),
+                            tool_id: definition.id.clone(),
+                            name: definition.name.clone(),
+                            arguments: serde_json::json!({"arguments": invalid}),
+                        })
+                        .unwrap(),
+                    PreflightOutcome::Rejected { .. }
+                ));
+            } else {
+                assert!(active.is_empty());
+            }
+        }
     }
 
     #[test]

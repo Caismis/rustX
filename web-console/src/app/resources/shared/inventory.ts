@@ -1,6 +1,6 @@
 import type {
   RuntimeClientSnapshot, ResourceFamily, SourceInspection, SourceScope, SourceSettings, WorkflowInspection,
-} from '../../../../../protocol/app-server/v77';
+} from '../../../../../protocol/app-server/v78';
 type CapabilityInspection = NonNullable<NonNullable<RuntimeClientSnapshot['resources']>['inspection']>;
 import { resourceCapability, toolSourceId, type ResourceCapability } from '../../settings/capability';
 import type { ExtensionFamily } from '../../settings/projection';

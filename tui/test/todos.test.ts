@@ -410,7 +410,7 @@ describe("what the tool card may hand a terminal", () => {
         callId: "call-todo",
         toolId: TODO_TOOL_ID,
         name: "todo",
-        argumentsText: JSON.stringify(args),
+        argumentsText: JSON.stringify({ arguments: args }),
         lifecycle:
           result === undefined ? { type: "assembled" } : { type: "settled", result },
         committed: result !== undefined,
@@ -533,7 +533,7 @@ describe("what the tool card may hand a terminal", () => {
         callId: "call-todo",
         toolId: TODO_TOOL_ID,
         name: "todo",
-        argumentsText: '{"action":"create","subject":"\\u001b[8mhidden"}',
+        argumentsText: "{\"arguments\":{\"action\":\"create\",\"subject\":\"\\u001b[8mhidden\"}}",
         lifecycle: { type: "assembled" },
         committed: false,
         resultCommitted: false,

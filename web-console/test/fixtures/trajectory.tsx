@@ -6,7 +6,7 @@ import { workflowTraceFixture } from '../workflow-trace-fixture';
 import { workflowTraceRefreshFixture } from './workflow-trace-refresh';
 import { completeTraceDetail, prependTrace, refreshTrace, replaceTrace, selectTrace } from '../../src/client/trace';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, semanticLedgerRecords, structuralSearchRecords, traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
-import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v77';
+import type { TraceRecord, TraceSystemPromptState, TraceToolCatalogState } from '../../../protocol/app-server/v78';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -43,7 +43,7 @@ const params = new URLSearchParams(location.search);
 const workflowRefresh = params.has('workflow-refresh') ? workflowTraceRefreshFixture() : undefined;
 if (workflowRefresh) window.workflowTraceRefresh = workflowRefresh.controls;
 const agentInteractions = params.has('agent-interactions');
-const agentCall = traceTool(30, { tool: { ...traceTool(30).tool!, name: 'subagent', tool_id: 'tool-subagent', arguments: text('{"agent":"explore","task":"Review the parser"}') }, preview: text('Started background agent parser-review') });
+const agentCall = traceTool(30, { tool: { ...traceTool(30).tool!, name: 'subagent', tool_id: 'tool-subagent', arguments: text('{"arguments":{"agent":"explore","task":"Review the parser"}}') }, preview: text('Started background agent parser-review') });
 const agentRecords = [
   records[0]!, agentCall,
   ...['running', 'completed', 'cancelled', 'failed'].map((state, n) => traceRecord(n + 31, {
@@ -58,10 +58,10 @@ const waitReceipt = { job_id: 'job-launched', tool: 'bash', state: 'outcome_unkn
 const backgroundNotice = 'Background execution job-launched (bash) settled: outcome_unknown';
 const backgroundNoticeId = 'background-job-launched-terminal';
 const backgroundRecords = [
-  traceTool(20, { preview: text(JSON.stringify(launchReceipt)), tool: { ...traceTool(20).tool!, arguments: text('{"command":"sleep 5","execution_mode":"background"}') } }),
+  traceTool(20, { preview: text(JSON.stringify(launchReceipt)), tool: { ...traceTool(20).tool!, arguments: text('{"arguments":{"command":"sleep 5"},"execution_mode":"background"}') } }),
   traceRecord(21, { kind: 'background', request: null, native_id: 'job-launched', originating_tool_call_id: 'call-20', state: 'outcome_unknown', preview: text('Internal execution audit') }),
   traceRecord(22, { kind: 'context', request: null, message_id: backgroundNoticeId, preview: { text: backgroundNotice, truncated: true } }),
-  traceTool(23, { preview: text(JSON.stringify(waitReceipt)), tool: { ...traceTool(23).tool!, tool_id: 'tool-job_wait', name: 'job_wait', arguments: text('{"job_id":"job-launched"}') } }),
+  traceTool(23, { preview: text(JSON.stringify(waitReceipt)), tool: { ...traceTool(23).tool!, tool_id: 'tool-job_wait', name: 'job_wait', arguments: text('{"arguments":{"job_id":"job-launched"}}') } }),
 ];
 const long = params.has('long'); const threshold = params.has('threshold');
 const renumber = params.has('renumber');
@@ -117,7 +117,7 @@ function Fixture() {
           const n = Number(id.split(':')[1]); const record = current.page.records.find(record => record.id === id)!;
           const detail = record.kind === 'tool' ? toolDetail(n) : record.kind === 'request' ? requestDetail(n) : requestDetail(n, { kind: record.kind, request: null, messages: [] });
           if (backgroundJobs && n === 20) {
-            detail.tool!.arguments = { value: { command: 'sleep 5', execution_mode: 'background' }, truncated: false };
+            detail.tool!.arguments = { value: { arguments: { command: 'sleep 5' }, execution_mode: 'background' }, truncated: false };
             detail.tool!.source!.text = text('sleep 5');
             detail.tool!.result!.blocks = [{ type: 'json', value: { value: launchReceipt, truncated: false } }];
           }
@@ -128,7 +128,7 @@ function Fixture() {
           if (backgroundJobs && n === 23) {
             detail.tool!.name = 'job_wait'; detail.tool!.tool_id = 'tool-job_wait';
             detail.tool!.source = null;
-            detail.tool!.arguments = { value: { job_id: 'job-launched' }, truncated: false };
+            detail.tool!.arguments = { value: { arguments: { job_id: 'job-launched' } }, truncated: false };
             detail.tool!.result!.blocks = [{ type: 'json', value: { value: waitReceipt, truncated: false } }];
           }
           if (detail.request) {
@@ -151,10 +151,10 @@ function Fixture() {
             if (record.kind === 'assistant') detail.messages = [{ message_id: record.message_id!, role: 'assistant', truncated: false, blocks: [
               {type:'reasoning',text:text('I will **inspect the working tree**, then check the implementation.\n\nThis keeps the review focused.')},
               {type:'text',text:text('I’ll inspect the **working tree**.\n\n- Read the changes\n- Run the relevant checks')},
-              {type:'tool_call',call_id:'call-5',tool_id:'tool-bash',name:'bash',arguments:{value:{command:'git diff --stat'},truncated:false}},
+              {type:'tool_call',call_id:'call-5',tool_id:'tool-bash',name:'bash',arguments:{value:{arguments:{command:'git diff --stat'},execution_mode:'foreground'},truncated:false}},
             ] }];
             if (record.kind === 'user') detail.messages = [{message_id:'original-user',role:'user',truncated:false,blocks:[{type:'text',text:record.preview!}]}];
-            if (detail.tool?.source && detail.tool.arguments) detail.tool.arguments.value={command:detail.tool.source.text.text};
+            if (detail.tool?.source && detail.tool.arguments) detail.tool.arguments.value={arguments:{command:detail.tool.source.text.text},execution_mode:'foreground'};
             if (params.has('native') && ['request','tool','assistant','user','context'].includes(record.kind)) {
               const native=nativeTraceFixture(record,detail);
               return completeTraceDetail(current,id,current.epoch,undefined,undefined,undefined,undefined,native.page,native.reader);

@@ -22,8 +22,6 @@ async fn an_external_origin_requirement_is_no_longer_refused_by_the_registry() {
         description: "issue".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: crate::tools::types::ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: crate::tools::types::ToolReplayPolicy::Never,
         origin: crate::tools::types::ToolOrigin::Mcp {
             server_id: crate::runtime::identity::McpServerId::new("github"),
@@ -816,6 +814,7 @@ async fn reserved_commit_does_not_lock_registry_and_interrupt_captures_exact_res
                 &id,
                 "next",
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new(),
             )
             .await

@@ -3,8 +3,7 @@ use super::registration::{NativeToolRegistration, native_definition};
 use super::support::{cancelled_result, failed_result, success_text};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
-    ToolInvocationPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocation, ToolInvocationPolicy,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -33,11 +32,7 @@ pub(super) fn definition() -> ToolDefinition {
         "tool-present",
         "present",
         "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
-        ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
-        ),
+        ToolInvocationPolicy::new(ToolExecutionPolicy::ForegroundOnly),
     )
 }
 pub(super) fn registration() -> NativeToolRegistration {
@@ -153,7 +148,7 @@ mod tests {
             id: crate::runtime::identity::ToolCallId::new("declaration"),
             tool_id: definition().id,
             name: "present".into(),
-            arguments,
+            arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
         };
         let crate::tools::executor::PreflightOutcome::Ready(prepared) =
             fixture.registry.preflight(&call).unwrap()
@@ -251,7 +246,7 @@ mod tests {
                 id: crate::runtime::identity::ToolCallId::new("bad"),
                 tool_id: definition().id,
                 name: "present".into(),
-                arguments,
+                arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
             };
             assert!(matches!(
                 fixture.registry.preflight(&call),
@@ -272,7 +267,9 @@ mod tests {
             id: crate::runtime::identity::ToolCallId::new("gated-present"),
             tool_id: definition().id,
             name: "present".into(),
-            arguments: serde_json::json!({"files":[{"path":"ok.txt"}]}),
+            arguments: crate::scripted_suites::common::tool_call_envelope(
+                serde_json::json!({"files":[{"path":"ok.txt"}]}),
+            ),
         };
         let crate::tools::executor::PreflightOutcome::Ready(prepared) =
             fixture.registry.preflight(&call).unwrap()

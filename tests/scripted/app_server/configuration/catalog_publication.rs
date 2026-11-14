@@ -112,9 +112,11 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             .await
             .unwrap();
         settled(&fixture, 0).await;
-        let invocation = runtime.model_snapshot();
-        let capability = runtime.runtime_resources().capability().clone();
-        let preparations = probe.configuration_preparations.load(Ordering::SeqCst);
+        let publication_baseline = std::cell::RefCell::new((
+            runtime.model_snapshot(),
+            runtime.runtime_resources().capability().clone(),
+            probe.configuration_preparations.load(Ordering::SeqCst),
+        ));
         let published = |expected: (Option<&str>, &[(&str, Option<u32>)])| {
             let expected = (
                 expected.0.map(str::to_owned),
@@ -124,15 +126,16 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
                     .map(|(id, budget)| ((*id).to_owned(), *budget))
                     .collect::<Vec<_>>(),
             );
+            let (invocation, capability, preparations) = &*publication_baseline.borrow();
             assert_eq!(discovered(), expected);
             // Publication alone never re-resolves, prepares or rebuilds.
-            assert_eq!(runtime.model_snapshot(), invocation);
+            assert_eq!(&runtime.model_snapshot(), invocation);
             assert!(Arc::ptr_eq(
-                &capability,
+                capability,
                 runtime.runtime_resources().capability()
             ));
             assert_eq!(
-                probe.configuration_preparations.load(Ordering::SeqCst),
+                &probe.configuration_preparations.load(Ordering::SeqCst),
                 preparations
             );
         };
@@ -153,13 +156,30 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             );
         };
 
-        // Reasoning metadata publishes normally, with no preparation or
-        // invocation change. The retained Attempt snapshot stays identical.
-        for order in [
-            Some(["fast", "balanced", "creative"]),
-            Some(["creative", "fast", "balanced"]),
-            None,
-        ] {
+        // Keep Lowest pinned on "balanced" for catalog-only edits below. An
+        // order whose first Profile matches the current Lowest target publishes
+        // without preparation; later mutations reuse this helper so unselected
+        // Profile edits stay invocation-inert under #543.
+        let with_stable_lowest = |default: &str, profiles: &[Authored]| {
+            let mut mutation = model(default, profiles);
+            let ConfigMutation::Model {
+                authored: Some(definition),
+                ..
+            } = &mut mutation
+            else {
+                unreachable!()
+            };
+            let mut order = vec![ModelProfileId::new("balanced")];
+            for (name, ..) in profiles {
+                let id = ModelProfileId::new(*name);
+                if !order.iter().any(|existing| existing == &id) {
+                    order.push(id);
+                }
+            }
+            definition.reasoning_profile_order = Some(order);
+            mutation
+        };
+        {
             let before = runtime.runtime_resources().revision();
             let binding =
                 crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
@@ -171,20 +191,15 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
             let model_position = (0..catalog.model_count() as u64)
                 .find(|position| catalog.model_at(*position).unwrap().model.as_str() == "local/a")
                 .unwrap();
-            let mut mutation = model(
-                "balanced",
-                &[balanced.clone(), fast.clone(), creative.clone()],
-            );
-            let ConfigMutation::Model {
-                authored: Some(definition),
-                ..
-            } = &mut mutation
-            else {
-                unreachable!()
-            };
-            definition.reasoning_profile_order =
-                order.map(|ids| ids.map(ModelProfileId::new).into());
-            write(&fixture, 0, mutation).await;
+            write(
+                &fixture,
+                0,
+                with_stable_lowest(
+                    "balanced",
+                    &[balanced.clone(), fast.clone(), creative.clone()],
+                ),
+            )
+            .await;
             applied(settled(&fixture, 0).await);
             published((
                 Some("balanced"),
@@ -207,19 +222,17 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
                     crate::runtime::conversation_runtime::ModelUpdateError::Conflict
                 ))
             ));
-            let catalog = runtime.model_read_source().catalog_source();
             assert_eq!(
-                catalog.profile_at(model_position, 0).unwrap().id.as_str(),
-                "balanced"
-            );
-            let full = runtime.model_catalog();
-            assert_eq!(
-                full.models
+                runtime
+                    .model_catalog()
+                    .models
                     .iter()
                     .find(|row| row.model.to_string() == "local/a")
                     .unwrap()
-                    .reasoning_profile_order,
-                order.map(|ids| ids.map(ModelProfileId::new).to_vec())
+                    .reasoning_profile_order
+                    .as_ref()
+                    .map(|ids| ids.iter().map(ToString::to_string).collect::<Vec<_>>()),
+                Some(vec!["balanced".into(), "fast".into(), "creative".into()])
             );
         }
 
@@ -228,7 +241,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
         write(
             &fixture,
             0,
-            model(
+            with_stable_lowest(
                 "balanced",
                 &[balanced.clone(), fast_edited.clone(), creative.clone()],
             ),
@@ -244,7 +257,7 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
         write(
             &fixture,
             0,
-            model("balanced", &[balanced.clone(), fast_edited.clone()]),
+            with_stable_lowest("balanced", &[balanced.clone(), fast_edited.clone()]),
         )
         .await;
         applied(settled(&fixture, 0).await);
@@ -262,15 +275,50 @@ async fn issue459_catalog_publication_keeps_discovery_and_admission_on_one_autho
         assert_eq!(observed_model, view);
         assert_eq!(runtime.model_view(), view);
 
-        // A moved default never reaches the pinned selection.
+        // A moved default leaves the pinned primary alone, but Lowest still
+        // follows default_profile when no order overrides it — keep order so
+        // catalog publication stays inert, then prove an order that moves
+        // Lowest prepares the new auxiliary.
         write(
             &fixture,
             0,
-            model("fast", &[balanced.clone(), fast_edited.clone()]),
+            with_stable_lowest("fast", &[balanced.clone(), fast_edited.clone()]),
         )
         .await;
         applied(settled(&fixture, 0).await);
         published((Some("fast"), &[("balanced", None), ("fast", Some(32))]));
+        {
+            let primary_before = runtime.model_snapshot().primary().view();
+            let mut mutation = model("fast", &[balanced.clone(), fast_edited.clone()]);
+            let ConfigMutation::Model {
+                authored: Some(definition),
+                ..
+            } = &mut mutation
+            else {
+                unreachable!()
+            };
+            definition.reasoning_profile_order =
+                Some(["fast", "balanced"].map(ModelProfileId::new).into());
+            write(&fixture, 0, mutation).await;
+            let _ = super::applied(&fixture, 0).await;
+            let snapshot = runtime.model_snapshot();
+            assert_eq!(snapshot.primary().view(), primary_before);
+            assert_eq!(
+                snapshot
+                    .summary_invocation()
+                    .view()
+                    .profile
+                    .as_ref()
+                    .map(ToString::to_string),
+                Some("fast".into())
+            );
+            // Refresh the publication baseline after Lowest-driven adoption.
+            *publication_baseline.borrow_mut() = (
+                runtime.model_snapshot(),
+                runtime.runtime_resources().capability().clone(),
+                probe.configuration_preparations.load(Ordering::SeqCst),
+            );
+        }
 
         // A failed publication keeps the last good authority.
         let revision = runtime.runtime_resources().revision();
@@ -433,7 +481,7 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
             assert_eq!(view.configured, b);
             assert!(view.unavailable.as_deref().unwrap().contains("local/b"));
             // Nothing is resolved for, or substituted into, a removed selection.
-            assert!(view.effective.is_none() && view.summary.is_none());
+            assert!(view.effective.is_none() && view.auxiliary.is_none());
             assert!(
                 runtime
                     .model_catalog()
@@ -742,13 +790,12 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         applied(&fixture, 0).await;
         let summary_on = |model: &str| AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(model).unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: RequestParams::new(),
             max_output_tokens: Some(256),
         };
         let with_summary = |profile, summary| SessionModelConfig {
-            title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-            summary_model: summary,
+            auxiliary: summary,
             ..issue459_pinned(profile)
         };
         fixture
@@ -768,7 +815,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         settled(&fixture, 0).await;
         let view = runtime.model_view();
         assert!(view.unavailable.as_deref().unwrap().contains("fast"));
-        assert_eq!(view.configured.summary_model, summary_on("local/b"));
+        assert_eq!(view.configured.auxiliary, summary_on("local/b"));
         // Replacing the primary keeps the explicit Summary, as both clients send it.
         let view = fixture
             .manager
@@ -777,7 +824,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .unwrap()
             .0;
         assert!(view.unavailable.is_none());
-        let Some(AuxiliaryModelView::Explicit(summary)) = &view.summary else {
+        let Some(AuxiliaryModelView::Explicit { effective: summary }) = &view.auxiliary else {
             panic!("explicit summary")
         };
         assert_eq!(
@@ -825,7 +872,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
         let mut changed = with_summary(None, summary_on("local/b"));
         let AuxiliaryModelPolicy::Explicit {
             max_output_tokens, ..
-        } = &mut changed.summary_model
+        } = &mut changed.auxiliary
         else {
             unreachable!()
         };
@@ -848,8 +895,8 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .0;
         assert!(recovered.unavailable.is_none());
         assert_eq!(
-            recovered.configured.summary_model,
-            AuxiliaryModelPolicy::Session
+            recovered.configured.auxiliary,
+            AuxiliaryModelPolicy::default()
         );
         settled(&fixture, 0).await;
         // A complete valid configuration corrects both.
@@ -860,7 +907,7 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .unwrap()
             .0;
         assert!(view.unavailable.is_none());
-        assert_eq!(view.configured.summary_model, summary_on("local/a"));
+        assert_eq!(view.configured.auxiliary, summary_on("local/a"));
         assert!(fixture.provider.request_bodies().is_empty());
         fixture.close().await;
     }))

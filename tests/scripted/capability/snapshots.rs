@@ -1578,15 +1578,24 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         generation_facts,
         "turns never append or re-resolve generation diagnostics"
     );
-    let expected_prompt = format!(
+    let reminder = rustx::runtime::permission::permission_reminder_text(
+        rustx::runtime::ApprovalMode::FullAccess,
+    );
+    let expected_base = format!(
         "{}\n\nCurrent working directory: {}\n\n{catalog}",
         rustx::context::DEFAULT_SYSTEM_PROMPT,
         conversation.workspace.root().display()
     );
-    for request in &requests {
+    let expected_first = format!("{expected_base}\n\n{reminder}");
+    for (index, request) in requests.iter().enumerate() {
+        let expected = if index == 0 {
+            expected_first.as_str()
+        } else {
+            expected_base.as_str()
+        };
         assert_eq!(
-            request.effective_system_prompt, expected_prompt,
-            "the attempt's immutable Skill snapshot extends the built-in System Prompt"
+            request.effective_system_prompt, expected,
+            "the attempt's immutable Skill snapshot extends the built-in System Prompt (request {index}; sparse Full Access reminder only on first start)"
         );
         assert!(
             !request.messages.iter().any(|message| {

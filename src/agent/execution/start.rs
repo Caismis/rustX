@@ -220,7 +220,15 @@ impl AgentExecution<'_> {
         // The durable start commit won: the request-scoped context installs
         // infallibly (validated at preparation, still exact), the start fact
         // is recorded, and only after this point may the provider be
-        // invoked.
+        // invoked. Sparse permission reminders are consumed exactly here so
+        // pre-start cancellation cannot lose eligibility and retries reuse
+        // the same frozen input without duplicating the reminder.
+        self.permission_reminder.consume_after_start_commit();
+        // The same transaction froze this task in the RequestSnapshot. A
+        // prepared Human task that loses start arbitration must not survive
+        // settlement as authority for a later Runtime or Agent input.
+        self.committed_permission_task_message
+            .clone_from(&prepared.snapshot.permission_task_message);
         self.logical_step.last_started_request = Some(prepared.snapshot.identity.clone());
         self.logical_step.model_step = LogicalModelStepState::Unresolved;
         for (commit, receipt) in prepared

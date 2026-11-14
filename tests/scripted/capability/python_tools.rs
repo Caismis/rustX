@@ -539,6 +539,8 @@ async fn a_configured_python_identity_collision_is_an_internal_invariant_violati
                 environment: std::collections::BTreeMap::new(),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     )]));
 

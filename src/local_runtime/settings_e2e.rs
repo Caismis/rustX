@@ -60,7 +60,7 @@ fn a_missing_primary_uses_a_credentialed_default_and_preserves_auxiliary_policy(
     models.insert("b".into(), missing_credential);
     models.insert("c".into(), configured);
     document["agent"]["model"].as_table_mut().unwrap().insert(
-        "title_model".into(),
+        "auxiliary".into(),
         toml::Value::try_from(serde_json::json!({ "mode": "explicit", "model": "c" })).unwrap(),
     );
     std::fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
@@ -72,7 +72,7 @@ fn a_missing_primary_uses_a_credentialed_default_and_preserves_auxiliary_policy(
         .unwrap();
     assert_eq!(default.model.as_str(), "c");
     assert!(
-        matches!(&default.title_model, AuxiliaryModelPolicy::Explicit { model, .. } if model.as_str() == "c")
+        matches!(&default.auxiliary, AuxiliaryModelPolicy::Explicit { model, .. } if model.as_str() == "c")
     );
     input.model = Some(SessionModelConfig::of(
         crate::model::catalog::ModelRef::parse("b").unwrap(),
@@ -344,6 +344,9 @@ fn s1_mcp_literal_environment_and_headers_stay_redacted() {
         args: Vec::new(),
         env: BTreeMap::from([("TOKEN".to_string(), SENTINEL.to_string())]),
         cwd: None,
+
+        permissions: None,
+        tools: std::collections::BTreeMap::new(),
     };
     let rejected = manager
         .write_source_settings(

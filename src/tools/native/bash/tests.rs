@@ -126,6 +126,7 @@ async fn run_with_control(
         questionnaire_requester: None,
         todos: None,
         subagent: None,
+        bound_mutation: None,
     };
     let invocation = match timeout_seconds {
         Some(seconds) => invocation_with_timeout(&command, seconds),

@@ -18,14 +18,13 @@ use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolId};
 use crate::runtime::interaction::InteractionFailure;
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
-use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
 };
 use crate::tools::types::{
-    ToolCall, ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolProgress,
+    ToolCall, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolInvocationMode, ToolOrigin, ToolProgress,
 };
 use futures_util::StreamExt;
 use std::sync::Arc;
@@ -69,7 +68,6 @@ struct CallSlot {
     /// The canonical registry-resolved typed origin of the tool.
     origin: ToolOrigin,
     prepared: Option<PreparedInvocation>,
-    /// Native Bash environment frozen before permission approval.
     command_environment: Option<ToolEnvironment>,
     result: Option<ToolExecutionResult>,
     /// The authoritative per-call executor-start frontier. Once true, this
@@ -103,34 +101,35 @@ pub(super) struct SettledCall {
 enum Group {
     /// The slot is already settled (validation rejection); no barrier.
     Trivial,
-    /// An exclusive scheduling barrier.
-    Sequential,
-    /// Adjacent parallel invocations executing concurrently.
-    Parallel,
+    /// Adjacent prepared invocations authorize and may execute concurrently.
+    /// Todo participates here; the Todo owner serializes provisional list work.
+    Concurrent,
 }
 
-/// The scheduling phase beginning at `index`: a `Sequential` invocation is
-/// an exclusive barrier; adjacent `Parallel` invocations form one group.
+/// Issue #544: tool-level Sequential/Parallel authoring is removed. Prepared
+/// slots authorize and may start concurrently. Todo list mutations stay ordered
+/// by the Todo owner/batch writer; they must not split the whole tool batch
+/// into global serial stages that block unrelated Read/MCP work.
 fn group_at(slots: &[CallSlot], index: usize) -> Group {
-    let Some(prepared) = slots[index].prepared.as_ref() else {
-        return Group::Trivial;
-    };
-    match prepared.concurrency {
-        ToolConcurrencyPolicy::Sequential => Group::Sequential,
-        ToolConcurrencyPolicy::Parallel => Group::Parallel,
+    if slots[index].prepared.is_none() {
+        Group::Trivial
+    } else {
+        Group::Concurrent
     }
 }
 
-/// The exclusive end of the parallel group beginning at `index`: every
-/// adjacent `Parallel` invocation forms one group.
-fn parallel_group_end(slots: &[CallSlot], index: usize) -> usize {
+/// End of the concurrent group beginning at `index`.
+///
+/// Already-settled preflight rejections may sit between prepared siblings and
+/// must not split the group. Todo slots participate in the same concurrent
+/// group; their owner serializes provisional list mutations.
+fn concurrent_group_end(slots: &[CallSlot], index: usize) -> usize {
+    debug_assert!(index < slots.len());
+    debug_assert!(slots[index].prepared.is_some());
     let mut end = index + 1;
-    while end < slots.len()
-        && slots[end]
-            .prepared
-            .as_ref()
-            .is_some_and(|candidate| candidate.concurrency == ToolConcurrencyPolicy::Parallel)
-    {
+    while end < slots.len() {
+        // Extend through prepared siblings (including todo) and settled
+        // preflight rejections alike.
         end += 1;
     }
     end
@@ -155,12 +154,21 @@ fn failed_result(error: &str) -> ToolExecutionResult {
 
 /// A cancelled tool result carrying the attempt cancellation reason.
 fn cancelled_result(reason: CancellationReason) -> ToolExecutionResult {
+    cancelled_result_with_phase(reason, ToolCancellationPhase::BeforeStart)
+}
+
+/// A cancelled result for a call that already crossed the executor-start frontier.
+fn cancelled_after_start(reason: CancellationReason) -> ToolExecutionResult {
+    cancelled_result_with_phase(reason, ToolCancellationPhase::DuringExecution)
+}
+
+fn cancelled_result_with_phase(
+    reason: CancellationReason,
+    phase: ToolCancellationPhase,
+) -> ToolExecutionResult {
     ToolExecutionResult {
         deliveries: Vec::new(),
-        status: ToolExecutionStatus::Cancelled {
-            reason,
-            phase: ToolCancellationPhase::BeforeStart,
-        },
+        status: ToolExecutionStatus::Cancelled { reason, phase },
         content: Vec::new(),
         duration_ms: 0,
         exit_code: None,
@@ -323,16 +331,13 @@ impl AgentExecution<'_> {
         &self.admitted_tools
     }
 
-    /// Executes the turn's tool calls through deterministic scheduling
-    /// phases and commits the structurally complete result batch.
+    /// Executes the turn's tool calls concurrently and commits the
+    /// structurally complete result batch in original call order.
     ///
-    /// Scheduling interprets [`ToolConcurrencyPolicy`] per registered tool:
-    /// a `Sequential` invocation is an exclusive scheduling barrier, and
-    /// adjacent `Parallel` invocations execute concurrently as one group.
-    /// A background call is settled for the originating attempt when its
-    /// background dispatch is accepted, not when the detached work
-    /// terminates, so a sequential background call blocks later scheduling
-    /// only through its dispatch-acceptance point.
+    /// Prepared slots may authorize and start independently. A background
+    /// call is settled for the originating attempt when its background
+    /// dispatch is accepted, not when the detached work terminates. Domain
+    /// owners (Todo, Goal, Scheduler) keep their own synchronization.
     ///
     /// The structural invariant: once the valid Assistant tool-call message is
     /// committed, its entire tool-result batch is settled exactly once.
@@ -446,21 +451,19 @@ impl AgentExecution<'_> {
                 },
             })
             .collect();
-        // Resolve every ready call through the one pre-tool policy boundary
-        // before scheduling any executor. This is a deliberately strong
-        // parallel-batch contract: all policy/interaction decisions for the
-        // committed batch settle in canonical call order before the existing
-        // sequential/parallel start frontier advances. The original
-        // PreparedInvocation remains in every slot unchanged.
+        // Freeze each native Bash slot before any sibling authorization starts.
         self.freeze_bash_environments(&mut slots);
-        self.resolve_pre_tool_decisions(&mut slots)
-            .await
-            .map_err(CanonicalCommitError::Interaction)?;
-        if self.cancellation.interaction_failed() {
-            return Err(CanonicalCommitError::Interaction(
-                InteractionFailure::ControlLost,
-            ));
-        }
+        // Issue #544: authorize each prepared invocation independently.
+        // Allowed work may start without waiting for unrelated Ask/Review
+        // siblings. Denied/cancelled slots settle their own result only.
+        // Invocation identity and validated arguments stay frozen; only the
+        // native mutation owner may bind a prepared Write/Edit target onto
+        // the slot before authorization.
+        //
+        // If a group failure arrives after siblings already started, finish a
+        // structurally complete result batch before surfacing the failure so
+        // Allow side effects cannot outlive missing tool-result messages.
+        let mut deferred_group_error: Option<CanonicalCommitError> = None;
         let mut index = 0;
         while index < slots.len() {
             if self.cancellation.is_cancelled() {
@@ -470,101 +473,157 @@ impl AgentExecution<'_> {
                 Group::Trivial => {
                     index += 1;
                 }
-                Group::Sequential => {
-                    if slots[index].result.is_none() {
-                        // This assignment is the per-call executor-start
-                        // frontier. It is set before the existing start fact
-                        // and before constructing the executor future; once
-                        // crossed, cancellation must be classified as
-                        // `DuringExecution` for this slot.
-                        slots[index].executor_started = true;
-                        self.emit(RuntimeEvent::ToolExecutionStarted {
-                            tool_call_id: slots[index].call.id.clone(),
-                            tool_id: slots[index].tool_id.clone(),
-                        });
-                        #[cfg(test)]
-                        self.park_after_tool_start();
-                        if let Some(error) = self.durable_failure_commit_error() {
-                            return Err(error);
+                Group::Concurrent => {
+                    // Authorize siblings independently and start each allowed
+                    // call as soon as its decision is Allow, without waiting
+                    // for unrelated Ask/Review siblings.
+                    let end = concurrent_group_end(&slots, index);
+                    let mut auth_futures = futures_util::stream::FuturesUnordered::new();
+                    // Per-slot auth cancellation: abort only unfinished Ask /
+                    // Review waiters without cancel_pending_async tearing down
+                    // interactions already owned by started sibling tools.
+                    let mut auth_cancels = std::collections::BTreeMap::new();
+                    for (slot_index, slot) in slots.iter_mut().enumerate().take(end).skip(index) {
+                        if slot.result.is_some() {
+                            continue;
                         }
-                        let prepared = slots[index]
-                            .prepared
-                            .as_ref()
-                            .expect("unsettled slots are preflighted");
-                        let invocation = prepared.invocation.clone();
-                        let progress_capability = prepared.progress_capability;
-                        let environment = self.invocation_environment(&slots[index]);
-                        let (_, result, facts) = self
-                            .run_single_call(
-                                index,
-                                invocation,
-                                progress_capability,
-                                todo_writer.clone(),
-                                occurrences[index].clone(),
-                                environment,
-                            )
-                            .await;
-                        slots[index].result = Some(result);
-                        slots[index].execution_facts = facts;
-                        if self.cancellation.interaction_failed() {
-                            return Err(CanonicalCommitError::Interaction(
-                                InteractionFailure::ControlLost,
-                            ));
-                        }
-                    }
-                    index += 1;
-                }
-                Group::Parallel => {
-                    // Execution-start facts are emitted before any future is
-                    // created, so the loop owns `&mut self` emission and the
-                    // shared `&self` borrows of the spawned futures never
-                    // conflict.
-                    let end = parallel_group_end(&slots, index);
-                    for slot in &mut slots[index..end] {
-                        // Cancellation can be requested by a synchronous
-                        // start-event observer while this group is being
-                        // announced. Stop the logical start frontier at the
-                        // first observed cancellation; the remaining slots
-                        // are filled by the canonical cancellation pass and
-                        // never acquire an execution future.
                         if self.cancellation.is_cancelled() {
-                            break;
+                            slot.result = Some(cancelled_result(self.cancellation.reason()));
+                            continue;
                         }
-                        if slot.result.is_none() {
-                            // The slot crosses its authoritative start
-                            // frontier before the existing projection event.
-                            // A synchronous observer may cancel here; this
-                            // slot is still an in-flight cancellation, while
-                            // later siblings remain eligible for BeforeStart.
-                            slot.executor_started = true;
-                            self.emit(RuntimeEvent::ToolExecutionStarted {
-                                tool_call_id: slot.call.id.clone(),
-                                tool_id: slot.tool_id.clone(),
-                            });
-                            #[cfg(test)]
-                            self.park_after_tool_start();
+                        if let Some(prepared) = slot.prepared.as_mut()
+                            && let Err(error) = Self::bind_prepared_mutation_target(
+                                prepared,
+                                self.tool_runtime.workspace().root(),
+                                self.tool_runtime.tool_output(),
+                            )
+                        {
+                            slot.result = Some(failed_result(&error));
+                            continue;
                         }
-                    }
-                    if let Some(error) = self.durable_failure_commit_error() {
-                        return Err(error);
+                        let facts = ParallelAuthFacts::from_execution(slot_index, self, slot);
+                        let lifecycle = self.lifecycle.clone();
+                        let (auth_trigger, cancellation) =
+                            self.cancellation.execution_cancellation().child_execution();
+                        auth_cancels.insert(slot_index, auth_trigger);
+                        auth_futures.push(Box::pin(async move {
+                            let outcome = authorize_owned(&lifecycle, &cancellation, &facts).await;
+                            (facts.slot_index, outcome)
+                        }));
                     }
                     let mut futures = futures_util::stream::FuturesUnordered::new();
-                    for (slot_index, slot) in slots[index..end].iter().enumerate() {
-                        if slot.executor_started {
-                            let prepared = slot
-                                .prepared
-                                .as_ref()
-                                .expect("unsettled slots are preflighted");
-                            let environment = self.invocation_environment(slot);
-                            futures.push(Box::pin(self.run_single_call(
-                                index + slot_index,
-                                prepared.invocation.clone(),
-                                prepared.progress_capability,
-                                todo_writer.clone(),
-                                occurrences[index + slot_index].clone(),
-                                environment,
-                            )));
+                    let mut remaining_auth = auth_futures.len();
+                    // Prefer draining already-started executors before surfacing
+                    // a sibling auth/durable failure: dropping run futures would
+                    // abandon live work without a structurally complete batch.
+                    let mut group_error: Option<CanonicalCommitError> = None;
+                    while remaining_auth > 0 && group_error.is_none() {
+                        tokio::select! {
+                            biased;
+                            () = self.cancellation.cancelled() => break,
+                            Some((slot_index, outcome)) = auth_futures.next() => {
+                                remaining_auth -= 1;
+                                auth_cancels.remove(&slot_index);
+                                match outcome {
+                                    Ok(Some(result)) => {
+                                        slots[slot_index].result = Some(result);
+                                    }
+                                    Ok(None) => {
+                                        if self.cancellation.is_cancelled() {
+                                            slots[slot_index].result =
+                                                Some(cancelled_result(self.cancellation.reason()));
+                                            continue;
+                                        }
+                                        let tool_call_id = slots[slot_index].call.id.clone();
+                                        let tool_id = slots[slot_index].tool_id.clone();
+                                        // Shared emission: run futures already
+                                        // hold `&self`, so `&mut self` emit is
+                                        // unavailable while siblings proceed.
+                                        // Mark started only after Started is
+                                        // durable so Completed cannot outrun it.
+                                        if let Err(message) =
+                                            self.emit_shared(RuntimeEvent::ToolExecutionStarted {
+                                                tool_call_id,
+                                                tool_id,
+                                            })
+                                        {
+                                            group_error =
+                                                Some(CanonicalCommitError::Durable(
+                                                    crate::durable::ConversationStoreError::Storage(
+                                                        message,
+                                                    ),
+                                                ));
+                                            continue;
+                                        }
+                                        slots[slot_index].executor_started = true;
+                                        #[cfg(test)]
+                                        self.park_after_tool_start();
+                                        if let Some(error) = self.durable_failure_commit_error() {
+                                            group_error = Some(error);
+                                            continue;
+                                        }
+                                        let prepared = slots[slot_index]
+                                            .prepared
+                                            .as_ref()
+                                            .expect("unsettled slots are preflighted");
+                                        let environment = self.invocation_environment(&slots[slot_index]);
+                                        futures.push(Box::pin(self.run_single_call(
+                                            slot_index,
+                                            prepared.clone(),
+                                            todo_writer.clone(),
+                                            occurrences[slot_index].clone(),
+                                            environment,
+                                        )));
+                                    }
+                                    Err(error) => {
+                                        group_error =
+                                            Some(CanonicalCommitError::Interaction(error));
+                                    }
+                                }
+                            }
+                            Some((slot_index, result, facts)) = futures.next(), if !futures.is_empty() => {
+                                slots[slot_index].result = Some(result);
+                                slots[slot_index].execution_facts = facts;
+                            }
                         }
+                    }
+                    // Abort only unfinished auth waiters, then drain so their
+                    // Ask/Review interactions settle without orphaning and
+                    // without cancelling interactions owned by started tools.
+                    if remaining_auth > 0 {
+                        let cause = crate::tools::deadline::ToolCancellationCause::Attempt(
+                            self.cancellation.reason(),
+                        );
+                        for trigger in auth_cancels.values() {
+                            trigger.cancel(cause);
+                        }
+                        while let Some((slot_index, outcome)) = auth_futures.next().await {
+                            remaining_auth = remaining_auth.saturating_sub(1);
+                            auth_cancels.remove(&slot_index);
+                            if slots[slot_index].result.is_some() {
+                                continue;
+                            }
+                            // Keep only decisive Deny/TimedOut outcomes from
+                            // aborted waiters. Cancelled placeholders from the
+                            // child_execution abort must stay unset so the
+                            // group-error / attempt-cancellation fill owns the
+                            // canonical ToolMessage text.
+                            if let Ok(Some(result)) = outcome {
+                                let aborted_cancel = matches!(
+                                    result.status,
+                                    crate::tools::types::ToolExecutionStatus::Cancelled { .. }
+                                );
+                                if !aborted_cancel {
+                                    slots[slot_index].result = Some(result);
+                                }
+                            }
+                        }
+                    }
+                    drop(auth_futures);
+                    if group_error.is_none()
+                        && let Some(error) = self.durable_failure_commit_error()
+                    {
+                        group_error = Some(error);
                     }
                     let mut remaining = futures.len();
                     if remaining > 0 {
@@ -600,27 +659,81 @@ impl AgentExecution<'_> {
                         slots[slot_index].result = Some(result);
                         slots[slot_index].execution_facts = facts;
                     }
+                    if let Some(error) = group_error {
+                        // Batch-wide: an earlier Sequential/Concurrent group may
+                        // already have started even when this group's frontier is
+                        // empty.
+                        let batch_started = slots.iter().any(|slot| slot.executor_started);
+                        if batch_started {
+                            deferred_group_error.get_or_insert(error);
+                        } else {
+                            return Err(error);
+                        }
+                    }
                     if self.cancellation.interaction_failed() {
-                        return Err(CanonicalCommitError::Interaction(
-                            InteractionFailure::ControlLost,
-                        ));
+                        let batch_started = slots.iter().any(|slot| slot.executor_started);
+                        if batch_started {
+                            // Keep the first deferred error (e.g. Durable). A later
+                            // ControlLost must not rewrite attempt-terminal cause.
+                            deferred_group_error.get_or_insert(CanonicalCommitError::Interaction(
+                                InteractionFailure::ControlLost,
+                            ));
+                        } else {
+                            return Err(CanonicalCommitError::Interaction(
+                                InteractionFailure::ControlLost,
+                            ));
+                        }
                     }
                     index = end;
+                    // A durable/auth failure after a sibling started closes the
+                    // start frontier: later groups must not admit new side
+                    // effects before the deferred error is returned.
+                    if deferred_group_error.is_some() {
+                        break;
+                    }
+                }
+            }
+        }
+        // Cancellation fill runs before ControlLost Failed placeholders so a
+        // cancelled attempt keeps Cancelled phase invariants on unset slots
+        // (started → DuringExecution, otherwise BeforeStart).
+        if self.cancellation.is_cancelled() {
+            let reason = self.cancellation.reason();
+            for slot in &mut slots {
+                if slot.result.is_none() {
+                    slot.result = Some(if slot.executor_started {
+                        cancelled_after_start(reason)
+                    } else {
+                        cancelled_result(reason)
+                    });
                 }
             }
         }
         if self.cancellation.interaction_failed() {
-            return Err(CanonicalCommitError::Interaction(
-                InteractionFailure::ControlLost,
-            ));
+            let started = slots.iter().any(|slot| slot.executor_started);
+            if started {
+                for slot in &mut slots {
+                    if slot.result.is_none() {
+                        slot.result = Some(failed_result(
+                            "tool authorization aborted after sibling execution started",
+                        ));
+                    }
+                }
+                deferred_group_error.get_or_insert(CanonicalCommitError::Interaction(
+                    InteractionFailure::ControlLost,
+                ));
+            } else {
+                return Err(CanonicalCommitError::Interaction(
+                    InteractionFailure::ControlLost,
+                ));
+            }
         }
-        // Cancellation fill: every not-yet-started foreground call receives
-        // a cancelled result slot, so the committed batch covers every
-        // logical call exactly once.
-        if self.cancellation.is_cancelled() {
+        if deferred_group_error.is_some() {
             for slot in &mut slots {
                 if slot.result.is_none() {
-                    slot.result = Some(cancelled_result(self.cancellation.reason()));
+                    slot.result = Some(failed_result(
+                        "tool authorization aborted after sibling execution started",
+                    ));
                 }
             }
         }
@@ -734,84 +847,10 @@ impl AgentExecution<'_> {
         if let Some(error) = self.durable_failure_commit_error() {
             return Err(error);
         }
+        if let Some(error) = deferred_group_error {
+            return Err(error);
+        }
         Ok(settled)
-    }
-
-    /// Resolves the typed pre-tool decision of every preflight-ready call.
-    ///
-    /// The policy sees only an immutable view of the exact registry-resolved
-    /// facts. `Ask` delegates the wait to the attempt's concrete native
-    /// interaction binding, while the Agent Loop remains the owner of
-    /// execution and cancellation. A provider-unavailable interaction and a
-    /// policy error fail closed as `Denied` only when no post-await
-    /// cancellation is observable; an owner cancellation produces the
-    /// existing cancelled result slot and closes the later tool-start
-    /// frontier.
-    fn freeze_bash_environments(&self, slots: &mut [CallSlot]) {
-        for slot in slots {
-            if slot.result.is_some() {
-                continue;
-            }
-            let Some(prepared) = slot.prepared.as_ref() else {
-                continue;
-            };
-            if prepared.invocation.tool_name == crate::tools::native::BASH_TOOL_NAME
-                && matches!(slot.origin, ToolOrigin::Builtin)
-            {
-                slot.command_environment = Some(crate::tools::execution_environment::freeze_bash(
-                    self.capability.snapshot().effective_environment(),
-                    self.tool_runtime.workspace(),
-                ));
-            }
-        }
-    }
-
-    fn invocation_environment(&self, slot: &CallSlot) -> ToolEnvironment {
-        slot.command_environment
-            .clone()
-            .unwrap_or_else(|| self.capability.snapshot().effective_environment().clone())
-    }
-
-    async fn resolve_pre_tool_decisions(
-        &self,
-        slots: &mut [CallSlot],
-    ) -> Result<(), InteractionFailure> {
-        for slot in slots {
-            if slot.result.is_some() {
-                continue;
-            }
-            if self.cancellation.is_cancelled() {
-                slot.result = Some(cancelled_result(self.cancellation.reason()));
-                continue;
-            }
-            let prepared = slot
-                .prepared
-                .as_ref()
-                .expect("a policy decision requires a preflight-ready invocation");
-            let invocation = &prepared.invocation;
-            let view = PreToolView {
-                conversation_id: &self.request.conversation_id,
-                execution: crate::runtime::interaction::InteractionExecution::Attempt {
-                    attempt_id: self.request.attempt_id.clone(),
-                    turn: self.turn,
-                },
-                invocation_id: &invocation.id,
-                tool_id: &invocation.tool_id,
-                tool_name: &invocation.tool_name,
-                origin: &prepared.origin,
-                mode: invocation.mode,
-                arguments: &invocation.arguments,
-                audit_arguments: &slot.call.arguments,
-                approval_policy: prepared.approval,
-            };
-            slot.result = crate::tools::invocation::authorize(
-                &self.lifecycle,
-                &view,
-                &self.cancellation.execution_cancellation(),
-            )
-            .await?;
-        }
-        Ok(())
     }
 
     /// Runs the immutable tool-result observation pass of one structurally
@@ -976,6 +1015,31 @@ impl AgentExecution<'_> {
         Ok(staged)
     }
 
+    fn freeze_bash_environments(&self, slots: &mut [CallSlot]) {
+        for slot in slots {
+            if slot.result.is_some() {
+                continue;
+            }
+            let Some(prepared) = slot.prepared.as_ref() else {
+                continue;
+            };
+            if prepared.invocation.tool_name == crate::tools::native::BASH_TOOL_NAME
+                && matches!(slot.origin, ToolOrigin::Builtin)
+            {
+                slot.command_environment = Some(crate::tools::execution_environment::freeze_bash(
+                    self.capability.snapshot().effective_environment(),
+                    self.tool_runtime.workspace(),
+                ));
+            }
+        }
+    }
+
+    fn invocation_environment(&self, slot: &CallSlot) -> ToolEnvironment {
+        slot.command_environment
+            .clone()
+            .unwrap_or_else(|| self.capability.snapshot().effective_environment().clone())
+    }
+
     /// Runs one logical tool call of the batch.
     ///
     /// Foreground invocations race against attempt cancellation (biased):
@@ -991,32 +1055,46 @@ impl AgentExecution<'_> {
     async fn run_single_call(
         &self,
         call_index: usize,
-        invocation: ToolInvocation,
-        progress_capability: ToolProgressCapability,
+        prepared: PreparedInvocation,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: crate::message::types::ToolCallOccurrenceRef,
         environment: ToolEnvironment,
     ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
-        let (result, facts) = match invocation.mode {
+        let (result, facts) = match prepared.invocation.mode {
             ToolInvocationMode::Foreground => {
-                self.run_foreground(
-                    &invocation,
-                    progress_capability,
-                    todos,
-                    &occurrence,
-                    environment,
-                )
-                .await
+                self.run_foreground(&prepared, todos, &occurrence, environment)
+                    .await
             }
             // A detached execution outlives this batch, so it is handed no
             // task-list authority: nothing it does can land in the snapshot
             // this batch is about to commit.
             ToolInvocationMode::Background => (
-                self.dispatch_background(&invocation, environment).await,
+                self.dispatch_background(&prepared.invocation, environment)
+                    .await,
                 Vec::new(),
             ),
         };
         (call_index, result, facts)
+    }
+
+    /// Native mutation owner: prepare and hold the Write/Edit target before
+    /// authorization so classify/execute/commit share one bound path.
+    fn bind_prepared_mutation_target(
+        prepared: &mut PreparedInvocation,
+        workspace_root: &std::path::Path,
+        tool_output: &crate::tools::managed_output::ManagedToolOutput,
+    ) -> Result<(), String> {
+        if prepared.mutation_target.is_some() {
+            return Ok(());
+        }
+        prepared.mutation_target = crate::tools::native::support::bind_invocation_mutation_target(
+            &prepared.origin,
+            &prepared.invocation.tool_name,
+            &prepared.invocation.arguments,
+            workspace_root,
+            tool_output,
+        )?;
+        Ok(())
     }
 
     #[cfg(test)]
@@ -1062,13 +1140,14 @@ impl AgentExecution<'_> {
     #[allow(clippy::too_many_lines)] // Caller context and canonical fact projection stay together.
     async fn run_foreground(
         &self,
-        invocation: &ToolInvocation,
-        progress_capability: ToolProgressCapability,
+        prepared: &PreparedInvocation,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: &crate::message::types::ToolCallOccurrenceRef,
         environment: ToolEnvironment,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
         use crate::tools::invocation::InvocationFact;
+        let invocation = &prepared.invocation;
+        let progress_capability = prepared.progress_capability;
         let call_id = invocation
             .id
             .canonical_call_id()
@@ -1081,7 +1160,7 @@ impl AgentExecution<'_> {
             attempt_id: &self.request.attempt_id,
         };
         let execution_cancellation = self.cancellation.execution_cancellation();
-        let context = ToolExecutionContext::new(
+        let mut context = ToolExecutionContext::new(
             &self.request.conversation_id,
             None,
             execution_cancellation.clone(),
@@ -1091,6 +1170,7 @@ impl AgentExecution<'_> {
             self.tool_runtime.tool_output(),
             &environment,
         );
+        context.bound_mutation = prepared.mutation_target.clone();
         let context = match self.lifecycle.native_questionnaire_requester(
             self.request.attempt_id.clone(),
             execution_cancellation,
@@ -1140,6 +1220,7 @@ impl AgentExecution<'_> {
                 let mut subagent = subagent.clone();
                 subagent.native = Some(Arc::new(
                     crate::tools::invocation::NativeInvocationServices {
+                        task: self.permission_task.clone(),
                         lifecycle: self.lifecycle.clone(),
                         runtime: self.tool_runtime.clone(),
                         clock: self.monotonic_clock.clone(),
@@ -1236,9 +1317,8 @@ impl AgentExecution<'_> {
         environment: ToolEnvironment,
     ) -> ToolExecutionResult {
         let executor = self.tool_registry().executor(&invocation.tool_id);
-        // Native Bash arrives with the environment frozen before approval.
-        // Other tools keep the attempt snapshot captured at prepare time.
-        // The detached execution retains exactly this immutable environment.
+        // Native Bash retains the environment frozen before approval; other
+        // tools retain the admitted capability snapshot's environment.
         let Some(mcp_leases) = self.capability.mcp_leases() else {
             return failed_result("the admitted MCP generation is already physically retired");
         };
@@ -1272,6 +1352,107 @@ impl AgentExecution<'_> {
             Err(error) => failed_result(&error.to_string()),
         }
     }
+}
+
+/// Owned pre-tool facts for one parallel authorization future.
+struct ParallelAuthFacts {
+    task: Option<Arc<crate::runtime::permission::PermissionTaskEvidence>>,
+    slot_index: usize,
+    conversation_id: crate::runtime::identity::ConversationId,
+    attempt_id: AttemptId,
+    turn: u32,
+    invocation_id: crate::tools::types::ToolInvocationId,
+    tool_id: ToolId,
+    tool_name: String,
+    origin: ToolOrigin,
+    mode: ToolInvocationMode,
+    arguments: serde_json::Value,
+    audit_arguments: serde_json::Value,
+    elevation_reason: Option<String>,
+    workspace_root: std::path::PathBuf,
+    /// Bound Write/Edit target held from authorize through execute/commit.
+    mutation_target: Option<std::path::PathBuf>,
+    resource_permission: crate::runtime::permission::ResourcePermissionValue,
+}
+
+impl ParallelAuthFacts {
+    fn from_execution(slot_index: usize, execution: &AgentExecution<'_>, slot: &CallSlot) -> Self {
+        let prepared = slot
+            .prepared
+            .as_ref()
+            .expect("a policy decision requires a preflight-ready invocation");
+        let mut permission_arguments = prepared.invocation.arguments.clone();
+        // `send_message` authorizes against durable agent_id; bind it to the
+        // named profile used by frozen resource_permission_targets first.
+        if prepared.invocation.tool_name == crate::tools::native::agents::NAMES[1]
+            && let Some(agent_id) = permission_arguments
+                .get("agent_id")
+                .and_then(serde_json::Value::as_str)
+            && let Ok(parsed) = crate::runtime::identity::AgentId::parse(agent_id)
+            && let Some(name) = execution
+                .subagent_context
+                .as_ref()
+                .and_then(|context| context.named_agent_for_id(&parsed))
+            && let Some(object) = permission_arguments.as_object_mut()
+        {
+            object.insert("agent".into(), serde_json::Value::String(name));
+        }
+        let resource_permission =
+            crate::runtime::permission::effective_invocation_resource_permission(
+                prepared.resource_permissions,
+                &prepared.resource_permission_targets,
+                &permission_arguments,
+                execution.permission_reminder.mode,
+            );
+        Self {
+            task: execution.permission_task.clone(),
+            slot_index,
+            conversation_id: execution.request.conversation_id.clone(),
+            attempt_id: execution.request.attempt_id.clone(),
+            turn: execution.turn,
+            invocation_id: prepared.invocation.id.clone(),
+            tool_id: prepared.invocation.tool_id.clone(),
+            tool_name: prepared.invocation.tool_name.clone(),
+            origin: prepared.origin.clone(),
+            mode: prepared.invocation.mode,
+            arguments: prepared.invocation.arguments.clone(),
+            audit_arguments: slot.call.arguments.clone(),
+            elevation_reason: prepared.elevation_reason.clone(),
+            workspace_root: execution.tool_runtime.workspace().root().to_path_buf(),
+            mutation_target: prepared
+                .mutation_target
+                .as_ref()
+                .map(|target| target.path().to_path_buf()),
+            resource_permission,
+        }
+    }
+}
+
+async fn authorize_owned(
+    lifecycle: &crate::agent::AttemptLifecycle,
+    cancellation: &crate::runtime::cancellation::ExecutionCancellation,
+    facts: &ParallelAuthFacts,
+) -> Result<Option<ToolExecutionResult>, InteractionFailure> {
+    let view = PreToolView {
+        task: facts.task.as_deref(),
+        conversation_id: &facts.conversation_id,
+        execution: crate::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: facts.attempt_id.clone(),
+            turn: facts.turn,
+        },
+        invocation_id: &facts.invocation_id,
+        tool_id: &facts.tool_id,
+        tool_name: &facts.tool_name,
+        origin: &facts.origin,
+        mode: facts.mode,
+        arguments: &facts.arguments,
+        audit_arguments: &facts.audit_arguments,
+        elevation_reason: facts.elevation_reason.as_deref(),
+        workspace_root: Some(facts.workspace_root.as_path()),
+        mutation_target: facts.mutation_target.as_deref(),
+        resource_permission: facts.resource_permission,
+    };
+    crate::tools::invocation::authorize(lifecycle, &view, cancellation).await
 }
 
 #[cfg(test)]

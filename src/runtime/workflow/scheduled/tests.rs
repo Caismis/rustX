@@ -188,9 +188,9 @@ chat_reasoning_replay = "omit"
     )
     .unwrap();
     let mut model = SessionModelConfig::of(ModelRef::parse("local/model").unwrap());
-    model.summary_model = crate::model::session::AuxiliaryModelPolicy::Explicit {
+    model.auxiliary = crate::model::session::AuxiliaryModelPolicy::Explicit {
         model: ModelRef::parse("local/summary").unwrap(),
-        profile: None,
+        profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
         request_params: crate::model::invocation::RequestParams::new(),
         max_output_tokens: None,
     };
@@ -204,6 +204,7 @@ chat_reasoning_replay = "omit"
             tools: Vec::new(),
             skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
             inherit_project_instructions: false,
+            permissions: None,
             extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             workflows: BTreeSet::new(),
         },
@@ -218,18 +219,17 @@ chat_reasoning_replay = "omit"
         description: input.tool_description.into(),
         input_schema: empty,
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
-    let registration = ToolRegistration::plain(definition.clone(), executor);
+    let registry =
+        ToolRegistry::from_registrations([ToolRegistration::plain(definition.clone(), executor)])
+            .unwrap();
     let available = if input.metadata {
         AvailableToolCatalog::metadata([definition])
     } else {
-        AvailableToolCatalog::new(vec![registration.clone()])
+        AvailableToolCatalog::new(registry.validated_registrations())
     };
-    let registry = ToolRegistry::from_registrations([registration]).unwrap();
     let skills = SkillSnapshot::new(Vec::new());
     let availability = CapabilityAvailability::default();
     let mut catalog = WorkflowCatalog::new([program(input)]).unwrap();
@@ -524,6 +524,8 @@ fn scheduled_workflow_source_identity_excludes_native_credential_values() {
             environment: BTreeMap::new(),
         },
         policy: ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     first
         .credentials

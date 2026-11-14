@@ -6,7 +6,7 @@ use rustx::model::session::AuxiliaryModelPolicy;
 use rustx::model::types::ModelProtocol;
 use rustx::skills::{SkillDiscovery, SkillDiscoveryConfig};
 use rustx::tools::Workspace;
-use rustx::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
+use rustx::tools::types::ToolExecutionPolicy;
 
 fn examples_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime")
@@ -114,8 +114,8 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert_eq!(config.initial_model().max_output_tokens, Some(2_048));
     assert_eq!(
-        config.initial_model().summary_model,
-        AuxiliaryModelPolicy::Session
+        config.initial_model().auxiliary,
+        AuxiliaryModelPolicy::default()
     );
     assert_eq!(config.context.reserve_tokens, 4_096);
     assert_eq!(config.context.keep_recent_tokens, 12_000);
@@ -127,7 +127,6 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert!(config.agent.extensions.agent_status.background.enabled);
     assert!(config.mcp_servers.is_empty());
-    assert!(config.mcp_tool_policies.is_empty());
     assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
     assert!(
         config
@@ -167,17 +166,16 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
         vec!["parallel_review", "implement_and_review"]
     );
 
-    let policies = config.native_tools.to_policies();
+    // Issue #544: composition uses product-default NativeToolPolicies; Bash
+    // remains ModelSelectable without authored native_tools overlays.
+    let policies = rustx::tools::NativeToolPolicies::default();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
-    assert_eq!(policies.read.concurrency, ToolConcurrencyPolicy::Parallel);
     assert_eq!(
         policies.bash.execution,
         ToolExecutionPolicy::ModelSelectable
     );
     assert_eq!(policies.grep.execution, ToolExecutionPolicy::ForegroundOnly);
-    assert_eq!(policies.edit.approval, ToolApprovalPolicy::Always);
-    assert_eq!(policies.bash.concurrency, ToolConcurrencyPolicy::Sequential);
-    assert_eq!(policies.bash.approval, ToolApprovalPolicy::Always);
+    assert_eq!(policies.edit.execution, ToolExecutionPolicy::ForegroundOnly);
 }
 
 #[test]

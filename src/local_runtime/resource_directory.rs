@@ -514,6 +514,35 @@ mod revision_tests {
     }
 
     #[test]
+    fn large_python_package_permission_edits_change_capture_without_changing_source() {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let package = root.join("tools/large");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            package.join("server.py"),
+            "from fastmcp import FastMCP\nmcp = FastMCP('large')\n",
+        )
+        .unwrap();
+        std::fs::write(package.join("requirements.txt"), "").unwrap();
+        std::fs::File::create(package.join("asset.bin"))
+            .unwrap()
+            .set_len(65 * 1024 * 1024)
+            .unwrap();
+        let mut previous = revision(&root);
+        for permissions in [
+            "[permissions]\nplan = 'allow'\nautomatic = 'default'\nfull_access = 'allow'\n",
+            "[permissions]\nplan = 'deny'\nautomatic = 'default'\nfull_access = 'allow'\n",
+            "[permissions]\nplan = 'deny'\nautomatic = 'default'\nfull_access = 'allow'\n[tools.echo.permissions]\nplan = 'default'\nautomatic = 'ask'\nfull_access = 'allow'\n",
+        ] {
+            std::fs::write(package.join("permissions.toml"), permissions).unwrap();
+            let next = revision(&root);
+            assert!(!same_capture(&previous, &next), "{permissions}");
+            previous = next;
+        }
+    }
+
+    #[test]
     fn issue527_same_size_edits_beyond_old_file_and_directory_byte_budgets_change_revision() {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap();

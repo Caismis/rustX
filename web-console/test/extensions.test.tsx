@@ -6,7 +6,7 @@ import {McpEditor} from '../src/app/resources/mcp/McpEditor';
 import {AvailabilityDetail} from '../src/app/resources/shared/AvailabilityDetail';
 import {renderEditor} from './settings-harness';
 import {cfg3Source} from './cfg3-data';
-import type {SourceScope,SourceSettings} from '../../protocol/app-server/v77';
+import type {SourceScope,SourceSettings} from '../../protocol/app-server/v78';
 afterEach(cleanup);
 const noop=()=>{};
 const mcpDetail=(source:SourceSettings,scope:SourceScope,name:string)=><>

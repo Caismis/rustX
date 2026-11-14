@@ -102,8 +102,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
     // the supervisor spawns into.
     // The deadline test owns executor start; Tool approval has separate
     // deterministic coverage and must not park this execution fixture.
-    let mut policies = rustx::tools::NativeToolPolicies::default();
-    policies.bash.approval = rustx::tools::ToolApprovalPolicy::Never;
+    let policies = rustx::tools::NativeToolPolicies::default();
     // This fixture's subject is bash deadline settlement, so it composes no
     // native Agent Extension: no task list, and no `todo` in either Tool
     // plane (Issue #259).
@@ -199,10 +198,14 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
             monotonic_clock: clock.clone() as Arc<dyn MonotonicClock>,
             subagent_context: None,
             workflow_output: None,
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
+            last_permission_reminder_mode: None,
+            permission_task_message: None,
+            recovered_permission_task_message: None,
         },
         context_runtime,
         &fixture.runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     let (started_sender, mut started) = watch::channel(false);

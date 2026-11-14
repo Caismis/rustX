@@ -1,8 +1,10 @@
 //! The native `ask_user` tool.
 //!
-//! `ask_user` is an ordinary foreground, sequential, approval-never Tool. One
-//! invocation contains one bounded questionnaire and publishes exactly one
-//! interaction through the runtime-owned `InteractionCoordinator`.
+//! `ask_user` is an ordinary foreground-only Tool. Permission follows the
+//! Issue #544 matrix (Allow in every mode). One invocation contains one
+//! bounded questionnaire and publishes exactly one interaction through the
+//! runtime-owned `InteractionCoordinator`. Its answer is not a Tool Approval
+//! token.
 
 use std::fmt::Write as _;
 
@@ -25,8 +27,8 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::native::registration::{NativeToolRegistration, input_schema};
 use crate::tools::native::support::{cancelled_result, failed_result, success_json};
 use crate::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolInvocation, ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolInvocation, ToolOrigin,
+    ToolReplayPolicy,
 };
 
 /// The canonical model-facing name of the native questionnaire tool.
@@ -262,8 +264,6 @@ pub(super) fn definition() -> ToolDefinition {
         description: "Ask the user one structured questionnaire for a blocking decision. Group related blocking questions into one invocation instead of issuing consecutive ask_user calls. Use 1–4 questions with unique question text, each with 2–4 authored options. Option labels must be unique within their question; every option needs a meaningful label and description of its meaning or trade-offs. A custom answer is always available at runtime, so do not author Other or an equivalent reserved custom-answer choice. If one option is recommended, place it first and append (Recommended) to its label. multi_select defaults to false. Optional previews are for single-select questions only; multi-select questions cannot include previews. The user's answers are returned as an ordinary structured tool result.".to_owned(),
         input_schema: input_schema::<AskUserInput>(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -466,7 +466,7 @@ mod tests {
                 id: crate::runtime::identity::ToolCallId::new("ask-user-test"),
                 tool_id: ToolId::new("tool-ask-user"),
                 name: ASK_USER_NAME.to_owned(),
-                arguments,
+                arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
             }),
             Ok(PreflightOutcome::Ready(_))
         )
@@ -566,12 +566,14 @@ mod tests {
             "../../../tests/fixtures/ask_user/schema-before.json"
         ))
         .unwrap();
-        let mut original_definition = definition();
-        original_definition.input_schema = before.clone();
-        let compiled_before = crate::tools::schema::compile_model_definition(&original_definition)
-            .expect("baseline definition compiles for model adapters");
-        assert_eq!(compiled_before.input_schema, before);
-        let mut after = registry().model_definitions().remove(0).input_schema;
+        let baseline =
+            crate::tools::schema::compile_model_definition(&crate::tools::types::ToolDefinition {
+                input_schema: before.clone(),
+                ..definition()
+            })
+            .unwrap();
+        assert!(baseline.input_schema["properties"]["arguments"].is_object());
+        let mut after = registry().definitions().remove(0).input_schema;
         let captured_after: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/ask_user/schema-after.json"
         ))
@@ -911,7 +913,7 @@ mod tests {
 
     #[test]
     fn reserved_runtime_metadata_rejection_is_bounded_without_echoing_the_private_key() {
-        let mut arguments = valid(1);
+        let mut arguments = serde_json::json!({"arguments": valid(1)});
         let private_key = format!("__rustx_{}", "private-key-秘密字段".repeat(1024));
         arguments
             .as_object_mut()

@@ -392,6 +392,10 @@ impl RuntimeInner {
                             &success.completed.persisted_event,
                         );
                     }
+                    // A successfully activated compaction is a new model
+                    // context: the next Attempt must re-emit the permission
+                    // reminder even when the mode is unchanged.
+                    state.last_permission_reminder_mode = None;
                     Ok(success.outcome)
                 }
                 Err(error) if confirmed_commit => Err(error),

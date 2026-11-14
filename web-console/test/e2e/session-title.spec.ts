@@ -31,7 +31,7 @@ capabilities = { input_modalities = ["text"], output_modalities = ["text"] }
 compat = { chat_reasoning_replay = "omit" }
 [agent.model]
 model = "fixture/console-model"
-[agent.model.title_model]
+[agent.model.auxiliary]
 mode = "explicit"
 model = "titles/short"
 request_params = '{"title_tag":"explicit-native"}'
@@ -48,7 +48,7 @@ max_output_tokens = { mode = "limit", tokens = 128 }
     const id = await selectedSessionId(page);
     native = await AppServerHost.connectRemote({ endpoint: primary.endpoint, token: primary.token });
     const settings = await native.readSettings(id);
-    expect(settings.settings.model?.titleModel).toMatchObject({ mode: 'explicit', model: 'titles/short', max_output_tokens: 128 });
+    expect(settings.settings.model?.auxiliary).toMatchObject({ mode: 'explicit', model: 'titles/short', max_output_tokens: 128 });
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('Investigate the cache invalidation bug');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await auxiliary.gate('title-dispatched');

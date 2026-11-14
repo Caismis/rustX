@@ -1269,7 +1269,6 @@ pub(crate) fn start_admit_watcher(shutdown: tokio_util::sync::CancellationToken)
     tokio::spawn(async move {
         if let Some(directory) = admit_directory() {
             let _ = std::fs::create_dir_all(&directory);
-            scan_admit(&directory);
             let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
             if let Ok(mut watcher) =
                 notify::recommended_watcher(move |_event: notify::Result<notify::Event>| {
@@ -1279,6 +1278,8 @@ pub(crate) fn start_admit_watcher(shutdown: tokio_util::sync::CancellationToken)
                     .watch(&directory, notify::RecursiveMode::NonRecursive)
                     .is_ok()
             {
+                // Watch before scanning so a publication cannot fall between them.
+                scan_admit(&directory);
                 loop {
                     tokio::select! {
                         () = shutdown.cancelled() => break,
@@ -1319,7 +1320,16 @@ fn scan_admit(directory: &Path) {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
-    for entry in entries.take(32).flatten() {
+    for entry in entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "txt")
+        })
+        .take(32)
+    {
         let path = entry.path();
         let Ok(Some(text)) = read_optional_file(&path) else {
             continue;
@@ -2581,6 +2591,37 @@ pub(crate) mod tests {
         std::fs::write(&file, format!("{}\n", root.path().display())).expect("admit file");
         scan_admit(directory.path());
         assert!(!file.exists());
+    }
+
+    #[tokio::test]
+    async fn admission_consumes_only_atomically_published_complete_paths() {
+        use std::io::Write;
+        let root = workspace();
+        let directory = tempfile::tempdir().unwrap();
+        let pending = directory.path().join("admission.pending");
+        let published = directory.path().join("admission.txt");
+        let mut file = std::fs::File::create(&pending).unwrap();
+        scan_admit(directory.path());
+        assert!(
+            pending.exists(),
+            "CREATE before write must not consume the handoff"
+        );
+        file.write_all(root.path().to_str().unwrap().as_bytes())
+            .unwrap();
+        scan_admit(directory.path());
+        assert!(
+            pending.exists(),
+            "completed staging remains unpublished until rename"
+        );
+        drop(file);
+        std::fs::rename(&pending, &published).unwrap();
+        let owner = super::global();
+        let canonical = std::fs::canonicalize(root.path()).unwrap();
+        assert!(!owner.admitted.lock().unwrap().contains(&canonical));
+        scan_admit(directory.path());
+        assert!(!published.exists());
+        assert!(owner.admitted.lock().unwrap().contains(&canonical));
+        scan_admit(directory.path());
     }
 
     #[tokio::test]

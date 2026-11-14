@@ -11,9 +11,7 @@ mod input;
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{
-    atomic_commit, failed_result, interpret_path, prepare_mutation_target, success_text,
-};
+use crate::tools::native::support::{atomic_commit, failed_result, success_text};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
@@ -65,7 +63,7 @@ impl ToolExecutor for WriteTool {
     }
 }
 
-fn run_write(
+pub(super) fn run_write(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
@@ -73,21 +71,23 @@ fn run_write(
         Ok(input) => input,
         Err(error) => return failed_result(error),
     };
-    let requested = interpret_path(context.workspace.root(), &input.path);
-    let target = match prepare_mutation_target(&requested, context.tool_output) {
+    let Some(bound) = context.bound_mutation.as_ref() else {
+        return failed_result(
+            "write mutation target was not bound at authorization; refusing to resolve independently",
+        );
+    };
+    if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
+        return failed_result(error);
+    }
+    let target = match bound.commit_target(true) {
         Ok(target) => target,
         Err(error) => return failed_result(error),
     };
-    if let Some(parent) = target.path().parent()
-        && let Err(error) = std::fs::create_dir_all(parent)
-    {
-        return failed_result(format!(
-            "cannot create parent directories for {}: {error}",
-            target.path().display()
-        ));
-    }
     if let Some(changes) = &context.workspace_changes {
-        changes.capture(target.path());
+        changes.capture(bound.path());
+    }
+    if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
+        return failed_result(error);
     }
     if let Err(error) = atomic_commit(&target, input.content.as_bytes()) {
         return failed_result(error);

@@ -197,8 +197,16 @@ pub async fn run_subagent_child() -> i32 {
         Ok(spec) => spec,
         Err(code) => return code,
     };
-    if let Ok(root) = spec.runtime_root() {
-        let _ = crate::tools::execution_environment::install_child_snapshot(&root);
+    let runtime_root = spec.runtime_root().ok();
+    if let Err(detail) =
+        crate::tools::execution_environment::install_child_snapshot(runtime_root.as_deref())
+    {
+        let _ = write_child_frame(
+            &mut control,
+            &ChildFrame::StartupError(DiagnosticFrame { message: detail }),
+        )
+        .await;
+        return 2;
     }
     // From here on there is exactly one owner of the raw transports. Every
     // other child-side owner — the semantic driver and every nested
@@ -1538,7 +1546,7 @@ pub(crate) mod tests {
                 explicit_model: true,
                 agent_id: AgentId::new("agent-child"),
                 model: scripted_session_model(adapter),
-                approval_mode: crate::runtime::ApprovalMode::Policy,
+                approval_mode: crate::runtime::ApprovalMode::Plan,
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
@@ -2036,7 +2044,7 @@ pub(crate) mod tests {
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             },
-            approval_mode: crate::runtime::ApprovalMode::Policy,
+            approval_mode: crate::runtime::ApprovalMode::Plan,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: SessionContextPolicy {

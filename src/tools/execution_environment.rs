@@ -110,22 +110,29 @@ pub(crate) fn current() -> Arc<ExecutionHost> {
     Arc::clone(host_slot().get_or_init(|| Arc::new(capture_process())))
 }
 
-/// Installs a parent snapshot before any child capture.
-pub(crate) fn install_child_snapshot(runtime_root: &Path) -> bool {
-    let path = runtime_root.join(SNAPSHOT_FILE);
-    let Ok(bytes) = std::fs::read(&path) else {
-        return false;
-    };
-    let Ok(host) = decode_snapshot(&bytes) else {
-        return host_slot()
-            .set(Arc::new(ExecutionHost::from_unicode(
+/// Installs a parent snapshot before any child capture. An unavailable snapshot
+/// closes native Bash rather than recapturing the child process environment.
+pub(crate) fn install_child_snapshot(runtime_root: Option<&Path>) -> Result<(), String> {
+    install_child_snapshot_into(host_slot(), runtime_root)
+}
+
+fn install_child_snapshot_into(
+    slot: &OnceLock<Arc<ExecutionHost>>,
+    runtime_root: Option<&Path>,
+) -> Result<(), String> {
+    let host = runtime_root
+        .and_then(|root| std::fs::read(root.join(SNAPSHOT_FILE)).ok())
+        .and_then(|bytes| decode_snapshot(&bytes).ok())
+        .unwrap_or_else(|| {
+            ExecutionHost::from_unicode(
                 BTreeMap::new(),
                 0,
                 Some("the child host snapshot is unreadable"),
-            )))
-            .is_ok();
-    };
-    host_slot().set(Arc::new(host)).is_ok()
+            )
+        });
+    slot.set(Arc::new(host)).map_err(|_| {
+        "the child host was captured before its parent snapshot was installed".to_owned()
+    })
 }
 
 /// Writes the parent snapshot into the child runtime root before spawn.
@@ -215,11 +222,14 @@ struct SnapshotFile {
 
 /// The environment a uv or interpreter probe inherits from the host.
 pub(crate) fn bootstrap_environment(host: &ExecutionHost) -> Vec<(String, String)> {
-    host.entries
+    let mut entries = host
+        .entries
         .iter()
         .filter(|(key, _)| !excluded_from_bootstrap(key))
         .map(|(key, value)| (key.clone(), value.clone()))
-        .collect()
+        .collect();
+    super::environment::apply_git_execution_environment(&mut entries);
+    entries
 }
 
 fn excluded_from_bootstrap(key: &str) -> bool {
@@ -265,10 +275,8 @@ pub(crate) fn compose(
     base: &ToolEnvironment,
     selection: &PythonSelection,
 ) -> Result<Vec<(String, String)>, &'static str> {
-    if host.closed.is_some() {
-        return Err(
-            "the execution environment could not be composed because PATH or HOME is not Unicode",
-        );
+    if let Some(reason) = host.closed {
+        return Err(reason);
     }
     if selection.guard_unavailable {
         return Err(
@@ -313,7 +321,9 @@ pub(crate) fn compose(
     if !entries.contains_key("LC_ALL") {
         entries.insert("LC_ALL".to_owned(), "C.UTF-8".to_owned());
     }
-    Ok(entries.into_iter().collect())
+    let mut entries = entries.into_iter().collect();
+    super::environment::apply_git_execution_environment(&mut entries);
+    Ok(entries)
 }
 
 fn excluded_after_overrides(key: &str) -> bool {
@@ -518,6 +528,47 @@ mod tests {
         assert_eq!(entries, frozen);
         assert!(!format!("{environment:?}").contains("/users/ada"));
         assert!(!format!("{environment:?}").contains("/frozen/bin"));
+    }
+
+    #[test]
+    fn child_snapshot_failures_never_allow_process_recapture() {
+        let root = tempfile::tempdir().unwrap();
+        let snapshot = root.path().join(super::SNAPSHOT_FILE);
+        for case in ["missing", "directory", "malformed", "invalid-root", "valid"] {
+            if snapshot.is_dir() {
+                std::fs::remove_dir(&snapshot).unwrap();
+            } else if snapshot.exists() {
+                std::fs::remove_file(&snapshot).unwrap();
+            }
+            match case {
+                "directory" => std::fs::create_dir(&snapshot).unwrap(),
+                "malformed" => std::fs::write(&snapshot, "invalid JSON").unwrap(),
+                "valid" => {
+                    let parent = host_from_entries(vec![("PARENT_ONLY", "frozen")]);
+                    std::fs::write(&snapshot, super::encode_snapshot(&parent).unwrap()).unwrap();
+                }
+                _ => {}
+            }
+            let slot = std::sync::OnceLock::new();
+            let path = (case != "invalid-root").then_some(root.path());
+            super::install_child_snapshot_into(&slot, path).unwrap();
+            let host = slot.get_or_init(|| panic!("{case} must never recapture the process"));
+            if case == "valid" {
+                assert_eq!(
+                    host.entries.get("PARENT_ONLY").map(String::as_str),
+                    Some("frozen")
+                );
+                assert!(host.closed.is_none());
+            } else {
+                assert!(host.entries.is_empty());
+                assert_eq!(host.closed, Some("the child host snapshot is unreadable"));
+                assert!(compose(host, &ToolEnvironment::new(), &selection(true)).is_err());
+            }
+            assert!(
+                super::install_child_snapshot_into(&slot, path).is_err(),
+                "duplicate installation must be reported"
+            );
+        }
     }
 
     #[test]

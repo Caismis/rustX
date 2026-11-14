@@ -13,6 +13,12 @@ The composition order is:
    `BASHOPTS`, and exported Bash functions) and rustX supervisor control
    variables. Overrides cannot put those keys back.
 4. Workspace Python selection.
+5. Runtime-owned Git execution defaults. `GIT_CONFIG_COUNT`, indexed
+   `GIT_CONFIG_KEY_*` / `GIT_CONFIG_VALUE_*`, `GIT_CONFIG_PARAMETERS`,
+   `GIT_PAGER`, and `GIT_EDITOR` cannot be configured as ordinary overrides.
+   Inherited values in this namespace are replaced for native Bash and Python
+   bootstrap as well as excluded subprocesses. These defaults control common
+   helper behavior; Git commands still require normal permission admission.
 
 `PATH` or `HOME` values that are not Unicode fail that composition. Other
 non-Unicode host values are omitted because the supervisor receives the
@@ -191,3 +197,10 @@ file for every supervised launch, including small foreground Bash commands.
 This is independent of lazy output spill. Failure to allocate that snapshot
 refuses launch; moving it to a retained private FD or control-frame transport
 would require a separate supervisor transport change.
+
+Workspace registration publishes its native preparation handoff only after a
+private staging file has been fully written and atomically renamed. The native
+watcher ignores staging files and installs its watch before the initial scan.
+A subagent whose parent host snapshot is missing, unreadable, or malformed keeps
+native Bash closed; it never recaptures the environment injected at child spawn.
+An already-captured child host is a startup error.

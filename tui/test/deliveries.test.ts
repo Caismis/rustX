@@ -265,7 +265,7 @@ describe("tool-present presentation", () => {
     const settled = toolResult({ deliveries: [REPORT] });
     const running = stateOf({
       messages: [assistantBlocks("m1", [toolCallBlock("call-1", "tool-present", "present", ARGS)])],
-      attempt: attemptView({ foreground: [foreground("call-1", "tool-present", "present", { type: "settled", arguments: JSON.stringify(ARGS), result: settled })] }),
+      attempt: attemptView({ foreground: [foreground("call-1", "tool-present", "present", { type: "settled", arguments: JSON.stringify({ arguments: ARGS }), result: settled })] }),
     });
     const tool = correlateTools(running).byCallId.get("call-1");
     assert.equal(tool?.lifecycle.type, "settled");
@@ -278,7 +278,7 @@ describe("tool-present presentation", () => {
         assistantBlocks("m1", [toolCallBlock("call-1", "tool-present", "present", ARGS)]),
         toolMessage("m2", "call-1", "tool-present", settled),
       ],
-      attempt: attemptView({ foreground: [foreground("call-1", "tool-present", "present", { type: "settled", arguments: JSON.stringify(ARGS), result: settled })] }),
+      attempt: attemptView({ foreground: [foreground("call-1", "tool-present", "present", { type: "settled", arguments: JSON.stringify({ arguments: ARGS }), result: settled })] }),
     });
     assert.equal(correlateTools(committed).byCallId.get("call-1")?.resultCommitted, true);
     assert.match(renderTranscript(committed, prefs()).map(blockText).join("\n"), /Delivered 1 file/);

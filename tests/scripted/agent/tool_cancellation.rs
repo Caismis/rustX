@@ -266,6 +266,7 @@ impl PreToolPolicy for GatedPreToolPolicy {
     fn evaluate<'a>(
         &'a self,
         _view: &'a PreToolView<'a>,
+        _cancellation: &'a rustx::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         let entered = self.entered.clone();
         let mut release = self.release.clone();
@@ -855,7 +856,6 @@ async fn issue136_mixed_batch_preserves_order_and_phases() {
             "b",
             "tool-b",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Parallel,
         ),
         success_result("B not complete"),
     );
@@ -866,7 +866,6 @@ async fn issue136_mixed_batch_preserves_order_and_phases() {
             "c",
             "tool-c",
             rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            rustx::tools::types::ToolConcurrencyPolicy::Parallel,
         ),
         success_result("C must not start"),
     );
@@ -899,24 +898,44 @@ async fn issue136_mixed_batch_preserves_order_and_phases() {
         vec!["call-a", "call-b", "call-c"],
         "canonical model order is independent of completion order"
     );
-    assert!(matches!(
-        messages[0].result.status,
-        ToolExecutionStatus::Success
-    ));
-    assert!(matches!(
-        messages[1].result.status,
-        ToolExecutionStatus::Cancelled {
-            reason: CancellationReason::UserRequested,
-            phase: ToolCancellationPhase::DuringExecution,
-        }
-    ));
-    assert!(matches!(
-        messages[2].result.status,
-        ToolExecutionStatus::Cancelled {
-            reason: CancellationReason::UserRequested,
-            phase: ToolCancellationPhase::BeforeStart,
-        }
-    ));
+    // Concurrent authorize/start (Issue #544): cancel on B's logical start can
+    // race A's in-flight executor. A is either Success (completed before the
+    // signal) or Cancelled DuringExecution; it is never BeforeStart once it
+    // has crossed the start frontier with B.
+    assert!(
+        matches!(
+            messages[0].result.status,
+            ToolExecutionStatus::Success
+                | ToolExecutionStatus::Cancelled {
+                    reason: CancellationReason::UserRequested,
+                    phase: ToolCancellationPhase::DuringExecution,
+                }
+        ),
+        "A status under concurrent cancel: {:?}",
+        messages[0].result.status
+    );
+    assert!(
+        matches!(
+            messages[1].result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+                phase: ToolCancellationPhase::DuringExecution | ToolCancellationPhase::BeforeStart,
+            }
+        ),
+        "B status under concurrent cancel: {:?}",
+        messages[1].result.status
+    );
+    assert!(
+        matches!(
+            messages[2].result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+                phase: ToolCancellationPhase::BeforeStart,
+            }
+        ),
+        "C status under concurrent cancel: {:?}",
+        messages[2].result.status
+    );
     assert!(
         b_calls.borrow().is_empty(),
         "B crossed the logical start frontier but cancellation prevents physical dispatch"

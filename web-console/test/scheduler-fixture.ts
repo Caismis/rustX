@@ -1,5 +1,5 @@
 import { threadFor } from '../../protocol/app-server/testing';
-import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v77';
+import type { ScheduleHeader, ScheduleSnapshot, ScheduleCommandResult, ScheduledWorkflowRecovery } from '../../protocol/app-server/v78';
 import { Server, snapshot } from './fixture';
 import { cfg3Source } from './cfg3-data';
 export const nodeA = 'node_00000000-0000-7000-8000-000000000001';
@@ -18,7 +18,7 @@ export function schedulerFixture(values = [task()]) {
   const commands = new Map<string, ScheduleCommandResult>();
   const capabilities = { inputModalities: ['text' as const], outputModalities: ['text' as const], jsonSchemaOutput: false };
   server.workspaceHost.resolveWorkspace = async id => ({ cwd: id === 'workspace-b' ? '/workspace/B' : '/workspace' });
-  server.workspaceHost.configureWorkspace = async id => ({ kind: 'read', projection: { ...cfg3Source(), target: { kind: 'workspace', directory: id === 'workspace-b' ? '/workspace/B' : '/workspace' }, prospective_approval_mode: 'policy',
+  server.workspaceHost.configureWorkspace = async id => ({ kind: 'read', projection: { ...cfg3Source(), target: { kind: 'workspace', directory: id === 'workspace-b' ? '/workspace/B' : '/workspace' }, prospective_approval_mode: 'plan',
     session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses', contextWindow: 8192, maxOutputTokens: 1024,
       credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [{ id: 'medium' }, { id: 'high' }], defaultProfile: 'medium' })) } } } });
   let sessionSequence = 0;

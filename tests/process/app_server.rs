@@ -164,7 +164,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":77,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":78,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -234,9 +234,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v77"),
+            Some("rustx.app-server.v78"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v77, rustx-token.wrong"),
+            Some("rustx.app-server.v78, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -805,7 +805,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v77".parse().unwrap(),
+                            "rustx.app-server.v78".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -1408,7 +1408,13 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let authored = config.join("rustx.toml");
             let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
             source["agent"].as_table_mut().unwrap().insert("skills".into(), "all".into());
-            source.as_table_mut().unwrap().insert("native_tools".into(), toml::Value::try_from(serde_json::json!({"bash": {"approval": "never"}})).unwrap());
+            // Host isolation / crash recovery is not a permission-mode test.
+            // Full Access admits write/bash so the fixture reaches process
+            // death and cold recovery without Ask stalls under Plan.
+            source.as_table_mut().unwrap().insert(
+                "approval_mode".into(),
+                toml::Value::String("full_access".into()),
+            );
             std::fs::write(&authored, toml::to_string_pretty(&source).unwrap()).unwrap();
             let mut text = std::fs::read_to_string(&authored).unwrap();
             write!(text, "\n[environment]\nRUSTX_HOST_MARKER = \"{identity}\"\n").unwrap();
@@ -1951,7 +1957,7 @@ async fn app_server_ordinary_clients_have_equal_delivery_eligibility() {
             driver::try_socket(
                 &url,
                 &format!(
-                    "rustx.app-server.v77, {}, rustx-delivery-access.obsolete",
+                    "rustx.app-server.v78, {}, rustx-delivery-access.obsolete",
                     driver::credential_offer(driver::TOKEN)
                 )
             )
@@ -2232,7 +2238,7 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
         assert_eq!(
             receipt.changes,
             vec![
-                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 11 },
+                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
                 ConfigRepairChange::RemovedField { object_path: String::new() },
                 ConfigRepairChange::RemovedField {
                     object_path: "app_server".into()

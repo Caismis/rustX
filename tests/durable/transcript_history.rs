@@ -226,6 +226,7 @@ fn all_entries(
 fn start_request(store: &SqliteConversationStore, turn: &str) -> RequestId {
     let head = store.load_head().expect("head");
     let mut snapshot = RequestSnapshot::new(
+        rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new(turn),
@@ -1319,6 +1320,7 @@ fn requirement_15_old_request_snapshot_reconstructs_old_system_bytes() {
         .expect("initialize");
     let head = store.load_head().expect("head");
     let mut snapshot = RequestSnapshot::new(
+        rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new("old-request"),

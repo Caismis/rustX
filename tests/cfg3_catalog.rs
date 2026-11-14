@@ -1025,13 +1025,13 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
     let (host, request) = sources(
         root.path(),
         &format!("approval_mode = \"full_access\"\n{PROVIDER}{MODEL}{ROOT}"),
-        "approval_mode = \"policy\"\n",
+        "approval_mode = \"plan\"\n",
     );
     let (owner, input) = request.session_input(&host).unwrap();
     let before = owner
         .read_source_settings(&rustx_target(&input.cwd))
         .unwrap();
-    assert_eq!(before.prospective_approval_mode, Some(ApprovalMode::Policy));
+    assert_eq!(before.prospective_approval_mode, Some(ApprovalMode::Plan));
     let mutation = SourceMutation::Config {
         mutation: ConfigMutation::Approval {
             authored: Some(ApprovalMode::FullAccess),

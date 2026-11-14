@@ -166,7 +166,7 @@ struct Setup {
     /// Tokens of recent history kept literal.
     keep_recent_tokens: u64,
     /// The explicit summary-model policy, when the session declares one.
-    summary_model: Option<String>,
+    auxiliary: Option<String>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
     responses_stateless: bool,
@@ -180,7 +180,7 @@ impl Setup {
             context_window: 128_000,
             reserve_tokens: 1_024,
             keep_recent_tokens: 8_192,
-            summary_model: None,
+            auxiliary: None,
             skill_paths: Vec::new(),
             responses_stateless: false,
         }
@@ -223,7 +223,7 @@ impl Driver {
             .unwrap();
             std::fs::write(
                 workspace.join("rustx.toml"),
-                "[agent]\nworkflows = [\"image_review\"]\n",
+                "approval_mode = \"full_access\"\n[agent]\nworkflows = [\"image_review\"]\n",
             )
             .unwrap();
         }
@@ -872,10 +872,13 @@ fn text_capabilities() -> serde_json::Value {
 
 fn session_json(setup: &Setup) -> String {
     let mut model = serde_json::json!({"model": setup.model});
-    if let Some(summary) = &setup.summary_model {
-        model["summary_model"] = serde_json::json!({"mode": "explicit", "model": summary});
+    if let Some(summary) = &setup.auxiliary {
+        model["auxiliary"] = serde_json::json!({"mode": "explicit", "model": summary});
     }
     let document = serde_json::json!({
+        // Conformance loops are not permission tests: Full Access avoids
+        // elevation_reason Ask hangs on write/edit/bash that Plan would raise.
+        "approval_mode": "full_access",
         "agent_id": "agent-issue47",
         "agent": {"model": model, "skills": "all", "tools": {"builtin": if setup.images { vec!["read", "write", "edit", "glob", "grep", "bash", "read_image"] } else { vec!["read", "write", "edit", "glob", "grep", "bash"] }}, "plugins": {"agent_status": {"enabled": true}, "todo": {"enabled": true}}},
         "context": {
@@ -1243,11 +1246,27 @@ async fn default_system_prompt_layers_project_instructions_on_every_protocol() {
             "Current working directory: {}",
             workspace.canonicalize().unwrap().display()
         )));
-        assert!(prompt.ends_with(&format!(
+        let project_instructions = format!(
             "\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{global}\n</project_instructions>\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>",
-            global_directory.canonicalize().unwrap().join("AGENTS.md").display(),
-            workspace.canonicalize().unwrap().join("AGENTS.md").display()
-        )));
+            global_directory
+                .canonicalize()
+                .unwrap()
+                .join("AGENTS.md")
+                .display(),
+            workspace
+                .canonicalize()
+                .unwrap()
+                .join("AGENTS.md")
+                .display()
+        );
+        assert!(prompt.contains(&project_instructions));
+        // PermissionReminder is the last system-section lane when eligible, so
+        // the prompt may continue past project instructions on first request.
+        let after_project = prompt.split(&project_instructions).nth(1).unwrap_or("");
+        assert!(
+            after_project.is_empty() || after_project.starts_with("\n\nExecution permission mode:"),
+            "unexpected system prompt tail after project instructions: {after_project:?}"
+        );
         let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].effective_system_prompt, prompt);
@@ -1632,7 +1651,7 @@ async fn cancellation_at_a_provider_gate_settles_once_and_closes_the_stream() {
 // it together preserves the request ordering that is the whole point.
 #[allow(clippy::too_many_lines)]
 async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
-    for (scenario, summary_model, expected_summary_model) in [
+    for (scenario, auxiliary, expected_summary_model) in [
         ("compaction_session_summary", None, CHAT_MODEL),
         (
             "compaction_explicit_summary",
@@ -1647,7 +1666,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
             context_window: COMPACTION_CONTEXT_WINDOW,
             reserve_tokens: COMPACTION_RESERVE_TOKENS,
             keep_recent_tokens: 256,
-            summary_model,
+            auxiliary,
             ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
         };
         let driver = Driver::start(&emulator, &setup).await;
@@ -1745,7 +1764,7 @@ async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
         context_window: COMPACTION_CONTEXT_WINDOW,
         reserve_tokens: COMPACTION_RESERVE_TOKENS,
         keep_recent_tokens: 256,
-        summary_model: Some(format!("emulator/{SUMMARY_MODEL}")),
+        auxiliary: Some(format!("emulator/{SUMMARY_MODEL}")),
         ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
     };
     let driver = Driver::start(&emulator, &setup).await;
@@ -1810,7 +1829,7 @@ async fn summary_retry_reuses_frozen_wire_input_and_commits_one_checkpoint() {
 // it together preserves the request ordering that is the whole point.
 #[allow(clippy::too_many_lines)]
 async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies() {
-    for (scenario, summary_model, expected_summary_model) in [
+    for (scenario, auxiliary, expected_summary_model) in [
         ("compaction_twice_session_summary", None, CHAT_MODEL),
         (
             "compaction_twice_explicit_summary",
@@ -1825,7 +1844,7 @@ async fn repeated_compaction_invokes_the_real_provider_on_both_summary_policies(
             context_window: COMPACTION_CONTEXT_WINDOW,
             reserve_tokens: COMPACTION_RESERVE_TOKENS,
             keep_recent_tokens: 256,
-            summary_model,
+            auxiliary,
             ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
         };
         let driver = Driver::start(&emulator, &setup).await;
@@ -2034,8 +2053,7 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
     // The first attempt is provably in flight and has already been billed
     // its provider request.
     let next_model = SessionModelConfig {
-        title_model: AuxiliaryModelPolicy::Session,
-        summary_model: AuxiliaryModelPolicy::Session,
+        auxiliary: AuxiliaryModelPolicy::default(),
         ..SessionModelConfig::of(
             ModelRef::parse(&format!("emulator/{SECOND_MODEL}"))
                 .expect("the second model reference parses"),
@@ -2673,7 +2691,7 @@ async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, P
     setup.images = true;
     if scenario == "image_coverage_overflow_retry" {
         setup.keep_recent_tokens = setup.context_window;
-        setup.summary_model = Some("emulator/summary-model".into());
+        setup.auxiliary = Some("emulator/summary-model".into());
     }
     let driver = Driver::start_in(root, &emulator, &setup).await;
     Some((driver, emulator))

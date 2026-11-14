@@ -546,7 +546,7 @@ previous file, so an invalid one stays editable.
 records, derived from `RuntimeLayer::overlay`: `replace` records a whole-unit
 path, `named` records `<container>.<identity>`, and `replace_origin` drops that
 path's descendants. So `providers.a`, `models.a`, `agent.tools.sources.a`,
-`native_tools.read`, `mcp_tool_policies.a`, `environment.A` and `mcp_servers.a`
+`environment.A` and `mcp_servers.a`
 each resolve independently; a sibling identity's name, length or insertion order
 cannot change the answer. `unitProvenance` then takes the exact key, else the
 nearest recorded ancestor (a member omitted from a replaced object belongs to

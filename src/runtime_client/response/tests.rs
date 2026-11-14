@@ -219,6 +219,7 @@ fn start_request_with_window(
     context_window: u64,
 ) -> RequestSnapshot {
     let mut snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new(attempt),
             turn: TurnId::new("1"),

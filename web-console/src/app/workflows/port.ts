@@ -1,5 +1,5 @@
 import { checkWorkflowDocument, readWorkflowSource, withWorkflowDocument, withWorkflowOperation, type WorkflowRequest } from '../../../../protocol/app-server/workflow-documents.ts';
-import type { ErrorData, SourceScope, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor, WorkflowToolSource } from '../../../../protocol/app-server/v77';
+import type { ErrorData, SourceScope, WorkflowAnalysisReport, WorkflowAnalysisQuery, WorkflowCheckReport, WorkflowFileDocument, WorkflowDiagnostic, WorkflowLibrary, WorkflowModelChoices, WorkflowModelChoicesQuery, WorkflowToolCatalog, WorkflowToolCatalogCursor, WorkflowToolSource } from '../../../../protocol/app-server/v78';
 import type { WorkflowEdit, WorkflowSource } from '../../../../protocol/app-server/workflow-documents.ts';
 import { analysisMatches } from '../../../../protocol/app-server/workflow-analysis';
 import type { AppServerClient } from '../../client/app-server';
@@ -228,7 +228,7 @@ export function createWorkflowPort({ client, host, hostAuthority, scope, expecte
     }),
     check: (id, document) => read(() => checkWorkflowDocument(client, request, target, id, document)),
     write: (id, expected_revision, edit) => write(async () => {
-      const commit = (authored: import('../../../../protocol/app-server/v77').WorkflowEdit) => client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation: { kind: 'workflow', id, edit: authored } } }, 'sources_written');
+      const commit = (authored: import('../../../../protocol/app-server/v78').WorkflowEdit) => client.request({ method: 'configuration/sourceWrite', params: { target, expected_revision, mutation: { kind: 'workflow', id, edit: authored } } }, 'sources_written');
       const acknowledgement = edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(edit);
       // The commit is a fact from here on; its reread may fail independently.
       let reread: WorkflowCommit['reread'];

@@ -54,6 +54,9 @@ pub mod interactive_supervisor;
 /// Runtime-owned monotonic elapsed time for deterministic policy deadlines.
 /// This is separate from the UTC [`RuntimeClock`] timestamp boundary.
 pub mod monotonic;
+/// Fixed execution-permission modes, resource overrides, and the built-in
+/// permission matrix (Issue #544).
+pub mod permission;
 pub(crate) mod read_layout;
 
 /// Generic containment of nested supervised process units created inside a

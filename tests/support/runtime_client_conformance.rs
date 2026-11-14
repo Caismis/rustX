@@ -67,8 +67,7 @@ use rustx::runtime_client::{
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
-    ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus,
-    ToolOrigin,
+    ToolCancellationPhase, ToolExecutionPolicy, ToolExecutionStatus, ToolOrigin,
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
@@ -81,7 +80,9 @@ use crate::scripted_suites::common;
 /// model releases on an explicit signal). This bounds only total wall time
 /// so a scheduling stall on a loaded runner cannot hang the suite; no
 /// assertion depends on its value.
-const LIVENESS_GUARD: Duration = Duration::from_mins(2);
+// Scenario-level guard: long enough for slow CI hosts, short enough that a
+// Plan/Ask stall fails the job instead of burning the contracts timeout.
+const LIVENESS_GUARD: Duration = Duration::from_secs(45);
 
 // ---------------------------------------------------------------------------
 // The driver abstraction
@@ -1405,6 +1406,7 @@ impl PreToolPolicy for BeforeStartPolicy {
     fn evaluate<'a>(
         &'a self,
         _view: &'a PreToolView<'a>,
+        _cancellation: &'a rustx::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         let entered = self.entered.clone();
         let mut release = self.release.clone();
@@ -1605,12 +1607,7 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
     }));
     let mut tools = ToolRegistry::new();
     FakeTool::new(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     )
     .register(&mut tools);
@@ -1733,21 +1730,11 @@ pub async fn parallel_tools_keep_independent_identities(factory: &dyn DriverFact
     }));
 
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -1870,12 +1857,7 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
     }));
 
     let (tool, _release) = FakeTool::parking(
-        common::tool_policies(
-            "bg",
-            "tool-bg",
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("bg", "tool-bg", ToolExecutionPolicy::ModelSelectable),
         success_result("bg"),
     );
     let mut tools = ToolRegistry::new();
@@ -2135,12 +2117,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
 pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory) {
     let mut base = ToolRegistry::new();
     FakeTool::new(
-        common::tool_policies(
-            "ls",
-            "tool-ls",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("ls", "tool-ls", ToolExecutionPolicy::ForegroundOnly),
         success_result("listed"),
     )
     .register(&mut base);
@@ -2401,6 +2378,8 @@ pub async fn capability_projection_covers_mcp_origins(
                 )]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     )]);
     let fixture = ConformanceFixture::builder(&conversation(factory, "mcp"))

@@ -1,5 +1,29 @@
 import { describe, expect, it } from 'vitest';
-import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming } from './session-latency';
+import { nodeLineageIdentity, recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming, type ThreadStatusTiming } from './session-latency';
+
+describe('node lineage identity narrowing', () => {
+  it('records only complete string identities', () => {
+    expect(nodeLineageIdentity('session-a', { id: 'node-a', conversation_id: 'conversation-a' })).toEqual({
+      conversationId: 'conversation-a',
+      sessionId: 'session-a',
+      nodeId: 'node-a',
+    });
+  });
+
+  it.each([
+    [undefined, { id: 'node-a', conversation_id: 'conversation-a' }],
+    ['', { id: 'node-a', conversation_id: 'conversation-a' }],
+    ['session-a', undefined],
+    ['session-a', {}],
+    ['session-a', { id: 'node-a' }],
+    ['session-a', { conversation_id: 'conversation-a' }],
+    ['session-a', { id: '', conversation_id: 'conversation-a' }],
+    ['session-a', { id: 'node-a', conversation_id: '' }],
+  ] as const)('rejects malformed or missing identity %#', (sessionId, node) => {
+    expect(nodeLineageIdentity(sessionId, node)).toBeUndefined();
+  });
+});
+
 
 const target = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 'attachment-1']);
 const otherTarget = JSON.stringify(['session-a', 'conversation-a', 'runtime-1', 'attachment-2']);
@@ -127,6 +151,26 @@ describe('latency evidence for a cold preview superseded by attachment', () => {
     rows.push({ ...rows[0], nodeId: 'node-b' });
     expect(supersededHistoryReads(rows)).toEqual([rows[0]]);
   });
+
+  it('accepts a Retry/switchNode handoff once resume carries the selected Session and Node', () => {
+    // Mirrors browser evidence after session/branch + session/switchNode: the
+    // observer must annotate thread/resume from the switchNode Conversation
+    // owner, because resume itself only names threadId on the wire.
+    const rows = evidence();
+    rows[0] = { ...rows[0], sessionId: 'ses-retry', nodeId: 'node-retry', start: 100, end: 150 };
+    rows[1] = {
+      ...rows[1],
+      sessionId: 'ses-retry',
+      nodeId: 'node-retry',
+      threadId: 'conv-retry',
+      target: JSON.stringify(['ses-retry', 'conv-retry', '2', 'attachment-1']),
+      start: 120,
+      end: 200,
+    };
+    rows[2] = { ...rows[2], target: rows[1].target, start: 200, end: 210 };
+    rows[3] = { ...rows[3], target: rows[1].target, start: 210, end: 220 };
+    expect(supersededHistoryReads(rows)).toEqual([rows[0]]);
+  });
 });
 
 describe('latency evidence for recovered native status capture', () => {
@@ -136,6 +180,46 @@ describe('latency evidence for recovered native status capture', () => {
       { method: 'thread/read', connection: 1, threadId: 'thread-a', resultThreadId: 'thread-a', resultType: 'thread', start: 20, end: 30 },
     ];
   }
+
+  const notification = (time: number, revision = '5'): Extract<ThreadStatusTiming, { entry: unknown }> => ({
+    kind: 'notification', connection: 1, time,
+    entry: { threadId: 'thread-a', revision, status: { type: 'idle' } },
+  });
+
+  it('accepts a newer same-connection notification after the failed read, preserving the refusal', () => {
+    const rows = evidence().slice(0, 1), original = structuredClone(rows);
+    for (const time of [21, 30]) {
+      const statuses = [notification(5, '4'), notification(time)];
+      expect(recoveredThreadStatusReads(rows, statuses)).toEqual([rows[0]]);
+      expect(recoveredThreadStatusReads(rows, statuses)[0]).toBe(rows[0]);
+    }
+    expect(rows).toEqual(original);
+  });
+
+  it('rejects stale, foreign, early and malformed notification evidence', () => {
+    const rows = evidence().slice(0, 1);
+    for (const event of [
+      notification(5), notification(10), notification(15), notification(20), notification(21, '4'), notification(21, '3'),
+      notification(21, 'invalid'), { ...notification(21), connection: 2 },
+      { ...notification(21), time: Number.NaN }, { ...notification(21), connection: 0 },
+      { ...notification(21), entry: { threadId: 'other', revision: '5', status: { type: 'idle' as const } } },
+      { ...notification(21), kind: 'snapshot' as const },
+    ] satisfies ThreadStatusTiming[]) {
+      expect(recoveredThreadStatusReads(rows, [notification(1, '4'), event])).toEqual([]);
+    }
+  });
+
+  it('uses snapshot floors and accepts new notification proof after a resync', () => {
+    const rows = evidence().slice(0, 1);
+    const snapshot: ThreadStatusTiming = { ...notification(5, '8'), kind: 'snapshot' };
+    expect(recoveredThreadStatusReads(rows, [snapshot, notification(21, '7')])).toEqual([]);
+    expect(recoveredThreadStatusReads(rows, [snapshot, notification(21, '9')])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows, [notification(15), { kind: 'resync', connection: 1, time: 16 }])).toEqual([]);
+    expect(recoveredThreadStatusReads(rows, [notification(21), { kind: 'resync', connection: 1, time: 15 }])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows, [notification(15), { kind: 'resync', connection: 1, time: 12 }])).toEqual([]);
+    expect(recoveredThreadStatusReads(rows, [notification(21), { kind: 'resync', connection: 2, time: 15 }])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows, [notification(21), { kind: 'resync', connection: 1, time: 5 }])).toEqual([rows[0]]);
+  });
 
   it('retains the original error and only accepts a later strong read of the same Thread and connection', () => {
     const rows = evidence(), original = structuredClone(rows);
@@ -162,6 +246,13 @@ describe('latency evidence for recovered native status capture', () => {
       const rows = evidence(); Object.assign(rows[1], interval);
       expect(recoveredThreadStatusReads(rows)).toEqual([]);
     }
+  });
+
+  it('requires a strong recovery read to finish within its connection epoch', () => {
+    const rows = evidence();
+    expect(recoveredThreadStatusReads(rows, [{ kind: 'resync', connection: 1, time: 25 }])).toEqual([]);
+    expect(recoveredThreadStatusReads(rows, [{ kind: 'resync', connection: 2, time: 25 }])).toEqual([rows[0]]);
+    expect(recoveredThreadStatusReads(rows, [{ kind: 'resync', connection: 1, time: 19 }])).toEqual([rows[0]]);
   });
 
   it.each([0, 1])('requires the exact connection and request Thread identity for row %i', index => {

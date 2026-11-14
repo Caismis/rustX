@@ -1,4 +1,4 @@
-import type { SourceMutation, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v77';
+import type { SourceMutation, SourceScope, SourceSettings } from '../../../../../protocol/app-server/v78';
 import { useTranslation } from '../../../locale/react';
 import { Switch } from '../../../presentation/primitives/Switch';
 import { Button } from '../../../presentation/primitives/Button';

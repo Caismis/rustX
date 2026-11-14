@@ -154,21 +154,13 @@ it('Session renaming never promotes a localized fallback title into native data 
   expect(sequences[1]).toEqual(sequences[0]);
 });
 
-it.each(['en', 'zh'] as const)('policy display choices preserve exact native values in %s', async locale => {
-  const { PolicyFields } = await import('../src/app/settings/forms/PolicyFields');
+it.each(['en', 'zh'] as const)('resource permission choices preserve exact native values in %s', async locale => {
+  const { ResourcePermissionFields } = await import('../src/app/settings/forms/ResourcePermissionFields');
   act(() => localeController.setLocale(locale));
   const change = vi.fn(), tx = translator(locale);
-  render(<PolicyFields value={{}} change={change}/>);
-  for (const [field, label, values] of [
-    ['execution', 'settings:tools-page.execution', ['foreground_only', 'background_only', 'model_selectable']],
-    ['concurrency', 'settings:tools-page.concurrency', ['sequential', 'parallel']],
-    ['approval', 'settings:tools-page.approval-2', ['never', 'always']],
-  ] as const) {
-    for (const value of values) {
-      fireEvent.click(screen.getByRole('button', { name: new RegExp(`${tx(label)}$`) }));
-      fireEvent.click(screen.getByRole('option', { name: tx(`settings:policy.${value}`) }));
-      expect(change).toHaveBeenLastCalledWith({ [field]: value });
-    }
-  }
-  expect(change).toHaveBeenCalledTimes(7);
+  render(<ResourcePermissionFields value={undefined} change={change}/>);
+  // Issue #544: MCP/resource overrides author complete three-mode objects.
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(`${tx('settings:permission.plan')}$`) }));
+  fireEvent.click(screen.getByRole('option', { name: tx('settings:permission.deny') }));
+  expect(change).toHaveBeenLastCalledWith({ plan: 'deny', automatic: 'default', full_access: 'default' });
 });

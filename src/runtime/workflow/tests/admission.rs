@@ -40,6 +40,8 @@ fn cfg274_admit_child(
                 environment: BTreeMap::new(),
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     )]
     .into();
@@ -502,7 +504,9 @@ fn cfg274_model_exposure_requires_agent_selection_and_enabled_admission() {
             id: ToolCallId::new("main-cannot-call-internal"),
             tool_id: definition().id,
             name: "check".into(),
-            arguments: json!({"passed":true,"label":"main"}),
+            arguments: crate::scripted_suites::common::tool_call_envelope(
+                json!({"passed":true,"label":"main"})
+            ),
         }),
         Err(crate::tools::executor::ToolPreflightError::UnknownTool { .. })
     ));
@@ -585,12 +589,14 @@ fn tool_node_admission_is_capability_plane_selection_without_agents() {
     tool.name = "check".into();
     tool.id = crate::runtime::identity::ToolId::new("github-check");
     tool.origin = ToolOrigin::Mcp { server_id: github };
-    let available = crate::capabilities::AvailableToolCatalog::new(vec![
-        crate::tools::executor::ToolRegistration::plain(
+    let available = crate::capabilities::AvailableToolCatalog::new(
+        ToolRegistry::from_registrations([crate::tools::executor::ToolRegistration::plain(
             tool.clone(),
             Probe::new(ToolExecutionStatus::Success),
-        ),
-    ]);
+        )])
+        .unwrap()
+        .validated_registrations(),
+    );
     let program = |name: &str| {
         WorkflowProgram::compile(WorkflowId::parse("verify").unwrap(), serde_json::from_value(json!({
             "description":"Source verification", "block": {

@@ -108,7 +108,16 @@ async fn assert_child_definition(
     .unwrap();
     assert_eq!(definition["tool_id"], "tool-inspect");
     assert_eq!(definition["name"], "inspect_tool");
-    assert_eq!(definition["description"]["text"], "Tool inspect_tool");
+    let expected = crate::tools::compile_model_definition(&common::tool_policies(
+        "inspect_tool",
+        "tool-inspect",
+        crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
+    ))
+    .unwrap();
+    assert_eq!(definition["description"]["text"], expected.description);
+    assert_eq!(definition["description"]["truncated"], false);
+    assert_eq!(definition["input_schema"]["value"], expected.input_schema);
+    assert_eq!(definition["input_schema"]["truncated"], false);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -132,7 +141,6 @@ async fn t08_t12_t18_t19_tool_inspection_uses_real_child_live_and_cold_original_
             "inspect_tool",
             "tool-inspect",
             crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
-            crate::tools::types::ToolConcurrencyPolicy::Sequential,
         ),
         support::fake::success_result("original Child inspection result"),
     )

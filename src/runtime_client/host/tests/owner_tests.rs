@@ -20,7 +20,7 @@ fn giant_owner_seed(with_turn: bool) -> (crate::durable::LineageSeed, Conversati
             id: ToolCallId::new("inherited-owner-call"),
             tool_id: ToolId::new("inherited-owner-tool"),
             name: "original-proposal".into(),
-            arguments: serde_json::json!({"ordinal":u64::MAX}),
+            arguments: serde_json::json!({"arguments":{"ordinal":u64::MAX}}),
         })],
     });
     let final_message = MessageBlock::Assistant(crate::message::types::AssistantMessageBlock {

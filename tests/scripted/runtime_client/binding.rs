@@ -105,7 +105,9 @@ fn try_config(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: support::model::scripted_session_model(model),
-        approval_mode: rustx::runtime::ApprovalMode::Policy,
+        // Binding proofs do not exercise Ask; Full Access keeps an accidental
+        // tool call from parking the runtime on elevation.
+        approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {

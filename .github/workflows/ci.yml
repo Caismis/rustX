@@ -279,9 +279,10 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-contracts']
     runs-on: ubuntu-26.04
     # Preparation and the two native builds consumed about 11 minutes in
-    # run 38883956631. Budget compilation and complete test execution here;
-    # individual liveness guards and the other lanes retain their bounds.
-    timeout-minutes: 45
+    # run 38883956631. After Plan-default tool fixtures were moved to Full
+    # Access (and tool-start waits shortened to 15s), the contracts step is
+    # back in the 20–35m band on tip; restore the pre-hang 90m ceiling.
+    timeout-minutes: 90
 
     env:
       VERIFICATION_PROFILE: full
@@ -354,9 +355,9 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-boundaries']
     runs-on: ubuntu-26.04
     # Cold libclang setup and both native builds exhausted 25 minutes in
-    # runs 39798438811 and 39811600857. Budget the complete test and coverage
-    # tail as well as preparation, with the same ceiling as rust-contracts.
-    timeout-minutes: 45
+    # runs 39798438811 and 39811600857. Match rust-contracts at the restored
+    # pre-hang 90m ceiling once Plan Ask stalls were removed from fixtures.
+    timeout-minutes: 90
 
     env:
       VERIFICATION_PROFILE: full
@@ -1038,8 +1039,10 @@ jobs:
     needs: [plan, browser-prepare]
     if: fromJSON(needs.plan.outputs.run)['browser-shard']
     runs-on: ubuntu-26.04
-    # Per-test deadlines, fixture budgets and required assertions stay unchanged.
-    timeout-minutes: 45
+    # Tip 85eed5f80 shard 2 finished 384 tests in ~40m then cancelled at the
+    # prior 45m ceiling during report/artifact packing. Keep per-test
+    # deadlines unchanged; budget post-suite upload under FULL permission CI.
+    timeout-minutes: 60
     strategy:
       # All selected shards always finish, so one failure never hides the others.
       fail-fast: false
@@ -1193,11 +1196,13 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      # Depth 2 keeps the tested merge commit's parents, which the gate
-      # matches against the event's base and head.
+      # Full history so the gate can accept GitHub stacked-PR merge commits:
+      # second parent is still head, and the PR base is an ancestor of the
+      # first parent (an intermediate stack merge) rather than the parent
+      # itself. Ordinary PRs still match parents `[base, head]` exactly.
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Every selected job succeeded, at the right profile, for the current head
         env:
           GITHUB_TOKEN: ${{ github.token }}

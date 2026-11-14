@@ -404,6 +404,9 @@ pub struct WorkflowDefinition {
     /// Trusted finite total foreground lifetime, including descendant waits.
     #[serde(default = "default_workflow_timeout_ms")]
     pub timeout_ms: u64,
+    /// Source-default three-mode permission object for this workflow Tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
     /// The root lexical execution scope.
     pub block: WorkflowBlock,
 }
@@ -568,6 +571,9 @@ pub enum WorkflowNodeDefinition {
         /// exits through its required `switch` value.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         routes: Vec<WorkflowAgentRoute>,
+        /// Effective resource permission for this Agent entry only.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
         /// What a failed or timed-out child run leaves behind. Agents are not
         /// retried: a workflow child writes the shared Session workspace
         /// directly, and termination must be proven before it is handled.
@@ -1221,6 +1227,7 @@ pub struct WorkflowProgram {
         crate::capabilities::selection::ExactToolSelector,
         crate::tools::types::ToolDefinition,
     >,
+    permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 }
 
 /// Immutable compiled graph of the root or of a body; a body's path is not empty.
@@ -1272,6 +1279,14 @@ impl WorkflowProgram {
     #[must_use]
     pub fn description(&self) -> &str {
         &self.description
+    }
+
+    /// The frozen workflow Tool resource permission object, when authored.
+    #[must_use]
+    pub(crate) const fn permissions(
+        &self,
+    ) -> Option<crate::runtime::permission::ResourcePermissionSet> {
+        self.permissions
     }
 
     /// The immutable input schema.
@@ -1403,7 +1418,7 @@ pub enum WorkflowNodeProgram {
 pub struct WorkflowModelProgram {
     /// Classifier exits; ordinary Model calls have none.
     pub classes: Vec<WorkflowClassifierClass>,
-    pub model: crate::model::session::AuxiliaryModelPolicy,
+    pub model: crate::model::session::DirectModelPolicy,
     pub messages: Vec<WorkflowModelMessage>,
     pub output: WorkflowModelOutput,
     pub retry: Option<WorkflowRetry>,
@@ -1422,6 +1437,8 @@ pub struct WorkflowAgentProgram {
     pub output: WorkflowAgentOutput,
     /// The exits the child chooses among; empty for one `next` exit.
     pub routes: Vec<WorkflowAgentRoute>,
+    /// Frozen Agent-entry resource permission object.
+    pub resource_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
     pub on_error: WorkflowValueErrorStrategy,
 }
 
@@ -1786,6 +1803,7 @@ fn compile_program(
         retained_bound,
         timeout_ms: definition.timeout_ms,
         frozen_tools: BTreeMap::new(),
+        permissions: definition.permissions,
     })
 }
 
@@ -2228,6 +2246,7 @@ fn compile_block(
                 task,
                 output,
                 routes,
+                permissions,
                 on_error,
             } => {
                 let profile = SubagentName::parse(profile).map_err(|_| WorkflowCompileError::InvalidField("Agent selection requires a valid named profile".into()).at("profile"))?;
@@ -2245,6 +2264,7 @@ fn compile_block(
                     task: task.clone(),
                     output: output.clone(),
                     routes: routes.clone(),
+                    resource_permissions: *permissions,
                     on_error: on_error.clone(),
                 };
                 available_after.insert(
@@ -3163,7 +3183,7 @@ fn validate_prompt(
 }
 
 fn validate_model(
-    model: &crate::model::session::AuxiliaryModelPolicy,
+    model: &crate::model::session::DirectModelPolicy,
     messages: &[WorkflowModelMessage],
     output: &WorkflowModelOutput,
     available: &SchemaMap,
@@ -3294,10 +3314,10 @@ fn validate_model_output(
 /// Protocol-specific ownership, Profile defaults and output maxima are checked
 /// by the existing model resolver against the invoking Attempt's registry.
 fn validate_model_policy(
-    policy: &crate::model::session::AuxiliaryModelPolicy,
+    policy: &crate::model::session::DirectModelPolicy,
 ) -> Result<(), WorkflowCompileError> {
-    use crate::model::session::AuxiliaryModelPolicy;
-    let AuxiliaryModelPolicy::Explicit {
+    use crate::model::session::DirectModelPolicy;
+    let DirectModelPolicy::Explicit {
         model,
         profile,
         request_params,
@@ -4258,7 +4278,6 @@ impl WorkflowRuntime {
                 title: node_id.node.clone().into(),
                 execution_policy: context.execution_policy(),
                 resolved,
-                approval_mode: context.approval_mode(),
             },
             admission: crate::runtime::subagent::ActivationAdmission {
                 attachments: Vec::new(),
@@ -4273,9 +4292,76 @@ impl WorkflowRuntime {
                     run_id: run.run_id.clone(),
                     node_id: Box::new(node_id.clone()),
                 },
+                approval_mode: context.approval_mode(),
             },
         };
         let child_cancellation = cancellation.child_signal();
+        let services = context.native.as_ref().ok_or_else(|| {
+            WorkflowRunError::InvocationAuthority(
+                "attempt has no native invocation services".into(),
+            )
+        })?;
+        let approval_mode = context.approval_mode();
+        // Node-authored permissions win; otherwise inherit the Named Agent
+        // profile's frozen permissions. Omitting the node field must not erase
+        // an explicit profile Deny/Ask.
+        let effective_permissions = admission::effective_agent_entry_resource_permissions(
+            agent.resource_permissions,
+            context
+                .resources()
+                .subagents()
+                .get(&agent.profile)
+                .and_then(|definition| definition.profile().permissions),
+        );
+        let resource_permission = effective_permissions.map_or(
+            crate::runtime::permission::ResourcePermissionValue::Default,
+            |set| set.for_mode(approval_mode),
+        );
+        let tool_id =
+            crate::runtime::identity::ToolId::new(format!("workflow-agent-{}", agent.profile));
+        let origin = crate::tools::types::ToolOrigin::Builtin;
+        let invocation_id = crate::tools::types::ToolInvocationId::Workflow {
+            node: Box::new(node_id.clone()),
+            retry: 0,
+        };
+        let arguments =
+            admission::agent_entry_authorize_arguments(&agent.profile, &spec.admission.task);
+        let workspace_root = services.runtime.workspace().root();
+        let view = crate::agent::PreToolView {
+            task: services.task.as_deref(),
+            conversation_id: &run.run_id.conversation_id,
+            execution: services.execution.clone(),
+            invocation_id: &invocation_id,
+            tool_id: &tool_id,
+            tool_name: crate::tools::native::subagent::SUBAGENT_TOOL_NAME,
+            origin: &origin,
+            mode: crate::tools::types::ToolInvocationMode::Foreground,
+            arguments: &arguments,
+            audit_arguments: &arguments,
+            elevation_reason: None,
+            workspace_root: Some(workspace_root),
+            mutation_target: None,
+            resource_permission,
+        };
+        self.read_model.node(node_id, |view| {
+            view.state = read_model::WorkflowState::Waiting {
+                reason: read_model::WorkflowWait::Approval,
+            }
+        });
+        if let Some(result) =
+            crate::tools::invocation::authorize(&services.lifecycle, &view, cancellation)
+                .await
+                .map_err(|error| WorkflowRunError::InvocationAuthority(error.to_string()))?
+        {
+            let detail = match result.status {
+                crate::tools::types::ToolExecutionStatus::Denied { reason } => reason,
+                other => format!("agent entry blocked: {other:?}"),
+            };
+            return Err(WorkflowRunError::ChildStart {
+                node: node_id.to_string(),
+                detail: bound_workflow_diagnostic(detail),
+            });
+        }
         self.read_model.node(node_id, |view| {
             view.state = read_model::WorkflowState::Waiting {
                 reason: read_model::WorkflowWait::Capacity,
@@ -4884,6 +4970,7 @@ mod tests {
             task: vec![text("Review the input."), reference("args.task")],
             output: WorkflowAgentOutput::JsonSchema { schema: output },
             routes: Vec::new(),
+            permissions: None,
             on_error: WorkflowValueErrorStrategy::default(),
         }
     }
@@ -4926,8 +5013,9 @@ mod tests {
         edges: Vec<WorkflowEdgeDefinition>,
     ) -> WorkflowDefinition {
         WorkflowDefinition {
-            timeout_ms: 600_000,
             description: "Test workflow".to_owned(),
+            timeout_ms: 600_000,
+            permissions: None,
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
                 nodes: {
@@ -5055,6 +5143,8 @@ chat_reasoning_replay = "omit"
             1,
             "Workflow test instructions",
             WorkflowCatalog::empty(),
+            ApprovalMode::FullAccess,
+            None,
         )
     }
 
@@ -5064,6 +5154,8 @@ chat_reasoning_replay = "omit"
         revision: u64,
         instructions: &str,
         workflow_catalog: WorkflowCatalog,
+        approval_mode: ApprovalMode,
+        reviewer_permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
     ) -> crate::runtime::subagent::NativeExecutionContext {
         let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes())
             .expect("workflow test model catalog");
@@ -5087,6 +5179,7 @@ chat_reasoning_replay = "omit"
                 inherit_project_instructions: false,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
+                permissions: reviewer_permissions,
             },
             plane.dir.path().join("reviewer.md"),
         )
@@ -5115,13 +5208,36 @@ chat_reasoning_replay = "omit"
             .with_subagent_catalog(catalog)
             .with_workflow_catalog(workflow_catalog),
         );
-        crate::runtime::subagent::NativeExecutionContext::test_context(
+        let mut context = crate::runtime::subagent::NativeExecutionContext::test_context(
             crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
             resources,
             SessionModelConfig::of(model),
             models,
-            ApprovalMode::Policy,
-        )
+            approval_mode,
+        );
+        let attempt_id = context.attempt_id().expect("workflow test attempt").clone();
+        context.native = Some(std::sync::Arc::new(
+            crate::tools::invocation::NativeInvocationServices {
+                task: None,
+                lifecycle: crate::agent::AttemptLifecycle::default()
+                    .with_approval_mode(approval_mode),
+                runtime: crate::tools::runtime::ConversationToolRuntime::new(
+                    plane.conversation_id.clone(),
+                    plane.dir.path().join("workspace"),
+                    plane.dir.path().join("artifacts"),
+                )
+                .expect("workflow test tool runtime"),
+                clock: std::sync::Arc::new(crate::runtime::ManualMonotonicClock::new()),
+                leaf_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+                execution: crate::runtime::interaction::InteractionExecution::Attempt {
+                    attempt_id,
+                    turn: 1,
+                },
+                scheduling: std::sync::Arc::new(tokio::sync::RwLock::new(())),
+                descendants: crate::tools::invocation::NativeChildScope::default(),
+            },
+        ));
+        context
     }
 
     #[cfg(unix)]
@@ -5233,6 +5349,7 @@ chat_reasoning_replay = "omit"
                         schema: output.clone(),
                     },
                     routes: Vec::new(),
+                    permissions: None,
                     on_error: WorkflowValueErrorStrategy::default(),
                 },
             );
@@ -5245,6 +5362,7 @@ chat_reasoning_replay = "omit"
             compile_test(WorkflowDefinition {
                 description: "Sibling fanout".into(),
                 timeout_ms: 600_000,
+                permissions: None,
                 block: WorkflowBlock {
                     input: schema(json!({"task":{"type":"string"}}), &["task"]),
                     nodes,
@@ -5270,6 +5388,7 @@ chat_reasoning_replay = "omit"
                             schema: output.clone(),
                         },
                         routes: Vec::new(),
+                        permissions: None,
                         on_error: WorkflowValueErrorStrategy::default(),
                     },
                 ),
@@ -5296,6 +5415,7 @@ chat_reasoning_replay = "omit"
                 WorkflowId::parse("event_journal_workflow").expect("event workflow id"),
                 WorkflowDefinition {
                     timeout_ms: 600_000,
+                    permissions: None,
                     description: "Event journal test workflow".to_owned(),
                     block: WorkflowBlock {
                         input: output.clone(),
@@ -5795,6 +5915,8 @@ chat_reasoning_replay = "omit"
             1,
             "old generation instructions",
             old_catalog.clone(),
+            ApprovalMode::FullAccess,
+            None,
         );
         assert_eq!(old_context.resources().revision().get(), 1);
         assert_eq!(
@@ -5861,6 +5983,8 @@ chat_reasoning_replay = "omit"
             2,
             "new generation instructions",
             new_catalog.clone(),
+            ApprovalMode::FullAccess,
+            None,
         )
         .with_test_policy(new_policy);
         assert_eq!(new_context.resources().revision().get(), 2);
@@ -6226,6 +6350,7 @@ chat_reasoning_replay = "omit"
         );
         let definition = WorkflowDefinition {
             timeout_ms: 600_000,
+            permissions: None,
             description: "Review".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"task": {"type": "string"}}), &["task"]),
@@ -6286,6 +6411,7 @@ chat_reasoning_replay = "omit"
     fn rejects_branch_without_boolean_condition_or_complete_ports() {
         let definition = WorkflowDefinition {
             timeout_ms: 600_000,
+            permissions: None,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "string"}}), &["flag"]),
@@ -6431,6 +6557,7 @@ block:
         };
         let missing_ports = WorkflowDefinition {
             timeout_ms: 600_000,
+            permissions: None,
             description: "Branch".to_owned(),
             block: WorkflowBlock {
                 input: schema(json!({"flag": {"type": "boolean"}}), &["flag"]),
@@ -6480,6 +6607,7 @@ block:
                             schema: output.clone(),
                         },
                         routes: Vec::new(),
+                        permissions: None,
                         on_error: WorkflowValueErrorStrategy::default(),
                     },
                 ),
@@ -6546,6 +6674,7 @@ block:
                             schema: schema(json!({"ok": {"type": "boolean"}}), &["ok"]),
                         },
                         routes: Vec::new(),
+                        permissions: None,
                         on_error: WorkflowValueErrorStrategy::default(),
                     },
                 ),
@@ -6570,8 +6699,9 @@ block:
     #[allow(clippy::too_many_lines)] // one nested-schema rejection table
     fn rejects_nested_schema_mismatches_and_optional_nested_references() {
         let optional_input = WorkflowDefinition {
-            timeout_ms: 600_000,
             description: "Optional nested input".to_owned(),
+            timeout_ms: 600_000,
+            permissions: None,
             block: WorkflowBlock {
                 input: schema(
                     json!({
@@ -6600,6 +6730,7 @@ block:
                                     schema: schema(json!({}), &[]),
                                 },
                                 routes: Vec::new(),
+                                permissions: None,
                                 on_error: WorkflowValueErrorStrategy::default(),
                             },
                         ),

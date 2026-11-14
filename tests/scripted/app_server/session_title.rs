@@ -165,9 +165,9 @@ async fn anthropic_title_preserves_follow_and_explicit_thinking_budgets_and_text
             let (revision, mut settings) = f.manager.sessions.read_settings(id).await.unwrap();
             let mut model = SessionModelConfig::of(ModelRef::parse("local/a").unwrap());
             if explicit {
-                model.title_model = AuxiliaryModelPolicy::Explicit {
+                model.auxiliary = AuxiliaryModelPolicy::Explicit {
                     model: ModelRef::parse("local/b").unwrap(),
-                    profile: None,
+                    profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                     request_params: serde_json::Map::default(),
                     max_output_tokens: Some(4096),
                 };

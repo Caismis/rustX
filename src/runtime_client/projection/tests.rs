@@ -1603,7 +1603,7 @@ fn anchor_race_model() -> Arc<FakeModel> {
         id: ToolCallId::new("call-anchor-1"),
         tool_id: ToolId::new(crate::tools::todo::TODO_TOOL_ID),
         name: "todo".to_owned(),
-        arguments: serde_json::json!({ "action": "create", "subject": "Anchor the status" }),
+        arguments: serde_json::json!({ "arguments": { "action": "create", "subject": "Anchor the status" } }),
     };
     let arguments_json = serde_json::to_string(&call.arguments).expect("serialize todo arguments");
     let stop_turn = || {
@@ -1737,6 +1737,10 @@ async fn a_later_inbound_cannot_relocate_a_prepared_post_tool_batch_status() {
     .expect("conversation identity matches the tool runtime");
     execution.observe(observer.as_ref());
     let _result = execution.run().await;
+    assert!(
+        *observer.parked.borrow(),
+        "the valid Todo invocation must reach the PostToolBatch rendezvous"
+    );
     let (batch_cursor, inbound_cursor) = controller.await.expect("controller task");
 
     let (snapshot, _) = projection
@@ -5355,7 +5359,7 @@ fn t14_native_admission_publishes_frozen_model_before_execution_starts() {
             attempt_id: attempt(),
             model,
             resource_revision: crate::runtime::identity::RuntimeResourceRevision::new(7),
-            approval_mode: crate::runtime::types::ApprovalMode::Policy,
+            approval_mode: crate::runtime::types::ApprovalMode::Plan,
         });
     });
     let current = projection.checkpoint_candidate().unwrap();
@@ -6490,6 +6494,7 @@ fn raw_publication_snapshot(
     frontier: crate::context::resources::LedgerFrontier,
 ) -> crate::model::RequestSnapshot {
     crate::model::RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         crate::model::RequestIdentity {
             attempt_id: attempt(),
             turn: TurnId::new("1"),

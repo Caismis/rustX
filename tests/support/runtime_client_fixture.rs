@@ -407,7 +407,11 @@ impl RuntimeClientFixtureBuilder {
             explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: session_model,
-            approval_mode: rustx::runtime::ApprovalMode::Policy,
+            // Tool-execution conformance fixtures must not sit on Plan:
+            // Plan elevation denies FakeTool starts and turns await_started
+            // liveness waits into multi-minute failures that starve the
+            // Deterministic contracts lane.
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {

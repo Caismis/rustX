@@ -17,7 +17,7 @@ import { CommandSession } from '../src/app/commands/native';
 import { CommandPanel } from '../src/app/commands/CommandPanel';
 import { App } from '../src/app/App';
 import { OutcomeUncertain, RpcFailure } from '../src/client/errors';
-import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v77';
+import type { MethodResult, Request, SessionNodeObservation, SessionUserMessageBoundaryObservation, UserInputBlock } from '../../protocol/app-server/v78';
 import { Server, snapshot } from './fixture';
 
 let server: Server;
@@ -642,7 +642,7 @@ describe('typed native operations and continuation fencing', () => {
     navigation.invalidate(); const count = server.requests.length;
     server.socket.deliver(response); await work;
     expect(server.requests).toHaveLength(count);
-    expect(server.client.getSnapshot().views.B.snapshot?.effective_approval_mode).toBe('policy');
+    expect(server.client.getSnapshot().views.B.snapshot?.effective_approval_mode).toBe('plan');
     if (method === 'session/setModel') expect(fixture.model()).toBe('fixture/second');
   });
   it.each(['fork', 'branch', 'retry'] as const)('%s commit/held response/navigation/release leaves the mutation valid without continuation', async action => {

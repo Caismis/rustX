@@ -24,7 +24,7 @@ import { Server, snapshot, checkpoint, childConversation, readingWindow } from '
 import { cfg3Source, cfg3Effective } from '../cfg3-data';
 import { traceRecord, traceTool, requestDetail, toolDetail } from '../trace-fixture';
 import { RpcFailure } from '../../src/client/errors';
-import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v77';
+import type { CheckpointReadCut, Request, MessageBlock, GoalSnapshot, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v78';
 import '../../src/presentation/theme/base.css';
 import '../../src/presentation/theme/gradient-shadow-text.css';
 import '../../src/presentation/theme/design-platform.css';
@@ -51,7 +51,7 @@ const capabilities = { inputModalities: ['text' as const], outputModalities: ['t
 let releaseSource!: () => void;
 const sourceGate = new Promise<void>(resolve => { releaseSource = resolve; });
 if (!new URL(location.href).searchParams.has('source-gate')) releaseSource();
-server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'policy', target: { kind: 'workspace', directory: '/workspace/A' } } });
+server.workspaceHost.configureWorkspace = async () => ({ kind: 'read', projection: { ...cfg3Source(), session_models: { kind: 'available', default_model: { model: 'fixture/native' }, catalog: { models: ['fixture/native', 'fixture/second'].map(model => ({ model, protocol: 'openai_responses' as const, contextWindow: 8192, maxOutputTokens: 1024, credentialSource: { type: 'environment', variable: 'KEY' }, declaredCapabilities: capabilities, effectiveCapabilities: capabilities, profiles: [] })) } }, prospective_approval_mode: 'plan', target: { kind: 'workspace', directory: '/workspace/A' } } });
 const configureWorkspace = server.workspaceHost.configureWorkspace;
 server.workspaceHost.configureWorkspace = async (...args) => { await sourceGate; return configureWorkspace(...args); };
 if (new URL(location.href).searchParams.has('models')) {
@@ -120,14 +120,14 @@ if (new URL(location.href).searchParams.has('opening-history')) {
 if (new URL(location.href).searchParams.has('history-refresh')) {
   const saved = server.snapshots.get('A')!;
   const question: RuntimeClientTranscriptEntry = { cursor: '1', item: { type: 'message', message: { id: 'repair-question', role: 'user', source: 'human', content: [{ type: 'text', text: 'Run a background task and keep my conversation visible.' }] } } };
-  const tool: RuntimeClientTranscriptEntry = { cursor: '2', response_pending: true, item: { type: 'message', message: { id: 'repair-call', role: 'assistant', content: [{ type: 'tool_call', id: 'repair-bash', tool_id: 'tool-bash', name: 'bash', arguments: { command: 'printf repaired-result' } }] } }, tool_calls: [{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'repair-call' }, block_index: 0 }, assembly_complete: true, message_id: 'repair-call', block_index: 0, call_id: 'repair-bash', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: '{"command":"printf repaired-result"}' } }] };
+  const tool: RuntimeClientTranscriptEntry = { cursor: '2', response_pending: true, item: { type: 'message', message: { id: 'repair-call', role: 'assistant', content: [{ type: 'tool_call', id: 'repair-bash', tool_id: 'tool-bash', name: 'bash', arguments: { arguments: { command: 'printf repaired-result' } } }] } }, tool_calls: [{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'repair-call' }, block_index: 0 }, assembly_complete: true, message_id: 'repair-call', block_index: 0, call_id: 'repair-bash', tool_id: 'tool-bash', name: 'bash', state: { type: 'assembled', arguments: "{\"arguments\":{\"command\":\"printf repaired-result\"}}" } }] };
   const answer: RuntimeClientTranscriptEntry = { cursor: '3', item: { type: 'message', message: { id: 'repair-answer', role: 'assistant', content: [{ type: 'text', text: 'Your conversation stays available.\n\n' + Array.from({ length: 30 }, (_, n) => `Reading paragraph ${n + 1}: earlier content stays in place during native completion.`).join('\n\n') }] } } };
   saved.messages = [];
   saved.transcript = { entries: [question, tool, answer], next_cursor: null };
   server.handlers.set('session/transcript', request => {
     if (request.method !== 'session/transcript' || request.params.at.type !== 'message' || request.params.at.id !== 'repair-call') throw Error('Expected exact old message refresh');
     const settled = structuredClone(tool); settled.response_pending = false;
-    settled.tool_calls![0].state = { type: 'settled', arguments: '{"command":"printf repaired-result"}', result: { status: { type: 'success' }, duration_ms: '30', content: [{ type: 'text', text: 'repaired-result' }] } };
+    settled.tool_calls![0].state = { type: 'settled', arguments: "{\"arguments\":{\"command\":\"printf repaired-result\"}}", result: { status: { type: 'success' }, duration_ms: '30', content: [{ type: 'text', text: 'repaired-result' }] } };
     return { type: 'transcript_window', window: { cut: { conversation_id: saved.conversation_id, journal: '4', transcript: '4', mutation_revision: '0', ledger_through: '4', surface_revision: '0', transcript_total: '4', pending_through: '0', pending_total: '0' }, page: { entries: [settled] }, target_cursor: '2' } };
   });
   advanceHistory = async () => {
@@ -153,8 +153,8 @@ if (new URL(location.href).searchParams.has('subagents')) {
     ];
     saved.transcript.entries!.push({ cursor: '22', item: { type: 'message', message: { role: 'assistant', id: 'delegation', content: [
       { type: 'text', text: 'I will delegate the source verification and review the evidence when it returns.' },
-      ...invocations.map((invocation, index) => ({ type: 'tool_call' as const, id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, arguments: invocation.arguments })),
-    ] } }, tool_calls: invocations.map((invocation, index) => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'delegation'},block_index:index + 1},assembly_complete:true, message_id: 'delegation', block_index: index + 1, call_id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, state: { type: 'settled', arguments: JSON.stringify(invocation.arguments), result: { status: { type: 'success' }, content: [{ type: 'json', value: invocation.result }], duration_ms: '100' } } })) });
+      ...invocations.map((invocation, index) => ({ type: 'tool_call' as const, id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, arguments: { arguments: invocation.arguments } })),
+    ] } }, tool_calls: invocations.map((invocation, index) => ({committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'delegation'},block_index:index + 1},assembly_complete:true, message_id: 'delegation', block_index: index + 1, call_id: `agent-call-${index}`, tool_id: `tool-${invocation.name}`, name: invocation.name, state: { type: 'settled', arguments: JSON.stringify({ arguments: invocation.arguments }), result: { status: { type: 'success' }, content: [{ type: 'json', value: invocation.result }], duration_ms: '100' } } })) });
   }
   server.handlers.set('agent/statistics', () => ({ type: 'agent_statistics', metrics: agentMetrics }));
   if (new URL(location.href).searchParams.has('nested-subagents')) saved.agents.push({ ...saved.agents[1]!, title: 'Verify original documents', agent: 'Verify original documents', agent_id: 'grandchild', parent_agent_id: 'child-1', child_conversation_id: 'grandchild-conversation' });
@@ -232,7 +232,7 @@ const handled = new Set<Request>(server.requests.filter(row => row.request.metho
       input_tokens: String(input), context_window_tokens: "100000", model: 'measured/model',
       breakdown: { system_tokens: "1000", tool_tokens: "2000", message_tokens: String(input - 3000) },
     } };
-    next.attempt = running ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'policy' } } : null;
+    next.attempt = running ? { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1, execution_settings: { resource_revision: '1', approval_mode: 'plan' } } : null;
     await server.update('A', next);
   },
   async appendSavedReply() {

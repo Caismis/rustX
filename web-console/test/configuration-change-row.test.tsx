@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import type { BoundedNames, ConfigurationChange } from '../../protocol/app-server/v77';
+import type { BoundedNames, ConfigurationChange } from '../../protocol/app-server/v78';
 import { ConfigurationChangeRow, hasConfigurationChangeRow } from '../src/app/agent/ConfigurationChangeRow';
 afterEach(cleanup);
 const none: BoundedNames = { names: [], total: 0 };
