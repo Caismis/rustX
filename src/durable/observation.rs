@@ -48,11 +48,16 @@ pub struct WorkflowTraceNode {
     pub output_preview: Option<String>,
     pub input_omitted: bool,
     pub output_omitted: bool,
+    /// Exact admission identity retained at this cut; grants no child access.
+    pub child: Option<crate::runtime::identity::SubagentId>,
+    /// Present only after the same concrete visit's ownership fact commits.
+    pub child_agent_id: Option<crate::runtime::identity::AgentId>,
 }
 #[derive(Debug, Clone)]
 pub struct WorkflowTraceNodes {
     pub revision: u64,
-    pub workflow_id: String,
+    pub run_id: crate::runtime::workflow::WorkflowRunId,
+    pub workflow_id: crate::runtime::workflow::WorkflowId,
     pub parent_sequence: Option<u64>,
     pub total: u64,
     pub nodes: Vec<WorkflowTraceNode>,

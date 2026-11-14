@@ -173,6 +173,68 @@ impl AppServerConnection {
                 )
                 .await
             }
+            Method::SessionWorkflowRunSnapshotHeader {
+                session_id,
+                node_id,
+                cut,
+                run_id,
+            } => {
+                let resolved = self
+                    .resolve_history_run_snapshot(&session_id, node_id.as_ref(), cut, run_id)
+                    .await?;
+                Ok(MethodResult::WorkflowRunSnapshotHeader {
+                    header: resolved.map(|(header, _)| header),
+                })
+            }
+            Method::SessionWorkflowTraceNode {
+                session_id,
+                node_id,
+                cut,
+                instance,
+            } => {
+                let (selected, _) = self
+                    .history_trace_cut(&session_id, node_id.as_ref(), Some(&cut))
+                    .await?;
+                let (_, node) = self
+                    .sessions
+                    .read_trace_observation(&session_id, Some(&selected), move |store| {
+                        crate::runtime_client::trace_observation::history_workflow_node(
+                            store, &cut, &instance,
+                        )
+                    })
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::WorkflowTraceNode {
+                    node: node.map_err(client_error)?,
+                })
+            }
+            Method::SessionWorkflowRunSnapshotChunk {
+                session_id,
+                node_id,
+                cut,
+                run_id,
+                offset,
+                limit,
+            } => {
+                if limit == 0
+                    || limit > crate::runtime::workflow::WORKFLOW_SNAPSHOT_CHUNK_BYTES
+                    || offset > 9_007_199_254_740_991
+                {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let Some((_, wire_bytes)) = self
+                    .resolve_history_run_snapshot(&session_id, node_id.as_ref(), cut, run_id)
+                    .await?
+                else {
+                    return Ok(MethodResult::WorkflowRunSnapshotChunk { chunk: None });
+                };
+                let chunk = crate::app_server::workflow_documents::WorkflowDocuments::slice_run_snapshot_chunk(
+                    &wire_bytes,
+                    offset,
+                    limit,
+                )?;
+                Ok(MethodResult::WorkflowRunSnapshotChunk { chunk: Some(chunk) })
+            }
             Method::SessionHistoryContentRead {
                 session_id,
                 node_id,
@@ -451,6 +513,61 @@ impl AppServerConnection {
             }
         }
         Ok((selected, upper))
+    }
+
+    async fn resolve_history_run_snapshot(
+        &self,
+        session_id: &crate::local_runtime::session::SessionId,
+        node_id: Option<&crate::local_runtime::session::SessionNodeId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<
+        Option<(
+            crate::runtime::workflow::WorkflowRunSnapshotHeader,
+            std::sync::Arc<Vec<u8>>,
+        )>,
+        RpcError,
+    > {
+        let (selected, _) = self
+            .history_trace_cut(session_id, node_id, Some(&cut))
+            .await?;
+        let header_cut = cut.clone();
+        let header_run = run_id.clone();
+        let (_, db_header) = self
+            .sessions
+            .read_trace_observation(session_id, Some(&selected), move |store| {
+                crate::runtime_client::trace_observation::history_workflow_run_snapshot_header(
+                    store,
+                    &header_cut,
+                    &header_run,
+                )
+            })
+            .await
+            .map_err(session_error)?;
+        let Some(db_header) = db_header.map_err(client_error)? else {
+            return Ok(None);
+        };
+        if let Some(hit) = self
+            .workflow_documents
+            .get_cached_run_snapshot(&db_header)?
+        {
+            return Ok(Some(hit));
+        }
+        let (_, loaded) = self
+            .sessions
+            .read_trace_observation(session_id, Some(&selected), move |store| {
+                crate::runtime_client::trace_observation::history_workflow_run_snapshot_document(
+                    store, &cut, &run_id,
+                )
+            })
+            .await
+            .map_err(session_error)?;
+        let Some((header, document)) = loaded.map_err(client_error)? else {
+            return Ok(None);
+        };
+        self.workflow_documents
+            .put_run_snapshot(header, &document)
+            .map(Some)
     }
 }
 

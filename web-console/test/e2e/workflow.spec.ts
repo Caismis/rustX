@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { wireProbe } from './wire-probe';
+import { METHOD_POLICY, type MethodName } from '../../../protocol/app-server/method-policy';
 
 test('native Workflow Agent child composes with Chat, Trace, reload and resource inventory', async ({ page }) => {
   const fixture = await startDogfood('web_workflow_observation'); let passed = false;
@@ -54,7 +55,30 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await expect(page.getByText('Workflow · review_pr · Read-only')).toBeVisible();
     await page.getByRole('treeitem', { name: /review/ }).press('Escape');
     const parentTitle = await page.locator('#session-title').innerText();
-    await openChild();
+    const attached = await wire.attachedTarget(session);
+    const checkpointBefore = (await wire.read('session/checkpoint', attached)).checkpoint;
+    expect(checkpointBefore.snapshot.workflows?.runs).toHaveLength(1);
+    const providerBefore = (await fixture.control('requests')).requests.length;
+    expect(providerBefore).toBe(2);
+    const requestStart = wire.requests.length;
+    await run.getByRole('button', { name: 'View run graph', exact: true }).click();
+    const canvas = page.getByRole('dialog');
+    const graphReview = canvas.getByRole('group', { name: /^Agent node review(?:,|$)/ });
+    await graphReview.click();
+    // Opening and selecting headers reads no original I/O bodies.
+    expect(wire.requests.slice(requestStart).filter(request => request.method === 'conversation/checkpointValueRead')).toHaveLength(0);
+    await canvas.getByRole('tab', { name: 'Input', exact: true }).click();
+    await expect(canvas.getByRole('tabpanel')).toContainText('workflow conformance request');
+    await canvas.getByRole('tab', { name: 'Output', exact: true }).click();
+    await expect(canvas.getByRole('tabpanel')).toContainText('Output not recorded');
+    const checkpointAfter = (await wire.read('session/checkpoint', attached)).checkpoint;
+    expect(checkpointAfter.read_cut.through).toBe(checkpointBefore.read_cut.through);
+    expect(checkpointAfter.snapshot.workflows).toEqual(checkpointBefore.snapshot.workflows);
+    expect((await fixture.control('requests')).requests.length).toBe(providerBefore);
+    expect(wire.requests.slice(requestStart).filter(request => METHOD_POLICY[request.method as MethodName]?.effect === 'side_effecting')).toEqual([]);
+    await canvas.getByRole('tab', { name: 'Summary', exact: true }).click();
+    await canvas.getByRole('button', { name: 'Open subagent conversation', exact: true }).click();
+    await expect(canvas).toBeHidden();
     const childView = page.locator('[data-agent-id][data-view="chat"]:visible');
     await expect(childView).toHaveCount(1);
     await expect(childView).toContainText('Review the request and commit the result.');
@@ -80,7 +104,7 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     const trajectory = page.getByRole('region', { name: 'Trajectory', exact: true });
     await trajectory.getByLabel('Search trajectory').fill('workflow');
     await expect(trajectory.locator('[data-display-type="RecordRow"][data-kind="workflow"]')).toHaveCount(1);
-    await trajectory.locator('[data-display-type="RecordRow"][data-kind="workflow"]').click();
+    await trajectory.locator('[data-display-type="RecordRow"][data-kind="workflow"]').getByText(/^review_pr/).click();
     const inspector = trajectory.getByRole('complementary', { name: 'Event details' });
     await inspector.getByRole('tab', { name: 'Timing', exact: true }).click();
     await expect(inspector).toContainText('Not available');
@@ -107,6 +131,12 @@ test('native Workflow Agent child composes with Chat, Trace, reload and resource
     await returnHome(page); await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     await expect(page.getByText('workflow conformance complete', { exact: true })).toBeVisible();
     await expect(run).toContainText('completed');
+    await run.getByRole('button', { name: 'View run graph', exact: true }).click();
+    await canvas.getByRole('group', { name: /^Agent node review(?:,|$)/ }).click();
+    await canvas.getByRole('tab', { name: 'Output', exact: true }).click();
+    await expect(canvas.getByRole('tabpanel')).toContainText('native workflow child committed');
+    await page.keyboard.press('Escape');
+    await expect(canvas).toBeHidden();
     await expect(catalog).toHaveText('1 subagents');
     await run.getByRole('button').first().click();
     await openChild();

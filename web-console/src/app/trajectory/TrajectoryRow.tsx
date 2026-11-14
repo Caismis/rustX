@@ -6,11 +6,14 @@ import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
 import type { TraceRecord } from '../../../../protocol/app-server/v78';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
+import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
 
 export interface TrajectoryRowActions {
   workflows?: ReadonlyMap<string, TraceRecord>;
   openedWorkflows?: ReadonlySet<string>;
   toggleWorkflow?: (id: string) => void;
+  openWorkflowNodeCanvas?: (node: WorkflowTraceNode, source: WorkflowNodes, trigger: HTMLElement | null) => void;
+  openWorkflowRootCanvas?: (root: TraceRecord, trigger: HTMLElement | null) => void;
   select: (item: InspectableDisplayItem) => void;
   toggleTurn: (id: string) => void;
   toggleCalls: (id: string) => void;
@@ -48,6 +51,11 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
     else if (turn) actions.toggleTurn(turn.ownerKey);
   };
   const onDoubleClick = (event: MouseEvent) => {
+    if (node && item?.type === 'WorkflowNode' && actions.openWorkflowNodeCanvas) {
+      event.preventDefault();
+      actions.openWorkflowNodeCanvas(node, item.workflowSource, event.currentTarget as HTMLElement);
+      return;
+    }
     if (workflow) { event.preventDefault(); actions.toggleWorkflow?.(workflow.id); return; }
     if (summary || !item || item.type === 'RequestBoundary' || !turn || row.betweenTurns) return;
     if (folded.has(turn.ownerKey) && actions.foldableTurns.has(turn.ownerKey)) { event.preventDefault(); actions.toggleTurn(turn.ownerKey); return; }
@@ -109,6 +117,36 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
           <span className={css.collapsedTurnText}>{row.summary}</span>
         </span>
         : item && row.kind === 'semantic' ? <CellContent item={item} /> : null}
+      {node && item?.type === 'WorkflowNode' && actions.openWorkflowNodeCanvas && (
+        <button
+          type="button"
+          className={css.workflowCanvasButton}
+          aria-label={tx('workflows:run-canvas.inspect-node', { p0: node.instance.node })}
+          title={tx('workflows:run-canvas.inspect-node', { p0: node.instance.node })}
+          onClick={event => {
+            event.stopPropagation();
+            actions.openWorkflowNodeCanvas!(node, item.workflowSource, event.currentTarget);
+          }}
+          onDoubleClick={event => event.stopPropagation()}
+        >
+          {tx('workflows:run-canvas.open')}
+        </button>
+      )}
+      {workflow && !node && actions.openWorkflowRootCanvas && (
+        <button
+          type="button"
+          className={css.workflowCanvasButton}
+          aria-label={tx('workflows:run-canvas.open')}
+          title={tx('workflows:run-canvas.open')}
+          onClick={event => {
+            event.stopPropagation();
+            actions.openWorkflowRootCanvas!(workflow, event.currentTarget);
+          }}
+          onDoubleClick={event => event.stopPropagation()}
+        >
+          {tx('workflows:run-canvas.open')}
+        </button>
+      )}
     </div>
   </div>;
 }

@@ -384,6 +384,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/traceLocateWorkflow';
+      params: {
+        target: AttachmentTarget;
+        run_id: WorkflowRunId;
+      };
+    }
+  | {
       method: 'session/traceLocateTool';
       params: {
         target: AttachmentTarget;
@@ -661,6 +668,14 @@ export type Request1 =
       };
     }
   | {
+      method: 'agent/traceLocateWorkflow';
+      params: {
+        target: AttachmentTarget;
+        agent_id: AgentId;
+        run_id: WorkflowRunId;
+      };
+    }
+  | {
       method: 'agent/traceLocateTool';
       params: {
         target: AttachmentTarget;
@@ -801,6 +816,35 @@ export type Request1 =
         content_ref: ContentRef;
         offset: number;
         max_bytes: number;
+      };
+    }
+  | {
+      method: 'session/workflowRunSnapshotHeader';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        cut: CheckpointReadCut;
+        run_id: WorkflowRunId;
+      };
+    }
+  | {
+      method: 'session/workflowRunSnapshotChunk';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        cut: CheckpointReadCut;
+        run_id: WorkflowRunId;
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
+      method: 'session/workflowTraceNode';
+      params: {
+        session_id: SessionId;
+        node_id?: SessionNodeId | null;
+        cut: CheckpointReadCut;
+        instance: WorkflowNodeInstance;
       };
     }
   | {
@@ -1039,6 +1083,35 @@ export type Request1 =
         domain: string;
         offset: number;
         limit: number;
+      };
+    }
+  | {
+      method: 'conversation/workflowRunSnapshotHeader';
+      params: {
+        target: AttachmentTarget;
+        agent_id?: AgentId | null;
+        cut?: CheckpointReadCut | null;
+        run_id: WorkflowRunId;
+      };
+    }
+  | {
+      method: 'conversation/workflowRunSnapshotChunk';
+      params: {
+        target: AttachmentTarget;
+        agent_id?: AgentId | null;
+        cut?: CheckpointReadCut | null;
+        run_id: WorkflowRunId;
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
+      method: 'conversation/workflowTraceNode';
+      params: {
+        target: AttachmentTarget;
+        agent_id?: AgentId | null;
+        cut: CheckpointReadCut;
+        instance: WorkflowNodeInstance;
       };
     }
   | {
@@ -1526,6 +1599,18 @@ export type CheckpointId = string;
  */
 export type TraceCursor = string;
 /**
+ * Identifies one attempt to execute an agent manifest.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AttemptId".
+ */
+export type AttemptId = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ScheduledWorkflowStartId".
+ */
+export type ScheduledWorkflowStartId = string;
+/**
  * A stable index identifying one content block within the ordered content
  * list of the canonical message being assembled.
  *
@@ -1606,13 +1691,6 @@ export type ConversationWindowAt =
  */
 export type TranscriptCursor = string;
 /**
- * Identifies one attempt to execute an agent manifest.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "AttemptId".
- */
-export type AttemptId = string;
-/**
  * The identity of one Model Profile declared by a model.
  *
  * The runtime assigns no meaning to the name: `fast`, `precise`, `creative`,
@@ -1631,11 +1709,6 @@ export type ModelProfileId = string;
  * via the `definition` "ManualCompactionRequestId".
  */
 export type ManualCompactionRequestId = string;
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ScheduledWorkflowStartId".
- */
-export type ScheduledWorkflowStartId = string;
 /**
  * Trusted product-control commands. Model request grants are a separate seam.
  *
@@ -2731,6 +2804,10 @@ export type MethodResult =
       type: 'trace_tool_location';
     }
   | {
+      location?: TraceWorkflowLocation | null;
+      type: 'trace_workflow_location';
+    }
+  | {
       conversation_id: ConversationId;
       window: ConversationWindow;
       type: 'session_history';
@@ -2905,6 +2982,18 @@ export type MethodResult =
   | {
       page: CheckpointPage;
       type: 'checkpoint_page';
+    }
+  | {
+      header?: WorkflowRunSnapshotHeader | null;
+      type: 'workflow_run_snapshot_header';
+    }
+  | {
+      chunk?: WorkflowRunSnapshotChunk | null;
+      type: 'workflow_run_snapshot_chunk';
+    }
+  | {
+      node?: WorkflowTraceNode | null;
+      type: 'workflow_trace_node';
     }
   | {
       checkpoint: RuntimeClientCheckpoint;
@@ -6080,6 +6169,33 @@ export type ObservationSource2 = 'live';
  */
 export type CheckpointValueRepresentation = 'utf8_text' | 'canonical_json_v1';
 /**
+ * Durable visit lifecycle; transient labels additionally require a live owner.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeTraceState".
+ */
+export type WorkflowNodeTraceState =
+  | {
+      type: 'incomplete';
+    }
+  | {
+      type: 'pending';
+    }
+  | {
+      type: 'running';
+    }
+  | {
+      reason: WorkflowWait;
+      type: 'waiting';
+    }
+  | {
+      type: 'draining';
+    }
+  | {
+      outcome: WorkflowExecutionOutcome;
+      type: 'settled';
+    };
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "UnitApplication".
  */
@@ -7374,6 +7490,11 @@ export type TraceInspectionContent =
   | {
       page: TraceInspectionMessages;
       type: 'messages';
+    }
+  | {
+      run_id: WorkflowRunId;
+      workflow_id: WorkflowId;
+      type: 'workflow';
     };
 /**
  * Absence is proved by the original catalog; unavailable means its relationship cannot be read.
@@ -7468,33 +7589,6 @@ export type WorkflowRunOrigin =
   | {
       start_id: ScheduledWorkflowStartId;
       type: 'scheduled';
-    };
-/**
- * Durable visit lifecycle; transient labels additionally require a live owner.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowNodeTraceState".
- */
-export type WorkflowNodeTraceState =
-  | {
-      type: 'incomplete';
-    }
-  | {
-      type: 'pending';
-    }
-  | {
-      type: 'running';
-    }
-  | {
-      reason: WorkflowWait;
-      type: 'waiting';
-    }
-  | {
-      type: 'draining';
-    }
-  | {
-      outcome: WorkflowExecutionOutcome;
-      type: 'settled';
     };
 /**
  * The bounded native interaction vocabulary of the 0.1 protocol.
@@ -9351,6 +9445,34 @@ export interface UploadMetadata {
   size: number;
 }
 /**
+ * Runtime-owned identity, independent of model `ToolCall` text.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowRunId".
+ */
+export interface WorkflowRunId {
+  /**
+   * Owning conversation.
+   */
+  conversation_id: string;
+  /**
+   * Real Tool or durable Scheduled origin, unique across recovery.
+   */
+  origin:
+    | {
+        attempt_id: AttemptId;
+        type: 'tool';
+      }
+    | {
+        start_id: ScheduledWorkflowStartId;
+        type: 'scheduled';
+      };
+  /**
+   * WorkflowRuntime-owned invocation ordinal, allocated at run admission.
+   */
+  invocation: string;
+}
+/**
  * Native occurrence identity owns navigation; optional inline IDs are checks.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -9778,6 +9900,41 @@ export interface ContentRef {
    */
   content_revision: number;
   readable_end: number;
+}
+/**
+ * One concrete node visit in an owning block instance.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowNodeInstance".
+ */
+export interface WorkflowNodeInstance {
+  block: WorkflowBlockInstance;
+  node: string;
+  visit: number;
+}
+/**
+ * A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowBlockInstance".
+ */
+export interface WorkflowBlockInstance {
+  run: WorkflowRunId;
+  definition: WorkflowDefinitionPath;
+  invocations: number[];
+}
+/**
+ * Static source location; never a concrete execution authority.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowDefinitionPath".
+ */
+export interface WorkflowDefinitionPath {
+  workflow_id: WorkflowId;
+  /**
+   * Pairs of Loop owner node and the fixed child key `body`; empty for root.
+   */
+  blocks: string[];
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -10609,34 +10766,6 @@ export interface ScheduledWorkflowHead {
   result_digest?: string | null;
 }
 /**
- * Runtime-owned identity, independent of model `ToolCall` text.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowRunId".
- */
-export interface WorkflowRunId {
-  /**
-   * Owning conversation.
-   */
-  conversation_id: string;
-  /**
-   * Real Tool or durable Scheduled origin, unique across recovery.
-   */
-  origin:
-    | {
-        attempt_id: AttemptId;
-        type: 'tool';
-      }
-    | {
-        start_id: ScheduledWorkflowStartId;
-        type: 'scheduled';
-      };
-  /**
-   * WorkflowRuntime-owned invocation ordinal, allocated at run admission.
-   */
-  invocation: string;
-}
-/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ScheduleTriggerId".
  */
@@ -10667,41 +10796,6 @@ export interface ScheduledWorkflowEffect {
   owner: ScheduledEffectOwner;
   physical_settlement_proven: boolean;
   diagnostic?: string | null;
-}
-/**
- * One concrete node visit in an owning block instance.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowNodeInstance".
- */
-export interface WorkflowNodeInstance {
-  block: WorkflowBlockInstance;
-  node: string;
-  visit: number;
-}
-/**
- * A concrete block instance. Root starts at zero; each Loop appends its one-based iteration.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowBlockInstance".
- */
-export interface WorkflowBlockInstance {
-  run: WorkflowRunId;
-  definition: WorkflowDefinitionPath;
-  invocations: number[];
-}
-/**
- * Static source location; never a concrete execution authority.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowDefinitionPath".
- */
-export interface WorkflowDefinitionPath {
-  workflow_id: WorkflowId;
-  /**
-   * Pairs of Loop owner node and the fixed child key `body`; empty for root.
-   */
-  blocks: string[];
 }
 /**
  * A finite catalog page. Failed sources remain explicit instead of becoming empty.
@@ -11899,6 +11993,16 @@ export interface BoundedNames {
  * via the `definition` "TraceToolLocation".
  */
 export interface TraceToolLocation {
+  record_id: string;
+  page: TracePage;
+}
+/**
+ * A native history window containing one exact Workflow run's admitted start.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TraceWorkflowLocation".
+ */
+export interface TraceWorkflowLocation {
   record_id: string;
   page: TracePage;
 }
@@ -18408,6 +18512,60 @@ export interface CheckpointValueChunk {
   readable_end: number;
 }
 /**
+ * Compact header describing an immutable snapshot bound to one Workflow run.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowRunSnapshotHeader".
+ */
+export interface WorkflowRunSnapshotHeader {
+  run_id: WorkflowRunId;
+  workflow_id: WorkflowId;
+  program_digest: string;
+  source_revision: string;
+  snapshot_digest: string;
+  has_source_presentation: boolean;
+  byte_length: number;
+  sha256: string;
+}
+/**
+ * Bounded chunk of an immutable run snapshot document.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowRunSnapshotChunk".
+ */
+export interface WorkflowRunSnapshotChunk {
+  offset: number;
+  data: string;
+  next_offset?: number | null;
+}
+/**
+ * Actual admitted nodes at one immutable Journal cut, not the program's nodes.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "WorkflowTraceNode".
+ */
+export interface WorkflowTraceNode {
+  id: string;
+  instance: WorkflowNodeInstance;
+  kind?: WorkflowNodeKind | null;
+  state: WorkflowNodeTraceState;
+  timing: TraceTiming;
+  input?: TraceFieldSource | null;
+  output?: TraceFieldSource | null;
+  input_preview?: string | null;
+  output_preview?: string | null;
+  input_omitted: boolean;
+  output_omitted: boolean;
+  /**
+   * Exact admission identity retained at this cut; grants no child access.
+   */
+  child?: SubagentId | null;
+  /**
+   * Present only after the same concrete visit's ownership fact commits.
+   */
+  child_agent_id?: AgentId | null;
+}
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "EffectiveValueChunk".
  */
@@ -20411,25 +20569,6 @@ export interface TraceSystemPromptPresentation1 {
    * A present but empty preview records an empty historical prompt.
    */
   preview?: TracePreview | null;
-}
-/**
- * Actual admitted nodes at one immutable Journal cut, not the program's nodes.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "WorkflowTraceNode".
- */
-export interface WorkflowTraceNode {
-  id: string;
-  instance: WorkflowNodeInstance;
-  kind?: WorkflowNodeKind | null;
-  state: WorkflowNodeTraceState;
-  timing: TraceTiming;
-  input?: TraceFieldSource | null;
-  output?: TraceFieldSource | null;
-  input_preview?: string | null;
-  output_preview?: string | null;
-  input_omitted: boolean;
-  output_omitted: boolean;
 }
 /**
  * Finite metadata for one original model name at its native request owner.

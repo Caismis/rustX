@@ -26,6 +26,7 @@ import { NODE_WIDTH, projectScene, type SceneEdge, type SceneNode } from './scen
 import { WorkflowEdge } from './WorkflowEdge';
 import { viewId, type Duplicate, type Selection } from './selection';
 import { COPY_KEYS, DELETE_KEYS, DUPLICATE_KEYS } from './shortcuts';
+import type { NodeRunOverlay } from '../../run-canvas/aggregation';
 import css from './Editor.module.css';
 
 export type { Selection } from './selection';
@@ -46,15 +47,21 @@ interface Addition {
 
 /** One React Flow scene, one native editing document. Local nodes retain only
  * transient pointer geometry/selection, never executable definitions. */
-export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, currentState, organizeEpoch = 0, drafts, onDuplicate, tools }: {
+export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch, selection, onSelect, problems, edit, editable, currentState, organizeEpoch = 0, drafts, onDuplicate, tools, runOverlay, readOnly = false, persistViewport = true, focusNonce = 0 }: {
   document: WorkflowDocument; path: BlockPath; viewKey: string; viewEpoch: number; selection: Selection; onSelect: (selection: Selection) => void;
   problems: Problems; edit: Edit; editable: boolean; currentState: () => LayoutOwner; organizeEpoch?: number;
   drafts: Readonly<Record<string, FieldDraft>>; onDuplicate: Duplicate; tools: readonly WorkflowToolChoice[];
+  runOverlay?: ReadonlyMap<string, NodeRunOverlay>;
+  readOnly?: boolean;
+  persistViewport?: boolean;
+  focusNonce?: number;
 }) {
+  const effectiveEditable = editable && !readOnly;
   const tx = useTranslation(), flow = useReactFlow<SceneNode, SceneEdge>(), initialized = useNodesInitialized(), container = useRef<HTMLDivElement>(null);
-  const [stored] = useState(() => readViewport(viewKey));
+  const [stored] = useState(() => persistViewport ? readViewport(viewKey) : undefined);
   const [source] = useState(() => crypto.randomUUID());
   const [mode, setMode] = useState<'select' | 'pan'>('select'), [minimap, setMinimap] = useState(true);
+  const [moving, setMoving] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [focusedId, setFocusedId] = useState<string>();
   const [palette, setPalette] = useState<Addition>(), [menu, setMenu] = useState<{ id: string; at: Point; changing?: boolean }>();
@@ -79,18 +86,29 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     setSelected(current => selectedId && current.has(selectedId) ? current : new Set(selectedId ? [selectedId] : []));
   }, [selectedId]);
   const scene = useMemo(() => projectScene(document), [document]);
-  const projected = useMemo(() => scene.nodes.map(node => ({ ...node,
-    // As Dify: ordinary cards size to their content. Only containers
-    // and notes have an explicit, user-resizable height.
-    height: node.data.container || node.data.view === 'note' ? node.height : undefined,
-    selected: selected.has(node.id) || node.id === selectedId,
-    draggable: editable && node.draggable !== false, connectable: editable && node.connectable !== false,
-    ...(node.parentId ? { extent: [[24, 64], [1_000_000, 1_000_000]] as [[number, number], [number, number]] } : {}),
-    ariaLabel: node.data.view === 'node' ? tx('workflows:canvas.node-label', { p0: tx(`workflows:kind.${node.data.definition!.type}`), p1: `${node.data.local}${node.data.path.length ? ` · ${keyOfBlock(node.data.path)}` : ''}` })
+  const projected = useMemo(() => scene.nodes.map(node => {
+    const overlay = node.data.view !== 'note' ? runOverlay?.get(node.id) : undefined;
+    const baseLabel = node.data.view === 'node' ? tx('workflows:canvas.node-label', { p0: tx(`workflows:kind.${node.data.definition!.type}`), p1: `${node.data.local}${node.data.path.length ? ` · ${keyOfBlock(node.data.path)}` : ''}` })
       : node.data.view === 'start' ? tx(node.data.path.length ? 'workflows:canvas.nested-start-label' : 'workflows:canvas.start-label', { p0: keyOfBlock(node.data.path) })
-      : tx('workflows:canvas.note-label', { p0: node.data.local }),
-    className: problems.nodes.has(node.id) ? css[`node_${problems.nodes.get(node.id)}`] : undefined,
-  })), [scene, selected, selectedId, editable, problems, tx]);
+      : tx('workflows:canvas.note-label', { p0: node.data.local });
+    const overlayLabel = overlay ? `, ${tx(`workflows:run-canvas.status.${overlay.status}`)}, ${tx(overlay.visitCount === 1 ? 'workflows:run-canvas.visit-count.one' : 'workflows:run-canvas.visit-count.other', { p0: String(overlay.visitCount) })}` : '';
+    return {
+      ...node,
+      data: overlay ? { ...node.data, runOverlay: overlay } : node.data,
+      // As Dify: ordinary cards size to their content. Only containers
+      // and notes have an explicit, user-resizable height.
+      height: node.data.container || node.data.view === 'note' ? node.height : undefined,
+      selected: selected.has(node.id) || node.id === selectedId,
+      draggable: effectiveEditable && node.draggable !== false,
+      connectable: effectiveEditable && node.connectable !== false,
+      ...(node.parentId ? { extent: [[24, 64], [1_000_000, 1_000_000]] as [[number, number], [number, number]] } : {}),
+      ariaLabel: `${baseLabel}${overlayLabel}`,
+      className: clsx(
+        problems.nodes.has(node.id) && css[`node_${problems.nodes.get(node.id)}`],
+        overlay && css[`run_${overlay.status}`],
+      ) || undefined,
+    };
+  }), [scene, runOverlay, selected, selectedId, effectiveEditable, problems, tx]);
   const [nodes, setNodes] = useState<SceneNode[]>(projected);
   useEffect(() => setNodes(current => {
     const previous = new Map(current.map(node => [node.id, node]));
@@ -186,21 +204,22 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
     openAt({ x: bounds.left - 268, y: bounds.top }, vacant(node.data.path, { x: node.position.x - NODE_WIDTH - GAP, y: node.position.y }), node.data.path, { before: node.data.local, insertion: true });
   }, [byId, openAt, vacant]);
   const actions = useMemo(() => ({
-    editable,
-    addAfter: (id: string, port: ControlPort, anchor: HTMLElement) => { if (editable) openFor(id, anchor, port); },
+    editable: effectiveEditable,
+    hideNodeMenu: readOnly,
+    addAfter: (id: string, port: ControlPort, anchor: HTMLElement) => { if (effectiveEditable) openFor(id, anchor, port); },
     insertEdge: (id: string, anchor: HTMLElement) => {
       const edge = scene.edges.find(edge => edge.id === id), source = edge && byId.get(edge.source);
-      if (!editable || !edge?.data || !source) return;
+      if (!effectiveEditable || !edge?.data || !source) return;
       const value = edgesOf(blockAt(document, edge.data.path)!)[edge.data.index];
       const rect = anchor.getBoundingClientRect(), position = { x: source.position.x + (source.width ?? NODE_WIDTH) + GAP, y: source.position.y };
       openAt({ x: rect.right, y: rect.top }, position, edge.data.path, { edge: { index: edge.data.index, value }, insertion: true, room: room(edge.data.path, position.x, value.to) });
     },
-    addBefore: (id: string, anchor: HTMLElement) => { if (editable) openBefore(id, anchor); },
-    addIn: (id: string, anchor: HTMLElement) => { if (editable) openFor(id, anchor); },
-    menu(id: string, anchor: HTMLElement) { const rect = anchor.getBoundingClientRect(), bounds = container.current!.getBoundingClientRect(); setMenu({ id, at: { x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 248)), y: Math.max(8, Math.min(rect.bottom - bounds.top, bounds.height - 180)) } }); setPalette(undefined); },
+    addBefore: (id: string, anchor: HTMLElement) => { if (effectiveEditable) openBefore(id, anchor); },
+    addIn: (id: string, anchor: HTMLElement) => { if (effectiveEditable) openFor(id, anchor); },
+    menu(id: string, anchor: HTMLElement) { if (readOnly) return; const rect = anchor.getBoundingClientRect(), bounds = container.current!.getBoundingClientRect(); setMenu({ id, at: { x: Math.max(8, Math.min(rect.left - bounds.left, bounds.width - 248)), y: Math.max(8, Math.min(rect.bottom - bounds.top, bounds.height - 180)) } }); setPalette(undefined); },
     geometryStart() { session.current.cancel(); },
     resize(id: string, geometry: { x: number; y: number; width: number; height: number }) {
-      if (!editable) return;
+      if (!effectiveEditable) return;
       const node = byId.get(id); if (!node) return;
       mutate(document => {
         const { path, local, view } = node.data, dimensions = { width: geometry.width, height: geometry.height }, position = { x: geometry.x, y: geometry.y };
@@ -209,7 +228,7 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
         return document;
       });
     },
-  }), [editable, openFor, openBefore, byId, mutate, scene.edges, document, openAt, room]);
+  }), [effectiveEditable, readOnly, openFor, openBefore, byId, mutate, scene.edges, document, openAt, room]);
   const selectedNodes = (override?: string) => {
     const all = override ? [byId.get(override)].filter((node): node is SceneNode => !!node) : scene.nodes.filter(node => selected.has(node.id) || node.id === selectedId);
     return all.filter(node => !all.some(parent => parent.id !== node.id && node.data.path.length > parent.data.path.length && sameBlockPath(node.data.path.slice(0, parent.data.path.length), parent.data.path) && node.data.path[parent.data.path.length].node === parent.data.local && parent.data.view === 'node'));
@@ -318,6 +337,9 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
   useEffect(() => { if (epoch.current !== organizeEpoch) { epoch.current = organizeEpoch; void organize(); } }, [organizeEpoch, organize]);
 
   const locateId = focusedId ?? selectedId;
+  // A readonly status banner can resize the frame. Only its first measurement
+  // admits initial navigation; later selection/focus actions own camera moves.
+  const locateFrame = readOnly ? frameSize !== '' : frameSize;
   // Pan only the selected or keyboard-focused card into usable view; preserve the author's zoom.
   useEffect(() => {
     if (!locateId || !initialized) return;
@@ -336,53 +358,63 @@ export const Canvas = memo(function Canvas({ document, path, viewKey, viewEpoch,
       if (dx || dy) void flow.setViewport({ ...viewport, x: viewport.x + dx, y: viewport.y + dy });
     });
     return () => cancelAnimationFrame(frame);
-  }, [locateId, initialized, flow, viewEpoch, frameSize, minimap]);
+  }, [locateId, initialized, flow, viewEpoch, locateFrame, minimap, focusNonce]);
   useEffect(() => { if (viewEpoch) setSelected(new Set()); }, [viewEpoch]);
   const found = search === undefined ? [] : projectScene(document).nodes.filter(node => `${node.data.title} ${node.data.local} ${keyOfBlock(node.data.path)}`.toLowerCase().includes(search.toLowerCase())).slice(0, 64);
-  return <div ref={container} className={css.canvas} aria-label={tx('workflows:canvas.label')} role="region" tabIndex={0}
+  return <div ref={container} className={css.canvas} aria-label={tx('workflows:canvas.label')} role="region" aria-busy={moving} tabIndex={0}
     onFocusCapture={event => { const target = event.target as HTMLElement; if (target.matches('.react-flow__node')) setFocusedId(target.dataset.id); }}
     onBlurCapture={event => { if ((event.target as Element).matches('.react-flow__node')) setFocusedId(undefined); }}
     onCopy={event => { if (keyboardOwned(event.target) || window.getSelection()?.toString()) return; try { event.clipboardData.setData('text/plain', fragmentFor()); event.preventDefault(); } catch (error) { report(error); } }}
-    onPaste={event => { if (!editable || keyboardOwned(event.target)) return; event.preventDefault(); try { const fragment = parseFragment(event.clipboardData.getData('text/plain')); mutate(document => pasteFragment(document, source, scope, fragment).document); } catch (error) { report(error); } }}
+    onPaste={event => { if (!effectiveEditable || keyboardOwned(event.target)) return; event.preventDefault(); try { const fragment = parseFragment(event.clipboardData.getData('text/plain')); mutate(document => pasteFragment(document, source, scope, fragment).document); } catch (error) { report(error); } }}
     onKeyDown={event => {
       if (event.nativeEvent.isComposing || event.defaultPrevented || keyboardOwned(event.target) || window.getSelection()?.toString()) return;
       const mod = event.metaKey || event.ctrlKey, key = event.key.toLowerCase();
       const focused = (event.target as Element).closest<HTMLElement>('.react-flow__node');
       if ((event.key === 'Enter' || event.key === ' ') && focused && event.target === focused) { const node = byId.get(focused.dataset.id ?? ''); if (node) { event.preventDefault(); choose(node); } }
-      else if (event.key === 'Escape') { event.preventDefault(); setPalette(undefined); setMenu(undefined); setSearch(undefined); onSelect(undefined); container.current?.focus(); }
-      else if (mod && key === 'd') { event.preventDefault(); if (editable) duplicate(); }
+      else if (event.key === 'Escape') {
+        if (readOnly && palette === undefined && menu === undefined && search === undefined) return;
+        event.preventDefault(); setPalette(undefined); setMenu(undefined); setSearch(undefined); onSelect(undefined); container.current?.focus();
+      }
+      else if (mod && key === 'd') { event.preventDefault(); if (effectiveEditable) duplicate(); }
       else if (mod && key === 'f') { event.preventDefault(); setSearch(''); }
       else if (mod && key === 'a') { event.preventDefault(); setSelected(new Set(scene.nodes.filter(node => sameBlockPath(node.data.path, scope) && ['node', 'note'].includes(node.data.view)).map(node => node.id))); }
       else if (event.key === 'Delete' || event.key === 'Backspace') { event.preventDefault(); remove(); }
-      else if (!mod && key === 'n' && editable) { event.preventDefault(); addBelow(); }
+      else if (!mod && key === 'n' && effectiveEditable) { event.preventDefault(); addBelow(); }
       else if (!mod && key === 'v') setMode('select'); else if (!mod && key === 'h') setMode('pan');
     }}>
     <CanvasActions.Provider value={actions}><NoteActions.Provider value={noteActions}>
       <ReactFlow<SceneNode, SceneEdge> nodes={nodes} edges={edges} nodeTypes={nodeTypes} edgeTypes={edgeTypes} connectOnClick={false} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange}
         onNodeDragStart={() => { dragged.current = true; session.current.cancel(); }} onNodeDragStop={(_, __, moved) => { dragged.current = false; persist(moved); }}
-        onConnect={connection => { if (editable) mutate(document => connectionCommand(document, connection)); }} onReconnect={(edge, connection) => { if (editable) mutate(document => connectionCommand(document, connection, edge)); }}
+        onConnect={connection => { if (effectiveEditable) mutate(document => connectionCommand(document, connection)); }} onReconnect={(edge, connection) => { if (effectiveEditable) mutate(document => connectionCommand(document, connection, edge)); }}
         onReconnectStart={(_, edge) => { reconnecting.current = edge; }} onReconnectEnd={() => { reconnecting.current = undefined; }}
-        isValidConnection={isValidConnection} elevateEdgesOnSelect edgesReconnectable={editable} nodesConnectable={editable} deleteKeyCode={null} nodesDraggable={editable}
+        isValidConnection={isValidConnection} elevateEdgesOnSelect edgesReconnectable={effectiveEditable} nodesConnectable={effectiveEditable} deleteKeyCode={null} nodesDraggable={effectiveEditable}
         onNodeClick={(event, node) => choose(node, event.metaKey || event.ctrlKey || event.shiftKey)}
         onEdgeClick={(_, edge) => { container.current?.focus({ preventScroll: true }); if (!edge.data) return; setSelected(new Set()); onSelect({ kind: 'edge', index: edge.data.index, path: edge.data.path }); }}
-        onNodeContextMenu={(event, node) => { event.preventDefault(); if (node.data.view === 'start') return; const bounds = container.current!.getBoundingClientRect(); setMenu({ id: node.id, at: { x: Math.max(8, Math.min(event.clientX - bounds.left, bounds.width - 248)), y: Math.max(8, Math.min(event.clientY - bounds.top, bounds.height - 180)) } }); }}
+        onNodeContextMenu={(event, node) => { if (readOnly) return; event.preventDefault(); if (node.data.view === 'start') return; const bounds = container.current!.getBoundingClientRect(); setMenu({ id: node.id, at: { x: Math.max(8, Math.min(event.clientX - bounds.left, bounds.width - 248)), y: Math.max(8, Math.min(event.clientY - bounds.top, bounds.height - 180)) } }); }}
         onPaneClick={() => { setPalette(undefined); setMenu(undefined); onSelect(undefined); setSelected(new Set()); container.current?.focus({ preventScroll: true }); }}
-        onPaneContextMenu={event => { if (!editable) return; event.preventDefault(); openAt({ x: event.clientX, y: event.clientY }, flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }), []); }}
-        onMoveEnd={(_, viewport: Viewport) => writeViewport(viewKey, viewport)}
+        onPaneContextMenu={event => { if (!effectiveEditable) return; event.preventDefault(); openAt({ x: event.clientX, y: event.clientY }, flow.screenToFlowPosition({ x: event.clientX, y: event.clientY }), []); }}
+        onMoveStart={() => setMoving(true)}
+        onMoveEnd={(_, viewport: Viewport) => { setMoving(false); if (persistViewport) writeViewport(viewKey, viewport); }}
         defaultViewport={stored ?? { x: 24, y: 120, zoom: 1 }} minZoom={0.05} maxZoom={2}
-        autoPanOnNodeFocus={false} panOnDrag={mode === 'pan' ? true : [1, 2]} selectionOnDrag={mode === 'select'} panOnScroll proOptions={{ hideAttribution: true }} ariaLabelConfig={{ 'node.a11yDescription.default': tx('workflows:canvas.label') }}>
+        autoPanOnNodeFocus={false} panOnDrag={mode === 'pan' ? true : [1, 2]} selectionOnDrag={mode === 'select'} panOnScroll
+        proOptions={readOnly ? undefined : { hideAttribution: true }} attributionPosition={readOnly ? 'top-right' : undefined}
+        ariaLabelConfig={{ 'node.a11yDescription.default': tx('workflows:canvas.label') }}>
         <Background variant={BackgroundVariant.Dots} gap={18} size={1} className={css.dots} />
         {minimap && <MiniMap className={css.minimap} pannable zoomable ariaLabel={tx('workflows:canvas.minimap')} nodeClassName={css.miniNode} maskColor="transparent" />}
       </ReactFlow>
       {/* As Dify's operator bar: add, then the pointer modes, then layout. */}
       <div className={css.rail} role="toolbar" aria-label={tx('workflows:canvas.tools')} aria-orientation="vertical">
-        <Tool label={tx('workflows:canvas.add')} disabled={!editable} onClick={addBelow}><IconAddCircle /></Tool>
-        <Tool label={tx('workflows:canvas.add-note')} disabled={!editable} onClick={addNote}><IconNoteAdd /></Tool>
-        <span className={css.railSeparator} aria-hidden />
+        {!readOnly && <>
+          <Tool label={tx('workflows:canvas.add')} disabled={!effectiveEditable} onClick={addBelow}><IconAddCircle /></Tool>
+          <Tool label={tx('workflows:canvas.add-note')} disabled={!effectiveEditable} onClick={addNote}><IconNoteAdd /></Tool>
+          <span className={css.railSeparator} aria-hidden />
+        </>}
         <Tool label={tx('workflows:canvas.select')} active={mode === 'select'} onClick={() => setMode('select')}><IconCursor /></Tool>
         <Tool label={tx('workflows:canvas.pan')} active={mode === 'pan'} onClick={() => setMode('pan')}><IconHand /></Tool>
-        <span className={css.railSeparator} aria-hidden />
-        <Tool label={tx('workflows:canvas.organize')} disabled={!editable || organizing} onClick={() => void organize()}><IconOrganize /></Tool>
+        {!readOnly && <>
+          <span className={css.railSeparator} aria-hidden />
+          <Tool label={tx('workflows:canvas.organize')} disabled={!effectiveEditable || organizing} onClick={() => void organize()}><IconOrganize /></Tool>
+        </>}
       </div>
       <Zoom minimap={minimap} toggleMinimap={() => setMinimap(value => !value)} />
       <p className={css.canvasStatus} aria-live="polite">{message ?? (organizing ? tx('workflows:canvas.organizing') : tx('workflows:canvas.status', { p0: deepNodeCount(document.block) }))}</p>

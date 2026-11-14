@@ -22,7 +22,7 @@ import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
 import type { CompletedResponseView } from '../../../../protocol/app-server/v78';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { responseRetryReady, type ResponseRetry } from './response-retry';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
 import pendingCss from './PendingMessage.module.css';
@@ -31,6 +31,7 @@ import { useTranslation } from '../../locale/react';
 import { TurnNavigator } from './TurnNavigator';
 import { transcriptContent, transcriptPresentation, turnAnchor } from '../../client/transcript';
 import { firstSubmissions } from '../new-conversation/first-submit';
+import { ConversationRunCanvasHost } from '../workflows/run-canvas/ConversationRunCanvasHost';
 
 export function ConversationLive({ client, sessionId, mode, disabled, historicalPending, retry, forking, onHistorical, previewCurrent, onMode }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean; historicalPending?: boolean; forking?: CompletedResponseView;
@@ -88,7 +89,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const readingScope = useMemo(() => ({ endpoint: readingOwner.endpoint, authority: readingOwner.authority, authorityRevision: readingOwner.authorityRevision, conversation: view?.conversation_id, replay: retry?.view }), [readingOwner.endpoint, readingOwner.authority, readingOwner.authorityRevision, view?.conversation_id, retry?.view]);
   const presentationOwner = useMemo(() => Symbol('released conversation text'), [client, sessionId, readingOwner.endpoint, readingOwner.authority, readingOwner.authorityRevision, view?.nodeId, view?.conversation_id, retry?.view]);
   const workflowView = useClientSelector(client, state => sessionId ? state.views[sessionId] : undefined, sameWorkflowView);
-  const standaloneWorkflows = useWorkflowContent(client, workflowView, !scope && mode === 'chat' && !readingPending && !view?.retrying && !view?.readingPreview && !view?.history?.window);
+  const standaloneWorkflows = useWorkflowContent(client, workflowView, !scope && !readingPending && !view?.retrying && !view?.readingPreview && !view?.history?.window);
   const workflows = scope?.workflows ?? standaloneWorkflows;
   const contentView = useMemo(() => Symbol('root content view'), [view?.observation, sessionId, mode, scope?.selected]);
   const currentContentView = useRef(contentView); currentContentView.current = contentView;
@@ -110,9 +111,30 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     if (!view?.readable || view.retrying || view.readingPreview || scope?.selected) return;
     void (mode === 'chat' ? client.loadInitialHistory(view.id) : client.loadInitialTrace(view.id)).catch(() => {});
   }, [client, mode, view?.id, view?.target?.attachment_id, view?.readable, view?.retrying, view?.readingPreview, scope?.selected]);
-  if (sessionId && tracePreview) return <Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>;
+  const liveReadable = view ? (view.readingPreview || !view.target ? true : view.readable) : !!tracePreview;
+  const wrapCanvas = (contentNode: ReactNode) => (
+    <ConversationRunCanvasHost
+      client={client}
+      sessionId={sessionId}
+      conversationId={view?.conversation_id ?? readingOwner.conversation}
+      attachmentTarget={view && !view.readingPreview ? view.target : undefined}
+      attachmentObservation={view && !view.readingPreview ? view.observation : undefined}
+      ownerCurrent={liveReadable && !view?.retrying}
+      liveCheckpointCut={workflowView?.checkpoint?.read_cut}
+      historyNodeId={view?.nodeId ?? readingOwner.node}
+      traceCache={tracePreview?.cache ?? view?.trace}
+      inlineRuns={workflowView?.snapshot?.workflows?.runs}
+      liveRuns={workflows.currentSnapshot?.runs}
+      liveRunsCurrentCut={workflows.isCurrentCut}
+      liveWorkflowView={!scope && !readingPending && !view?.retrying && !view?.readingPreview && !view?.history?.window ? workflowView : undefined}
+      pendingInteractions={view?.pending_interactions}
+    >
+      {contentNode}
+    </ConversationRunCanvasHost>
+  );
+  if (sessionId && tracePreview) return wrapCanvas(<Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>);
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
-  return mode === 'trajectory' && view.trace
+  return wrapCanvas(mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}/>
     : <JournalSourceProvider presentationOwner={presentationOwner} historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={readingPending ? undefined : view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={!readingPending && <TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
@@ -134,7 +156,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       {view.configurationObservation?.error && <div className={pendingCss.root}><p role="alert">{view.configurationObservation.error}</p></div>}
       {workflows.error && <p role="alert">{workflows.error}</p>}
       <PendingMessage client={client} sessionId={view.id}/>
-      </ChatViewport></ToolInspectionContext></JournalSourceProvider>;
+      </ChatViewport></ToolInspectionContext></JournalSourceProvider>);
 }
 export function ConversationDocks({ client, sessionId, disabled }: { client: AppServerClient; sessionId: string; disabled: boolean }) {
   const first = useSyncExternalStore(firstSubmissions(client).subscribe, () => firstSubmissions(client).session(sessionId));

@@ -841,3 +841,47 @@
 
 .stateActions { display: flex; justify-content: center; gap: 8px; margin-top: 16px; }
 .changeNodeLeft { left: auto; right: calc(100% + 6px); }
+
+/* Read-only Run Canvas status overlays: non-color border patterns, glyphs, and counts. */
+.runBadge {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+  padding: 4px 7px;
+  border-radius: 7px;
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 15px;
+  background: var(--dsw-alias-bg-layer-2);
+  color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-border-l2);
+}
+.runGlyph { font-weight: 700; font-size: 11px; line-height: 1; }
+.runCounts { margin-left: auto; color: var(--dsw-alias-label-secondary); font-weight: 500; font-size: 10.5px; }
+.run_running > .node, .run_draining > .node, .run_running > .entryFrame > .node {
+  border-width: 2px;
+  border-color: var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-business-primary) 22%, transparent);
+}
+.run_waiting > .node, .run_pending > .node {
+  border-width: 2px;
+  border-style: dashed;
+  border-color: var(--dsw-alias-state-warn-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-warn-primary) 18%, transparent);
+}
+.run_completed > .node {
+  border-width: 2px;
+  border-color: var(--dsw-alias-state-success-primary);
+}
+.run_failed > .node, .run_timed_out > .node, .run_denied > .node {
+  border-width: 2px;
+  border-color: var(--dsw-alias-state-error-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--dsw-alias-state-error-primary) 20%, transparent);
+}
+.run_cancelled > .node, .run_outcome_unknown > .node, .run_incomplete > .node {
+  border-width: 2px;
+  border-style: dashed;
+  border-color: var(--dsw-alias-label-tertiary);
+}

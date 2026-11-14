@@ -945,6 +945,8 @@ impl AppServerConnection {
                 | Method::SessionTracePage { .. }
                 | Method::SessionTraceValueRead { .. }
                 | Method::SessionTraceContentRead { .. }
+                | Method::SessionWorkflowRunSnapshotHeader { .. }
+                | Method::SessionWorkflowRunSnapshotChunk { .. }
                 | Method::SessionHistoryContentRead { .. }
                 | Method::SessionHistoryPage { .. }
                 | Method::SessionHistoryValueRead { .. }
@@ -1201,6 +1203,7 @@ impl AppServerConnection {
         let sessions = self.sessions.clone();
         let manager = self.host.manager().clone();
         let upload_host = self.host.clone();
+        let workflow_documents = self.workflow_documents.clone();
         let receiver = {
             let routes = self.routes.lock().expect("routes mutex");
             if routes.closed
@@ -1239,6 +1242,7 @@ impl AppServerConnection {
                                 configuration,
                                 upload_host,
                                 observation_cancel,
+                                workflow_documents,
                             )
                             .await
                         }

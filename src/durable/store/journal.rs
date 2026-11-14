@@ -38,6 +38,13 @@ pub trait JournalStore: Send + Sync + 'static {
         &self,
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    /// Atomically persists a `WorkflowStarted` Event Journal fact together with
+    /// its immutable admission-bound definition snapshot and run binding.
+    fn publish_workflow_start(
+        &self,
+        event: RuntimeEventEnvelope,
+        snapshot: &crate::runtime::workflow::WorkflowRunDefinitionSnapshot,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
     /// Commits a non-success Workflow-owned child terminal fact without a
     /// parent inbound notification. Successful Workflow terminals must use
     /// [`JournalStore::commit_workflow_agent_terminal`] so their value

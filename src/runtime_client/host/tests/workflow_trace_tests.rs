@@ -165,6 +165,24 @@ async fn assert_live_overlay(prior_instances: usize, node_name: &str) {
         WorkflowNodeTraceState::Waiting { .. }
     ));
     assert_eq!(
+        inner
+            .workflow_trace_node(&current, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Waiting {
+            reason: WorkflowWait::Review
+        }
+    );
+    assert_eq!(
+        inner
+            .workflow_trace_node(&old, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Incomplete
+    );
+    assert_eq!(
         read(&inner, &old, start),
         WorkflowNodeTraceState::Incomplete
     );
@@ -192,11 +210,19 @@ async fn assert_live_overlay(prior_instances: usize, node_name: &str) {
         read(&cold.inner, &cold_cut, start),
         WorkflowNodeTraceState::Incomplete
     );
+    assert_eq!(
+        cold.inner
+            .workflow_trace_node(&cold_cut, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Incomplete
+    );
 
     let end = append(
         &inner,
         RuntimeEvent::WorkflowNodeSettled {
-            instance,
+            instance: instance.clone(),
             outcome: Outcome::Completed,
         },
         4,
@@ -212,10 +238,34 @@ async fn assert_live_overlay(prior_instances: usize, node_name: &str) {
             outcome: Outcome::Completed
         }
     );
+    assert_eq!(
+        inner
+            .workflow_trace_node(&terminal, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Settled {
+            outcome: Outcome::Completed
+        }
+    );
     // The previous start-only source cannot import a terminal from a newer J.
     assert_eq!(
         read(&inner, &current, start),
         WorkflowNodeTraceState::Incomplete
     );
+    assert_eq!(
+        inner
+            .workflow_trace_node(&current, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Incomplete
+    );
+    let mut foreign = instance;
+    foreign.block.run.conversation_id = ConversationId::generate();
+    assert!(matches!(
+        inner.workflow_trace_node(&terminal, &foreign),
+        Err(RuntimeClientError::InvalidRequest { .. })
+    ));
     fixture.runtime.shutdown().await.unwrap();
 }

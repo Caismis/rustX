@@ -25,6 +25,7 @@ pub(super) async fn dispatch_runtime(
     >,
     upload_host: AppServerHost,
     observation_cancel: Option<crate::app_server::admission::ObservationControl>,
+    workflow_documents: Arc<crate::app_server::workflow_documents::WorkflowDocuments>,
 ) -> Result<MethodResult, RpcError> {
     match method {
         Method::ConversationChanges { attempt_id, .. } => Ok(MethodResult::WorkspaceChanges {
@@ -194,6 +195,16 @@ pub(super) async fn dispatch_runtime(
             target: _,
             record_id,
         } => native_result(authority.trace_detail(record_id)),
+        Method::TraceLocateWorkflow { run_id, .. } => {
+            native_result(authority.trace_locate_workflow(run_id).await)
+        }
+        Method::AgentTraceLocateWorkflow {
+            agent_id, run_id, ..
+        } => native_result(
+            authority
+                .agent_trace_locate_workflow(&agent_id, run_id)
+                .await,
+        ),
         Method::TraceLocateTool { locator, .. } => {
             native_result(authority.trace_locate_tool(locator).await)
         }
@@ -418,6 +429,75 @@ pub(super) async fn dispatch_runtime(
             .map_err(client_error)?;
             Ok(MethodResult::CheckpointPage { page })
         }
+        Method::ConversationWorkflowRunSnapshotHeader {
+            target: _,
+            agent_id,
+            cut,
+            run_id,
+        } => {
+            let resolved = resolve_runtime_run_snapshot(
+                &authority,
+                &workflow_documents,
+                agent_id,
+                cut,
+                run_id,
+            )
+            .await?;
+            Ok(MethodResult::WorkflowRunSnapshotHeader {
+                header: resolved.map(|(header, _)| header),
+            })
+        }
+        Method::ConversationWorkflowTraceNode {
+            target: _,
+            agent_id,
+            cut,
+            instance,
+        } => {
+            let node = if let Some(agent_id) = agent_id {
+                authority
+                    .agent_workflow_trace_node(&agent_id, &cut, instance)
+                    .await
+            } else {
+                tokio::task::spawn_blocking(move || authority.workflow_trace_node(&cut, &instance))
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?
+            }
+            .map_err(client_error)?;
+            Ok(MethodResult::WorkflowTraceNode { node })
+        }
+        Method::ConversationWorkflowRunSnapshotChunk {
+            target: _,
+            agent_id,
+            cut,
+            run_id,
+            offset,
+            limit,
+        } => {
+            if limit == 0
+                || limit > crate::runtime::workflow::WORKFLOW_SNAPSHOT_CHUNK_BYTES
+                || offset > 9_007_199_254_740_991
+            {
+                return Err(domain(ErrorData::InvalidParams));
+            }
+            let Some((_, wire_bytes)) = resolve_runtime_run_snapshot(
+                &authority,
+                &workflow_documents,
+                agent_id,
+                cut,
+                run_id,
+            )
+            .await?
+            else {
+                return Ok(MethodResult::WorkflowRunSnapshotChunk { chunk: None });
+            };
+            let chunk =
+                crate::app_server::workflow_documents::WorkflowDocuments::slice_run_snapshot_chunk(
+                    &wire_bytes,
+                    offset,
+                    limit,
+                )?;
+            Ok(MethodResult::WorkflowRunSnapshotChunk { chunk: Some(chunk) })
+        }
         Method::SessionCheckpoint {
             target: _,
             trace_records,
@@ -593,6 +673,9 @@ pub(super) fn native_result(
             MethodResult::ProjectionDetail { detail }
         }
         RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
+        RuntimeClientResult::TraceWorkflowLocation { location } => {
+            MethodResult::TraceWorkflowLocation { location }
+        }
         RuntimeClientResult::TraceToolLocation { location } => {
             MethodResult::TraceToolLocation { location }
         }
@@ -654,6 +737,66 @@ pub(super) fn native_result(
 
         _ => return Err(domain(ErrorData::OperationFailed)),
     })
+}
+
+async fn resolve_runtime_run_snapshot(
+    authority: &Arc<crate::runtime_client::host::ClientInner>,
+    workflow_documents: &Arc<crate::app_server::workflow_documents::WorkflowDocuments>,
+    agent_id: Option<crate::runtime::identity::AgentId>,
+    cut: Option<crate::observation::cut::CheckpointReadCut>,
+    run_id: crate::runtime::workflow::WorkflowRunId,
+) -> Result<
+    Option<(
+        crate::runtime::workflow::WorkflowRunSnapshotHeader,
+        Arc<Vec<u8>>,
+    )>,
+    RpcError,
+> {
+    if agent_id.is_some() && cut.is_none() {
+        return Err(domain(ErrorData::InvalidParams));
+    }
+    let header_authority = authority.clone();
+    let header_agent = agent_id.clone();
+    let header_cut = cut.clone();
+    let header_run = run_id.clone();
+    let db_header = tokio::task::spawn_blocking(move || match header_agent {
+        Some(agent) => header_authority.agent_workflow_run_snapshot_header(
+            &agent,
+            header_cut.as_ref().expect("checked above"),
+            &header_run,
+        ),
+        None => header_authority.workflow_run_snapshot_header(header_cut.as_ref(), &header_run),
+    })
+    .await
+    .map_err(|_| domain(ErrorData::OperationFailed))?
+    .map_err(client_error)?;
+
+    let Some(db_header) = db_header else {
+        return Ok(None);
+    };
+    if let Some(hit) = workflow_documents.get_cached_run_snapshot(&db_header)? {
+        return Ok(Some(hit));
+    }
+
+    let doc_authority = authority.clone();
+    let loaded = tokio::task::spawn_blocking(move || match agent_id {
+        Some(agent) => doc_authority.agent_workflow_run_snapshot_document(
+            &agent,
+            cut.as_ref().expect("checked above"),
+            &run_id,
+        ),
+        None => doc_authority.workflow_run_snapshot_document(cut.as_ref(), &run_id),
+    })
+    .await
+    .map_err(|_| domain(ErrorData::OperationFailed))?
+    .map_err(client_error)?;
+
+    let Some((header, document)) = loaded else {
+        return Ok(None);
+    };
+    workflow_documents
+        .put_run_snapshot(header, &document)
+        .map(Some)
 }
 
 #[cfg(test)]

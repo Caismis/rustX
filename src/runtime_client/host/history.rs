@@ -129,7 +129,7 @@ impl ClientInner {
         locator: super::super::trace::TraceToolLocator,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         let owner = Arc::clone(self);
-        // The complete-history scan cannot occupy an async transport worker.
+        // Durable projection work cannot occupy an async transport worker.
         tokio::task::spawn_blocking(move || {
             let (current, cut) = {
                 let state = owner
@@ -167,6 +167,53 @@ impl ClientInner {
         .await
         .map_err(|_| RuntimeClientError::RuntimeFailure {
             message: "Trace tool locator failed".into(),
+        })?
+    }
+
+    /// Locate an exact Workflow run through the complete native history.
+    pub(crate) async fn trace_locate_workflow(
+        self: &Arc<Self>,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let owner = Arc::clone(self);
+        // Durable projection work cannot occupy an async transport worker.
+        tokio::task::spawn_blocking(move || {
+            let (current, cut) = {
+                let state = owner
+                    .state
+                    .lock()
+                    .expect("runtime client host lock poisoned");
+                (
+                    state.projection.checkpoint_seed(),
+                    state.projection.checkpoint_read_cut(),
+                )
+            };
+            let current = current.checkpoint_candidate()?.snapshot;
+            #[cfg(test)]
+            crate::local_runtime::live_inspection::trace_read_gate(owner.store.conversation_id());
+            let source_cut = cut
+                .source_cut
+                .as_ref()
+                .ok_or(RuntimeClientError::ReadCutExpired)?;
+            let projection =
+                super::super::trace::TraceProjection::at_cut(owner.store.as_ref(), source_cut)
+                    .map_err(RuntimeClientError::observation_store_error)?;
+            let mut location = projection
+                .locate_workflow_at(&run_id, source_cut)
+                .map_err(RuntimeClientError::observation_store_error)?;
+            if let Some(location) = &mut location {
+                location.page.read_cut = Some(cut.clone());
+            }
+            if owner.runtime.is_some()
+                && let Some(location) = &mut location
+            {
+                super::super::trace::repair_records(&mut location.page.records, &current);
+            }
+            Ok(RuntimeClientResult::TraceWorkflowLocation { location })
+        })
+        .await
+        .map_err(|_| RuntimeClientError::RuntimeFailure {
+            message: "Trace Workflow locator failed".into(),
         })?
     }
 

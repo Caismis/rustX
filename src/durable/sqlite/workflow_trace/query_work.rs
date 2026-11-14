@@ -140,6 +140,14 @@ fn node_work(connection: &Connection, start: u64, through: u64, instance: &str) 
             "events_workflow_node_instance_kind_idx",
         );
     }
+    for sql in [NODE_OWNERSHIP_SQL, NODE_ADMITTED_SQL] {
+        cost += work(
+            connection,
+            sql,
+            &[number(start), number(through), instance.to_owned().into()],
+            "events_workflow_agent_node_idx",
+        );
+    }
     cost
 }
 
@@ -292,4 +300,135 @@ fn absent_visit_facts_and_run_headers_ignore_unrelated_later_history() {
         }
     }
     connection.execute_batch("COMMIT").unwrap();
+}
+
+#[test]
+fn exact_run_locator_has_constant_index_work_across_unrelated_runs() {
+    let owner = store();
+    owner.initialize(&[]).unwrap();
+    let connection = owner.lock().unwrap();
+    let mut instance = crate::runtime::workflow::test_instance("query_work", "start");
+    instance.block.run.conversation_id = owner.conversation_id().clone();
+    let identity = serde_json::to_string(&instance.block.run).unwrap();
+    let mut sequence = 0;
+    start_run(&connection, &mut sequence, &instance);
+    let measure = |through| {
+        let plan: String = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {RUN_START_SQL}"))
+            .unwrap()
+            .query_row(params![identity, through], |row| row.get(3))
+            .unwrap();
+        assert!(
+            plan.replace("USING COVERING INDEX", "USING INDEX")
+                .contains("SEARCH events USING INDEX events_run_id_kind_idx"),
+            "{plan}"
+        );
+        assert!(
+            !plan.contains("SCAN ") && !plan.contains("TEMP B-TREE"),
+            "{plan}"
+        );
+        let mut statement = connection.prepare(RUN_START_SQL).unwrap();
+        assert_eq!(
+            statement
+                .query_row(params![identity, through], |row| row.get::<_, u64>(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(statement.get_status(StatementStatus::FullscanStep), 0);
+        assert_eq!(statement.get_status(StatementStatus::Sort), 0);
+        statement.get_status(StatementStatus::VmStep)
+    };
+    let before = measure(sequence);
+    connection.execute_batch("BEGIN").unwrap();
+    for invocation in 2..=2048 {
+        instance.block.run.invocation = invocation;
+        start_run(&connection, &mut sequence, &instance);
+    }
+    connection.execute_batch("COMMIT").unwrap();
+    assert_eq!(measure(sequence), before);
+}
+
+#[test]
+fn exact_visit_lookup_has_constant_index_work_across_unrelated_runs() {
+    let owner = store();
+    owner.initialize(&[]).unwrap();
+    let mut cut = owner.observation_read_cut().unwrap();
+    let connection = owner.lock().unwrap();
+    let mut instance = crate::runtime::workflow::test_instance("query_work", "worker");
+    instance.block.run.conversation_id = owner.conversation_id().clone();
+    let target = instance.clone();
+    let target_run_json = serde_json::to_string(&target.block.run).unwrap();
+    let target_instance_json = serde_json::to_string(&target).unwrap();
+    let mut sequence = 0;
+    start_run(&connection, &mut sequence, &target);
+    let target_start = visit(&connection, &mut sequence, &target);
+    let measure = |through| {
+        for (sql, idx_name, params_vec) in [
+            (
+                RUN_END_SQL,
+                "events_run_id_kind_idx",
+                vec![
+                    rusqlite::types::Value::from(target_run_json.clone()),
+                    rusqlite::types::Value::from(1_i64),
+                    rusqlite::types::Value::from(i64::try_from(through).unwrap()),
+                ],
+            ),
+            (
+                NODE_VISIT_SQL,
+                "events_workflow_node_instance_kind_idx",
+                vec![
+                    rusqlite::types::Value::from(1_i64),
+                    rusqlite::types::Value::from(i64::try_from(through).unwrap()),
+                    rusqlite::types::Value::from(target_instance_json.clone()),
+                ],
+            ),
+        ] {
+            let plan: String = connection
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .unwrap()
+                .query_row(rusqlite::params_from_iter(params_vec.iter()), |row| {
+                    row.get(3)
+                })
+                .unwrap();
+            assert!(
+                plan.replace("USING COVERING INDEX", "USING INDEX")
+                    .contains(&format!("SEARCH events USING INDEX {idx_name}")),
+                "{sql}: {plan}"
+            );
+            assert!(
+                !plan.contains("SCAN ") && !plan.contains("TEMP B-TREE"),
+                "{sql}: {plan}"
+            );
+        }
+        let mut stmt = connection.prepare(NODE_VISIT_SQL).unwrap();
+        let found: (u64, String) = stmt
+            .query_row(
+                params![1_i64, i64::try_from(through).unwrap(), target_instance_json],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(found.0, target_start);
+        assert_eq!(stmt.get_status(StatementStatus::FullscanStep), 0);
+        assert_eq!(stmt.get_status(StatementStatus::Sort), 0);
+        stmt.get_status(StatementStatus::VmStep)
+    };
+    let baseline = measure(sequence);
+    connection.execute_batch("BEGIN").unwrap();
+    for later in 1..=2048 {
+        instance.block.run.invocation = later + 1;
+        start_run(&connection, &mut sequence, &instance);
+        visit(&connection, &mut sequence, &instance);
+    }
+    connection.execute_batch("COMMIT").unwrap();
+    let after = measure(sequence);
+    assert!(
+        (after - baseline).abs() <= 1,
+        "baseline={baseline}, after={after}"
+    );
+    cut.read.journal = sequence;
+    let found = super::visit(&connection, owner.conversation_id(), &cut, &target)
+        .unwrap()
+        .expect("exact selected visit at later cut");
+    assert_eq!(found.instance, target);
+    assert!(found.input.is_some() && found.output.is_some());
 }

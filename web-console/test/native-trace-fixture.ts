@@ -45,7 +45,7 @@ export function nativeTraceFixture(record: TraceRecord, detail: TraceDetail, cut
     } else value = { id: record.id, kind: record.kind, record: headRecord, content: { type: 'messages', page: { domain: `${domain}.messages`, total: String(messages.length), items: messages, next_offset: null } } } satisfies TraceInspectionHead;
   }
   const page: CheckpointPage = { read_cut: cut, cursor: cut.revision, domain, total: '1', next_offset: null, collections: [], items: [{ offset: '0', identity: record.id, value, deferred: true, body_complete: false, content: [] }] };
-  type NativeSource = { [Key in keyof TraceFieldReader]: (...args: Parameters<TraceFieldReader[Key]>) => Awaited<ReturnType<TraceFieldReader[Key]>> };
+  type NativeSource = { [Key in 'page' | 'value' | 'content']: (...args: Parameters<NonNullable<TraceFieldReader[Key]>>) => Awaited<ReturnType<NonNullable<TraceFieldReader[Key]>>> };
   const original: NativeSource = {
     page(cut, domain, offset, current) {
       if (!current()) throw Error('Fixture view replaced');

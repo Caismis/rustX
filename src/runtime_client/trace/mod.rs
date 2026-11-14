@@ -73,7 +73,7 @@ mod summary;
 #[cfg(test)]
 mod tool;
 
-pub use locate::{TraceToolLocation, TraceToolLocator};
+pub use locate::{TraceToolLocation, TraceToolLocator, TraceWorkflowLocation};
 
 use record::bound_record;
 

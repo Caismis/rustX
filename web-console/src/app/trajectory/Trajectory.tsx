@@ -3,7 +3,7 @@ import { useTraceContexts } from './useTraceContexts';
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/TrajectoryTable.tsx and TrajectoryToolbar.tsx; see PROVENANCE.md. */
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
-import { type TraceCache } from '../../client/trace';
+import { traceInspectionHead, type TraceCache } from '../../client/trace';
 import { IconSearchOutline16 } from '../../presentation/primitives/icons';
 import { WorkflowNodeReadInspector, TrajectoryInspector, inspectorTabs } from './TrajectoryInspector';
 import { TrajectoryLedger, type LedgerHandle } from './TrajectoryLedger';
@@ -15,6 +15,7 @@ import { timelineFocus, timelineProjectionRevision, trajectoryTimeline, type Tra
 import css from './Trajectory.module.css';
 import { workflowCalls, withWorkflowNodes } from './workflow';
 import { useWorkflowNodes } from './useWorkflowNodes';
+import { useWorkflowRunCanvas } from '../workflows/run-canvas/context';
 
 const DETAILS_MIN_WIDTH = 320;
 const DETAILS_MAX_WIDTH = 720;
@@ -163,7 +164,42 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
       && (candidate.type === 'RequestBoundary' || candidate.type === 'RecordRow'));
     if (item) open(item, facet);
   };
+  const runCanvas = useWorkflowRunCanvas();
+  const openNodeCanvas = useCallback((node: import('./workflow').WorkflowTraceNode, source: import('./workflow').WorkflowNodes, trigger: HTMLElement | null) => {
+    runCanvas?.openRunCanvas({
+      runId: node.instance.block.run,
+      workflowId: node.instance.block.definition.workflow_id,
+      conversationId: node.instance.block.run.conversation_id,
+      selectedVisit: node.instance,
+      selectedTraceNode: node,
+      traceRoot: source.root,
+      traceNodes: source.nodes,
+      traceReader: source.reader,
+      traceCut: source.cut,
+      sourceMode: 'history',
+    }, trigger);
+  }, [runCanvas]);
+  const openRootCanvas = useCallback((root: import('../../../../protocol/app-server/v78').TraceRecord, trigger: HTMLElement | null) => {
+    const loaded = workflowNodes.get(root.id);
+    const cut = loaded?.cut ?? cache.readCuts?.[root.id];
+    const detailPage = cache.details[root.id]?.page;
+    const detailHead = cut && detailPage && JSON.stringify(detailPage.read_cut) === JSON.stringify(cut)
+      ? traceInspectionHead(detailPage, root.id)
+      : undefined;
+    const workflow = detailHead?.content.type === 'workflow' ? detailHead.content : undefined;
+    runCanvas?.openRunCanvas({
+      ...(workflow ? { runId: workflow.run_id, workflowId: workflow.workflow_id } : {}),
+      conversationId: workflow?.run_id.conversation_id ?? cut?.conversation_id ?? '',
+      traceRoot: root,
+      traceNodes: loaded?.nodes,
+      traceReader: loaded?.reader ?? cache.fields,
+      traceCut: cut,
+      sourceMode: 'history',
+    }, trigger);
+  }, [runCanvas, workflowNodes, cache.details, cache.fields, cache.readCuts]);
   const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, workflows: workflowMap, openedWorkflows,
+    openWorkflowNodeCanvas: runCanvas ? openNodeCanvas : undefined,
+    openWorkflowRootCanvas: runCanvas ? openRootCanvas : undefined,
     toggleWorkflow: id => {
       if (openedWorkflows.has(id) && selection?.workflow_node && selection.owner_record_id === id) select();
       setWorkflowExpansion(current => { const ids = new Set(current.epoch === cache.epoch ? current.ids : []); if (!ids.delete(id)) ids.add(id); return { epoch: cache.epoch, ids }; });
@@ -181,10 +217,19 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
     && workflowRoots.some(root => root.id === selection.owner_record_id)
     && (!workflowNodes.has(selection.owner_record_id) || workflowNodes.get(selection.owner_record_id)?.loading || workflowNodes.get(selection.owner_record_id)?.error)
     ? selection.workflow_node : undefined;
+  const selectedWorkflowRoot = selectedItem && selectedItem.type !== 'WorkflowNode' ? workflowMap.get(selectedItem.owner_record_id) : undefined;
+  const inspectorOpenCanvas = runCanvas && selectedItem
+    ? (selectedItem.type === 'WorkflowNode'
+      ? (trigger: HTMLElement | null) => openNodeCanvas(selectedItem.workflowNode, selectedItem.workflowSource, trigger)
+      : selectedWorkflowRoot
+        ? (trigger: HTMLElement | null) => openRootCanvas(selectedWorkflowRoot, trigger)
+        : undefined)
+    : undefined;
   const inspector = selected && selection && selectedItem
     ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
-      records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={completeHistoryThrough(cache.page.records, selected.id, cache.page.next_cursor, cache.gaps)} onOpen={openRecord} />
+      records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={completeHistoryThrough(cache.page.records, selected.id, cache.page.next_cursor, cache.gaps)} onOpen={openRecord}
+      onOpenWorkflowCanvas={inspectorOpenCanvas} />
     : unresolvedWorkflow ? <WorkflowNodeReadInspector node={unresolvedWorkflow.instance} error={workflowNodes.get(selection!.owner_record_id)?.error}
       onRetry={() => retryWorkflowNodes(selection!.owner_record_id)} onClose={close} /> : null;
   const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;
