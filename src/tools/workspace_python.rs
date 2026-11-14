@@ -1269,27 +1269,39 @@ pub(crate) fn start_admit_watcher(shutdown: tokio_util::sync::CancellationToken)
     tokio::spawn(async move {
         if let Some(directory) = admit_directory() {
             let _ = std::fs::create_dir_all(&directory);
-            let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-            if let Ok(mut watcher) =
+            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+            let watch =
                 notify::recommended_watcher(move |_event: notify::Result<notify::Event>| {
                     let _ = sender.send(());
                 })
-                && watcher
-                    .watch(&directory, notify::RecursiveMode::NonRecursive)
-                    .is_ok()
-            {
-                // Watch before scanning so a publication cannot fall between them.
-                scan_admit(&directory);
-                loop {
-                    tokio::select! {
-                        () = shutdown.cancelled() => break,
-                        () = global().shutdown.cancelled() => break,
-                        Some(()) = receiver.recv() => scan_admit(&directory),
-                    }
-                }
-            }
+                .and_then(|mut watcher| {
+                    watcher.watch(&directory, notify::RecursiveMode::NonRecursive)?;
+                    Ok(watcher)
+                });
+            receive_admissions(&directory, shutdown, watch, receiver).await;
         }
     });
+}
+
+async fn receive_admissions(
+    directory: &Path,
+    shutdown: tokio_util::sync::CancellationToken,
+    watch: Result<notify::RecommendedWatcher, notify::Error>,
+    mut receiver: tokio::sync::mpsc::UnboundedReceiver<()>,
+) {
+    // Watch before scanning so a publication cannot fall between them. Even if
+    // setup failed, consume handoffs already published before this initial scan.
+    scan_admit(directory);
+    let Ok(_watcher) = watch else {
+        return;
+    };
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => break,
+            () = global().shutdown.cancelled() => break,
+            Some(()) = receiver.recv() => scan_admit(directory),
+        }
+    }
 }
 
 pub(crate) async fn shutdown() {
@@ -2622,6 +2634,27 @@ pub(crate) mod tests {
         assert!(!published.exists());
         assert!(owner.admitted.lock().unwrap().contains(&canonical));
         scan_admit(directory.path());
+    }
+
+    #[tokio::test]
+    async fn watch_setup_failure_still_consumes_previously_published_admissions() {
+        let root = workspace();
+        let directory = tempfile::tempdir().unwrap();
+        let published = directory.path().join("admission.txt");
+        std::fs::write(&published, root.path().to_str().unwrap()).unwrap();
+        let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let canonical = std::fs::canonicalize(root.path()).unwrap();
+        let owner = super::global();
+        assert!(!owner.admitted.lock().unwrap().contains(&canonical));
+        super::receive_admissions(
+            directory.path(),
+            tokio_util::sync::CancellationToken::new(),
+            Err(notify::Error::generic("controlled watch setup failure")),
+            receiver,
+        )
+        .await;
+        assert!(!published.exists());
+        assert!(owner.admitted.lock().unwrap().contains(&canonical));
     }
 
     #[tokio::test]

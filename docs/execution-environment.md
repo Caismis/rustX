@@ -201,6 +201,7 @@ would require a separate supervisor transport change.
 Workspace registration publishes its native preparation handoff only after a
 private staging file has been fully written and atomically renamed. The native
 watcher ignores staging files and installs its watch before the initial scan.
+Already published handoffs still receive one initial scan if watch setup fails.
 A subagent whose parent host snapshot is missing, unreadable, or malformed keeps
 native Bash closed; it never recaptures the environment injected at child spawn.
 An already-captured child host is a startup error.
