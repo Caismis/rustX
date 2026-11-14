@@ -778,3 +778,66 @@ fn t11_t19_trace_and_journal_sources_keep_native_sequence_above_safe_byte_coordi
         "byte coordinates retain their independent safe bound"
     );
 }
+
+#[test]
+fn workflow_start_detail_exposes_typed_run_identity_even_when_native_id_is_omitted() {
+    let conversation = ConversationId::generate();
+    let store = store(conversation.as_str());
+    let mut run = crate::runtime::workflow::test_instance("escaped_only", "start")
+        .block
+        .run;
+    run.conversation_id = conversation;
+    run.origin = crate::runtime::workflow::WorkflowRunOrigin::Tool {
+        attempt_id: AttemptId::new("att-\"\\".to_owned() + &"a".repeat(520)),
+    };
+    run.invocation = 9_007_199_254_740_993;
+    assert!(
+        serde_json::to_vec(&run).unwrap().len()
+            > crate::runtime_client::trace::bounds::TRACE_IDENTITY_BYTES,
+        "test fixture must exceed generic 512B TraceRecord native_id bound"
+    );
+    let workflow_id = crate::runtime::workflow::WorkflowId::parse("escaped_only").unwrap();
+    let started = store
+        .publish_workflow_start(
+            event(
+                &store,
+                E::WorkflowStarted {
+                    tool_call_id: None,
+                    workflow_id: workflow_id.clone(),
+                    run_id: run.clone(),
+                },
+                0,
+            ),
+            &crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone()),
+        )
+        .unwrap();
+    let cut = TraceProjection::new(&store).unwrap().history_cut().unwrap();
+    let record_id = format!("trace:{}", started.sequence);
+    let page =
+        crate::runtime_client::trace_observation::history_detail(&store, &cut, &record_id).unwrap();
+    let head: TraceInspectionHead =
+        decode_domain_value(page.items[0].value.clone().unwrap()).unwrap();
+    assert!(
+        head.record.native_id.is_none(),
+        "generic 512B display native_id bound remains enforced"
+    );
+    assert!(head.record.has_detail);
+    let domain = format!("trace.records.{}.workflow.nodes", started.sequence);
+    let collection = head
+        .record
+        .collections
+        .iter()
+        .find(|frontier| frontier.domain == domain)
+        .expect("workflow nodes collection frontier");
+    assert_eq!(collection.total, 0);
+    assert!(collection.next_offset.is_none());
+    let TraceInspectionContent::Workflow {
+        run_id: detail_run_id,
+        workflow_id: detail_workflow_id,
+    } = head.content
+    else {
+        panic!("expected Workflow inspection detail");
+    };
+    assert_eq!(detail_run_id, run);
+    assert_eq!(detail_workflow_id, workflow_id);
+}

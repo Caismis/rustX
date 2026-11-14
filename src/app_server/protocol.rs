@@ -389,6 +389,12 @@ pub enum Method {
         #[schemars(length(max = 256))]
         record_id: String,
     },
+    /// Indexed read-only navigation to an exact admitted Workflow run.
+    #[serde(rename = "session/traceLocateWorkflow")]
+    TraceLocateWorkflow {
+        target: AttachmentTarget,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
     #[serde(rename = "session/traceLocateTool")]
     TraceLocateTool {
         target: AttachmentTarget,
@@ -569,6 +575,12 @@ pub enum Method {
         agent_id: crate::runtime::identity::AgentId,
         record_id: String,
     },
+    #[serde(rename = "agent/traceLocateWorkflow")]
+    AgentTraceLocateWorkflow {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
     #[serde(rename = "agent/traceLocateTool")]
     AgentTraceLocateTool {
         target: AttachmentTarget,
@@ -688,6 +700,31 @@ pub enum Method {
         offset: u64,
         #[schemars(range(min = 1, max = 65_536))]
         max_bytes: u32,
+    },
+    #[serde(rename = "session/workflowRunSnapshotHeader")]
+    SessionWorkflowRunSnapshotHeader {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+    #[serde(rename = "session/workflowRunSnapshotChunk")]
+    SessionWorkflowRunSnapshotChunk {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        limit: usize,
+    },
+    #[serde(rename = "session/workflowTraceNode")]
+    SessionWorkflowTraceNode {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
     },
     #[serde(rename = "session/historyContentRead")]
     SessionHistoryContentRead {
@@ -881,6 +918,36 @@ pub enum Method {
         #[schemars(range(max = 9_007_199_254_740_991_u64))]
         offset: u64,
         limit: usize,
+    },
+    #[serde(rename = "conversation/workflowRunSnapshotHeader")]
+    ConversationWorkflowRunSnapshotHeader {
+        target: AttachmentTarget,
+        #[serde(default)]
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        #[serde(default)]
+        cut: Option<crate::observation::cut::CheckpointReadCut>,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+    #[serde(rename = "conversation/workflowRunSnapshotChunk")]
+    ConversationWorkflowRunSnapshotChunk {
+        target: AttachmentTarget,
+        #[serde(default)]
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        #[serde(default)]
+        cut: Option<crate::observation::cut::CheckpointReadCut>,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        limit: usize,
+    },
+    #[serde(rename = "conversation/workflowTraceNode")]
+    ConversationWorkflowTraceNode {
+        target: AttachmentTarget,
+        #[serde(default)]
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
     },
     #[serde(rename = "session/checkpoint")]
     SessionCheckpoint {
@@ -1171,6 +1238,8 @@ impl Method {
             | Self::ProjectionDetail { .. }
             | Self::TraceDetail { .. }
             | Self::TraceLocateTool { .. }
+            | Self::TraceLocateWorkflow { .. }
+            | Self::AgentTraceLocateWorkflow { .. }
             | Self::Transcript { .. }
             | Self::ConversationTurns { .. }
             | Self::ModelGet { .. }
@@ -1237,6 +1306,12 @@ impl Method {
             | Self::WorkflowToolCatalog { .. }
             | Self::WorkflowCheck { .. }
             | Self::WorkflowAnalyze { .. }
+            | Self::SessionWorkflowRunSnapshotHeader { .. }
+            | Self::SessionWorkflowRunSnapshotChunk { .. }
+            | Self::SessionWorkflowTraceNode { .. }
+            | Self::ConversationWorkflowRunSnapshotHeader { .. }
+            | Self::ConversationWorkflowRunSnapshotChunk { .. }
+            | Self::ConversationWorkflowTraceNode { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
             | Self::SettingsValueRead { .. }
@@ -1653,6 +1728,9 @@ pub enum MethodResult {
     TraceToolLocation {
         location: Option<crate::runtime_client::trace::TraceToolLocation>,
     },
+    TraceWorkflowLocation {
+        location: Option<crate::runtime_client::trace::TraceWorkflowLocation>,
+    },
     SessionHistory {
         conversation_id: ConversationId,
         window: crate::runtime_client::snapshot::ConversationWindow,
@@ -1772,6 +1850,15 @@ pub enum MethodResult {
     },
     CheckpointPage {
         page: crate::runtime_client::checkpoint::CheckpointPage,
+    },
+    WorkflowRunSnapshotHeader {
+        header: Option<crate::runtime::workflow::WorkflowRunSnapshotHeader>,
+    },
+    WorkflowRunSnapshotChunk {
+        chunk: Option<crate::runtime::workflow::WorkflowRunSnapshotChunk>,
+    },
+    WorkflowTraceNode {
+        node: Option<crate::durable::observation::WorkflowTraceNode>,
     },
     Checkpoint {
         checkpoint: Box<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>,

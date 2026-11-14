@@ -1,7 +1,7 @@
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
-import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1 } from '../../../protocol/app-server/v78';
+import type { TraceDetail, TracePage, TraceRecord, TraceLifecycle,CheckpointReadCut,CheckpointPage,CheckpointValueChunk,ContentRef,ContentChunk, Request1, WorkflowNodeInstance, WorkflowTraceNode } from '../../../protocol/app-server/v78';
 
 /** Records requested per older page. */
 export const TRACE_PAGE_SIZE = 32;
@@ -53,6 +53,7 @@ export interface TraceFieldReader {
  value(cut:CheckpointReadCut,field:TraceValueSelector,offset:number,current:()=>boolean):Promise<CheckpointValueChunk>;
  content(cut:CheckpointReadCut,reference:ContentRef,offset:number,current:()=>boolean):Promise<ContentChunk>;
  page(cut:CheckpointReadCut,domain:string,offset:number,current:()=>boolean):Promise<CheckpointPage>;
+ workflowNode?(cut:CheckpointReadCut,instance:WorkflowNodeInstance,current:()=>boolean):Promise<WorkflowTraceNode|null>;
 }
 export interface TraceCache {
   /** Navigation marker only; locating history never pauses live appends. */
@@ -138,6 +139,7 @@ export function bindTraceDetailReader(reader:TraceFieldReader,page:CheckpointPag
   value:async(cut,field,offset,owned)=>{valid(cut,owned);const chunk=await reader.value(cut,field,offset,()=>current()&&owned());valid(cut,owned);return chunk;},
   page:async(cut,domain,offset,owned)=>{valid(cut,owned);const result=await reader.page(cut,domain,offset,()=>current()&&owned());valid(cut,owned);return result;},
   content:async(cut,ref,offset,owned)=>{valid(cut,owned);const chunk=await reader.content(cut,ref,offset,()=>current()&&owned());valid(cut,owned);return chunk;},
+  ...(reader.workflowNode?{workflowNode:async(cut,instance,owned)=>{valid(cut,owned);const node=await reader.workflowNode!(cut,instance,()=>current()&&owned());valid(cut,owned);return node;}}:{}),
  };
 }
 

@@ -17,6 +17,41 @@ pub trait ObservationStore: Send + Sync + 'static {
         offset: u64,
         limit: usize,
     ) -> Result<crate::durable::observation::WorkflowTraceNodes, ConversationStoreError>;
+    /// Exact bounded header lookup for one admitted node visit at this read cut.
+    fn observation_workflow_node(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        instance: &crate::runtime::workflow::WorkflowNodeInstance,
+    ) -> Result<Option<crate::durable::observation::WorkflowTraceNode>, ConversationStoreError>;
+    /// Compact header for an immutable admission-bound Workflow run snapshot,
+    /// authorized at the caller's read cut and conversation ownership.
+    fn observation_workflow_run_snapshot_header(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<Option<crate::runtime::workflow::WorkflowRunSnapshotHeader>, ConversationStoreError>;
+    /// Bounded chunk (`<= 65_536` bytes, base64 encoded) of an immutable Workflow
+    /// run snapshot, authorized at the caller's read cut and conversation.
+    fn observation_workflow_run_snapshot_chunk(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+        offset: u64,
+        limit: usize,
+    ) -> Result<Option<crate::runtime::workflow::WorkflowRunSnapshotChunk>, ConversationStoreError>;
+    /// Reads and SHA-256-verifies an immutable Workflow run snapshot document
+    /// within the conversation and `cut` boundary.
+    fn observation_workflow_run_snapshot_document(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<
+        Option<(
+            crate::runtime::workflow::WorkflowRunSnapshotHeader,
+            crate::workflow_file::WorkflowFileDocument,
+        )>,
+        ConversationStoreError,
+    >;
     /// Finite typed facts from original native J rows at one authentic cut.
     fn observation_trace_facts(
         &self,
@@ -546,6 +581,12 @@ pub trait ObservationStore: Send + Sync + 'static {
         cut: &crate::durable::observation::ObservationReadCut,
         ledger_position: u64,
         block_index: crate::message::types::ContentBlockIndex,
+    ) -> Result<Option<u64>, ConversationStoreError>;
+    /// Exact admitted Workflow start, without scanning unrelated Journal history.
+    fn observation_workflow_trace_sequence(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
     ) -> Result<Option<u64>, ConversationStoreError>;
     /// Captures only native finite metadata; never reads Surface/body JSON.
     fn observation_read_cut(

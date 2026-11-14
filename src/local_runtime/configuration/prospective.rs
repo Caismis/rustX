@@ -167,11 +167,12 @@ impl ProspectiveSessionConfig {
         }
         if a.agent.workflows.iter().any(|id| {
             let view = |source: &Self| {
-                source
-                    .workflows
-                    .entries()
-                    .get(id)
-                    .map(|entry| entry.source.tool_identity())
+                source.workflows.entries().get(id).map(|entry| {
+                    (
+                        entry.source.tool_identity(),
+                        entry.source.run_snapshot().source_revision.clone(),
+                    )
+                })
             };
             view(self) != view(other)
         }) {

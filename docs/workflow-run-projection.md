@@ -218,3 +218,54 @@ nodes. The run projection continues to consume the existing native lifecycle and
 value owners; saving or organizing a file does not start a run or alter a frozen
 admitted program. A Return shown inside a container completes only its owning
 Block, and Loop exhaustion retains its existing ordinary exit meaning.
+
+Historical and live read-only run inspection retrieves the run's frozen
+`WorkflowRunDefinitionSnapshot` via authorized `conversation/workflowRunSnapshotHeader|Chunk`
+or cold `session/workflowRunSnapshotHeader|Chunk` RPCs (keyed by exact `WorkflowRunId`
+and validated against the caller's `CheckpointReadCut`), preserving the admitted
+`editor` layout (`has_source_presentation`) even after layout-only or structural edits
+on disk and returning `null` without live synthesis when unavailable or deleted.
+
+
+## Inspecting an admitted run
+
+Chat execution rows, Workflow headers and Trajectory roots/nodes open the same
+readonly canvas. Run identity, qualified definition path, Block invocation path
+and concrete visit remain separate. Executable Start IDs need not be `start`.
+Containers use the existing expanded scene projection, so nested visits select
+and locate their owning definition without collapsing repeated executions into
+one mutable current-node marker.
+
+Chat resolves the run's native trace root with indexed
+`session/traceLocateWorkflow` or `agent/traceLocateWorkflow`; Trajectory supplies
+its already authorized root and immutable cut, resolving typed `(run_id, workflow_id)`
+for `WorkflowStarted`-only roots (even when `workflow.nodes` is empty and display
+`native_id` is omitted) from native `TraceInspectionContent::Workflow` in
+`trace.records.<seq>.detail` without falling back to `nodes[0]`. The initial
+graph reads at most two 32-header pages; additional headers require explicit
+paging, except that when the currently selected `WorkflowNodeInstance` is beyond
+that prefix (including across cut advancements or in historical/child-activation
+scopes), `conversation/workflowTraceNode` or cold `session/workflowTraceNode`
+resolves only that exact visit header via indexed lookup. Input/Output
+uses the original-body reader shared with Trajectory only when a tab is opened;
+omitted, unrecorded, inaccessible and expired data stay distinct. Native child
+references remain navigation metadata and confer no additional authority.
+
+A matching current native run and exact instance may enrich an unsettled trace
+header. An old cut, incomplete record, lost owner or settled run cannot claim
+Running/Waiting merely because it once recorded a wait. Settled outcomes and
+exact selected visits survive ordinary publications. A new cut replaces its
+headers and reader coherently while the immutable graph stays mounted, never
+reusing an old-cut selected header and fencing held lookup successes and errors
+across conversation, activation, cut, visit, reader and dialog lifetime.
+
+The canvas preserves persisted source coordinates. When these are absent it
+uses deterministic cached layout derived from this snapshot, identified as
+arranged for display. It has no mutable editor document, save/reconciliation
+port, execution action or persisted authoring viewport. Opening, paging, closing
+and live updates leave drafts, invalid field text, undo/redo and conflicts with
+the editor that owns them. Conversation/attachment/activation retirement fences
+late results, releases view resources and never restores an obsolete opener.
+
+See [Workflow Run Canvas validation](issue-552-validation.md) for crash, access,
+scale, browser and observation-only evidence.

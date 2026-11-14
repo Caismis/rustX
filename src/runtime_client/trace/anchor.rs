@@ -170,7 +170,7 @@ impl TraceProjection<'_> {
         let nodes = self
             .store
             .observation_workflow_nodes(self.cut()?, sequence, 0, 0)?;
-        facts.preview = Some(TracePreview::of(&nodes.workflow_id));
+        facts.preview = Some(TracePreview::of(nodes.workflow_id.as_str()));
         if let Some(parent) = nodes.parent_sequence {
             facts.location = self
                 .anchor_facts(&self.inspection_anchor(parent)?)?

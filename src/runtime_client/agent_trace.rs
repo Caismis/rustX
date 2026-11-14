@@ -16,6 +16,15 @@ impl ClientInner {
         self.agent_trace_locate_via_inspection(id, locator).await
     }
 
+    pub(crate) async fn agent_trace_locate_workflow(
+        self: &Arc<Self>,
+        id: &AgentId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        self.agent_trace_locate_workflow_via_inspection(id, run_id)
+            .await
+    }
+
     pub(crate) async fn agent_trace(
         self: &Arc<Self>,
         id: &AgentId,

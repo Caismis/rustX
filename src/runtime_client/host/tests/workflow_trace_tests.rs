@@ -4,21 +4,29 @@ use crate::durable::observation::WorkflowNodeTraceState;
 use crate::runtime::workflow::read_model::{WorkflowRunView, WorkflowState, WorkflowWait};
 
 fn append(inner: &Arc<super::super::ClientInner>, event: RuntimeEvent, ordinal: u64) -> u64 {
-    let committed = inner
-        .store
-        .append_event(RuntimeEventEnvelope {
-            tool_occurrence: None,
-            observation: None,
-            schema_version: EVENT_SCHEMA_VERSION,
-            event_id: EventId::new(format!("workflow-live-{ordinal}")),
-            sequence: 0,
-            conversation_id: inner.conversation_id.clone(),
-            attempt_id: None,
-            turn_id: None,
-            timestamp: chrono::DateTime::UNIX_EPOCH,
-            event,
-        })
-        .unwrap();
+    let envelope = RuntimeEventEnvelope {
+        tool_occurrence: None,
+        observation: None,
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: EventId::new(format!("workflow-live-{ordinal}")),
+        sequence: 0,
+        conversation_id: inner.conversation_id.clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp: chrono::DateTime::UNIX_EPOCH,
+        event,
+    };
+    let committed = match &envelope.event {
+        RuntimeEvent::WorkflowStarted { workflow_id, .. } => {
+            let snapshot =
+                crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone());
+            inner
+                .store
+                .publish_workflow_start(envelope, &snapshot)
+                .unwrap()
+        }
+        _ => inner.store.append_event(envelope).unwrap(),
+    };
     committed.sequence
 }
 
@@ -165,6 +173,24 @@ async fn assert_live_overlay(prior_instances: usize, node_name: &str) {
         WorkflowNodeTraceState::Waiting { .. }
     ));
     assert_eq!(
+        inner
+            .workflow_trace_node(&current, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Waiting {
+            reason: WorkflowWait::Review
+        }
+    );
+    assert_eq!(
+        inner
+            .workflow_trace_node(&old, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Incomplete
+    );
+    assert_eq!(
         read(&inner, &old, start),
         WorkflowNodeTraceState::Incomplete
     );
@@ -192,11 +218,19 @@ async fn assert_live_overlay(prior_instances: usize, node_name: &str) {
         read(&cold.inner, &cold_cut, start),
         WorkflowNodeTraceState::Incomplete
     );
+    assert_eq!(
+        cold.inner
+            .workflow_trace_node(&cold_cut, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Incomplete
+    );
 
     let end = append(
         &inner,
         RuntimeEvent::WorkflowNodeSettled {
-            instance,
+            instance: instance.clone(),
             outcome: Outcome::Completed,
         },
         4,
@@ -212,10 +246,34 @@ async fn assert_live_overlay(prior_instances: usize, node_name: &str) {
             outcome: Outcome::Completed
         }
     );
+    assert_eq!(
+        inner
+            .workflow_trace_node(&terminal, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Settled {
+            outcome: Outcome::Completed
+        }
+    );
     // The previous start-only source cannot import a terminal from a newer J.
     assert_eq!(
         read(&inner, &current, start),
         WorkflowNodeTraceState::Incomplete
     );
+    assert_eq!(
+        inner
+            .workflow_trace_node(&current, &instance)
+            .unwrap()
+            .unwrap()
+            .state,
+        WorkflowNodeTraceState::Incomplete
+    );
+    let mut foreign = instance;
+    foreign.block.run.conversation_id = ConversationId::generate();
+    assert!(matches!(
+        inner.workflow_trace_node(&terminal, &foreign),
+        Err(RuntimeClientError::InvalidRequest { .. })
+    ));
     fixture.runtime.shutdown().await.unwrap();
 }

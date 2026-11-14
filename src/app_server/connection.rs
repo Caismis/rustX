@@ -945,6 +945,9 @@ impl AppServerConnection {
                 | Method::SessionTracePage { .. }
                 | Method::SessionTraceValueRead { .. }
                 | Method::SessionTraceContentRead { .. }
+                | Method::SessionWorkflowRunSnapshotHeader { .. }
+                | Method::SessionWorkflowRunSnapshotChunk { .. }
+                | Method::SessionWorkflowTraceNode { .. }
                 | Method::SessionHistoryContentRead { .. }
                 | Method::SessionHistoryPage { .. }
                 | Method::SessionHistoryValueRead { .. }
@@ -1076,11 +1079,11 @@ impl AppServerConnection {
                 )
                 .await;
         }
-        let _physical_association = physical_association;
         let request_owner = self
             .host
             .admit_request(request_lane, std::convert::identity)
             .map_err(host_error)?;
+        let _physical_association = physical_association;
         // Source observation may await the Session catalog. Only an admitted
         // request owns that work; a draining host must refuse without it.
         self.observe_repair_source(&method).await;
@@ -1201,6 +1204,7 @@ impl AppServerConnection {
         let sessions = self.sessions.clone();
         let manager = self.host.manager().clone();
         let upload_host = self.host.clone();
+        let workflow_documents = self.workflow_documents.clone();
         let receiver = {
             let routes = self.routes.lock().expect("routes mutex");
             if routes.closed
@@ -1239,6 +1243,7 @@ impl AppServerConnection {
                                 configuration,
                                 upload_host,
                                 observation_cancel,
+                                workflow_documents,
                             )
                             .await
                         }

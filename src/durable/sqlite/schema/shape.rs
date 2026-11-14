@@ -18,6 +18,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     content::verify_binary_schema(connection)?;
     provenance::verify_turn_header_shape(connection)?;
     projection::verify_completion_index(connection)?;
+    crate::durable::sqlite::workflow_snapshot::verify_schema(connection)?;
     // Bootstrap metadata stays compact; provenance payloads have their own rows.
     // Refuse obsolete inline arrays and require the native keyed representation.
     let bootstrap_columns = connection

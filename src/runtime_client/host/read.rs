@@ -3,6 +3,7 @@ use super::{
     Arc, ClientInner, ConversationRuntime, InteractionRef, RuntimeClientCursor, RuntimeClientError,
     RuntimeClientResult, TranscriptFieldSource,
 };
+use crate::durable::ObservationStore as _;
 
 pub(super) fn transcript_native_field(domain: &str) -> Option<(u64, &str)> {
     let tail = domain.strip_prefix("transcript.entries.")?;
@@ -180,6 +181,161 @@ impl ClientInner {
         self.store
             .content_read(reference, offset, max_bytes)
             .map_err(RuntimeClientError::content_read_error)
+    }
+
+    fn resolve_workflow_snapshot_cut(
+        &self,
+        cut: Option<&crate::observation::cut::CheckpointReadCut>,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<crate::durable::observation::ObservationReadCut, RuntimeClientError> {
+        if run_id.conversation_id != self.conversation_id {
+            return Err(RuntimeClientError::InvalidRequest {
+                message: "workflow run belongs to another conversation".into(),
+            });
+        }
+        let state = self.state.lock().expect("published native content cut");
+        if let Some(cut) = cut {
+            if cut.conversation_id != self.conversation_id {
+                return Err(RuntimeClientError::ReadCutExpired);
+            }
+            state.projection.validate_checkpoint_cut(cut)?;
+            cut.source_cut
+                .clone()
+                .filter(|source| {
+                    source.read.conversation_id == cut.conversation_id
+                        && source.read.journal == cut.through
+                })
+                .ok_or(RuntimeClientError::ReadCutExpired)
+        } else {
+            state.projection.validate_published_source()?;
+            state
+                .projection
+                .checkpoint_read_cut()
+                .source_cut
+                .ok_or(RuntimeClientError::ReadCutExpired)
+        }
+    }
+
+    pub(crate) fn workflow_trace_node(
+        &self,
+        cut: &crate::observation::cut::CheckpointReadCut,
+        instance: &crate::runtime::workflow::WorkflowNodeInstance,
+    ) -> Result<Option<crate::durable::observation::WorkflowTraceNode>, RuntimeClientError> {
+        if cut.conversation_id != self.conversation_id {
+            return Err(RuntimeClientError::ReadCutExpired);
+        }
+        if instance.block.run.conversation_id != self.conversation_id {
+            return Err(RuntimeClientError::InvalidRequest {
+                message: "workflow node belongs to another conversation".into(),
+            });
+        }
+        let current = {
+            let state = self.state.lock().expect("published native content cut");
+            state.projection.validate_checkpoint_cut(cut)?;
+            self.runtime
+                .as_ref()
+                .map(|_| state.projection.checkpoint_seed())
+        };
+        let live = current
+            .as_ref()
+            .and_then(|current| current.live_workflows_at(cut));
+        super::super::trace_observation::workflow_node(self.store.as_ref(), cut, instance, live)
+    }
+
+    pub(crate) fn workflow_run_snapshot_header(
+        &self,
+        cut: Option<&crate::observation::cut::CheckpointReadCut>,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<Option<crate::runtime::workflow::WorkflowRunSnapshotHeader>, RuntimeClientError>
+    {
+        let source_cut = self.resolve_workflow_snapshot_cut(cut, run_id)?;
+        self.store
+            .observation_workflow_run_snapshot_header(&source_cut, run_id)
+            .map_err(RuntimeClientError::observation_store_error)
+    }
+
+    pub(crate) fn workflow_run_snapshot_document(
+        &self,
+        cut: Option<&crate::observation::cut::CheckpointReadCut>,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<
+        Option<(
+            crate::runtime::workflow::WorkflowRunSnapshotHeader,
+            crate::workflow_file::WorkflowFileDocument,
+        )>,
+        RuntimeClientError,
+    > {
+        let source_cut = self.resolve_workflow_snapshot_cut(cut, run_id)?;
+        self.store
+            .observation_workflow_run_snapshot_document(&source_cut, run_id)
+            .map_err(RuntimeClientError::observation_store_error)
+    }
+
+    pub(crate) fn agent_workflow_run_snapshot_header(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        cut: &crate::observation::cut::CheckpointReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<Option<crate::runtime::workflow::WorkflowRunSnapshotHeader>, RuntimeClientError>
+    {
+        let agent = self.child_view(id)?;
+        if cut.conversation_id != agent.child_conversation_id
+            || cut.activation_id.as_ref() != Some(&agent.activation_id)
+            || run_id.conversation_id != agent.child_conversation_id
+        {
+            return Err(RuntimeClientError::ReadCutExpired);
+        }
+        let native = cut
+            .source_cut
+            .as_ref()
+            .filter(|source| {
+                source.read.conversation_id == cut.conversation_id
+                    && source.read.journal == cut.through
+            })
+            .ok_or(RuntimeClientError::ReadCutExpired)?;
+        let store = self
+            .agent_registry()?
+            .transcript_store(&agent.activation_id)
+            .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
+        store
+            .observation_workflow_run_snapshot_header(native, run_id)
+            .map_err(RuntimeClientError::observation_store_error)
+    }
+
+    pub(crate) fn agent_workflow_run_snapshot_document(
+        &self,
+        id: &crate::runtime::identity::AgentId,
+        cut: &crate::observation::cut::CheckpointReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<
+        Option<(
+            crate::runtime::workflow::WorkflowRunSnapshotHeader,
+            crate::workflow_file::WorkflowFileDocument,
+        )>,
+        RuntimeClientError,
+    > {
+        let agent = self.child_view(id)?;
+        if cut.conversation_id != agent.child_conversation_id
+            || cut.activation_id.as_ref() != Some(&agent.activation_id)
+            || run_id.conversation_id != agent.child_conversation_id
+        {
+            return Err(RuntimeClientError::ReadCutExpired);
+        }
+        let native = cut
+            .source_cut
+            .as_ref()
+            .filter(|source| {
+                source.read.conversation_id == cut.conversation_id
+                    && source.read.journal == cut.through
+            })
+            .ok_or(RuntimeClientError::ReadCutExpired)?;
+        let store = self
+            .agent_registry()?
+            .transcript_store(&agent.activation_id)
+            .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
+        store
+            .observation_workflow_run_snapshot_document(native, run_id)
+            .map_err(RuntimeClientError::observation_store_error)
     }
 
     pub(crate) fn domain_page(

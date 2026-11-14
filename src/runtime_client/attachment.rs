@@ -411,6 +411,9 @@ impl RuntimeAttachment {
             } => inner
                 .checkpoint_page(&cut, &domain, offset, limit)
                 .map(|page| RuntimeClientResult::CheckpointPage { page }),
+            RuntimeClientRequest::WorkflowTraceNode { cut, instance, .. } => inner
+                .workflow_trace_node(&cut, &instance)
+                .map(|node| RuntimeClientResult::WorkflowTraceNode { node }),
             RuntimeClientRequest::CheckpointValueRead {
                 cut,
                 domain,
@@ -451,6 +454,8 @@ impl RuntimeAttachment {
             | RuntimeClientRequest::AgentStatistics { .. }
             | RuntimeClientRequest::AgentTrace { .. }
             | RuntimeClientRequest::TraceLocateTool { .. }
+            | RuntimeClientRequest::TraceLocateWorkflow { .. }
+            | RuntimeClientRequest::AgentTraceLocateWorkflow { .. }
             | RuntimeClientRequest::AgentTraceLocateTool { .. }
             | RuntimeClientRequest::AgentTraceDetail { .. } => {
                 unreachable!("Agent statistics are read asynchronously")
@@ -524,6 +529,16 @@ impl RuntimeAttachment {
             RuntimeClientRequest::TraceLocateTool { locator, .. } => {
                 Some(inner.trace_locate_tool(locator.clone()).await)
             }
+            RuntimeClientRequest::TraceLocateWorkflow { run_id, .. } => {
+                Some(inner.trace_locate_workflow(run_id.clone()).await)
+            }
+            RuntimeClientRequest::AgentTraceLocateWorkflow {
+                agent_id, run_id, ..
+            } => Some(
+                inner
+                    .agent_trace_locate_workflow(agent_id, run_id.clone())
+                    .await,
+            ),
             RuntimeClientRequest::InteractionPageGet {
                 interaction,
                 path,

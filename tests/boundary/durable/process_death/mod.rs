@@ -61,6 +61,7 @@ pub(crate) mod conformance;
 pub(crate) mod harness;
 mod physical_settlement;
 mod title;
+mod workflow_snapshot;
 
 /// The environment variable that selects a child scenario. Its absence means
 /// "this is an ordinary test run", so the child entry point below is inert.

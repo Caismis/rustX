@@ -30,6 +30,10 @@ pub enum TraceInspectionContent {
     Messages {
         page: TraceInspectionMessages,
     },
+    Workflow {
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        workflow_id: crate::runtime::workflow::WorkflowId,
+    },
 }
 
 /// Absence is proved by the original catalog; unavailable means its relationship cannot be read.
@@ -146,12 +150,20 @@ impl super::TraceProjection<'_> {
                     page: self.inspection_messages(anchor.sequence, 0, 8)?,
                 }
             }
+            TraceFactData::WorkflowStart { .. } => {
+                let nodes =
+                    self.store
+                        .observation_workflow_nodes(self.cut()?, anchor.sequence, 0, 0)?;
+                TraceInspectionContent::Workflow {
+                    run_id: nodes.run_id,
+                    workflow_id: nodes.workflow_id,
+                }
+            }
             TraceFactData::AttemptStart
             | TraceFactData::CompactionStart { .. }
             | TraceFactData::StepStart
             | TraceFactData::BackgroundStart { .. }
             | TraceFactData::SubagentStart { .. }
-            | TraceFactData::WorkflowStart { .. }
             | TraceFactData::InteractionStart { .. }
             | TraceFactData::Configuration { .. } => TraceInspectionContent::Lifecycle,
             TraceFactData::RequestStart { .. }

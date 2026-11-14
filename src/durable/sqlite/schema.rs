@@ -470,6 +470,10 @@ pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
         "json_extract(event_json, '$.event.instance'), json_extract(event_json, '$.event.type'), sequence",
     ),
     (
+        "events_workflow_agent_node_idx",
+        "COALESCE(json_extract(event_json, '$.event.origin.node_id'), json_extract(event_json, '$.event.node_id')), json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
         "events_interaction_id_kind_idx",
         "json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence",
     ),
@@ -959,6 +963,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
     auxiliary::create_schema(connection)?;
     super::schedule::create_schema(connection)?;
     super::scheduled_workflow::create_schema(connection)?;
+    super::workflow_snapshot::create_schema(connection)?;
     request_owner_shape::create_schema(connection)?;
     projection::create_auxiliary_lineage_schema(connection)?;
     connection

@@ -27,6 +27,70 @@ impl ObservationStore for SqliteConversationStore {
             super::super::workflow_trace::page(connection, cut, start, offset, limit)
         })
     }
+    fn observation_workflow_node(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        instance: &crate::runtime::workflow::WorkflowNodeInstance,
+    ) -> Result<Option<crate::durable::observation::WorkflowTraceNode>, ConversationStoreError>
+    {
+        self.read_at_cut(cut, |connection| {
+            super::super::workflow_trace::visit(connection, &self.conversation_id, cut, instance)
+        })
+    }
+    fn observation_workflow_run_snapshot_header(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<Option<crate::runtime::workflow::WorkflowRunSnapshotHeader>, ConversationStoreError>
+    {
+        self.read_at_cut(cut, |connection| {
+            super::super::workflow_snapshot::read_header(
+                connection,
+                &self.conversation_id,
+                cut,
+                run_id,
+            )
+        })
+    }
+    fn observation_workflow_run_snapshot_chunk(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+        offset: u64,
+        limit: usize,
+    ) -> Result<Option<crate::runtime::workflow::WorkflowRunSnapshotChunk>, ConversationStoreError>
+    {
+        self.read_at_cut(cut, |connection| {
+            super::super::workflow_snapshot::read_chunk(
+                connection,
+                &self.conversation_id,
+                cut,
+                run_id,
+                offset,
+                limit,
+            )
+        })
+    }
+    fn observation_workflow_run_snapshot_document(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<
+        Option<(
+            crate::runtime::workflow::WorkflowRunSnapshotHeader,
+            crate::workflow_file::WorkflowFileDocument,
+        )>,
+        ConversationStoreError,
+    > {
+        self.read_at_cut(cut, |connection| {
+            super::super::workflow_snapshot::read_document(
+                connection,
+                &self.conversation_id,
+                cut,
+                run_id,
+            )
+        })
+    }
     fn observation_trace_facts(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -1065,6 +1129,24 @@ impl ObservationStore for SqliteConversationStore {
             ));
         }
         connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1",params![ledger_position,block_index.get(),seq_to_i64(cut.read.journal)?],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))
+    }
+    fn observation_workflow_trace_sequence(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<Option<u64>, ConversationStoreError> {
+        let identity =
+            super::super::workflow_trace::validate_run_id(&self.conversation_id, run_id)?;
+        self.read_at_cut(cut, |connection| {
+            connection
+                .query_row(
+                    super::super::workflow_trace::RUN_START_SQL,
+                    params![identity, seq_to_i64(cut.read.journal)?],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(|error| storage(error.to_string()))
+        })
     }
     fn observation_read_cut(
         &self,

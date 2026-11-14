@@ -31,12 +31,20 @@ pub trait JournalStore: Send + Sync + 'static {
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
     /// Appends one standalone execution fact after validating every durable
     /// reference and lifecycle terminal rule. Canonical-message,
-    /// compaction-completion, request-start, and background-publication facts
-    /// must use their specialized combined transition; this method rejects
-    /// them so a reference event cannot be split from its durable authority.
+    /// compaction-completion, request-start, workflow-start, and
+    /// background-publication facts must use their specialized combined
+    /// transition; this method rejects them so a reference event cannot be
+    /// split from its durable authority.
     fn append_event(
         &self,
         event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    /// Atomically persists a `WorkflowStarted` Event Journal fact together with
+    /// its immutable admission-bound definition snapshot and run binding.
+    fn publish_workflow_start(
+        &self,
+        event: RuntimeEventEnvelope,
+        snapshot: &crate::runtime::workflow::WorkflowRunDefinitionSnapshot,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
     /// Commits a non-success Workflow-owned child terminal fact without a
     /// parent inbound notification. Successful Workflow terminals must use

@@ -122,6 +122,9 @@ pub(crate) const LIVE_RESOURCE_EDIT: &str = "live_resource_edit";
 /// A reload attempted while an attempt owns the session.
 /// A reload attempted while a **compaction** owns the session.
 /// A reload attempted while a pending **interaction** owns the session.
+pub(crate) const WORKFLOW_RUN_START: &str = "workflow_run_start";
+/// Recompose after a workflow crash without admitting any new work or model calls.
+pub(crate) const WORKFLOW_RUN_REOPEN: &str = "workflow_run_reopen";
 /// A reopened conversation that admits one new request.
 pub(crate) const COLD_RESUME: &str = "cold_resume";
 /// One unresolved publication whose terminal attempt transition can be
@@ -1877,8 +1880,104 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.submit("the projection subject");
             park_owning((child, supervisor)).await;
         }
+        WORKFLOW_RUN_START => {
+            let composed = compose_workflow_emulator_child(root, true).await;
+            composed
+                .0
+                .runtime()
+                .submit_inbound(user_text("workflow conformance request"))
+                .expect("accept workflow inbound message");
+            park_owning(composed).await;
+        }
+        WORKFLOW_RUN_REOPEN => {
+            let composed = compose_workflow_emulator_child(root, false).await;
+            if let Some(registry) = composed.0.runtime().subagent_registry() {
+                registry.wait_recovery_reconciliation().await;
+            }
+            let live = composed.0.runtime().tool_runtime().workflows().snapshot();
+            assert!(
+                live.runs.is_empty(),
+                "reopened runtime must never invent a phantom live workflow run: {live:?}"
+            );
+            let _recovery = composed.0.runtime().recovery();
+            note(&format!("workflow-reopen:live_runs={}", live.runs.len()));
+            park_owning(composed).await;
+        }
         other => panic!("unknown FND-06 scenario {other}"),
     }
+}
+
+/// Composes one workflow-capable child runtime over the external `ProviderEmulator`
+/// HTTP/SSE binding (`ModelBindingRegistry::new`) and real `rustx` child executable.
+async fn compose_workflow_emulator_child(
+    root: &Path,
+    client: bool,
+) -> (
+    HeadlessConversationRuntime,
+    Option<event_recorder::ObserverTask>,
+    Arc<Log>,
+) {
+    let paths = lab_paths(root);
+    let launch = paths.try_resolve().expect("resolve workflow lab launch");
+    let runtime_config = launch.config().clone();
+    let child_program = std::env::var_os("CARGO_BIN_EXE_rustx").map_or_else(
+        || {
+            std::env::current_exe()
+                .expect("current test exe")
+                .parent()
+                .expect("deps dir")
+                .parent()
+                .expect("profile dir")
+                .join("rustx")
+        },
+        PathBuf::from,
+    );
+    assert!(
+        child_program.is_file(),
+        "workflow crash child requires built `rustx` binary at {}",
+        child_program.display()
+    );
+    let dependencies = LocalRuntimeDependencies {
+        child_program: Some(child_program),
+        ..LocalRuntimeDependencies::default()
+    };
+    let registry = crate::model::invocation::ModelBindingRegistry::new(
+        launch
+            .models
+            .resolve(&launch.credentials)
+            .expect("resolve emulator model catalog"),
+    )
+    .expect("construct emulator model bindings");
+    let state = SessionPersistentState {
+        model: Some(runtime_config.initial_model().clone()),
+        ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
+            root.join("workspace"),
+        ))
+    };
+    let controller = Arc::new(
+        crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+            .expect("acquire lab controller"),
+    );
+    let artifacts_root = controller.root().join(
+        "sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001",
+    );
+    let core = LocalConversationCore::compose_from_config(
+        &launch,
+        &dependencies,
+        registry,
+        runtime_config,
+        state,
+        ConversationId::new(CONVERSATION),
+        artifacts_root,
+        controller,
+    )
+    .await
+    .expect("compose emulator workflow child runtime");
+    let log = Log::new();
+    *log.runtime.lock().expect("fixture runtime") = Some(core.runtime().clone());
+    let observer = client
+        .then(|| event_recorder::bind(&core, Arc::clone(&log), false).expect("bind observer"));
+    (core.into_headless(), observer, log)
 }
 
 /// The model watch proves recovery admitted an attempt. The exit gate proves

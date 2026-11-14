@@ -1,6 +1,6 @@
 //! Connection-owned, anonymous document scratch. Control records carry 64 KiB
 //! chunks; only the existing source transaction can publish an authored file.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -81,9 +81,18 @@ struct Document {
     used: Instant,
 }
 
+#[derive(Clone)]
+struct CachedRunSnapshot {
+    conversation_id: crate::runtime::identity::ConversationId,
+    snapshot_digest: String,
+    wire_header: crate::runtime::workflow::WorkflowRunSnapshotHeader,
+    wire_bytes: Arc<Vec<u8>>,
+}
+
 #[derive(Default)]
 pub(super) struct WorkflowDocuments {
     documents: Mutex<BTreeMap<String, Arc<Mutex<Document>>>>,
+    run_snapshots: Mutex<VecDeque<CachedRunSnapshot>>,
     closed: AtomicBool,
     #[cfg(test)]
     finish_gate: Mutex<
@@ -105,6 +114,11 @@ fn io(_: impl std::fmt::Display) -> RpcError {
     )
 }
 
+pub(super) type RunSnapshotPayload = (
+    crate::runtime::workflow::WorkflowRunSnapshotHeader,
+    Arc<Vec<u8>>,
+);
+
 impl WorkflowDocuments {
     #[cfg(test)]
     pub(super) fn gate_finish(
@@ -121,6 +135,91 @@ impl WorkflowDocuments {
     pub(super) fn clear(&self) {
         self.closed.store(true, Ordering::Release);
         self.documents.lock().expect("Workflow documents").clear();
+        self.run_snapshots
+            .lock()
+            .expect("Workflow run snapshots")
+            .clear();
+    }
+
+    pub(super) fn get_cached_run_snapshot(
+        &self,
+        header: &crate::runtime::workflow::WorkflowRunSnapshotHeader,
+    ) -> Result<Option<RunSnapshotPayload>, RpcError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(domain(ErrorData::OperationFailed));
+        }
+        let Some(hit) = self
+            .run_snapshots
+            .lock()
+            .expect("Workflow run snapshots")
+            .iter()
+            .find(|entry| {
+                entry.conversation_id == header.run_id.conversation_id
+                    && entry.snapshot_digest == header.snapshot_digest
+            })
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let mut wire_header = hit.wire_header;
+        wire_header.run_id = header.run_id.clone();
+        Ok(Some((wire_header, hit.wire_bytes)))
+    }
+
+    pub(super) fn put_run_snapshot(
+        &self,
+        mut header: crate::runtime::workflow::WorkflowRunSnapshotHeader,
+        document: &WorkflowFileDocument,
+    ) -> Result<
+        (
+            crate::runtime::workflow::WorkflowRunSnapshotHeader,
+            Arc<Vec<u8>>,
+        ),
+        RpcError,
+    > {
+        let wire_bytes = Arc::new(
+            super::wire::workflow_document_to_bytes(document)
+                .map_err(|_| domain(ErrorData::OperationFailed))?,
+        );
+        header.byte_length =
+            u64::try_from(wire_bytes.len()).map_err(|_| domain(ErrorData::OperationFailed))?;
+        header.sha256 = format!("{:x}", Sha256::digest(wire_bytes.as_slice()));
+        if !self.closed.load(Ordering::Acquire) {
+            let mut cache = self.run_snapshots.lock().expect("Workflow run snapshots");
+            if !self.closed.load(Ordering::Acquire) {
+                while cache.len() >= CAPACITY {
+                    cache.pop_front();
+                }
+                cache.push_back(CachedRunSnapshot {
+                    conversation_id: header.run_id.conversation_id.clone(),
+                    snapshot_digest: header.snapshot_digest.clone(),
+                    wire_header: header.clone(),
+                    wire_bytes: wire_bytes.clone(),
+                });
+            }
+        }
+        Ok((header, wire_bytes))
+    }
+
+    pub(super) fn slice_run_snapshot_chunk(
+        wire_bytes: &[u8],
+        offset: u64,
+        limit: usize,
+    ) -> Result<crate::runtime::workflow::WorkflowRunSnapshotChunk, RpcError> {
+        let total =
+            u64::try_from(wire_bytes.len()).map_err(|_| domain(ErrorData::OperationFailed))?;
+        if limit == 0 || limit > CHUNK || offset > total {
+            return Err(invalid());
+        }
+        let start = usize::try_from(offset).map_err(|_| invalid())?;
+        let end = start.saturating_add(limit).min(wire_bytes.len());
+        let next_offset =
+            (end < wire_bytes.len()).then(|| u64::try_from(end).expect("chunk end fits u64"));
+        Ok(crate::runtime::workflow::WorkflowRunSnapshotChunk {
+            offset,
+            data: base64::engine::general_purpose::STANDARD.encode(&wire_bytes[start..end]),
+            next_offset,
+        })
     }
 
     pub(super) fn begin(
