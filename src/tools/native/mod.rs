@@ -51,6 +51,7 @@
 pub(crate) mod agents;
 mod ask_user;
 mod bash;
+pub(crate) use bash::NAME as BASH_TOOL_NAME;
 mod edit;
 mod glob;
 mod goal;

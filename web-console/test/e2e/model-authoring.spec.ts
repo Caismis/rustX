@@ -31,7 +31,7 @@ test('new sessions receive independently configured title and compaction models'
     expect(settings.model).toMatchObject({
       model: 'fixture/console-model',
       auxiliary: {mode:'explicit', model:'fixture/second-model'},
-      
+
     });
     expect(errors).toEqual([]);
   } finally { await native?.shutdown(); await fixture.stop(false); }

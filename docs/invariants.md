@@ -2828,9 +2828,8 @@ ownership commits. Global invocation policies remain global, not profile prose.
   parent holds the exact `pgid` and owns catastrophic containment for it.
 - **One containment abstraction covers every supervised unit.** Native Bash,
   MCP stdio (a synthesized Python tool server's venv interpreter included),
-  the parent runtime's Python uv builds, and Skill environment
-  subprocesses all enter the same `AnchorGate`. There
-  is no `McpSubagentAnchor` or `BashSubagentAnchor`.
+  and the parent runtime's Python uv builds all enter the same `AnchorGate`.
+  There is no `McpSubagentAnchor` or `BashSubagentAnchor`.
 - **The top-level process is unchanged.** With no authority installed the
   gate resolves immediately, so the existing single-level lifecycle is
   bit-for-bit the same.
@@ -3309,9 +3308,8 @@ An attempt sees one immutable capability revision for its entire lifetime.
 M6 makes this operational: one `AgentExecution` holds one RAII attempt
 capability lease (`src/capabilities`) pinning one immutable
 `CapabilitySnapshot` (revision, immutable ToolRegistry handle, immutable
-Skill snapshot/catalog with `SkillId` + `SkillVersionId` bindings, Python/
-Node environment identity and path when present, and the effective
-ToolEnvironment) for the complete lifetime of the attempt. There is no
+Skill snapshot/catalog with `SkillId` + `SkillVersionId` bindings and the
+effective ToolEnvironment) for the complete lifetime of the attempt. There is no
 capability-free execution constructor, and no model turn re-discovers
 Skills.
 
@@ -3326,14 +3324,14 @@ hold attempt leases and never block a capability commit.
   → the next independent Attempt captures the new revision. There is no unchecked window
   between the deciding quiescence observation and the active-snapshot
   swap, and no sleep-based coordination.
-- A candidate may be prepared independently (Skill discovery, dependency
-  merge, environment materialization); only its activation respects the
+- A candidate may be prepared independently (Skill discovery and optional
+  source preparation); only its activation respects the
   commit boundary. An identical rediscovery/preparation is a no-op that
   never fabricates a new revision; a candidate prepared from an obsolete
   base revision is rejected as stale.
 - The no-op equivalence covers the executable identity, not only the
   model-visible contract: a candidate is a no-op only when the tool
-  definitions, available catalog, Skills, environment digests **and** the
+  definitions, available catalog, Skills, **and** the
   effective frozen MCP server bindings are all equivalent. A changed
   executable binding — a configured server whose command/args/env/cwd/
   endpoint/headers/policy changed, or a managed Python package whose
@@ -3345,11 +3343,27 @@ hold attempt leases and never block a capability commit.
   generation until its leases settle.
 - Failed preparation or commit leaves the current active revision
   authoritative.
-- `CapabilityRevision`, `SkillVersionId`, `PythonEnvironmentDigest`, and
-  `NodeEnvironmentDigest` remain distinct identities: a description-only
-  Skill change yields a new Skill version and a new capability revision
-  without changing environment identities when dependency inputs are
-  unchanged.
+- `CapabilityRevision` and `SkillVersionId` remain distinct identities: a
+  description-only Skill change yields a new Skill version and a new
+  capability revision. It does not change the effective tool environment.
+  Managed Python package fingerprints are a separate identity owned by
+  `src/tools/python.rs`.
+- Native Agent Bash, Workflow Bash, and Subagent Bash inherit the launched
+  host environment, then the configured `[environment]` overrides, then the
+  Workspace `.venv` when it is ready. The command environment is frozen
+  before permission approval and is not recomputed when a background command
+  starts. Managed Python, manual terminals, generic `command/exec`, and MCP
+  keep the fixed `child_environment` baseline. Skills do not change either
+  environment. Workspace Python preparation never deletes or rebuilds an
+  existing `.venv`. `uv` is optional for reuse and must be at least 0.10.0
+  to create a missing environment. Preparation belongs to process/host drain,
+  not transport lifetime. The original root identity and one validated input
+  generation authorize physical work and Ready publication. Creation rechecks
+  its target after acquiring capacity, and uv selects over all root version
+  constraints. An existing empty directory is never initialized. Physical programs
+  inherit that Owner's cancellation signal. Command environments travel in
+  private snapshots retained through settlement, not an aggregated OS
+  environment string. See `docs/execution-environment.md`.
 - Skill, native-tool, and MCP capability mutations (a Python tool package's
   included, since it is an MCP source) in a live product
   runtime occur through native configuration coordination. Complete preserved
@@ -3389,29 +3403,20 @@ hold attempt leases and never block a capability commit.
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
 
-Capability environments are prepared and validated before an atomic
-revision swap. The prospective canonical environment-store path is checked
-against the canonical Workspace before any directory is created, including
-through symlinked existing ancestors. Python environments are built at their
-final digest path and become reusable only after an exact deterministic ready
-manifest is atomically committed; Node environments use private staging and
-atomic rename. Same-process preparations of one ecosystem/digest coalesce
-behind one `EnvironmentStore`-owned materialization task. Candidate
-preparation lifetime is distinct from shared build lifetime: dropping a
-caller only stops its wait, while the owner continues through supervised
-process settlement and publication. Published digest environments are
-immutable: they are reused only when their committed manifest matches the
-expected digest inputs and are never installed into again. The in-flight
-entry is released only after the owner returns, making a retry unable to
-overlap the previous physical writer.
+The runtime-private environment-store root stays disjoint from the model
+Workspace, including through symlinked ancestors. Managed Python may create
+`<store>/python-tools` when a package is prepared. Skill discovery, selection,
+refresh, and child propagation create no `python/` or `node/` environment
+there and start no uv, pip, npm, or interpreter probe.
 
-**Skill resource boundary.** Capability metadata and environment identities
-are snapshotted. Accepted Skill source files (`SKILL.md`, scripts,
-references, and assets) remain current filesystem resources, read at use time
-through ordinary native tool semantics at their host paths. The Skill catalog
-publishes the canonical absolute host path established at discovery time, and ordinary Workspace authorization is not
+**Skill resource boundary.** Admitted Skill definitions are snapshotted.
+Accepted Skill source files (`SKILL.md`, scripts, references, and assets)
+remain current filesystem resources, read at use time through ordinary native
+tool semantics at their host paths. The Skill catalog publishes the host path
+established at discovery time, and ordinary Workspace authorization is not
 weakened: native Read/Write/Edit/Grep/Glob already accept absolute host paths.
 A package rewrite is observed only at the next quiescent re-discovery.
+Discovery does not hash or watch package payloads.
 
 ### M7 external tool invariants
 
@@ -8205,7 +8210,7 @@ confirmed `CallStarted`, without waiting for inference or retirement.
 - Before the first Send, one native connection owns at most one transferable
   unsent draft. Selection starts only its effective configured Root/enabled-Workflow
   MCP demand. No Session/catalog row, canonical input, upload receipt, provider
-  request, Agent execution, Skill environment or Python build is created.
+  request, Agent execution, or Python build is created.
 - A scope supervisor coalesces replacement intent. Superseded pending and ready
   resources are cancelled and physically settled before unsent replacement work
   starts. Global source reservations include live ready and retiring generations;

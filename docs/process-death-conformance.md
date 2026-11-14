@@ -426,7 +426,7 @@ publication.
 ### Nested supervised process units inside a subagent child (Issue #145)
 
 A subagent child that runs Bash, MCP stdio (a synthesized `python:<folder>`
-server included), or Skill environment
+server included), or Managed Python uv
 work owns supervised units whose inner `setsid()` group is deliberately
 outside the child's own process group, so killing the child's group cannot
 reach them. The generic anchor protocol makes every death boundary decidable

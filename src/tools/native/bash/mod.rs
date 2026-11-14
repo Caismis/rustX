@@ -21,8 +21,8 @@
 //! supervised command runner (`crate::runtime::process_runner`): the same
 //! supervisor unit, control protocol, process-group ownership, cancellation
 //! settlement, and catastrophic containment that native Bash uses is reused
-//! by Skill environment materialization, so package-manager work never
-//! becomes a second independent subprocess hierarchy. This tool owns the
+//! by Managed Python, so package-manager work never becomes a second
+//! independent subprocess hierarchy. This tool owns the
 //! capture half: artifact spooling, bounded previews, and the final
 //! canonical result formatting.
 //!

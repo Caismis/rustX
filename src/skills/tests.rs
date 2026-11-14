@@ -55,18 +55,29 @@ fn definition_identity_normalizes_yaml_and_includes_all_standard_fields() {
 }
 
 #[test]
-fn dependency_metadata_uses_normalized_pins_rather_than_embedded_json_formatting() {
+fn dependency_metadata_is_uninterpreted_frontmatter() {
     let dir = tempfile::tempdir().unwrap();
     let one = skill(
         dir.path(),
-        "---\nname: guide\ndescription: Guide\nmetadata:\n  rustx.python-dependencies: '{\"PyPDF\":\"1.0\", \"Pillow\": \"2.0\"}'\n---\n",
+        "---\nname: guide\ndescription: Guide\nmetadata:\n  rustx.python-dependencies: '{\"PyPDF\":\"1.0\", \"Pillow\": \"2.0\"}'\n  rustx.node-dependencies: not-a-manifest\n---\n",
     );
     let two = skill(
         dir.path(),
-        "---\nname: guide\ndescription: Guide\nmetadata:\n  rustx.python-dependencies: '{\"pillow\":\"2.0\",\"pypdf\":\"1.0\"}'\n---\n",
+        "---\nname: guide\ndescription: Guide\nmetadata:\n  rustx.python-dependencies: '{\"pillow\":\"2.0\",\"pypdf\":\"1.0\"}'\n  rustx.node-dependencies: not-a-manifest\n---\n",
     );
-    assert_eq!(one.dependencies(), two.dependencies());
-    assert_eq!(one.version_id(), two.version_id());
+    assert_eq!(
+        one.metadata()["rustx.python-dependencies"].as_str(),
+        Some(r#"{"PyPDF":"1.0", "Pillow": "2.0"}"#)
+    );
+    assert_eq!(
+        one.metadata()["rustx.node-dependencies"].as_str(),
+        Some("not-a-manifest")
+    );
+    assert_ne!(
+        one.version_id(),
+        two.version_id(),
+        "uninterpreted metadata keeps its literal text in the definition"
+    );
 }
 
 #[test]

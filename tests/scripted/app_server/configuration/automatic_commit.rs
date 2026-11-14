@@ -1702,7 +1702,6 @@ async fn unselected_skill_catalog_updates_future_overrides_without_preparation_o
         let updated = runtime.runtime_resources();
         let idle = resolve(&updated, "idle").unwrap();
         assert_eq!(idle.skills[0].catalog_entry.description, "Latest");
-        assert_eq!(idle.skills[0].dependencies.python["rustx-review-must-not-install"], "3.0");
         assert_eq!(resolve(&updated, "new-skill").unwrap().skills[0].catalog_entry.description, "New");
         assert_eq!(resolve(&old, "idle").unwrap().skills[0].catalog_entry.description, "Original");
         assert!(matches!(resolve(&old, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
@@ -1718,7 +1717,10 @@ async fn unselected_skill_catalog_updates_future_overrides_without_preparation_o
         assert!(matches!(resolve(&removed, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
         assert_eq!(removed.capability().revision(), capability_revision);
         assert_eq!(configuration_changes(&runtime).len(), facts);
-        assert!(removed.capability().python_environment().is_none());
+        assert_eq!(
+            removed.capability().effective_environment(),
+            old.capability().effective_environment()
+        );
         fixture.manager.unload(&fixture.sessions[0].active_conversation_id).await.unwrap();
         skill("cold-skill", "Added while cold", false, "1.0");
         let mut changes = fixture.manager.configuration_changes();
@@ -1738,7 +1740,10 @@ async fn unselected_skill_catalog_updates_future_overrides_without_preparation_o
         assert_eq!(resolve(&cold, "cold-skill").unwrap().skills[0].catalog_entry.description, "Added while cold");
         assert!(matches!(resolve(&cold, "idle"), Err(SubagentResolutionError::SkillNotModelVisible { .. })));
         assert_eq!(configuration_changes(&reloaded).len(), facts);
-        assert!(cold.capability().python_environment().is_none());
+        assert_eq!(
+            cold.capability().effective_environment(),
+            old.capability().effective_environment()
+        );
         fixture.close().await;
     }).await;
 }
@@ -2086,12 +2091,11 @@ async fn an_environment_value_change_is_recorded_without_its_value() {
     .await;
 }
 
-/// Root Tools run in the whole effective environment, so a new shared Skill
-/// Python environment — a new content-addressed root, as a dependency change
-/// prepares — is execution policy even with every authorized entry, Tool and
-/// selected Skill unchanged, and the fact carries no path.
+/// An authorized tool-environment change is execution policy. The fact names
+/// the changed variable and does not carry its value. Skill metadata is not
+/// an environment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_new_skill_environment_is_execution_policy() {
+async fn an_authorized_environment_change_is_execution_policy() {
     bounded(async {
         use crate::runtime::configuration_commit::{
             ConfigurationChange, ConfigurationChangeReason, ConfigurationDomain,
@@ -2102,22 +2106,16 @@ async fn a_new_skill_environment_is_execution_policy() {
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         let before = runtime.runtime_resources();
         let model = runtime.model_state_for_test();
-        let environment = before.capability().effective_environment();
-        let prepared = |root: &str| {
-            before.with_effective_environment(environment.with_overlay(
-                &crate::tools::environment::ToolEnvironmentOverlay::python(std::path::Path::new(
-                    root,
-                )),
-            ))
+        let prepared = |value: &str| {
+            before.with_effective_environment(
+                crate::tools::environment::ToolEnvironment::from_authorized([(
+                    "MODE".to_owned(),
+                    value.to_owned(),
+                )])
+                .expect("authorized environment"),
+            )
         };
-        let (first, second) = (prepared("/env/python-sha-a"), prepared("/env/python-sha-b"));
-        assert_eq!(
-            first
-                .capability()
-                .effective_environment()
-                .authorized_entries(),
-            environment.authorized_entries()
-        );
+        let (first, second) = (prepared("value-alpha"), prepared("value-bravo"));
         let change = |old: &crate::runtime::RuntimeResourceSnapshot,
                       new: &crate::runtime::RuntimeResourceSnapshot| {
             ConfigurationChange::between(
@@ -2131,11 +2129,11 @@ async fn a_new_skill_environment_is_execution_policy() {
             change(&first, &first).is_none(),
             "the same environment is no change"
         );
-        let (fact, content) = change(&first, &second).expect("a new environment root changes");
+        let (fact, content) = change(&first, &second).expect("a new authorized entry changes");
         assert_eq!(fact.domains, [ConfigurationDomain::ExecutionPolicy]);
         assert!(fact.tools.is_empty() && fact.skills.is_empty(), "{fact:?}");
         assert!(
-            !content.catalog.contains("python-sha"),
+            !content.catalog.contains("value-alpha") && !content.catalog.contains("value-bravo"),
             "{}",
             content.catalog
         );

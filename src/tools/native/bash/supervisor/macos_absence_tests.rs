@@ -42,12 +42,16 @@ async fn expired_absence_observation_can_recover_without_signaling_a_released_gr
     let (runtime, supervisor) = std::os::unix::net::UnixStream::pair().unwrap();
     runtime.set_nonblocking(true).unwrap();
     let mut stream = tokio::net::UnixStream::from_std(runtime).unwrap();
+    let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
+        &vec![("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
+    )
+    .expect("environment snapshot");
     let mut outer =
         tokio::process::Command::new(crate::runtime::process_runner::supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-                r#"[["PATH","/usr/bin:/bin"]]"#,
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                environment_snapshot.path(),
             )
             .env(COMMAND_ENV, "sleep 30")
             .env(FAIL_SIGNAL_ENV, "1")

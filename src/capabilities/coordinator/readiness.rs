@@ -346,8 +346,6 @@ impl CapabilityCoordinator {
         candidate.base_revision = state.revision;
         candidate.resource_inputs = inputs;
         candidate.skills = state.snapshot.skills().clone();
-        candidate.python = state.snapshot.python_environment().cloned();
-        candidate.node = state.snapshot.node_environment().cloned();
         candidate.effective_environment = state.snapshot.effective_environment().clone();
         candidate.mcp_epochs = epochs;
         candidate.effective_mcp_servers = bindings;
@@ -471,8 +469,6 @@ impl CapabilityCoordinator {
             resolved_profile: Some(Arc::new(profile)),
             base_revision: state.revision,
             skills: snapshot.skills().clone(),
-            python: snapshot.python_environment().cloned(),
-            node: snapshot.node_environment().cloned(),
             effective_environment: snapshot.effective_environment().clone(),
             candidate_registry: Arc::new(registry),
             available_tools: Arc::new(available_tools),

@@ -85,9 +85,7 @@ pub(super) async fn render_with_control(
     let (send, receive) = tokio::sync::oneshot::channel();
     std::mem::drop(tokio::spawn(async move {
         let _permit = permit;
-        let result = RunnerBackedProcessRunner::default()
-            .run(spec, control)
-            .await;
+        let result = RunnerBackedProcessRunner.run(spec, control).await;
         let cleaned = tokio::task::spawn_blocking(move || input.close()).await;
         let result = match cleaned {
             Ok(Ok(())) => result,

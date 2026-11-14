@@ -230,6 +230,19 @@ impl WorkflowRuntime {
                 &prepared.invocation.arguments,
                 services.lifecycle.approval_mode(),
             );
+        let mut environment = context
+            .resources()
+            .capability()
+            .effective_environment()
+            .clone();
+        if definition.name == crate::tools::native::BASH_TOOL_NAME
+            && matches!(prepared.origin, crate::tools::types::ToolOrigin::Builtin)
+        {
+            environment = crate::tools::execution_environment::freeze_bash(
+                &environment,
+                services.runtime.workspace(),
+            );
+        }
         let view = crate::agent::PreToolView {
             task: services.task.as_deref(),
             conversation_id: &run.run_id.conversation_id,
@@ -302,7 +315,7 @@ impl WorkflowRuntime {
                     &progress,
                     services.runtime.artifacts(),
                     services.runtime.tool_output(),
-                    context.resources().capability().effective_environment(),
+                    &environment,
                 );
                 native_context.stdout_capture = stdout;
                 native_context.bound_mutation = prepared.mutation_target.clone();

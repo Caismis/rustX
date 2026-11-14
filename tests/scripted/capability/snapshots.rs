@@ -1,14 +1,10 @@
-//! M6 deterministic tests: capability snapshots, quiescent commits,
-//! environment materialization/publication, and background environment
-//! retention.
+//! Deterministic tests: capability snapshots, quiescent commits, and
+//! background environment retention.
 //!
-//! Every materialization test uses the deterministic fake backend
-//! (`common::FakeSkillEnvironmentBackend`): no test ever touches a public
-//! package registry. Race semantics use exact synchronization points
-//! (watches, notify gates, registry state) — never sleeps.
+//! Skill discovery publishes instruction metadata only. These tests never
+//! materialize a Skill Python or Node environment. Race semantics use exact
+//! synchronization points (watches, notify gates, registry state), never sleeps.
 
-use std::collections::BTreeMap;
-use std::future::Future;
 use std::sync::{Arc, Mutex};
 
 use rustx::capabilities::{
@@ -16,7 +12,6 @@ use rustx::capabilities::{
 };
 use rustx::runtime::identity::{ConversationId, ToolCallId, ToolExecutionId, ToolId};
 use rustx::runtime::inbound::ConversationInboundMailbox;
-use rustx::skills::Ecosystem;
 use rustx::tools::ToolProgressCapability;
 use rustx::tools::artifacts::ArtifactStore;
 use rustx::tools::background::{
@@ -41,7 +36,6 @@ struct Conversation {
     pub workspace: Workspace,
     pub background: ConversationBackgroundRegistry,
     pub coordinator: CapabilityCoordinator,
-    pub backend: common::FakeSkillEnvironmentBackend,
 }
 
 fn write_skill(root: &std::path::Path, name: &str, description: &str, deps: &[(&str, &str)]) {
@@ -144,7 +138,6 @@ fn conversation_with(
             event_sink: None,
         },
     );
-    let backend = common::FakeSkillEnvironmentBackend::new();
     let mut base_tool_registry = ToolRegistry::new();
     register_native_tools(
         &mut base_tool_registry,
@@ -156,28 +149,24 @@ fn conversation_with(
         NativeToolPolicies::default(),
     )
     .expect("native tools");
-    let coordinator = CapabilityCoordinator::with_backend(
-        CapabilityCoordinatorConfig {
-            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: conversation_id.clone(),
-            workspace: workspace.clone(),
-            base_tool_registry: Arc::new(base_tool_registry),
-            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            agent_activation,
-            skill_discovery: skill_discovery(dir.path(), &workspace),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: ToolEnvironment::new(),
-            environment_store_root: dir.path().join("skill-env"),
-        },
-        Arc::new(backend.clone()),
-    )
+    let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
+        conversation_id: conversation_id.clone(),
+        workspace: workspace.clone(),
+        base_tool_registry: Arc::new(base_tool_registry),
+        extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+        agent_activation,
+        skill_discovery: skill_discovery(dir.path(), &workspace),
+        mcp_servers: std::collections::BTreeMap::new(),
+        base_environment: ToolEnvironment::new(),
+        environment_store_root: dir.path().join("skill-env"),
+    })
     .expect("coordinator");
     Conversation {
         dir,
         workspace,
         background,
         coordinator,
-        backend,
     }
 }
 
@@ -686,665 +675,6 @@ async fn cfg280_generation_scoped_skill_facts_are_published_not_collapsed() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Environment materialization (sections 28/29)
-// ---------------------------------------------------------------------------
-
-/// Two Skills with compatible Python dependencies produce one merged
-/// Python environment; two Skills with compatible Node dependencies
-/// produce one merged Node environment.
-#[tokio::test]
-async fn compatible_skills_share_one_merged_environment_per_ecosystem() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[
-            python_deps(r#"{"pypdf":"5.9.0"}"#),
-            node_deps(r#"{"pdf-lib":"1.17.1"}"#),
-        ],
-    );
-    write_skill(
-        conversation.workspace.root(),
-        "slides",
-        "Slides skill.",
-        &[
-            python_deps(r#"{"pillow":"11.3.0"}"#),
-            node_deps(r#"{"@scope/pkg":"2.0.0"}"#),
-        ],
-    );
-    let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    let python = snapshot.python_environment().expect("python env");
-    let node = snapshot.node_environment().expect("node env");
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        1,
-        "one shared Python environment, never one per Skill"
-    );
-    assert_eq!(
-        conversation.backend.materialization_count(Ecosystem::Node),
-        1,
-        "one shared Node environment, never one per Skill"
-    );
-    let prepared = conversation
-        .coordinator
-        .prepare_candidate()
-        .await
-        .expect("prepare");
-    let merged_python = prepared
-        .skill_packages()
-        .iter()
-        .flat_map(|package| package.dependencies().python.clone())
-        .collect::<BTreeMap<_, _>>();
-    assert_eq!(merged_python.len(), 2);
-    // The effective environment carries both bin prefixes.
-    let entries = snapshot
-        .effective_environment()
-        .child_environment(conversation.workspace.root());
-    let path = entries
-        .iter()
-        .find(|(key, _)| key == "PATH")
-        .expect("PATH")
-        .1
-        .clone();
-    assert!(path.starts_with(&format!(
-        "{}:{}:",
-        python.bin_dir.display(),
-        node.bin_dir.display()
-    )));
-    assert!(entries.iter().any(|(key, value)| {
-        key == "VIRTUAL_ENV" && value == &python.root.display().to_string()
-    }));
-    assert!(entries.iter().any(|(key, value)| {
-        key == "NODE_PATH" && value == &node.modules_dir.display().to_string()
-    }));
-}
-
-/// No ecosystem dependencies → no runtime requirement and no empty
-/// environment materialization.
-#[tokio::test]
-async fn no_dependencies_means_no_environment_and_no_runtime_requirement() {
-    let conversation = conversation();
-    write_skill(conversation.workspace.root(), "shell", "Shell skill.", &[]);
-    let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    assert!(snapshot.python_environment().is_none());
-    assert!(snapshot.node_environment().is_none());
-    assert_eq!(conversation.backend.calls(), Vec::new());
-    let entries = snapshot
-        .effective_environment()
-        .child_environment(conversation.workspace.root());
-    let path = entries
-        .iter()
-        .find(|(key, _)| key == "PATH")
-        .expect("PATH")
-        .1
-        .clone();
-    assert_eq!(path, "/usr/local/bin:/usr/bin:/bin");
-}
-
-/// An already-published identical digest is reused; the published
-/// environment is never modified during reuse.
-#[tokio::test]
-async fn published_identical_digest_is_reused_and_never_modified() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
-    );
-    let first = prepare_and_commit(&conversation.coordinator).await;
-    let python = first.python_environment().expect("python env");
-    let wrapper = std::fs::read_to_string(python.root.join("bin/fake-tool")).expect("wrapper");
-    assert_eq!(
-        wrapper.lines().next(),
-        Some(format!("#!{}", python.root.join("bin/python").display()).as_str()),
-        "console-script shebang points at the final immutable environment path"
-    );
-    let marker_before =
-        std::fs::read(python.root.join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)).expect("marker");
-    let modified_before = std::fs::metadata(python.root.join("bin/python"))
-        .expect("env file")
-        .modified()
-        .expect("mtime");
-
-    // A second preparation with the same declarations reuses the published
-    // digest directory without installing into it again.
-    let second = prepare_and_commit(&conversation.coordinator).await;
-    assert_eq!(
-        second.python_environment().expect("env").digest,
-        python.digest
-    );
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        1,
-        "a published environment is never installed into again"
-    );
-    let marker_after =
-        std::fs::read(python.root.join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)).expect("marker");
-    assert_eq!(marker_before, marker_after);
-    let modified_after = std::fs::metadata(python.root.join("bin/python"))
-        .expect("env file")
-        .modified()
-        .expect("mtime");
-    assert_eq!(
-        modified_before, modified_after,
-        "reuse never mutates the environment"
-    );
-}
-
-/// The absolute environment store path never changes the environment
-/// digest: two stores in different roots with the same inputs produce the
-/// same digest.
-#[tokio::test]
-async fn absolute_store_path_does_not_change_the_digest() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
-    );
-    let first = prepare_and_commit(&conversation.coordinator).await;
-    let digest = first.python_environment().expect("env").digest.clone();
-
-    let conversation_two = {
-        let dir = tempfile::tempdir().expect("temp dir");
-        let workspace_root = dir.path().join("workspace");
-        std::fs::create_dir_all(&workspace_root).expect("workspace");
-        let workspace = Workspace::new(&workspace_root).expect("workspace");
-        let conversation_id = ConversationId::new("conv_a281bd6a-26a3-731b-8d0c-560b79b2276f");
-        let mailbox = ConversationInboundMailbox::new(conversation_id.clone());
-        let background = ConversationBackgroundRegistry::new(
-            conversation_id.clone(),
-            BackgroundResources {
-                mailbox,
-                workspace: workspace.clone(),
-                artifacts: ArtifactStore::new(
-                    ConversationId::new("conv_a281bd6a-26a3-731b-8d0c-560b79b2276f"),
-                    dir.path().join("artifacts"),
-                )
-                .expect("artifacts"),
-                tool_output: rustx::tools::managed_output::ManagedToolOutput::new(
-                    ConversationId::new("conv_a281bd6a-26a3-731b-8d0c-560b79b2276f"),
-                    dir.path().join("artifacts/tool-output"),
-                )
-                .expect("managed tool output"),
-                clock: Arc::new(rustx::runtime::SystemClock),
-                event_sink: None,
-            },
-        );
-        let _ = background;
-        let backend = common::FakeSkillEnvironmentBackend::new();
-        let coordinator = CapabilityCoordinator::with_backend(
-            CapabilityCoordinatorConfig {
-                source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-                conversation_id: conversation_id.clone(),
-                workspace: workspace.clone(),
-                base_tool_registry: {
-                    let mut registry = ToolRegistry::new();
-                    register_native_tools(
-                        &mut registry,
-                        NativeToolResources {
-                            subagent_catalog: rustx::runtime::subagent::AgentCatalog::empty(),
-                            background: background.clone(),
-                            subagents: None,
-                        },
-                        NativeToolPolicies::default(),
-                    )
-                    .unwrap();
-                    Arc::new(registry)
-                },
-                extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-                agent_activation: fixture_activation(),
-                skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
-                    workspace.root().join(".agents/skills"),
-                ),
-                mcp_servers: std::collections::BTreeMap::new(),
-                base_environment: ToolEnvironment::new(),
-                environment_store_root: dir.path().join("skill-env"),
-            },
-            Arc::new(backend.clone()),
-        )
-        .expect("coordinator");
-        Conversation {
-            dir,
-            workspace,
-            background,
-            coordinator,
-            backend,
-        }
-    };
-    write_skill(
-        conversation_two.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
-    );
-    let second = prepare_and_commit(&conversation_two.coordinator).await;
-    assert_eq!(
-        second.python_environment().expect("env").digest,
-        digest,
-        "the store root is never part of the environment identity"
-    );
-}
-
-/// A corrupt published manifest means the digest directory is never
-/// reused and never mutated; the candidate fails explicitly.
-#[tokio::test]
-async fn corrupt_published_manifest_fails_the_candidate() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
-    );
-    let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    let python = snapshot.python_environment().expect("python env");
-    std::fs::write(
-        python.root.join(rustx::skills::ENVIRONMENT_MANIFEST_FILE),
-        b"{}",
-    )
-    .expect("corrupt the marker");
-    let error = conversation
-        .coordinator
-        .prepare_candidate()
-        .await
-        .map(drop)
-        .expect_err("corrupt environment must fail the candidate");
-    assert!(matches!(
-        error,
-        CapabilityPreparationError::Environment(
-            rustx::skills::EnvironmentPreparationError::CorruptPublishedEnvironment { .. }
-        )
-    ));
-}
-
-/// Materialization failure leaves the active capability unchanged and
-/// removes the staging directory.
-#[tokio::test]
-async fn materialization_failure_leaves_the_active_capability_unchanged() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
-    );
-    let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    let revision = snapshot.revision();
-    assert!(
-        snapshot.python_environment().is_some(),
-        "revision N has an environment"
-    );
-
-    conversation
-        .backend
-        .fail_python_materialization("injected install failure");
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
-    );
-    let error = conversation
-        .coordinator
-        .prepare_candidate()
-        .await
-        .expect_err("materialization failure");
-    assert!(matches!(
-        error,
-        CapabilityPreparationError::Environment(
-            rustx::skills::EnvironmentPreparationError::MaterializationFailed { .. }
-        )
-    ));
-    let current = conversation.coordinator.current_snapshot();
-    assert_eq!(
-        current.revision(),
-        revision,
-        "failed preparation leaves the active revision authoritative"
-    );
-    // The staging directory was removed.
-    let store_root = std::fs::read_dir(
-        conversation
-            .coordinator
-            .current_snapshot()
-            .effective_environment()
-            .child_environment(conversation.workspace.root())
-            .first()
-            .map(|_| conversation.dir.path().join("skill-env"))
-            .expect("store root"),
-    )
-    .expect("store exists");
-    for entry in store_root {
-        let name = entry.expect("entry").file_name();
-        assert!(
-            !name.to_string_lossy().starts_with(".staging-"),
-            "staging state must be cleaned after failure"
-        );
-    }
-}
-
-/// The ready-marker commit is the only point at which a Python environment
-/// becomes reusable: while materialization is gated, the final digest
-/// directory is incomplete; after publication its marker exists.
-#[tokio::test]
-async fn atomic_publication_is_the_only_reusable_point() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
-    );
-    let gate = conversation.backend.install_materialize_gate();
-    let store_root = conversation.dir.path().join("skill-env").join("python");
-    let prepare_task = {
-        let coordinator = conversation.coordinator.clone();
-        tokio::spawn(async move { coordinator.prepare_candidate().await })
-    };
-    gate.await_entered().await;
-    // Materialization began; no digest directory is reusable yet.
-    let entries: Vec<String> = std::fs::read_dir(&store_root)
-        .expect("store")
-        .map(|entry| {
-            entry
-                .expect("entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    let digest_name = entries
-        .iter()
-        .find(|name| name.starts_with("sha256:"))
-        .expect("final digest directory is created before Python materialization completes");
-    assert!(
-        !store_root
-            .join(digest_name)
-            .join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)
-            .exists(),
-        "an incomplete final-path environment has no reusable ready marker"
-    );
-    gate.release();
-    prepare_task.await.expect("prepare task").expect("prepare");
-    let entries: Vec<String> = std::fs::read_dir(&store_root)
-        .expect("store")
-        .map(|entry| {
-            entry
-                .expect("entry")
-                .file_name()
-                .to_string_lossy()
-                .into_owned()
-        })
-        .collect();
-    let digest_name = entries
-        .iter()
-        .find(|name| name.starts_with("sha256:"))
-        .expect("published digest directory");
-    assert!(
-        store_root
-            .join(digest_name)
-            .join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)
-            .is_file(),
-        "the ready marker is the Python publication boundary"
-    );
-}
-
-/// Node retains its independent staging-to-rename publication contract:
-/// materialization has a private staging directory and no final digest
-/// directory exists until the manifest and rename complete.
-#[tokio::test]
-async fn node_staging_is_published_by_atomic_rename() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "node-skill",
-        "Node skill.",
-        &[node_deps(r#"{"pdf-lib":"1.17.1"}"#)],
-    );
-    let gate = conversation.backend.install_materialize_gate();
-    let node_root = conversation.dir.path().join("skill-env").join("node");
-    let prepare = {
-        let coordinator = conversation.coordinator.clone();
-        tokio::spawn(async move { coordinator.prepare_candidate().await })
-    };
-    gate.await_entered().await;
-
-    let entries = std::fs::read_dir(&node_root)
-        .expect("node store")
-        .map(|entry| entry.expect("entry").file_name())
-        .collect::<Vec<_>>();
-    assert!(
-        entries
-            .iter()
-            .any(|name| name.to_string_lossy().starts_with(".staging-")),
-        "Node materialization uses a private staging directory"
-    );
-    assert!(
-        !entries
-            .iter()
-            .any(|name| name.to_string_lossy().starts_with("sha256:")),
-        "Node final digest is not visible before rename"
-    );
-
-    gate.release();
-    let candidate = prepare.await.expect("prepare task").expect("prepare");
-    let node = candidate.node_environment().expect("Node environment");
-    assert!(node.root.is_dir());
-    assert!(
-        node.root
-            .join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)
-            .is_file()
-    );
-    assert!(
-        std::fs::read_dir(&node_root)
-            .expect("node store")
-            .all(|entry| {
-                !entry
-                    .expect("entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".staging-")
-            }),
-        "published Node staging is consumed by rename"
-    );
-}
-
-/// Same-digest preparations share one in-process build owner. The barrier
-/// proves the two preparations overlap while only one Python materialization
-/// is active; both callers then receive the same immutable identities.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn same_digest_preparations_coalesce_for_python_and_node() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[
-            python_deps(r#"{"pypdf":"5.9.0"}"#),
-            node_deps(r#"{"pdf-lib":"1.17.1"}"#),
-        ],
-    );
-    let gate = conversation.backend.install_materialize_gate();
-    let first_coordinator = conversation.coordinator.clone();
-    let second_coordinator = conversation.coordinator.clone();
-    let first = tokio::spawn(async move { first_coordinator.prepare_candidate().await });
-    let second = tokio::spawn(async move { second_coordinator.prepare_candidate().await });
-    gate.await_entered().await;
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        1,
-        "one caller owns the overlapping Python build"
-    );
-    gate.release();
-    let first = first.await.expect("first task").expect("first prepare");
-    let second = second.await.expect("second task").expect("second prepare");
-    assert_eq!(
-        first
-            .python_environment()
-            .expect("Python environment")
-            .digest,
-        second
-            .python_environment()
-            .expect("Python environment")
-            .digest
-    );
-    assert_eq!(
-        first.node_environment().expect("Node environment").digest,
-        second.node_environment().expect("Node environment").digest
-    );
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        1
-    );
-    assert_eq!(
-        conversation.backend.materialization_count(Ecosystem::Node),
-        1,
-        "the same generic build coordination covers Node"
-    );
-}
-
-/// Cancelling the initiating preparation only drops that caller's wait. The
-/// EnvironmentStore-owned Python build remains the sole final-path writer;
-/// the second caller remains pending while the physical build is gated.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn dropped_prepare_waiter_does_not_cancel_python_build_owner() {
-    let conversation = conversation();
-    write_skill(
-        conversation.workspace.root(),
-        "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
-    );
-    let gate = conversation.backend.install_materialize_gate();
-    let first_coordinator = conversation.coordinator.clone();
-    let first = tokio::spawn(async move { first_coordinator.prepare_candidate().await });
-    gate.await_entered().await;
-
-    first.abort();
-    assert!(
-        first
-            .await
-            .expect_err("caller A was aborted")
-            .is_cancelled()
-    );
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        1,
-        "aborting the initiating caller does not drop the physical build"
-    );
-
-    let mut second = Box::pin(conversation.coordinator.prepare_candidate());
-    let waker = futures_util::task::noop_waker_ref();
-    let mut context = std::task::Context::from_waker(waker);
-    assert!(
-        matches!(second.as_mut().poll(&mut context), std::task::Poll::Pending),
-        "caller B remains pending while the physical build is gated"
-    );
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        1,
-        "pending preparation does not create a second final-path writer"
-    );
-    let store_root = conversation.dir.path().join("skill-env").join("python");
-    assert!(
-        std::fs::read_dir(&store_root)
-            .expect("python store")
-            .filter_map(Result::ok)
-            .all(|entry| {
-                !entry
-                    .path()
-                    .join(rustx::skills::ENVIRONMENT_MANIFEST_FILE)
-                    .exists()
-            }),
-        "the gated Python final path is not reusable before publication"
-    );
-
-    gate.release();
-    let candidate = second.await.expect("caller B prepare");
-    assert!(candidate.python_environment().is_some());
-    assert_eq!(
-        conversation
-            .backend
-            .materialization_count(Ecosystem::Python),
-        1
-    );
-}
-
-/// An EnvironmentStore-owned same-digest build failure is shared by a waiter
-/// even after the initiating caller is gone. Retry ownership becomes legal
-/// only after the failed physical writer has returned and published failure.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn dropped_build_waiter_cannot_start_an_early_retry() {
-    let directory = tempfile::tempdir().expect("environment store directory");
-    let backend = common::FakeSkillEnvironmentBackend::new();
-    backend.fail_python_materialization("injected same-digest failure");
-    let store = rustx::skills::EnvironmentStore::new(
-        directory.path().join("environments"),
-        Arc::new(backend.clone()),
-    )
-    .expect("environment store");
-    let dependencies = BTreeMap::from([("pypdf".to_owned(), "5.9.0".to_owned())]);
-    let gate = backend.install_materialize_gate();
-    let first_store = store.clone();
-    let first_dependencies = dependencies.clone();
-    let first = tokio::spawn(async move {
-        first_store
-            .ensure_python_environment(&first_dependencies)
-            .await
-    });
-    gate.await_entered().await;
-
-    first.abort();
-    assert!(
-        first
-            .await
-            .expect_err("caller A was aborted")
-            .is_cancelled()
-    );
-    // Poll the store waiter itself: a coordinator caller first spawns its
-    // preparation owner, so polling that caller cannot prove it joined this build.
-    let mut second = Box::pin(store.ensure_python_environment(&dependencies));
-    let waker = futures_util::task::noop_waker_ref();
-    let mut context = std::task::Context::from_waker(waker);
-    assert!(
-        matches!(second.as_mut().poll(&mut context), std::task::Poll::Pending),
-        "caller B remains attached to the live failed build"
-    );
-    assert_eq!(
-        backend.materialization_count(Ecosystem::Python),
-        1,
-        "no retry writer starts while the original materialization is gated"
-    );
-    gate.release();
-    let failure = second
-        .await
-        .expect_err("the joined waiter shares the failed owner");
-    assert!(failure.to_string().contains("injected same-digest failure"));
-    assert_eq!(backend.materialization_count(Ecosystem::Python), 1);
-    let retry = store
-        .ensure_python_environment(&dependencies)
-        .await
-        .expect("retry can build after the failed owner");
-    assert!(retry.is_some());
-    assert_eq!(backend.materialization_count(Ecosystem::Python), 2);
-}
-
 #[test]
 fn environment_store_inside_workspace_is_rejected_before_creation() {
     let dir = tempfile::tempdir().expect("temp dir");
@@ -1352,21 +682,18 @@ fn environment_store_inside_workspace_is_rejected_before_creation() {
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let workspace = Workspace::new(&workspace_root).expect("workspace");
     let store = workspace.root().join("private-env");
-    let Err(error) = CapabilityCoordinator::with_backend(
-        CapabilityCoordinatorConfig {
-            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
-            workspace,
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            agent_activation: fixture_activation(),
-            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: ToolEnvironment::new(),
-            environment_store_root: store.clone(),
-        },
-        Arc::new(common::FakeSkillEnvironmentBackend::new()),
-    ) else {
+    let Err(error) = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
+        conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
+        workspace,
+        base_tool_registry: Arc::new(ToolRegistry::new()),
+        extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+        agent_activation: fixture_activation(),
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+        mcp_servers: std::collections::BTreeMap::new(),
+        base_environment: ToolEnvironment::new(),
+        environment_store_root: store.clone(),
+    }) else {
         panic!("nested store must be rejected")
     };
     assert!(matches!(
@@ -1383,21 +710,18 @@ fn workspace_inside_environment_store_is_rejected() {
     let workspace_root = store.join("workspace");
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let workspace = Workspace::new(&workspace_root).expect("workspace");
-    let Err(error) = CapabilityCoordinator::with_backend(
-        CapabilityCoordinatorConfig {
-            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
-            workspace,
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            agent_activation: fixture_activation(),
-            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: ToolEnvironment::new(),
-            environment_store_root: store,
-        },
-        Arc::new(common::FakeSkillEnvironmentBackend::new()),
-    ) else {
+    let Err(error) = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
+        conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
+        workspace,
+        base_tool_registry: Arc::new(ToolRegistry::new()),
+        extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+        agent_activation: fixture_activation(),
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+        mcp_servers: std::collections::BTreeMap::new(),
+        base_environment: ToolEnvironment::new(),
+        environment_store_root: store,
+    }) else {
         panic!("workspace containing the store must be rejected")
     };
     assert!(matches!(
@@ -1413,21 +737,18 @@ fn external_environment_store_is_accepted() {
     std::fs::create_dir_all(&workspace_root).expect("workspace");
     let workspace = Workspace::new(&workspace_root).expect("workspace");
     let store = dir.path().join("external").join("private-env");
-    let coordinator = CapabilityCoordinator::with_backend(
-        CapabilityCoordinatorConfig {
-            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
-            workspace,
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            agent_activation: fixture_activation(),
-            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: ToolEnvironment::new(),
-            environment_store_root: store.clone(),
-        },
-        Arc::new(common::FakeSkillEnvironmentBackend::new()),
-    )
+    let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
+        conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
+        workspace,
+        base_tool_registry: Arc::new(ToolRegistry::new()),
+        extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+        agent_activation: fixture_activation(),
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+        mcp_servers: std::collections::BTreeMap::new(),
+        base_environment: ToolEnvironment::new(),
+        environment_store_root: store.clone(),
+    })
     .expect("external store");
     assert!(
         coordinator
@@ -1451,21 +772,18 @@ fn symlink_prefix_environment_store_is_rejected_before_creation() {
     symlink(&workspace_root, outside.join("link")).expect("link");
     let workspace = Workspace::new(&workspace_root).expect("workspace");
     let configured = outside.join("link/private-env");
-    let Err(error) = CapabilityCoordinator::with_backend(
-        CapabilityCoordinatorConfig {
-            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
-            workspace,
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            agent_activation: fixture_activation(),
-            skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: ToolEnvironment::new(),
-            environment_store_root: configured,
-        },
-        Arc::new(common::FakeSkillEnvironmentBackend::new()),
-    ) else {
+    let Err(error) = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
+        conversation_id: ConversationId::new("conv_d1c8ffd4-e55a-7688-84ec-b44b65b846f7"),
+        workspace,
+        base_tool_registry: Arc::new(ToolRegistry::new()),
+        extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+        agent_activation: fixture_activation(),
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::default(),
+        mcp_servers: std::collections::BTreeMap::new(),
+        base_environment: ToolEnvironment::new(),
+        environment_store_root: configured,
+    }) else {
         panic!("symlink-prefix escape must be rejected")
     };
     assert!(matches!(
@@ -1478,10 +796,10 @@ fn symlink_prefix_environment_store_is_rejected_before_creation() {
     );
 }
 
-/// A dependency conflict is reported before any environment materialization
-/// (no package-manager subprocess runs).
+/// Conflicting dependency strings are inert metadata. Both Skills publish and
+/// the effective environment stays the base environment.
 #[tokio::test]
-async fn conflict_is_reported_before_materialization() {
+async fn conflicting_dependency_metadata_does_not_block_publication() {
     let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
@@ -1493,20 +811,21 @@ async fn conflict_is_reported_before_materialization() {
         conversation.workspace.root(),
         "b",
         "Skill B.",
-        &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
+        &[python_deps(r#"{"pypdf":"5.10.0"}"#), node_deps("not-json")],
     );
-    let error = conversation
-        .coordinator
-        .prepare_candidate()
-        .await
-        .map(drop)
-        .expect_err("conflict");
-    assert!(matches!(
-        error,
-        CapabilityPreparationError::DependencyConflict(conflict)
-            if conflict.package == "pypdf" && conflict.declarations.len() == 2
-    ));
-    assert_eq!(conversation.backend.calls(), Vec::new());
+    let snapshot = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(
+        snapshot
+            .skills()
+            .catalog_entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["a", "b"]
+    );
+    assert_eq!(snapshot.effective_environment(), &ToolEnvironment::new());
+    assert!(!conversation.dir.path().join("skill-env/python").exists());
+    assert!(!conversation.dir.path().join("skill-env/node").exists());
 }
 
 // ---------------------------------------------------------------------------
@@ -1646,11 +965,10 @@ async fn unchanged_preparation_is_a_noop() {
     assert_eq!(committed.as_ref(), &snapshot);
 }
 
-/// A description-only change increments the capability revision without
-/// changing the environment identity; a dependency-only change changes
-/// both.
+/// A description change and uninterpreted dependency metadata each publish a
+/// new Skill definition. Neither changes the effective tool environment.
 #[tokio::test]
-async fn description_change_bumps_revision_without_changing_environment_identity() {
+async fn description_or_dependency_metadata_keeps_the_same_environment() {
     let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
@@ -1659,7 +977,6 @@ async fn description_change_bumps_revision_without_changing_environment_identity
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    let python_digest = snapshot.python_environment().expect("env").digest.clone();
 
     write_skill(
         conversation.workspace.root(),
@@ -1678,9 +995,8 @@ async fn description_change_bumps_revision_without_changing_environment_identity
         "a description change yields a new SkillVersionId binding"
     );
     assert_eq!(
-        second.python_environment().expect("env").digest,
-        python_digest,
-        "the environment identity is unchanged when dependency inputs are unchanged"
+        second.effective_environment(),
+        snapshot.effective_environment()
     );
 
     write_skill(
@@ -1690,10 +1006,11 @@ async fn description_change_bumps_revision_without_changing_environment_identity
         &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
     );
     let third = prepare_and_commit(&conversation.coordinator).await;
-    assert_ne!(
-        third.python_environment().expect("env").digest,
-        python_digest,
-        "a dependency change changes the environment identity"
+    assert_ne!(third.skills().bindings(), second.skills().bindings());
+    assert_eq!(
+        third.effective_environment(),
+        snapshot.effective_environment(),
+        "dependency metadata does not change the tool environment"
     );
 }
 
@@ -1769,9 +1086,11 @@ async fn stale_candidate_cannot_overwrite_a_newer_revision() {
     ));
 }
 
-/// Failed candidate preparation leaves the current revision authoritative.
+/// Conflicting dependency text prepares and publishes. Preparation itself
+/// does not move the revision; only the commit does. The tool environment
+/// stays the one already published.
 #[tokio::test]
-async fn failed_preparation_leaves_revision_authoritative() {
+async fn conflicting_dependency_text_does_not_fail_preparation() {
     let conversation = conversation();
     write_skill(
         conversation.workspace.root(),
@@ -1780,24 +1099,38 @@ async fn failed_preparation_leaves_revision_authoritative() {
         &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
     );
     let snapshot = prepare_and_commit(&conversation.coordinator).await;
-    // A conflict across two *valid* Skills is still a whole-candidate
-    // preparation failure: the merged dependency set has no answer.
     write_skill(
         conversation.workspace.root(),
         "b",
         "Skill B.",
         &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
     );
-    let _ = conversation
+    let prepared = conversation
         .coordinator
         .prepare_candidate()
         .await
-        .map(drop)
-        .expect_err("malformed candidate");
+        .expect("conflicting dependency text still prepares");
     assert_eq!(
         conversation.coordinator.current_snapshot().revision(),
-        snapshot.revision()
+        snapshot.revision(),
+        "preparation does not publish"
     );
+    let committed = conversation
+        .coordinator
+        .commit(prepared)
+        .expect("commit the expanded catalog");
+    assert_ne!(committed.revision(), snapshot.revision());
+    assert_eq!(
+        committed.effective_environment(),
+        snapshot.effective_environment()
+    );
+    let names = committed
+        .skills()
+        .catalog_entries()
+        .iter()
+        .map(|entry| entry.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["a", "b"]);
 }
 
 #[tokio::test]
@@ -1825,13 +1158,14 @@ async fn cfg280_malformed_skill_dependencies_do_not_block_publication() {
             .collect::<Vec<_>>(),
         ["bad", "good"]
     );
-    assert!(snapshot.python_environment().is_some());
+    assert_eq!(snapshot.effective_environment(), &ToolEnvironment::new());
     assert!(
         snapshot
             .skills()
             .diagnostics()
             .iter()
-            .any(|fact| matches!(fact, rustx::skills::SkillDiagnostic::PackageWarning { .. }))
+            .all(|fact| { !format!("{fact:?}").contains("rustx.python-dependencies") }),
+        "dependency text is not a Skill diagnostic"
     );
 }
 
@@ -1969,14 +1303,12 @@ async fn background_execution_retains_its_dispatching_environment() {
     // Attempt N terminates; the background execution stays active.
     drop(lease_n);
 
-    // Revision N+1 activates with a different Python runtime identity. The
-    // active detached execution does not block the capability commit.
-    conversation.backend.set_python_runtime("Python 3.13.0");
+    // A later definition publishes while the detached execution stays active.
     write_skill(
         conversation.workspace.root(),
         "pdf",
-        "PDF skill.",
-        &[python_deps(r#"{"pypdf":"5.9.0"}"#)],
+        "PDF skill, revised.",
+        &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
     );
     let snapshot_n1 = prepare_and_commit(&conversation.coordinator).await;
     assert_eq!(
@@ -1984,9 +1316,10 @@ async fn background_execution_retains_its_dispatching_environment() {
         snapshot_n.revision().get() + 1,
         "an active detached background execution never blocks a capability commit"
     );
-    assert_ne!(
-        snapshot_n1.python_environment().expect("env").digest,
-        snapshot_n.python_environment().expect("env").digest
+    assert_eq!(
+        snapshot_n1.effective_environment(),
+        snapshot_n.effective_environment(),
+        "a Skill definition change leaves the tool environment unchanged"
     );
 
     // The old background execution still has environment N.
@@ -2105,47 +1438,44 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
     );
     fake_tool.register(&mut tools);
     let tools = Arc::new(tools);
-    let coordinator = CapabilityCoordinator::with_backend(
-        CapabilityCoordinatorConfig {
-            source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
-            conversation_id: ConversationId::new("conv_6c966d7f-bdde-792f-8692-51542a5c1834"),
-            workspace: conversation.workspace.clone(),
-            base_tool_registry: tools.clone(),
-            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            agent_activation: rustx::capabilities::AgentActivation {
-                profile: rustx::local_runtime::config::AgentProfileDocument {
-                    tools: rustx::capabilities::selection::ToolSelectionDocument {
-                        builtin: tools
-                            .definitions()
-                            .into_iter()
-                            .filter(|tool| tool.origin.source().is_none())
-                            .map(|tool| tool.name.clone())
-                            .collect(),
-                        sources: tools
-                            .definitions()
-                            .into_iter()
-                            .filter_map(|definition| definition.origin.source())
-                            .map(|source| {
-                                (
-                                    source,
-                                    rustx::capabilities::selection::SourceToolSelection::All,
-                                )
-                            })
-                            .collect(),
-                    },
-                    ..fixture_activation().profile
+    let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        source_demand: rustx::capabilities::source::ToolSourceDemand::default(),
+        conversation_id: ConversationId::new("conv_6c966d7f-bdde-792f-8692-51542a5c1834"),
+        workspace: conversation.workspace.clone(),
+        base_tool_registry: tools.clone(),
+        extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+        agent_activation: rustx::capabilities::AgentActivation {
+            profile: rustx::local_runtime::config::AgentProfileDocument {
+                tools: rustx::capabilities::selection::ToolSelectionDocument {
+                    builtin: tools
+                        .definitions()
+                        .into_iter()
+                        .filter(|tool| tool.origin.source().is_none())
+                        .map(|tool| tool.name.clone())
+                        .collect(),
+                    sources: tools
+                        .definitions()
+                        .into_iter()
+                        .filter_map(|definition| definition.origin.source())
+                        .map(|source| {
+                            (
+                                source,
+                                rustx::capabilities::selection::SourceToolSelection::All,
+                            )
+                        })
+                        .collect(),
                 },
-                ..Default::default()
+                ..fixture_activation().profile
             },
-            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
-                conversation.workspace.root().join(".agents/skills"),
-            ),
-            mcp_servers: std::collections::BTreeMap::new(),
-            base_environment: ToolEnvironment::new(),
-            environment_store_root: conversation.dir.path().join("skill-env-2"),
+            ..Default::default()
         },
-        Arc::new(conversation.backend.clone()),
-    )
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+            conversation.workspace.root().join(".agents/skills"),
+        ),
+        mcp_servers: std::collections::BTreeMap::new(),
+        base_environment: ToolEnvironment::new(),
+        environment_store_root: conversation.dir.path().join("skill-env-2"),
+    })
     .expect("coordinator");
     let snapshot = prepare_and_commit(&coordinator).await;
     let lease = coordinator.acquire_attempt_lease();
@@ -2307,4 +1637,155 @@ async fn every_turn_uses_the_attempts_immutable_catalog_and_environment() {
         coordinator.commit(next_candidate).is_ok(),
         "a settled execution immediately permits the next capability commit"
     );
+}
+
+fn assert_no_skill_environment(dir: &std::path::Path) {
+    let store = dir.join("skill-env");
+    assert!(
+        store.is_dir(),
+        "the runtime-private store root still exists"
+    );
+    for name in ["python", "node"] {
+        assert!(
+            !store.join(name).exists(),
+            "skill discovery must not create a {name} environment"
+        );
+    }
+}
+
+/// Catalog, environment, and store-layout assertions for Skills that carry
+/// uninterpreted dependency text. The launch proof lives in
+/// `boundary_suites::skill_launch`, because it loads a recorder and awaits a
+/// real interpreter.
+pub(crate) async fn exercise_skill_catalog_without_environments() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "pdf",
+        "PDF skill.",
+        &[
+            python_deps(r#"{"pypdf":"5.9.0","pillow":"not a version"}"#),
+            node_deps(r#"{"pdf-lib":"1.17.1"}"#),
+        ],
+    );
+    write_skill(
+        conversation.workspace.root(),
+        "slides",
+        "Slides.",
+        &[python_deps(r#"{"pypdf":"9.9.9"}"#), node_deps("malformed")],
+    );
+    let snapshot = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(
+        snapshot
+            .skills()
+            .catalog_entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["pdf", "slides"]
+    );
+    assert_eq!(snapshot.effective_environment(), &ToolEnvironment::new());
+    assert_no_skill_environment(conversation.dir.path());
+    write_skill(
+        conversation.workspace.root(),
+        "pdf",
+        "PDF skill reloaded.",
+        &[python_deps(r#"{"pypdf":"5.10.0"}"#)],
+    );
+    let reloaded = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(
+        reloaded.effective_environment(),
+        snapshot.effective_environment()
+    );
+    assert_eq!(
+        reloaded
+            .skills()
+            .catalog_entries()
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["pdf", "slides"]
+    );
+    assert_no_skill_environment(conversation.dir.path());
+}
+
+/// S01/S02 catalog half: selecting and reloading Skills that carry Python and
+/// Node metadata publishes both names, leaves the effective environment
+/// unchanged, and creates no Skill environment directory. The zero-launch
+/// proof is `boundary_suites::skill_launch`.
+#[tokio::test]
+async fn skill_metadata_does_not_probe_or_materialize() {
+    exercise_skill_catalog_without_environments().await;
+}
+
+/// S03: zero, one, many, and hidden Skills share one effective environment.
+#[tokio::test]
+async fn skill_population_does_not_change_the_effective_environment() {
+    let conversation = conversation();
+    let empty = prepare_and_commit(&conversation.coordinator).await;
+    let baseline = empty.effective_environment().clone();
+    write_skill(
+        conversation.workspace.root(),
+        "one",
+        "One skill.",
+        &[python_deps(r#"{"example":"1.0.0"}"#)],
+    );
+    let one = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(one.effective_environment(), &baseline);
+    write_skill(
+        conversation.workspace.root(),
+        "two",
+        "Two.",
+        &[node_deps(r#"{"left-pad":"1.0.0"}"#)],
+    );
+    write_hidden_skill(conversation.workspace.root(), "hidden", "Hidden.");
+    let many = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(many.effective_environment(), &baseline);
+    assert_eq!(
+        many.effective_environment()
+            .child_environment(conversation.workspace.root()),
+        baseline.child_environment(conversation.workspace.root())
+    );
+    assert!(
+        many.skill_catalog()
+            .is_some_and(|catalog| !catalog.contains("Hidden."))
+    );
+}
+
+/// S04/S08: payload size, symlinks, and body edits do not hash the payload or
+/// create an environment. Ordinary reads observe the current instruction bytes.
+#[tokio::test]
+async fn payload_edits_stay_outside_discovery_and_reads_see_current_bytes() {
+    let conversation = conversation();
+    write_skill(
+        conversation.workspace.root(),
+        "guide",
+        "Guide.",
+        &[python_deps(r#"{"example":"1.0.0"}"#)],
+    );
+    let package = conversation.workspace.root().join(".agents/skills/guide");
+    std::fs::File::create(package.join("asset.bin"))
+        .unwrap()
+        .set_len(8 * 1024 * 1024)
+        .unwrap();
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/nonexistent/payload", package.join("references")).unwrap();
+    let snapshot = prepare_and_commit(&conversation.coordinator).await;
+    let location = snapshot.skills().catalog_entries()[0].location.clone();
+    assert_eq!(
+        location,
+        skill_location(conversation.workspace.root(), "guide")
+    );
+    let body = std::fs::read_to_string(&location).unwrap();
+    assert!(body.contains("body"));
+    std::fs::write(&location, body.replace("body", "current bytes")).unwrap();
+    assert!(
+        std::fs::read_to_string(&location)
+            .unwrap()
+            .contains("current bytes")
+    );
+    let again = prepare_and_commit(&conversation.coordinator).await;
+    assert_eq!(again.revision(), snapshot.revision());
+    assert_eq!(again.skills().bindings(), snapshot.skills().bindings());
+    assert_no_skill_environment(conversation.dir.path());
 }

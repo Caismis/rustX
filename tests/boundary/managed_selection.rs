@@ -131,7 +131,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
         let store = rustx::tools::python::PythonToolStore::with_runner(
             fixture.dir().path().join("environments/python-tools"),
             Arc::new(PreparationRunner {
-                runner: RunnerBackedProcessRunner::default(),
+                runner: RunnerBackedProcessRunner,
                 staged: Mutex::new(Some(staged_tx)),
                 release: Mutex::new(Some(release_rx)),
             }),

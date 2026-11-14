@@ -148,6 +148,7 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 biodivine-lib-bdd = "0.6.3"
 minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
+pep440_rs = "0.7.3"
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash

@@ -396,9 +396,11 @@ impl SupervisedInteractiveProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let environment_snapshot =
+            crate::runtime::supervised_unit::snapshot_command_environment(&environment)?;
         supervisor.env(
-            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-            serde_json::to_string(&environment).map_err(|error| error.to_string())?,
+            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            environment_snapshot.path(),
         );
         #[cfg(test)]
         test_control.configure_supervisor(&mut supervisor);
@@ -450,20 +452,22 @@ impl SupervisedInteractiveProcess {
         }
         let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
         let settlement = Arc::new(SettlementCell::new());
-        let settlement_for_driver = settlement.clone();
         #[cfg(test)]
         let supervisor_child_pid = child.id().expect("the spawned supervisor child has a pid");
         // The runtime-owned driver is the physical settlement owner from
         // the moment the spawn succeeded. Dropping the JoinHandle detaches
         // it; the driver completes the terminal exchange and reaps the
         // direct supervisor child regardless of the business handles.
-        std::mem::drop(tokio::spawn(drive_interactive_unit(
-            child,
-            listener,
-            socket_path,
-            shutdown_rx,
-            settlement_for_driver,
-            test_control,
+        std::mem::drop(tokio::spawn(futures_util::FutureExt::map(
+            drive_interactive_unit(
+                child,
+                listener,
+                socket_path,
+                shutdown_rx,
+                settlement.clone(),
+                test_control,
+            ),
+            move |()| drop(environment_snapshot),
         )));
         Ok(Self {
             stdin,
@@ -703,7 +707,7 @@ async fn run_interactive_unit(
     // top-level runtime it resolves immediately; inside a subagent child it
     // holds START closed until the top-level parent has acknowledged
     // retention of this exact anchor. MCP stdio therefore uses exactly the
-    // same generic mechanism as Bash, Python, and Skill environments.
+    // same generic mechanism as Bash and Managed Python.
     let mut anchor_gate = crate::runtime::nested_containment::AnchorGate::Idle;
     loop {
         tokio::select! {
@@ -1303,7 +1307,7 @@ mod interactive_tests {
             "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR",
             "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP",
             "RUSTX_TEST_INTERACTIVE_TRACE",
-            "RUSTX_COMMAND_ENVIRONMENT",
+            "RUSTX_COMMAND_ENVIRONMENT_FILE",
             "RUSTX_PHYSICAL_CONTINUATION",
         ];
         let environment = ToolEnvironment::from_authorized(
