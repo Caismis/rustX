@@ -363,21 +363,41 @@ change a mutable reader into an immutable source or introduce a second source
 cache. A complete authorized read establishes the fixed full-source copy.
 Geometry Session
 files and Workbench sources use the existing at-most-2-MiB byte ranges to assemble
-at most 200 MiB in one exact-size buffer. Every range reauthorizes its source and
-checks offset, size, version, EOF and response length. A changed version/size
-rejects the assembly; cancellation waits for the current physical read to settle
-and starts no next range. No partial assembly is published or retained as a copy.
+at most 200 MiB in one exact-size buffer. The first page establishes size and
+version; up to two rolling lanes then fill disjoint ranges directly into that
+buffer, accepting out-of-order completion. Each lane retains at most one page.
+Two mounted reading owners can therefore retain up to four geometry page
+results (8 MiB), in addition to their source buffers and transport/parser copies.
+The lanes share the existing two-read FIFO admission domain with other previews
+and Download; they do not add Host/native capacity. Every range reauthorizes its
+source and checks offset, size, version, EOF and response length. A changed
+version/size or malformed page cancels sibling lanes. Cancellation starts no next
+range and waits for every started physical read to settle; unknown settlement
+outranks canceled publication or a sibling's source error. No partial assembly
+is published or retained as a copy. A read-only descriptor does not freeze
+externally mutable contents or replace these checks.
+
+Workbench byte pages use one stat-sized output buffer and explicit positional
+reads, including short-read handling. They avoid the text reader's retained
+64-KiB chunks and final concatenation/copy. The byte reader checks growth, source
+metadata and a final secure pathname reopen before publication. Text pages keep
+their existing path. [Issue #534 reading evidence](issue-534/README.md) describes
+the paired production-function benchmark and its measurement limits.
 Ordinary complete reads and original Download retain their 32-MiB bound. Source-version
 hints still validate authority but cannot replace that copy. Refresh starts a
 new content generation and reauthorizes the current source; loading/errors follow
 the existing preview flow. Other viewers keep their automatic-refresh behavior.
 
-Hidden bodies terminate their import Worker and release every renderer resource.
+Parked geometry bodies retain their active copy, scene, canvas and inspection
+state within the shared two-mounted-body budget. Parking pauses rendering/input
+and new optional work; already running work keeps its original deadline. Resuming
+the same retained body neither rereads nor reimports. Actual body retirement
+terminates its import Worker and releases every renderer resource.
 Small admitted source copies can remain in the existing 8-entry/64-MiB inactive
 cache. A larger copy cannot fit that cache: its content owner relinquishes the
 buffer directly to the ready STL/CAD Worker instead of making another source-sized
 copy. GLB releases its large raw copy after successful admission. The detached
-data object remains only as the current copy token; hiding evicts it, so reopening
+data object remains only as the current copy token; retirement evicts it, so reopening
 performs a newly authorized read. Retirement, Refresh and failed imports cannot
 reuse detached bytes. Download remains an independent original-source action.
 Separately, the page may retain one compiled immutable CAD code module, just as

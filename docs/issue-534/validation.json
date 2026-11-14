@@ -1,0 +1,241 @@
+{
+  "base": "c076354d647c1a1832e9af5e005696ecb5579285",
+  "productionSha256": {
+    "web-console/src/client/geometry-source.ts": "1d913cc4e281bf76e0bb89547e77431f2b729d7154a9321239ddce70e06eadce",
+    "web-console/host/workspace-preview.ts": "eae8e3930df8ff9b24d10d1732cf68e70fdc014ca9e99e649f59050b2969e6d3"
+  },
+  "checks": {
+    "typescript": {
+      "command": "node node_modules/typescript/bin/tsc --noEmit",
+      "exitCode": 0
+    },
+    "unit": {
+      "command": "node node_modules/vitest/vitest.mjs run --config /tmp/rustx534-vitest.config.mts geometry- workspace-preview file-observation-native workbench-preview-admission product-host-file-read document-http-lifetime preview-content preview-lifetime --maxWorkers=4",
+      "passedFiles": 45,
+      "passedTests": 504,
+      "note": "Revalidated together in the isolated implementation worktree; existing locked Web/TUI dependencies and unchanged native build reused. Temporary Vite config only allows the linked dependency paths outside the worktree; no test selection, assertions, timeout or product configuration changed.",
+      "exitCode": 0,
+      "temporaryConfiguration": {
+        "server.fs.allow": [
+          "/tmp/rustx-issue-534",
+          "/home/aecc608/Workspace/rustX/web-console/node_modules",
+          "/home/aecc608/Workspace/rustX/tui/node_modules"
+        ]
+      }
+    },
+    "production": {
+      "command": "node node_modules/vite/bin/vite.js build",
+      "exitCode": 0
+    },
+    "audits": {
+      "commands": [
+        "node scripts/provenance.ts --artifact",
+        "node scripts/geometry-runtime.ts --artifact",
+        "node scripts/check-i18n.ts",
+        "node scripts/notices.ts"
+      ],
+      "exitCodes": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "browser": {
+      "purpose": "Supplementary installed-Chrome functional diagnosis, not pinned-browser acceptance or paired browser speedup evidence",
+      "browser": "Google Chrome 157.0.8103.38",
+      "playwright": "1.63.0",
+      "configuration": {
+        "productionFixture": "test/geometry-performance.vite.config.ts",
+        "workers": 1,
+        "retries": 0,
+        "repeatEach": 1,
+        "timeoutMs": 120000,
+        "viewport": {
+          "width": 1440,
+          "height": 1000
+        },
+        "arguments": [
+          "--no-sandbox",
+          "--use-angle=swiftshader",
+          "--enable-unsafe-swiftshader"
+        ],
+        "snapshotsUpdated": false,
+        "strictPerformanceBudgetCertification": false
+      },
+      "stats": {
+        "startTime": "2026-11-13T04:00:38.004Z",
+        "duration": 48106.44,
+        "expected": 8,
+        "skipped": 0,
+        "unexpected": 1,
+        "flaky": 0
+      },
+      "tests": [
+        {
+          "title": "cancelled CAD code wait retires its idle Worker and the retained copy reuses only compiled code",
+          "file": "geometry-code.spec.ts",
+          "repeatEachIndex": null,
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "duration": 1757,
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "two actual split CAD owners share code and allocate fresh import Workers after retirement",
+          "file": "geometry-code.spec.ts",
+          "repeatEachIndex": null,
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "duration": 3186,
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "browser input and GPU-complete frame opportunity: stl-735000-vertices",
+          "file": "geometry-latency.spec.ts",
+          "repeatEachIndex": null,
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "duration": 6530,
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "browser input and GPU-complete frame opportunity: cad-96-parts",
+          "file": "geometry-latency.spec.ts",
+          "repeatEachIndex": null,
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "duration": 7092,
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "browser input and GPU-complete frame opportunity: stl-200mib",
+          "file": "geometry-latency.spec.ts",
+          "repeatEachIndex": null,
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "duration": 16072,
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "an ordinary unheld 96-part CAD import presents a complete LOD before the full model",
+          "file": "geometry-progressive.spec.ts",
+          "repeatEachIndex": null,
+          "status": "unexpected",
+          "results": [
+            {
+              "status": "failed",
+              "duration": 2527,
+              "retry": 0,
+              "error": {
+                "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeGreaterThan\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m\n\nExpected: > \u001b[32m0\u001b[39m\nReceived:   \u001b[31m0\u001b[39m",
+                "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoBeGreaterThan\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m\n\nExpected: > \u001b[32m0\u001b[39m\nReceived:   \u001b[31m0\u001b[39m\n    at /tmp/rustx-issue-534/web-console/test/e2e/geometry-progressive.spec.ts:61:30",
+                "location": {
+                  "file": "/tmp/rustx-issue-534/web-console/test/e2e/geometry-progressive.spec.ts",
+                  "column": 30,
+                  "line": 61
+                },
+                "snippet": "  59 |     for(const tier of evidence.nativeTiers){expect(tier.meshNames).toEqual(imported.map((mesh:any)=>mesh.name));expect(tier.root).toEqual(root);expect(occurrences(tier.root)).toBe(96);}\n  60 |     const displayed=Object.entries(evidence.latency.lodStages).filter(([,stage]:[string,any])=>stage.submission>0&&stage.gpu>=stage.submission&&stage.opportunity>=stage.gpu&&stage.opportunity<fullFirst);\n> 61 |     expect(displayed.length).toBeGreaterThan(0);\n     |                              ^\n  62 |     for(const [lod,stage] of displayed as [string,{submission:number;gpu:number;opportunity:number}][]){\n  63 |       const tier=evidence.nativeTiers.find((value:any)=>value.level===(lod==='coarse'?0:1));expect(tier).toBeDefined();\n  64 |       expect(evidence.frames.some((frame:any)=>frame.completeness==='preview'&&frame.lod===lod&&frame.triangles===tier.triangles&&frame.ms-evidence.latency.start<=stage.gpu)).toBe(true);"
+              }
+            }
+          ]
+        },
+        {
+          "title": "whole-model CAD tessellation refines coarse to medium to full through one focused renderer",
+          "file": "geometry-progressive.spec.ts",
+          "repeatEachIndex": null,
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "duration": 3411,
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "whole-model adoption preserves focus on external controls",
+          "file": "geometry-progressive.spec.ts",
+          "repeatEachIndex": null,
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "duration": 1134,
+              "retry": 0
+            }
+          ]
+        },
+        {
+          "title": "retirement destroys LOD graphics and fences native tiers and final results held in transit",
+          "file": "geometry-progressive.spec.ts",
+          "repeatEachIndex": null,
+          "status": "expected",
+          "results": [
+            {
+              "status": "passed",
+              "duration": 1133,
+              "retry": 0
+            }
+          ]
+        }
+      ],
+      "latencyArtifacts": [
+        {
+          "path": "docs/issue-534/browser/cad-96-parts-latency.json",
+          "sha256": "57d4a2e2efe1d47be4dfd3c063445f613f4f60697b70167559a1d7fa0df1d08c"
+        },
+        {
+          "path": "docs/issue-534/browser/stl-735000-vertices-latency.json",
+          "sha256": "aa932469c5239519b9cb5df3033f765fa7e3bfa24bcccb109eec1fa69efa8adc"
+        },
+        {
+          "path": "docs/issue-534/browser/stl-200mib-latency.json",
+          "sha256": "831ffc8d0ba17746f9ff58fc99232809ce82b40eb0b421c6af27dcbeffc4d9b0"
+        }
+      ],
+      "limitation": "No Docker/Podman executable was available for the pinned browser. Native delivery HTTP reading was not benchmarked.",
+      "pairedNaturalLodDiagnostics": {
+        "baseline-natural-lod": {
+          "startTime": "2026-11-13T04:03:37.515Z",
+          "duration": 10504.969000000001,
+          "expected": 2,
+          "skipped": 0,
+          "unexpected": 1,
+          "flaky": 0
+        },
+        "candidate-natural-lod": {
+          "startTime": "2026-11-13T04:03:48.402Z",
+          "duration": 9202.043,
+          "expected": 3,
+          "skipped": 0,
+          "unexpected": 0,
+          "flaky": 0
+        }
+      },
+      "allResultEvidence": "browser/functional-validation.json",
+      "diagnosis": "Candidate full run: 8 passed, 1 existing natural-LOD GPU/next-rAF ordering assertion failed. Same baseline assertion reproduced in 1 of 3 baseline runs; 3 subsequent candidate runs passed. Preserve all observations; no retry-to-pass verdict or pinned-CI certification. Fixture is 168057 bytes, one source page; concurrent lanes and Host byte reader are not exercised by this case. Renderer/Worker/test unchanged."
+    }
+  },
+  "implementationRevision": "01a9b5d9681da3107c7e7a5591ee9dcb128f968c"
+}
