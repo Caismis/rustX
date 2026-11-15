@@ -7,7 +7,7 @@ This document records the Stage 5 CI hardening, lane-checker enforcement, benchm
 
 ## 1. Breaking Build & Deployment Contract (Rust 1.100.0)
 
-1. **Pinned toolchain (`rust-toolchain.toml`)**: `channel = "1.100.0"`, `profile = "minimal"`, `components = ["clippy", "rustfmt"]`. All Cargo build, test, check, clippy, doc, run, and metadata steps use `--locked` (`cargo fmt` itself takes no `--locked` flag).
+1. **Pinned toolchain (`rust-toolchain.toml`)**: `channel = "1.100.0"`, `profile = "minimal"`, `components = ["clippy", "rustfmt"]`. All CI Cargo build, test, check, clippy, doc, run, and metadata steps use `--locked` (`cargo fmt` itself takes no `--locked` flag; this does not cover all historical contributor commands outside CI and managed generator/checker scripts).
 2. **Removal of `build.rs` and `src/tools/profile_dir.rs`**:
    - Cargo `1.100.0` defaults to `<profile>/build/<pkg>/<hash>/out` `OUT_DIR` nesting, breaking the historical parent-depth walk that copied `python-guard` during Cargo builds.
    - `companion_binary` sibling resolution now locates `bash-supervisor`, `interactive-supervisor`, `workflow-renderer`, and companion binaries directly alongside `std::env::current_exe()`. Deployment/packaging must place sibling executables directly in the binary directory (no build-tree or `OUT_DIR` probing).
@@ -37,7 +37,7 @@ No second scheduler, new job topology, weakened gate, or `save-if` relaxation is
 | Full Linux boundary suites | `rust-boundaries` | `uv run --frozen pytest` (`fake-provider`) + `prepare_native_tests.py` + 7 external boundary targets + `boundary_suites::` + `check_test_lanes -- --job rust-boundaries` |
 | Native macOS boundary core (FAST) | `rust-platform-core` | `prepare_native_tests.py` + 7 external boundary targets (`--all-features --locked`) + `check_test_lanes -- --job rust-platform-core` |
 | Native macOS full unit/in-crate/external boundaries | `rust-platform-boundaries` | `prepare_native_tests.py` + `--lib --bins --all-features --locked -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::` + 7 external targets + `check_test_lanes -- --job rust-platform-boundaries` |
-| Generated App Server protocol & TUI/Dev/Web/Browser | `app-server-protocol`, `tui`, `web-client`, `browser-shard`, `browser-report` | `pnpm check` (invoking `cargo run --locked --bin generate_app_server_protocol`) + `pnpm typecheck`, `vitest`, i18n/provenance, Playwright shards |
+| Generated App Server protocol & TUI/Dev/Web/Browser | `app-server-protocol`, `tui`, `web-client`, `browser-shard`, `browser-report` | `pnpm check` (invoking `cargo run --locked --example generate_app_server_protocol`) + `pnpm typecheck`, `vitest`, i18n/provenance, Playwright shards |
 
 ## 3. `examples/check_test_lanes.rs` Enforcement & Cost Analysis
 
