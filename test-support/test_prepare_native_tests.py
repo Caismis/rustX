@@ -460,6 +460,13 @@ class ValidationAndStagingTests(unittest.TestCase):
                 "message": {"level": "error", "rendered": "error[E0425]: first-party fail\n"},
             }
         )
+        upstream_diag = json.dumps(
+            {
+                "reason": "compiler-message",
+                "package_id": "registry+https://example.invalid#upstream@0.1.0",
+                "message": {"level": "warning", "rendered": "warning: upstream context note\n"},
+            }
+        )
         emitted_test = json.dumps(
             artifact_record(
                 pkg_id=self.pkg_id,
@@ -473,7 +480,7 @@ class ValidationAndStagingTests(unittest.TestCase):
         )
         fake_proc = mock.Mock(
             returncode=101,
-            stdout=f"{emitted_before_error}\n{emitted_diag}\n{emitted_test}\n"
+            stdout=f"{emitted_before_error}\n{emitted_diag}\n{upstream_diag}\n{emitted_test}\n"
             + json.dumps({"reason": "build-finished", "success": False}),
         )
         stderr_buf = io.StringIO()
@@ -482,9 +489,49 @@ class ValidationAndStagingTests(unittest.TestCase):
             mock.patch.object(sys, "stderr", stderr_buf),
         ):
             with self.assertRaises(prep.PreparationError):
-                prep.run_cargo_json(["cargo", "test", "--no-run"], self.root, package_id=self.pkg_id)
+                prep.run_cargo_json(["cargo", "test", "--no-run"], self.root)
         self.assertIn("error[E0425]: first-party fail", stderr_buf.getvalue())
+        self.assertIn("warning: upstream context note", stderr_buf.getvalue())
         self.assertFalse((test_out / "comp").exists())
+
+    def test_relays_upstream_and_first_party_diagnostics_on_success(self) -> None:
+        upstream_warn = json.dumps(
+            {
+                "reason": "compiler-message",
+                "package_id": "registry+https://example.invalid#upstream@0.1.0",
+                "message": {"level": "warning", "rendered": "warning: upstream dep unused\n"},
+            }
+        )
+        first_party_warn = json.dumps(
+            {
+                "reason": "compiler-message",
+                "package_id": self.pkg_id,
+                "message": {"level": "warning", "rendered": "warning: first-party unused\n"},
+            }
+        )
+        empty_rendered = json.dumps(
+            {
+                "reason": "compiler-message",
+                "package_id": "registry+https://example.invalid#upstream@0.1.0",
+                "message": {"level": "note", "rendered": ""},
+            }
+        )
+        fake_proc = mock.Mock(
+            returncode=0,
+            stdout=f"{upstream_warn}\n{first_party_warn}\n{empty_rendered}\n"
+            + json.dumps({"reason": "build-finished", "success": True}),
+        )
+        stderr_buf = io.StringIO()
+        with (
+            mock.patch.object(subprocess, "run", return_value=fake_proc),
+            mock.patch.object(sys, "stderr", stderr_buf),
+        ):
+            records = prep.run_cargo_json(["cargo", "test", "--no-run"], self.root)
+        self.assertEqual(len(records), 4)
+        self.assertEqual(
+            stderr_buf.getvalue(),
+            "warning: upstream dep unused\nwarning: first-party unused\n",
+        )
 
 
 class RealCargoIntegrationTests(unittest.TestCase):
@@ -634,6 +681,69 @@ class RealCargoIntegrationTests(unittest.TestCase):
         self.assertEqual(len(lib_rows), 1)
         self.assertIs(lib_rows[0]["fresh"], True)
         self.assertEqual(lib_rows[0]["profile"]["debuginfo"], "line-tables-only")
+
+    def test_real_cargo_relays_upstream_warning_on_success_and_error_on_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as upstream_tmp:
+            upstream_dir = Path(upstream_tmp).resolve()
+            (upstream_dir / "src").mkdir(parents=True)
+            (upstream_dir / "Cargo.toml").write_text(
+                """[package]
+name = "upstream_dep"
+version = "0.1.0"
+edition = "2024"
+""",
+                encoding="utf-8",
+            )
+            (upstream_dir / "src/lib.rs").write_text(
+                """pub fn ok() -> &'static str {
+    "ok"
+}
+
+fn upstream_unused_warning_witness() {}
+""",
+                encoding="utf-8",
+            )
+            cargo_toml = self.root / "Cargo.toml"
+            cargo_toml.write_text(
+                cargo_toml.read_text(encoding="utf-8")
+                + f'\n[dependencies]\nupstream_dep = {{ path = "{upstream_dir}" }}\n',
+                encoding="utf-8",
+            )
+            lib_rs = self.root / "src/lib.rs"
+            lib_rs.write_text(
+                lib_rs.read_text(encoding="utf-8")
+                + "\npub fn use_upstream() -> &'static str {\n    upstream_dep::ok()\n}\n",
+                encoding="utf-8",
+            )
+
+            custom_target = self.root / "diag-target"
+            cmd = [
+                "prepare_native_tests.py",
+                "--",
+                "cargo",
+                "test",
+                "--lib",
+                "--target-dir",
+                str(custom_target),
+                "--no-run",
+            ]
+            stderr_ok = io.StringIO()
+            with mock.patch.object(sys, "stderr", stderr_ok):
+                binaries, harnesses = prep.prepare(cmd, cwd=self.root)
+            self.assertIn("companion", binaries)
+            self.assertEqual(len(harnesses), 1)
+            self.assertIn("upstream_unused_warning_witness", stderr_ok.getvalue())
+
+            # A failing compilation relays the compiler error and fails preparation.
+            (upstream_dir / "src/lib.rs").write_text(
+                "pub fn ok() -> &'static str { missing_symbol_in_upstream }\n",
+                encoding="utf-8",
+            )
+            stderr_fail = io.StringIO()
+            with mock.patch.object(sys, "stderr", stderr_fail):
+                with self.assertRaises(prep.PreparationError):
+                    prep.prepare(cmd, cwd=self.root)
+            self.assertIn("missing_symbol_in_upstream", stderr_fail.getvalue())
 
 
 if __name__ == "__main__":

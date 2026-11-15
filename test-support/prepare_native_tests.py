@@ -269,21 +269,19 @@ def load_package_metadata(
     return pkg_id, manifest_path, bin_targets, all_targets
 
 
-def _relay_diagnostic(row: dict, package_id: str | None, failed: bool) -> None:
+def _relay_diagnostic(row: dict) -> None:
     if row.get("reason") != "compiler-message":
         return
-    msg = row.get("message") or {}
-    rendered = msg.get("rendered")
-    if not isinstance(rendered, str) or not rendered:
+    msg = row.get("message")
+    if not isinstance(msg, dict):
         return
-    is_first_party = package_id is None or row.get("package_id") == package_id
-    is_error = msg.get("level") in ("error", "ice", "failure-note")
-    if is_first_party or (failed and is_error):
+    rendered = msg.get("rendered")
+    if isinstance(rendered, str) and rendered:
         sys.stderr.write(rendered)
         sys.stderr.flush()
 
 
-def run_cargo_json(cmd: list[str], cwd: Path, package_id: str | None = None) -> list[dict]:
+def run_cargo_json(cmd: list[str], cwd: Path) -> list[dict]:
     """Execute Cargo with ``--message-format=json``, relaying diagnostics cleanly."""
     proc = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=None, text=True, check=False)
     records: list[dict] = []
@@ -302,7 +300,7 @@ def run_cargo_json(cmd: list[str], cwd: Path, package_id: str | None = None) -> 
                 f"`{' '.join(cmd)}` emitted invalid JSON on line {line_no}: {exc}"
             ) from exc
         records.append(row)
-        _relay_diagnostic(row, package_id, proc.returncode != 0)
+        _relay_diagnostic(row)
 
     if proc.returncode != 0:
         raise PreparationError(
@@ -507,7 +505,7 @@ def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], 
     )
     has_lib = any(kind == ("lib",) or "rlib" in kind for kind, _ in all_targets)
 
-    test_records = run_cargo_json(test_cmd, work_dir, package_id=pkg_id)
+    test_records = run_cargo_json(test_cmd, work_dir)
     libraries, binaries, harnesses = collect_package_artifacts(
         test_records, pkg_id, manifest_path, all_targets
     )
@@ -517,7 +515,7 @@ def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], 
         )
 
     if bin_targets and not binaries:
-        bin_records = run_cargo_json(bin_cmd, work_dir, package_id=pkg_id)
+        bin_records = run_cargo_json(bin_cmd, work_dir)
         bin_libraries, binaries, _ = collect_package_artifacts(
             bin_records, pkg_id, manifest_path, all_targets
         )
