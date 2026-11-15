@@ -16,7 +16,10 @@ fn acceptance_and_adoption_share_durable_identity() {
     let accepted = store.accept_inbound(draft("hello")).unwrap();
     let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
     assert_eq!(adopted.items.len(), 1);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
 }
 
@@ -41,7 +44,10 @@ fn acceptance_watermark_is_monotonic_across_adoption() {
 
     let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
     assert_eq!(adopted.items.len(), 1);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert!(
         store.has_accepted_inbound().unwrap(),
         "adoption cannot rewind the acceptance fact"
@@ -74,13 +80,19 @@ fn inbound_adoption_fault_keeps_pending_and_surface_atomic() {
     let store = store();
     store.arm_fail_next_accept_commit();
     assert!(store.accept_inbound(draft("not committed")).is_err());
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
 
     let accepted = store.accept_inbound(draft("pending")).unwrap();
     store.arm_fail_next_adopt_commit();
     assert!(store.adopt_pending_batch(accepted.sequence, None,).is_err());
     assert_eq!(store.load_pending().unwrap().len(), 1);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(
         store.load_head().unwrap().revision,
         SurfaceRevision::INITIAL
@@ -88,7 +100,10 @@ fn inbound_adoption_fault_keeps_pending_and_surface_atomic() {
 
     let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
     assert_eq!(adopted.items.len(), 1);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
 }
 
@@ -252,6 +267,9 @@ fn active_steering_adopts_exact_rows_and_keeps_interleaved_queue_pending() {
     let next = store.adopt_pending_batch(queued.sequence, None).unwrap();
     assert_eq!(next.items.len(), 1);
     assert_eq!(next.items[0].sequence, queued.sequence);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(store.load_canonical().unwrap().len(), 3);
 }

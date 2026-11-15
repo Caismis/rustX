@@ -66,7 +66,7 @@ export interface Manifest { schema: 1; identity: Identity; provenance: Provenanc
 function sha256(path: string) { return createHash('sha256').update(readFileSync(path)).digest('hex'); }
 function run(command: string, args: string[], cwd = repository) { return execFileSync(command, args, { cwd, encoding: 'utf8' }).trim(); }
 
-/** The Rust release the checked-in toolchain file pins, e.g. `1.98.1`. */
+/** The Rust release the checked-in toolchain file pins, e.g. `1.100.0`. */
 export function pinnedRust(root = repository) {
   const channel = /^channel\s*=\s*"([^"]+)"/m.exec(readFileSync(join(root, 'rust-toolchain.toml'), 'utf8'))?.[1];
   if (!channel) throw new Error('rust-toolchain.toml pins no channel');

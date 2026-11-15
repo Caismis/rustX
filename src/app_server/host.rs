@@ -75,6 +75,12 @@ struct HostInner {
 pub struct AppServerHost(Arc<HostInner>);
 
 pub(crate) struct ServerOperation(watch::Sender<usize>);
+#[cfg(test)]
+impl ServerOperation {
+    pub(super) fn for_test() -> Self {
+        Self(watch::channel(1).0)
+    }
+}
 impl Drop for ServerOperation {
     fn drop(&mut self) {
         self.0.send_modify(|n| *n -= 1);

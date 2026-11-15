@@ -497,7 +497,7 @@ fn a_temporary_root_inside_the_workspace_reports_configuration_conflict() {
         let diagnostic = output.open_spill().unwrap_err().to_string();
         assert!(diagnostic.contains("inside workspace"), "{diagnostic}");
         assert!(!diagnostic.contains("collision"), "{diagnostic}");
-        assert!(output.roots().is_empty());
+        assert_eq!(output.roots(), [] as [std::path::PathBuf; 0]);
         assert!(
             output
                 .allocate_background_output(&output.execution_identity().unwrap())

@@ -520,8 +520,11 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     // invocation, no tools, no system prompt, no continuation, and the
     // deterministic retired-span input.
     for summary_request in [&requests[1], &requests[3]] {
-        assert!(summary_request.tools.is_empty());
-        assert!(summary_request.effective_system_prompt.is_empty());
+        assert_eq!(
+            summary_request.tools,
+            [] as [crate::tools::types::ModelToolDefinition; 0]
+        );
+        assert_eq!(summary_request.effective_system_prompt, "");
         assert_eq!(summary_request.continuation, None);
     }
     assert!(request_wire(&requests[1].messages).contains("FILLER-ONE-MARKER"));
@@ -862,8 +865,11 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     // Tool definitions reached the tool turn; the summary stays one-off.
     assert_eq!(requests[1].tools.len(), 1);
     for summary_request in [&requests[3], &requests[6]] {
-        assert!(summary_request.tools.is_empty());
-        assert!(summary_request.effective_system_prompt.is_empty());
+        assert_eq!(
+            summary_request.tools,
+            [] as [crate::tools::types::ModelToolDefinition; 0]
+        );
+        assert_eq!(summary_request.effective_system_prompt, "");
     }
 
     // No request ever carries half a tool unit.

@@ -309,7 +309,7 @@ mod tests {
                 .decode(chunk.bytes_base64)
                 .unwrap();
             assert!(value.len() <= 65_535);
-            assert!(!value.is_empty());
+            assert_ne!(value, [] as [u8; 0]);
             bytes.extend(value);
             let Some(next) = chunk.next_offset else { break };
             assert!(next > offset);

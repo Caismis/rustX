@@ -773,10 +773,10 @@ impl AttemptLifecycle {
     /// authorize with Full Access until a caller applies an explicit mode.
     ///
     /// Production attempt construction always chains
-    /// [`Self::with_approval_mode_and_reviewer`]. Direct fixture construction
+    /// `Self::with_approval_mode_and_reviewer`. Direct fixture construction
     /// that needs Plan or Automatic must opt in; freezing Plan here made
     /// non-interactive suites hang on Elevate Ask despite Full Access
-    /// reminder policy on [`crate::agent::execution::AgentExecutionRuntimePolicy`].
+    /// reminder policy on `crate::agent::execution::AgentExecutionRuntimePolicy`.
     #[must_use]
     pub fn inert() -> Self {
         Self {
@@ -811,7 +811,7 @@ impl AttemptLifecycle {
     /// Applies the runtime's effective approval mode to the built-in
     /// pre-tool policy. Test/custom policies can still replace this seam
     /// explicitly with [`Self::with_pre_tool_policy`].
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub(crate) fn with_approval_mode(mut self, mode: ApprovalMode) -> Self {
         self.approval_mode = mode;
         self.pre_tool = Arc::new(ConfiguredApprovalPolicy::new(mode));

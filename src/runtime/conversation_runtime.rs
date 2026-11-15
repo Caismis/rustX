@@ -1,5 +1,8 @@
 //! The conversation runtime coordinator (Issue #61): the semantic owner of
-//! conversation coordination for one conversation.
+//! conversation coordination for one conversation — session model state,
+//! attempt admission, the current-attempt slot, between-attempt current
+//! Surface state, durable request-history reads, the shared lifecycle/drain
+//! authority, and settlement handoff through quiescence.
 //!
 //! [`ConversationRuntime`] owns the semantic conversation/runtime state that
 //! used to live inside the old Runtime Client host:
@@ -22,17 +25,17 @@
 //! attempt settlement handoff back into conversation state
 //! ```
 //!
-//! The Runtime Client (see `crate::runtime_client`) is a projection + control
-//! + attachment adapter over this coordinator. It observes runtime
+//! The Runtime Client (see `crate::runtime_client`) is a projection, control,
+//! and attachment adapter over this coordinator. It observes runtime
 //! observations and forwards control requests; it never owns the semantic
 //! state above.
 //!
 //! # The one admission owner
 //!
 //! Any producer may publish ordinary inbound work through the conversation
-//! inbound boundary (the [`ConversationInboundMailbox`](crate::runtime::inbound::ConversationInboundMailbox)
+//! inbound boundary (the [`ConversationInboundMailbox`]
 //! of the owned tool runtime). Only [`ConversationRuntime`] admits the next
-//! [`AgentExecution`](crate::agent::AgentExecution):
+//! [`AgentExecution`]:
 //!
 //! ```text
 //! producer publishes ordinary inbound
@@ -137,7 +140,7 @@
 //! # One lifecycle authority
 //!
 //! The conversation has exactly **one** authoritative lifecycle state:
-//! the [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+//! the [`ConversationLifecycle`]
 //! composed by the runtime and shared with every runtime-owned semantic
 //! boundary — the inbound mailbox (runtime ownership is the lifecycle
 //! handle; the mailbox keeps no activation flag), the background registry
@@ -217,9 +220,9 @@
 //! # Observation bridge
 //!
 //! The coordinator publishes every semantically meaningful transition as a
-//! runtime-owned [`ConversationObservation`](crate::runtime::observation::ConversationObservation)
+//! runtime-owned `ConversationObservation`
 //! into the runtime-owned observation fan-out. The Runtime Client projection
-//! owns the primary [`PendingObservations`](crate::runtime::observation::PendingObservations)
+//! owns the primary `PendingObservations`
 //! queue and folds it under its own synchronization boundary, translating the
 //! semantic observations into its snapshot/cursor read model (see
 //! `RuntimeClientProjection`), so snapshot/cursor reads remain linearizable.
@@ -231,7 +234,7 @@
 //!
 //! # The bootstrap cut
 //!
-//! [`ConversationRuntime::install_observation_bridge`] is the one runtime
+//! `ConversationRuntime::install_observation_bridge` is the one runtime
 //! handshake a Runtime Client adapter uses at construction. It runs
 //! entirely under the one coordinator lock, refuses an already-activated
 //! runtime under that same lock, installs the observation fan-out and every
@@ -706,7 +709,7 @@ pub struct RuntimeConversationConfig {
 /// cancellation trigger the attempt task runs against so that
 /// `cancel_current_attempt` can request cancellation. It does **not** own a
 /// second cancellation state machine and never decides a terminal outcome;
-/// [`AgentExecution`] remains the attempt execution/terminal authority.
+/// [`AgentExecution`](crate::agent::AgentExecution) remains the attempt execution/terminal authority.
 struct CurrentAttempt {
     configuration: AdmittedConfiguration,
     /// The attempt identity.

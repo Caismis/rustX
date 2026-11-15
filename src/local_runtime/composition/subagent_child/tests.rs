@@ -275,7 +275,10 @@ async fn child_binding_gates_historical_guidance_before_activation() {
         store.load_pending().unwrap()[0].message_id,
         accepted.message_id
     );
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert!(
         !store
             .read_events(None, 128)
@@ -371,12 +374,9 @@ async fn ext259_parent_and_concurrent_child_todo_lists_never_alias() {
             .todo_snapshot()
             .expect("a Todo-enabled child composes a list")
     };
-    assert!(
-        parent
-            .todo_snapshot()
-            .expect("parent list")
-            .tasks
-            .is_empty()
+    assert_eq!(
+        parent.todo_snapshot().expect("parent list").tasks,
+        [] as [crate::tools::todo::TodoTask; 0]
     );
     for child in &children {
         assert!(

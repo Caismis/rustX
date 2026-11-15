@@ -126,7 +126,7 @@ pub const REQUIREMENTS_FILE: &str = "requirements.txt";
 /// Optional package-local resource permission document.
 ///
 /// Same authoring shape as an MCP server permissions document: a source-default
-/// [`ResourcePermissionSet`] under `permissions`, plus exact-tool exceptions
+/// [`ResourcePermissionSet`](crate::runtime::permission::ResourcePermissionSet) under `permissions`, plus exact-tool exceptions
 /// under `tools.<name>.permissions`. Absent means product/matrix defaults.
 pub const PERMISSIONS_FILE: &str = "permissions.toml";
 

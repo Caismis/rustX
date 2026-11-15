@@ -457,7 +457,10 @@ fn canonical_summary_payload_is_not_a_canonical_message() {
     let input = serde_json::json!({"role":"user","id":"summary","source":"runtime","kind":{"compaction_summary":{}},"content":[]});
     assert!(serde_json::from_value::<MessageBlock>(input).is_err());
     assert_eq!(store.load_canonical().unwrap(), [user_message("a", "A")]);
-    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 64).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
 }
 
 #[test]
@@ -477,7 +480,10 @@ fn pending_message_identity_cannot_be_reused_by_a_canonical_append() {
     ));
     assert_eq!(store.load_pending().unwrap().len(), 1);
     assert_eq!(store.load_pending().unwrap()[0].sequence, accepted.sequence);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 }
 
 #[test]

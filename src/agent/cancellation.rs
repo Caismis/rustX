@@ -13,7 +13,7 @@
 //! against the durable model-request start commit. The gate guarantees that
 //! exactly one of "cancellation" and "the durable request-start commit"
 //! wins per model turn, with no unsynchronized window between a cancellation
-//! observation and the commit: see [`AgentCancellation::arbitrate_model_turn_start`].
+//! observation and the commit: see `AgentCancellation::arbitrate_model_turn_start`.
 //!
 //! The loop races tool execution against this signal: once cancellation is
 //! observable while a tool is pending, the loop stops starting new work, and

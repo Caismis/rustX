@@ -1751,7 +1751,10 @@ async fn every_contributor_proposal_reaches_the_same_policy() {
         "the policy sees every proposal in stable logical contributor order"
     );
     assert_eq!(ledger_shape(&result), vec!["user(Message):go".to_owned()]);
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_single_terminal(&result.event_history);
 }
 
@@ -1791,8 +1794,11 @@ async fn pre_step_policy_failure_admits_nothing_and_settles_once() {
         } if message == "policy exploded"
     ));
     assert_eq!(ledger_shape(&result), vec!["user(Message):go".to_owned()]);
-    assert!(result.snapshot_history().is_empty());
-    assert!(model.requests().is_empty());
+    assert_eq!(result.snapshot_history(), []);
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_single_terminal(&result.event_history);
 }
 
@@ -1855,8 +1861,11 @@ async fn cancellation_during_pending_pre_step_policy_wins_admission() {
         }
     ));
     assert_eq!(ledger_shape(&result), vec!["user(Message):go".to_owned()]);
-    assert!(result.snapshot_history().is_empty());
-    assert!(model.requests().is_empty());
+    assert_eq!(result.snapshot_history(), []);
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_single_terminal(&result.event_history);
 }
 
@@ -2134,7 +2143,10 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             if decision != "full_access" {
                 pending.wait_for(|count| *count == 1).await.unwrap();
                 assert!(!*handle.started.borrow(), "{name} started before approval");
-                assert!(handle.invocations().is_empty());
+                assert_eq!(
+                    handle.invocations(),
+                    [] as [crate::tools::types::ToolInvocation; 0]
+                );
                 let observed = facts.lock().unwrap()[0].clone();
                 assert_eq!(observed.tool_id, definition.id);
                 assert_eq!(observed.mode, ToolInvocationMode::Foreground);
@@ -2173,7 +2185,10 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 .count();
             if decision == "deny" || decision == "cancel" {
                 assert_eq!(starts, 0);
-                assert!(handle.invocations().is_empty());
+                assert_eq!(
+                    handle.invocations(),
+                    [] as [crate::tools::types::ToolInvocation; 0]
+                );
             } else {
                 assert_eq!(starts, 1);
                 assert_eq!(handle.invocations().len(), 1);
@@ -2369,7 +2384,10 @@ async fn approval_deny_emits_one_denied_result_without_starting_executor() {
         !*tool_handle.started.borrow(),
         "denial never starts an executor"
     );
-    assert!(tool_handle.invocations().is_empty());
+    assert_eq!(
+        tool_handle.invocations(),
+        [] as [crate::tools::types::ToolInvocation; 0]
+    );
     assert_eq!(
         result
             .event_history

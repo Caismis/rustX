@@ -110,7 +110,10 @@ fn t08_t14_tool_schema_unavailable_preserves_own_lifecycle_and_original_fields()
         }
     ));
     assert_eq!(after.record, before.record);
-    assert!(!after.record.tool.as_ref().unwrap().fields.is_empty());
+    assert_ne!(
+        after.record.tool.as_ref().unwrap().fields,
+        [] as [crate::observation::trace::types::TraceFieldSource; 0]
+    );
     assert_eq!(
         store.observation_read_cut().unwrap(),
         cut.source_cut.clone().unwrap()

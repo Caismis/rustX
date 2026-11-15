@@ -353,6 +353,55 @@ pub(crate) struct SupervisedInteractiveProcess {
 }
 
 #[cfg(unix)]
+/// Drains child stderr until EOF while retaining a bounded preview buffer.
+fn spawn_stderr_drain(
+    stderr: Option<tokio::process::ChildStderr>,
+) -> (
+    Arc<Mutex<Vec<u8>>>,
+    tokio::sync::watch::Receiver<Option<bool>>,
+) {
+    let stderr_capture = Arc::new(Mutex::new(Vec::new()));
+    let (stderr_done, stderr_complete) = tokio::sync::watch::channel(None);
+    if let Some(mut stderr_pipe) = stderr {
+        let capture = stderr_capture.clone();
+        // The stderr drain reads until EOF — the preview bound only
+        // limits what is retained, never how long the pipe is drained,
+        // so a server that keeps writing stderr can never die on a full
+        // pipe while it continues operating. The bounded preview is
+        // published incrementally so it is observable before EOF.
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            let mut buffer = [0u8; 8192];
+            let mut complete = false;
+            let mut truncated = false;
+            loop {
+                match stderr_pipe.read(&mut buffer).await {
+                    Ok(0) => {
+                        complete = true;
+                        break;
+                    }
+                    Err(_) => break,
+                    Ok(count) => {
+                        let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(bytes.len());
+                        truncated |= count > remaining;
+                        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+                        capture
+                            .lock()
+                            .expect("interactive stderr lock")
+                            .clone_from(&bytes);
+                    }
+                }
+            }
+            *capture.lock().expect("interactive stderr lock") = bytes;
+            let _ = stderr_done.send(Some(complete && !truncated));
+        });
+    } else {
+        let _ = stderr_done.send(Some(true));
+    }
+    (stderr_capture, stderr_complete)
+}
+
+#[cfg(unix)]
 impl SupervisedInteractiveProcess {
     /// Starts one interactive process under the dedicated long-lived owner.
     pub(crate) fn spawn(spec: InteractiveProcessSpec) -> Result<Self, String> {
@@ -386,9 +435,8 @@ impl SupervisedInteractiveProcess {
         ));
         let listener = tokio::net::UnixListener::bind(&socket_path)
             .map_err(|error| format!("cannot bind interactive control socket: {error}"))?;
-        let mut supervisor = tokio::process::Command::new(
-            crate::runtime::process_runner::interactive_supervisor_binary(),
-        );
+        let supervisor_path = crate::runtime::process_runner::interactive_supervisor_binary();
+        let mut supervisor = tokio::process::Command::new(&supervisor_path);
         supervisor.arg("outer").arg(&program).args(&args);
         supervisor
             .current_dir(&cwd)
@@ -405,51 +453,16 @@ impl SupervisedInteractiveProcess {
         #[cfg(test)]
         test_control.configure_supervisor(&mut supervisor);
         supervisor.env(RUSTX_CONTROL_ENV, &socket_path);
-        let mut child = supervisor
-            .spawn()
-            .map_err(|error| format!("cannot spawn interactive supervisor: {error}"))?;
+        let mut child = supervisor.spawn().map_err(|error| {
+            format!(
+                "cannot spawn interactive supervisor at {}: {error}",
+                supervisor_path.display()
+            )
+        })?;
         drop(supervisor);
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let stderr_capture = Arc::new(Mutex::new(Vec::new()));
-        let (stderr_done, stderr_complete) = tokio::sync::watch::channel(None);
-        if let Some(mut stderr_pipe) = stderr {
-            let capture = stderr_capture.clone();
-            // The stderr drain reads until EOF — the preview bound only
-            // limits what is retained, never how long the pipe is drained,
-            // so a server that keeps writing stderr can never die on a full
-            // pipe while it continues operating. The bounded preview is
-            // published incrementally so it is observable before EOF.
-            tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                let mut buffer = [0u8; 8192];
-                let mut complete = false;
-                let mut truncated = false;
-                loop {
-                    match stderr_pipe.read(&mut buffer).await {
-                        Ok(0) => {
-                            complete = true;
-                            break;
-                        }
-                        Err(_) => break,
-                        Ok(count) => {
-                            let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(bytes.len());
-                            truncated |= count > remaining;
-                            bytes.extend_from_slice(&buffer[..count.min(remaining)]);
-                            capture
-                                .lock()
-                                .expect("interactive stderr lock")
-                                .clone_from(&bytes);
-                        }
-                    }
-                }
-                *capture.lock().expect("interactive stderr lock") = bytes;
-                let _ = stderr_done.send(Some(complete && !truncated));
-            });
-        } else {
-            let _ = stderr_done.send(Some(true));
-        }
+        let (stderr_capture, stderr_complete) = spawn_stderr_drain(child.stderr.take());
         let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
         let settlement = Arc::new(SettlementCell::new());
         #[cfg(test)]

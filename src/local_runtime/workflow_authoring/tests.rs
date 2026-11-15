@@ -126,7 +126,7 @@ fn id(value: &str) -> WorkflowId {
 }
 
 fn definition(yaml: &str) -> WorkflowFileDocument {
-    serde_yaml::from_str(yaml).unwrap()
+    serde_yaml_ng::from_str(yaml).unwrap()
 }
 
 fn with_note(mut document: WorkflowFileDocument, text: &str) -> WorkflowFileDocument {
@@ -307,7 +307,7 @@ fn unselected_authored_identities_round_trip_and_save_as_unfinished() {
             value["block"]["nodes"]["review"] = node.clone();
             let document: WorkflowFileDocument = serde_json::from_value(value).unwrap();
             let round_trip: WorkflowFileDocument =
-                serde_yaml::from_slice(&document.canonical_bytes().unwrap()).unwrap();
+                serde_yaml_ng::from_slice(&document.canonical_bytes().unwrap()).unwrap();
             assert_eq!(document, round_trip);
             let (report, effects) = super::super::static_effects::measure(|| {
                 roots
@@ -322,7 +322,10 @@ fn unselected_authored_identities_round_trip_and_save_as_unfinished() {
                     .unwrap()
             });
             assert_eq!(effects, [0; 11]);
-            assert!(!report.analysis.outputs.is_empty());
+            assert_ne!(
+                report.analysis.outputs,
+                [] as [crate::runtime::workflow::authoring::WorkflowOutputDeclaration; 0]
+            );
             assert!(matches!(
                 roots
                     .manager
@@ -675,7 +678,7 @@ fn each_scope_enables_its_own_files_in_its_own_configuration() {
         (library.configuration_revision.unwrap(), ids)
     };
     let (user, none) = enabled(&SourceTarget::User);
-    assert!(none.is_empty());
+    assert_eq!(none, [] as [std::string::String; 0]);
     let user = enable(&SourceTarget::User, &user, "daily", true).unwrap();
     assert_eq!(
         enabled(&SourceTarget::User),
@@ -687,7 +690,10 @@ fn each_scope_enables_its_own_files_in_its_own_configuration() {
     assert_eq!((missing.as_str(), none.len()), ("missing", 0));
     let local = enable(&a, "missing", "local", true).unwrap();
     assert_eq!(enabled(&a), (local, vec!["local.yaml".into()]));
-    assert!(enabled(&workspace(&roots.b)).1.is_empty());
+    assert_eq!(
+        enabled(&workspace(&roots.b)).1,
+        [] as [std::string::String; 0]
+    );
     // A stale revision is a conflict; disabling keeps the rest of the file.
     assert!(matches!(
         enable(&SourceTarget::User, "missing", "daily", false),
@@ -974,7 +980,10 @@ fn redirected_and_oversized_workflow_files_are_refused_without_outside_writes() 
     std::fs::create_dir_all(roots.a.join(".agents")).unwrap();
     std::os::unix::fs::symlink(&outside, roots.a.join(".agents/workflows")).unwrap();
     let library = roots.manager.workflow_library(&a).unwrap();
-    assert!(library.files.is_empty());
+    assert_eq!(
+        library.files,
+        [] as [crate::local_runtime::workflow_authoring::WorkflowFileSummary; 0]
+    );
     assert!(library.diagnostic.is_some());
     assert!(roots.manager.workflow_source(&a, &id("leak")).is_err());
     assert!(
@@ -1193,7 +1202,7 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
             serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
         assert_eq!(wire, original, "{name}");
         let bytes = candidate::encode(&wire).unwrap();
-        let canonical: WorkflowFileDocument = serde_yaml::from_slice(&bytes).unwrap();
+        let canonical: WorkflowFileDocument = serde_yaml_ng::from_slice(&bytes).unwrap();
         assert_eq!(canonical, original, "{name}");
         assert!(
             !String::from_utf8(bytes).unwrap().contains("port: null"),
@@ -1539,7 +1548,10 @@ fn a_global_addition_is_admitted_up_to_64_identities_and_refused_before_publicat
     // Discovery of the existing files is untouched.
     let catalog = roots.discover(None);
     assert!(catalog.get(&id("sixty_four")).is_some());
-    assert!(catalog.discovery_diagnostics.is_empty());
+    assert_eq!(
+        catalog.discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
 }
 
 #[test]
@@ -1577,7 +1589,10 @@ fn a_workspace_addition_counts_its_union_with_global_and_an_override_adds_no_ide
     roots.create(&target, "u000", "A Workspace override.");
     let catalog = roots.discover(Some(&roots.a));
     assert_eq!(catalog.locations.len(), 64);
-    assert!(catalog.discovery_diagnostics.is_empty());
+    assert_eq!(
+        catalog.discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
     assert!(catalog.get(&id("workspace_last")).is_some());
     // A Global addition counts the User-only catalog it is authorized for:
     // it cannot know every Workspace a later session composes with.
@@ -1659,7 +1674,10 @@ fn an_externally_over_full_scope_still_allows_guarded_replace_and_delete() {
         .unwrap();
     let catalog = roots.discover(None);
     assert_eq!(catalog.locations.len(), 64);
-    assert!(catalog.discovery_diagnostics.is_empty());
+    assert_eq!(
+        catalog.discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
     assert!(catalog.get(&id("o000")).is_some());
     assert_eq!(
         roots
@@ -1772,7 +1790,10 @@ fn a_workspace_addition_waits_for_and_counts_a_concurrent_global_addition() {
     capacity_refusal(local);
     let catalog = roots.discover(Some(&roots.a));
     assert_eq!(catalog.locations.len(), 64);
-    assert!(catalog.discovery_diagnostics.is_empty());
+    assert_eq!(
+        catalog.discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
 }
 
 /// Run `operation` on its own thread and require it to finish in time: a
@@ -1993,7 +2014,10 @@ fn writers_in_two_processes_competing_for_the_last_slot_of_one_shared_directory_
     assert!(!roots.user_directory().join("second_racer.yaml").exists());
     let catalog = roots.discover(None);
     assert_eq!(catalog.locations.len(), 64);
-    assert!(catalog.discovery_diagnostics.is_empty());
+    assert_eq!(
+        catalog.discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
 }
 
 /// The names directly in `directory`.
@@ -2047,7 +2071,10 @@ fn writer_lock_history_never_counts_toward_discovery_of_a_directory() {
         "Created after much history."
     );
     let catalog = roots.discover(None);
-    assert!(catalog.discovery_diagnostics.is_empty());
+    assert_eq!(
+        catalog.discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
     assert!(catalog.get(&id("copied_after")).is_some());
 }
 
@@ -2075,7 +2102,10 @@ fn refused_additions_leave_no_entry_that_discovery_counts() {
     assert!(library.diagnostic.is_none());
     assert_eq!(library.files.len(), 64);
     assert!(roots.read(&SourceTarget::User, "f063").document.is_some());
-    assert!(roots.discover(None).discovery_diagnostics.is_empty());
+    assert_eq!(
+        roots.discover(None).discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
 }
 
 #[test]
@@ -2175,7 +2205,10 @@ fn a_first_write_into_an_externally_full_directory_keeps_its_catalog_readable() 
         kept
     );
     assert_kept(&roots, &SourceTarget::User, &kept);
-    assert!(roots.discover(None).discovery_diagnostics.is_empty());
+    assert_eq!(
+        roots.discover(None).discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
 }
 
 #[test]
@@ -2235,7 +2268,10 @@ fn a_workspace_addition_never_makes_a_full_global_directory_unreadable() {
     assert!(roots.user_directory().join(".rustx-locks").is_dir());
     assert_kept(&roots, &SourceTarget::User, &kept);
     let composed = roots.discover(Some(&roots.a));
-    assert!(composed.discovery_diagnostics.is_empty());
+    assert_eq!(
+        composed.discovery_diagnostics,
+        [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+    );
     for name in ["kept", "local", "local_copy"] {
         assert!(composed.get(&id(name)).is_some(), "{name}");
     }
@@ -2431,7 +2467,10 @@ fn title_search_unions_qualified_producers_with_original_paths_before_catalog_li
     );
     assert!(!report.analysis.truncated);
     for choice in &report.analysis.references[1..] {
-        assert!(choice.producer.as_ref().unwrap().block.is_empty());
+        assert_eq!(
+            choice.producer.as_ref().unwrap().block,
+            [] as [crate::runtime::workflow::authoring::WorkflowBlockStep; 0]
+        );
         assert_eq!(
             choice.availability,
             crate::runtime::workflow::authoring::WorkflowReferenceAvailability::Available

@@ -8,7 +8,7 @@ import { EXECUTABLES, INSTALLED_MANIFEST, buildOverrides, check, fileErrors, ide
 import { assign, cases, inventoryOf, playwrightList, verify, weightsOf, type Inventory, type ShardIdentity, type ShardRun } from '../scripts/browser-shards.ts';
 
 const identity: Identity = {
-  commit: 'a'.repeat(40), platform: 'linux', arch: 'x64', rust: '1.98.1',
+  commit: 'a'.repeat(40), platform: 'linux', arch: 'x64', rust: '1.100.0',
   cargo: { profile: 'dev', command: 'cargo build --bins --example document_artifact_fixture --locked', features: 'default', debuginfo: 'stripped' }, build: 'repository-defaults',
   node: { version: 'v24.19.0', abi: '137' }, pnpm: '11.13.1', playwright: '1.63.0', sources: { 'Cargo.lock': 'c'.repeat(64) },
 };
@@ -220,7 +220,7 @@ describe('prepared browser inputs', () => {
     expect(identityErrors({ ...identity, platform: 'darwin', arch: 'arm64' }, identity)).toEqual(['identity.platform: prepared "darwin", required "linux"', 'identity.arch: prepared "arm64", required "x64"']);
     expect(identityErrors({ ...identity, cargo: { ...identity.cargo, features: 'all' as 'default' }, node: { ...identity.node, abi: '127' } }, identity)).toEqual(['identity.cargo.features: prepared "all", required "default"', 'identity.node.abi: prepared "127", required "137"']);
     const { stage } = staged();
-    expect(() => install(stage, directory(), { ...identity, rust: '1.99.0' })).toThrow('identity.rust: prepared "1.98.1", required "1.99.0"');
+    expect(() => install(stage, directory(), { ...identity, rust: '1.99.0' })).toThrow('identity.rust: prepared "1.100.0", required "1.99.0"');
   });
   it('refuses inputs built under another build configuration, and never builds under an override', () => {
     expect(identityErrors({ ...identity, build: 'overridden' as 'repository-defaults' }, identity)).toEqual(['identity.build: prepared "overridden", required "repository-defaults"']);

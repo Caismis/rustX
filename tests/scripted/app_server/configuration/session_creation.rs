@@ -70,14 +70,14 @@ async fn native_source_application_identity_uses_exact_facts_not_projection() {
     std::fs::write(root.join("AGENTS.md"), "new native instructions").unwrap();
     assert_ne!(before_resource_change, capture(&f.manager));
     assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
-    assert!(
+    assert_eq!(
         f.manager
             .sessions
             .list_sessions(None, 0, 32)
             .await
             .unwrap()
-            .sessions
-            .is_empty()
+            .sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
     );
 }
 
@@ -379,7 +379,10 @@ async fn deleting_a_model_releases_creation_when_a_named_agent_depends_on_it() {
         );
         let main = restored.inspection.main.as_ref().unwrap();
         assert_eq!(main.agents, [agent, stable]);
-        assert!(!main.agent_controls.is_empty());
+        assert_ne!(
+            main.agent_controls,
+            [] as [crate::runtime::capability_inspection::ToolInspection; 0]
+        );
         assert!(
             !restored
                 .inspection
@@ -577,7 +580,7 @@ async fn issue419_initial_model_commit_readback_admission_and_later_switch() {
                 .unwrap();
             assert!(created.durability_diagnostic.is_none());
             assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             let persisted =
                 std::fs::read_to_string(f.archive_root.join("sessions/catalog.json")).unwrap();
             assert!(persisted.contains(&selection.model.to_string()));
@@ -736,17 +739,17 @@ async fn issue419_rejected_explicit_model_does_not_publish_or_substitute() {
         })
         .await;
     assert!(result.is_err());
-    assert!(
+    assert_eq!(
         f.manager
             .sessions
             .list_sessions(None, 0, 32)
             .await
             .unwrap()
-            .sessions
-            .is_empty()
+            .sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
     );
     assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
-    assert!(f.provider.request_bodies().is_empty());
+    assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1022,14 +1025,14 @@ async fn issue422_creation_previsibility_failure_removes_provisional_binding() {
             .unwrap()
             .is_empty()
     );
-    assert!(
+    assert_eq!(
         f.manager
             .sessions
             .list_sessions(None, 0, 32)
             .await
             .unwrap()
-            .sessions
-            .is_empty()
+            .sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
     );
     assert_eq!(log.next_after(frontier), None);
     f.close().await;

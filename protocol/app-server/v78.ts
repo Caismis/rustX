@@ -1873,7 +1873,7 @@ export type SubagentId = string;
  *
  * - monotonic within the Runtime Client observation stream;
  * - **not** an alias of `u64`;
- * - **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);
+ * - **not** the mailbox [`InboundSequence`];
  * - **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);
  * - **not** any future Event Journal sequence;
  * - owned by the runtime observation stream, so it survives attachment
@@ -3267,7 +3267,7 @@ export type ThreadActiveFlag = 'waitingOnApproval' | 'waitingOnUserInput';
  *
  * The sequence identifies one item of the conversation's inbound ordering
  * domain. It is **not**
- * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+ * [`RuntimeEventEnvelope`]`::sequence`
  * and is never allocated from the Event Journal sequence; the durable
  * Pending Inbound Inbox owns allocation, and the first successful
  * acceptance of a conversation receives `1`.
@@ -4007,8 +4007,7 @@ export type TurnProcessOutcome =
 /**
  * The normalized client-visible failure of one attempt.
  *
- * This is the external projection of the internal [`AttemptFailure`]
- * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+ * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
  * (such as the raw provider error code) never appear here.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -5453,8 +5452,7 @@ export type RuntimeClientEvent =
             /**
              * The normalized client-visible failure of one attempt.
              *
-             * This is the external projection of the internal [`AttemptFailure`]
-             * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+             * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
              * (such as the raw provider error code) never appear here.
              */
             error:
@@ -5993,7 +5991,7 @@ export type RuntimeClientEvent =
        *
        * The sequence identifies one item of the conversation's inbound ordering
        * domain. It is **not**
-       * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+       * [`RuntimeEventEnvelope`]`::sequence`
        * and is never allocated from the Event Journal sequence; the durable
        * Pending Inbound Inbox owns allocation, and the first successful
        * acceptance of a conversation receives `1`.
@@ -6013,7 +6011,7 @@ export type RuntimeClientEvent =
        *
        * The sequence identifies one item of the conversation's inbound ordering
        * domain. It is **not**
-       * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+       * [`RuntimeEventEnvelope`]`::sequence`
        * and is never allocated from the Event Journal sequence; the durable
        * Pending Inbound Inbox owns allocation, and the first successful
        * acceptance of a conversation receives `1`.
@@ -8042,7 +8040,7 @@ export type RuntimeError =
  * external result. An unknown outcome is never silently collapsed into
  * success, generic failure, confirmed timeout, or confirmed cancellation,
  * and every non-success status produces bounded model-facing feedback
- * through [`Self::feedback_text`].
+ * through `Self::feedback_text`.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ToolExecutionStatus".
@@ -8529,8 +8527,7 @@ export type RuntimeClientAttemptPhase =
             /**
              * The normalized client-visible failure of one attempt.
              *
-             * This is the external projection of the internal [`AttemptFailure`]
-             * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+             * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
              * (such as the raw provider error code) never appear here.
              */
             error:
@@ -8747,8 +8744,7 @@ export type RuntimeClientOutcome =
       /**
        * The normalized client-visible failure of one attempt.
        *
-       * This is the external projection of the internal [`AttemptFailure`]
-       * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+       * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
        * (such as the raw provider error code) never appear here.
        */
       error:
@@ -10250,7 +10246,7 @@ export interface ModelLayer {
  * It carries no contributor settings today. That is a statement about the
  * extension, not a placeholder: the list's bounds, transitions, and
  * dependency rules are owned by
- * [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are
+ * `ConversationTodoList` and are
  * not launch configuration.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -10477,7 +10473,7 @@ export interface AgentStatusExtensionDocument1 {
  * It carries no contributor settings today. That is a statement about the
  * extension, not a placeholder: the list's bounds, transitions, and
  * dependency rules are owned by
- * [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are
+ * `ConversationTodoList` and are
  * not launch configuration.
  */
 export interface TodoExtensionDocument1 {
@@ -12976,6 +12972,22 @@ export interface GoalSnapshot {
  * }
  * ```
  *
+ * ```rust
+ * use chrono::Utc;
+ * use rustx::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
+ *
+ * let metadata = AgentStatusGenerationMetadata::new(
+ *     Utc::now(),
+ *     [AgentStatusModuleId::Time, AgentStatusModuleId::Todo],
+ * )
+ * .expect("canonical status metadata");
+ * assert_eq!(
+ *     metadata.modules(),
+ *     &[AgentStatusModuleId::Time, AgentStatusModuleId::Todo]
+ * );
+ * assert!(metadata.contains(AgentStatusModuleId::Time));
+ * ```
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AgentStatusGenerationMetadata".
  */
@@ -13942,7 +13954,7 @@ export interface RuntimeClientSnapshot {
    * This is a **projection of canonical history, not a second
    * authority**: the runtime derives it from exactly the tool results the
    * Ledger holds, the same fact the runtime's own
-   * [`ConversationTodoList`] is rebuilt from, so the two can never
+   * `ConversationTodoList` is rebuilt from, so the two can never
    * disagree.
    *
    * It is carried here rather than left for a client to scan out of the
@@ -13960,8 +13972,6 @@ export interface RuntimeClientSnapshot {
    * at all. Canonical history may still contain `todo` calls and results
    * from a launch that did compose it; those remain renderable as
    * *transcript history* and must not be folded back into a current panel.
-   *
-   * [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
    */
   todos?: TodoSnapshot | null;
   /**
@@ -14427,8 +14437,7 @@ export interface RuntimeClientAttempt {
               /**
                * The normalized client-visible failure of one attempt.
                *
-               * This is the external projection of the internal [`AttemptFailure`]
-               * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+               * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
                * (such as the raw provider error code) never appear here.
                */
               error:
@@ -14841,7 +14850,7 @@ export interface InboundItemView {
    *
    * The sequence identifies one item of the conversation's inbound ordering
    * domain. It is **not**
-   * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+   * [`RuntimeEventEnvelope`]`::sequence`
    * and is never allocated from the Event Journal sequence; the durable
    * Pending Inbound Inbox owns allocation, and the first successful
    * acceptance of a conversation receives `1`.
@@ -14940,7 +14949,7 @@ export interface InboundDrainView {
    *
    * The sequence identifies one item of the conversation's inbound ordering
    * domain. It is **not**
-   * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+   * [`RuntimeEventEnvelope`]`::sequence`
    * and is never allocated from the Event Journal sequence; the durable
    * Pending Inbound Inbox owns allocation, and the first successful
    * acceptance of a conversation receives `1`.
@@ -15161,8 +15170,7 @@ export interface QuestionnaireSpecification2 {
 /**
  * The external background execution read model.
  *
- * Projected from the authoritative [`ConversationBackgroundRegistry`]
- * ([`crate::tools::background::ConversationBackgroundRegistry`]); the
+ * Projected from the authoritative [`ConversationBackgroundRegistry`](crate::tools::background::ConversationBackgroundRegistry); the
  * container shape belongs to the Runtime Client protocol while the
  * lifecycle, progress, and result leaf types are stable runtime-owned
  * value contracts. No internal task handles or process ids ever appear.
@@ -16224,7 +16232,7 @@ export interface RuntimeClientModelStatus {
  * The complete state of one conversation's list.
  *
  * This is the persistence format: it is what a successful mutation
- * publishes, and it is what [`ConversationTodoList::rebuilt`] reads back.
+ * publishes, and it is what `ConversationTodoList::rebuilt` reads back.
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "TodoSnapshot".
@@ -16342,7 +16350,7 @@ export interface RuntimeClientProtocolEvent {
    *
    * - monotonic within the Runtime Client observation stream;
    * - **not** an alias of `u64`;
-   * - **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);
+   * - **not** the mailbox [`InboundSequence`];
    * - **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);
    * - **not** any future Event Journal sequence;
    * - owned by the runtime observation stream, so it survives attachment
@@ -16487,8 +16495,7 @@ export interface RuntimeClientProtocolEvent {
               /**
                * The normalized client-visible failure of one attempt.
                *
-               * This is the external projection of the internal [`AttemptFailure`]
-               * ([`crate::events::types::AttemptFailure`]): provider-specific fields
+               * This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
                * (such as the raw provider error code) never appear here.
                */
               error:
@@ -17027,7 +17034,7 @@ export interface RuntimeClientProtocolEvent {
          *
          * The sequence identifies one item of the conversation's inbound ordering
          * domain. It is **not**
-         * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+         * [`RuntimeEventEnvelope`]`::sequence`
          * and is never allocated from the Event Journal sequence; the durable
          * Pending Inbound Inbox owns allocation, and the first successful
          * acceptance of a conversation receives `1`.
@@ -17047,7 +17054,7 @@ export interface RuntimeClientProtocolEvent {
          *
          * The sequence identifies one item of the conversation's inbound ordering
          * domain. It is **not**
-         * [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+         * [`RuntimeEventEnvelope`]`::sequence`
          * and is never allocated from the Event Journal sequence; the durable
          * Pending Inbound Inbox owns allocation, and the first successful
          * acceptance of a conversation receives `1`.
@@ -17974,8 +17981,7 @@ export interface UserMessageBlock2 {
 /**
  * The external background execution read model.
  *
- * Projected from the authoritative [`ConversationBackgroundRegistry`]
- * ([`crate::tools::background::ConversationBackgroundRegistry`]); the
+ * Projected from the authoritative [`ConversationBackgroundRegistry`](crate::tools::background::ConversationBackgroundRegistry); the
  * container shape belongs to the Runtime Client protocol while the
  * lifecycle, progress, and result leaf types are stable runtime-owned
  * value contracts. No internal task handles or process ids ever appear.

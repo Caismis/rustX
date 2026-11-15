@@ -89,7 +89,7 @@ const INCARNATION_ALLOCATION_ATTEMPTS: usize = 8;
 /// The composition inputs one child process is spawned with.
 ///
 /// Everything the child needs that is not process-inheritable travels in
-/// the typed [`SubagentChildSpec`] over the control channel; this plan
+/// the typed `SubagentChildSpec` over the control channel; this plan
 /// carries the spawn-time locations only.
 #[derive(Debug, Clone)]
 pub struct SubagentSpawnPlan {
@@ -2336,7 +2336,10 @@ mod tests {
                 ..
             })
         ));
-        assert!(settled.nested.unproven.is_empty());
+        assert_eq!(
+            settled.nested.unproven,
+            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+        );
         assert!(
             matches!(
                 nix::sys::signal::kill(
@@ -2844,7 +2847,10 @@ mod tests {
             .unwrap();
         assert!(matches!(settled.outcome, PhysicalOutcome::Lost { .. }));
         assert_eq!(settled.nested.contained, vec![unit]);
-        assert!(settled.nested.unproven.is_empty());
+        assert_eq!(
+            settled.nested.unproven,
+            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+        );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
             Err(nix::errno::Errno::ESRCH)
@@ -2915,7 +2921,10 @@ mod tests {
             matches!(&settled.outcome, PhysicalOutcome::Lost { diagnostic, .. } if diagnostic.contains("unexpected frame after Result"))
         );
         assert_eq!(settled.nested.contained, vec![unit]);
-        assert!(settled.nested.unproven.is_empty());
+        assert_eq!(
+            settled.nested.unproven,
+            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+        );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
             Err(nix::errno::Errno::ESRCH)
@@ -3082,7 +3091,10 @@ mod tests {
         assert!(path.exists());
         drop(harness.child); // reliable control EOF releases the physical settlement frontier
         let settlement = tokio::time::timeout(DEADLINE, task).await.unwrap().unwrap();
-        assert!(settlement.nested.unproven.is_empty());
+        assert_eq!(
+            settlement.nested.unproven,
+            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+        );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
             Err(nix::errno::Errno::ESRCH)

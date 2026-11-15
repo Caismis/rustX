@@ -82,7 +82,7 @@ fn project_discovery(workspace: &Workspace) -> SkillDiscovery {
 fn missing_skill_root_is_an_empty_skill_set() {
     let (_dir, workspace) = fixture();
     let outcome = project_discovery(&workspace).discover();
-    assert!(outcome.packages.is_empty());
+    assert_eq!(outcome.packages, [] as [rustx::skills::SkillPackage; 0]);
 }
 
 /// Valid Skills are discovered with deterministic ordering independent of
@@ -227,7 +227,10 @@ fn optional_frontmatter_fields_do_not_gate_discovery() {
     )
     .expect("SKILL.md");
     let outcome = project_discovery(&workspace).discover();
-    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(
+        outcome.diagnostics,
+        [] as [rustx::skills::SkillDiagnostic; 0]
+    );
     assert_eq!(outcome.packages[0].compatibility().unwrap().len(), 501);
     assert_eq!(outcome.packages[0].metadata()["version"], 1.0);
 }
@@ -238,8 +241,11 @@ fn empty_grouping_directory_is_ignored() {
     let (dir, workspace) = fixture();
     std::fs::create_dir_all(dir.path().join(".agents/skills/empty")).expect("dir");
     let outcome = project_discovery(&workspace).discover();
-    assert!(outcome.packages.is_empty());
-    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(outcome.packages, [] as [rustx::skills::SkillPackage; 0]);
+    assert_eq!(
+        outcome.diagnostics,
+        [] as [rustx::skills::SkillDiagnostic; 0]
+    );
 }
 
 /// Nested packages are never discovered recursively: a subdirectory of a
@@ -285,7 +291,10 @@ fn package_symlinks_are_deduplicated() {
             .collect::<Vec<_>>(),
         ["real"]
     );
-    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(
+        outcome.diagnostics,
+        [] as [rustx::skills::SkillDiagnostic; 0]
+    );
 
     let (dir2, workspace2) = fixture();
     write_skill(dir2.path(), "skill", "A skill.", &[], "body\n");
@@ -398,7 +407,7 @@ fn a_non_utf8_package_root_is_rejected_rather_than_published_lossily() {
         package.parent().unwrap().to_path_buf(),
     ))
     .discover();
-    assert!(outcome.packages.is_empty());
+    assert_eq!(outcome.packages, [] as [rustx::skills::SkillPackage; 0]);
     assert!(
         matches!(
             outcome.diagnostics.as_slice(),
@@ -856,5 +865,5 @@ fn catalog_rendering_is_exact_and_publishes_host_skill_locations() {
     // The empty snapshot has no entries; CapabilitySnapshot consequently
     // omits the entire system section.
     let empty = rustx::skills::SkillSnapshot::new(Vec::new());
-    assert!(empty.catalog_entries().is_empty());
+    assert_eq!(empty.catalog_entries(), []);
 }

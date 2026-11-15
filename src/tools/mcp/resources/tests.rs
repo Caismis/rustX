@@ -97,7 +97,7 @@ impl HttpPeer {
     }
 
     async fn close(self, connection: &McpConnection) {
-        assert!(connection.close().await.is_empty());
+        assert_eq!(connection.close().await, [] as [std::string::String; 0]);
         self.shutdown.cancel();
         self.server.abort();
         let _ = self.server.await;
@@ -144,7 +144,10 @@ async fn negotiated_matrix_skips_unsupported_tool_lists_and_never_enumerates_at_
             discovered.capabilities,
             crate::tools::mcp::McpNegotiatedCapabilities { tools, resources }
         );
-        assert!(discovered.tools.is_empty());
+        assert_eq!(
+            discovered.tools,
+            [] as [crate::tools::mcp::executor::CanonicalMcpTool; 0]
+        );
         assert_eq!(
             peer.fixture.list_tools_calls.load(Ordering::SeqCst),
             usize::from(tools)
@@ -487,7 +490,10 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
         let discovery = connected.discover().await.unwrap();
         assert!(discovery.capabilities.resources);
         assert!(!discovery.capabilities.tools);
-        assert!(discovery.tools.is_empty());
+        assert_eq!(
+            discovery.tools,
+            [] as [crate::tools::mcp::executor::CanonicalMcpTool; 0]
+        );
         if legacy {
             assert_eq!(
                 connected.protocol_version(),
@@ -931,7 +937,10 @@ async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() 
     }
     assert_eq!(peer.fixture.resource_state.reads.load(Ordering::SeqCst), 1);
     assert!(generation.retire_and_close().await.is_none());
-    assert!(retirement.settle_all().await.is_empty());
+    assert_eq!(
+        retirement.settle_all().await,
+        [] as [std::string::String; 0]
+    );
     peer.close(&connection).await;
 }
 
@@ -1240,7 +1249,10 @@ async fn management_catalog_reads_bounded_pages_without_business_calls() {
         .await
         .unwrap();
     assert!(page.capabilities.resources);
-    assert!(!page.resources.is_empty());
+    assert_ne!(
+        page.resources,
+        [] as [crate::tools::mcp::catalog::ResourceDescriptor; 0]
+    );
     assert_eq!(peer.fixture.resource_state.lists.load(Ordering::SeqCst), 2);
     assert_eq!(page.resources.len(), 2);
     assert_eq!(peer.fixture.resource_state.reads.load(Ordering::SeqCst), 0);

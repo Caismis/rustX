@@ -1789,7 +1789,10 @@ async fn issue204_admitted_executions_obey_their_own_frozen_policy() {
     let messages = tool_messages(&audit_p2);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].result, success_result("released"));
-    assert!(deadline_kinds(&audit_p2, "call-frozen-2").is_empty());
+    assert_eq!(
+        deadline_kinds(&audit_p2, "call-frozen-2"),
+        [] as [crate::tools::deadline::ToolDeadlineKind; 0]
+    );
 }
 
 /// M (finite settlement, the primary #204 liveness goal): an executor whose

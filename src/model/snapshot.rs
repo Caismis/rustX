@@ -802,7 +802,7 @@ mod tests {
                             .map(|(_, id)| id.clone())
                             .collect();
                         if mode == 1 {
-                            assert!(actual_calls.is_empty());
+                            assert_eq!(actual_calls, [] as [std::string::String; 0]);
                         } else {
                             assert_eq!(actual_calls, calls);
                         }

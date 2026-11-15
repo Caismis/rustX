@@ -296,7 +296,7 @@ pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
 ///
 /// - monotonic within the Runtime Client observation stream;
 /// - **not** an alias of `u64`;
-/// - **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);
+/// - **not** the mailbox [`InboundSequence`];
 /// - **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);
 /// - **not** any future Event Journal sequence;
 /// - owned by the runtime observation stream, so it survives attachment

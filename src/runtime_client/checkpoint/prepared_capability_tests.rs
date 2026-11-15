@@ -183,7 +183,10 @@ fn prepared_capability_same_revision_model_and_availability_keep_exact_source_ow
     let changed_availability = CapabilityReadSource::new(snapshot, availability, None);
     changed_availability.prepare();
     assert!(!original.same_owner(&changed_availability.prepared_head()));
-    assert!(source.header().sources.is_empty());
+    assert_eq!(
+        source.header().sources,
+        [] as [crate::observation::capability_source::CapabilitySourceView; 0]
+    );
     assert_eq!(changed_availability.header().sources.len(), 1);
     for (head, header) in [
         (original, source.header()),

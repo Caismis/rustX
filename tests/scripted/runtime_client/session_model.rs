@@ -506,7 +506,10 @@ async fn a_transient_retry_after_live_selection_keeps_the_admitted_invocation() 
             serde_json::json!(0.1)
         );
     }
-    assert!(beta.handle.requests().is_empty());
+    assert_eq!(
+        beta.handle.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     submit(&attachment, 3, "new independent Attempt");
     receive_until(&host, &subscription, |event| {
         event
@@ -616,7 +619,10 @@ async fn an_attempt_plans_compaction_with_its_own_model_window() {
     // The summary one-off is recognizable: no tools, no continuation, and the
     // context plane's output safety cap applied through the runtime-owned
     // protected max-output field.
-    assert!(beta_requests[0].tools.is_empty());
+    assert_eq!(
+        beta_requests[0].tools,
+        [] as [crate::tools::types::ModelToolDefinition; 0]
+    );
     assert_eq!(beta_requests[0].continuation, None);
     assert_eq!(
         beta_requests[0].max_output_tokens(),
@@ -708,7 +714,10 @@ async fn session_summary_mode_uses_the_admitted_primary_invocation() {
     );
     let summary = &requests[1];
     assert_eq!(summary.model(), "model-a");
-    assert!(summary.tools.is_empty());
+    assert_eq!(
+        summary.tools,
+        [] as [crate::tools::types::ModelToolDefinition; 0]
+    );
     assert_eq!(summary.continuation, None);
     assert_eq!(
         summary.request_params(),

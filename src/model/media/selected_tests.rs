@@ -132,11 +132,10 @@ fn selected_media_noop_does_not_copy_or_rehash_unchanged_canonical_and_derived_b
     legacy_materialize(&snapshot, &mut expected);
     assert!(take_work().copied_bytes > 128 * 4096);
     take_work();
-    assert!(
+    assert_eq!(
         snapshot
             .materialize_with_changes(&mut input, Some(&selected))
-            .unwrap()
-            .is_empty()
+            .unwrap(), [] as [usize; 0]
     );
     let work = take_work();
     assert_eq!(work.copied_bytes, 0);
@@ -209,11 +208,10 @@ fn selected_media_deltas_equal_legacy_upload_image_semantics_and_keep_exact_froz
             serde_json::to_vec(&selected).unwrap(),
             serde_json::to_vec(&SelectedInputManifest::from_messages(&scope, &actual)).unwrap()
         );
-        assert!(
+        assert_eq!(
             snapshot
                 .materialize_with_changes(&mut actual, Some(&selected))
-                .unwrap()
-                .is_empty()
+                .unwrap(), [] as [usize; 0]
         );
         assert_eq!(
             actual, expected,

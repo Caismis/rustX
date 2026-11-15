@@ -128,7 +128,10 @@ fn a_new_model_bootstraps_an_empty_catalog_without_adopting_new_agents() {
         .initial_binding(&manager, &input, &credentials, false)
         .unwrap();
     assert_eq!(binding.session_model().model.as_str(), "a");
-    assert!(binding.config.agent.agents.is_empty());
+    assert_eq!(
+        binding.config.agent.agents,
+        [] as [crate::runtime::subagent::catalog::SubagentName; 0]
+    );
     assert!(binding.subagents.is_empty());
 }
 

@@ -407,7 +407,7 @@ impl LocalConversationCore {
     ///
     /// The runtime is left **inactive**: the caller must finish through
     /// [`LocalConversationCore::into_interactive`],
-    /// [`LocalConversationCore::into_subagent_child_with_route`], or
+    /// `LocalConversationCore::into_subagent_child_with_route`, or
     /// [`LocalConversationCore::into_headless`] (or, for low-level
     /// composition callers, activate the runtime explicitly). Prefer the
     /// final composition paths of

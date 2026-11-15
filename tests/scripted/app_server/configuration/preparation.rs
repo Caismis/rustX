@@ -821,6 +821,6 @@ async fn t03_t05_failed_capabilities_preserve_leases_while_instructions_commit()
         runtime.runtime_resources().capability().revision(),
         before.capability().revision()
     );
-    assert!(!before.capability().skills().packages().is_empty());
+    assert_ne!(before.capability().skills().packages(), []);
     fixture.close().await;
 }

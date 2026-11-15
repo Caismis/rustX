@@ -143,7 +143,10 @@ async fn t18_live_durable_only_and_reactivation_preserve_source_and_execution_id
     else {
         panic!("expected retained authoritative history: {durable:?}");
     };
-    assert!(!checkpoint.snapshot.messages.is_empty());
+    assert_ne!(
+        checkpoint.snapshot.messages,
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert!(matches!(
         observe(&attachment, &agent, Some(old.clone())).await,
         AgentObservation::ResyncRequired {
@@ -482,7 +485,10 @@ async fn assert_embedded_durable_trace(
         .unwrap();
     assert_eq!(page.read_cut, *cut);
     assert_eq!(page.domain, domain);
-    assert!(!page.items.is_empty());
+    assert_ne!(
+        page.items,
+        [] as [crate::observation::cut::CheckpointPageItem; 0]
+    );
     let mut foreign = cut.clone();
     foreign.activation_id = Some(SubagentId::new("foreign-activation"));
     assert!(matches!(
@@ -678,7 +684,10 @@ async fn t20_real_unix_listener_bounds_and_reaps_its_physical_workset() {
         assert_eq!(*workset.borrow(), 8);
         clients.push((reader, writer));
     }
-    assert!(child.model.requests().is_empty());
+    assert_eq!(
+        child.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     inspection.shutdown().await.unwrap();
     assert_eq!(*workset.borrow(), 0);
     for (mut reader, writer) in clients {
@@ -761,14 +770,13 @@ async fn t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_
     }
     // Finish the reliable header drain, then hold unrelated disposable Activity
     // at the existing native preparation gate throughout this read-only proof.
-    assert!(
-        !host
-            .inner
+    assert_ne!(
+        host.inner
             .checkpoint()
             .unwrap()
             .snapshot
-            .pending_interactions
-            .is_empty()
+            .pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
     );
     host.inner.park_projection_worker();
     let checkpoint = host.inner.checkpoint().unwrap();
@@ -797,7 +805,7 @@ async fn t08_t11_t12_child_pending_body_uses_its_own_unix_source_and_exact_root_
         let part = base64::engine::general_purpose::STANDARD
             .decode(chunk.bytes_base64)
             .unwrap();
-        assert!(!part.is_empty());
+        assert_ne!(part, [] as [u8; 0]);
         assert!(part.len() <= 8192);
         bytes.extend(part);
         let Some(next) = chunk.next_offset else {
@@ -1015,14 +1023,14 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
     // Drain the reliable header before freezing unrelated disposable Activity.
     // The preparation gate waits for any in-flight native drain to finish;
     // both real inspection peers stay live while reads prove no publication.
-    assert!(
-        !root_host
+    assert_ne!(
+        root_host
             .inner
             .checkpoint()
             .unwrap()
             .snapshot
-            .pending_interactions
-            .is_empty()
+            .pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
     );
     root_host.inner.park_projection_worker();
     let before = root_host.inner.checkpoint().unwrap();
@@ -1112,7 +1120,7 @@ async fn nested_pending_fixture(stop_at_seal: bool) {
         let data = base64::engine::general_purpose::STANDARD
             .decode(chunk.bytes_base64)
             .unwrap();
-        assert!(!data.is_empty());
+        assert_ne!(data, [] as [u8; 0]);
         assert!(data.len() <= 8192);
         bytes.extend(data);
         let Some(next) = chunk.next_offset else { break };
@@ -1288,7 +1296,10 @@ async fn t20_real_unix_shutdown_joins_admitted_physical_source_worker() {
     shutdown.await.unwrap();
     assert_eq!(*workset.borrow(), 0);
     assert!(reader.next_line().await.unwrap().is_none());
-    assert!(child.model.requests().is_empty());
+    assert_eq!(
+        child.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     child.runtime.shutdown().await.unwrap();
 }
 
@@ -1601,7 +1612,10 @@ async fn t20_real_unix_shutdown_retires_the_exact_pending_observe_before_its_dea
     );
     assert_eq!(child.host.inner.checkpoint().unwrap(), before);
     assert_eq!(child.store.observation_read_cut().unwrap(), native);
-    assert!(child.model.requests().is_empty());
+    assert_eq!(
+        child.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     drop(unpark);
     child.runtime.shutdown().await.unwrap();
 }

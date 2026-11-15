@@ -532,7 +532,6 @@ impl SubagentRegistry {
     ///
     /// # Errors
     /// Unknown Agent or failed physical settlement/canonical publication.
-    #[must_use]
     pub fn wait_agent(
         &self,
         id: &AgentId,

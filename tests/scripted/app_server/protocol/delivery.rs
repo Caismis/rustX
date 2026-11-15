@@ -348,7 +348,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         let file = tool.result.deliveries[0].clone();
         assert_eq!(file.scope.conversation_id, target.conversation_id);
         assert_eq!(file.name, "报告 file.md");
-        assert!(tool.result.artifacts.is_empty());
+        assert_eq!(tool.result.artifacts, [] as [crate::message::content::FileReference; 0]);
         phases.enter("original bytes and authority checks");
         let requests = f.provider.request_bodies().len();
         assert_eq!(requests, 2);
@@ -377,7 +377,7 @@ pub(crate) async fn committed_present_read_boundary_scenario() {
         observation.send(tokio_tungstenite::tungstenite::Message::Text(serde_json::to_string(&read(tool.id.clone())).unwrap().into())).await.unwrap();
         let ready: serde_json::Value = serde_json::from_str(observation.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
         assert_eq!(ready["result"]["file"], serde_json::to_value(&file).unwrap());
-        assert!(!ready["result"]["version"].as_str().unwrap().is_empty());
+        assert_ne!(ready["result"]["version"].as_str().unwrap(), "");
         assert!(ready["result"].get("data").is_none(), "observation publishes metadata only");
         assert_eq!(f.host.file_reads().available_permits(), crate::tools::session_files::SESSION_FILE_MAX_READS, "idle observation retains no read permit");
         let observers = f.host.file_observers();

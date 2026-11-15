@@ -535,23 +535,38 @@ async fn cancellation_in_flight_openai_responses() {
     assert_eq!(server.attempt_count(), 1);
 }
 
-/// Cancellation while the provider has accepted the connection but delays the
-/// response headers terminates the invocation promptly with exactly one
-/// provider attempt, no retry, and no later events.
-#[tokio::test]
-async fn cancellation_while_headers_delayed_anthropic() {
+struct GateReleaseGuard(std::sync::Arc<crate::common::HeaderGate>);
+
+impl Drop for GateReleaseGuard {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+async fn assert_cancelled_while_headers_gated(
+    protocol: &'static str,
+    fixture_name: &'static str,
+    make_stream: impl FnOnce(
+        &crate::common::FixtureServer,
+        CancellationSignal,
+    ) -> rustx::model::ModelStream,
+) {
     use futures_util::StreamExt;
-    let server = crate::common::FixtureServer::start(|_attempt, _head| {
-        sse_fixture("anthropic", "text.sse").with_header_delay(60_000)
+    let gate = crate::common::HeaderGate::new();
+    let _release_guard = GateReleaseGuard(gate.clone());
+    let server_gate = gate.clone();
+    let server = crate::common::FixtureServer::start(move |_attempt, _head| {
+        sse_fixture(protocol, fixture_name).with_header_gate(server_gate.clone())
     })
     .await;
     let cancellation = CancellationSignal::new();
-    let mut stream = anthropic(&server).stream(anthropic_request(), cancellation.clone());
+    let mut stream = make_stream(&server, cancellation.clone());
     assert_eq!(
         stream.next().await,
         Some(ModelStreamItem::Event(ModelEvent::Started))
     );
-    // Drive the stream in the background so the connection attempt happens.
+    // Drive the stream in the background so the connection reaches the gated
+    // response-header boundary.
     let collector = tokio::spawn(async move {
         let mut events = Vec::new();
         while let Some(item) = stream.next().await {
@@ -561,23 +576,19 @@ async fn cancellation_while_headers_delayed_anthropic() {
         }
         events
     });
-    // Wait until the provider has accepted the connection (attempt counted),
-    // then cancel while the response headers are still delayed.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while server.attempt_count() == 0 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "connection never opened"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
+    // Wait until the provider has reached the withheld-header response
+    // boundary, then cancel while the gate remains held.
+    tokio::time::timeout(Duration::from_secs(5), gate.wait_entered())
+        .await
+        .expect("provider reached gated response headers");
     cancellation.cancel();
     let events = tokio::time::timeout(Duration::from_secs(5), collector)
         .await
         .expect("collection finished promptly")
         .expect("collector did not panic");
     // The test itself consumed Started; the collector sees exactly the
-    // terminal Failed(Cancelled) and nothing after it.
+    // terminal Failed(Cancelled) and nothing after it, all while the
+    // response-header gate remains held.
     assert_eq!(
         events,
         vec![ModelEvent::Failed {
@@ -600,130 +611,39 @@ async fn cancellation_while_headers_delayed_anthropic() {
         1,
         "exactly one provider attempt, no retry"
     );
+}
+
+/// Cancellation while the provider has reached the withheld-header response
+/// boundary terminates the invocation promptly with exactly one provider
+/// attempt, no retry, and no later events.
+#[tokio::test]
+async fn cancellation_while_headers_delayed_anthropic() {
+    assert_cancelled_while_headers_gated("anthropic", "text.sse", |server, cancellation| {
+        anthropic(server).stream(anthropic_request(), cancellation)
+    })
+    .await;
 }
 
 /// The same before-headers cancellation for `OpenAI` Chat.
 #[tokio::test]
 async fn cancellation_while_headers_delayed_openai_chat() {
-    use futures_util::StreamExt;
-    let server = crate::common::FixtureServer::start(|_attempt, _head| {
-        sse_fixture("openai_chat", "plain_text.sse").with_header_delay(60_000)
-    })
+    assert_cancelled_while_headers_gated(
+        "openai_chat",
+        "plain_text.sse",
+        |server, cancellation| openai_chat(server).stream(chat_request(), cancellation),
+    )
     .await;
-    let cancellation = CancellationSignal::new();
-    let mut stream = openai_chat(&server).stream(chat_request(), cancellation.clone());
-    assert_eq!(
-        stream.next().await,
-        Some(ModelStreamItem::Event(ModelEvent::Started))
-    );
-    let collector = tokio::spawn(async move {
-        let mut events = Vec::new();
-        while let Some(item) = stream.next().await {
-            if let ModelStreamItem::Event(event) = item {
-                events.push(event);
-            }
-        }
-        events
-    });
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while server.attempt_count() == 0 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "connection never opened"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    cancellation.cancel();
-    let events = tokio::time::timeout(Duration::from_secs(5), collector)
-        .await
-        .expect("collection finished promptly")
-        .expect("collector did not panic");
-    // The test itself consumed Started; the collector sees exactly the
-    // terminal Failed(Cancelled) and nothing after it.
-    assert_eq!(
-        events,
-        vec![ModelEvent::Failed {
-            error: rustx::model::ModelError {
-                kind: ModelErrorKind::Cancelled,
-                message: "model invocation cancelled".to_owned(),
-                retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
-                retry_after_ms: None,
-                provider_code: None,
-                context_overflow: None,
-                malformed_tool_proposal: None,
-                timeout_phase: None,
-                generation: None,
-            },
-        }],
-        "lifecycle is Started then Failed(Cancelled), nothing after"
-    );
-    assert_eq!(
-        server.attempt_count(),
-        1,
-        "exactly one provider attempt, no retry"
-    );
 }
 
 /// The same before-headers cancellation for `OpenAI` Responses.
 #[tokio::test]
 async fn cancellation_while_headers_delayed_openai_responses() {
-    use futures_util::StreamExt;
-    let server = crate::common::FixtureServer::start(|_attempt, _head| {
-        sse_fixture("openai_responses", "plain_text.sse").with_header_delay(60_000)
-    })
+    assert_cancelled_while_headers_gated(
+        "openai_responses",
+        "plain_text.sse",
+        |server, cancellation| openai_responses(server).stream(responses_request(), cancellation),
+    )
     .await;
-    let cancellation = CancellationSignal::new();
-    let mut stream = openai_responses(&server).stream(responses_request(), cancellation.clone());
-    assert_eq!(
-        stream.next().await,
-        Some(ModelStreamItem::Event(ModelEvent::Started))
-    );
-    let collector = tokio::spawn(async move {
-        let mut events = Vec::new();
-        while let Some(item) = stream.next().await {
-            if let ModelStreamItem::Event(event) = item {
-                events.push(event);
-            }
-        }
-        events
-    });
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while server.attempt_count() == 0 {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "connection never opened"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-    cancellation.cancel();
-    let events = tokio::time::timeout(Duration::from_secs(5), collector)
-        .await
-        .expect("collection finished promptly")
-        .expect("collector did not panic");
-    // The test itself consumed Started; the collector sees exactly the
-    // terminal Failed(Cancelled) and nothing after it.
-    assert_eq!(
-        events,
-        vec![ModelEvent::Failed {
-            error: rustx::model::ModelError {
-                kind: ModelErrorKind::Cancelled,
-                message: "model invocation cancelled".to_owned(),
-                retry_disposition: rustx::model::error::ModelRetryDisposition::Never,
-                retry_after_ms: None,
-                provider_code: None,
-                context_overflow: None,
-                malformed_tool_proposal: None,
-                timeout_phase: None,
-                generation: None,
-            },
-        }],
-        "lifecycle is Started then Failed(Cancelled), nothing after"
-    );
-    assert_eq!(
-        server.attempt_count(),
-        1,
-        "exactly one provider attempt, no retry"
-    );
 }
 
 /// The same valid response succeeds without a cap and fails with a cap. The

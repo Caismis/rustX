@@ -804,7 +804,7 @@ async fn cancellation_before_the_regeneration_wins_over_the_budget() {
     );
     assert_single_terminal(&audit.event_history);
     assert_nothing_executed(&audit);
-    assert!(assistant_texts(&audit).is_empty());
+    assert_eq!(assistant_texts(&audit), [] as [std::string::String; 0]);
 }
 
 /// The corrective hint belongs to the corrective **generation**, not to one

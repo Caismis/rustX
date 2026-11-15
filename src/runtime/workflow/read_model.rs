@@ -782,6 +782,9 @@ mod tests {
                 outcome: WorkflowExecutionOutcome::Completed
             }
         ));
-        assert!(client.snapshot().unwrap().0.messages.is_empty());
+        assert_eq!(
+            client.snapshot().unwrap().0.messages,
+            [] as [crate::message::types::MessageBlock; 0]
+        );
     }
 }

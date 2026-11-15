@@ -1076,7 +1076,10 @@ async fn t04_large_canonical_source_has_bounded_stdio_initialize_and_checkpoint(
     else {
         panic!("independent bounded checkpoint");
     };
-    assert!(!checkpoint.snapshot.message_descriptors.is_empty());
+    assert_ne!(
+        checkpoint.snapshot.message_descriptors,
+        [] as [crate::observation::transcript::RuntimeClientMessageDescriptor; 0]
+    );
     let frontier = checkpoint
         .collections
         .iter()
@@ -1617,15 +1620,15 @@ async fn shutdown_does_not_close_the_transport() {
 
     // This idle shutdown has no attempt to cancel, so canonical history is
     // untouched.
-    assert!(
+    assert_eq!(
         fixture
             .host
             .checkpoint()
             .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("snapshot")
             .0
-            .messages
-            .is_empty()
+            .messages,
+        [] as [crate::message::types::MessageBlock; 0]
     );
 }
 

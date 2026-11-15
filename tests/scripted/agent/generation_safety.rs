@@ -784,7 +784,7 @@ async fn two_truncated_generations_terminate_without_a_third() {
         panic!("expected an explicit model-generation failure, got {terminal:?}");
     };
     assert_eq!(error.kind, ModelErrorKind::GenerationBudgetExceeded);
-    assert!(assistant_texts(&audit).is_empty());
+    assert_eq!(assistant_texts(&audit), [] as [std::string::String; 0]);
     assert_nothing_executed(&audit);
 }
 
@@ -965,7 +965,7 @@ async fn a_transient_retry_does_not_restore_the_semantic_budget() {
         panic!("expected an explicit model-generation failure, got {terminal:?}");
     };
     assert_eq!(error.kind, ModelErrorKind::GenerationDegenerated);
-    assert!(assistant_texts(&audit).is_empty());
+    assert_eq!(assistant_texts(&audit), [] as [std::string::String; 0]);
     assert!(!canonical_text(&audit).contains(LOOP_UNIT));
 }
 

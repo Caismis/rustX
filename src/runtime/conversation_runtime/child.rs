@@ -75,7 +75,7 @@ impl ConversationRuntime {
     /// # Errors
     ///
     /// Returns the same variants as
-    /// [`ConversationRuntime::submit_sourced_inbound`], plus
+    /// `ConversationRuntime::submit_sourced_inbound`, plus
     /// [`InboundAdmissionError::GuidanceSealed`].
     pub(crate) fn submit_parent_guidance(
         &self,

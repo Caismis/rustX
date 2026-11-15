@@ -390,9 +390,7 @@ impl ScheduleStore for SqliteConversationStore {
                 |row| row.get(0),
             )
             .map_err(sql)?;
-        let after_time = after
-            .map(|cursor| stamp(cursor.due_utc))
-            .unwrap_or_default();
+        let after_time = after.map_or_default(|cursor| stamp(cursor.due_utc));
         let after_ordinal = after.map_or(0, |cursor| cursor.ordinal);
         let mut statement=tx.prepare("SELECT ordinal,revision,next_due FROM schedules WHERE state='enabled' AND next_due<=?1 AND (next_due,ordinal)>(?2,?3) ORDER BY next_due,ordinal LIMIT 64").map_err(sql)?;
         let candidates = statement

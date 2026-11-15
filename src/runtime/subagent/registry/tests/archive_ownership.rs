@@ -74,7 +74,10 @@ impl ArchivePlane {
         .unwrap()
         .initialize(&[])
         .unwrap();
-        assert!(self.plane.registry.all_snapshots().is_empty());
+        assert_eq!(
+            self.plane.registry.all_snapshots(),
+            [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+        );
         assert!(!events(&self.plane).iter().any(|event| matches!(
             event,
             crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
@@ -179,7 +182,10 @@ async fn archive_wins_before_live_subagent_ownership_commit() {
     let cancellation = CancellationSignal::new();
     let mut committing = Box::pin(fixture.plane.registry.commit(prepared, &cancellation));
     assert_waiting(committing.as_mut()).await;
-    assert!(fixture.plane.registry.all_snapshots().is_empty()); // No registry lock held while waiting.
+    assert_eq!(
+        fixture.plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    ); // No registry lock held while waiting.
     assert!(!events(&fixture.plane).iter().any(|event| matches!(
         event,
         crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
@@ -242,7 +248,10 @@ async fn cancelled_subagent_waiting_for_ownership_admission_rolls_back_without_p
         committing.await.unwrap(),
         SubagentStartOutcome::RolledBack
     ));
-    assert!(fixture.plane.registry.all_snapshots().is_empty());
+    assert_eq!(
+        fixture.plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
     assert!(!events(&fixture.plane).iter().any(|event| matches!(
         event,
         crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
@@ -293,7 +302,10 @@ async fn ownership_admission_rechecks_capacity_drain_and_durability() {
                 | ("drain", SubagentStartError::ConversationInactive)
                 | ("durability", SubagentStartError::DurabilityFailed { .. })
         ));
-        assert!(fixture.plane.registry.all_snapshots().is_empty());
+        assert_eq!(
+            fixture.plane.registry.all_snapshots(),
+            [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+        );
         assert!(!events(&fixture.plane).iter().any(|event| matches!(
             event,
             crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
@@ -377,7 +389,10 @@ async fn archive_wins_before_production_child_reservation() {
     assert_waiting(preparing.as_mut()).await;
     allocation_reached.await.unwrap();
     assert_waiting(preparing.as_mut()).await;
-    assert!(fixture.plane.registry.all_snapshots().is_empty());
+    assert_eq!(
+        fixture.plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
     release.send(()).unwrap();
     let cut = capture.await.unwrap();
     let prepared = preparing
@@ -435,7 +450,10 @@ async fn cancelled_production_reservation_wait_creates_no_child_allocation() {
     ));
     assert!(child.await.is_err(), "no process was staged");
     assert_eq!(std::fs::read_dir(conversations).unwrap().count(), before);
-    assert!(fixture.plane.registry.all_snapshots().is_empty());
+    assert_eq!(
+        fixture.plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
     assert!(!events(&fixture.plane).iter().any(|event| matches!(
         event,
         crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }

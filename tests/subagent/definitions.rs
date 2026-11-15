@@ -175,13 +175,12 @@ impl Lab {
         let definition_names = subagents
             .get("roles")
             .and_then(serde_json::Value::as_object)
-            .map(|definitions| {
+            .map_or_default(|definitions| {
                 definitions
                     .keys()
                     .map(|name| serde_json::Value::String(name.clone()))
                     .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
+            });
         if let Some(document) = subagents.as_object_mut() {
             document
                 .entry("agents".to_owned())
@@ -1321,13 +1320,12 @@ fn write_config_with_root_extensions(
     let definition_names = subagents
         .get("roles")
         .and_then(serde_json::Value::as_object)
-        .map(|definitions| {
+        .map_or_default(|definitions| {
             definitions
                 .keys()
                 .map(|name| serde_json::Value::String(name.clone()))
                 .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        });
     if let Some(document) = subagents.as_object_mut() {
         document
             .entry("agents".to_owned())

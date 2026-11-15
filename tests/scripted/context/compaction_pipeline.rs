@@ -478,7 +478,10 @@ async fn model_backed_summarizer_issues_a_canonical_request() {
         rustx::model::ModelProtocol::OpenAiChatCompletions
     );
     assert_eq!(requests[0].max_output_tokens(), 128);
-    assert!(requests[0].tools.is_empty());
+    assert_eq!(
+        requests[0].tools,
+        [] as [crate::tools::types::ModelToolDefinition; 0]
+    );
     assert_eq!(requests[0].effective_system_prompt, "");
     assert_eq!(requests[0].continuation, None);
     let rustx::model::projected::ModelMessageView::User(content) = requests[0].messages[0].view()
@@ -783,11 +786,11 @@ fn assert_no_transition(store: &dyn ConversationStore, history: &[MessageBlock])
     assert_eq!(head.compaction_generation, 0);
     assert_eq!(store.load_canonical().unwrap(), history);
     assert!(store.projection_head().unwrap().is_none());
-    assert!(
+    assert_eq!(
         store
             .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
     );
 }
 
@@ -1139,9 +1142,15 @@ async fn cancellation_observed_during_planning_starts_no_summary_and_commits_not
     assert!(
         matches!(result, Err(crate::context::compaction::CompactionExecutionError::Context(error)) if error.kind == ContextErrorKind::Cancelled)
     );
-    assert!(summarizer.requests().is_empty());
+    assert_eq!(
+        summarizer.requests(),
+        [] as [crate::context::summarizer::SummaryRequest; 0]
+    );
     assert_no_transition(&store, &history);
-    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 64).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
 }
 
 #[tokio::test]
@@ -1190,9 +1199,15 @@ async fn n1_incomplete_search_invokes_no_summary_and_leaves_no_durable_transitio
     assert!(
         matches!(result, Err(crate::context::compaction::CompactionExecutionError::Context(error)) if error.kind == ContextErrorKind::SearchIncomplete)
     );
-    assert!(summarizer.requests().is_empty());
+    assert_eq!(
+        summarizer.requests(),
+        [] as [crate::context::summarizer::SummaryRequest; 0]
+    );
     assert_no_transition(&store, &history);
-    assert!(store.read_events(None, 64).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 64).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     assert!(
         store
             .projection_receipt(&operation, "unused")

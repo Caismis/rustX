@@ -642,7 +642,7 @@ fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, String> {
         .find("\n---")
         .ok_or("SKILL.md frontmatter is missing its closing delimiter")?;
     let yaml = remainder.get(1..closing).unwrap_or_default();
-    let value: serde_yaml::Value = serde_yaml::from_str(yaml)
+    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml)
         .map_err(|error| format!("frontmatter is not valid YAML: {error}"))?;
     let string = |key| value[key].as_str().map(str::to_owned);
     let metadata = value["metadata"]
@@ -826,7 +826,10 @@ mod frontmatter_tests {
             automatic: automatic_skill_roots(Some(&home), workspace.root()),
         })
         .discover();
-        assert!(outcome.packages.is_empty());
+        assert_eq!(
+            outcome.packages,
+            [] as [crate::skills::package::SkillPackage; 0]
+        );
         assert_eq!(outcome.diagnostics.len(), 2);
         assert!(
             outcome
@@ -957,7 +960,10 @@ mod frontmatter_tests {
             linked.join("SKILL.md")
         );
         assert_eq!(outcome.packages[1].instruction_source(), instruction);
-        assert!(outcome.diagnostics.is_empty());
+        assert_eq!(
+            outcome.diagnostics,
+            [] as [crate::skills::diagnostics::SkillDiagnostic; 0]
+        );
     }
 
     /// A source root that exists but cannot be scanned excludes only that
@@ -1030,7 +1036,10 @@ mod frontmatter_tests {
             automatic: automatic_skill_roots(Some(&home), workspace.root()),
         })
         .discover();
-        assert!(outcome.packages.is_empty());
+        assert_eq!(
+            outcome.packages,
+            [] as [crate::skills::package::SkillPackage; 0]
+        );
         assert_eq!(
             std::fs::read_to_string(legacy).expect("legacy bytes preserved"),
             "unrelated legacy user bytes; not valid frontmatter"
@@ -1154,8 +1163,8 @@ mod frontmatter_tests {
         assert!(outcome.packages[0].disable_model_invocation());
         let snapshot = SkillSnapshot::new(outcome.packages.into_iter().map(Arc::new).collect());
         assert_eq!(snapshot.packages().len(), 1);
-        assert!(snapshot.catalog_entries().is_empty());
-        assert!(snapshot.visible_bindings().is_empty());
+        assert_eq!(snapshot.catalog_entries(), []);
+        assert_eq!(snapshot.visible_bindings(), []);
         assert_eq!(snapshot.bindings().len(), 1);
         // The package is hidden from the catalog but still tracked, so its
         // host location participates in snapshot equality.

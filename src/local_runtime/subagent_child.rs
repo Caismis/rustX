@@ -4,7 +4,7 @@
 //! The child is a real rustX runtime — the same `ConversationRuntime`,
 //! Agent Loop, Context Assembly, Tool Plane, and `ModelAdapter` as an
 //! interactive session — composed headlessly from the typed
-//! [`SubagentChildSpec`] that arrives over the control channel. The driver
+//! `SubagentChildSpec` that arrives over the control channel. The driver
 //! itself is a thin bounded loop:
 //!
 //! ```text
@@ -30,7 +30,7 @@
 //!
 //! Only the `Hello` version handshake reads the raw control `UnixStream`
 //! directly: it must be decided before anything at all is composed.
-//! Everything after it goes through [`ChildControlDispatcher`], the single
+//! Everything after it goes through `ChildControlDispatcher`, the single
 //! owner of both inherited transports, because the child now also creates
 //! supervised process units that must offer their containment anchors to
 //! the parent concurrently with `Delegate`/`Cancel`/`Result` traffic, and
@@ -51,7 +51,7 @@
 //!
 //! IPC never appends to the child's canonical history: the delegated task
 //! becomes an ordinary durable inbound item through
-//! [`ConversationRuntime::submit_sourced_inbound`], and the result travels
+//! `ConversationRuntime::submit_sourced_inbound`, and the result travels
 //! back as a **candidate** frame — terminal publication authority stays
 //! with the parent-side settlement owner.
 //!
@@ -2114,7 +2114,10 @@ pub(crate) mod tests {
             crate::runtime::types::ConversationLifecycleState::Quiescent
         );
         assert!(!runtime.has_current_attempt());
-        assert!(runtime.durable_ledger().unwrap().is_empty());
+        assert_eq!(
+            runtime.durable_ledger().unwrap(),
+            [] as [crate::message::types::MessageBlock; 0]
+        );
         dispatcher.shutdown().await;
     }
 
@@ -2539,8 +2542,14 @@ pub(crate) mod tests {
                 .unwrap()
                 .contains("delegated task was refused")
         );
-        assert!(store.load_pending().unwrap().is_empty());
-        assert!(store.load_canonical().unwrap().is_empty());
+        assert_eq!(
+            store.load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
+        assert_eq!(
+            store.load_canonical().unwrap(),
+            [] as [crate::message::types::MessageBlock; 0]
+        );
         assert!(
             tokio::time::timeout(
                 std::time::Duration::from_secs(20),
@@ -2552,7 +2561,10 @@ pub(crate) mod tests {
             .is_none()
         );
         fixture.serve.await.unwrap().unwrap();
-        assert!(model.requests().is_empty());
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
     }
 
     /// Native handoff classifications cannot be mistaken for successful completion.
@@ -2745,7 +2757,10 @@ pub(crate) mod tests {
             // pre-Delegate permit check. Absence of a request is not a timeout.
             resumed.admit_now_for_test();
             assert!(!resumed.has_current_attempt());
-            assert!(resumed_model.requests().is_empty());
+            assert_eq!(
+                resumed_model.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
             assert_eq!(store.load_pending().unwrap(), pending);
             delegate(&mut fixture.parent, "later activation task").await;
             let later = read_result(&mut fixture.parent).await;
@@ -2761,7 +2776,10 @@ pub(crate) mod tests {
                     "later activation task",
                 ]
             );
-            assert!(store.load_pending().unwrap().is_empty());
+            assert_eq!(
+                store.load_pending().unwrap(),
+                [] as [crate::durable::inbox::PendingInboundItem; 0]
+            );
         }
     }
 
@@ -2888,7 +2906,10 @@ pub(crate) mod tests {
         );
         next.serve.await.unwrap().unwrap();
         assert_eq!(next_model.requests().len(), 1);
-        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            store.load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         assert_eq!(
             adopted_guidance(&resumed),
             vec![
@@ -3632,7 +3653,10 @@ pub(crate) mod tests {
                 1
             }
         );
-        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            store.load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         result
     }
 

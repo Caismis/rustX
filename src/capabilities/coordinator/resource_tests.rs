@@ -58,7 +58,7 @@ async fn resource_only_sources_publish_three_helpers_only_for_source_wide_author
         candidate.availability.get(&source),
         Some(&CapabilitySourceState::Ready)
     );
-    assert!(candidate.available_tools().tools().is_empty());
+    assert_eq!(candidate.available_tools().tools(), []);
     let snapshot = coordinator.commit(candidate).unwrap();
     assert_helpers(&snapshot, 3);
     assert_eq!(snapshot.resource_sources(), &[source.clone()].into());
@@ -81,7 +81,10 @@ async fn resource_only_sources_publish_three_helpers_only_for_source_wide_author
         .unwrap();
     let exact = coordinator.commit(exact).unwrap();
     assert_helpers(&exact, 0);
-    assert!(exact.to_capabilities_manifest().mcp.is_empty());
+    assert_eq!(
+        exact.to_capabilities_manifest().mcp,
+        [] as [crate::protocol::manifest::McpBinding; 0]
+    );
     assert!(exact.resource_sources().contains(&source));
 
     // Workflow demand may prepare a source without granting Root read authority.
@@ -164,7 +167,10 @@ async fn resource_only_sources_publish_three_helpers_only_for_source_wide_author
     let inert = coordinator.commit(inert).unwrap();
     assert_helpers(&inert, 0);
     assert!(inert.resource_sources().is_empty());
-    assert!(inert.to_capabilities_manifest().mcp.is_empty());
+    assert_eq!(
+        inert.to_capabilities_manifest().mcp,
+        [] as [crate::protocol::manifest::McpBinding; 0]
+    );
     coordinator.retire_current_mcp_runtimes();
     coordinator.settle_ready_mcp_runtimes().await.unwrap();
     assert_eq!(coordinator.pending_mcp_retirements(), 0);

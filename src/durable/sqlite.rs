@@ -118,7 +118,7 @@ fn count_conversation_store_open() {
 /// Journal.
 ///
 /// Version 9 froze the Issue #111 durable **answer obligation**: the adoption
-/// transaction now commits a [`RuntimeEvent::InboundTurnAdopted`] fact naming
+/// transaction now commits a [`RuntimeEvent::InboundTurnAdopted`](crate::events::types::RuntimeEvent::InboundTurnAdopted) fact naming
 /// the exact adopted batch, and startup recovery decides continuation from
 /// that fact alone rather than from canonical shape.
 ///
@@ -504,7 +504,7 @@ impl ConnectionOwner {
                 });
             }
             if let Some(connection) = slot.take() {
-                let Ok(previous) = self.lease_generation.fetch_update(
+                let Ok(previous) = self.lease_generation.try_update(
                     Ordering::AcqRel,
                     Ordering::Acquire,
                     |current| current.checked_add(1),
@@ -1044,7 +1044,7 @@ impl SqliteConversationStore {
     #[cfg(test)]
     fn consume(counter: &AtomicUsize) -> bool {
         counter
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()
