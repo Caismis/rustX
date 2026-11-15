@@ -73,6 +73,19 @@ the production Web build, with no retries, skips or screenshot changes.
 All eight model-refresh scenarios also pass two complete repetitions (16 passing
 executions), for 18 passing fixed-browser executions across nine distinct scenarios.
 
+The Harness convergence scenario observes all four real provider responses before
+checking the final rendered heading. Native Write, Bash and Read execution is no
+longer charged against the five-second rendering assertion. The provider barrier
+uses the existing finite 30-second execution wait; the browser test retains its
+120-second limit, creation/admission counts, resident composer identity, permission
+settings, Tool results, accessibility checks and screenshots. Its teardown also
+uses the shared browser-route drain before Host shutdown.
+
+Five consecutive fixed-browser convergence executions pass with no retries or
+skips. TUI provider-gate waits explicitly pass the helper's existing 20-second
+deadlock allowance to the emulator instead of inheriting its shorter default;
+ordering continues to come from exact native/provider observations.
+
 ### Earlier integration baseline (2026-11-13)
 
 The following results predate the current main integration:

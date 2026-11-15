@@ -1,7 +1,7 @@
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openWorkspaceSettings, openSettingsPage, returnHome } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -105,6 +105,9 @@ test('Harness New Conversation, permission, model, native process and Models con
     try { await named.renameSession(wire.responses.find(row => row.method === 'thread/start')!.result.session.id, 'New session'); }
     finally { await named.shutdown(); }
     wire.releaseHeld();
+    // Creation acknowledgement precedes the four real model responses and
+    // Write/Bash/Read settlement. Observe that execution before timing the UI.
+    await fixture.control('observations/await?kind=response_completed&count=4&timeoutMs=30000');
     await expect(page.getByRole('heading', { name: 'Workspace ready' })).toBeVisible();
     expect(await residentInput!.evaluate(node => node === document.querySelector('textarea[aria-label="Message"]'))).toBe(true);
     expect(await residentSeat!.evaluate(node => node === document.querySelector('[data-resident-composer]'))).toBe(true);
@@ -142,5 +145,5 @@ test('Harness New Conversation, permission, model, native process and Models con
     expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()).violations).toEqual([]);
     await returnHome(page); await noOverflow();
     expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } finally { await stopDogfoodPage(page, fixture, passed); }
 });
