@@ -217,6 +217,27 @@ async function openSession(
   return host.attach(created.session.id, created.session.active_node);
 }
 
+async function loadTranscriptThroughAnchor(session: AppServerSession, anchor: string): Promise<void> {
+  const loaded = () => session.state.transcript.filter(entry => 'cursor' in entry);
+  await until(() => session.controlReady, 'native transcript observation follows');
+  await until(() => {
+    const last = loaded().at(-1);
+    return last !== undefined && BigInt(last.cursor) >= BigInt(anchor);
+  }, 'published transcript reaches the installed checkpoint anchor');
+  // The scenario permits at most 64 primary requests. Eight bounded native
+  // pages cover its history even when async installation falls outside the tail.
+  for (let page = 0; page <= 8; page += 1) {
+    const first = loaded()[0];
+    if (first !== undefined && (BigInt(first.cursor) <= BigInt(anchor) || session.state.transcriptNextCursor == null)) return;
+    assert.ok(page < 8, 'the finite fixture history reaches the native checkpoint anchor');
+    const before = session.state.transcriptNextCursor;
+    assert.ok(before != null, 'the checkpoint anchor has an older native page');
+    assert.ok(await session.loadOlderTranscript(), 'the older native transcript page is loaded');
+    const after = session.state.transcriptNextCursor;
+    assert.ok(after == null || BigInt(after) < BigInt(before), 'native pagination advances');
+  }
+}
+
 it('renders one native multi-call compaction through the actual TUI client and reconnect', { skip: SKIP, timeout: 420_000 }, async t => {
   const provider = await ProviderEmulator.start('chunked_compaction');
   const fixture = ServerFixture.create('rustx-tui-chunked-', provider.url());
@@ -248,9 +269,15 @@ it('renders one native multi-call compaction through the actual TUI client and r
     assert.ok(summaries.length > 13);
     assert.equal((summaries[0]!.body as { response_format: { type: string } }).response_format.type, 'json_schema');
     assert.ok(summaries.slice(1).every(request => (request.body as { response_format?: unknown }).response_format === undefined));
+    await loadTranscriptThroughAnchor(session, head.transcript_anchor);
     const preferences = withToggledCompaction(defaultPreferences(), compactionKey(head));
     const markers = renderTranscript(session.state, preferences).filter(block => block.kind === 'compaction');
-    assert.equal(markers.length, 1);
+    assert.equal(markers.length, 1, JSON.stringify({
+      head, currentHead: session.state.context.projection_head,
+      loadedCursors: session.state.transcript.filter(entry => 'cursor' in entry).map(entry => entry.cursor),
+      nextCursor: session.state.transcriptNextCursor,
+      deferred: session.state.deferredTranscriptEntries?.map(entry => entry.offset),
+    }));
     assert.match(blockText(markers[0]!), new RegExp(compactionSummary));
     assert.doesNotMatch(blockText(markers[0]!), /private-summary-reasoning-522/);
     await session.projections();
@@ -260,6 +287,7 @@ it('renders one native multi-call compaction through the actual TUI client and r
     host = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
     const restored = await host.attach(sessionId, nodeId);
     assert.equal(restored.state.context.projection_head?.checkpoint_id, head.checkpoint_id);
+    await loadTranscriptThroughAnchor(restored, head.transcript_anchor);
     assert.equal(renderTranscript(restored.state, preferences).filter(block => block.kind === 'compaction').length, 1);
     t.diagnostic(JSON.stringify({ operation: id, fragments: installed.status.accepted_fragments, physicalRequests: summaries.length, checkpoint: head.checkpoint_id }));
     passed = true;
