@@ -1,5 +1,15 @@
 # Architecture
 
+## Rust engineering ownership (#560)
+
+Rust 1.100 is the sole compiler baseline. Native companions follow one
+executable-sibling deployment contract; Cargo test preparation binds and stages
+actual emitted artifacts instead of inferring intermediate directory layouts.
+Workspace Python keeps guard, interpreter and preparation ownership in private
+modules. Session Controller operations and Workflow compilation/catalog modules
+retain their original native authorities and public paths. See the
+[engineering report](evidence/issue-560-final-report.md) and its disposition maps.
+
 ## App Server environment services (#533)
 
 The v77 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).

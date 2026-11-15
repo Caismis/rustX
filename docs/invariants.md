@@ -1,5 +1,16 @@
 # Runtime Invariants
 
+## Native resource and notification ownership (#560)
+
+- Companion executables resolve beside the running executable; no Cargo
+  build-directory inference supplies production execution authority.
+- Python guards are runtime-owned embedded bytes, or an explicitly provisioned
+  executable sibling validated against those bytes. Failure to acquire a valid
+  guard fails Python lookup closed.
+- App Server command admission releases its State mutex before watch publication;
+  observers release watch borrows before acquiring State. Notification hints do
+  not replace exact command identity or physical process settlement.
+
 ## Environment service ownership (#533)
 
 1. Every authenticated, initialized ordinary client has equal command/file/management API eligibility; common native source, OS, state, secret and capacity restrictions remain effective.

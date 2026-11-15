@@ -1,5 +1,7 @@
 # Issue #560 Implementation and Measurement Plan: Adopt Rust 1.100 and Streamline Dependencies, Module Boundaries, Tests, and CI
 
+This is the historical Stage 0 bounded plan. Its completed implementation, measurements, negative results and final validation procedure are indexed by the [final report](../evidence/issue-560-final-report.md).
+
 Status: **Accepted Bounded Stage 0 Plan (Revised Prior to B0/B1/B2 Execution and Stages 1–5)**
 
 ---

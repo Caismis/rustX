@@ -1,5 +1,7 @@
 # Issue #560 Consolidated Stage 1–4 Test, Synchronization & Contract Disposition Map
 
+This map records the Stage 4 checkpoint. Final explicit doctest/CI ownership and subsequent measurement results are in the [Stage 5 map](issue-560-stage5-ci-disposition.md) and [final report](issue-560-final-report.md); references below to pending Stage 5 describe that historical checkpoint.
+
 This consolidated map indexes Stage 1 and Stage 3 disposition tables via links and records all Stage 4 (`stage4_native`, `stage4_surfaces`, `stage4_benchmark`) meaningful proof changes, inventory closures, and boundary preservations. No new test taxonomy or registry is introduced; Cargo test discovery, `.github/workflows/ci.yml`, `examples/check_test_lanes.rs`, and `web-console/scripts/browser-shards.ts` remain authoritative.
 
 ## 0. Stage 1, Pre-Stage-3 Layout Fix & Stage 3 Consolidation Links
