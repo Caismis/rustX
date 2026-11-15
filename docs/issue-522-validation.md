@@ -8,9 +8,9 @@ changes.
 
 ## Integrated contract (2026-11-15)
 
-PR #531 integrates `origin/main` at `33234e5b1`. The integrated contract is
-App Server v80, Runtime Client v86,
-Child IPC v40, SQLite schema 89, Runtime authoring schema 13 and Runtime
+This stack builds on PR #531's `origin/main` integration at `33234e5b1`.
+Its current contract is App Server v80, Runtime Client v87,
+Child IPC v40, SQLite schema 90, Runtime authoring schema 13 and Runtime
 Manifest v7. The model catalog remains schema 2 and Session catalog schema 21.
 The integration retains shared writable Thread clients, instance bearer/JWT
 authentication, Provider-owned protocol, Agent resources and Skills, automatic
@@ -25,8 +25,8 @@ terminals.
 
 The integrated tree retains main's instruction-only Skills, Workspace Python
 execution environment and immutable Workflow Run Canvas snapshots. SQLite schema
-89 distinguishes this combined layout from both earlier schema-88 layouts. The
-current v79 protocol pair is regenerated from Rust, and all new Workflow readers
+90 includes authenticated asynchronous checkpoint coverage. The
+current v80 protocol pair is regenerated from Rust, and all new Workflow readers
 use that same pair. Configuration changes compare the complete execution-policy
 tuple after removal of authored Context settings.
 
@@ -122,7 +122,7 @@ protocol artifacts are byte-identical to the checked-in artifacts. Linux
 `rust-contracts` and `rust-boundaries` lane coverage checks passed. A remote FULL
 CI result for the new integrated commit has not yet been established.
 
-### Review follow-up (2026-11-13)
+### Provider format rejection and recovery
 
 The native-format classifiers now recognize complete protocol-field rejection
 messages when optional `code` or `param` metadata is absent. Recognition remains
@@ -132,6 +132,18 @@ defects, unrelated fields, authentication, rate limits and context overflow do
 not authorize a format downgrade. The HTTP matrix includes the
 [type/message-only example documented by the OpenAI Agents SDK](https://openai.github.io/openai-agents-python/models/#structured-outputs-support)
 and the [Anthropic error envelope](https://platform.claude.com/docs/en/api/errors#error-shapes).
+
+Anthropic also recognizes the whole-field diagnostic
+`output_config.format: Extra inputs are not permitted` reported in
+[vercel/ai#14773](https://github.com/vercel/ai/issues/14773). This establishes the
+response shape, not present model or endpoint capabilities. The exact message
+requires the same Native-request, HTTP-400, error-type and metadata checks.
+The nested `output_config.format.schema.properties.x` form and prefixed or
+extended schema explanations remain ordinary invalid requests. Real HTTP
+coverage checks these exclusions. A composed two-compaction scenario observes
+one rejected Native Call and exactly one Prompt downgrade per operation;
+the later operation starts with Native again, so no provider-wide capability
+or Session preference is changed.
 
 The composed real-HTTP compaction regression checks that the rejected Native
 request does not advance its source cursor. Adding the Prompt schema makes that

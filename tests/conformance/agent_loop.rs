@@ -164,6 +164,7 @@ struct Setup {
     auxiliary: Option<String>,
     /// The Summary model and profile arrangement exercised by this fixture.
     summary_scenario: SummaryScenario,
+    anthropic_native_output: bool,
     summary_window: Option<u64>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
@@ -178,6 +179,7 @@ impl Setup {
             context_window: 128_000,
             auxiliary: None,
             summary_scenario: SummaryScenario::Standard,
+            anthropic_native_output: false,
             summary_window: None,
             skill_paths: Vec::new(),
             responses_stateless: false,
@@ -840,6 +842,9 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
             "context_window": window, "max_output_tokens": 1024,
             "capabilities": if setup.images && protocol == "anthropic_messages" { serde_json::json!({"input_modalities": ["text", "image"], "output_modalities": ["text"]}) } else { text_capabilities() },
         });
+        if protocol == "anthropic_messages" && setup.anthropic_native_output {
+            model["capabilities"]["json_schema_output"] = true.into();
+        }
         if setup.summary_scenario == SummaryScenario::CrossProvider
             && protocol == "anthropic_messages"
         {
@@ -1913,6 +1918,132 @@ async fn compaction_uses_an_explicit_cross_provider_summary_profile() {
     assert_eq!(
         after, before,
         "historical request identity is independent of current Session configuration"
+    );
+    emulator.finish().await;
+}
+
+/// A whole-field Anthropic rejection downgrades only its current operation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)]
+async fn anthropic_extra_inputs_downgrades_once_per_compaction_operation() {
+    use rustx::durable::AuxiliaryStore;
+    use rustx::events::types::RuntimeEvent as E;
+    use rustx::model::auxiliary::AuxiliaryInputEvidence;
+    use rustx::model::structured::StructuredOutputStrategy;
+
+    let Some(emulator) = ProviderEmulator::start("compaction_anthropic_format_rejection").await
+    else {
+        return;
+    };
+    let setup = Setup {
+        context_window: COMPACTION_CONTEXT_WINDOW,
+        auxiliary: Some(format!("emulator-anthropic/{ANTHROPIC_MODEL}")),
+        anthropic_native_output: true,
+        ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
+    };
+    let driver = Driver::start(&emulator, &setup).await;
+    for prompt in [TURN_ONE, TURN_TWO, TURN_THREE] {
+        driver.submit(prompt);
+        let (_, outcome) = driver.settle().await;
+        assert!(
+            matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+            "{outcome:?}"
+        );
+    }
+    assert_eq!(driver.snapshot().unwrap().0.context.compaction_count, 2);
+    let requests = emulator.requests().await;
+    assert_eq!(
+        requests.len(),
+        7,
+        "three primary and two pairs of Summary requests"
+    );
+    let summaries: Vec<_> = requests
+        .iter()
+        .filter(|request| request["model"] == ANTHROPIC_MODEL)
+        .collect();
+    assert_eq!(summaries.len(), 4);
+    for pair in summaries.as_chunks::<2>().0 {
+        assert_eq!(
+            pair[0]["body"]["output_config"]["format"]["type"],
+            "json_schema"
+        );
+        assert!(pair[1]["body"].get("output_config").is_none());
+        assert!(
+            pair.iter()
+                .all(|request| request["protocol"] == "anthropic_messages")
+        );
+    }
+    let mut journal = Vec::new();
+    let mut after = None;
+    loop {
+        let page = driver.store.read_events(after, 128).unwrap();
+        if page.events.is_empty() {
+            break;
+        }
+        after = page.next_sequence;
+        journal.extend(page.events);
+    }
+    let calls: Vec<_> = journal
+        .iter()
+        .filter_map(|record| match &record.event {
+            E::AuxiliaryCallStarted {
+                call_id,
+                business_source:
+                    rustx::model::auxiliary::AuxiliaryBusinessSource::Compaction {
+                        operation_id, ..
+                    },
+                input:
+                    AuxiliaryInputEvidence::Compaction {
+                        output_strategy, ..
+                    },
+                ..
+            } => Some((call_id, operation_id, output_strategy)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(calls.len(), 4);
+    assert_ne!(
+        calls[0].1, calls[2].1,
+        "a later operation retries Native independently"
+    );
+    let cut = driver.store.auxiliary_audit_cut().unwrap();
+    for pair in calls.as_chunks::<2>().0 {
+        assert_eq!(pair[0].1, pair[1].1);
+        assert_eq!(*pair[0].2, StructuredOutputStrategy::Native);
+        assert!(
+            matches!(pair[1].2, StructuredOutputStrategy::PromptFallback { operation_id } if operation_id == pair[0].1)
+        );
+        let failed = driver
+            .store
+            .read_auxiliary_call_requests(pair[0].0, cut, None, 2)
+            .unwrap();
+        assert_eq!(failed.len(), 1, "the permanent format error is not retried");
+        assert_eq!(
+            failed[0].normalized_failure_kind,
+            Some(rustx::model::ModelErrorKind::NativeFormatUnsupported)
+        );
+        let accepted = driver
+            .store
+            .read_auxiliary_call_requests(pair[1].0, cut, None, 2)
+            .unwrap();
+        assert_eq!(
+            accepted.len(),
+            1,
+            "exactly one operation-local Prompt downgrade"
+        );
+        assert_eq!(accepted[0].normalized_failure_kind, None);
+    }
+    assert_eq!(
+        journal
+            .iter()
+            .filter(|record| matches!(record.event, E::CompactionCompleted { .. }))
+            .count(),
+        2
+    );
+    assert!(
+        !journal
+            .iter()
+            .any(|record| matches!(record.event, E::AuxiliaryRetryScheduled { .. }))
     );
     emulator.finish().await;
 }
