@@ -40,5 +40,11 @@ All **106** baseline strict-`rustdoc` errors (`53` `rustdoc::private_intra_doc_l
 
 ## 4. First-Party vs. Upstream / Native Diagnostics
 
+The later [macOS CI correction](issue-560-macos-ci-disposition.md) closes four
+native-platform first-party warning groups through exact import/platform scope,
+and separately records the retained Apple compact-unwind and action-dependency
+diagnostics. Earlier local strict-check receipts below retain their original
+configuration scope.
+
 - **First-party workspace diagnostics**: Strict `rustdoc` (`RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked`) and strict `clippy` (both default-features and `--all-features`, `--workspace --all-targets --locked -- -D warnings`) report **0 errors and 0 warnings** across all first-party library, binary, example, and integration test targets.
 - **Upstream / native diagnostics**: Kept strictly separate from first-party lints. Stage 2 made no whole-graph dependency updates or patches to upstream crates (`Cargo.lock` only removed direct `grep-matcher` and replaced `serde_yaml 0.9.34+deprecated` with already-locked `serde_yaml_ng 0.10.0`). Native test preparation continues through `test-support/prepare_native_tests.py` with explicit sibling binary staging and emulator-backed conformance validation recorded in Stage 2 verification receipts (`/tmp/rustx-560-control/stage2-result.md` and external logs under `/tmp/rustx-560-control/`).

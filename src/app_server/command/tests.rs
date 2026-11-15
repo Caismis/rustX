@@ -246,34 +246,71 @@ fn reaching_the_cap_cannot_hide_a_saturated_consumer_behind_a_pending_tail() {
     assert!(events.overloaded.is_cancelled());
 }
 
-async fn wait_for_ready_output(events: &super::super::service_events::Events, process_id: &str) {
-    let mut output = Vec::new();
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+fn command_fixture_root() -> (tempfile::TempDir, PathBuf) {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path().join("workspace");
+    std::fs::create_dir(&root).unwrap();
+    let alias = temporary.path().join("workspace-alias");
+    std::os::unix::fs::symlink(&root, &alias).unwrap();
+    // Native grants reject symlink components. Exercise the macOS temporary
+    // directory alias precondition on every platform, then grant its real path.
+    let root = alias.canonicalize().unwrap();
+    (temporary, root)
+}
+
+type CommandSettlement =
+    Result<Result<ExecResult, RpcError>, tokio::sync::oneshot::error::RecvError>;
+
+struct ReadyObservation {
+    output: Result<Vec<u8>, String>,
+    settlement: Option<CommandSettlement>,
+}
+
+async fn wait_for_ready_output(
+    events: &super::super::service_events::Events,
+    process_id: &str,
+    received: &mut oneshot::Receiver<Result<ExecResult, RpcError>>,
+) -> ReadyObservation {
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        let mut output = Vec::new();
         while output.len() < b"READY".len() {
             let event = events.next().await;
+            let _ = event.emitted.send(());
             let NotificationMethod::CommandOutputDelta(delta) = event.notification.notification
             else {
-                panic!("expected command output delta");
+                return Err("expected command output delta".to_owned());
             };
-            assert_eq!(delta.process_id, process_id);
+            if delta.process_id != process_id {
+                return Err(format!("unexpected process identity: {}", delta.process_id));
+            }
             output.extend(
                 base64::engine::general_purpose::STANDARD
                     .decode(delta.delta_base64)
-                    .unwrap(),
+                    .map_err(|error| error.to_string())?,
             );
-            let _ = event.emitted.send(());
         }
-    })
-    .await
-    .expect("READY output arrived promptly");
-    assert_eq!(output, b"READY");
+        Ok(output)
+    });
+    tokio::select! {
+        result = output => ReadyObservation {
+            output: result.map_err(|error| error.to_string()).and_then(|result| result),
+            settlement: None,
+        },
+        settlement = received => ReadyObservation {
+            output: Err(format!("command settled before READY: {settlement:?}")),
+            settlement: Some(settlement),
+        },
+    }
 }
 
 #[tokio::test]
 async fn start_releases_state_mutex_before_watch_publication() {
-    let temp = tempfile::tempdir().unwrap();
+    let (_temporary, root) = command_fixture_root();
     let environment = Arc::new(crate::local_runtime::environment::Environment::default());
-    environment.configure(&[temp.path().to_path_buf()]);
+    environment.configure(std::slice::from_ref(&root));
+    environment
+        .directory(&root.display().to_string())
+        .expect("canonical fixture root must be admitted");
     let events = Arc::new(super::super::service_events::Events::default());
     let commands = Arc::new(Commands::default());
     let params = ExecParams {
@@ -282,7 +319,7 @@ async fn start_releases_state_mutex_before_watch_publication() {
             "-c".into(),
             "printf READY; exec /bin/cat".into(),
         ],
-        cwd: temp.path().display().to_string(),
+        cwd: root.display().to_string(),
         env: BTreeMap::new(),
         process_id: Some("lock-order".into()),
         tty: false,
@@ -318,21 +355,27 @@ async fn start_releases_state_mutex_before_watch_publication() {
     drop(state_try);
 
     drop(watch_read_guard);
-    let received = start_task
+    let mut received = start_task
         .await
         .expect("start blocking task")
         .expect("Commands::start admitted command");
 
-    commands.admitted_for_test("lock-order").await;
-    let active_when_admitted = commands
+    let active_after_start = commands
         .state
         .lock()
         .expect("connection commands")
         .active
         .contains_key("lock-order");
-    wait_for_ready_output(&events, "lock-order").await;
+    let ready = wait_for_ready_output(&events, "lock-order", &mut received).await;
+    if ready.output.is_err() {
+        events.closed.cancel();
+    }
     let terminate = commands.terminate("lock-order");
-    let settled = received.await;
+    let settled = match ready.settlement {
+        Some(settled) => settled,
+        None => received.await,
+    };
+    commands.close();
     let active_after_settle = commands
         .state
         .lock()
@@ -340,17 +383,10 @@ async fn start_releases_state_mutex_before_watch_publication() {
         .active
         .is_empty();
 
-    assert!(
-        state_available,
-        "Commands::start must release State mutex before publishing to watch"
-    );
-    assert!(
-        entry_inserted,
-        "active entry lock-order must be inserted before pre-publish witness"
-    );
-    assert!(
-        active_when_admitted,
-        "admitted_for_test must observe active entry lock-order"
+    assert_eq!(
+        ready.output.as_deref(),
+        Ok(b"READY".as_slice()),
+        "READY observation failed; command settlement: {settled:?}"
     );
     assert!(
         terminate.is_ok(),
@@ -362,13 +398,28 @@ async fn start_releases_state_mutex_before_watch_publication() {
         active_after_settle,
         "settled command must clear active entry"
     );
+    assert!(
+        active_after_start,
+        "Commands::start must retain active entry lock-order"
+    );
+    assert!(
+        state_available,
+        "Commands::start must release State mutex before publishing to watch"
+    );
+    assert!(
+        entry_inserted,
+        "active entry lock-order must be inserted before pre-publish witness"
+    );
 }
 
 #[tokio::test]
 async fn admitted_for_test_observes_concurrent_start_without_holding_watch_across_state() {
-    let temp = tempfile::tempdir().unwrap();
+    let (_temporary, root) = command_fixture_root();
     let environment = Arc::new(crate::local_runtime::environment::Environment::default());
-    environment.configure(&[temp.path().to_path_buf()]);
+    environment.configure(std::slice::from_ref(&root));
+    environment
+        .directory(&root.display().to_string())
+        .expect("canonical fixture root must be admitted");
     let events = Arc::new(super::super::service_events::Events::default());
     let commands = Arc::new(Commands::default());
     let params = ExecParams {
@@ -377,7 +428,7 @@ async fn admitted_for_test_observes_concurrent_start_without_holding_watch_acros
             "-c".into(),
             "printf READY; exec /bin/cat".into(),
         ],
-        cwd: temp.path().display().to_string(),
+        cwd: root.display().to_string(),
         env: BTreeMap::new(),
         process_id: Some("concurrent-admit".into()),
         tty: false,
@@ -392,7 +443,7 @@ async fn admitted_for_test_observes_concurrent_start_without_holding_watch_acros
     tokio::pin!(observer);
     let pending_before_start = futures_util::poll!(observer.as_mut()).is_pending();
 
-    let received = commands
+    let mut received = commands
         .start(
             params,
             environment,
@@ -408,14 +459,15 @@ async fn admitted_for_test_observes_concurrent_start_without_holding_watch_acros
         .expect("connection commands")
         .active
         .contains_key("concurrent-admit");
-    wait_for_ready_output(&events, "concurrent-admit").await;
-    commands
-        .terminate("concurrent-admit")
-        .expect("terminate concurrent command");
-    let exec_result = received
-        .await
-        .expect("result channel")
-        .expect("exec result");
+    let ready = wait_for_ready_output(&events, "concurrent-admit", &mut received).await;
+    if ready.output.is_err() {
+        events.closed.cancel();
+    }
+    let terminate = commands.terminate("concurrent-admit");
+    let settled = match ready.settlement {
+        Some(settled) => settled,
+        None => received.await,
+    };
     commands.close();
     let active_after_settle = commands
         .state
@@ -424,6 +476,18 @@ async fn admitted_for_test_observes_concurrent_start_without_holding_watch_acros
         .active
         .is_empty();
 
+    assert_eq!(
+        ready.output.as_deref(),
+        Ok(b"READY".as_slice()),
+        "READY observation failed; command settlement: {settled:?}"
+    );
+    assert!(
+        terminate.is_ok(),
+        "terminate concurrent command: {terminate:?}"
+    );
+    let exec_result = settled.expect("result channel").expect("exec result");
+    assert_eq!(exec_result.status, ExecStatus::Terminated);
+    assert!(active_after_settle);
     assert!(
         pending_before_start,
         "admitted_for_test must return Pending when polled before Commands::start"
@@ -433,6 +497,55 @@ async fn admitted_for_test_observes_concurrent_start_without_holding_watch_acros
         "admitted_for_test must wake and settle after Commands::start without deadlock"
     );
     assert!(active_when_admitted);
-    assert_eq!(exec_result.status, ExecStatus::Terminated);
+}
+
+#[tokio::test]
+async fn readiness_observes_ungranted_root_failure_and_settles_before_assertions() {
+    let (_temporary, root) = command_fixture_root();
+    // Deliberately leave the real root ungranted. The actual command actor
+    // must reject it before spawning, rather than leaving READY waiting alone.
+    let environment = Arc::new(crate::local_runtime::environment::Environment::default());
+    let events = Arc::new(super::super::service_events::Events::default());
+    let commands = Arc::new(Commands::default());
+    let mut params = parameters();
+    params.command = vec!["/bin/sh".into(), "-c".into(), "printf READY".into()];
+    params.cwd = root.display().to_string();
+    params.process_id = Some("ungranted-root".into());
+    params.tty = false;
+    params.stream_stdin = true;
+    params.stream_stdout_stderr = true;
+    params.timeout_ms = Some(10_000);
+    let mut received = commands
+        .start(
+            params,
+            environment,
+            events.clone(),
+            super::super::host::ServerOperation::for_test(),
+        )
+        .expect("command admission");
+    let ready = wait_for_ready_output(&events, "ungranted-root", &mut received).await;
+    let observed_settlement = ready.settlement.is_some();
+    events.closed.cancel();
+    commands.close();
+    let settled = match ready.settlement {
+        Some(settled) => settled,
+        None => received.await,
+    };
+    let active_after_settle = commands
+        .state
+        .lock()
+        .expect("connection commands")
+        .active
+        .is_empty();
+
+    assert!(
+        observed_settlement,
+        "native result must win before READY timeout"
+    );
+    assert!(ready.output.is_err());
+    assert_eq!(
+        settled.expect("result channel"),
+        Err(domain(ErrorData::EnvironmentUnauthorized))
+    );
     assert!(active_after_settle);
 }

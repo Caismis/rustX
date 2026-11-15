@@ -348,11 +348,11 @@ pub(crate) struct RecordedSignal {
 #[cfg_attr(not(test), allow(dead_code))] // empty in non-test builds
 #[derive(Clone)]
 pub(crate) struct RunnerLifecycleHook {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     shell_exit_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     proceed_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     proceed_rx: tokio::sync::watch::Receiver<bool>,
     #[cfg(test)]
     ownership_tx: tokio::sync::watch::Sender<bool>,
@@ -371,14 +371,19 @@ pub(crate) struct RunnerLifecycleHook {
 #[cfg(test)]
 impl RunnerLifecycleHook {
     pub(crate) fn new() -> Self {
+        #[cfg(target_os = "linux")]
         let (shell_exit_tx, _) = tokio::sync::watch::channel(false);
+        #[cfg(target_os = "linux")]
         let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
         let (ownership_tx, ownership_rx) = tokio::sync::watch::channel(false);
         let (terminal_tx, terminal_rx) = tokio::sync::watch::channel(false);
         let (direct_child_reaped_tx, direct_child_reaped_rx) = tokio::sync::watch::channel(false);
         Self {
+            #[cfg(target_os = "linux")]
             shell_exit_tx,
+            #[cfg(target_os = "linux")]
             proceed_tx,
+            #[cfg(target_os = "linux")]
             proceed_rx,
             ownership_tx,
             ownership_rx,
@@ -391,6 +396,7 @@ impl RunnerLifecycleHook {
 
     /// Runner side: signals the exact shell-exit boundary and parks until
     /// the test releases the runner.
+    #[cfg(target_os = "linux")]
     async fn pause_after_shell_exit(&self) {
         let _ = self.shell_exit_tx.send(true);
         let mut proceed = self.proceed_rx.clone();
@@ -399,6 +405,7 @@ impl RunnerLifecycleHook {
 
     /// Test side: waits until the runner provably observed the shell's
     /// natural exit and parked at the boundary.
+    #[cfg(target_os = "linux")]
     pub(crate) async fn await_shell_exit(&self) {
         let mut rx = self.shell_exit_tx.subscribe();
         if !*rx.borrow() {
@@ -407,6 +414,7 @@ impl RunnerLifecycleHook {
     }
 
     /// Test side: releases the parked runner.
+    #[cfg(target_os = "linux")]
     pub(crate) fn release(&self) {
         let _ = self.proceed_tx.send(true);
     }
@@ -663,7 +671,7 @@ pub(crate) struct RunnerTestControl {
     #[cfg(test)]
     pub(crate) anchor_stop_socket: Option<std::path::PathBuf>,
     pub(crate) diagnostics: crate::tools::native::bash_supervisor::diagnostics::FixtureControl,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) pause_at_shell_exit: bool,
     #[cfg(test)]
     pub(crate) lifecycle: RunnerLifecycleHook,
@@ -720,6 +728,7 @@ impl RunnerTestControl {
             anchor_stop_socket: None,
             diagnostics:
                 crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
+            #[cfg(target_os = "linux")]
             pause_at_shell_exit: false,
             lifecycle: RunnerLifecycleHook::new(),
             nested_authority: None,
@@ -1154,7 +1163,7 @@ impl SupervisedCommandRunner {
                     }
                     Ok(Some(SupervisorEvent::ShellExited { status })) => {
                         self.exit_status = Some(status);
-                        #[cfg(test)]
+                        #[cfg(all(test, target_os = "linux"))]
                         if let Some(control) = self.control.as_ref()
                             && control.pause_at_shell_exit
                             && self.settled.is_none()

@@ -39,6 +39,14 @@ All-target checking includes the modified example and was measured again.
 Documentation is a runtime input of `contracts`; its timing stays historical,
 and current documentation receives separate functional checks.
 
+The later [macOS CI correction](issue-560-macos-ci-disposition.md) canonicalizes
+the Commands fixtures, adds early-result cleanup coverage and narrows test-only
+platform gates. This changes the test/build source tree while ordinary non-test
+execution logic remains unchanged. The timing checkpoints above remain
+historical measurements; they are not rerun timings for the corrected candidate.
+Fresh functional checks, negative controls and current-head FULL CI validate the
+correction without claiming another performance gain.
+
 ## Ownership, dependencies and diagnostics
 
 The [guard/deployment map](issue-560-stage1-guard-disposition.md) explains removal
