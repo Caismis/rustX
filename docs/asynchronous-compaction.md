@@ -50,7 +50,12 @@ At activation, the current owner reads a coherent current projection and cut,
 compares authenticated coverage and constructs a fresh candidate. Compatible
 strict advancement is eligible; equal coverage keeps the installed result;
 smaller coverage is superseded; unprovable or incomparable coverage is refused.
-Completion time does not decide precedence. Current retained history and all
+Completion time does not decide precedence. A newly authorized blocking/manual
+owner may separately reduce only the currently installed Summary to fit a
+smaller primary request without inventing coverage advancement. Its sealed
+in-process permission names that exact Head and retains every current suffix
+item. Independent results never receive this permission; their equal coverage
+still preserves the installed result. Current retained history and all
 later appends survive in order exactly once, with remapped tool occurrences.
 
 The complete current primary request must fit and historical size must

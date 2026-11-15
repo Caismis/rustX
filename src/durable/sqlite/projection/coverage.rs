@@ -135,6 +135,7 @@ fn validate_current_suffix(
     scope: &ConversationId,
     candidate: &CheckpointCandidate,
     record: &PrefixCoverage,
+    proof: Option<&crate::context::coverage::VerifiedPrefixCoverage>,
     current: Option<&ProjectionCheckpoint>,
 ) -> Result<(), ConversationStoreError> {
     if candidate.base_frontier != candidate.read_cut.ledger {
@@ -152,9 +153,14 @@ fn validate_current_suffix(
             current.and_then(|checkpoint| checkpoint.candidate.prefix_coverage.as_ref()),
         )
     });
-    let offset = record.retained_offset(head).ok_or_else(|| {
-        invalid("native coverage is not a strict compatible advance of current Head")
-    })?;
+    let offset = proof
+        .map_or_else(
+            || record.retained_offset(head),
+            |proof| proof.retained_offset(head),
+        )
+        .ok_or_else(|| {
+            invalid("native coverage is not a strict compatible advance of current Head")
+        })?;
     let current_history = compile_history(connection, scope, &candidate.read_cut, current)?;
     complete_boundary(&current_history, offset)?;
     if candidate.items.len() != 1 + current_history.items.len() - offset {
@@ -265,5 +271,5 @@ pub(super) fn validate_commit(
         }
     }
     captured_history(connection, scope, record)?;
-    validate_current_suffix(connection, scope, candidate, record, current)
+    validate_current_suffix(connection, scope, candidate, record, Some(proof), current)
 }

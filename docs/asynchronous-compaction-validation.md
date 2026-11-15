@@ -37,6 +37,12 @@ A controlled Ready-publication gate makes cancellation arrive after the reaper
 claims its pending join. The terminal cancellation must be durable before the
 registry entry is removed.
 
+The Summary-only model-switch regression requires a second current-owner
+activation with the same coverage root/frontier and all fresh input retained.
+Its sealed current-Head reduction permission is absent from independent
+results. Store tests continue to reject equal/incomparable competition and
+serialized coverage without a generation witness.
+
 ## Controlled measurements
 
 HTTP conformance emits `RUSTX_529_CONTROLLED_METRICS` from the original Journal

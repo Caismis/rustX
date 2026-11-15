@@ -120,6 +120,7 @@ fn installation_retains_every_current_suffix_occurrence_once() {
         &candidate,
         &record,
         None,
+        None,
     )
     .unwrap();
     let mut missing = candidate.clone();
@@ -130,6 +131,7 @@ fn installation_retains_every_current_suffix_occurrence_once() {
             store.conversation_id(),
             &missing,
             &record,
+            None,
             None
         )
         .is_err()
@@ -142,6 +144,7 @@ fn installation_retains_every_current_suffix_occurrence_once() {
             store.conversation_id(),
             &reordered,
             &record,
+            None,
             None
         )
         .is_err()
@@ -154,6 +157,7 @@ fn installation_retains_every_current_suffix_occurrence_once() {
             store.conversation_id(),
             &duplicated,
             &record,
+            None,
             None
         )
         .is_err()
@@ -194,6 +198,7 @@ fn competing_native_head_must_have_less_compatible_coverage() {
         store.conversation_id(),
         &candidate,
         &second,
+        None,
         Some(&current),
     )
     .unwrap();
@@ -203,6 +208,7 @@ fn competing_native_head_must_have_less_compatible_coverage() {
             store.conversation_id(),
             &candidate,
             &first,
+            None,
             Some(&current)
         )
         .is_err()
@@ -217,6 +223,7 @@ fn competing_native_head_must_have_less_compatible_coverage() {
             store.conversation_id(),
             &candidate,
             &foreign,
+            None,
             Some(&current)
         )
         .is_err()
