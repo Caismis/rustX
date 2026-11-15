@@ -241,7 +241,7 @@ it('renders one native multi-call compaction through the actual TUI client and r
     const head = session.state.context.projection_head;
     assert.ok(head, 'only the native installed checkpoint becomes a marker');
     const installed = session.state.context.compaction_operations!.find(value => value.status.operation_id === id)!;
-    assert.equal(installed.status.phase, 'committed');
+    assert.equal(installed.status.phase, 'committed', JSON.stringify({ operation: installed, head }));
     assert.ok(installed.status.accepted_fragments > 12);
     const requests = await provider.requests();
     const summaries = requests.filter(request => request.model === 'summary-model');
