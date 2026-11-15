@@ -848,8 +848,64 @@ fn assert_post_shell_exit_cancel_trace(trace: &std::path::Path, anchor_pid: i32)
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::test]
-async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group() {
+fn read_i32_file(path: &std::path::Path) -> Result<i32, String> {
+    let raw = std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
+    raw.trim()
+        .parse::<i32>()
+        .map_err(|err| format!("{}: {err} ({raw:?})", path.display()))
+}
+
+#[cfg(target_os = "linux")]
+struct PostShellExitObservations {
+    case_label: &'static str,
+    redirect_stdio: bool,
+    shell_pid: Result<i32, String>,
+    descendant_pid: Result<i32, String>,
+    anchor_pid: Result<i32, String>,
+    pre_probe: Option<(bool, Option<i32>)>,
+    pre_trace: std::io::Result<String>,
+}
+
+#[cfg(target_os = "linux")]
+fn verify_post_shell_exit_observations(obs: PostShellExitObservations, trace: &std::path::Path) {
+    let label = obs.case_label;
+    let redirect = obs.redirect_stdio;
+    let shell_pid = obs.shell_pid.expect("shell pid");
+    let descendant_pid = obs.descendant_pid.expect("descendant pid");
+    let anchor_pid = obs.anchor_pid.expect("anchor pid");
+    let (pre_alive, pre_pgid) = obs.pre_probe.expect("descendant live probe");
+    let pre_trace = obs.pre_trace.unwrap_or_else(|err| {
+        panic!("[{label}] supervision trace must be readable at shell-exit boundary: {err}")
+    });
+    eprintln!(
+        "[post-shell-exit case={label} redirect_stdio={redirect}] shell_pid={shell_pid} descendant_pid={descendant_pid} anchor_pid={anchor_pid} pre_alive={pre_alive} pre_pgid={pre_pgid:?} pre_trace_bytes={}",
+        pre_trace.len()
+    );
+    assert_ne!(descendant_pid, shell_pid, "[{label}]");
+    assert!(
+        pre_alive,
+        "[{label}] descendant pid {descendant_pid} must still be alive at the exact shell-exit boundary"
+    );
+    assert_eq!(
+        pre_pgid,
+        Some(anchor_pid),
+        "[{label}] descendant pid {descendant_pid} must belong to owned process group {anchor_pid}"
+    );
+    assert!(
+        !pre_trace.is_empty(),
+        "[{label}] supervision trace must already contain prior lifecycle events before shell-exit release"
+    );
+    assert!(
+        !pre_trace.contains("TerminateReceived")
+            && !pre_trace.contains("GroupChildrenReaped")
+            && !pre_trace.contains("TerminalPublished"),
+        "[{label}] cancellation/settlement must not precede shell-exit boundary: {pre_trace}"
+    );
+    assert_post_shell_exit_cancel_trace(trace, anchor_pid);
+}
+
+#[cfg(target_os = "linux")]
+async fn assert_exact_shell_exit_cancel_case(case_label: &'static str, redirect_stdio: bool) {
     use super::supervisor::diagnostics::FixtureControl;
     use nix::unistd::{Pid, getpgid};
 
@@ -862,8 +918,13 @@ async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group
     let _hold_guard = HoldFifoGuard::create(&hold_path);
     let trace_dir = tempfile::tempdir().unwrap();
     let trace = trace_dir.path().join("trace");
+    let stdio_redirection = if redirect_stdio {
+        " >/dev/null 2>&1"
+    } else {
+        ""
+    };
     let command = format!(
-        "echo $$ > {}; sh -c 'IFS= read -r _ < {}' >/dev/null 2>&1 & echo $! > {}; exit 0",
+        "echo $$ > {}; sh -c 'IFS= read -r _ < {}'{stdio_redirection} & echo $! > {}; exit 0",
         shell_pid_file.display(),
         hold_path.display(),
         desc_pid_file.display()
@@ -887,59 +948,47 @@ async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group
         workspace.clone(),
         None,
     ));
-    // 1. The exact boundary: the shell parent exited and the executor
-    //    is parked before natural settlement handling.
-    tokio::time::timeout(Duration::from_secs(15), hook.await_shell_exit())
-        .await
-        .expect("the shell-exit boundary is observed");
-    // 2. While the anchor is still retained at the shell-exit boundary, the
-    //    descendant is provably alive inside the owned process group and
-    //    neither cancellation nor settlement has fired yet.
-    let read_i32 = |p: &std::path::Path| -> i32 {
-        std::fs::read_to_string(p).unwrap().trim().parse().unwrap()
+    let awaited_boundary =
+        tokio::time::timeout(Duration::from_secs(15), hook.await_shell_exit()).await;
+    let descendant_pid = read_i32_file(&desc_pid_file);
+    let pre_probe = descendant_pid.as_ref().ok().map(|&pid| {
+        (
+            process_alive(pid),
+            getpgid(Some(Pid::from_raw(pid))).ok().map(Pid::as_raw),
+        )
+    });
+    let obs = PostShellExitObservations {
+        case_label,
+        redirect_stdio,
+        shell_pid: read_i32_file(&shell_pid_file),
+        descendant_pid,
+        anchor_pid: read_i32_file(&anchor_pid_file),
+        pre_probe,
+        pre_trace: std::fs::read_to_string(&trace),
     };
-    let (shell_pid, descendant_pid, anchor_pid) = (
-        read_i32(&shell_pid_file),
-        read_i32(&desc_pid_file),
-        read_i32(&anchor_pid_file),
-    );
-    let pre_alive = process_alive(descendant_pid);
-    let pre_pgid = getpgid(Some(Pid::from_raw(descendant_pid)))
-        .ok()
-        .map(Pid::as_raw);
-    let pre_trace = std::fs::read_to_string(&trace).unwrap_or_default();
-    // 3. Cancellation becomes observable strictly after shell exit.
     cancelling.cancel();
-    // 4. The executor resumes and settles before any assertion can panic.
     hook.release();
-    let result = tokio::time::timeout(Duration::from_secs(20), task)
-        .await
+    let settled = tokio::time::timeout(Duration::from_secs(20), task).await;
+
+    awaited_boundary.expect("the shell-exit boundary is observed");
+    let result = settled
         .expect("the invocation settles exactly once")
         .expect("executor task");
-
-    assert_ne!(descendant_pid, shell_pid);
-    assert!(
-        pre_alive,
-        "the descendant must still be alive at the exact shell-exit boundary"
-    );
-    assert_eq!(
-        pre_pgid,
-        Some(anchor_pid),
-        "descendant pid {descendant_pid} must belong to owned process group {anchor_pid}"
-    );
-    assert!(
-        !pre_trace.contains("TerminateReceived")
-            && !pre_trace.contains("GroupChildrenReaped")
-            && !pre_trace.contains("TerminalPublished"),
-        "cancellation/settlement must not precede shell-exit boundary: {pre_trace}"
-    );
     assert!(
         matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
-        "late cancellation after the shell-parent exit must be Cancelled, got {:?}",
+        "[{case_label}] late cancellation after the shell-parent exit must be Cancelled, got {:?}",
         result.status
     );
-    assert_post_shell_exit_cancel_trace(&trace, anchor_pid);
+    verify_post_shell_exit_observations(obs, &trace);
     let _ = dir;
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group() {
+    for (case_label, redirect_stdio) in [("redirected-stdio", true), ("inherited-stdio", false)] {
+        assert_exact_shell_exit_cancel_case(case_label, redirect_stdio).await;
+    }
 }
 
 /// Natural settlement requires the supervisor's terminal child set: at
