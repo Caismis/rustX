@@ -1665,6 +1665,13 @@ async fn issue552_workflow_trace_locator_routes_exact_reads_without_execution_or
             }
             tokio::task::yield_now().await;
         }
+        // A settled Workflow header does not join the independently published
+        // Journal source. Choose the read-only baseline after both are installed.
+        f.manager
+            .configuration_host(&f.sessions[0].id)
+            .unwrap()
+            .projection_settled()
+            .await;
         let access = f
             .manager
             .session_controller()
