@@ -504,7 +504,7 @@ impl ConnectionOwner {
                 });
             }
             if let Some(connection) = slot.take() {
-                let Ok(previous) = self.lease_generation.fetch_update(
+                let Ok(previous) = self.lease_generation.try_update(
                     Ordering::AcqRel,
                     Ordering::Acquire,
                     |current| current.checked_add(1),
@@ -1044,7 +1044,7 @@ impl SqliteConversationStore {
     #[cfg(test)]
     fn consume(counter: &AtomicUsize) -> bool {
         counter
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()

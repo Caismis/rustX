@@ -429,7 +429,7 @@ async fn cfg280_the_committed_generation_owns_sources_merge_and_root_visibility(
 async fn cfg332_both_fixed_roots_are_discovered_and_missing_roots_are_empty() {
     let (conversation, home) = conversation_with_sources(fixture_activation(), "home");
     let missing = prepare_and_commit(&conversation.coordinator).await;
-    assert!(missing.skills().packages().is_empty());
+    assert_eq!(missing.skills().packages(), []);
     write_skill(&home, "user-only", "User.", &[]);
     write_skill(
         conversation.workspace.root(),
@@ -558,7 +558,10 @@ async fn cfg280_generation_scoped_skill_facts_are_published_not_collapsed() {
             fact,
             rustx::skills::SkillDiagnostic::SourceRootMissing { .. }
         )));
-        assert!(first.skills().provenance()[0].shadowed.is_empty());
+        assert_eq!(
+            first.skills().provenance()[0].shadowed,
+            [] as [crate::skills::ShadowedSkill; 0]
+        );
 
         // An identical rediscovery is a true no-op: no revision is fabricated.
         let unchanged = prepare_and_commit(&conversation.coordinator).await;

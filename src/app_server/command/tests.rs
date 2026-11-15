@@ -175,7 +175,7 @@ async fn exact_cap_flushes_a_short_tail_and_overflow_emits_one_empty_marker() {
     };
     assert_eq!(second.sequence, 2);
     assert!(second.cap_reached);
-    assert!(second.delta_base64.is_empty());
+    assert_eq!(second.delta_base64, "");
     assert!(
         output
             .push(
@@ -190,7 +190,7 @@ async fn exact_cap_flushes_a_short_tail_and_overflow_emits_one_empty_marker() {
             .is_none()
     );
     assert_eq!(sequence, 2);
-    assert!(output.pending.is_empty());
+    assert_eq!(output.pending, [] as [u8; 0]);
 }
 
 #[test]
@@ -242,6 +242,6 @@ fn reaching_the_cap_cannot_hide_a_saturated_consumer_behind_a_pending_tail() {
             .is_err()
     );
     assert_eq!(output.total, cap);
-    assert!(output.pending.is_empty());
+    assert_eq!(output.pending, [] as [u8; 0]);
     assert!(events.overloaded.is_cancelled());
 }

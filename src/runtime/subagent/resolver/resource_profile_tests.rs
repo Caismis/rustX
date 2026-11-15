@@ -75,7 +75,10 @@ fn resource_only_spec(source: &ToolSourceId, binding: McpServerBinding) -> Resol
         extensions: frozen.extensions,
         ..frozen_spec()
     };
-    assert!(spec.tools.is_empty());
+    assert_eq!(
+        spec.tools,
+        [] as [crate::runtime::subagent::resolver::ResolvedSubagentTool; 0]
+    );
     assert_eq!(spec.resource_sources, [source.clone()].into());
     assert_eq!(spec.materialization.sources.len(), 1);
     spec

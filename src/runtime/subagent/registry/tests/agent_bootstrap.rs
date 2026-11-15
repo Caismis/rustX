@@ -248,7 +248,10 @@ async fn domain_tool_metadata_matches_registered_authority() {
                 crate::tools::native::register_subagent_child_tools(&mut child, &[definition])
                     .is_err()
             );
-            assert!(child.definitions().is_empty());
+            assert_eq!(
+                child.definitions(),
+                [] as [crate::tools::types::ToolDefinition; 0]
+            );
         }
     }
     let mut degraded = crate::tools::executor::ToolRegistry::new();
@@ -746,7 +749,10 @@ async fn t15_t18_t20_child_pending_head_uses_sparse_native_route_index_and_retir
         .unwrap();
     let retired = plane.registry.pending_interaction_head();
     assert_eq!(retired.cut.total, 0);
-    assert!(retired.head.is_empty());
+    assert_eq!(
+        retired.head,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 }
 
 #[tokio::test]

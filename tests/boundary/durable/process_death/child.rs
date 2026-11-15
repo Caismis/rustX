@@ -1092,10 +1092,16 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 runtime.admit_now_for_test();
             }
             assert!(!runtime.has_current_attempt());
-            assert!(child.model.requests().is_empty());
+            assert_eq!(
+                child.model.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
             runtime.shutdown().await.unwrap();
             assert_eq!(runtime.goal_view().unwrap().unwrap().current, Some(before));
-            assert!(child.model.requests().is_empty());
+            assert_eq!(
+                child.model.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
             note("reenabled-paused-proved");
             park_owning(child).await;
         }
@@ -1144,10 +1150,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 // runtime alive here makes the process own the exact in-flight
                 // transition until SIGKILL.
                 park_owning(child).await;
-            } else {
-                child.log.wait_settled(1).await;
-                note("settled");
             }
+            child.log.wait_settled(1).await;
+            note("settled");
         }
         INTERNAL_RETRY_SUCCESS => {
             let child = Child::require(
@@ -1168,10 +1173,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 // kills the attempt-terminal transaction so recovery must
                 // derive that fact from durable request/snapshot evidence.
                 park_owning(child).await;
-            } else {
-                child.log.wait_settled(1).await;
-                note("settled");
             }
+            child.log.wait_settled(1).await;
+            note("settled");
         }
         TOOL_TURN => {
             let call = read_call("call-read-1", "note.txt");

@@ -1861,10 +1861,14 @@ const GUARD_PYTHON3: &[u8] = include_bytes!("../../assets/python-guard/python3")
 /// and both scripts must match the bytes embedded in that binary.
 fn provisioned_guard() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
-    if let Some(directory) = guard_beside_executable(&executable) {
+    provisioned_guard_for(&executable)
+}
+
+fn provisioned_guard_for(executable: &Path) -> Option<PathBuf> {
+    if let Some(directory) = guard_beside_executable(executable) {
         return Some(directory);
     }
-    let canonical = std::fs::canonicalize(&executable).ok()?;
+    let canonical = std::fs::canonicalize(executable).ok()?;
     if canonical == executable {
         return None;
     }
@@ -1963,7 +1967,7 @@ fn ensure_guard(diagnostic: &str) -> Option<PathBuf> {
 fn install_guard(directory: &Path, diagnostic: &str) -> Option<PathBuf> {
     std::fs::create_dir_all(directory).ok()?;
     let _ = diagnostic; // The immutable script reads the per-command diagnostic.
-    for name in ["python", "python3"] {
+    for (name, bytes) in [("python", GUARD_PYTHON), ("python3", GUARD_PYTHON3)] {
         let path = directory.join(name);
         if path.exists() {
             continue;
@@ -1978,7 +1982,7 @@ fn install_guard(directory: &Path, diagnostic: &str) -> Option<PathBuf> {
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
             Err(_) => return None,
         };
-        file.write_all(GUARD_PYTHON).ok()?;
+        file.write_all(bytes).ok()?;
     }
     validated_guard_directory(directory)
 }
@@ -2498,7 +2502,7 @@ pub(crate) mod tests {
         let owner = Owner::for_test(Arc::new(Scripted::new("0.10.2")), None, None, None);
         let selection = owner.observe(root.path());
         assert!(selection.virtual_env.is_none());
-        assert!(!selection.path_prefix.is_empty());
+        assert_ne!(selection.path_prefix, [] as [std::path::PathBuf; 0]);
         let script = selection.path_prefix[0].join("python");
         let body = std::fs::read_to_string(&script).expect("guard");
         assert!(body.contains("exit 127"));
@@ -3205,7 +3209,7 @@ pub(crate) mod tests {
         write_executable(&python, "#!/bin/sh\necho replaced\nexit 0\n");
         let selection = owner.observe(&root_path);
         assert!(selection.virtual_env.is_none());
-        assert!(!selection.path_prefix.is_empty());
+        assert_ne!(selection.path_prefix, [] as [std::path::PathBuf; 0]);
     }
 
     #[tokio::test]
@@ -3301,7 +3305,7 @@ pub(crate) mod tests {
         assert!(super::install_guard(&not_directory, "disk full").is_none());
         let selection = super::selection_from_guard(None, "disk full");
         assert!(!selection.guard_unavailable);
-        assert!(!selection.path_prefix.is_empty());
+        assert_ne!(selection.path_prefix, [] as [std::path::PathBuf; 0]);
         let host_bin = tempfile::tempdir().expect("host bin");
         write_executable(
             &host_bin.path().join("python"),
@@ -3784,18 +3788,52 @@ pub(crate) mod tests {
         assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
     }
 
-    #[test]
-    fn no_guard_directory_rejects_path_lookup_and_keeps_other_commands() {
+    fn stage_relocated_executable(directory: &Path, name: &str) -> PathBuf {
+        let source = std::env::current_exe().expect("test executable");
+        let target = directory.join(name);
+        if std::fs::hard_link(&source, &target).is_err() {
+            std::fs::copy(&source, &target).expect("copy relocated executable");
+        }
+        target
+    }
+
+    fn record_guard_witness(expected_token: &str) {
+        let witness_path = std::env::var_os("RUSTX_TEST_GUARD_WITNESS")
+            .expect("RUSTX_TEST_GUARD_WITNESS must be set in relocated guard subprocess");
+        std::fs::write(&witness_path, expected_token).expect("write guard witness");
+    }
+
+    fn verify_unprovisioned_guard_subprocess(
+        host: &crate::tools::execution_environment::ExecutionHost,
+    ) {
+        assert!(super::provisioned_guard().is_none());
+        let selection = super::finish_guard(None, "disk full");
+        assert!(selection.guard_unavailable);
+        assert!(
+            crate::tools::execution_environment::compose(
+                host,
+                &crate::tools::environment::ToolEnvironment::new(),
+                &selection,
+            )
+            .is_err(),
+            "unprovisioned binary without writable guard storage must fail closed"
+        );
+        record_guard_witness("unprovisioned-ok");
+    }
+
+    fn verify_provisioned_guard_subprocess(
+        host: &crate::tools::execution_environment::ExecutionHost,
+    ) {
         let selection = super::finish_guard(None, "disk full");
         assert!(!selection.guard_unavailable);
-        let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
         let entries = crate::tools::execution_environment::compose(
-            &host,
+            host,
             &crate::tools::environment::ToolEnvironment::new(),
             &selection,
         )
-        .expect("composition stays available");
-        let deployed = super::provisioned_guard().expect("guard beside the test executable");
+        .expect("composition stays available with provisioned sidecar");
+        let deployed =
+            super::provisioned_guard().expect("guard beside the relocated test executable");
         let executable = std::env::current_exe().expect("test executable");
         let beside = executable
             .parent()
@@ -3821,7 +3859,7 @@ pub(crate) mod tests {
         assert!(
             entries
                 .iter()
-                .any(|(key, value)| { key == super::GUARD_MESSAGE_KEY && value == "disk full" })
+                .any(|(key, value)| key == super::GUARD_MESSAGE_KEY && value == "disk full")
         );
         assert_guard_rejected(&run_bash(&entries, "python3 -c 'print(99)'"));
         assert_guard_rejected(&run_program(
@@ -3845,6 +3883,128 @@ pub(crate) mod tests {
         );
         assert!(listed.status.success(), "{listed:?}");
         assert_eq!(String::from_utf8_lossy(&listed.stdout), "ok");
+        record_guard_witness("provisioned-ok");
+    }
+
+    fn set_guard_permissions(
+        directory: &Path,
+        dir_mode: u32,
+        script_mode: u32,
+        restore_dir_first: bool,
+    ) {
+        let set_dir = || {
+            if let Ok(meta) = std::fs::metadata(directory) {
+                let mut perms = meta.permissions();
+                perms.set_mode(dir_mode);
+                let _ = std::fs::set_permissions(directory, perms);
+            }
+        };
+        let set_scripts = || {
+            for name in ["python", "python3"] {
+                let path = directory.join(name);
+                if let Ok(meta) = std::fs::metadata(&path) {
+                    let mut perms = meta.permissions();
+                    perms.set_mode(script_mode);
+                    let _ = std::fs::set_permissions(&path, perms);
+                }
+            }
+        };
+        if restore_dir_first {
+            set_dir();
+            set_scripts();
+        } else {
+            set_scripts();
+            set_dir();
+        }
+    }
+
+    struct RestoreGuardPermissions(PathBuf);
+
+    impl Drop for RestoreGuardPermissions {
+        fn drop(&mut self) {
+            set_guard_permissions(&self.0, 0o755, 0o755, true);
+        }
+    }
+
+    #[test]
+    fn no_guard_directory_rejects_path_lookup_and_keeps_other_commands() {
+        let host = host_from_entries(vec![("PATH", "/usr/bin:/bin"), ("HOME", "/home/ada")]);
+        match std::env::var("RUSTX_TEST_GUARD_MODE").ok().as_deref() {
+            Some("unprovisioned") => {
+                verify_unprovisioned_guard_subprocess(&host);
+                return;
+            }
+            Some("provisioned") => {
+                verify_provisioned_guard_subprocess(&host);
+                return;
+            }
+            Some(other) => panic!("unexpected RUSTX_TEST_GUARD_MODE: {other}"),
+            None => {}
+        }
+
+        // Compute the test filter dynamically so later module moves keep the exact selector valid.
+        let module_suffix = module_path!()
+            .split_once("::")
+            .map_or(module_path!(), |(_, rest)| rest);
+        let test_filter = format!(
+            "{module_suffix}::no_guard_directory_rejects_path_lookup_and_keeps_other_commands"
+        );
+        let witness_dir = tempfile::tempdir().expect("witness");
+
+        // First verify fail-closed behavior in an isolated relocated executable without sidecar.
+        let unprovisioned_dir = tempfile::tempdir().expect("unprovisioned");
+        let unprovisioned_exe =
+            stage_relocated_executable(unprovisioned_dir.path(), "rustx-unprovisioned");
+        assert!(super::provisioned_guard_for(&unprovisioned_exe).is_none());
+        let unprovisioned_witness = witness_dir.path().join("unprovisioned.witness");
+        let unprovisioned_out = std::process::Command::new(&unprovisioned_exe)
+            .env("RUSTX_TEST_GUARD_MODE", "unprovisioned")
+            .env("RUSTX_TEST_GUARD_WITNESS", &unprovisioned_witness)
+            .args(["--exact", &test_filter, "--nocapture"])
+            .output()
+            .expect("spawn unprovisioned relocated runner");
+        assert!(unprovisioned_out.status.success(), "{unprovisioned_out:?}");
+        let unprovisioned_stdout = String::from_utf8_lossy(&unprovisioned_out.stdout);
+        assert!(
+            unprovisioned_stdout.contains("1 passed; 0 failed"),
+            "expected unprovisioned child to run 1 test: {unprovisioned_stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&unprovisioned_witness)
+                .expect("unprovisioned witness must exist"),
+            "unprovisioned-ok"
+        );
+
+        // Next verify an explicitly pre-provisioned read-only executable-adjacent sidecar works.
+        let provisioned_dir = tempfile::tempdir().expect("provisioned");
+        let provisioned_exe =
+            stage_relocated_executable(provisioned_dir.path(), "rustx-provisioned");
+        let guard = provisioned_dir.path().join("python-guard");
+        install_embedded_guard(&guard);
+        let _restore = RestoreGuardPermissions(guard.clone());
+        // Both the guard scripts and their containing directory must be read-only;
+        // never chmod the relocated executable inode shared with the build artifact.
+        set_guard_permissions(&guard, 0o555, 0o555, false);
+        let resolved_guard = super::provisioned_guard_for(&provisioned_exe);
+        let provisioned_witness = witness_dir.path().join("provisioned.witness");
+        let provisioned_res = std::process::Command::new(&provisioned_exe)
+            .env("RUSTX_TEST_GUARD_MODE", "provisioned")
+            .env("RUSTX_TEST_GUARD_WITNESS", &provisioned_witness)
+            .args(["--exact", &test_filter, "--nocapture"])
+            .output();
+        set_guard_permissions(&guard, 0o755, 0o755, true);
+        assert_eq!(resolved_guard, Some(guard));
+        let provisioned_out = provisioned_res.expect("spawn provisioned relocated runner");
+        assert!(provisioned_out.status.success(), "{provisioned_out:?}");
+        let provisioned_stdout = String::from_utf8_lossy(&provisioned_out.stdout);
+        assert!(
+            provisioned_stdout.contains("1 passed; 0 failed"),
+            "expected provisioned child to run 1 test: {provisioned_stdout}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&provisioned_witness).expect("provisioned witness must exist"),
+            "provisioned-ok"
+        );
     }
 
     fn install_embedded_guard(directory: &Path) {

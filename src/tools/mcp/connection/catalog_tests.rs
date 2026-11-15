@@ -269,7 +269,7 @@ async fn independent_connection_first_use_waits_for_its_own_live_schema() {
     let fixture = Fixture::new().await;
     let first = fixture.connection();
     let expected = first.discover_catalog().await.unwrap().remove(0);
-    assert!(first.close().await.is_empty());
+    assert_eq!(first.close().await, [] as [std::string::String; 0]);
     let second = fixture.connection();
     assert_eq!(second.established_count().await, 0);
     fixture.peer.release.send_replace(false);
@@ -294,7 +294,7 @@ async fn same_name_description_changed_schema_never_dispatches_frozen_tool() {
     let fixture = Fixture::new().await;
     let first = fixture.connection();
     let expected = first.discover_catalog().await.unwrap().remove(0);
-    assert!(first.close().await.is_empty());
+    assert_eq!(first.close().await, [] as [std::string::String; 0]);
     *fixture.peer.tool.lock().unwrap() = tool("integer");
     let result = fixture.execute(fixture.connection(), expected).await;
     assert!(matches!(
@@ -363,7 +363,7 @@ async fn invalidation_during_listing_rejects_capture_and_sdk_ttl_never_hides_fai
     fixture.peer.fail.store(true, Ordering::SeqCst);
     assert!(connection.discover_catalog().await.is_err());
     assert_eq!(*fixture.peer.lists.borrow(), 3);
-    assert!(connection.close().await.is_empty());
+    assert_eq!(connection.close().await, [] as [std::string::String; 0]);
 }
 
 #[tokio::test]
@@ -392,7 +392,7 @@ async fn replacement_transport_revalidates_schema_and_coalesces_concurrent_fetch
     ));
     assert_eq!(*fixture.peer.lists.borrow(), 2);
     assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 2);
-    assert!(connection.close().await.is_empty());
+    assert_eq!(connection.close().await, [] as [std::string::String; 0]);
 }
 
 #[tokio::test]
@@ -424,7 +424,7 @@ async fn acquired_catalog_waiters_share_one_complete_live_discovery() {
     assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 1);
     assert_eq!(*fixture.peer.lists.borrow(), 1);
     assert_eq!(fixture.peer.calls.load(Ordering::SeqCst), 0);
-    assert!(connection.close().await.is_empty());
+    assert_eq!(connection.close().await, [] as [std::string::String; 0]);
 }
 
 #[tokio::test]
@@ -677,7 +677,7 @@ async fn cancellation_while_acquiring_connection_starts_no_request() {
     assert!(acquiring.await.is_err());
     assert_eq!(fixture.peer.handshakes.load(Ordering::SeqCst), 0);
     drop(state);
-    assert!(connection.close().await.is_empty());
+    assert_eq!(connection.close().await, [] as [std::string::String; 0]);
 }
 
 #[tokio::test]
@@ -707,7 +707,7 @@ async fn catalog_observation_retains_capture_epoch_and_terminal_invalidation_fai
         outcome.is_err(),
         "terminal invalidation must not look like a pending initializer"
     );
-    assert!(connection.close().await.is_empty());
+    assert_eq!(connection.close().await, [] as [std::string::String; 0]);
 }
 
 #[tokio::test]
@@ -715,7 +715,7 @@ async fn terminal_catalog_failure_is_not_retried_in_the_same_epoch() {
     let fixture = Fixture::new().await;
     let first = fixture.connection();
     let expected = first.discover_catalog().await.unwrap().remove(0);
-    assert!(first.close().await.is_empty());
+    assert_eq!(first.close().await, [] as [std::string::String; 0]);
     fixture.peer.fail.store(true, Ordering::SeqCst);
     let connection = fixture.connection();
     assert!(connection.discover_catalog().await.is_err());

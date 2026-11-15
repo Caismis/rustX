@@ -1184,14 +1184,12 @@ async fn http_errors_normalize() {
     for (fixture, status, reason, headers, expected_kind) in cases {
         let fixture = fixture.to_owned();
         let fixture_for_server = fixture.clone();
-        let headers: Vec<(String, String)> = headers
-            .map(|headers| {
-                headers
-                    .into_iter()
-                    .map(|(name, value)| (name.to_owned(), value.to_owned()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let headers: Vec<(String, String)> = headers.map_or_default(|headers| {
+            headers
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect()
+        });
         let server = crate::common::FixtureServer::start(move |_attempt, _head| {
             let mut reply = error_fixture(&fixture_for_server);
             reply.status = status;

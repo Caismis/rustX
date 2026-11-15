@@ -684,7 +684,7 @@ impl SessionRuntimeManager {
         }
         let incarnation = RuntimeIncarnationId(
             NEXT_INCARNATION
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
                     next.checked_add(1)
                 })
                 .expect("process incarnation identity exhausted"),

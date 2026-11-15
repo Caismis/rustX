@@ -1197,7 +1197,7 @@ mod tests {
         .resolve();
         assert_eq!(neither, NativeAgentExtensions::none());
         assert!(neither.is_empty());
-        assert!(composed_extension_names(&neither).is_empty());
+        assert_eq!(composed_extension_names(&neither), [] as [&str; 0]);
     }
 
     /// Todo is supported in one-shot child scope: a child is an ordinary

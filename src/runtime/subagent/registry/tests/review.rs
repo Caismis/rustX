@@ -244,7 +244,13 @@ async fn agent_listing_is_newest_admission_first_and_reports_more_than_sixty_fou
     );
     let empty = plane.registry.list_agents(0);
     assert_eq!(empty.matched, 70);
-    assert!(empty.agents.is_empty());
+    assert_eq!(
+        empty.agents,
+        [] as [(
+            crate::runtime::subagent::registry::agents::AgentSnapshot,
+            crate::runtime::subagent::registry::observation::SubagentSnapshot
+        ); 0]
+    );
 }
 
 #[tokio::test]

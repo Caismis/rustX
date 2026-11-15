@@ -89,7 +89,7 @@ Core correctness must not depend only on live model behavior.
 
 ### Repository Rust toolchain
 
-`rust-toolchain.toml` pins Rust 1.98.1, including Cargo, Clippy and rustfmt.
+`rust-toolchain.toml` pins Rust 1.100.0, including Cargo, Clippy and rustfmt.
 Every Cargo-bearing CI job explicitly installs that release before its Rust
 cache step. Rust toolchain upgrades are intentional repository changes, not
 automatic CI drift; an upgrade owns any resulting compiler/lint repairs.

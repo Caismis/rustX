@@ -447,7 +447,10 @@ async fn issue459_publication_selection_race(selection_first: bool) {
         guidance(runtime.runtime_resources().project_context_files()),
         "issue459 raced instructions"
     );
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     fixture.close().await;
 }
 
@@ -677,7 +680,10 @@ async fn issue459_failed_mixed_generations_keep_last_good_authority() {
                 .contains("fast")
         );
         assert!(runtime.runtime_resources().revision() > good.2);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         fixture.close().await;
     }))
     .await;
@@ -756,15 +762,15 @@ async fn issue459_failed_capability_preparation_keeps_published_catalog_and_retr
             &tools,
             runtime.runtime_resources().capability().tool_registry()
         ));
-        assert!(
+        assert_eq!(
             runtime
                 .runtime_resources()
                 .configuration()
                 .unwrap()
                 .config
                 .agent
-                .agents
-                .is_empty()
+                .agents,
+            [] as [crate::runtime::subagent::catalog::SubagentName; 0]
         );
 
         // A newer explicit selection recaptures; the Capability change retries.
@@ -899,7 +905,10 @@ async fn issue459_older_candidates_and_overtaken_generations_never_restore_autho
             changes + 1,
             "only the newest generation committed a change"
         );
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         fixture.close().await;
     }))
     .await;
@@ -1085,7 +1094,10 @@ async fn issue459_mixed_generations_keep_the_summary_policy_and_clients_agree() 
             guidance(runtime.runtime_resources().project_context_files()).to_owned(),
             "issue459 summary instructions 2"
         );
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         drop(client);
         fixture.close().await;
     }))

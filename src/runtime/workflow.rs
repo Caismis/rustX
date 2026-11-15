@@ -4073,7 +4073,7 @@ impl WorkflowRuntime {
         }
         let invocation = self
             .next_run
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::Relaxed,
                 std::sync::atomic::Ordering::Relaxed,
                 |n| n.checked_add(1),
@@ -5771,7 +5771,7 @@ chat_reasoning_replay = "omit"
                 "zulu": {"summary": "zulu"}
             })
         );
-        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert_eq!(plane.registry.unsettled_snapshot(), Vec::new());
         assert!(!alpha.root.exists());
         assert!(!zulu.root.exists());
     }
@@ -5843,7 +5843,7 @@ chat_reasoning_replay = "omit"
             detail.find("alpha").expect("alpha diagnostic")
                 < detail.find("zulu").expect("zulu diagnostic")
         );
-        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert_eq!(plane.registry.unsettled_snapshot(), Vec::new());
         assert!(!alpha.root.exists());
         assert!(!zulu.root.exists());
     }
@@ -5890,7 +5890,7 @@ chat_reasoning_replay = "omit"
             json!({"alpha":{"summary":"alpha"},"zulu":{"summary":"zulu"}})
         );
         assert_eq!(plane.registry.all_snapshots().len(), 2);
-        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert_eq!(plane.registry.unsettled_snapshot(), Vec::new());
         assert!(!alpha.root.exists());
         assert!(!zulu.root.exists());
     }
@@ -5967,7 +5967,7 @@ chat_reasoning_replay = "omit"
             snapshot.state == crate::runtime::subagent::SubagentState::Cancelled
                 && snapshot.is_settled()
         }));
-        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert_eq!(plane.registry.unsettled_snapshot(), Vec::new());
         assert!(!alpha.root.exists());
         assert!(!zulu.root.exists());
     }
@@ -6119,7 +6119,7 @@ chat_reasoning_replay = "omit"
             .expect("new workflow success");
         assert_eq!(new_result, json!({"new": {"summary": "new"}}));
         let snapshots = plane.registry.all_snapshots();
-        assert!(plane.registry.unsettled_snapshot().is_empty());
+        assert_eq!(plane.registry.unsettled_snapshot(), Vec::new());
         assert_eq!(snapshots.len(), 2);
         assert_ne!(
             snapshots[0].definition_digest, snapshots[1].definition_digest,
@@ -6205,7 +6205,10 @@ chat_reasoning_replay = "omit"
                     "loop": {"count": if broken {0} else {3}, "echo": "verified"}
                 })
             );
-            assert!(plane.registry.all_snapshots().is_empty());
+            assert_eq!(
+                plane.registry.all_snapshots(),
+                [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+            );
             let snapshot = native.snapshot();
             assert!(
                 snapshot.runs[0]

@@ -1760,13 +1760,13 @@ mod tests {
         create.abort();
         assert!(create.await.unwrap_err().is_cancelled());
         assert!(controller.preparation.try_lock().is_err());
-        assert!(
+        assert_eq!(
             controller
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
         *controller.create_gate.lock().unwrap() = None;
         drop(release);
@@ -1792,13 +1792,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("rustx.toml"), "malformed = [").unwrap();
         let controller = SessionController::open(root.path()).unwrap();
-        assert!(
+        assert_eq!(
             controller
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
         let a = controller
             .create_session(settings(root.path()))
@@ -1860,7 +1860,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(conversation, session.active_conversation_id);
-        assert!(page.records.is_empty());
+        assert_eq!(
+            page.records,
+            [] as [crate::observation::trace::types::TraceRecord; 0]
+        );
         let (_, detail) = controller
             .read_trace(&session.id, None, |projection| {
                 projection.detail("trace:999")
@@ -2015,13 +2018,13 @@ mod tests {
             .delete_session(&b.id, &preview.target_revision)
             .await
             .unwrap();
-        assert!(
+        assert_eq!(
             controller
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
     }
     #[tokio::test]
@@ -2130,7 +2133,10 @@ mod tests {
                 &access.database_path,
             )
             .unwrap();
-            assert!(store.load_canonical().unwrap().is_empty());
+            assert_eq!(
+                store.load_canonical().unwrap(),
+                [] as [crate::message::types::MessageBlock; 0]
+            );
         }
     }
     /// R04 companion: two creates prepare from snapshots taken before either

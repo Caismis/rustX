@@ -162,7 +162,10 @@ fn projection_activation_closure_survives_clone_fork_clone_again_and_source_dele
             assert_eq!(head.activation.origin.conversation_id, source_id);
             assert!(head.activation.destination_installation.is_some());
             assert_eq!(fork.load_canonical().unwrap().len(), 100);
-            assert!(fork.read_events(None, 64).unwrap().events.is_empty());
+            assert_eq!(
+                fork.read_events(None, 64).unwrap().events,
+                [] as [crate::events::types::RuntimeEventEnvelope; 0]
+            );
             fork.projected_history().unwrap();
         }
         let cut = copied
@@ -212,8 +215,14 @@ fn post_response_fork_and_branch_include_the_response_and_retry_excludes_input()
             LineageSide::After,
         )
         .unwrap();
-    assert!(fork_editor.is_empty());
-    assert!(branch_editor.is_empty());
+    assert_eq!(
+        fork_editor,
+        [] as [crate::message::types::UserContentBlock; 0]
+    );
+    assert_eq!(
+        branch_editor,
+        [] as [crate::message::types::UserContentBlock; 0]
+    );
     assert_ne!(fork.session_id, session);
     assert_eq!(branch.session_id, session);
     for prepared in [&fork, &branch] {
@@ -466,12 +475,9 @@ fn same_revision_different_temporal_cuts(member: bool) {
     let second = catalog.prepare_clone_session(&state(), &c2).unwrap();
     let after_terminal = store.conversation_read_cut().unwrap();
     let source_events = store.read_events(None, 64).unwrap().events;
-    assert!(
-        store
-            .read_request_snapshots(None, 64)
-            .unwrap()
-            .snapshots
-            .is_empty()
+    assert_eq!(
+        store.read_request_snapshots(None, 64).unwrap().snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
     for (index, prepared) in [first, second].into_iter().enumerate() {
         let destination = SqliteConversationStore::open_existing(
@@ -523,19 +529,16 @@ fn same_revision_different_temporal_cuts(member: bool) {
         .unwrap();
         for copied_store in [&destination, &repeated_store] {
             assert_eq!(copied_store.presentation_frontier().unwrap(), 0);
-            assert!(
-                copied_store
-                    .read_events(None, 64)
-                    .unwrap()
-                    .events
-                    .is_empty()
+            assert_eq!(
+                copied_store.read_events(None, 64).unwrap().events,
+                [] as [crate::events::types::RuntimeEventEnvelope; 0]
             );
-            assert!(
+            assert_eq!(
                 copied_store
                     .read_request_snapshots(None, 64)
                     .unwrap()
-                    .snapshots
-                    .is_empty()
+                    .snapshots,
+                [] as [crate::model::snapshot::RequestSnapshot; 0]
             );
             let outline = copied_store.conversation_turns(0, 64).unwrap();
             assert_eq!(

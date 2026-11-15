@@ -1243,7 +1243,7 @@ impl ConversationInboundMailbox {
         #[cfg(test)]
         if self
             .pending_probe_faults
-            .fetch_update(
+            .try_update(
                 std::sync::atomic::Ordering::SeqCst,
                 std::sync::atomic::Ordering::SeqCst,
                 |remaining| remaining.checked_sub(1),

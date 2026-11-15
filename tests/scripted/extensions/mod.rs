@@ -135,7 +135,10 @@ async fn goal351_create_while_idle_admits_one_continuation_and_drain_preserves_a
         )
         .unwrap();
     composed.runtime.activate();
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     let mut parked = model.parked();
     let created = composed
         .runtime
@@ -287,8 +290,14 @@ async fn goal351_pause_or_drain_before_the_round_frontier_consumes_no_round() {
             goal.autonomous_rounds_consumed, 0,
             "a winner before the frontier consumes no autonomous round"
         );
-        assert!(tools.durable_store().load_pending().unwrap().is_empty());
-        assert!(model.requests().is_empty());
+        assert_eq!(
+            tools.durable_store().load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
     }
 }
 
@@ -336,7 +345,10 @@ async fn goal351_owned_background_is_awaited_without_polling_or_blocking_goal() 
             .autonomous_rounds_consumed,
         0
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
 }
 
 /// Issue #351 requirement 6: a Paused Goal admits zero autonomous rounds,
@@ -1012,8 +1024,11 @@ async fn ext256_a_disabled_agent_status_extension_emits_nothing_anywhere() {
     let model = fake_model(vec![tool_turn(std::slice::from_ref(&call)), stop_turn()]);
     let (result, recorder) = run(&extensions, &fixture.runtime, tools, model.clone()).await;
 
-    assert!(status_texts(&result).is_empty());
-    assert!(recorder.observations().is_empty());
+    assert_eq!(status_texts(&result), [] as [std::string::String; 0]);
+    assert_eq!(
+        recorder.observations(),
+        [] as [crate::agent::observer::AgentStatusObservation; 0]
+    );
     assert!(
         !result.messages().iter().any(is_agent_status),
         "canonical history carries no Agent Status fact"
@@ -3682,7 +3697,10 @@ async fn goal351_stopped_phases_admit_nothing_and_resume_alone_restores_eligibil
                 "Complete is terminal"
             );
             composed.runtime.admit_now_for_test();
-            assert!(model.requests().is_empty());
+            assert_eq!(
+                model.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
         } else {
             let resumed = composed
                 .runtime
@@ -3757,13 +3775,19 @@ async fn goal351_a_round_durability_failure_fences_admission_without_changing_ac
     store.arm_fail_accept_times(1);
     composed.runtime.activate();
     composed.runtime.admit_now_for_test();
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_eq!(
         store.load_goal().unwrap(),
         Some(seeded.clone()),
         "durable Goal intent is untouched by a runtime-health failure"
     );
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(
         composed.runtime.idle_epoch(),
         Err(rustx::runtime::conversation_runtime::IdleBusyReason::Durability),
@@ -3774,7 +3798,10 @@ async fn goal351_a_round_durability_failure_fences_admission_without_changing_ac
     for _ in 0..8 {
         composed.runtime.admit_now_for_test();
     }
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_eq!(store.load_goal().unwrap(), Some(seeded));
     composed.runtime.shutdown().await.ok();
 }
@@ -4120,7 +4147,10 @@ async fn goal350_background_terminal_publication_wakes_next_continuation() {
         })
         .unwrap();
     composed.runtime.admit_now_for_test();
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_eq!(
         tools
             .durable_store()
@@ -4189,14 +4219,20 @@ async fn goal350_reopen_adopts_already_accepted_round_without_recharging() {
     let model = fake_model(vec![vec![FakeStep::ParkUntilCancelled]]);
     let mut parked = model.parked();
     let composed = conversation_runtime_over_model(&tools, capability, model.clone()).unwrap();
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     composed.runtime.activate();
     tokio::time::timeout(Duration::from_secs(10), parked.wait_for(|v| *v))
         .await
         .unwrap()
         .unwrap();
     assert_eq!(tools.durable_store().load_goal().unwrap(), Some(committed));
-    assert!(tools.durable_store().load_pending().unwrap().is_empty());
+    assert_eq!(
+        tools.durable_store().load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(model.requests().len(), 1);
     let messages: Vec<_> = model.requests()[0]
         .messages

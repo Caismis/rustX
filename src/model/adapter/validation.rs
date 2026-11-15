@@ -307,9 +307,9 @@ mod tests {
                 .into_iter()
                 .collect();
                 let mut wire = super::prepared_wire_request(&request).unwrap();
-                assert!(
-                    crate::model::adapter::correlation::observed_correlations(&mut wire, protocol)
-                        .is_empty()
+                assert_eq!(
+                    crate::model::adapter::correlation::observed_correlations(&mut wire, protocol),
+                    [] as [(bool, std::string::String); 0]
                 );
                 let encoded = serde_json::to_string(&wire).unwrap();
                 assert!(encoded.contains(source.id().as_str()));

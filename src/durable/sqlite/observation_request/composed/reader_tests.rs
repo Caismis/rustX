@@ -80,7 +80,16 @@ fn t08_t15_t20_scalar_capture_scopes_span_io_without_changing_any_original_field
     let (fragment, _, _) = scalar(&connection, &source).unwrap();
     assert_eq!(INDEX_OPENS.with(std::cell::Cell::get), 3);
     assert_eq!(take_file_work(), (0, 4));
-    assert!(!expected.is_empty());
+    assert_ne!(
+        expected,
+        [] as [(
+            std::vec::Vec<std::string::String>,
+            u64,
+            u64,
+            u64,
+            std::vec::Vec<u8>
+        ); 0]
+    );
     for (path, start, end, children, preview) in expected {
         let actual = fact(&connection, &fragment, &path).unwrap().unwrap();
         assert_eq!(

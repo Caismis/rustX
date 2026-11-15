@@ -1207,7 +1207,13 @@ mod tests {
             assert!(spelled(actual, &distinct).is_empty(), "{actual}");
         }
         // Uploads stay unrouted in any case.
-        assert!(spelled("/w/.Agents/Uploads/s/AGENTS.md", &aliases).is_empty());
+        assert_eq!(
+            spelled("/w/.Agents/Uploads/s/AGENTS.md", &aliases),
+            [] as [(
+                crate::local_runtime::configuration::settings::SourceTarget,
+                std::path::PathBuf
+            ); 0]
+        );
         // On a case-insensitive volume, route the alias to the loader spelling.
         assert_eq!(
             spelled("/w/AGENTS.MD", &aliases),
@@ -1446,14 +1452,14 @@ mod tests {
             notified(&policy, &sources, &|_, _| false, &mut active),
             [workspace_target(&other), workspace_target(&workspace)]
         );
-        assert!(
+        assert_eq!(
             notified(
                 &workspace.join("docs/other.md"),
                 &sources,
                 &|_, _| false,
                 &mut active
-            )
-            .is_empty()
+            ),
+            [] as [crate::local_runtime::configuration::settings::SourceTarget; 0]
         );
     }
 
@@ -1628,7 +1634,10 @@ mod tests {
         std::fs::remove_file(workspace.join("policies/a.md")).unwrap();
         assert!(desired(&sources()).contains_key(&workspace.join("policies")));
         assert_eq!(routed("policies/a.md"), reader);
-        assert!(routed("policies/b.md").is_empty());
+        assert_eq!(
+            routed("policies/b.md"),
+            [] as [crate::local_runtime::configuration::settings::SourceTarget; 0]
+        );
     }
 
     /// Pending notifications stay bounded: duplicates merge, and past the
@@ -1752,7 +1761,10 @@ mod tests {
         let routed = |path: PathBuf| notified(&path, &sources, &|_, _| false, &mut BTreeMap::new());
         assert_eq!(routed(shared.join("current")), reader);
         assert_eq!(routed(shared.join("v1/policy.md")), reader);
-        assert!(routed(shared.join("v2/policy.md")).is_empty());
+        assert_eq!(
+            routed(shared.join("v2/policy.md")),
+            [] as [crate::local_runtime::configuration::settings::SourceTarget; 0]
+        );
     }
 
     /// A directory reached through a link takes one watch, under its

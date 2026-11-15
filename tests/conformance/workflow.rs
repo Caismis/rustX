@@ -756,7 +756,7 @@ impl Driver {
             );
             assert_eq!(chunk.domain, "workflows.runs");
             assert_eq!(chunk.item_offset, item_offset);
-            assert!(chunk.path.is_empty());
+            assert_eq!(chunk.path, [] as [std::string::String; 0]);
             assert_eq!(chunk.offset, offset);
             assert_eq!(
                 *frontier.get_or_insert(chunk.readable_end),
@@ -879,7 +879,7 @@ impl Driver {
                 panic!("original routed interaction read: {reply:?}");
             };
             assert_eq!(interaction, header.interaction);
-            assert!(path.is_empty());
+            assert_eq!(path, [] as [std::string::String; 0]);
             assert_eq!(actual, offset);
             assert_eq!(*frontier.get_or_insert(readable_end), readable_end);
             assert!(readable_end <= 16 * 1024 * 1024);
@@ -2175,7 +2175,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
         // workspace contents and Workflow node inventory below.
         assert_eq!((questions, reviews, approvals), (2, 1, 0));
         assert_eq!(writes, 0);
-        assert!(check_commands.is_empty());
+        assert_eq!(check_commands, [] as [std::string::String; 0]);
         let definition: serde_json::Value = serde_yaml::from_str(include_str!(
             "../../examples/local-runtime/.agents/workflows/implement_and_review.yaml"
         ))

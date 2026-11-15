@@ -432,11 +432,9 @@ impl RuntimeInner {
             .install_observer_and_snapshots(observer.clone());
         // ---- T2b: the subagent registry (frozen by the same inactive
         //           mailbox binding) ----
-        let (agents, agents_cut) = self
-            .subagents
-            .as_ref()
-            .map(|subagents| subagents.install_observer_and_agent_snapshots(observer.clone()))
-            .unwrap_or_default();
+        let (agents, agents_cut) = self.subagents.as_ref().map_or_default(|subagents| {
+            subagents.install_observer_and_agent_snapshots(observer.clone())
+        });
         pending_interactions.extend(child_pending_interactions);
         pending_interactions.sort_by_key(|header| header.source_offset);
         // No fallible subsystem has been mutated after the pending read. The

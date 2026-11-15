@@ -2357,7 +2357,10 @@ mod tests {
         assert_eq!(background.state, before[0].state);
 
         registry.wait_until_terminal(&execution_id).await.unwrap();
-        assert!(registry.active_snapshot().is_empty());
+        assert_eq!(
+            registry.active_snapshot(),
+            [] as [crate::tools::background::BackgroundExecutionSnapshot; 0]
+        );
         release.send_replace(true);
     }
 
@@ -2847,7 +2850,10 @@ mod tests {
             ],
             DateTime::from_timestamp(1_754_000_001, 0).expect("timestamp"),
         );
-        assert!(emissions.is_empty());
+        assert_eq!(
+            emissions,
+            [] as [crate::message::types::ContributionEmission; 0]
+        );
         assert_eq!(status.sections.len(), 1);
         assert_eq!(status.sections[0].id.as_str(), "small");
         let rendered = render_agent_status(&status);
@@ -3069,7 +3075,10 @@ mod tests {
                 .is_none()
         );
         assert_eq!(list.snapshot().tasks.len(), 1, "the test has staged work");
-        assert!(list.committed().tasks.is_empty());
+        assert_eq!(
+            list.committed().tasks,
+            [] as [crate::tools::todo::TodoTask; 0]
+        );
 
         let committed = writer.snapshot().expect("batch remains open");
         batch.settle(&[todo_result(&committed)]);

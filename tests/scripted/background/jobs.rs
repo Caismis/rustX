@@ -249,7 +249,10 @@ async fn abandoned_publication_finishes_job_wait_and_cancel_with_typed_failure()
         registry.wait_until_terminal(&execution_id).await,
         Err(rustx::tools::background::BackgroundWaitError::PublicationAbandoned)
     );
-    assert!(fixture.store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        fixture.store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert!(
         fixture
             .store

@@ -2458,7 +2458,10 @@ mod tests {
         );
 
         fold_all(&mut evidence, &[ownership, terminal]);
-        assert!(evidence.unsettled_subagents.is_empty());
+        assert_eq!(
+            evidence.unsettled_subagents,
+            [] as [crate::runtime::recovery::SubagentEvidence; 0]
+        );
     }
 
     fn trailing_human(id: &str) -> MessageBlock {

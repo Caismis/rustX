@@ -264,8 +264,14 @@ pub(super) fn assert_claim_read_models(
         })
         .collect();
     assert_eq!(obligations, if ids.is_empty() { vec![] } else { vec![ids] });
-    assert!(first.load_pending().unwrap().is_empty());
-    assert!(second.load_pending().unwrap().is_empty());
+    assert_eq!(
+        first.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
+    assert_eq!(
+        second.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     let transcript = first.load_transcript_page(None, 64).unwrap();
     assert_eq!(transcript.entries.len(), receipt.len());
     for (entry, item) in transcript.entries.iter().zip(receipt) {
@@ -286,7 +292,10 @@ pub(super) fn assert_claim_read_models(
     .unwrap();
     assert_eq!(reopened.load_canonical().unwrap(), canonical);
     assert_eq!(reopened.load_transcript_page(None, 64).unwrap(), transcript);
-    assert!(reopened.load_pending().unwrap().is_empty());
+    assert_eq!(
+        reopened.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
 }
 
 #[test]

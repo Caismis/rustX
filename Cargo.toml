@@ -2,11 +2,7 @@
 name = "rustx"
 version = "0.1.0"
 edition = "2024"
-# 1.92 is the effective MSRV of the released `xberg` document decoders
-# (Issue #48): xberg 1.0.14 declares 1.91, but its PDF backend chain
-# (pdf_oxide 0.3.77 → hayro-jpeg2000 0.4.0, pulled in unconditionally
-# through pdf_oxide's `rendering` feature) requires 1.92.
-rust-version = "1.92"
+rust-version = "1.100"
 license = "MIT"
 description = "A standalone Rust execution runtime for durable, tool-using LLM agents."
 repository = "https://github.com/Caismis/rustX"

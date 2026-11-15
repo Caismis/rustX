@@ -202,7 +202,7 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
     assert!(file_names.contains(&"server.py"));
     assert!(file_names.contains(&"requirements.txt"));
     // The example declares no dependencies; rustX pins FastMCP itself.
-    assert!(package.requirements().is_empty());
+    assert_eq!(package.requirements(), Vec::<String>::new());
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn committed_example_skill_is_found_by_project_agents_discovery() {
             .collect::<Vec<_>>(),
         vec!["review-guidance"]
     );
-    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(outcome.diagnostics, []);
     assert!(outcome.packages[0].description().contains("bounded"));
 }
 

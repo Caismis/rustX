@@ -337,7 +337,10 @@ async fn shared_executor_return_ownership_instance_routing_and_child_settlement(
         events.last().unwrap().event,
         RuntimeEvent::WorkflowCompleted { .. }
     ));
-    assert!(plane.registry.unsettled_snapshot().is_empty());
+    assert_eq!(
+        plane.registry.unsettled_snapshot(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
 }
 
 #[cfg(unix)]
@@ -369,7 +372,10 @@ async fn cancellation_wakes_native_capacity_waiter_and_drains_owned_child() {
     alpha.cancel_after_delegate().await;
     assert!(task.await.unwrap().unwrap_err().is_cancelled());
     assert_eq!(plane.registry.all_snapshots().len(), 1);
-    assert!(plane.registry.unsettled_snapshot().is_empty());
+    assert_eq!(
+        plane.registry.unsettled_snapshot(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
     assert!(
         !alpha.root.exists() && !beta.root.exists(),
         "owned child settled and pending staged child rolled back"

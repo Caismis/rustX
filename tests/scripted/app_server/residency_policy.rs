@@ -200,7 +200,7 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
     assert!(!drain.is_finished());
     drop(accepted);
     probe.before_operation.release();
-    assert!(drain.await.unwrap().is_empty());
+    assert_eq!(drain.await.unwrap(), [] as [std::string::String; 0]);
     f.host.finish_drain().unwrap();
     assert_eq!(f.host.diagnostics().lifecycle, ServerLifecycle::Terminated);
     f.close().await;
@@ -770,7 +770,7 @@ async fn host_admission_commit_accounts_for_requests_connections_and_attachments
         ));
         assert!(f.manager.is_empty());
         drop(request);
-        assert!(drain.await.is_empty());
+        assert_eq!(drain.await, [] as [std::string::String; 0]);
         assert!(f.host.finish_drain().is_err());
         drop(connection);
         assert!(f.host.finish_drain().is_err());
@@ -851,7 +851,7 @@ async fn host_request_and_runtime_lease_commit_before_drain_as_one_admission() {
         assert!(!called.load(Ordering::SeqCst));
         probe.before_operation.release();
         assert_eq!(response.await.unwrap(), 291);
-        assert!(draining.await.unwrap().is_empty());
+        assert_eq!(draining.await.unwrap(), [] as [std::string::String; 0]);
         f.host.finish_drain().unwrap();
         f.close().await;
     })

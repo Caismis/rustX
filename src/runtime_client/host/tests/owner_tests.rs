@@ -188,7 +188,10 @@ async fn t08_t12_t14_t19_cold_host_giant_owner_uses_original_inherited_identity_
         InheritedAttemptIdentityKind::Turn,
         &original,
     );
-    assert!(store.read_events(None, 32).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 32).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
     assert!(crate::observation::bounded::bounded_bytes(&checkpoint, 786_432).is_some());
 }
@@ -196,14 +199,17 @@ async fn t08_t12_t14_t19_cold_host_giant_owner_uses_original_inherited_identity_
 #[tokio::test]
 async fn t08_t12_t14_t19_cold_host_response_only_giant_owner_uses_original_identity_ranges() {
     let (seed, origin, original) = giant_owner_seed(false);
-    assert!(seed.turns().is_empty());
+    assert_eq!(seed.turns(), []);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("response-only-owner.sqlite");
     let conversation = ConversationId::generate();
     {
         let owner = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
         owner.initialize_lineage(&seed).unwrap();
-        assert!(owner.load_inherited_turns().unwrap().is_empty());
+        assert_eq!(
+            owner.load_inherited_turns().unwrap(),
+            [] as [crate::durable::reading::TurnReadingProvenance; 0]
+        );
         assert_eq!(
             owner.load_inherited_responses().unwrap(),
             seed.completed_responses()
@@ -246,8 +252,14 @@ async fn t08_t12_t14_t19_cold_host_response_only_giant_owner_uses_original_ident
         InheritedAttemptIdentityKind::Response,
         &original,
     );
-    assert!(store.read_events(None, 32).unwrap().events.is_empty());
-    assert!(store.load_inherited_turns().unwrap().is_empty());
+    assert_eq!(
+        store.read_events(None, 32).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
+    assert_eq!(
+        store.load_inherited_turns().unwrap(),
+        [] as [crate::durable::reading::TurnReadingProvenance; 0]
+    );
     assert_eq!(
         store.load_inherited_responses().unwrap(),
         seed.completed_responses()
@@ -337,7 +349,10 @@ async fn t08_t12_t14_t19_cold_giant_turn_page_navigates_by_native_ordinal() {
     );
     assert_eq!(host.checkpoint().unwrap(), checkpoint);
     assert!(checkpoint.snapshot.attempt.is_none());
-    assert!(store.read_events(None, 32).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 32).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     assert_eq!(store.load_inherited_turns().unwrap(), seed.turns());
     assert!(crate::observation::bounded::bounded_bytes(&page, 65_536).is_some());
     assert!(crate::observation::bounded::bounded_bytes(&window, 786_432).is_some());

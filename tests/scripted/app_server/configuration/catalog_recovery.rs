@@ -76,14 +76,14 @@ async fn issue459_inbound_accepted_before_publication_waits_for_explicit_recover
             (&json!(0.1), &json!(9))
         );
         assert!(bodies[0].contains("queued"));
-        assert!(
+        assert_eq!(
             host.checkpoint()
                 .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
                 .unwrap()
                 .0
                 .inbound
-                .pending
-                .is_empty()
+                .pending,
+            [] as [crate::runtime_client::snapshot::InboundItemView; 0]
         );
         fixture.close().await;
     }))
@@ -173,7 +173,10 @@ async fn issue459_removed_model_with_instructions_change_commits_and_recovers_ex
             runtime.submit_inbound(issue459_text("refused")),
             Err(InboundAdmissionError::ModelUnavailable { .. })
         ));
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
 
         // Explicit recovery keeps the committed instructions.
         let view = fixture
@@ -301,7 +304,10 @@ async fn issue459_cold_session_receives_mixed_publication_on_residency() {
             guidance(runtime.runtime_resources().project_context_files()),
             "issue459 new instructions"
         );
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         fixture.close().await;
     }))
     .await;

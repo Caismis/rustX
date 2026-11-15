@@ -415,7 +415,7 @@ pub(super) async fn read_model_result(
         assert_eq!(chunk.cut, page.read_cut);
         assert_eq!(chunk.domain, page.domain);
         assert_eq!(chunk.item_offset, item_offset);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,
@@ -486,7 +486,7 @@ pub(super) async fn read_native_model_result(
         assert_eq!(chunk.cut, page.read_cut);
         assert_eq!(chunk.domain, page.domain);
         assert_eq!(chunk.item_offset, page.items[0].offset);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,

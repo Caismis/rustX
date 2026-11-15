@@ -227,7 +227,10 @@ fn recovered_activation_constructors_preserve_domain_defaults() {
         );
         assert!(!record.physical_settlement_proven);
         assert!(record.terminal.is_none() && record.control.is_none() && record.profile.is_none());
-        assert!(record.steer_tickets.is_empty());
+        assert_eq!(
+            record.steer_tickets,
+            [] as [crate::runtime::subagent::registry::SteerTicket; 0]
+        );
         assert_eq!(record.lifecycle, SubagentLifecycle::Interrupted);
         assert_eq!(
             record.notification,
@@ -256,7 +259,10 @@ async fn post_result_protocol_failure_publishes_once_after_physical_settlement()
                 .unwrap(),
             None
         );
-        assert!(published_terminal_states(&plane, &accepted.subagent_id).is_empty());
+        assert_eq!(
+            published_terminal_states(&plane, &accepted.subagent_id),
+            [] as [crate::events::types::SubagentTerminalState; 0]
+        );
         assert!(
             plane
                 .registry

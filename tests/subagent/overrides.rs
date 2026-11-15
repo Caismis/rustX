@@ -466,7 +466,10 @@ async fn sub258_concurrent_invocations_do_not_mutate_each_other_or_the_role() {
     );
 
     assert_eq!(tool_names(&first), vec!["builtin:grep".to_owned()]);
-    assert!(second.tools.is_empty());
+    assert_eq!(
+        second.tools,
+        [] as [rustx::runtime::subagent::ResolvedSubagentTool; 0]
+    );
     assert_ne!(first.profile_digest(), second.profile_digest());
     assert_eq!(
         first.definition_digest, second.definition_digest,
@@ -786,7 +789,10 @@ async fn sub258_extension_composition_is_not_an_ordinary_tool_selection() {
         Some(&parse_override(serde_json::json!({"tools": {}}))),
     )
     .expect("resolution");
-    assert!(no_direct_tools.tools.is_empty());
+    assert_eq!(
+        no_direct_tools.tools,
+        [] as [rustx::runtime::subagent::ResolvedSubagentTool; 0]
+    );
     assert!(
         no_direct_tools.extensions.agent_status().is_some(),
         "an enabled extension is never silently stripped by the tools allowlist"

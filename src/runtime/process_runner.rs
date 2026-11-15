@@ -1454,51 +1454,50 @@ impl SupervisedCommandRunner {
 #[cfg(unix)]
 const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
-/// The dedicated supervisor binary: `CARGO_BIN_EXE` when cargo provides it
-/// (integration tests), otherwise the `bash-supervisor` sibling of the
-/// current executable (production), otherwise the binary-directory sibling
-/// of a test binary living under `target/debug/deps` (in-crate tests).
-#[cfg(unix)]
-pub(crate) fn supervisor_binary() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_bash-supervisor") {
-        return PathBuf::from(path);
-    }
+/// Locates a companion binary built from the same package (`bash-supervisor`,
+/// `interactive-supervisor`, or `workflow-renderer`).
+///
+/// In production binaries, the companion lives beside `current_exe()`.
+/// When unit or integration tests execute against the library (integration
+/// test crates link `[lib]` without `cfg(test)`), Cargo 1.100 places test
+/// executables under `<profile>/build/<pkg>/<hash>/out/`, while final
+/// package binaries live in `<profile>/`.
+pub(crate) fn companion_binary(name: &str) -> PathBuf {
     let exe = std::env::current_exe().expect("current executable");
-    let sibling = exe
-        .parent()
-        .expect("current executable directory")
-        .join("bash-supervisor");
-    if !sibling.exists() && exe.parent().is_some_and(|parent| parent.ends_with("deps")) {
-        return exe
+    let directory = exe.parent().expect("current executable directory");
+    let sibling = directory.join(name);
+    if !sibling.is_file()
+        // Cargo 1.100 places test binaries under `<profile>/build/<pkg>/<hash>/out/`.
+        && directory
+            .file_name()
+            .is_some_and(|segment| segment == "out")
+        && let Some(build_dir) = directory
             .parent()
-            .expect("current executable directory")
-            .parent()
-            .expect("binary directory")
-            .join("bash-supervisor");
+            .and_then(std::path::Path::parent)
+            .and_then(std::path::Path::parent)
+        && build_dir
+            .file_name()
+            .is_some_and(|segment| segment == "build")
+        && let Some(profile_dir) = build_dir.parent()
+    {
+        let candidate = profile_dir.join(name);
+        if candidate.is_file() {
+            return candidate;
+        }
     }
     sibling
 }
 
-/// Locates the long-lived interactive supervisor beside the current binary.
+/// Locates the `bash-supervisor` companion binary.
+#[cfg(unix)]
+pub(crate) fn supervisor_binary() -> PathBuf {
+    companion_binary("bash-supervisor")
+}
+
+/// Locates the `interactive-supervisor` companion binary.
 #[cfg(unix)]
 pub(crate) fn interactive_supervisor_binary() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_interactive-supervisor") {
-        return PathBuf::from(path);
-    }
-    let exe = std::env::current_exe().expect("current executable");
-    let sibling = exe
-        .parent()
-        .expect("current executable directory")
-        .join("interactive-supervisor");
-    if !sibling.exists() && exe.parent().is_some_and(|parent| parent.ends_with("deps")) {
-        return exe
-            .parent()
-            .expect("current executable directory")
-            .parent()
-            .expect("binary directory")
-            .join("interactive-supervisor");
-    }
-    sibling
+    companion_binary("interactive-supervisor")
 }
 
 /// Sends the one termination request to the invocation supervisor.
@@ -2201,7 +2200,10 @@ mod tests {
                 !marker.exists(),
                 "cancellation before START never executes the command"
             );
-            assert!(harness.control.recorded_signals().is_empty());
+            assert_eq!(
+                harness.control.recorded_signals(),
+                [] as [crate::runtime::process_runner::RecordedSignal; 0]
+            );
             // A late parent acknowledgement cannot replay START after settlement.
             harness.gate.send_replace(true);
         }
@@ -2403,7 +2405,7 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
         assert_eq!(result.intent, ProcessOutcomeIntent::Completed);
         assert_eq!(result.stdout, b"runner-result");
-        assert!(result.stderr.is_empty());
+        assert_eq!(result.stderr, [] as [u8; 0]);
     }
 
     #[cfg(unix)]

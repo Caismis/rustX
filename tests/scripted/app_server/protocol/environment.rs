@@ -189,7 +189,7 @@ pub(crate) async fn connection_process_scenario() {
         panic!("cat result")
     };
     assert_eq!(result.status, ExecStatus::Completed);
-    assert!(result.stdout_base64.is_empty());
+    assert_eq!(result.stdout_base64, "");
     call(
         &first,
         3,
@@ -301,7 +301,7 @@ pub(crate) async fn terminal_scenario() {
         panic!("terminal result")
     };
     assert_eq!(result.status, ExecStatus::Completed);
-    assert!(result.stdout_base64.is_empty());
+    assert_eq!(result.stdout_base64, "");
     connection.close();
 }
 
@@ -1165,7 +1165,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
         .iter()
         .find(|skill| skill.catalog.name == "inspection")
         .unwrap();
-    assert!(!skill.metadata_revision.is_empty());
+    assert_ne!(skill.metadata_revision, "");
     assert_eq!(
         skill.provenance.source,
         crate::skills::SkillSource::Workspace
@@ -1343,11 +1343,11 @@ pub(crate) async fn host_drain_scenario() {
         .unwrap();
     // This shutdown guard is shorter than the command's 60-second deadline.
     // Drain must cancel the process before waiting for its request owner.
-    assert!(
+    assert_eq!(
         tokio::time::timeout(std::time::Duration::from_secs(10), fixture.host.drain())
             .await
-            .expect("host drain cancels independent work before its execution deadline")
-            .is_empty()
+            .expect("host drain cancels independent work before its execution deadline"),
+        [] as [std::string::String; 0]
     );
     process_gone(pid);
     match bounded(command).await.unwrap() {
@@ -1904,7 +1904,10 @@ pub(crate) async fn skill_catalog_page_scenario() {
             panic!("catalog page")
         };
         assert!(crate::bounded_file::json_fits(&page.data, 131_072));
-        assert!(!page.data.is_empty());
+        assert_ne!(
+            page.data,
+            [] as [crate::local_runtime::skill_management::SkillDescriptor; 0]
+        );
         total += page.data.len();
         pages += 1;
         revision = Some(page.revision);

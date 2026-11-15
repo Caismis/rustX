@@ -371,7 +371,7 @@ async fn spill_allocation_failure_fails_the_invocation_explicitly() {
         panic!("allocation did not succeed")
     };
     assert!(error.contains(diagnostic));
-    assert!(!diagnostic.is_empty());
+    assert_ne!(diagnostic, "");
 }
 
 /// A spill WRITE failure after the spill was already allocated (the
@@ -1395,7 +1395,10 @@ async fn fallback_containment_does_not_kill_unrelated_processes() {
         "cancellation receipt is not settlement"
     );
     assert!(process_alive(shell_pid));
-    assert!(control.recorded_signals().is_empty());
+    assert_eq!(
+        control.recorded_signals(),
+        [] as [crate::runtime::process_runner::RecordedSignal; 0]
+    );
     assert!(
         !std::fs::read_to_string(&trace)
             .unwrap()

@@ -211,7 +211,9 @@ agent_profile_document!(
 
 agent_profile_document!(
     /// A complete named Agent resource profile.
-    NamedAgentProfileDocument, crate::runtime::agent_profile::AgentSkillSelection::default, {}
+    NamedAgentProfileDocument,
+    crate::runtime::agent_profile::AgentSkillSelection::default,
+    {}
 );
 
 /// Whether to include the automatically discovered AGENTS.md guidance chain.
@@ -1120,12 +1122,12 @@ model = "p/m"
             DEFAULT_STREAM_IDLE_TIMEOUT
         );
         assert!(config.mcp_bindings().expect("bindings").is_empty());
-        assert!(
+        assert_eq!(
             config
                 .tool_environment()
                 .expect("environment")
-                .authorized_entries()
-                .is_empty()
+                .authorized_entries(),
+            []
         );
     }
 
@@ -1617,8 +1619,14 @@ model = "p/m"
 subagents = {  "max_concurrent" = 4 }"#,
         );
         let config = CurrentRuntimeConfig::from_toml_slice(json.as_bytes()).expect("valid");
-        assert!(config.agent.agents.is_empty());
-        assert!(config.agent.agents.is_empty());
+        assert_eq!(
+            config.agent.agents,
+            [] as [crate::runtime::subagent::catalog::SubagentName; 0]
+        );
+        assert_eq!(
+            config.agent.agents,
+            [] as [crate::runtime::subagent::catalog::SubagentName; 0]
+        );
 
         let defined_but_unadmitted = MINIMAL.replace(
             r#"agent_id = "agent-a""#,
@@ -1655,8 +1663,14 @@ agents = ["worker", "worker"]"#,
 workflows = []",
         );
         let config = CurrentRuntimeConfig::from_toml_slice(valid.as_bytes()).expect("valid");
-        assert!(config.agent.workflows.is_empty());
-        assert!(config.agent.workflows.is_empty());
+        assert_eq!(
+            config.agent.workflows,
+            [] as [crate::runtime::workflow::WorkflowId; 0]
+        );
+        assert_eq!(
+            config.agent.workflows,
+            [] as [crate::runtime::workflow::WorkflowId; 0]
+        );
 
         let unknown = MINIMAL.replace(
             r"[agent]",

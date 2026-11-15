@@ -1056,7 +1056,7 @@ async fn every_protocol_switch_keeps_native_owners_history_and_tools() {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert!(!owned.is_empty());
+            assert_ne!(owned, [] as [&rustx::model::replay::ReplayOrigin; 0]);
             assert!(
                 owned
                     .iter()
@@ -1507,7 +1507,7 @@ async fn a_provider_failure_settles_once_without_a_retry() {
             .count(),
         1
     );
-    assert!(driver.committed_assistant_text().is_empty());
+    assert_eq!(driver.committed_assistant_text(), "");
     assert_eq!(
         emulator.requests().await.len(),
         1,

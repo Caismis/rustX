@@ -3645,7 +3645,7 @@ body
                 else {
                     panic!("ready")
                 };
-                assert!(missing_exact.is_empty());
+                assert_eq!(missing_exact, [] as [std::string::String; 0]);
                 selected
                     .iter()
                     .map(|tool| tool.name.clone())
@@ -4042,26 +4042,26 @@ mod mcp_race_tests {
             .await
             .unwrap();
         assert!(candidate.mcp_runtimes.is_empty());
-        assert!(
+        assert_eq!(
             coordinator
                 .commit(candidate)
                 .unwrap()
                 .tool_registry()
-                .definitions()
-                .is_empty()
+                .definitions(),
+            [] as [crate::tools::types::ToolDefinition; 0]
         );
         let candidate = coordinator
             .prepare_candidate_with_inputs(demanded)
             .await
             .unwrap();
         assert_eq!(candidate.mcp_runtimes.len(), 1);
-        assert!(
-            !coordinator
+        assert_ne!(
+            coordinator
                 .commit(candidate)
                 .unwrap()
                 .tool_registry()
-                .definitions()
-                .is_empty()
+                .definitions(),
+            [] as [crate::tools::types::ToolDefinition; 0]
         );
         coordinator.drain_conversation_owned().await.unwrap();
     }
@@ -4737,8 +4737,14 @@ mod mcp_race_tests {
             Arc::as_ptr(new_snapshot.tool_registry()),
             "the committed snapshot owns a fresh immutable registry"
         );
-        assert!(old_registry.definitions().is_empty());
-        assert!(!new_snapshot.tool_registry().definitions().is_empty());
+        assert_eq!(
+            old_registry.definitions(),
+            [] as [crate::tools::types::ToolDefinition; 0]
+        );
+        assert_ne!(
+            new_snapshot.tool_registry().definitions(),
+            [] as [crate::tools::types::ToolDefinition; 0]
+        );
         coordinator
             .drain_conversation_owned()
             .await

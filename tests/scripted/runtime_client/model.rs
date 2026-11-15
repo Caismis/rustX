@@ -53,7 +53,7 @@ fn model_source<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
         assert_eq!(chunk.cut, page.read_cut);
         assert_eq!(chunk.domain, page.domain);
         assert_eq!(chunk.item_offset, item_offset);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,
@@ -339,7 +339,10 @@ async fn standalone_model_selection_remains_writable_through_host_attachment_and
     let checkpoint = host.checkpoint().unwrap();
     assert_eq!(checkpoint.snapshot.model.unwrap().configured, b);
     assert!(checkpoint.cursor > initial_cursor);
-    assert!(provider.requests().is_empty());
+    assert_eq!(
+        provider.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     host.shutdown().await.unwrap();
 }
 
@@ -752,7 +755,10 @@ async fn runtime_client_lists_a_model_without_synthetic_profiles() {
         .iter()
         .find(|model| model.model == model_ref("always/always-on"))
         .expect("always-on model is listed");
-    assert!(always_on.profiles.is_empty());
+    assert_eq!(
+        always_on.profiles,
+        [] as [crate::model::catalog::ModelProfileView; 0]
+    );
     assert_eq!(always_on.default_profile, None);
 }
 

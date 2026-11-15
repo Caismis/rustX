@@ -909,7 +909,10 @@ mod tests {
         .expect("valid metadata");
         assert_eq!(valid.read_files(), &["/a".to_owned(), "/b".to_owned()]);
         assert_eq!(valid.modified_files(), &["/c".to_owned()]);
-        assert!(CompactionSummaryMetadata::empty().read_files().is_empty());
+        assert_eq!(
+            CompactionSummaryMetadata::empty().read_files(),
+            [] as [String; 0]
+        );
 
         assert_eq!(
             CompactionSummaryMetadata::new(vec!["/a".to_owned(), "/a".to_owned()], Vec::new()),

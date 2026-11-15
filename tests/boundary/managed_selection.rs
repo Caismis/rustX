@@ -234,7 +234,10 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 expected_names
             );
         } else {
-            assert!(expected.is_empty());
+            assert_eq!(
+                expected,
+                [] as [crate::tools::types::ModelToolDefinition; 0]
+            );
         }
 
         let call_id = rustx::tools::mcp::mcp_tool_id(&python_server_id("healthy"), "ping");

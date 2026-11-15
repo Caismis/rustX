@@ -92,7 +92,7 @@ async fn deletion_fence_rejects_late_operation_attach_and_replacement() {
             SessionDeleteResult::Deleted { .. }
         ));
         assert!(runtime.inspect_runtime().is_none());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -344,7 +344,7 @@ async fn load_claim_is_visible_to_delete_before_allocation_acquisition() {
         ));
         assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
         assert_eq!(probe.compositions.load(Ordering::SeqCst), 0);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert!(
             f.manager
                 .sessions
@@ -410,7 +410,7 @@ async fn deletion_joining_failed_loading_receives_proven_writer_absence() {
         );
         assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
         assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -476,7 +476,7 @@ async fn deletion_joins_replacement_failure_after_proven_writer_transfer() {
         );
         assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 2);
         assert_eq!(probe.compositions.load(Ordering::SeqCst), 2);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert!(
             f.manager
                 .sessions
@@ -516,14 +516,14 @@ async fn recovery_observes_live_session_without_releasing_active_delete_fence() 
                 .retiring_sessions
                 .contains(session)
         );
-        assert!(
+        assert_eq!(
             f.manager
                 .sessions
                 .catalog
                 .lock()
                 .await
-                .pending_deletion_ids()
-                .is_empty()
+                .pending_deletion_ids(),
+            [] as [crate::runtime::identity::SessionId; 0]
         );
         assert!(!delete.is_finished());
         assert!(f.load(0).await.unwrap().is_err());
@@ -590,14 +590,14 @@ async fn recovery_settles_durability_uncertainty_without_runtime_reconstruction(
                 .retiring_sessions
                 .contains(session)
         );
-        assert!(
+        assert_eq!(
             f.manager
                 .sessions
                 .catalog
                 .lock()
                 .await
-                .pending_deletion_ids()
-                .is_empty()
+                .pending_deletion_ids(),
+            [] as [crate::runtime::identity::SessionId; 0]
         );
         assert!(f.load(0).await.unwrap().is_err());
         assert_eq!(probe.compositions.load(Ordering::SeqCst), 1);
@@ -701,8 +701,14 @@ async fn deletion_retires_abandoned_unpublished_activation_without_inventing_an_
         let runtime = managed.inspect_runtime().unwrap();
         let registry = runtime.subagent_registry().unwrap();
         registry.wait_recovery_reconciliation().await;
-        assert!(registry.all_snapshots().is_empty());
-        assert!(registry.unproven_settlements().is_empty());
+        assert_eq!(
+            registry.all_snapshots(),
+            [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+        );
+        assert_eq!(
+            registry.unproven_settlements(),
+            [] as [crate::runtime::identity::SubagentId; 0]
+        );
         drop(runtime); // release the inspection lease before actual deletion cleanup
         let revision = deletion_revision(&f, 0).await;
         assert!(matches!(
@@ -713,7 +719,7 @@ async fn deletion_retires_abandoned_unpublished_activation_without_inventing_an_
             SessionDeleteResult::Deleted { .. }
         ));
         assert!(managed.inspect_runtime().is_none());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     }
 }

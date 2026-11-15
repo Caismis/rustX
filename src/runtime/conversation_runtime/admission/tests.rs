@@ -685,8 +685,11 @@ async fn automatic_compaction_keeps_attempt_pinned_resources_after_external_edit
             .all(|tool| tool.name != "tool_generation_b")
     );
 
-    assert!(requests[1].tools.is_empty());
-    assert!(requests[1].effective_system_prompt.is_empty());
+    assert_eq!(
+        requests[1].tools,
+        [] as [crate::tools::types::ModelToolDefinition; 0]
+    );
+    assert_eq!(requests[1].effective_system_prompt, "");
     assert!(requests[1].continuation.is_none());
 
     assert_eq!(

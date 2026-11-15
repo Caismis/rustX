@@ -23,12 +23,16 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
     // allocation fact must still prevent reuse in the parent's ordinal domain.
     let recovered = SubagentRegistry::new(plane.registry.config.clone());
     recovered.restore_agents(plane.store.as_ref()).unwrap();
-    assert!(recovered.all_snapshots().is_empty());
-    assert!(
-        recovered
-            .list_agents(MAX_AGENT_LIST_LIMIT)
-            .agents
-            .is_empty()
+    assert_eq!(
+        recovered.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
+    assert_eq!(
+        recovered.list_agents(MAX_AGENT_LIST_LIMIT).agents,
+        [] as [(
+            crate::runtime::subagent::registry::agents::AgentSnapshot,
+            crate::runtime::subagent::registry::observation::SubagentSnapshot
+        ); 0]
     );
     assert_eq!(recovered.state.lock().unwrap().next_ordinal, 2);
     assert!(
@@ -51,7 +55,10 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
     );
     recovered.wait_recovery_reconciliation().await;
     assert!(!recovered.owns_idle_work());
-    assert!(recovered.unproven_settlements().is_empty());
+    assert_eq!(
+        recovered.unproven_settlements(),
+        [] as [crate::runtime::identity::SubagentId; 0]
+    );
     assert_eq!(recovered.with_goal_idle(|| true), Some(true));
     let version = *recovered.state_version.borrow();
     recovered.reconcile_recovered_settlements();
@@ -520,7 +527,10 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             // Join the existing recovery owner; never require its next Try probe
             // to win against a concurrent fork inheriting a CLOEXEC descriptor.
             recovered.wait_recovery_reconciliation().await;
-            assert!(recovered.unproven_settlements().is_empty());
+            assert_eq!(
+                recovered.unproven_settlements(),
+                [] as [crate::runtime::identity::SubagentId; 0]
+            );
             {
                 let state = recovered.state.lock().unwrap();
                 assert!(state.recovery_inflight.is_empty());
@@ -564,7 +574,10 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             config.mailbox = ConversationInboundMailbox::over_store(reopened_store.clone());
             let reopened = SubagentRegistry::new(config);
             reopened.restore_agents(reopened_store.as_ref()).unwrap();
-            assert!(reopened.unproven_settlements().is_empty());
+            assert_eq!(
+                reopened.unproven_settlements(),
+                [] as [crate::runtime::identity::SubagentId; 0]
+            );
             assert_eq!(reopened.with_goal_idle(|| true), Some(true));
             let agent = reopened.agent_snapshot(&admitted.child_agent_id).unwrap();
             assert_eq!(agent.state, AgentState::Inactive);
@@ -633,17 +646,27 @@ async fn interrupted_authority_publication_reopens_without_logical_facts() {
             recovered.restore_agents(store.as_ref()).unwrap();
             recovered.wait_recovery_reconciliation().await;
             assert_eq!(recovered.state.lock().unwrap().next_ordinal, 2);
-            assert!(
-                recovered
-                    .list_agents(MAX_AGENT_LIST_LIMIT)
-                    .agents
-                    .is_empty()
+            assert_eq!(
+                recovered.list_agents(MAX_AGENT_LIST_LIMIT).agents,
+                [] as [(
+                    crate::runtime::subagent::registry::agents::AgentSnapshot,
+                    crate::runtime::subagent::registry::observation::SubagentSnapshot
+                ); 0]
             );
-            assert!(recovered.all_snapshots().is_empty());
+            assert_eq!(
+                recovered.all_snapshots(),
+                [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+            );
             assert!(!recovered.owns_idle_work());
-            assert!(recovered.unproven_settlements().is_empty());
+            assert_eq!(
+                recovered.unproven_settlements(),
+                [] as [crate::runtime::identity::SubagentId; 0]
+            );
             assert_eq!(recovered.with_goal_idle(|| true), Some(true));
-            assert!(store.read_events(None, 128).unwrap().events.is_empty());
+            assert_eq!(
+                store.read_events(None, 128).unwrap().events,
+                [] as [crate::events::types::RuntimeEventEnvelope; 0]
+            );
             let version = *recovered.state_version.borrow();
             recovered.reconcile_recovered_settlements();
             assert_eq!(*recovered.state_version.borrow(), version);
@@ -820,7 +843,10 @@ async fn published_initialization_error_retains_live_registry_obligation_until_e
         plane.registry.unproven_settlements(),
         vec![activation.clone()]
     );
-    assert!(events(&plane).is_empty());
+    assert_eq!(
+        events(&plane),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
     let reopened = SubagentRegistry::new(plane.registry.config.clone());
     reopened.restore_agents(plane.store.as_ref()).unwrap();
     assert_eq!(reopened.unproven_settlements(), vec![activation]);
@@ -830,7 +856,10 @@ async fn published_initialization_error_retains_live_registry_obligation_until_e
     reopened.wait_recovery_reconciliation().await;
     assert_eq!(plane.registry.with_goal_idle(|| true), Some(true));
     assert_eq!(reopened.with_goal_idle(|| true), Some(true));
-    assert!(events(&plane).is_empty());
+    assert_eq!(
+        events(&plane),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
 }
 
 fn quiescent_child_incarnation(
@@ -1051,7 +1080,10 @@ async fn pre_reserved_wait_settles_independently_of_another_agents_recovery() {
     drop(x_lock);
     release.send(()).unwrap();
     registry.wait_recovery_reconciliation().await;
-    assert!(registry.unproven_settlements().is_empty());
+    assert_eq!(
+        registry.unproven_settlements(),
+        [] as [crate::runtime::identity::SubagentId; 0]
+    );
     assert_eq!(registry.with_goal_idle(|| true), Some(true));
 }
 

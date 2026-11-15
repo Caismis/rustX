@@ -516,7 +516,10 @@ async fn issue459_unavailable_selection_survives_reload_and_cold_binding() {
             .0;
         assert!(view.unavailable.is_none());
         assert_eq!(runtime.model_view(), view);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         fixture.close().await;
     }))
     .await;
@@ -908,7 +911,10 @@ async fn issue459_recovery_keeps_the_explicit_summary_policy_explicit() {
             .0;
         assert!(view.unavailable.is_none());
         assert_eq!(view.configured.auxiliary, summary_on("local/a"));
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         fixture.close().await;
     }))
     .await;

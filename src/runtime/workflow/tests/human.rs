@@ -36,8 +36,14 @@ async fn cfg237_human_plan_template_uses_native_review_and_settlement() {
     assert_eq!(output["action"], "approve");
     assert!(output["content"].is_string());
     assert_eq!(audit.events().len(), 2);
-    assert!(owner.pending_snapshot().is_empty());
-    assert!(plane.registry.all_snapshots().is_empty());
+    assert_eq!(
+        owner.pending_snapshot(),
+        [] as [crate::runtime::interaction::InteractionRequest; 0]
+    );
+    assert_eq!(
+        plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
     assert!(matches!(
         observations.borrow().last(),
         Some(RuntimeEvent::WorkflowCompleted { .. })
@@ -226,8 +232,14 @@ async fn loop_review_and_questionnaire_reject_old_responses_and_allocate_fresh_i
         let output = task.await.unwrap().unwrap();
         assert_eq!(output, json!({"done":true}));
         assert_eq!(audit.events().len(), 4);
-        assert!(owner.pending_snapshot().is_empty());
-        assert!(plane.registry.all_snapshots().is_empty());
+        assert_eq!(
+            owner.pending_snapshot(),
+            [] as [crate::runtime::interaction::InteractionRequest; 0]
+        );
+        assert_eq!(
+            plane.registry.all_snapshots(),
+            [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+        );
     }
 }
 
@@ -646,7 +658,10 @@ async fn human_content_uses_the_questionnaire_unicode_limit_for_fixed_and_dynami
                 let error = task.await.unwrap().unwrap_err();
                 assert!(error.to_string().contains("4096"), "{error:?}");
                 assert!(published.try_recv().is_err());
-                assert!(audit.events().is_empty());
+                assert_eq!(
+                    audit.events(),
+                    [] as [crate::events::types::RuntimeEvent; 0]
+                );
             }
         }
     }
@@ -741,7 +756,10 @@ async fn iteration_error_modes_never_swallow_interaction_authority_failures() {
                 usize::from(parallel)
             );
             assert_eq!(owner.pending_count(), 0);
-            assert!(audit.events().is_empty());
+            assert_eq!(
+                audit.events(),
+                [] as [crate::events::types::RuntimeEvent; 0]
+            );
             assert!(published.try_recv().is_err());
             assert!(!observations.borrow().iter().any(|event| matches!(event, RuntimeEvent::WorkflowCompleted { .. }) || matches!(event, RuntimeEvent::WorkflowNodeStarted { instance } if instance.node == "z_effect")));
         }

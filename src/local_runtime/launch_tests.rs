@@ -924,8 +924,8 @@ fn assert_bounded_cause(report: &super::diagnostics::Report, path: &str, categor
         .find(|d| d["path"] == path && d["category"] == category)
         .unwrap();
     assert_eq!(*cause, serde_json::to_value(original).unwrap());
-    assert!(!cause["reason"].as_str().unwrap().is_empty());
-    assert!(!cause["correction"].as_str().unwrap().is_empty());
+    assert_ne!(cause["reason"].as_str().unwrap(), "");
+    assert_ne!(cause["correction"].as_str().unwrap(), "");
     if category == "invalid" {
         assert_eq!(cause["classification"], "error");
         assert!(cause["file"].is_string());
@@ -1114,8 +1114,8 @@ fn cfg235_diagnostics_keep_source_field_classification_and_correction() {
         assert!(diagnostic.file.is_some());
         assert_eq!(diagnostic.classification, "error");
         assert_eq!(diagnostic.category, "invalid");
-        assert!(!diagnostic.reason.is_empty());
-        assert!(!diagnostic.correction.is_empty());
+        assert_ne!(diagnostic.reason, "");
+        assert_ne!(diagnostic.correction, "");
     }
     std::fs::write(
         f.host.launch_directory.join("rustx.toml"),
@@ -1708,7 +1708,7 @@ async fn cfg3_optional_root_failures_publish_unavailable_without_evaluating_unus
         let CapabilitySourceState::Unavailable { reason } = &availability[&selected] else {
             panic!("failed optional source must report unavailable: {availability:?}");
         };
-        assert!(!reason.is_empty());
+        assert_ne!(reason, "");
         if source == "credential" {
             assert!(reason.contains("REQUIRED_KEY"));
         }
@@ -1865,7 +1865,10 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
         resolved.config.context.keep_recent_tokens,
         super::config::ContextPolicyDocument::default().keep_recent_tokens
     );
-    assert!(resolved.config.agent.tools.builtin.is_empty());
+    assert_eq!(
+        resolved.config.agent.tools.builtin,
+        [] as [std::string::String; 0]
+    );
     assert_eq!(resolved.config.environment.len(), 2);
     assert_eq!(resolved.config.environment["REPLACED"], "new");
     let service =
@@ -1902,7 +1905,10 @@ fn precedence_absence_empty_and_whole_entries_keep_provenance() {
     assert_eq!(empty.config.environment.len(), 2);
     assert_eq!(empty.config.environment["REPLACED"], "old");
     assert_eq!(empty.config.mcp_servers.len(), 2);
-    assert!(empty.config.agent.agents.is_empty());
+    assert_eq!(
+        empty.config.agent.agents,
+        [] as [crate::runtime::subagent::catalog::SubagentName; 0]
+    );
     assert_eq!(empty.config.agent.tools.builtin, ["read", "bash"]);
 }
 
@@ -2052,13 +2058,9 @@ async fn minimal_native_composition_and_frozen_launch_ignore_later_config_edits(
     f.user(json!({"agent_id": "edited", "agent": {"model": {"model":"host/two"}}}));
     f.project(json!({"agent": {"model": {"model":"missing/model"}}}));
     let product = compose_admitted(&launch).await.unwrap();
-    assert!(
-        product
-            .runtime()
-            .runtime_resources()
-            .subagents()
-            .names()
-            .is_empty()
+    assert_eq!(
+        product.runtime().runtime_resources().subagents().names(),
+        [] as [&crate::runtime::subagent::catalog::SubagentName; 0]
     );
     assert_eq!(launch.config.initial_model().model.to_string(), "host/one");
     assert_eq!(launch.config.agent_id.as_str(), "rustx");
@@ -2264,7 +2266,10 @@ fn workspace_authors_approval_mode_without_granting_root_tools() {
         resolved.config.approval_mode,
         crate::runtime::ApprovalMode::Plan
     );
-    assert!(resolved.config.agent.tools.builtin.is_empty());
+    assert_eq!(
+        resolved.config.agent.tools.builtin,
+        [] as [std::string::String; 0]
+    );
     assert!(matches!(
         resolved.provenance["approval_mode"],
         Origin::Workspace { .. }
@@ -2371,7 +2376,10 @@ fn project_directory_symlinks_cannot_authorize_builtin_or_declared_resources() {
     std::fs::write(other.join("file"), "B").unwrap();
     std::os::unix::fs::symlink(&other, f.host.launch_directory.join(".agents")).unwrap();
     let candidate = analyze(&f.request, &f.host).unwrap();
-    assert!(!candidate.inspection.resource_diagnostics.is_empty());
+    assert_ne!(
+        candidate.inspection.resource_diagnostics,
+        [] as [crate::runtime::capability_inspection::ResourceDiagnostic; 0]
+    );
     std::os::unix::fs::symlink(
         other.join("file"),
         f.host.launch_directory.join("AGENTS.md"),
@@ -2739,7 +2747,7 @@ mod session_resolution {
         assert_eq!(b.session_model().model.to_string(), "host/two");
         assert_eq!(a.project_context_files[0].content, "A guidance");
         assert_eq!(b.project_context_files[0].content, "B guidance");
-        assert!(a.skill_provenance().is_empty());
+        assert_eq!(a.skill_provenance(), []);
         assert_eq!(b.skill_provenance().len(), 1);
         assert_ne!(a.workspace, b.workspace);
         assert_eq!(a.runtime_root, b.runtime_root);
@@ -2761,7 +2769,10 @@ mod session_resolution {
         assert!(a.input.model.is_none());
         assert!(b.input.model.is_none());
         assert!(input.model.is_none());
-        assert!(!a.skill_sources.is_empty());
+        assert_ne!(
+            a.skill_sources,
+            [] as [crate::skills::source::AutomaticSkillRoot; 0]
+        );
         assert_eq!(
             a.skill_sources, b.skill_sources,
             "visibility never relocates collection roots"
@@ -2835,7 +2846,10 @@ mod session_resolution {
         let prospective = manager.resolve_session(&input).unwrap();
         let admitted = prospective.admit(|| f.credentials.clone()).unwrap();
 
-        assert!(admitted.project_context_files.is_empty());
+        assert_eq!(
+            admitted.project_context_files,
+            [] as [crate::runtime::resources::ProjectContextFile; 0]
+        );
     }
 
     /// The shared owner never resolves a Session cwd against the process's
@@ -2945,7 +2959,7 @@ mod session_resolution {
             "Captured guidance"
         );
         assert_eq!(resources.inspection().skills.len(), 1);
-        assert!(b.skill_provenance().is_empty());
+        assert_eq!(b.skill_provenance(), []);
         drop(product);
         assert_eq!(
             admitted.project_context_files[0].content,

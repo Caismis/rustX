@@ -2136,7 +2136,7 @@ async fn issue552_cold_workflow_trace_node_retains_host_operation_and_associatio
             assert!(f.host.finish_drain().is_err());
 
             gate.release();
-            assert!(drain.await.is_empty());
+            assert_eq!(drain.await, [] as [std::string::String; 0]);
             if let Some(serving) = serving {
                 serving.await.unwrap().unwrap();
             }
