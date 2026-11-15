@@ -112,6 +112,13 @@ async fn smaller_primary_reduces_summary_only_history_and_preserves_fresh_input(
             .join("artifacts/conversation.sqlite"),
     )
     .unwrap();
+    let original_coverage = store
+        .projection_head()
+        .unwrap()
+        .unwrap()
+        .candidate
+        .prefix_coverage
+        .unwrap();
     let before = store.projected_history().unwrap();
     assert_eq!(
         before.messages.len(),
@@ -169,6 +176,18 @@ async fn smaller_primary_reduces_summary_only_history_and_preserves_fresh_input(
     assert!(wire.contains("FRESH-INPUT"));
     assert!(!wire.contains("OLD-SUMMARY"));
     assert_eq!(store.projection_timeline(start, 64).unwrap().len(), 2);
+    let reduced_coverage = store
+        .projection_head()
+        .unwrap()
+        .unwrap()
+        .candidate
+        .prefix_coverage
+        .unwrap();
+    assert_eq!(reduced_coverage.root, original_coverage.root);
+    assert_eq!(
+        reduced_coverage.retired_through, original_coverage.retired_through,
+        "current-owner reduction preserves coverage rather than inventing advancement"
+    );
     let after = store.projected_history().unwrap();
     assert!(
         after.messages.iter().any(|message| matches!(

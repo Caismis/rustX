@@ -220,6 +220,7 @@ pub struct VerifiedPrefixCoverage {
     record: PrefixCoverage,
     summary_digest: String,
     generation: Option<SummaryGenerationRef>,
+    current_reduction: Option<CheckpointSourceRef>,
 }
 
 impl VerifiedPrefixCoverage {
@@ -251,6 +252,42 @@ impl VerifiedPrefixCoverage {
             generated.generated_summary(),
             generation,
         )
+    }
+
+    /// A newly authorized blocking/manual owner may shrink the current Summary
+    /// without retiring another canonical item. Independent results receive no
+    /// such permission: their equal coverage still preserves the installed Head.
+    pub(crate) fn seal_current(
+        generated: &super::compaction::GeneratedCompaction,
+    ) -> Result<Self, ContextError> {
+        let mut proof = Self::seal(generated)?;
+        if generated.retired_count() == 1
+            && let Some(previous) = generated.source_checkpoint()
+            && previous.candidate.prefix_coverage.is_some()
+            && matches!(generated.source_history().messages.first(), Some(ModelInputMessage::Derived(message))
+                if message.transformations.contains(&SemanticTransformation::Summary))
+        {
+            proof.current_reduction = Some(CheckpointSourceRef {
+                conversation_id: proof.record.capture_cut.conversation_id.clone(),
+                checkpoint_id: previous.candidate.checkpoint_id.clone(),
+                content_digest: previous.fingerprint.clone(),
+            });
+        }
+        Ok(proof)
+    }
+
+    /// Interpret a sealed current-owner reduction only at its exact Head.
+    /// Serialized coverage alone can never authorize an equal-coverage rewrite.
+    pub(crate) fn retained_offset(
+        &self,
+        head: Option<(&CheckpointSourceRef, Option<&PrefixCoverage>)>,
+    ) -> Option<usize> {
+        self.record.retained_offset(head).or_else(|| {
+            (self.current_reduction.as_ref() == head.map(|(source, _)| source)
+                && self.current_reduction.is_some()
+                && self.record.compare_to_head(head) == Some(Ordering::Equal))
+            .then_some(1)
+        })
     }
 
     #[allow(clippy::too_many_arguments)] // These are independently frozen authorities.
@@ -306,6 +343,7 @@ impl VerifiedPrefixCoverage {
             record,
             summary_digest: summary_digest(summary, generation)?,
             generation: generation.cloned(),
+            current_reduction: None,
         })
     }
 

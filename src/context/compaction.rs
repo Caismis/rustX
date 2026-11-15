@@ -406,7 +406,7 @@ pub(crate) fn activate_blocking_generated(
     owner: crate::durable::projection::ProjectionOwner,
     generated: GeneratedCompaction,
 ) -> Result<ExecutedCompaction, CompactionExecutionError> {
-    let prefix_proof = super::coverage::VerifiedPrefixCoverage::seal(&generated)?;
+    let prefix_proof = super::coverage::VerifiedPrefixCoverage::seal_current(&generated)?;
     operation.budget().check(cancellation)?;
     let grant = operation.authorize_commit()?;
     let GeneratedCompaction {
