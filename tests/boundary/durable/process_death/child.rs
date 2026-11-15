@@ -541,15 +541,8 @@ impl Child {
                 | REOPEN_SUBAGENT_RESUME
         );
         let dependencies = LocalRuntimeDependencies {
-            child_program: real_child.then(|| {
-                std::env::current_exe()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("rustx")
-            }),
+            child_program: real_child
+                .then(|| crate::runtime::process_runner::companion_binary("rustx")),
             ..LocalRuntimeDependencies::default()
         };
         let registry = if real_child {
@@ -1924,18 +1917,7 @@ async fn compose_workflow_emulator_child(
     let paths = lab_paths(root);
     let launch = paths.try_resolve().expect("resolve workflow lab launch");
     let runtime_config = launch.config().clone();
-    let child_program = std::env::var_os("CARGO_BIN_EXE_rustx").map_or_else(
-        || {
-            std::env::current_exe()
-                .expect("current test exe")
-                .parent()
-                .expect("deps dir")
-                .parent()
-                .expect("profile dir")
-                .join("rustx")
-        },
-        PathBuf::from,
-    );
+    let child_program = crate::runtime::process_runner::companion_binary("rustx");
     assert!(
         child_program.is_file(),
         "workflow crash child requires built `rustx` binary at {}",
