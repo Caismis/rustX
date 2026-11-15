@@ -313,9 +313,10 @@ fn count_conversation_store_open() {
 /// Version 84 requires exact Workflow run/instance indexes for bounded historical reads.
 /// Version 85 records Session configuration commits as Journal facts with
 /// their own transcript positions.
-/// Version 88 combines shared Auxiliary authority, resource permissions, Tool
-/// invocation envelopes and model-derived compaction settlement.
-pub const SQLITE_SCHEMA_VERSION: i64 = 88;
+/// Version 89 combines shared Auxiliary authority, resource permissions, Tool
+/// invocation envelopes and model-derived compaction settlement with admission-bound
+/// immutable Workflow run definition snapshots and chunked durable snapshot storage.
+pub const SQLITE_SCHEMA_VERSION: i64 = 89;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -434,6 +435,8 @@ pub struct SqliteConversationStore {
     pub(crate) fail_publication_terminal_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) fail_publication_audit_remaining: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) fail_workflow_snapshot_remaining: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for SqliteConversationStore {
@@ -768,6 +771,8 @@ impl SqliteConversationStore {
             fail_publication_terminal_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_publication_audit_remaining: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            fail_workflow_snapshot_remaining: Arc::new(AtomicUsize::new(0)),
         }
     }
     fn auxiliary_writer_scope(&self) -> Self {
@@ -904,6 +909,12 @@ impl SqliteConversationStore {
     #[cfg(test)]
     pub(crate) fn arm_fail_publication_audit_times(&self, count: usize) {
         self.fail_publication_audit_remaining
+            .store(count, Ordering::SeqCst);
+    }
+    /// Fails the next `count` atomic Workflow snapshot start commits.
+    #[cfg(test)]
+    pub(crate) fn arm_fail_workflow_snapshot_times(&self, count: usize) {
+        self.fail_workflow_snapshot_remaining
             .store(count, Ordering::SeqCst);
     }
     #[cfg(test)]
@@ -1223,6 +1234,7 @@ mod observation_request_summary;
 mod observation_state;
 mod observation_tools;
 mod observation_trace;
+mod workflow_snapshot;
 mod workflow_trace;
 
 /// Optional immutable read layout belongs to the native source transaction.

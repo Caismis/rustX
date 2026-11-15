@@ -2441,7 +2441,7 @@ the synchronization.
 
 The internal Runtime Client vocabulary is v86. Only App Server v79 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
-decoder. The current storage/control formats are Event envelope 1, SQLite 88, Session
+decoder. The current storage/control formats are Event envelope 1, SQLite 89, Session
 catalog 21 and subagent IPC v40. The child specification freezes MCP Resource source
 authority independently of ordinary Tool identities. Child file and artifact reads use the registered
 child Conversation and the parent attachment's native delivery authority.
@@ -2653,7 +2653,7 @@ after a lost carrier acknowledgment.
 
 Web and TUI negotiate only `rustx.app-server.v79`; v61 and older peers are
 rejected explicitly. The current native contracts are Runtime Client v86,
-Session catalog schema 21 and SQLite schema 88. There are no old policy fields, alternate upload paths
+Session catalog schema 21 and SQLite schema 89. There are no old policy fields, alternate upload paths
 or compatibility handlers. See [Session-owned workspace uploads](session-uploads.md).
 
 ## Workflow file authoring (Issue #491)

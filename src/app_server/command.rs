@@ -126,11 +126,17 @@ impl Default for Commands {
 impl Commands {
     #[cfg(test)]
     pub(crate) async fn admitted_for_test(&self, id: &str) {
-        self.1
-            .subscribe()
-            .wait_for(|_| self.0.lock().expect("commands").active.contains_key(id))
-            .await
-            .unwrap();
+        let mut revision = self.1.subscribe();
+        loop {
+            // A watch predicate holds its value's read lock. Admission publishes
+            // while holding the command registry, so never take that registry
+            // from inside the predicate. Subscribe before checking to retain
+            // every admission that races the following await.
+            if self.0.lock().expect("commands").active.contains_key(id) {
+                return;
+            }
+            revision.changed().await.unwrap();
+        }
     }
     pub fn close(&self) {
         let mut state = self.0.lock().expect("connection commands");

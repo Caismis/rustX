@@ -77,25 +77,40 @@ fn code_definition(script: &str, extra: Value) -> WorkflowDefinition {
     serde_json::from_value(json!({"description":"Typed code through Bash","block":{"nodes":{"start":{"type":"start"},"script":node,"done":returns("script", &["result"])},"edges":[{"from":"start","to":"script"},{"from":"script","to":"done"}]}})).unwrap()
 }
 
-/// Real Node may be installed by NVM/setup-node outside Bash's baseline PATH.
-/// Admit that dependency through the existing runtime-owned Skill overlay.
+/// Real Node may be installed outside Bash's baseline PATH. Tests admit that
+/// interpreter through a private path prefix; Skills do not.
 fn code_context(plane: &WorkflowTestPlane) -> crate::runtime::subagent::NativeExecutionContext {
+    let workspace = plane.dir.path().join("workspace");
+    let bin = workspace.join(".venv/bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    if !bin.join("python3").exists() {
+        let output = std::process::Command::new("python3")
+            .args(["-c", "import sys; print(sys.executable)"])
+            .output()
+            .expect("Code tests require python3");
+        assert!(
+            output.status.success(),
+            "python3 did not report its executable"
+        );
+        let executable = String::from_utf8(output.stdout).unwrap();
+        let executable = executable.trim();
+        std::os::unix::fs::symlink(executable, bin.join("python3")).unwrap();
+        std::os::unix::fs::symlink(executable, bin.join("python")).unwrap();
+    }
+    crate::tools::workspace_python::publish_ready_for_test(&workspace);
     let output = std::process::Command::new("node")
         .args(["-p", "process.execPath"])
         .output()
         .expect("Code tests require Node.js");
     assert!(output.status.success());
-    let root = plane.dir.path().join("node-environment");
-    let bin = root.join("node_modules/.bin");
+    let bin = plane.dir.path().join("node-bin");
     std::fs::create_dir_all(&bin).unwrap();
     std::os::unix::fs::symlink(
         String::from_utf8(output.stdout).unwrap().trim(),
         bin.join("node"),
     )
     .unwrap();
-    let environment = ToolEnvironment::new().with_overlay(
-        &crate::tools::environment::ToolEnvironmentOverlay::node(&root),
-    );
+    let environment = ToolEnvironment::new().with_path_prefix(&bin);
     let lifecycle = crate::agent::AttemptLifecycle::default().with_pre_tool_policy(Arc::new(
         crate::agent::lifecycle::ConfiguredApprovalPolicy::new(ApprovalMode::FullAccess),
     ));

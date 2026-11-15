@@ -240,7 +240,7 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 88, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Version 85 adds indexed compaction progress and chunk causality for Summary execution dependencies. Older schemas are refused without migration.
+The current SQLite development schema is 89, defined by `SQLITE_SCHEMA_VERSION`. Version 89 combines model-derived compaction progress and chunk causality with `workflow_definition_snapshots`, `workflow_snapshot_chunks`, and `workflow_run_snapshots`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests, an explicit owner on every model-request start, and atomic run-start immutable definition snapshots. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Older schemas are refused without migration.
 
 Version 79 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -759,7 +759,7 @@ ordinary capability preparation: cancellation root, inactive lifecycle admission
 source slots, immutable transport bindings, invalidation epochs and retirement
 supervision travel together. Draft preparation resolves only selected configured
 MCP demand from Root and enabled Workflows. It creates no durable Session, Python
-or Skill environment, provider request, upload receipt or executable capability.
+build, provider request, upload receipt or executable capability.
 
 An actual Web Send carries its draft target in `thread/start`. Synchronous
 native connection admission records the monotonic receipt and seals one exact
@@ -959,9 +959,10 @@ Foreground tool results retain one slot per model call and canonical model
 call order. A committed background execution survives attempt cancellation
 but not conversation drain. The process runner's existing physical proof is
 composed transitively; no global process registry is introduced. Capability
-preparation is counted until its owner returns, so shared `EnvironmentStore`
-materialization is not cancelled globally by one conversation but cannot
-create a late runtime callback or revision. Retained conversation-owned MCP
+preparation is counted until its owner returns and cannot create a late
+runtime callback or revision. Managed Python uv builds stay under the
+environment-store `python-tools` root and are not cancelled globally by one
+conversation. Retained conversation-owned MCP
 stdio runtimes are explicitly closed and physically settled before
 quiescence; an unproven process or notification-task settlement is reported
 as a runtime failure, not as successful shutdown. All runtime capability
@@ -1868,8 +1869,17 @@ tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
                            artifact ids with streaming spooling (genuine
                            semantic artifacts only — never textual overflow)
-tools/environment.rs       ToolEnvironment: the explicit authorized child
-                           environment (no wholesale parent inheritance)
+tools/environment.rs       ToolEnvironment: excluded executors use a fixed
+                           PATH and workspace HOME; native Bash carries a
+                           frozen host-derived command environment
+tools/execution_environment.rs
+                           Captures the launched host once and composes native
+                           Agent, Workflow, and Subagent Bash
+tools/workspace_python.rs  One Workspace `.venv`: reuse a valid environment,
+                           or create it with uv >= 0.10.0 without blocking
+                           registration or model turns; process/host drain owns
+                           cancellation and joins; original root identity and
+                           input generation fence execution and Ready
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            background executions (lifecycle state machine,
                            dispatch ownership commit, cancel-vs-complete
@@ -4752,10 +4762,8 @@ generic runtime supervisor:
 - **Immutable attempt capability snapshot.** One `CapabilitySnapshot`
   holds the monotonic `CapabilityRevision`, the immutable `ToolRegistry`
   handle, the immutable Skill snapshot/catalog with its
-  `SkillId` + `SkillVersionId` bindings, the Python/Node environment
-  identity and path when present, and the effective `ToolEnvironment`
-  (base authorized environment plus the deterministic Skill environment
-  overlay).
+  `SkillId` + `SkillVersionId` bindings, and the effective `ToolEnvironment`
+  (the base authorized environment; Skills add nothing).
 - **Capability owner identity.** A `CapabilityCoordinator` is explicitly
   conversation-owned and records the canonical Workspace root with its
   `ConversationId`. An attempt lease can only be passed to a
@@ -4784,8 +4792,8 @@ generic runtime supervisor:
   acquisition that reconnects after physical stdio spawn, settle before
   retirement completes. See [the deterministic regressions and controlled
   timing fixture](issue-498/README.md).
-- **Quiescent commit.** Candidate preparation (discovery, dependency
-  merge, environment materialization) runs independently; activation is a
+- **Quiescent commit.** Candidate preparation (Skill discovery and optional
+  source preparation) runs independently; activation is a
   quiescent atomic commit legal only when zero attempt leases are active
   for the conversation. Acquisition and commit serialize through one
   synchronization boundary; an identical candidate is a no-op that never
@@ -7626,3 +7634,47 @@ weak owners; addressed reads capture bounded native facts outside the residency
 registry lock, then validate the exact resident allocation before publication.
 A per-process revision orders snapshots and lightweight notifications without
 transcript attachment. See [status derivation and publication](app-server/shared-control.md#thread-runtime-status-v79-amendment).
+
+## Admission-bound Workflow run definition snapshots (Issue #552)
+
+Every admitted `WorkflowProgram` captures an immutable `WorkflowRunDefinitionSnapshot`
+from the exact parsed YAML source bytes (`workflow_id`, executable `program_digest`,
+distinct `source_revision`, `has_source_presentation` flag, and `WorkflowFileDocument`
+including optional `editor` presentation). Layout-only edits change `source_revision`
+and `snapshot_digest` without altering executable `program_digest` or `tool_identity`.
+
+When a native Workflow run starts, `JournalStore::publish_workflow_start` commits
+`RuntimeEvent::WorkflowStarted`, deduplicated `workflow_definition_snapshots` /
+`workflow_snapshot_chunks` (<= 65,536 bytes per chunk, `MAX_WORKFLOW_DOCUMENT_BYTES`
+16 MiB ceiling), and the `workflow_run_snapshots` binding (foreign-keyed `ON DELETE
+CASCADE` to `events(sequence)`) in one SQLite transaction with no staging rows or
+mutable disk fallback. Best-effort start observability failures never change execution
+outcomes. Reads flow through authorized v79 `conversation/workflowRunSnapshotHeader|Chunk`
+(`Family::Runtime`) and cold `session/workflowRunSnapshotHeader|Chunk`
+(`Family::History`, enforcing `ObservationReadCut` and conversation binding).
+
+The shared readonly Web canvas consumes this immutable document and existing
+native trace headers, field references and child inspection routes. Indexed
+`session/traceLocateWorkflow` / `agent/traceLocateWorkflow` reads locate a run at
+one authorized native cut without scanning all displayed history or parsing a
+bounded display identity, and `TraceInspectionContent::Workflow` in
+`trace.records.<seq>.detail` (plus `WorkflowTraceNodes.run_id|workflow_id`)
+carries typed native run and workflow identity directly from `WorkflowStarted`
+facts so even a root with zero started nodes or an omitted display `native_id`
+opens its frozen graph. When a selected visit lies beyond the initial two-page
+node prefix or survives a cut advancement without appearing in the fresh prefix,
+`conversation/workflowTraceNode` and cold `session/workflowTraceNode` perform a
+bounded indexed lookup (`events_run_id_kind_idx` +
+`events_workflow_node_instance_kind_idx`) without scanning the run, reading I/O
+bodies, or reusing prior-cut headers. Same-cut historical child references come from the
+existing Workflow admission and ownership indexes. The browser neither executes
+nodes nor appends status facts. See [run projection](workflow-run-projection.md)
+and [validation boundaries](issue-552-validation.md).
+
+Selected visits outside the initial trace prefix use exact indexed
+`conversation/workflowTraceNode` / cold `session/workflowTraceNode` reads under
+the same conversation, activation and cut checks. Their result is one bounded
+existing node header; original values stay in the existing field/content paths.
+Typed Workflow detail retains run and workflow identity even before the first
+node starts, so graph resolution does not depend on display labels or a first
+loaded visit.

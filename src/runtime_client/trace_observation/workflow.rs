@@ -23,13 +23,7 @@ pub(crate) fn workflow_page(
     if limit == 0 || limit > 32 || offset > 9_007_199_254_740_991 {
         return Err(RuntimeClientError::ReadCutExpired);
     }
-    let native = cut
-        .source_cut
-        .as_ref()
-        .filter(|source| {
-            source.read.conversation_id == cut.conversation_id && source.read.journal == cut.through
-        })
-        .ok_or(RuntimeClientError::ReadCutExpired)?;
+    let native = validate_source_cut(cut)?;
     let page = store
         .observation_workflow_nodes(native, start, offset, limit)
         .map_err(RuntimeClientError::observation_store_error)?;
@@ -91,6 +85,87 @@ fn repair_live(
     };
 }
 
+fn validate_source_cut(
+    cut: &CheckpointReadCut,
+) -> Result<&crate::durable::observation::ObservationReadCut, RuntimeClientError> {
+    cut.source_cut
+        .as_ref()
+        .filter(|source| {
+            source.read.conversation_id == cut.conversation_id && source.read.journal == cut.through
+        })
+        .ok_or(RuntimeClientError::ReadCutExpired)
+}
+
+pub(crate) fn workflow_node(
+    store: &dyn ConversationStore,
+    cut: &CheckpointReadCut,
+    instance: &crate::runtime::workflow::WorkflowNodeInstance,
+    live: Option<&crate::observation::workflow_source::WorkflowReadSource>,
+) -> Result<Option<WorkflowTraceNode>, RuntimeClientError> {
+    if instance.block.run.conversation_id != cut.conversation_id {
+        return Err(RuntimeClientError::InvalidRequest {
+            message: "workflow node belongs to another conversation".into(),
+        });
+    }
+    let native = validate_source_cut(cut)?;
+    let mut node = store
+        .observation_workflow_node(native, instance)
+        .map_err(RuntimeClientError::observation_store_error)?;
+    if let (Some(node), Some(live)) = (&mut node, live) {
+        repair_live(node, live);
+    }
+    Ok(node)
+}
+
+pub(crate) fn history_workflow_node(
+    store: &dyn ConversationStore,
+    cut: &CheckpointReadCut,
+    instance: &crate::runtime::workflow::WorkflowNodeInstance,
+) -> Result<Option<WorkflowTraceNode>, RuntimeClientError> {
+    super::validate_history_cut(store, cut)?;
+    workflow_node(store, cut, instance, None)
+}
+
+fn validate_snapshot_source_cut<'a>(
+    cut: &'a CheckpointReadCut,
+    run_id: &crate::runtime::workflow::WorkflowRunId,
+) -> Result<&'a crate::durable::observation::ObservationReadCut, RuntimeClientError> {
+    if run_id.conversation_id != cut.conversation_id {
+        return Err(RuntimeClientError::InvalidRequest {
+            message: "workflow run belongs to another conversation".into(),
+        });
+    }
+    validate_source_cut(cut)
+}
+
+pub(crate) fn history_workflow_run_snapshot_header(
+    store: &dyn ConversationStore,
+    cut: &CheckpointReadCut,
+    run_id: &crate::runtime::workflow::WorkflowRunId,
+) -> Result<Option<crate::runtime::workflow::WorkflowRunSnapshotHeader>, RuntimeClientError> {
+    let native = validate_snapshot_source_cut(cut, run_id)?;
+    store
+        .observation_workflow_run_snapshot_header(native, run_id)
+        .map_err(RuntimeClientError::observation_store_error)
+}
+
+pub(crate) fn history_workflow_run_snapshot_document(
+    store: &dyn ConversationStore,
+    cut: &CheckpointReadCut,
+    run_id: &crate::runtime::workflow::WorkflowRunId,
+) -> Result<
+    Option<(
+        crate::runtime::workflow::WorkflowRunSnapshotHeader,
+        crate::workflow_file::WorkflowFileDocument,
+    )>,
+    RuntimeClientError,
+> {
+    let native = validate_snapshot_source_cut(cut, run_id)?;
+    store
+        .observation_workflow_run_snapshot_document(native, run_id)
+        .map_err(RuntimeClientError::observation_store_error)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +198,8 @@ mod tests {
             output_preview: None,
             input_omitted: false,
             output_omitted: false,
+            child: None,
+            child_agent_id: None,
         };
         let run = serde_json::from_value(serde_json::json!({
             "id": instance.block.run,

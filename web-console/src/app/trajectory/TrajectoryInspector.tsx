@@ -594,6 +594,7 @@ export interface TrajectoryInspectorProps {
   completeHistory: boolean;
   /** Open another loaded record's summary (or a named tab). */
   onOpen: (recordId: string, facet?: TrajectoryFacet) => void;
+  onOpenWorkflowCanvas?: (trigger: HTMLElement | null) => void;
 }
 
 /**
@@ -601,7 +602,7 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
-export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
+export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen, onOpenWorkflowCanvas }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
   const messagesHead=inspection?.content.type==='messages'?inspection.content.page:undefined;
@@ -828,6 +829,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   return <>
     <div className={css.detailsHeader}>
       <div className={css.detailsTitle}>{title}</div>
+      {onOpenWorkflowCanvas && <Button size="sm" onClick={event => onOpenWorkflowCanvas(event.currentTarget)}>{tx('workflows:run-canvas.open')}</Button>}
       <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
     </div>
     <div className={css.detailTabs} role="tablist" aria-label={tx('trajectory:details.event')}>

@@ -13,10 +13,41 @@ import { NodePreview } from './NodePreview';
 import { PredicateView } from './VariableLabel';
 import { BODY_START_SIZE, type SceneNode } from './scene';
 import type { Predicate } from '../../document/model';
+import type { AggregateNodeStatus, NodeRunOverlay } from '../../run-canvas/aggregation';
 import css from './Editor.module.css';
+
+const STATUS_GLYPH: Record<AggregateNodeStatus, string> = {
+  running: '●',
+  waiting: '⏸',
+  draining: '◐',
+  pending: '○',
+  completed: '✓',
+  failed: '✕',
+  timed_out: '⏱',
+  denied: '⊘',
+  cancelled: '⊘',
+  outcome_unknown: '?',
+  incomplete: '◌',
+};
+
+function RunOverlayBadge({ overlay }: { overlay: NodeRunOverlay }) {
+  const tx = useTranslation();
+  const statusLabel = overlay.status === 'waiting' && overlay.waitingReasons.length === 1
+    ? tx('common:activity.waiting-for', { state: tx(`common:state.${overlay.waitingReasons[0]!}`) })
+    : tx(`workflows:run-canvas.status.${overlay.status}`);
+  const visitLabel = tx(overlay.visitCount === 1 ? 'workflows:run-canvas.visit-count.one' : 'workflows:run-canvas.visit-count.other', { p0: String(overlay.visitCount) });
+  return <div className={css.runBadge} data-run-status={overlay.status} data-run-active={overlay.activeCount} data-run-visits={overlay.visitCount}>
+    <span className={css.runGlyph} aria-hidden="true">{STATUS_GLYPH[overlay.status]}</span>
+    <span>{statusLabel}</span>
+    {(overlay.visitCount > 1 || overlay.activeCount > 0) && <span className={css.runCounts}>
+      {overlay.activeCount > 0 ? `${tx('workflows:run-canvas.active-count', { p0: String(overlay.activeCount) })} · ` : ''}{visitLabel}
+    </span>}
+  </div>;
+}
 
 export const CanvasActions = createContext<{
   editable: boolean;
+  hideNodeMenu?: boolean;
   addAfter(id: string, port: ControlPort, anchor: HTMLElement): void;
   insertEdge(id: string, anchor: HTMLElement): void;
   addBefore(id: string, anchor: HTMLElement): void;
@@ -59,7 +90,7 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
   }, [id, node, updateNodeInternals]);
   const container = data.container, branch = node?.type === 'branch' ? branchGeometry(node) : undefined;
   if (data.view === 'note' && data.note) return <NoteNode id={id} note={data.note} selected={selected}
-    resizer={<NodeResizer isVisible={selected} minWidth={240} minHeight={88} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />} />;
+    resizer={<NodeResizer isVisible={actions.editable && selected} minWidth={240} minHeight={88} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />} />;
   const adding = isConnectable && actions.editable, entered = connections.some(connection => connection.target === id);
   // As Dify's LoopStartNode: a body's Start is a small square with a home
   // glyph and its one exit.
@@ -73,8 +104,9 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
   const routes = node?.type === 'agent' ? node.routes ?? [] : node?.type === 'classifier' ? node.classes : [];
   const choices = node?.type === 'review' ? [...node.actions.map(action => action.id), TIMEOUT_PORT] : [];
   const exits = ports.filter(port => port !== 'fail' && !routes.some(route => route.id === port) && !choices.includes(port));
-  const card = <div className={clsx(css.node, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}>
-    {container && <NodeResizer isVisible={selected && data.minSize.width <= 8192 && data.minSize.height <= 8192} minWidth={data.minSize.width} minHeight={data.minSize.height} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />}
+  const card = <div className={clsx(css.node, container && css.containerNode, node?.type === 'branch' && css.branchCard, selected && css.nodeSelected)} title={data.description}
+    data-run-node-status={data.runOverlay?.status} data-run-active-count={data.runOverlay?.activeCount} data-run-visit-count={data.runOverlay?.visitCount}>
+    {container && <NodeResizer isVisible={actions.editable && selected && data.minSize.width <= 8192 && data.minSize.height <= 8192} minWidth={data.minSize.width} minHeight={data.minSize.height} maxWidth={8192} maxHeight={8192} onResizeStart={() => actions.geometryStart()} onResizeEnd={(_, geometry) => actions.resize(id, geometry)} />}
     {/* As Dify's NodeTargetHandle: "+" adds a node ahead of an unconnected input. */}
     {node && <Handle type="target" position={Position.Left} id="in" className={clsx(css.handle, entered && css.handleConnected)} style={{ top: 28 }}>
       {adding && !entered && <button type="button" className={clsx(css.handleAdd, 'nodrag nopan')} aria-label={tx('workflows:canvas.add-before', { p0: data.local })} onClick={event => { event.stopPropagation(); actions.addBefore(id, event.currentTarget); }}><IconPlus size={10} /></button>}
@@ -82,8 +114,9 @@ export const WorkflowNode = memo(function WorkflowNode({ id, data, selected, isC
     <div className={clsx(css.nodeHead, container && css.containerHead)}>
       <span className={clsx(css.nodeIcon, node ? css[`kind_${node.type}`] : css.startIcon)}>{node ? <KindIcon kind={nodeIconKind(node)} size={17} /> : <IconEntry size={17} />}</span>
       <span className={css.nodeText}><span className={css.nodeTitle}>{data.view === 'start' ? data.title || tx(data.path.length ? 'workflows:canvas.nested-start' : 'workflows:canvas.start-title') : data.title}</span></span>
-      <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>
+      {!actions.hideNodeMenu && <button type="button" className={clsx(css.iconButton, css.nodeMenu, 'nodrag nopan')} aria-label={tx('workflows:canvas.node-actions', { p0: data.local || tx('workflows:canvas.start') })} onClick={event => { event.stopPropagation(); data.view === 'start' ? actions.addIn(id, event.currentTarget) : actions.menu(id, event.currentTarget); }}><IconEllipsisOutline16 /></button>}
     </div>
+    {data.runOverlay && data.view !== 'note' && <RunOverlayBadge overlay={data.runOverlay} />}
     {/* As Dify's Loop and Iteration nodes: the body on a canvas of its own,
         and while it holds only its Start, an "Add node" button after it. */}
     {container && <div className={css.containerBody} />}

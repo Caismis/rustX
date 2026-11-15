@@ -113,6 +113,11 @@ fn append(store: &dyn ConversationStore, kind: E, seconds: i64) {
                 )
                 .unwrap();
         }
+        E::WorkflowStarted { workflow_id, .. } => {
+            let snapshot =
+                crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone());
+            store.publish_workflow_start(envelope, &snapshot).unwrap();
+        }
         _ => {
             store.append_event(envelope).unwrap();
         }

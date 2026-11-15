@@ -7,7 +7,10 @@ use base64::Engine as _;
 mod inspection;
 mod workflow;
 pub(crate) use inspection::{canonical_selection, messages_page, messages_selection};
-pub(crate) use workflow::{workflow_page, workflow_selection};
+pub(crate) use workflow::{
+    history_workflow_node, history_workflow_run_snapshot_document,
+    history_workflow_run_snapshot_header, workflow_node, workflow_page, workflow_selection,
+};
 
 pub(crate) fn context_selection(domain: &str) -> Option<u64> {
     domain

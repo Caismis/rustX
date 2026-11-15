@@ -80,7 +80,6 @@ use crate::runtime::identity::McpServerId;
 use crate::runtime::process_runner::{
     ProcessOutcomeIntent, RunnerBackedProcessRunner, SupervisedCommandSpec, SupervisedProcessRunner,
 };
-use crate::skills::environments::{ENVIRONMENT_COMMAND_TIMEOUT, RUNTIME_PROBE_TIMEOUT};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::mcp::{McpServerBinding, McpTransportConfig};
 use crate::tools::types::ToolInvocationPolicy;
@@ -139,12 +138,10 @@ const SOURCE_DIRECTORY: &str = "source";
 const VENV_DIRECTORY: &str = "venv";
 const MANIFEST_FILE: &str = "manifest.json";
 const MANIFEST_FORMAT: &str = "rustx-managed-python-package-v1";
-/// The finite deadline of one runtime identity probe (mirrors the M6
-/// `RUNTIME_PROBE_TIMEOUT`).
-const PYTHON_TOOL_PROBE_TIMEOUT: std::time::Duration = RUNTIME_PROBE_TIMEOUT;
-/// The finite deadline of one uv lock/materialization command (mirrors the
-/// M6 `ENVIRONMENT_COMMAND_TIMEOUT`).
-const PYTHON_TOOL_UV_TIMEOUT: std::time::Duration = ENVIRONMENT_COMMAND_TIMEOUT;
+/// Finite deadline of one managed-Python runtime identity probe.
+const PYTHON_TOOL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(1);
+/// Finite deadline of one managed-Python uv lock or materialization command.
+const PYTHON_TOOL_UV_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(10);
 
 /// A package discovery/preparation failure.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -959,7 +956,7 @@ impl PythonToolStore {
             inner: Arc::new(PythonToolStoreInner {
                 root,
                 pending_cleanup: Mutex::default(),
-                runner: Arc::new(RunnerBackedProcessRunner::default()),
+                runner: Arc::new(RunnerBackedProcessRunner),
                 uv_binary: resolve_executable("uv"),
                 python_binary: resolve_executable("python3"),
                 in_flight: Arc::new(Mutex::new(BTreeMap::new())),

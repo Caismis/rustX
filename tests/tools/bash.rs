@@ -614,7 +614,7 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
 }
 
 #[test]
-fn bash_parent_secrets_are_absent_and_authorized_variables_are_visible() {
+fn bash_inherits_host_values_and_applies_configured_overrides() {
     let test_env = std::env::var("RUSTX_SENTINEL_TEST").is_ok();
     if test_env {
         // Inner run: execute the Bash tool and print its observable stdout.
@@ -632,15 +632,16 @@ fn bash_parent_secrets_are_absent_and_authorized_variables_are_visible() {
         return;
     }
     // Outer run: re-execute this test with a sentinel secret injected into
-    // the child process environment, then prove Bash cannot observe it.
+    // the child process environment, then prove Bash inherits it while
+    // configured entries override the captured host baseline.
     let exe = std::env::current_exe().expect("current exe");
     let output = std::process::Command::new(exe)
         .arg("--exact")
-        .arg("bash::bash_parent_secrets_are_absent_and_authorized_variables_are_visible")
+        .arg("bash::bash_inherits_host_values_and_applies_configured_overrides")
         .arg("--nocapture")
         .env("RUSTX_SENTINEL_TEST", "1")
         .env("RUSTX_SENTINEL_SECRET", "shhh")
-        .env("RUSTX_AUTHORIZED", "visible")
+        .env("RUSTX_AUTHORIZED", "host-value")
         .output()
         .expect("inner test run");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -650,12 +651,8 @@ fn bash_parent_secrets_are_absent_and_authorized_variables_are_visible() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains("absent:visible"),
-        "the sentinel secret must be absent and the authorized variable visible: {stdout}"
-    );
-    assert!(
-        !stdout.contains("OBSERVED=shhh"),
-        "the sentinel secret leaked into the child environment: {stdout}"
+        stdout.contains("shhh:visible"),
+        "host data must be inherited and configured overrides must win: {stdout}"
     );
 }
 
@@ -1670,10 +1667,10 @@ async fn ordinary_environment_cannot_arm_supervisor_term_gate() {
             cancellation.cancel();
             entered.read().await;
         };
-        // The readiness byte also proves the same-named value reached Bash.
+        // The readiness byte also proves the control value was removed before Bash.
         let command = format!(
-            "test \"$RUSTX_TEST_BEFORE_TERM_SOCKET\" = '{}' || exit 7; trap 'printf T > {}; exit 0' TERM; printf R > {}; while :; do :; done",
-            socket.display(), entered_path.display(), ready_path.display()
+            "test -z \"${{RUSTX_TEST_BEFORE_TERM_SOCKET+x}}\" || exit 7; trap 'printf T > {}; exit 0' TERM; printf R > {}; while :; do :; done",
+            entered_path.display(), ready_path.display()
         );
         let (result, ()) = tokio::join!(run_tool_with_cancellation(&fixture, "bash", serde_json::json!({"command": command}), cancellation.clone()), controller);
         assert!(matches!(result.status, ToolExecutionStatus::Cancelled { .. }), "{result:?}");
@@ -1702,7 +1699,7 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
         "RUSTX_TEST_AFTER_ANCHOR_STOP_SOCKET",
         "RUSTX_TEST_FAIL_CONTAINMENT",
         "RUSTX_PHYSICAL_CONTINUATION",
-        "RUSTX_COMMAND_ENVIRONMENT",
+        "RUSTX_COMMAND_ENVIRONMENT_FILE",
     ];
     let mut environment: Vec<_> = keys
         .iter()
@@ -1719,12 +1716,14 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
     ));
     let fixture = native_fixture_with_environment(environment);
     let mut command = String::new();
-    for key in keys {
-        write!(command, "test \"${key}\" = user-visible-value || exit 9; ").unwrap();
+    for key in keys.into_iter().chain([
+        TRACE_ENV,
+        "RUSTX_SUPERVISOR_ANCHOR_PID_FILE",
+        "RUSTX_TEST_BEFORE_TERM_SOCKET",
+    ]) {
+        write!(command, "test -z \"${{{key}+x}}\" || exit 9; ").unwrap();
     }
-    command.push_str(
-        "test \"$RUSTX_TEST_BEFORE_TERM_SOCKET\" = user-visible-value || exit 10; printf isolated",
-    );
+    command.push_str("printf isolated");
     let result = run_tool(&fixture, "bash", serde_json::json!({"command": command})).await;
     assert_eq!(result.status, ToolExecutionStatus::Success, "{result:?}");
     assert_eq!(json_content(&result)["exit_code"], 0);

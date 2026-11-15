@@ -183,6 +183,10 @@ invariant is a real process boundary.
 - `background/text_spill` — real bash background execution through the
   actual `bash-supervisor` binary: oversized output spills and the terminal
   inbound.
+- `skill_launch` — Linux only. Skill discovery of Python and Node metadata
+  records no `posix_spawn` or `exec` attempt. The recorder is an `LD_PRELOAD`
+  library loaded into a fresh copy of this test binary; its negative control
+  awaits `python3 --version` before the observer reads the log.
 - `tool_deadline` — the Issue #204 generic hard deadline bounding a real
   foreground Bash process: the supervisor's process-group kill and reap are
   the physical settlement behind the proven `TimedOut`.

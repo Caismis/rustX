@@ -1,56 +1,69 @@
 //! The explicit tool execution environment.
 //!
-//! Native subprocess tools construct an explicit child environment instead
-//! of inheriting the parent process environment wholesale: only runtime-
-//! approved basics plus entries explicitly authorized through the runtime's
-//! tool environment configuration are visible to child processes. Parent-
-//! process secrets are absent unless explicitly provided to the tool
-//! environment. This is deliberately not a production secrets manager.
+//! Excluded executors — Managed Python, manual terminals, generic
+//! `command/exec`, and MCP — compose [`ToolEnvironment::child_environment`]:
+//! a fixed `PATH` and a workspace `HOME`, plus authorized entries.
+//! [`ToolEnvironment::from_authorized`] rejects `PATH`, `HOME`, `LANG`, and
+//! `LC_ALL` so those callers cannot replace that baseline.
+//!
+//! Native Agent Bash, Workflow Bash, and Subagent Bash do not use that
+//! baseline. They inherit the captured execution host, apply configured
+//! `[environment]` overrides (including those four keys, via
+//! [`ToolEnvironment::from_configured`]), then select the Workspace default
+//! Python. The frozen result is stored on the invocation clone as
+//! [`PreparedCommand`] and is omitted from [`std::fmt::Debug`].
 //!
 //! `ToolEnvironment` configures only the executed tool process. It never configures
 //! supervisor ownership, cancellation, settlement, tracing, fault injection, or
 //! physical authority. Internal-looking names remain ordinary child data; private
 //! supervisor configuration travels through a separate runtime-owned channel.
 //!
-//! # Reserved runtime-owned keys
-//!
-//! The runtime owns the baseline keys (`PATH`, `HOME`, `LANG`, `LC_ALL`)
-//! and the Skill environment overlay keys (`VIRTUAL_ENV`, `NODE_PATH`).
-//! The Git configuration namespace (`GIT_CONFIG_COUNT`, `GIT_CONFIG_KEY_*`,
-//! `GIT_CONFIG_VALUE_*`, `GIT_CONFIG_PARAMETERS`) and Git pager/editor keys
-//! are also runtime-owned so authorized entries cannot bypass or be silently
-//! discarded by the composed Git defaults.
-//! These cannot be supplied as conflicting ordinary authorized entries:
-//! [`ToolEnvironment::from_authorized`] rejects them with
-//! [`ToolEnvironmentError::RuntimeOwnedKey`]. There is no ambiguous
-//! "silently ignore the authorized override" behavior.
-//!
-//! # Skill environment overlay
-//!
-//! The attempt-level effective environment is the base authorized
-//! environment plus the deterministic runtime-owned Skill environment
-//! layer ([`ToolEnvironmentOverlay`]): Python and Node bin prefixes are
-//! inserted before the baseline `PATH`, and `VIRTUAL_ENV` / `NODE_PATH`
-//! are set when the corresponding environment exists. An ecosystem with no
-//! dependencies adds no overlay.
+//! Skills do not contribute to this environment. Discovery, selection, and
+//! catalog publication leave the child environment unchanged.
 
 use std::collections::BTreeMap;
 
-/// The runtime-owned baseline keys: they are composed by
-/// [`ToolEnvironment::child_environment`] and cannot be supplied as
-/// conflicting authorized entries.
-pub const RUNTIME_OWNED_KEYS: [&str; 10] = [
+/// Keys owned by the runtime. Configured native Bash environments may override
+/// `PATH`, `HOME`, `LANG`, and `LC_ALL`; Git execution defaults remain reserved.
+pub const RUNTIME_OWNED_KEYS: [&str; 8] = [
     "PATH",
     "HOME",
     "LANG",
     "LC_ALL",
-    "VIRTUAL_ENV",
-    "NODE_PATH",
     "GIT_CONFIG_PARAMETERS",
     "GIT_CONFIG_COUNT",
     "GIT_PAGER",
     "GIT_EDITOR",
 ];
+
+fn is_runtime_owned_git_key(key: &str) -> bool {
+    matches!(
+        key,
+        "GIT_CONFIG_PARAMETERS" | "GIT_CONFIG_COUNT" | "GIT_PAGER" | "GIT_EDITOR"
+    ) || key.starts_with("GIT_CONFIG_KEY_")
+        || key.starts_with("GIT_CONFIG_VALUE_")
+}
+
+/// A command environment frozen for one native Bash invocation.
+///
+/// Debug output reports only the entry count. Values stay on the invocation
+/// clone and are not written to journals or model context by this type.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum PreparedCommand {
+    /// The exact environment the supervisor will apply.
+    Entries(std::sync::Arc<Vec<(String, String)>>),
+    /// A bounded composition failure; never proceed with an unguarded host PATH.
+    Closed(&'static str),
+}
+
+impl std::fmt::Debug for PreparedCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Entries(entries) => write!(formatter, "Entries({} redacted)", entries.len()),
+            Self::Closed(reason) => write!(formatter, "Closed({reason})"),
+        }
+    }
+}
 
 /// An environment configuration failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -84,76 +97,20 @@ impl core::fmt::Display for ToolEnvironmentError {
 
 impl std::error::Error for ToolEnvironmentError {}
 
-/// The deterministic runtime-owned Skill environment layer.
-///
-/// `path_prefixes` are inserted before the baseline `PATH` in order
-/// (Python bin first, then Node `.bin`); `entries` are appended as
-/// runtime-owned environment entries (`VIRTUAL_ENV`, `NODE_PATH`). An
-/// ecosystem with no dependencies adds nothing.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ToolEnvironmentOverlay {
-    path_prefixes: Vec<String>,
-    entries: Vec<(String, String)>,
-}
-
-impl ToolEnvironmentOverlay {
-    /// The Python environment overlay: `<root>/bin` on `PATH` and
-    /// `VIRTUAL_ENV=<root>`.
-    #[must_use]
-    pub fn python(python_root: &std::path::Path) -> Self {
-        Self {
-            path_prefixes: vec![python_root.join("bin").display().to_string()],
-            entries: vec![("VIRTUAL_ENV".to_owned(), python_root.display().to_string())],
-        }
-    }
-
-    /// The Node environment overlay: `<root>/node_modules/.bin` on `PATH`
-    /// and `NODE_PATH=<root>/node_modules`.
-    #[must_use]
-    pub fn node(node_root: &std::path::Path) -> Self {
-        Self {
-            path_prefixes: vec![
-                node_root
-                    .join("node_modules")
-                    .join(".bin")
-                    .display()
-                    .to_string(),
-            ],
-            entries: vec![(
-                "NODE_PATH".to_owned(),
-                node_root.join("node_modules").display().to_string(),
-            )],
-        }
-    }
-
-    /// Merges two overlays deterministically (Python overlay first when
-    /// both exist).
-    #[must_use]
-    pub fn merge(mut self, other: Self) -> Self {
-        self.path_prefixes.extend(other.path_prefixes);
-        self.entries.extend(other.entries);
-        self
-    }
-
-    /// Whether the overlay contributes anything.
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.path_prefixes.is_empty() && self.entries.is_empty()
-    }
-}
-
 /// The explicit tool execution environment of one conversation runtime.
 ///
-/// The environment is deterministic: entries are stored sorted by key, so a
-/// constructed child environment is reproducible. The Bash executor composes
-/// the runtime-approved basics (`PATH`, `HOME`, `LANG`, `LC_ALL`) plus the
-/// runtime-owned Skill environment overlay plus the explicitly authorized
-/// entries; nothing from the parent process environment is inherited
-/// wholesale.
+/// The environment is deterministic: entries are stored sorted by key.
+/// [`Self::child_environment`] is the excluded-executor baseline.
+/// Native Bash uses [`PreparedCommand`] instead. Skill discovery never adds entries.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolEnvironment {
     authorized: Vec<(String, String)>,
-    overlay: ToolEnvironmentOverlay,
+    /// Set only on a per-invocation clone, never on the shared capability snapshot.
+    prepared: Option<PreparedCommand>,
+    /// Test-only interpreter locations outside the baseline `PATH`.
+    /// Production Skill and capability preparation never populate this.
+    #[cfg(test)]
+    path_prefixes: Vec<String>,
 }
 
 impl ToolEnvironment {
@@ -163,7 +120,9 @@ impl ToolEnvironment {
     pub fn new() -> Self {
         Self {
             authorized: Vec::new(),
-            overlay: ToolEnvironmentOverlay::default(),
+            prepared: None,
+            #[cfg(test)]
+            path_prefixes: Vec::new(),
         }
     }
 
@@ -184,14 +143,35 @@ impl ToolEnvironment {
     pub fn from_authorized(
         entries: impl IntoIterator<Item = (String, String)>,
     ) -> Result<Self, ToolEnvironmentError> {
+        Self::collect(entries, false)
+    }
+
+    /// Configuration entries for native Agent Bash, including `PATH` and `HOME`.
+    ///
+    /// Generic `command/exec` keeps using [`Self::from_authorized`], which
+    /// rejects those keys. [`Self::child_environment`] still installs its own
+    /// baseline first, so excluded executors ignore a configured override.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same key and duplicate errors as [`Self::from_authorized`].
+    pub fn from_configured(
+        entries: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self, ToolEnvironmentError> {
+        Self::collect(entries, true)
+    }
+
+    fn collect(
+        entries: impl IntoIterator<Item = (String, String)>,
+        allow_baseline_keys: bool,
+    ) -> Result<Self, ToolEnvironmentError> {
         let mut sorted: BTreeMap<String, String> = BTreeMap::new();
         for (key, value) in entries {
             if key.is_empty() || key.contains('=') || key.contains('\0') {
                 return Err(ToolEnvironmentError::InvalidKey(key));
             }
-            if RUNTIME_OWNED_KEYS.contains(&key.as_str())
-                || key.starts_with("GIT_CONFIG_KEY_")
-                || key.starts_with("GIT_CONFIG_VALUE_")
+            if is_runtime_owned_git_key(&key)
+                || (!allow_baseline_keys && RUNTIME_OWNED_KEYS.contains(&key.as_str()))
             {
                 return Err(ToolEnvironmentError::RuntimeOwnedKey(key));
             }
@@ -203,8 +183,26 @@ impl ToolEnvironment {
         }
         Ok(Self {
             authorized: sorted.into_iter().collect(),
-            overlay: ToolEnvironmentOverlay::default(),
+            prepared: None,
+            #[cfg(test)]
+            path_prefixes: Vec::new(),
         })
+    }
+
+    /// Attaches a frozen Bash command environment to this invocation clone.
+    #[must_use]
+    pub(crate) fn with_prepared_command(mut self, prepared: PreparedCommand) -> Self {
+        self.prepared = Some(prepared);
+        self
+    }
+
+    pub(crate) fn prepared_command(&self) -> Option<&PreparedCommand> {
+        self.prepared.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn path_prefixes(&self) -> &[String] {
+        &self.path_prefixes
     }
 
     /// The explicitly authorized entries in deterministic sorted order.
@@ -213,49 +211,38 @@ impl ToolEnvironment {
         &self.authorized
     }
 
-    /// The deterministic runtime-owned Skill environment overlay.
+    /// Prepends one executable directory for a crate test whose interpreter
+    /// is installed outside the baseline `PATH`.
+    #[cfg(test)]
     #[must_use]
-    pub fn overlay(&self) -> &ToolEnvironmentOverlay {
-        &self.overlay
-    }
-
-    /// Composes the attempt-level effective environment: this base
-    /// environment plus the deterministic runtime-owned Skill environment
-    /// overlay.
-    #[must_use]
-    pub fn with_overlay(&self, overlay: &ToolEnvironmentOverlay) -> Self {
+    pub fn with_path_prefix(&self, prefix: &std::path::Path) -> Self {
         let mut combined = self.clone();
-        combined
-            .overlay
-            .path_prefixes
-            .extend(overlay.path_prefixes.clone());
-        combined.overlay.entries.extend(overlay.entries.clone());
+        combined.path_prefixes.push(prefix.display().to_string());
         combined
     }
 
     /// The complete deterministic child environment for a workspace-rooted
-    /// subprocess: the runtime-approved basics, the Skill environment
-    /// overlay, and the authorized entries.
+    /// subprocess: the runtime-approved basics and the authorized entries.
     ///
     /// ```text
-    /// PATH=<python>/bin:<node>/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+    /// PATH=/usr/local/bin:/usr/bin:/bin
     /// HOME=<workspace root>
     /// LANG=C.UTF-8
     /// LC_ALL=C.UTF-8
-    /// VIRTUAL_ENV=<python root>          (when a Python overlay exists)
-    /// NODE_PATH=<node root>/node_modules (when a Node overlay exists)
     /// ```
     ///
     /// plus every explicitly authorized entry.
     #[must_use]
     pub fn child_environment(&self, workspace_root: &std::path::Path) -> Vec<(String, String)> {
         let mut path = String::new();
-        for prefix in &self.overlay.path_prefixes {
+        #[cfg(test)]
+        for prefix in &self.path_prefixes {
             if !path.is_empty() {
                 path.push(':');
             }
             path.push_str(prefix);
         }
+        #[cfg(test)]
         if !path.is_empty() {
             path.push(':');
         }
@@ -266,15 +253,11 @@ impl ToolEnvironment {
             ("LANG".to_owned(), String::from("C.UTF-8")),
             ("LC_ALL".to_owned(), String::from("C.UTF-8")),
         ];
-        entries.extend(self.overlay.entries.clone());
         for (key, value) in &self.authorized {
             if !entries.iter().any(|(existing, _)| existing == key) {
                 entries.push((key.clone(), value.clone()));
             }
         }
-        // Keep ordinary Git output intact while controlling the shared child
-        // environment. Git still requires authorization: argv alone cannot
-        // exclude repository-configured helpers.
         apply_git_execution_environment(&mut entries);
         entries
     }
@@ -283,7 +266,7 @@ impl ToolEnvironment {
 /// Deterministic child defaults, not a proof that a Git command is read-only.
 /// In particular, clean filters, textconv, external diff and signing helpers
 /// remain repository-configurable and require normal permission admission.
-fn apply_git_execution_environment(entries: &mut Vec<(String, String)>) {
+pub(crate) fn apply_git_execution_environment(entries: &mut Vec<(String, String)>) {
     const GUARDS: &[(&str, &str)] = &[
         ("GIT_CONFIG_COUNT", "5"),
         ("GIT_CONFIG_KEY_0", "core.useBuiltinFSMonitor"),
@@ -300,15 +283,15 @@ fn apply_git_execution_environment(entries: &mut Vec<(String, String)>) {
         ("GIT_EDITOR", "true"),
         ("GIT_CONFIG_PARAMETERS", ""),
     ];
+    entries.retain(|(key, _)| !is_runtime_owned_git_key(key));
     for (key, value) in GUARDS {
-        entries.retain(|(existing, _)| existing != key);
         entries.push(((*key).to_owned(), (*value).to_owned()));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ToolEnvironment, ToolEnvironmentError, ToolEnvironmentOverlay};
+    use super::{ToolEnvironment, ToolEnvironmentError};
 
     #[test]
     fn empty_environment_composes_only_approved_basics() {
@@ -382,8 +365,8 @@ mod tests {
         );
     }
 
-    /// Runtime-owned baseline/overlay keys cannot be supplied as
-    /// conflicting ordinary authorized entries.
+    /// Runtime-owned baseline keys cannot be supplied as conflicting
+    /// ordinary authorized entries.
     #[test]
     fn runtime_owned_keys_are_rejected_as_authorized_entries() {
         for key in super::RUNTIME_OWNED_KEYS {
@@ -414,49 +397,32 @@ mod tests {
         }
     }
 
-    /// The overlay composes deterministically: Python bin first, then Node
-    /// .bin, then the baseline; `VIRTUAL_ENV` and `NODE_PATH` are set; no
-    /// ecosystem dependencies add no overlay.
     #[test]
-    fn overlay_composes_deterministically() {
-        let base = ToolEnvironment::from_authorized([("MY_VAR".to_owned(), "1".to_owned())])
+    fn configured_git_execution_keys_remain_reserved() {
+        for key in [
+            "GIT_CONFIG_PARAMETERS",
+            "GIT_CONFIG_COUNT",
+            "GIT_PAGER",
+            "GIT_EDITOR",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_KEY_17",
+            "GIT_CONFIG_VALUE_17",
+        ] {
+            assert_eq!(
+                ToolEnvironment::from_configured([(key.to_owned(), "value".to_owned())]),
+                Err(ToolEnvironmentError::RuntimeOwnedKey(key.to_owned()))
+            );
+        }
+    }
+
+    /// Authorized entries are visible, and Skills have no path into `PATH`.
+    #[test]
+    fn authorized_entries_compose_without_a_skill_overlay() {
+        let environment = ToolEnvironment::from_authorized([("MY_VAR".to_owned(), "1".to_owned())])
             .expect("authorized");
-        let python = ToolEnvironmentOverlay::python(std::path::Path::new("/env/python/abc"));
-        let node = ToolEnvironmentOverlay::node(std::path::Path::new("/env/node/def"));
-        let effective = base.with_overlay(&python.merge(node));
-        let entries = effective.child_environment(std::path::Path::new("/ws"));
         assert_eq!(
-            entries,
-            vec![
-                (
-                    "PATH".to_owned(),
-                    "/env/python/abc/bin:/env/node/def/node_modules/.bin:/usr/local/bin:/usr/bin:/bin"
-                        .to_owned()
-                ),
-                ("HOME".to_owned(), "/ws".to_owned()),
-                ("LANG".to_owned(), "C.UTF-8".to_owned()),
-                ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
-                ("VIRTUAL_ENV".to_owned(), "/env/python/abc".to_owned()),
-                ("NODE_PATH".to_owned(), "/env/node/def/node_modules".to_owned()),
-                ("MY_VAR".to_owned(), "1".to_owned()),
-                ("GIT_CONFIG_COUNT".to_owned(), "5".to_owned()),
-                ("GIT_CONFIG_KEY_0".to_owned(), "core.useBuiltinFSMonitor".to_owned()),
-                ("GIT_CONFIG_VALUE_0".to_owned(), "false".to_owned()),
-                ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
-                ("GIT_CONFIG_VALUE_1".to_owned(), "/dev/null".to_owned()),
-                ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
-                ("GIT_CONFIG_VALUE_2".to_owned(), "true".to_owned()),
-                ("GIT_CONFIG_KEY_3".to_owned(), "core.pager".to_owned()),
-                ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
-                ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
-                ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
-                ("GIT_PAGER".to_owned(), "cat".to_owned()),
-                ("GIT_EDITOR".to_owned(), "true".to_owned()),
-                ("GIT_CONFIG_PARAMETERS".to_owned(), String::new()),
-            ]
-        );
-        assert_eq!(
-            base.child_environment(std::path::Path::new("/ws")),
+            environment.child_environment(std::path::Path::new("/ws")),
             vec![
                 ("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned()),
                 ("HOME".to_owned(), "/ws".to_owned()),
@@ -480,26 +446,7 @@ mod tests {
                 ("GIT_PAGER".to_owned(), "cat".to_owned()),
                 ("GIT_EDITOR".to_owned(), "true".to_owned()),
                 ("GIT_CONFIG_PARAMETERS".to_owned(), String::new()),
-            ],
-            "no ecosystem dependencies means no unnecessary overlay"
-        );
-    }
-
-    /// Equivalent capability snapshots construct identical child
-    /// environments.
-    #[test]
-    fn equivalent_overlays_construct_identical_child_environments() {
-        let base = ToolEnvironment::new();
-        let first = base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new(
-            "/e/p",
-        )));
-        let second = base.with_overlay(&ToolEnvironmentOverlay::python(std::path::Path::new(
-            "/e/p",
-        )));
-        assert_eq!(first, second);
-        assert_eq!(
-            first.child_environment(std::path::Path::new("/ws")),
-            second.child_environment(std::path::Path::new("/ws"))
+            ]
         );
     }
 
@@ -552,11 +499,19 @@ mod tests {
         }
 
         fn run(&self, args: &[&str]) -> std::process::Output {
+            self.run_with_environment(args, ToolEnvironment::new().child_environment(&self.repo))
+        }
+
+        fn run_with_environment(
+            &self,
+            args: &[&str],
+            environment: Vec<(String, String)>,
+        ) -> std::process::Output {
             std::process::Command::new("git")
                 .args(args)
                 .current_dir(&self.repo)
                 .env_clear()
-                .envs(ToolEnvironment::new().child_environment(&self.repo))
+                .envs(environment)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
                 .env("GIT_CONFIG_NOSYSTEM", "1")
                 .output()
@@ -568,6 +523,64 @@ mod tests {
                 self.run(&["config", key, &self.helper.display().to_string()])
                     .status
                     .success()
+            );
+        }
+    }
+
+    #[test]
+    fn inherited_git_controls_cannot_replace_native_or_bootstrap_defaults() {
+        let fixture = GitFixture::new();
+        fixture.configure_helper("core.fsmonitor");
+        let helper = fixture.helper.to_str().unwrap();
+        let parameters = format!("'core.fsmonitor={helper}'");
+        let host = crate::tools::execution_environment::host_from_entries(vec![
+            ("PATH", "/usr/local/bin:/usr/bin:/bin"),
+            ("GIT_CONFIG_COUNT", "18"),
+            ("GIT_CONFIG_KEY_0", "core.fsmonitor"),
+            ("GIT_CONFIG_VALUE_0", helper),
+            ("GIT_CONFIG_KEY_17", "core.editor"),
+            ("GIT_CONFIG_VALUE_17", helper),
+            ("GIT_CONFIG_PARAMETERS", &parameters),
+            ("GIT_PAGER", helper),
+            ("GIT_EDITOR", helper),
+        ]);
+        let selection = crate::tools::workspace_python::PythonSelection {
+            path_prefix: Vec::new(),
+            virtual_env: None,
+            diagnostic: String::new(),
+            guard_unavailable: false,
+        };
+        for environment in [
+            crate::tools::execution_environment::bootstrap_environment(&host),
+            crate::tools::execution_environment::compose(
+                &host,
+                &ToolEnvironment::new(),
+                &selection,
+            )
+            .unwrap(),
+        ] {
+            assert!(
+                !environment
+                    .iter()
+                    .any(|(key, _)| key == "GIT_CONFIG_KEY_17" || key == "GIT_CONFIG_VALUE_17")
+            );
+            let config = fixture
+                .run_with_environment(&["config", "--get", "core.fsmonitor"], environment.clone());
+            assert!(
+                config.status.success(),
+                "{}",
+                String::from_utf8_lossy(&config.stderr)
+            );
+            assert_eq!(String::from_utf8_lossy(&config.stdout).trim(), "false");
+            let status = fixture.run_with_environment(&["status", "--porcelain"], environment);
+            assert!(
+                status.status.success(),
+                "{}",
+                String::from_utf8_lossy(&status.stderr)
+            );
+            assert!(
+                !fixture.marker.exists(),
+                "inherited controls must not invoke a helper"
             );
         }
     }
@@ -668,5 +681,45 @@ mod tests {
             );
             std::fs::remove_file(&fixture.marker).unwrap();
         }
+    }
+    #[test]
+    fn configured_baseline_keys_do_not_change_the_excluded_child_baseline() {
+        let environment = ToolEnvironment::from_configured([
+            ("PATH".to_owned(), "/custom/bin".to_owned()),
+            ("HOME".to_owned(), "/users/ada".to_owned()),
+            ("MY_VAR".to_owned(), "1".to_owned()),
+        ])
+        .expect("configured");
+        assert_eq!(
+            environment.child_environment(std::path::Path::new("/ws")),
+            vec![
+                ("PATH".to_owned(), "/usr/local/bin:/usr/bin:/bin".to_owned()),
+                ("HOME".to_owned(), "/ws".to_owned()),
+                ("LANG".to_owned(), "C.UTF-8".to_owned()),
+                ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+                ("MY_VAR".to_owned(), "1".to_owned()),
+                ("GIT_CONFIG_COUNT".to_owned(), "5".to_owned()),
+                (
+                    "GIT_CONFIG_KEY_0".to_owned(),
+                    "core.useBuiltinFSMonitor".to_owned()
+                ),
+                ("GIT_CONFIG_VALUE_0".to_owned(), "false".to_owned()),
+                ("GIT_CONFIG_KEY_1".to_owned(), "diff.orderFile".to_owned()),
+                ("GIT_CONFIG_VALUE_1".to_owned(), "/dev/null".to_owned()),
+                ("GIT_CONFIG_KEY_2".to_owned(), "core.editor".to_owned()),
+                ("GIT_CONFIG_VALUE_2".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_KEY_3".to_owned(), "core.pager".to_owned()),
+                ("GIT_CONFIG_VALUE_3".to_owned(), "cat".to_owned()),
+                ("GIT_CONFIG_KEY_4".to_owned(), "core.fsmonitor".to_owned()),
+                ("GIT_CONFIG_VALUE_4".to_owned(), "false".to_owned()),
+                ("GIT_PAGER".to_owned(), "cat".to_owned()),
+                ("GIT_EDITOR".to_owned(), "true".to_owned()),
+                ("GIT_CONFIG_PARAMETERS".to_owned(), String::new()),
+            ]
+        );
+        let frozen = environment.with_prepared_command(super::PreparedCommand::Entries(
+            std::sync::Arc::new(vec![("SECRET_TOKEN".to_owned(), "super-secret".to_owned())]),
+        ));
+        assert!(!format!("{frozen:?}").contains("super-secret"));
     }
 }

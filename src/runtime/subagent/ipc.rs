@@ -1033,7 +1033,6 @@ mod tests {
                     skill_id: crate::runtime::identity::SkillId::new("skill-repository-navigation"),
                     version_id: crate::runtime::identity::SkillVersionId::new("sha256:skill-v1"),
                 },
-                dependencies: crate::skills::DependencyManifest::default(),
                 catalog_entry: crate::skills::SkillCatalogEntry {
                     name: "repository-navigation".to_owned(),
                     description: "Navigate the repository.".to_owned(),

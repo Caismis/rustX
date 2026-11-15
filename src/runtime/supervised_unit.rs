@@ -47,14 +47,41 @@ use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
 
-/// Opaque command data transported through supervisors, never installed in them.
-pub(crate) const COMMAND_ENVIRONMENT_ENV: &str = "RUSTX_COMMAND_ENVIRONMENT";
+/// Only a private snapshot pathname travels in the supervisor environment.
+/// The native process owner retains this mode-0600 file until settlement;
+/// environment values never become one execve argument/environment string.
+pub(crate) const COMMAND_ENVIRONMENT_FILE_ENV: &str = "RUSTX_COMMAND_ENVIRONMENT_FILE";
 
-/// Decode the explicit environment at the final child spawn boundary only.
+pub(crate) fn snapshot_command_environment(
+    entries: &[(String, String)],
+) -> Result<tempfile::NamedTempFile, String> {
+    let mut file = tempfile::Builder::new()
+        .prefix("rustx-command-environment-")
+        .tempfile()
+        .map_err(|error| format!("cannot create command environment snapshot: {error}"))?;
+    serde_json::to_writer(file.as_file_mut(), entries)
+        .map_err(|error| format!("cannot store command environment snapshot: {error}"))?;
+    Ok(file)
+}
+
+/// Decode at the final child boundary. Supervisors do not install these values
+/// into their own environment or forward the private pathname to the command.
 pub(crate) fn command_environment() -> Result<Vec<(String, String)>, String> {
-    let encoded = std::env::var(COMMAND_ENVIRONMENT_ENV)
-        .map_err(|error| format!("missing command environment: {error}"))?;
-    serde_json::from_str(&encoded).map_err(|error| format!("invalid command environment: {error}"))
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let path = std::env::var_os(COMMAND_ENVIRONMENT_FILE_ENV)
+        .ok_or("missing command environment snapshot")?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| format!("cannot open command environment snapshot: {error}"))?;
+    let meta = file.metadata().map_err(|error| error.to_string())?;
+    if !meta.is_file() || meta.uid() != nix::unistd::geteuid().as_raw() || meta.mode() & 0o077 != 0
+    {
+        return Err("command environment snapshot must be an owner-only regular file".into());
+    }
+    serde_json::from_reader(file)
+        .map_err(|error| format!("invalid command environment snapshot: {error}"))
 }
 
 /// The outer supervisor role name.

@@ -2848,8 +2848,30 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
         snapshots[2].identity.attempt_id
     );
     assert_eq!(
-        snapshots[1].context_generation, snapshots[2].context_generation,
+        snapshots[1].context_generation.id, snapshots[2].context_generation.id,
         "overflow retry keeps the one admitted context generation"
+    );
+    let reminder_owner = crate::runtime::identity::ContextContributorIdentity::Native(
+        crate::runtime::identity::NativeContextContributor::PermissionReminder,
+    );
+    let mut expected_contributors = snapshots[1].context_generation.contributors.clone();
+    expected_contributors.push(crate::context::ContributorGeneration {
+        identity: reminder_owner.clone(),
+        attestation: None,
+    });
+    expected_contributors.sort_by(|left, right| left.identity.cmp(&right.identity));
+    assert_eq!(
+        snapshots[2].context_generation.contributors, expected_contributors,
+        "compaction adds only its native reminder to the frozen contributors"
+    );
+    assert_eq!(
+        snapshots[2]
+            .system_sections
+            .iter()
+            .filter(|section| section.contributor == reminder_owner)
+            .count(),
+        1,
+        "the retried request contains exactly one activated permission reminder"
     );
     assert_ne!(
         snapshots[1].history_cut.activation, snapshots[2].history_cut.activation,

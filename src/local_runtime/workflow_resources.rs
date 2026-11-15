@@ -85,8 +85,11 @@ pub(crate) fn load(
             &path,
             MAX_WORKFLOW_FILE_BYTES as u64,
         )
-        .and_then(|bytes| parse_source(&id, &path, &bytes))
-        .and_then(|document| {
+        .and_then(|bytes| {
+            let source_revision = super::settings::revision(Some(&bytes));
+            parse_source(&id, &path, &bytes).map(|document| (source_revision, document))
+        })
+        .and_then(|(source_revision, document)| {
             let warnings: Vec<_> = document
                 .presentation_diagnostics()
                 .into_iter()
@@ -103,7 +106,7 @@ pub(crate) fn load(
             if !warnings.is_empty() {
                 presentation.insert(id.clone(), warnings);
             }
-            compile_definition(&id, &path, document.definition)
+            compile_document(&id, &path, source_revision, document)
         });
         match result {
             Ok(program) => programs.push(program),
@@ -182,12 +185,36 @@ pub(super) fn parse_source(
 
 /// Compile one parsed definition under its filename identity, with the
 /// discovery diagnostic contract.
+#[allow(dead_code)] // retained for direct definition compilation callers
 pub(super) fn compile_definition(
     id: &WorkflowId,
     path: &Path,
     definition: WorkflowDefinition,
 ) -> Result<WorkflowProgram, RuntimeResourceLoadError> {
-    WorkflowProgram::compile(id.clone(), definition).map_err(|error| {
+    map_compile_error(id, path, WorkflowProgram::compile(id.clone(), definition))
+}
+
+/// Compile one parsed document under its filename identity, retaining its
+/// exact source revision and same-revision presentation snapshot.
+pub(super) fn compile_document(
+    id: &WorkflowId,
+    path: &Path,
+    source_revision: String,
+    document: WorkflowFileDocument,
+) -> Result<WorkflowProgram, RuntimeResourceLoadError> {
+    map_compile_error(
+        id,
+        path,
+        WorkflowProgram::compile_document(id.clone(), source_revision, document),
+    )
+}
+
+fn map_compile_error(
+    id: &WorkflowId,
+    path: &Path,
+    result: Result<WorkflowProgram, WorkflowCompileError>,
+) -> Result<WorkflowProgram, RuntimeResourceLoadError> {
+    result.map_err(|error| {
         let mut failure = RuntimeResourceLoadError::new(format!(
             "cannot compile discovered workflow {id} at {}: {error}",
             path.display()
@@ -433,5 +460,140 @@ mod large_source_tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn issue552_load_captures_exact_source_revision_and_presentation_distinct_from_program_digest()
+    {
+        let dir = tempfile::TempDir::new().unwrap();
+        // The workspace argument is canonical authority; model the production
+        // binding point instead of passing an aliased temporary root (e.g. /var -> /private/var on macOS).
+        let root = dir.path().canonicalize().unwrap();
+        let workspace = root.join("workspace");
+        let user_root = root.join("user");
+        let wf_dir = workspace.join(".agents/workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::create_dir_all(&user_root).unwrap();
+
+        let wf_path = wf_dir.join("sample.yaml");
+        let rev1_yaml = r"description: Layout test
+block:
+  input:
+    type: object
+    properties: {}
+    additionalProperties: false
+  nodes:
+    start:
+      type: start
+    done:
+      type: return
+      outputs: []
+  edges:
+    - from: start
+      to: done
+editor:
+  nodes:
+    - address: { block: [], node: start }
+      position: { x: 10.0, y: 20.0 }
+      title: Rev 1 Start
+";
+        std::fs::write(&wf_path, rev1_yaml).unwrap();
+        let cat1 = load(Some(&workspace), &user_root).unwrap();
+        let wf_id = WorkflowId::parse("sample").unwrap();
+        assert!(
+            cat1.discovery_diagnostics.is_empty() && cat1.invalid().is_empty(),
+            "diagnostics={:?} invalid={:?}",
+            cat1.discovery_diagnostics,
+            cat1.invalid()
+        );
+        let prog1 = cat1.get(&wf_id).expect("sample workflow admitted");
+        let snap1 = prog1.run_snapshot();
+        assert_eq!(
+            snap1.source_revision,
+            crate::local_runtime::settings::revision(Some(rev1_yaml.as_bytes()))
+        );
+        assert!(snap1.has_source_presentation);
+
+        // Layout-only edit moves the start node and changes editor title, keeping executable semantics identical.
+        let rev2_yaml = r"description: Layout test
+block:
+  input:
+    type: object
+    properties: {}
+    additionalProperties: false
+  nodes:
+    start:
+      type: start
+    done:
+      type: return
+      outputs: []
+  edges:
+    - from: start
+      to: done
+editor:
+  nodes:
+    - address: { block: [], node: start }
+      position: { x: 420.0, y: 180.0 }
+      title: Rev 2 Moved
+";
+        std::fs::write(&wf_path, rev2_yaml).unwrap();
+        let cat2 = load(Some(&workspace), &user_root).unwrap();
+        assert!(
+            cat2.discovery_diagnostics.is_empty() && cat2.invalid().is_empty(),
+            "diagnostics={:?} invalid={:?}",
+            cat2.discovery_diagnostics,
+            cat2.invalid()
+        );
+        let prog2 = cat2.get(&wf_id).expect("sample workflow reloaded");
+        let snap2 = prog2.run_snapshot();
+
+        assert_eq!(snap1.program_digest, snap2.program_digest);
+        assert_eq!(prog1.tool_identity(), prog2.tool_identity());
+        assert_ne!(snap1.source_revision, snap2.source_revision);
+        assert_ne!(snap1.document, snap2.document);
+        assert_eq!(
+            snap1
+                .document
+                .editor
+                .as_ref()
+                .and_then(|e| e.nodes.first())
+                .and_then(|n| n.title.as_deref()),
+            Some("Rev 1 Start")
+        );
+        assert_eq!(
+            snap2
+                .document
+                .editor
+                .as_ref()
+                .and_then(|e| e.nodes.first())
+                .and_then(|n| n.title.as_deref()),
+            Some("Rev 2 Moved")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn issue552_uncanonicalized_alias_boundary_produces_outside_workspace_diagnostic() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let workspace = root.join("workspace");
+        let user_root = root.join("user");
+        std::fs::create_dir_all(workspace.join(".agents/workflows")).unwrap();
+        std::fs::create_dir_all(&user_root).unwrap();
+        std::fs::write(workspace.join(".agents/workflows/sample.yaml"), MINIMAL).unwrap();
+        let alias = root.join("alias");
+        std::os::unix::fs::symlink(&workspace, &alias).unwrap();
+
+        let rejected = load(Some(&alias), &user_root).unwrap();
+        let wf_id = WorkflowId::parse("sample").unwrap();
+        assert!(rejected.get(&wf_id).is_none());
+        assert!(
+            rejected
+                .discovery_diagnostics
+                .iter()
+                .any(|diag| diag.to_string().contains("outside workspace boundary")),
+            "{:?}",
+            rejected.discovery_diagnostics
+        );
     }
 }

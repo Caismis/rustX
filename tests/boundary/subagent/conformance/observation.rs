@@ -363,19 +363,19 @@ async fn closing_inspection_case(settle: bool, following: bool, trace_detail: bo
 async fn live_inspection_close_after_settlement_requires_retained_source_for_initial_and_following_reads()
  {
     for following in [false, true] {
-        closing_inspection_case(true, following, false).await;
+        Box::pin(closing_inspection_case(true, following, false)).await;
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn trace_detail_read_started_live_recovers_the_same_child_after_settlement() {
-    closing_inspection_case(true, false, true).await;
+    Box::pin(closing_inspection_case(true, false, true)).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn live_inspection_close_while_active_does_not_invent_retained_source_or_execution_outcome() {
     for following in [false, true] {
-        closing_inspection_case(false, following, false).await;
+        Box::pin(closing_inspection_case(false, following, false)).await;
     }
 }
 

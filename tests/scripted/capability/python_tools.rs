@@ -221,29 +221,26 @@ fn fixture_with_selection(
         std::fs::write(package_root.join("server.py"), server).expect("server source");
         std::fs::write(package_root.join("requirements.txt"), "# none\n").expect("requirements");
     }
-    let coordinator = CapabilityCoordinator::with_backend(
-        CapabilityCoordinatorConfig {
-            source_demand: common::source_demand(
-                &workspace_root,
-                selected
-                    .iter()
-                    .map(|name| format!("python:{name}"))
-                    .chain(mcp_servers.keys().map(ToString::to_string)),
-            ),
-            conversation_id: ConversationId::new("conv_55cd2a0a-89f8-7b8f-8367-c51bc097c9a6"),
-            workspace: Workspace::new(&workspace_root).expect("workspace"),
-            base_tool_registry: Arc::new(ToolRegistry::new()),
-            extension_tools: rustx::extensions::ExtensionToolPlane::none(),
-            agent_activation: rustx::capabilities::AgentActivation::default(),
-            skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
-                workspace_root.join(".agents/skills"),
-            ),
-            mcp_servers,
-            base_environment: ToolEnvironment::new(),
-            environment_store_root: dir.path().join("skill-env"),
-        },
-        Arc::new(common::FakeSkillEnvironmentBackend::new()),
-    )
+    let coordinator = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+        source_demand: common::source_demand(
+            &workspace_root,
+            selected
+                .iter()
+                .map(|name| format!("python:{name}"))
+                .chain(mcp_servers.keys().map(ToString::to_string)),
+        ),
+        conversation_id: ConversationId::new("conv_55cd2a0a-89f8-7b8f-8367-c51bc097c9a6"),
+        workspace: Workspace::new(&workspace_root).expect("workspace"),
+        base_tool_registry: Arc::new(ToolRegistry::new()),
+        extension_tools: rustx::extensions::ExtensionToolPlane::none(),
+        agent_activation: rustx::capabilities::AgentActivation::default(),
+        skill_discovery: rustx::skills::SkillDiscoveryConfig::workspace_root(
+            workspace_root.join(".agents/skills"),
+        ),
+        mcp_servers,
+        base_environment: ToolEnvironment::new(),
+        environment_store_root: dir.path().join("skill-env"),
+    })
     .expect("coordinator");
     // The coordinator canonicalizes the environment store root while
     // establishing it; the managed-package store must be installed at that

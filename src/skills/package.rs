@@ -17,7 +17,7 @@
 //! # Resource boundary
 //!
 //! Skill packages remain current filesystem resources. Discovery freezes
-//! identities, versions, catalog metadata, and dependency declarations at
+//! identities, versions, and catalog metadata at
 //! candidate-generation time. Package *bodies* are read at use time through
 //! ordinary tool semantics — discovery never loads a `SKILL.md` body into
 //! model context. Only definition edits publish a later generation at the
@@ -27,10 +27,6 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::runtime::identity::{SkillId, SkillVersionId};
-use crate::skills::dependencies::{
-    DependencyError, DependencyManifest, NODE_DEPENDENCIES_METADATA_KEY,
-    PYTHON_DEPENDENCIES_METADATA_KEY, parse_node_dependencies, parse_python_dependencies,
-};
 use crate::skills::diagnostics::{ShadowedSkill, SkillDiagnostic, SkillProvenance};
 use crate::skills::identity::definition_version_id;
 use crate::skills::source::{AutomaticSkillRoot, SkillSource};
@@ -107,8 +103,9 @@ impl std::error::Error for SkillPackageError {}
 /// One discovered and validated Skill package.
 ///
 /// The package is immutable after discovery: its `SkillVersionId` is
-/// derived only from its normalized frontmatter definition, and its dependency
-/// declarations are already parsed and normalized. The advertised location is
+/// derived only from its normalized frontmatter definition. Generic metadata
+/// is preserved verbatim and never interpreted as an executable dependency.
+/// The advertised location is
 /// the absolute path under its collection, retaining links within the collection
 /// so the model finds resources beside the offered instruction file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +113,6 @@ pub struct SkillPackage {
     id: SkillId,
     version_id: SkillVersionId,
     definition: Frontmatter,
-    dependencies: DependencyManifest,
     location: String,
     instruction_source: PathBuf,
     source: SkillSource,
@@ -157,8 +153,11 @@ impl SkillPackage {
         &self.definition.description
     }
 
-    /// The preserved standard `metadata` map (including the rustX
-    /// dependency declaration keys).
+    /// The preserved standard `metadata` map.
+    ///
+    /// Values such as `rustx.python-dependencies` and
+    /// `rustx.node-dependencies` stay uninterpreted metadata. They do not
+    /// select packages, grant permissions, or change the tool environment.
     #[must_use]
     pub fn metadata(&self) -> &BTreeMap<String, serde_json::Value> {
         &self.definition.metadata
@@ -181,12 +180,6 @@ impl SkillPackage {
     #[must_use]
     pub fn allowed_tools(&self) -> Option<&str> {
         self.definition.allowed_tools.as_deref()
-    }
-
-    /// The parsed and normalized rustX dependency declarations.
-    #[must_use]
-    pub fn dependencies(&self) -> &DependencyManifest {
-        &self.dependencies
     }
 
     /// The model-visible host path of this package's `SKILL.md`.
@@ -582,39 +575,12 @@ fn discover_package(
         ));
     }
 
-    // Dependency keys are a rustX extension. Invalid declarations never hide a
-    // skill or prevent the other ecosystem's valid declaration from being used.
-    let mut dependencies = DependencyManifest::default();
-    for (key, parse, pins) in [
-        (
-            PYTHON_DEPENDENCIES_METADATA_KEY,
-            parse_python_dependencies as fn(&str) -> Result<_, DependencyError>,
-            &mut dependencies.python,
-        ),
-        (
-            NODE_DEPENDENCIES_METADATA_KEY,
-            parse_node_dependencies as fn(&str) -> Result<_, DependencyError>,
-            &mut dependencies.node,
-        ),
-    ] {
-        if let Some(value) = frontmatter.metadata.get_mut(key) {
-            if let Some(declared) = value.as_str().and_then(|value| parse(value).ok()) {
-                *value = serde_json::Value::String(
-                    serde_json::to_string(&declared).expect("normalized dependency pins serialize"),
-                );
-                *pins = declared;
-            } else {
-                warnings.push(format!("invalid {key} declaration was ignored"));
-            }
-        }
-    }
     let version_id = definition_version_id(&frontmatter);
     Ok((
         SkillPackage {
             id: SkillId::new(frontmatter.name.clone()),
             version_id,
             definition: frontmatter,
-            dependencies,
             location,
             instruction_source: canonical.to_path_buf(),
             source,

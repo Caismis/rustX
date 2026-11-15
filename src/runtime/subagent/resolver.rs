@@ -138,8 +138,6 @@ pub struct ResolvedSubagentSkill {
     pub provenance: crate::skills::SkillProvenance,
     /// Normalized frontmatter definition version, independent of resource bytes.
     pub binding: SkillBinding,
-    /// Normalized dependency declarations of this frozen definition.
-    pub dependencies: crate::skills::DependencyManifest,
     /// Frozen model-visible metadata, including the actual SKILL.md location.
     pub catalog_entry: SkillCatalogEntry,
 }
@@ -1069,8 +1067,7 @@ fn freeze_tool(
 ///
 /// - the immutable `SkillId` + `SkillVersionId` binding of the exact package
 ///   this generation admitted, independent of runtime resource edits;
-/// - model-visible catalog metadata and effective source/location;
-/// - normalized declared dependencies for selected environment preparation.
+/// - model-visible catalog metadata and effective source/location.
 ///
 /// A `SKILL.md` body and its supporting resources are deliberately absent:
 /// rustX progressive disclosure is preserved, so a selected Skill's content
@@ -1115,7 +1112,6 @@ fn resolve_skills(
                 skill_id: package.id().clone(),
                 version_id: package.version_id().clone(),
             },
-            dependencies: package.dependencies().clone(),
             catalog_entry: catalog_entry.clone(),
         });
     }
@@ -1339,14 +1335,8 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
             // Effective source is execution binding; shadow diagnostics are inert.
             provenance,
             binding,
-            dependencies,
             catalog_entry,
         } = skill;
-        field(
-            &mut hasher,
-            "skill.dependencies",
-            &serde_json::to_string(dependencies).expect("frozen dependencies serialize"),
-        );
         field(&mut hasher, "skill.id", binding.skill_id.as_str());
         field(&mut hasher, "skill.version_id", binding.version_id.as_str());
         let crate::skills::SkillCatalogEntry {
@@ -3161,7 +3151,6 @@ mod tests {
                     skill_id: SkillId::new("code-review"),
                     version_id: SkillVersionId::new("sha256:abc"),
                 },
-                dependencies: crate::skills::DependencyManifest::default(),
                 catalog_entry: crate::skills::SkillCatalogEntry {
                     name: "code-review".to_owned(),
                     description: description.to_owned(),
@@ -3190,13 +3179,6 @@ mod tests {
         let mut renamed = base.clone();
         renamed.skills[0].catalog_entry.name = "review".to_owned();
         assert_ne!(base.profile_digest(), renamed.profile_digest());
-
-        let mut dependencies = base.clone();
-        dependencies.skills[0]
-            .dependencies
-            .python
-            .insert("example".into(), "1.0".into());
-        assert_ne!(base.profile_digest(), dependencies.profile_digest());
 
         let mut reversioned = base.clone();
         reversioned.skills[0].binding.version_id = SkillVersionId::new("sha256:def");

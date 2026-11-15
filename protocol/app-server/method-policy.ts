@@ -88,6 +88,8 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'agent/statistics': { effect: 'read' },
   'session/trace': { effect: 'read' },
   'session/traceLocateTool': { effect: 'read' },
+  'session/traceLocateWorkflow': { effect: 'read' },
+  'agent/traceLocateWorkflow': { effect: 'read' },
   // Inspection detail is a pure historical read: it advances no cursor,
   // consumes no pending work, and settles nothing, so a lost response is
   // safely retryable.
@@ -202,6 +204,12 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'conversation/contentRead': { effect: 'read' },
   'conversation/checkpointPage': { effect: 'read' },
   'conversation/checkpointValueRead': { effect: 'read' },
+  'conversation/workflowRunSnapshotHeader': { effect: 'read' },
+  'conversation/workflowRunSnapshotChunk': { effect: 'read' },
+  'conversation/workflowTraceNode': { effect: 'read' },
+  'session/workflowRunSnapshotHeader': { effect: 'read' },
+  'session/workflowRunSnapshotChunk': { effect: 'read' },
+  'session/workflowTraceNode': { effect: 'read' },
   'session/subscribe': { effect: 'connection_local' },
   'turn/start': { effect: 'side_effecting' },
   'turn/steer': { effect: 'side_effecting' },

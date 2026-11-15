@@ -1877,6 +1877,10 @@ mod coalesced_gate_tests {
         let server_marker = fixture.path().join("server-started");
         let socket = unique_socket("owner-attached");
         let listener = UnixListener::bind(&socket).expect("bind the rustX control socket");
+        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
+            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
+        )
+        .expect("environment snapshot");
         let mut outer = Command::new(interactive_supervisor_binary())
             .arg("outer")
             .arg("/bin/sh")
@@ -1888,8 +1892,8 @@ mod coalesced_gate_tests {
             .current_dir(fixture.path())
             .env_clear()
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-                r#"[["PATH","/usr/local/bin:/usr/bin:/bin"]]"#,
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                environment_snapshot.path(),
             )
             .env(RUSTX_CONTROL_ENV, &socket)
             .stdin(Stdio::null())
@@ -1949,6 +1953,10 @@ mod coalesced_gate_tests {
         let fixture = tempfile::tempdir().expect("fixture dir");
         let socket = unique_socket("start-gate");
         let listener = UnixListener::bind(&socket).expect("bind the inner control socket");
+        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
+            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
+        )
+        .expect("environment snapshot");
         let mut inner = Command::new(interactive_supervisor_binary())
             .arg("inner")
             .arg("/bin/sh")
@@ -1957,8 +1965,8 @@ mod coalesced_gate_tests {
             .current_dir(fixture.path())
             .env_clear()
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-                r#"[["PATH","/usr/local/bin:/usr/bin:/bin"]]"#,
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                environment_snapshot.path(),
             )
             .env(INNER_CONTROL_ENV, &socket)
             .stdin(Stdio::null())

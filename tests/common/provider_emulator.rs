@@ -344,6 +344,16 @@ impl ProviderEmulator {
             self.diagnostics()
         );
     }
+
+    /// Terminates and reaps an interrupted provider process without asserting
+    /// scenario completion, used when a crash test `SIGKILL`s the runtime
+    /// mid-scenario.
+    pub async fn abort(mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        }
+    }
 }
 
 impl Drop for ProviderEmulator {

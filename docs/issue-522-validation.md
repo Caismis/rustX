@@ -6,11 +6,11 @@ tuning with a model-derived policy and one sequential Summary pipeline. The
 background operation lifecycle and final Web/TUI presentation are separate
 changes.
 
-## Main integration state (2026-11-13)
+## Integrated contract (2026-11-15)
 
-PR #531 integrates `origin/main` at `e1d4b52d0` from prior PR head
-`30382ad8c`. The integrated contract is App Server v79, Runtime Client v86,
-Child IPC v40, SQLite schema 88, Runtime authoring schema 13 and Runtime
+PR #531 integrates `origin/main` at `33234e5b1`. The integrated contract is
+App Server v79, Runtime Client v86,
+Child IPC v40, SQLite schema 89, Runtime authoring schema 13 and Runtime
 Manifest v7. The model catalog remains schema 2 and Session catalog schema 21.
 The integration retains shared writable Thread clients, instance bearer/JWT
 authentication, Provider-owned protocol, Agent resources and Skills, automatic
@@ -21,7 +21,37 @@ compaction honors the frozen Auxiliary output limit, removes authored context
 tuning, and keeps accepted chunk progress and distinct cancelled/skipped Trace
 terminals.
 
-Integration-baseline local verification establishes the following results:
+### Current integration verification (2026-11-15)
+
+The integrated tree retains main's instruction-only Skills, Workspace Python
+execution environment and immutable Workflow Run Canvas snapshots. SQLite schema
+89 distinguishes this combined layout from both earlier schema-88 layouts. The
+current v79 protocol pair is regenerated from Rust, and all new Workflow readers
+use that same pair. Configuration changes compare the complete execution-policy
+tuple after removal of authored Context settings.
+
+The Linux overflow-snapshot assertion now preserves the accepted generation ID
+and every original contributor while requiring exactly one rearmed native
+permission-reminder contributor and section. Historical requests still reconstruct
+from their own frozen snapshots.
+
+The command-admission test helper no longer takes the registry mutex from a
+watch predicate. A deterministic blocked-revision-writer regression failed on
+the previous helper and passes after the fix. This removes the registry/watch
+lock inversion in the macOS command boundary's admission barrier. The original
+stdin/termination/disconnect/process-tree scenario also passes on Linux.
+
+Current local checks pass 374 relevant all-feature Rust library tests, all-target
+all-feature strict Clippy, formatting, regenerated-protocol typechecks, Web and
+TUI typechecks, 217 focused Web tests, production Web build, source/artifact
+provenance and dependency notices, 59 provider-emulator tests, and 66 CI-script
+tests. The two real TUI Agent-interruption carriers pass an initial run and ten
+additional repetitions each, without retries or skips. These focused and
+repeated results do not establish a completed remote FULL CI run.
+
+### Earlier integration baseline (2026-11-13)
+
+The following results predate the current main integration:
 
 - Library coverage comprises 5,527 distinct passing cases and 22 ignored cases.
   The initial full discovery ran 5,512 passing cases and exposed 15 fixture

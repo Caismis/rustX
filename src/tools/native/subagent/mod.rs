@@ -645,8 +645,6 @@ chat_reasoning_replay = "omit"
             Arc::new(registry),
             Arc::new(available),
             Arc::new(SkillSnapshot::new(Vec::new())),
-            None,
-            None,
             ToolEnvironment::new(),
             Arc::new(McpRuntimeLeaseAuthority::empty()),
             Arc::new(std::collections::BTreeMap::new()),

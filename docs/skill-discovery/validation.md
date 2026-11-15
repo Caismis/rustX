@@ -25,10 +25,10 @@ no new discovery roots, dependency packages or configuration modes were added.
 - `session_runtime_manager/source_watch.rs`: nonrecursive collection/candidate
   watches, exact entry filtering, bounded invalidation and recovery.
 - `configuration/{capture,prospective}.rs`, composition and capability coordinator:
-  selected definition comparison and selected-only dependency preparation.
+  selected definition comparison. Skills do not prepare dependencies.
 - `runtime/subagent/{resolver,ipc}.rs` and `composition/subagent_child.rs`: frozen
-  catalog/dependencies/source binding, direct host locations and supervised
-  preparation; IPC v38 and execution profile digest v8.
+  catalog and source binding, direct host locations; IPC v39 and execution
+  profile digest v9. No dependency manifest is transported.
 - `runtime/configuration_commit.rs`: selected definition versions, normalized
   metadata, actual locations and provenance in precise configuration differences.
 
@@ -42,34 +42,33 @@ copy helper were deleted. There is no legacy full-package mode or migration.
 | --- | --- | --- |
 | Discovery | Direct candidates → frontmatter → normalized definition hash; no recursive package walker exists. | Actual anchored file-open/read hooks allow only SKILL.md; 10 GiB assets, a 4 GiB body and 4,200 nested files do not add asset opens or directory enumeration. |
 | Revision/rescan | The Skill entry dispatches to the same discovery parser before generic traversal; overflow evidence uses the same owner. | Revision tests assert zero package directory listings and only the two prefix opens. Body/assets/formatting retain equality; semantic frontmatter changes do not. |
-| Configuration preparation | Captured immutable definitions flow by value; dependency merging consumes selected manifests. | Unselected conflicting dependencies do not prepare environments; leases/gates prove old Attempt snapshots and stale-successor rejection; Journal tests distinguish body edits and definition changes. |
+| Configuration preparation | Captured immutable definitions flow by value. Preparation publishes the discovered catalog and does not parse, merge, or install metadata. | Conflicting dependency text does not prepare environments or block publication; leases/gates prove old Attempt snapshots and stale-successor rejection; Journal tests distinguish body edits and definition changes. |
 | Child initialization | Frozen metadata and original paths install directly; no resource list, copy or full-content verifier remains. | Frozen composition tests survive new ambient Skills and rewritten frontmatter. A real child with a 2 GiB sparse asset is held at the provider gate while its private runtime tree is checked for absent Skill copies, then settles normally. |
 
 ## 4. SkillVersionId
 
 `sha256:<64 lowercase hex>` hashes `rustx-skill-definition-v1\n` plus stable JSON
 of the normalized validated frontmatter. All recognized standard fields and
-metadata participate. Python/Node dependency metadata is normalized through the
-existing parser and sorted canonical pins. YAML key order, comments and unrelated
+metadata participate. Generic metadata values, including
+`rustx.python-dependencies` and `rustx.node-dependencies`, are hashed as literal
+text. Pin spelling is not canonicalized. YAML key order, comments and unrelated
 formatting do not change the version. Paths, provenance, bodies, scripts, assets,
 file sizes and timestamps do not participate. Effective source/location bindings
 are compared separately, including bindings exposed through Named Agents.
 
 ## 5. Child execution and runtime resources
 
-The parent freezes selected identities, versions, catalog metadata, dependency
-manifests and effective sources/locations. The child does not rediscover Skills or
-expand its catalog from ambient filesystem changes. It uses ordinary authorized
-Read/Bash operations on the actual host paths, observing the bytes present when
-the Tool runs. A missing file fails that Tool operation; it does not invalidate a
-frozen definition or force an eager child scan.
+The parent freezes selected identities, versions, catalog metadata and effective
+sources/locations. The child does not rediscover Skills or expand its catalog
+from ambient filesystem changes. It uses ordinary authorized Read/Bash operations
+on the actual host paths, observing the bytes present when the Tool runs. A
+missing file fails that Tool operation; it does not invalidate a frozen
+definition or force an eager child scan.
 
-Selected declared dependencies use the existing supervised EnvironmentStore under
-the stable product/Conversation identity, including child resumption. The child
-preparation owner supplies cancellation to the environment backend. Cancellation
-or parent loss awaits physical process settlement before preparation can finish.
-The ordinary coordinator's shared environment-build ownership remains independent
-of an individual waiting candidate.
+Skill preparation installs no interpreter and changes no `PATH`. Managed Python
+keeps its own store under `<environment store>/python-tools`, disjoint from the
+Workspace. Cancellation or parent loss still awaits physical process settlement
+for the supervised units that remain, including Managed Python and MCP stdio.
 
 ## 6. Validation
 

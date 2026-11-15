@@ -92,6 +92,7 @@ export class TraceReads {
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.port.request({method:'conversation/checkpointValueRead',params:{target,agent_id:null,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
       content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Trace content source changed.');return this.port.readContent(target,undefined,reference,offset,()=>current()&&owns());},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.port.request({method:'conversation/checkpointPage',params:{target,agent_id:null,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns());valid(cut,owns);return result.page;},
+      workflowNode:async(cut,instance,owns)=>{valid(cut,owns);const result=await this.port.request({method:'conversation/workflowTraceNode',params:{target,agent_id:null,cut,instance}},'workflow_trace_node',undefined,()=>current()&&owns());valid(cut,owns);return result.node??null;},
     };
     this.traceFieldScopes.set(reader,{generation:this.port.state().generation,target});
     return reader;
@@ -104,6 +105,7 @@ export class TraceReads {
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.port.request({method:'session/traceValueRead',params:{session_id:id,node_id:node,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
       content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==conversation)throw new Error('Historical Trace content source changed.');return (await this.port.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut,content_ref:reference,offset,max_bytes:65536}},'content_chunk',undefined,()=>current()&&owns())).chunk;},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);return (await this.port.request({method:'session/tracePage',params:{session_id:id,node_id:node,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns())).page;},
+      workflowNode:async(cut,instance,owns)=>{valid(cut,owns);const result=await this.port.request({method:'session/workflowTraceNode',params:{session_id:id,node_id:node,cut,instance}},'workflow_trace_node',undefined,()=>current()&&owns());valid(cut,owns);return result.node??null;},
     };
   }
   private traceAuthorities = new Map<string, number>();
