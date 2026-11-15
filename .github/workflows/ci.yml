@@ -146,8 +146,16 @@ jobs:
       - name: Test native test preparation and artifact staging
         run: python3 -m unittest discover -s test-support -p 'test_*.py' -v
 
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Run Clippy (default features)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run Clippy (all features)
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Check rustdoc warnings
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps --all-features --locked
 
   # FAST Rust feedback for a pull request push that touches Rust: one
   # compilation of the library test harness and the `process` target (which
@@ -196,7 +204,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Compile the FAST harnesses and stage the real executables
-        run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --test process
+        run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --test process
 
       # Every unit and deterministic contract module except the in-crate
       # boundary suites (rust-boundaries), the capacity suite, and four heavy
@@ -204,29 +212,29 @@ jobs:
       - name: Run the FAST unit and contract core
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features -- --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
+        run: 'cargo test --lib --all-features --locked -- --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
 
       - name: Run the SQLite store contracts (durable changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:durable']
-        run: 'cargo test --lib --all-features -- durable::sqlite:: --skip ::scale::'
+        run: 'cargo test --lib --all-features --locked -- durable::sqlite:: --skip ::scale::'
 
       - name: Run the App Server and Session contracts (App Server or local runtime changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:app-server']
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
+        run: 'cargo test --lib --all-features --locked -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
 
       - name: Run the runtime client response contracts (runtime client changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:runtime-client']
-        run: 'cargo test --lib --all-features -- runtime_client::response:: --skip ::scale::'
+        run: 'cargo test --lib --all-features --locked -- runtime_client::response:: --skip ::scale::'
 
       - name: Run the real-process App Server and CLI workflows
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: cargo test --all-features --test process
+        run: cargo test --all-features --locked --test process
 
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-fast
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
 
   # FAST documentation contracts: a low-risk documentation change merges on
   # FAST, but the `contracts` target reads the top-level, docs/, Web and TUI
@@ -262,7 +270,7 @@ jobs:
           save-if: false
 
       - name: Run the documentation and runtime-example contracts
-        run: cargo test --test contracts --all-features
+        run: cargo test --test contracts --all-features --locked
 
   # Fast deterministic classes: source-module unit tests, the in-crate
   # scripted contract suites, and the pure contract targets. No cross-module
@@ -312,7 +320,7 @@ jobs:
       # Including `--test contracts --test provider` builds those binaries against
       # the same ordinary library unit without a second default-feature build.
       - name: Compile the contracts harnesses and stage the real executables
-        run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --bins --examples --test contracts --test provider
+        run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 
       # Source-module unit tests + the scripted contract suites
       # (`scripted_suites::`) + the App Server scripted contracts compiled
@@ -328,7 +336,7 @@ jobs:
       # automatically — which is simpler than a second repository policy
       # saying those targets must stay test-free forever.
       - name: Run unit tests and the in-crate contract suites
-        run: 'cargo test --lib --bins --examples --all-features -- --skip boundary_suites::'
+        run: 'cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::'
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
@@ -336,7 +344,13 @@ jobs:
       # target also carries the #[ignore]d opt-in live smoke tests, which
       # never run here.
       - name: Run the pure contract targets
-        run: cargo test --test contracts --test provider --all-features
+        run: cargo test --test contracts --test provider --all-features --locked
+
+      # Doctests (both positive API counterparts and `compile_fail` encapsulation
+      # proofs) are not executed by `--all-targets`; execute them explicitly
+      # here against the compiled `--all-features` library.
+      - name: Run doctests
+        run: cargo test --doc --all-features --locked
 
       # Cargo/libtest discovery of this lane's targets against every Linux
       # step that selects them: an unassigned target, a stale filter or
@@ -344,7 +358,7 @@ jobs:
       # deterministic tests ran above as part of `--examples`.
       # Reuse the all-feature library already compiled by the tested targets.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
@@ -406,7 +420,7 @@ jobs:
       - name: Compile the boundary harnesses and stage the real executables
         run: >-
           python3 test-support/prepare_native_tests.py --
-          cargo test --all-features --no-run
+          cargo test --all-features --locked --no-run
           --lib
           --test durable
           --test process
@@ -420,7 +434,7 @@ jobs:
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
-          cargo test --all-features
+          cargo test --all-features --locked
           --test durable
           --test process
           --test subagent
@@ -432,7 +446,7 @@ jobs:
       - name: Run the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features -- boundary_suites::'
+        run: 'cargo test --lib --all-features --locked -- boundary_suites::'
 
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With
@@ -440,7 +454,7 @@ jobs:
       # targets already compiled (dev-dependency features included); without
       # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-boundaries
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries
 
   # Rust platform coverage is intentional, not duplicated by habit. macOS
   # runs only platform-sensitive classes, natively; desktop-macos separately
@@ -549,7 +563,7 @@ jobs:
       - name: Compile the external boundary targets and stage the real executables
         run: >-
           /usr/bin/time -l python3 test-support/prepare_native_tests.py --
-          cargo test --all-features --no-run --timings
+          cargo test --all-features --locked --no-run --timings
           --test durable
           --test process
           --test subagent
@@ -562,7 +576,7 @@ jobs:
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
-          /usr/bin/time -l cargo test --all-features
+          /usr/bin/time -l cargo test --all-features --locked
           --test durable
           --test process
           --test subagent
@@ -574,7 +588,7 @@ jobs:
       # Native macOS discovery: every required external target (see
       # REQUIREMENTS in the checker) must execute here.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-platform-core
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-core
 
       - name: Native Cargo timing reports
         if: always()
@@ -665,7 +679,7 @@ jobs:
       - name: Compile the external boundary targets and stage the real executables
         run: >-
           /usr/bin/time -l python3 test-support/prepare_native_tests.py --
-          cargo test --all-features --no-run --timings
+          cargo test --all-features --locked --no-run --timings
           --test durable
           --test process
           --test subagent
@@ -684,18 +698,18 @@ jobs:
       # above and re-emits the package binary records without recompiling the
       # ordinary library so they stage beside the lib/bin test harnesses too.
       - name: Compile unit and in-crate boundary test harnesses and stage the real executables
-        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --no-run --timings
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
 
       - name: Run unit tests and the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: '/usr/bin/time -l cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
+        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
-          /usr/bin/time -l cargo test --all-features
+          /usr/bin/time -l cargo test --all-features --locked
           --test durable
           --test process
           --test subagent
@@ -708,7 +722,7 @@ jobs:
       # tests, and `boundary_suites::` and every external target (see
       # REQUIREMENTS in the checker) must execute here entirely.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-platform-boundaries
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-boundaries
 
       - name: Native Cargo timing reports
         if: always()
@@ -806,7 +820,7 @@ jobs:
       # Real stdio integration also launches MCP through the sibling
       # interactive-supervisor, so build the executable set before testing.
       - name: Build the real integration binaries
-        run: cargo build --bins
+        run: cargo build --bins --locked
 
       - name: Test
         working-directory: tui

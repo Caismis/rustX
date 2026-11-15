@@ -409,14 +409,17 @@ async fn inactive_goal_can_idle_unload_and_policy_is_user_only() {
         "[agent.plugins.goal]\nenabled = true\n",
     )
     .unwrap();
+    let id = f.id(0).await;
+    let probe = f.manager.probe(&id);
+    probe.status_before_wait.arm();
     let a = f.load(0).await.unwrap().unwrap();
+    probe.status_before_wait.entered().await;
     f.manager.reap_idle();
     clock.advance(1000);
     f.manager.reap_idle();
-    assert_eq!(
-        f.manager.residency(a.conversation_id()),
-        ResidencyState::Unloading
-    );
+    let residency = f.manager.residency(a.conversation_id());
+    probe.status_before_wait.release();
+    assert_eq!(residency, ResidencyState::Unloading);
     std::fs::write(
         f.workspaces[1].join("rustx.toml"),
         "[app_server]\nmax_resident_runtimes = 2\n",
@@ -454,7 +457,11 @@ async fn concurrent_distinct_loads_cannot_oversubscribe_one_slot() {
 async fn one_reaper_timer_wakes_from_manual_clock_and_unloads_automatically() {
     bounded(async {
         let (f, clock) = policy(1, 2).await;
+        let id = f.id(0).await;
+        let probe = f.manager.probe(&id);
+        probe.status_before_wait.arm();
         let a = f.load(0).await.unwrap().unwrap();
+        probe.status_before_wait.entered().await;
         let native = a.inspect_runtime().unwrap();
         while native.idle_epoch().is_err() {
             tokio::task::yield_now().await;
@@ -469,23 +476,20 @@ async fn one_reaper_timer_wakes_from_manual_clock_and_unloads_automatically() {
             .wait_for(|deadline| *deadline == 1000)
             .await
             .unwrap();
-        assert_eq!(
-            f.manager.residency(a.conversation_id()),
-            ResidencyState::Loaded
-        );
+        let initial_residency = f.manager.residency(a.conversation_id());
         clock.advance(1000);
         observed
             .wait_for(|deadline| *deadline == 2000)
             .await
             .unwrap();
-        assert_ne!(
-            f.manager.residency(a.conversation_id()),
-            ResidencyState::Loaded
-        );
-        f.manager.unload(a.conversation_id()).await.unwrap();
+        let residency_after_tick = f.manager.residency(a.conversation_id());
+        probe.status_before_wait.release();
         stop.cancel();
         worker.await.unwrap();
+        f.manager.unload(a.conversation_id()).await.unwrap();
         f.close().await;
+        assert_eq!(initial_residency, ResidencyState::Loaded);
+        assert_ne!(residency_after_tick, ResidencyState::Loaded);
     })
     .await;
 }

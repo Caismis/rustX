@@ -442,30 +442,35 @@ summarizes them and the lane check below verifies them against Cargo:
 | `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | core and full (required) |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
-- **quality** (ubuntu) — fmt, Clippy, and the Python benchmark and
-  native-test-preparation controller suites (`benchmarks/runtime`, `test-support`).
-- **rust-contracts** (ubuntu) — `python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --bins --examples --test contracts --test provider`,
+- **quality** (ubuntu) — `cargo fmt --all -- --check`, both default-feature and
+  `--all-features` workspace `--all-targets --locked` Clippy (`-D warnings`),
+  strict `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked`,
+  and the Python benchmark and native-test-preparation controller suites
+  (`benchmarks/runtime`, `test-support`).
+- **rust-contracts** (ubuntu) — `python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider`,
   then
-  `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::`
-  and `cargo test --test contracts --test provider --all-features`.
+  `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::`,
+  `cargo test --test contracts --test provider --all-features --locked`, and
+  explicit `cargo test --doc --all-features --locked` (executing both
+  positive API counterparts and `compile_fail` encapsulation proofs).
   Preparation compiles the lane's targets once with `--all-features` (matching
   the ordinary library unit that `--examples`, `--test contracts`, and `--test
   provider` share) and physically stages the emitted package binaries beside
   every emitted test harness executable so unit tests of `bash-supervisor`,
   `interactive-supervisor`, and `workflow-renderer` use the same
   executable-sibling contract as production without a duplicate default-feature
-  `cargo build --bins`. The three bin harnesses define no test today, and of
-  the example harnesses only `session_list_benchmark` (workload checker)
+  `cargo build --bins`. The four binary targets define no unit test today, and
+  of the example harnesses only `session_list_benchmark` (workload checker)
   and `check_test_lanes` (the lane checker's own tests) do. Bins and
   examples stay selected so Cargo's own target discovery picks up a future
   test; the lane check allows their harnesses to be empty.
 - **rust-boundaries** (ubuntu) — the emulator's pytest suite,
-  `python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`
+  `python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`
   (compiling and staging the real binaries beside the external and `--lib`
   harnesses once with `--all-features`), then
-  `cargo test --all-features --test durable --test process --test subagent
+  `cargo test --all-features --locked --test durable --test process --test subagent
   --test tools --test conformance --test cfg3_catalog --test
-  cfg3_managed_output`, then `cargo test --lib --all-features -- boundary_suites::`.
+  cfg3_managed_output`, then `cargo test --lib --all-features --locked -- boundary_suites::`.
   Both test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
 - **rust-platform-core** (macos; FAST) — the seven external boundary
   targets, natively: compiled and staged first through
@@ -602,10 +607,13 @@ fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
 second copy of it. Each Rust test lane ends with
-`cargo run --profile test --all-features --example check_test_lanes -- --job <job id>`, which reads the
-workflow's executing `cargo test` steps and asks libtest, through `--list`,
-what each one selects — so filters, `--skip`, features and `cfg` are
-Cargo's and libtest's own semantics. Every test job declares its profiles
+`cargo run --profile test --all-features --locked --example check_test_lanes -- --job <job id>`, which reads the
+workflow's executing `cargo test` steps, acquires the validated libtest harness
+executable once per `(features, target)` via Cargo `--no-run --message-format=json`,
+asks that native binary directly through `--list --format terse [--ignored]`
+(and runs `cargo test --doc --locked ... -- --list` across all emitted rustdoc
+blocks for doctests) — so filters, `--skip`, features and `cfg` are
+Cargo's, rustdoc's, and libtest's own semantics. Every test job declares its profiles
 (`env: VERIFICATION_PROFILE: fast`, `full` or `fast full` — not a `RUST*`
 name, which the Rust cache would hash into its key) and must be gated by
 exactly `if: fromJSON(needs.plan.outputs.run)['<its id>']`; a FAST step may
@@ -613,21 +621,26 @@ also be gated by the plan's affected-component map, and nothing else may
 make a test step conditional. Each profile's coverage is its own. It fails
 for:
 
-- a Cargo test target (lib, bin, example, integration test) selected by no
-  executing FULL Linux step (`--no-run` and FAST steps do not count);
-- a Linux-discovered runnable test that no FULL Linux step executes, the
-  capacity suite included;
-- a step that selects no runnable test of a lib or integration-test target;
+- a Cargo test target (lib, bin, example, integration test, bench, doc) selected by no
+  executing FULL Linux step (`--no-run` and `--all-targets` without `--doc`, as
+  well as FAST steps, do not count);
+- a Linux-discovered runnable test or doctest that no FULL Linux step executes,
+  the capacity suite and all discovered doctests included;
+- a step that selects no runnable test of a lib, integration-test, bench, or
+  doc target;
 - a positive filter that matches nothing, only `#[ignore]`d tests, or only
   `--skip`ped tests, and a `--skip` that excludes nothing;
 - a suite in its `REQUIREMENTS` table that is missing or not fully executed
   in its profile on its platform: FAST on Linux must always run
   `scripted_suites::`, `runtime::conversation_runtime::` and the `process`
   target (affected steps never satisfy this; the capacity suite is
-  excluded), FULL on Linux the whole `::scale::` suite, FULL on macOS
+  excluded), FULL on Linux the whole `::scale::` suite, key Stage 3/4 modularized
+  suites, pure `contracts`/`provider`/`runtime_benchmark` targets, and explicit
+  `doc` plus all 6 documented owner symbol suites, FULL on macOS
   `boundary_suites::` and the seven external boundary targets;
 - a test job without a declared profile or the canonical plan gate, and a
-  step or libtest output it cannot interpret exactly.
+  step, Cargo artifact receipt, libtest output, or rustdoc block output it
+  cannot interpret exactly.
 
 Discovery is always native: the macOS job checks macOS, and `--job` refuses
 a job of another platform. Run it without `--job` to check every target of
@@ -849,49 +862,50 @@ cargo test --all-features --test process app_server::
 (cd web-console && pnpm exec vitest run test/model-retry.test.tsx)
 
 # The FAST Rust lane (CI: rust-fast), without the affected heavy groups:
-python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --test process
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- \
+python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --test process
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked -- \
   --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: \
   --skip local_runtime::session_runtime_manager::tests:: \
   --skip local_runtime::session:: --skip runtime_client::response::
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test process
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked --test process
 
 # The capacity suite (FULL), or one capacity test:
-cargo test --lib --all-features ::scale::
+cargo test --lib --all-features --locked ::scale::
 
 # FULL: the lanes below. Promote a pull request with the
 # `full-verification` label to run all of them in CI on its exact head.
 
-# Unit tests + in-crate deterministic contracts (CI: rust-contracts):
+# Unit tests + in-crate deterministic contracts + doctests (CI: rust-contracts):
 python3 test-support/prepare_native_tests.py -- \
-  cargo test --all-features --no-run --lib --bins --examples --test contracts --test provider
-cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
-cargo test --test contracts --test provider --all-features
+  cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
+cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::
+cargo test --test contracts --test provider --all-features --locked
+cargo test --doc --all-features --locked
 
 # Boundary lane (CI: rust-boundaries); uv is mandatory:
 BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
   --test conformance --test cfg3_catalog --test cfg3_managed_output'
 python3 test-support/prepare_native_tests.py -- \
-  cargo test --all-features --no-run --lib $BOUNDARY_TARGETS
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features $BOUNDARY_TARGETS
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
+  cargo test --all-features --locked --no-run --lib $BOUNDARY_TARGETS
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked $BOUNDARY_TARGETS
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked -- boundary_suites::
 
 # macOS core (CI: rust-platform-core): the seven external boundary targets
 # prepared above. macOS full (CI: rust-platform-boundaries) adds:
 python3 test-support/prepare_native_tests.py -- \
-  cargo test --lib --bins --test durable --all-features --no-run
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
+  cargo test --lib --bins --test durable --all-features --locked --no-run
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features --locked -- \
   --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
 
 # Lane coverage for one CI job on its own platform, or every target here
 # (--all-features reuses the library the test targets already compiled):
-cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
-cargo run --profile test --all-features --example check_test_lanes
+cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts
+cargo run --profile test --all-features --locked --example check_test_lanes
 
-# Everything, the safety net (it does not prove the CI lanes' selection):
-python3 test-support/prepare_native_tests.py -- cargo test --all-targets --all-features --no-run
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
+# Everything, the safety net (it does not prove the CI lanes' selection or `--doc`):
+python3 test-support/prepare_native_tests.py -- cargo test --all-targets --all-features --locked --no-run
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked
 
 # One domain target:
 cargo test --test durable --all-features
