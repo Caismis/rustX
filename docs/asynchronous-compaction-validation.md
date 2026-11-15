@@ -28,6 +28,15 @@ incremental context facts and bounded `CheckpointAdvanced` notifications are
 authoritative representations. Cold recovery must preserve the original Call,
 request and usage facts while recording interruption without dispatching work.
 
+The competition fixture deliberately includes a long native cwd while leaving
+room for the re-armed permission reminder. It proves both mandatory pressure
+and admissible replacement using actual starts/activation, with the existing
+20-second liveness guard. Settlement checks use the native Attempt receipt;
+idle maintenance may legitimately borrow the returned conversation immediately.
+A controlled Ready-publication gate makes cancellation arrive after the reaper
+claims its pending join. The terminal cancellation must be durable before the
+registry entry is removed.
+
 ## Controlled measurements
 
 HTTP conformance emits `RUSTX_529_CONTROLLED_METRICS` from the original Journal
