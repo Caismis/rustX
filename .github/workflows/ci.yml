@@ -143,6 +143,9 @@ jobs:
       - name: Test current and historical benchmark controllers and summaries
         run: python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v
 
+      - name: Test native test preparation and artifact staging
+        run: python3 -m unittest discover -s test-support -p 'test_*.py' -v
+
       - name: Run Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
@@ -192,8 +195,8 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      - name: Compile the FAST harnesses and the real executables
-        run: cargo test --all-features --no-run --lib --test process
+      - name: Compile the FAST harnesses and stage the real executables
+        run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --test process
 
       # Every unit and deterministic contract module except the in-crate
       # boundary suites (rust-boundaries), the capacity suite, and four heavy
@@ -304,11 +307,12 @@ jobs:
           shared-key: rust-contracts
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      # `cargo test --bins` builds the bin *test harnesses* but does not
-      # place the binaries at `target/debug/`, where the bash tool's unit
-      # tests look for `bash-supervisor` at runtime — so build them first.
-      - name: Build the binaries the boundary-owning unit tests exec
-        run: cargo build --bins
+      # Compile the contracts lane's targets once with `--all-features` and stage
+      # the emitted package binaries beside every emitted test harness executable.
+      # Including `--test contracts --test provider` builds those binaries against
+      # the same ordinary library unit without a second default-feature build.
+      - name: Compile the contracts harnesses and stage the real executables
+        run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --bins --examples --test contracts --test provider
 
       # Source-module unit tests + the scripted contract suites
       # (`scripted_suites::`) + the App Server scripted contracts compiled
@@ -397,8 +401,21 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv run --frozen pytest
 
-      # The integration targets place the real executables at target/debug/.
-      # Run them first so the in-crate boundary suites can use those binaries.
+      # Prepare and stage the emitted package binaries beside the `--test`
+      # and `--lib` test harnesses before executing either boundary step.
+      - name: Compile the boundary harnesses and stage the real executables
+        run: >-
+          python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --no-run
+          --lib
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
       - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
@@ -527,10 +544,12 @@ jobs:
         run: uv sync --frozen
 
       # Compiling the external targets also builds every real executable
-      # against the same all-feature library and places it at target/debug/.
-      - name: Compile the external boundary targets and the real executables
+      # against the same all-feature library; staging places them beside each
+      # emitted test harness executable.
+      - name: Compile the external boundary targets and stage the real executables
         run: >-
-          /usr/bin/time -l cargo test --all-features --no-run --timings
+          /usr/bin/time -l python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --no-run --timings
           --test durable
           --test process
           --test subagent
@@ -640,13 +659,13 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      # Compiling the external targets first also builds every real
-      # executable against the same all-feature library and places it at
-      # target/debug/, where the lib tests (bash/uv boundary-owning modules,
-      # in-crate boundary suites) exec `bash-supervisor`.
-      - name: Compile the external boundary targets and the real executables
+      # Compiling the external targets first also builds every real executable
+      # against the same all-feature library; staging places them beside each
+      # emitted integration test harness executable.
+      - name: Compile the external boundary targets and stage the real executables
         run: >-
-          /usr/bin/time -l cargo test --all-features --no-run --timings
+          /usr/bin/time -l python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --no-run --timings
           --test durable
           --test process
           --test subagent
@@ -661,10 +680,11 @@ jobs:
       #
       # `--bins` executes zero tests today and removing it was measured, but it
       # is retained so Cargo's normal target discovery picks up any future test
-      # added to a binary. Binary test harnesses are not the real executables
-      # the tests exec; those come from the external-target compilation.
-      - name: Compile unit and in-crate boundary test harnesses
-        run: /usr/bin/time -l cargo test --lib --bins --all-features --no-run --timings
+      # added to a binary. `--test durable` is already fresh from the step
+      # above and re-emits the package binary records without recompiling the
+      # ordinary library so they stage beside the lib/bin test harnesses too.
+      - name: Compile unit and in-crate boundary test harnesses and stage the real executables
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --no-run --timings
 
       - name: Run unit tests and the in-crate boundary suites
         env:

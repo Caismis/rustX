@@ -97,8 +97,11 @@ const REQUIREMENTS: &[Requirement] = &[
 /// it. FAST lanes skip it by this name.
 const SCALE_SUITE: &str = "::scale::";
 
-/// Command prefixes that only measure the Cargo process they wrap.
-const TRANSPARENT_WRAPPERS: &[&[&str]] = &[&["/usr/bin/time", "-l"]];
+/// Command prefixes that only measure or prepare the Cargo process they wrap.
+const TRANSPARENT_WRAPPERS: &[&[&str]] = &[
+    &["/usr/bin/time", "-l"],
+    &["python3", "test-support/prepare_native_tests.py", "--"],
+];
 
 fn main() {
     let mut jobs = Vec::new();
@@ -553,7 +556,7 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
     }) {
         return Err(format!("unsupported shell syntax in `{token}`"));
     }
-    if let Some(wrapper) = TRANSPARENT_WRAPPERS
+    while let Some(wrapper) = TRANSPARENT_WRAPPERS
         .iter()
         .find(|wrapper| tokens.starts_with(wrapper))
     {
@@ -1156,6 +1159,22 @@ jobs:
                 parse_workflow(WORKFLOW, &targets()).unwrap().len(),
                 "{command}"
             );
+        }
+    }
+
+    #[test]
+    fn native_test_preparation_wrapper_is_transparent_to_lane_parsing() {
+        for command in [
+            "python3 test-support/prepare_native_tests.py -- cargo test --lib --all-features --no-run",
+            "/usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --all-features --no-run",
+        ] {
+            let workflow = format!(
+                "jobs:\n  j:\n    runs-on: ubuntu-latest\n    if: fromJSON(needs.plan.outputs.run)['j']\n    env:\n      VERIFICATION_PROFILE: full\n    steps:\n      - name: prep\n        run: {}\n",
+                serde_json::to_string(command).unwrap()
+            );
+            let steps = parse_workflow(&workflow, &targets()).unwrap();
+            assert_eq!(steps.len(), 1, "{command}");
+            assert!(!steps[0].executes, "{command}");
         }
     }
 

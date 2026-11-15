@@ -103,6 +103,7 @@ Before merge, the baseline local Rust checks are:
 ```bash
 cargo fmt --all -- --check
 cargo clippy --all-targets --all-features -- -D warnings
+python3 test-support/prepare_native_tests.py -- cargo test --all-targets --all-features --no-run
 cargo test --all-targets --all-features
 ```
 
@@ -120,9 +121,10 @@ line available:
 (cd test-support/fake-provider && uv run --frozen pytest)
 
 # Rust validation with uv-dependent tests required rather than skipped.
-# One command covers every target, conformance included; tests/README.md
-# documents the CI lanes' own selectors for focused runs.
-cargo build --bins --all-features
+# Standalone pure unit tests need no native binary staging; boundary/supervisor/
+# renderer tests require staging the current package binaries beside each
+# emitted test harness executable first (`test-support/prepare_native_tests.py`).
+python3 test-support/prepare_native_tests.py -- cargo test --all-targets --all-features --no-run
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
 
 # The CI lanes' selectors against Cargo discovery on this platform.

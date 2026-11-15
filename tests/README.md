@@ -442,32 +442,34 @@ summarizes them and the lane check below verifies them against Cargo:
 | `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | core and full (required) |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
-- **quality** (ubuntu) — fmt and Clippy.
-- **rust-contracts** (ubuntu) — `cargo build --bins`, then
+- **quality** (ubuntu) — fmt, Clippy, and the Python benchmark and
+  native-test-preparation controller suites (`benchmarks/runtime`, `test-support`).
+- **rust-contracts** (ubuntu) — `python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --bins --examples --test contracts --test provider`,
+  then
   `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::`
   and `cargo test --test contracts --test provider --all-features`.
-  The build comes first because the bash tool's unit tests exec
-  `target/debug/bash-supervisor` and the interactive-process unit tests exec
-  `target/debug/interactive-supervisor`; `cargo test --bins` builds the bin
-  *test harnesses*, which are a different Cargo unit and place neither
-  executable there. The three bin harnesses define no test today, and of
+  Preparation compiles the lane's targets once with `--all-features` (matching
+  the ordinary library unit that `--examples`, `--test contracts`, and `--test
+  provider` share) and physically stages the emitted package binaries beside
+  every emitted test harness executable so unit tests of `bash-supervisor`,
+  `interactive-supervisor`, and `workflow-renderer` use the same
+  executable-sibling contract as production without a duplicate default-feature
+  `cargo build --bins`. The three bin harnesses define no test today, and of
   the example harnesses only `session_list_benchmark` (workload checker)
   and `check_test_lanes` (the lane checker's own tests) do. Bins and
   examples stay selected so Cargo's own target discovery picks up a future
   test; the lane check allows their harnesses to be empty.
-- **rust-boundaries** (ubuntu) — the emulator's pytest suite, then
+- **rust-boundaries** (ubuntu) — the emulator's pytest suite,
+  `python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`
+  (compiling and staging the real binaries beside the external and `--lib`
+  harnesses once with `--all-features`), then
   `cargo test --all-features --test durable --test process --test subagent
   --test tools --test conformance --test cfg3_catalog --test
   cfg3_managed_output`, then `cargo test --lib --all-features -- boundary_suites::`.
-  Running the integration targets first also builds every
-  real executable against the library the tests link and places it at
-  `target/debug/`, where the text_spill suite execs `bash-supervisor`; a
-  separate `cargo build --bins` would compile another complete library
-  (without dev-dependency features) that no test in the lane links. Both
-  test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
+  Both test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
 - **rust-platform-core** (macos; FAST) — the seven external boundary
-  targets, natively: compiled first (which, as in rust-boundaries, places
-  the real executables at `target/debug/`), then run with
+  targets, natively: compiled and staged first through
+  `test-support/prepare_native_tests.py`, then run with
   `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Real process start and termination,
   signals, PTY, stdio and WebSocket transports, the native configuration
   writer lock race (`cfg3_catalog`), SQLite and filesystem durability and
@@ -475,7 +477,9 @@ summarizes them and the lane check below verifies them against Cargo:
   of the macOS lane's compilation (721 s of about 1,450 s in run
   39015122730).
 - **rust-platform-boundaries** (macos; FULL) — one job: the same external
-  targets, compiled first, then `cargo test --lib --bins --all-features
+  targets compiled and staged first, then `--lib --bins --test durable` compiled
+  and staged (reusing the fresh ordinary library and binaries from the first
+  step without compiling a third library copy), then `cargo test --lib --bins --all-features
   -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
   primitives differ across OSes — plus the in-crate boundary suites) and the
@@ -701,9 +705,12 @@ Mandatory prerequisites fail closed; only explicitly opt-in tooling may
 skip:
 
 - **Real executables.** Tests that exec `bash-supervisor`,
-  `interactive-supervisor`, `workflow-renderer` or `rustx` need `cargo build --bins` first;
-  integration targets receive `CARGO_BIN_EXE_*` from Cargo. A missing
-  executable fails the spawn.
+  `interactive-supervisor`, `workflow-renderer`, or `rustx` via sibling
+  resolution require `python3 test-support/prepare_native_tests.py -- cargo test ... --no-run`
+  so the current package binaries are staged beside every emitted test harness
+  executable; integration targets also receive `CARGO_BIN_EXE_*` from Cargo,
+  and external Node/TUI suites use `cargo build --bins`. A missing executable
+  fails the spawn clearly without falling back to ancestor directories.
 - **A verified case-insensitive filesystem on macOS.** The `process` target's
   reserved-configuration-name startup regression probes the temporary
   volume using file identity. If it is case sensitive, the fixture uses
@@ -842,7 +849,7 @@ cargo test --all-features --test process app_server::
 (cd web-console && pnpm exec vitest run test/model-retry.test.tsx)
 
 # The FAST Rust lane (CI: rust-fast), without the affected heavy groups:
-cargo test --all-features --no-run --lib --test process
+python3 test-support/prepare_native_tests.py -- cargo test --all-features --no-run --lib --test process
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- \
   --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: \
   --skip local_runtime::session_runtime_manager::tests:: \
@@ -856,21 +863,23 @@ cargo test --lib --all-features ::scale::
 # `full-verification` label to run all of them in CI on its exact head.
 
 # Unit tests + in-crate deterministic contracts (CI: rust-contracts):
-cargo build --bins   # unit tests exec target/debug/{bash,interactive}-supervisor
+python3 test-support/prepare_native_tests.py -- \
+  cargo test --all-features --no-run --lib --bins --examples --test contracts --test provider
 cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features
 
-# Boundary lane (CI: rust-boundaries); uv is mandatory. Running the
-# external targets first also places the real executables at target/debug/,
-# where the text_spill suite execs bash-supervisor:
+# Boundary lane (CI: rust-boundaries); uv is mandatory:
 BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
   --test conformance --test cfg3_catalog --test cfg3_managed_output'
+python3 test-support/prepare_native_tests.py -- \
+  cargo test --all-features --no-run --lib $BOUNDARY_TARGETS
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features $BOUNDARY_TARGETS
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
 
 # macOS core (CI: rust-platform-core): the seven external boundary targets
-# above. macOS full (CI: rust-platform-boundaries) adds, after the same
-# external-target compilation:
+# prepared above. macOS full (CI: rust-platform-boundaries) adds:
+python3 test-support/prepare_native_tests.py -- \
+  cargo test --lib --bins --test durable --all-features --no-run
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
   --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
@@ -881,6 +890,7 @@ cargo run --profile test --all-features --example check_test_lanes -- --job rust
 cargo run --profile test --all-features --example check_test_lanes
 
 # Everything, the safety net (it does not prove the CI lanes' selection):
+python3 test-support/prepare_native_tests.py -- cargo test --all-targets --all-features --no-run
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
 
 # One domain target:
