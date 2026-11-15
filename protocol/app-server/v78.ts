@@ -12972,6 +12972,22 @@ export interface GoalSnapshot {
  * }
  * ```
  *
+ * ```rust
+ * use chrono::Utc;
+ * use rustx::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
+ *
+ * let metadata = AgentStatusGenerationMetadata::new(
+ *     Utc::now(),
+ *     [AgentStatusModuleId::Time, AgentStatusModuleId::Todo],
+ * )
+ * .expect("canonical status metadata");
+ * assert_eq!(
+ *     metadata.modules(),
+ *     &[AgentStatusModuleId::Time, AgentStatusModuleId::Todo]
+ * );
+ * assert!(metadata.contains(AgentStatusModuleId::Time));
+ * ```
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "AgentStatusGenerationMetadata".
  */
