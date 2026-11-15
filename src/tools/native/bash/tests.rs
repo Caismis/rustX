@@ -769,21 +769,112 @@ async fn confirmed_timeout_is_timed_out_with_bounded_model_facing_feedback() {
 /// observable. The result is `Cancelled` and the owned group is
 /// terminated.
 #[cfg(target_os = "linux")]
+struct HoldFifoGuard(std::fs::File);
+
+#[cfg(target_os = "linux")]
+impl HoldFifoGuard {
+    /// Creates an `O_RDWR | O_NONBLOCK` FIFO so a child `read` blocks in the
+    /// kernel until signaled or until this guard drops and writes a release byte.
+    fn create(path: &std::path::Path) -> Self {
+        use std::os::unix::fs::OpenOptionsExt;
+        nix::unistd::mkfifo(
+            path,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(path)
+            .unwrap();
+        Self(file)
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for HoldFifoGuard {
+    fn drop(&mut self) {
+        use std::io::Write;
+        let _ = self.0.write_all(b"release\n");
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn assert_post_shell_exit_cancel_trace(trace: &std::path::Path, anchor_pid: i32) {
+    use super::supervisor::diagnostics::{Entry, Event};
+
+    let evidence = std::fs::read_to_string(trace).unwrap();
+    let entries: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let index = |predicate: fn(&Event) -> bool| {
+        entries
+            .iter()
+            .position(|entry| predicate(&entry.event))
+            .unwrap_or_else(|| panic!("missing native event: {evidence}"))
+    };
+    let shell_exited = index(|event| matches!(event, Event::ShellExited { status: 0 }));
+    let received = index(|event| matches!(event, Event::TerminateReceived));
+    let term = index(|event| {
+        matches!(
+            event,
+            Event::Signal {
+                signal: libc::SIGTERM,
+                result: Some(0),
+                ..
+            }
+        )
+    });
+    let group_reaped = index(|event| matches!(event, Event::GroupChildrenReaped));
+    let published = index(|event| matches!(event, Event::TerminalPublished));
+    let observed = index(|event| matches!(event, Event::TerminalObserved));
+    let direct_reaped = index(|event| matches!(event, Event::DirectChildReaped));
+    assert!(
+        shell_exited < received
+            && received < term
+            && term < group_reaped
+            && group_reaped < published
+            && published < direct_reaped
+            && group_reaped < observed
+            && observed < direct_reaped,
+        "{evidence}"
+    );
+    let Event::Signal { pgid, .. } = entries[term].event else {
+        unreachable!()
+    };
+    assert_eq!(pgid, anchor_pid, "{evidence}");
+}
+
+#[cfg(target_os = "linux")]
 #[tokio::test]
 async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group() {
+    use super::supervisor::diagnostics::FixtureControl;
+    use nix::unistd::{Pid, getpgid};
+
     let (dir, artifacts, tool_output, workspace) = fixture();
     let root = workspace.root().to_path_buf();
     let shell_pid_file = root.join("shell.pid");
     let desc_pid_file = root.join("desc.pid");
     let anchor_pid_file = root.join("anchor.pid");
+    let hold_path = root.join("hold.fifo");
+    let _hold_guard = HoldFifoGuard::create(&hold_path);
+    let trace_dir = tempfile::tempdir().unwrap();
+    let trace = trace_dir.path().join("trace");
     let command = format!(
-        "echo $$ > {}; sleep 30 >/dev/null 2>&1 & echo $! > {}; exit 0",
+        "echo $$ > {}; sh -c 'IFS= read -r _ < {}' >/dev/null 2>&1 & echo $! > {}; exit 0",
         shell_pid_file.display(),
+        hold_path.display(),
         desc_pid_file.display()
     );
     let control = BashTestControl::new()
         .pause_at_shell_exit()
-        .anchor_pid_file(anchor_pid_file.clone());
+        .anchor_pid_file(anchor_pid_file.clone())
+        .with_diagnostics(FixtureControl {
+            trace: Some(trace.clone()),
+            before_term_socket: None,
+        });
     let hook = control.lifecycle().clone();
     let cancellation = CancellationSignal::new();
     let cancelling = cancellation.clone();
@@ -801,38 +892,53 @@ async fn cancellation_after_exact_shell_exit_boundary_terminates_the_owned_group
     tokio::time::timeout(Duration::from_secs(15), hook.await_shell_exit())
         .await
         .expect("the shell-exit boundary is observed");
-    // 2. The descendant is provably still alive at the boundary.
-    let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_file)
-        .expect("descendant pid file")
-        .trim()
-        .parse()
-        .expect("descendant pid");
-    assert!(
-        process_alive(descendant_pid),
-        "the descendant must still be alive at the exact shell-exit boundary"
+    // 2. While the anchor is still retained at the shell-exit boundary, the
+    //    descendant is provably alive inside the owned process group and
+    //    neither cancellation nor settlement has fired yet.
+    let read_i32 = |p: &std::path::Path| -> i32 {
+        std::fs::read_to_string(p).unwrap().trim().parse().unwrap()
+    };
+    let (shell_pid, descendant_pid, anchor_pid) = (
+        read_i32(&shell_pid_file),
+        read_i32(&desc_pid_file),
+        read_i32(&anchor_pid_file),
     );
-    // 3. Cancellation becomes observable after the boundary.
+    let pre_alive = process_alive(descendant_pid);
+    let pre_pgid = getpgid(Some(Pid::from_raw(descendant_pid)))
+        .ok()
+        .map(Pid::as_raw);
+    let pre_trace = std::fs::read_to_string(&trace).unwrap_or_default();
+    // 3. Cancellation becomes observable strictly after shell exit.
     cancelling.cancel();
-    // 4. The executor resumes.
+    // 4. The executor resumes and settles before any assertion can panic.
     hook.release();
     let result = tokio::time::timeout(Duration::from_secs(20), task)
         .await
         .expect("the invocation settles exactly once")
         .expect("executor task");
+
+    assert_ne!(descendant_pid, shell_pid);
+    assert!(
+        pre_alive,
+        "the descendant must still be alive at the exact shell-exit boundary"
+    );
+    assert_eq!(
+        pre_pgid,
+        Some(anchor_pid),
+        "descendant pid {descendant_pid} must belong to owned process group {anchor_pid}"
+    );
+    assert!(
+        !pre_trace.contains("TerminateReceived")
+            && !pre_trace.contains("GroupChildrenReaped")
+            && !pre_trace.contains("TerminalPublished"),
+        "cancellation/settlement must not precede shell-exit boundary: {pre_trace}"
+    );
     assert!(
         matches!(result.status, ToolExecutionStatus::Cancelled { .. }),
         "late cancellation after the shell-parent exit must be Cancelled, got {:?}",
         result.status
     );
-    // 5. The owned group is terminated and quiescent; the descendant is
-    //    gone.
-    let anchor_pid: i32 = std::fs::read_to_string(&anchor_pid_file)
-        .expect("anchor pid file")
-        .trim()
-        .parse()
-        .expect("anchor pid");
-    wait_for_group_death(anchor_pid).await;
-    wait_for_process_death(descendant_pid).await;
+    assert_post_shell_exit_cancel_trace(&trace, anchor_pid);
     let _ = dir;
 }
 

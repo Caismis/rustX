@@ -245,3 +245,194 @@ fn reaching_the_cap_cannot_hide_a_saturated_consumer_behind_a_pending_tail() {
     assert_eq!(output.pending, [] as [u8; 0]);
     assert!(events.overloaded.is_cancelled());
 }
+
+async fn wait_for_ready_output(events: &super::super::service_events::Events, process_id: &str) {
+    let mut output = Vec::new();
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while output.len() < b"READY".len() {
+            let event = events.next().await;
+            let NotificationMethod::CommandOutputDelta(delta) = event.notification.notification
+            else {
+                panic!("expected command output delta");
+            };
+            assert_eq!(delta.process_id, process_id);
+            output.extend(
+                base64::engine::general_purpose::STANDARD
+                    .decode(delta.delta_base64)
+                    .unwrap(),
+            );
+            let _ = event.emitted.send(());
+        }
+    })
+    .await
+    .expect("READY output arrived promptly");
+    assert_eq!(output, b"READY");
+}
+
+#[tokio::test]
+async fn start_releases_state_mutex_before_watch_publication() {
+    let temp = tempfile::tempdir().unwrap();
+    let environment = Arc::new(crate::local_runtime::environment::Environment::default());
+    environment.configure(&[temp.path().to_path_buf()]);
+    let events = Arc::new(super::super::service_events::Events::default());
+    let commands = Arc::new(Commands::default());
+    let params = ExecParams {
+        command: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf READY; exec /bin/cat".into(),
+        ],
+        cwd: temp.path().display().to_string(),
+        env: BTreeMap::new(),
+        process_id: Some("lock-order".into()),
+        tty: false,
+        stream_stdin: true,
+        stream_stdout_stderr: true,
+        output_bytes_cap: None,
+        timeout_ms: Some(10_000),
+        size: None,
+    };
+
+    let witness_rx = commands.arm_pre_publish_for_test();
+    let watch_rx = commands.watch_receiver_for_test();
+    let watch_read_guard = watch_rx.borrow();
+
+    let commands_for_start = commands.clone();
+    let environment_for_start = environment.clone();
+    let events_for_start = events.clone();
+    let start_task = tokio::task::spawn_blocking(move || {
+        commands_for_start.start(
+            params,
+            environment_for_start,
+            events_for_start,
+            super::super::host::ServerOperation::for_test(),
+        )
+    });
+
+    witness_rx.await.expect("pre-publish witness fired");
+    let state_try = commands.state.try_lock();
+    let state_available = state_try.is_ok();
+    let entry_inserted = state_try
+        .as_ref()
+        .is_ok_and(|state| state.active.contains_key("lock-order"));
+    drop(state_try);
+
+    drop(watch_read_guard);
+    let received = start_task
+        .await
+        .expect("start blocking task")
+        .expect("Commands::start admitted command");
+
+    commands.admitted_for_test("lock-order").await;
+    let active_when_admitted = commands
+        .state
+        .lock()
+        .expect("connection commands")
+        .active
+        .contains_key("lock-order");
+    wait_for_ready_output(&events, "lock-order").await;
+    let terminate = commands.terminate("lock-order");
+    let settled = received.await;
+    let active_after_settle = commands
+        .state
+        .lock()
+        .expect("connection commands")
+        .active
+        .is_empty();
+
+    assert!(
+        state_available,
+        "Commands::start must release State mutex before publishing to watch"
+    );
+    assert!(
+        entry_inserted,
+        "active entry lock-order must be inserted before pre-publish witness"
+    );
+    assert!(
+        active_when_admitted,
+        "admitted_for_test must observe active entry lock-order"
+    );
+    assert!(
+        terminate.is_ok(),
+        "terminate active command must succeed: {terminate:?}"
+    );
+    let exec_result = settled.expect("result channel").expect("exec result");
+    assert_eq!(exec_result.status, ExecStatus::Terminated);
+    assert!(
+        active_after_settle,
+        "settled command must clear active entry"
+    );
+}
+
+#[tokio::test]
+async fn admitted_for_test_observes_concurrent_start_without_holding_watch_across_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let environment = Arc::new(crate::local_runtime::environment::Environment::default());
+    environment.configure(&[temp.path().to_path_buf()]);
+    let events = Arc::new(super::super::service_events::Events::default());
+    let commands = Arc::new(Commands::default());
+    let params = ExecParams {
+        command: vec![
+            "/bin/sh".into(),
+            "-c".into(),
+            "printf READY; exec /bin/cat".into(),
+        ],
+        cwd: temp.path().display().to_string(),
+        env: BTreeMap::new(),
+        process_id: Some("concurrent-admit".into()),
+        tty: false,
+        stream_stdin: true,
+        stream_stdout_stderr: true,
+        output_bytes_cap: None,
+        timeout_ms: Some(10_000),
+        size: None,
+    };
+
+    let observer = commands.admitted_for_test("concurrent-admit");
+    tokio::pin!(observer);
+    let pending_before_start = futures_util::poll!(observer.as_mut()).is_pending();
+
+    let received = commands
+        .start(
+            params,
+            environment,
+            events.clone(),
+            super::super::host::ServerOperation::for_test(),
+        )
+        .expect("Commands::start admitted command");
+
+    let observer_result = tokio::time::timeout(std::time::Duration::from_secs(5), observer).await;
+    let active_when_admitted = commands
+        .state
+        .lock()
+        .expect("connection commands")
+        .active
+        .contains_key("concurrent-admit");
+    wait_for_ready_output(&events, "concurrent-admit").await;
+    commands
+        .terminate("concurrent-admit")
+        .expect("terminate concurrent command");
+    let exec_result = received
+        .await
+        .expect("result channel")
+        .expect("exec result");
+    commands.close();
+    let active_after_settle = commands
+        .state
+        .lock()
+        .expect("connection commands")
+        .active
+        .is_empty();
+
+    assert!(
+        pending_before_start,
+        "admitted_for_test must return Pending when polled before Commands::start"
+    );
+    assert!(
+        observer_result.is_ok(),
+        "admitted_for_test must wake and settle after Commands::start without deadlock"
+    );
+    assert!(active_when_admitted);
+    assert_eq!(exec_result.status, ExecStatus::Terminated);
+    assert!(active_after_settle);
+}

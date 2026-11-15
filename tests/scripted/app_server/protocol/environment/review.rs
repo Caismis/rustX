@@ -114,7 +114,7 @@ pub(crate) async fn terminal_signals() {
         let worker = connection.clone();
         let mut command =
             tokio::spawn(async move { call(&worker, 3, Method::CommandExec(params)).await });
-        connection.command_admitted_for_test(id).await;
+        admit_or_fail(&connection, id, &mut command).await;
         input(&connection, id, b"READY\n").await;
         signal_marker(&connection, id, b"1\tREADY", &mut command).await;
         input(&connection, id, &[signal]).await;
