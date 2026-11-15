@@ -6,7 +6,7 @@ import type { TranscriptCache } from './transcript';
 import type {
   AttachmentTarget, ConfigRepairReceipt, ConfigurationApplication, InteractionRef, MethodResult, ObservedTurnPage, PendingMutationOutcome,
   Request1, RuntimeClientCursor, RuntimeClientSnapshot, ServerCapabilities, SessionPersistentState, SessionSummary as NativeSessionSummary, ThreadStatusEntry, SourceTarget, UserInputBlock,
-} from '../../../protocol/app-server/v80';
+} from '../../../protocol/app-server/v81';
 
 /** Optional only in the replaceable local view before a native status read. */
 export type SessionSummary = NativeSessionSummary & {thread_id?:string;thread_status?:ThreadStatusEntry|null};
@@ -50,16 +50,16 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   threadStatus?:ThreadStatusEntry;
   snapshot?: RuntimeClientSnapshot;
   publicationHeads?: readonly PublicationHead[];
-  checkpoint?: import('../../../protocol/app-server/v80').RuntimeClientCheckpoint;
+  checkpoint?: import('../../../protocol/app-server/v81').RuntimeClientCheckpoint;
   observationState?: import('../../../protocol/app-server/observation').ObservationPhase;
-  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v80').CheckpointReadCut;body:import('../../../protocol/app-server/v80').RoutedInteraction};
-  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v80').CheckpointPage;rows:import('../../../protocol/app-server/v80').RuntimeClientInteractionHeader[];offset:number};
+  interactionDetail?:{target:AttachmentTarget;cut:import('../../../protocol/app-server/v81').CheckpointReadCut;body:import('../../../protocol/app-server/v81').RoutedInteraction};
+  interactionPage?:{target:AttachmentTarget;page:import('../../../protocol/app-server/v81').CheckpointPage;rows:import('../../../protocol/app-server/v81').RuntimeClientInteractionHeader[];offset:number};
   trace?: TraceCache;
   cursor?: RuntimeClientCursor;
   history?: TranscriptCache;
   /** Read-only durable history, never an execution snapshot or control claim. */
   preview?: { conversationId: string; history: TranscriptCache };
-  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v80').CheckpointReadCut; statistics: import('../../../protocol/app-server/v80').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v80').RuntimeClientContextOccupancy | null };
+  statisticsPreview?: { conversationId: string; nodeId?: string; cut: import('../../../protocol/app-server/v81').CheckpointReadCut; statistics: import('../../../protocol/app-server/v81').ConversationStatistics; occupancy?: import('../../../protocol/app-server/v81').RuntimeClientContextOccupancy | null };
   tracePreview?: { conversationId: string; cache: TraceCache };
   turnOutline?: { paging: OutlinePagingIntent; page?: ObservedTurnPage; loading?: boolean; error?: string };
   turnNavigation?: { intent: number; pending?: string; error?: string };
@@ -69,7 +69,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;
-  modelIntent?: { config: import('../../../protocol/app-server/v80').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
+  modelIntent?: { config: import('../../../protocol/app-server/v81').SessionModelConfig; phase: 'waiting' | 'applying' | 'failed'; error?: string };
   modelMutation?: { generation: number; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   cancellation?: { attemptId?: string; status: 'in-flight' | 'acknowledged' | 'uncertain' };
   error?: string;

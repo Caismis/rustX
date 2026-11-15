@@ -75,6 +75,17 @@ fn compaction_status_is_exact_per_operation_and_historical_cut() {
     );
     assert_eq!(original.compaction.as_ref().unwrap().outcome, None);
     assert_ne!(original.state, TraceState::Completed);
+    let before = TraceProjection::at_cut(&store, &ready_cut).unwrap();
+    let anchor = before
+        .inspection_anchor(original.position.sequence().unwrap())
+        .unwrap();
+    assert!(matches!(
+        before.inspection_head(&anchor).unwrap().content,
+        TraceInspectionContent::Compaction {
+            checkpoint: None,
+            ..
+        }
+    ));
     update(&store, &first, Phase::NoEffect);
     for (generation, phase) in [
         (2, Phase::Cancelled),

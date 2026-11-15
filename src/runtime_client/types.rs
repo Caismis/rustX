@@ -286,9 +286,8 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-/// Version 87 adds independent Compaction supervision, authenticated prefix
-/// competition and bounded operation/physical-call observations.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 87;
+/// Version 88 adds the exact committed checkpoint to finite Compaction inspection.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 88;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -1415,7 +1414,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 87);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 88);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {

@@ -51,6 +51,10 @@ export const palette = {
   userMessageBg: "#343541",
   /** Neutral content surface for every Tool lifecycle. */
   toolBg: "#282828",
+  /** Pinned Pi dark compaction colors, converted with pi-tui 1.5.0. */
+  compactionBg: '#3a3055',
+  compactionLabel: '#a798d7',
+  compactionText: '#9da5a9',
   secondaryText: "#a0a0a0",
   /** The raised surface of a modal/popup overlay above the transcript. */
   popupBg: "#2a2a3a",
@@ -232,6 +236,8 @@ export const role = {
   toolOutput: style.text,
   /** Identities, counts, durations, hints — anything supporting. */
   meta: fg(palette.secondaryText),
+  compactionLabel: fg(palette.compactionLabel),
+  compactionText: fg(palette.compactionText),
   /** Structural punctuation and separators. */
   chrome: style.grey,
   /** Emphasis inside an otherwise unstyled line. */
@@ -249,6 +255,7 @@ export const role = {
 export const background = {
   user: bg(palette.userMessageBg),
   tool: bg(palette.toolBg),
+  compaction: bg(palette.compactionBg),
   popup: bg(palette.popupBg),
 };
 

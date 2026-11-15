@@ -9,7 +9,7 @@ changes.
 ## Integrated contract (2026-11-15)
 
 PR #531 integrates `origin/main` at `33234e5b1`. The integrated contract is
-App Server v80, Runtime Client v86,
+App Server v81, Runtime Client v88,
 Child IPC v40, SQLite schema 89, Runtime authoring schema 13 and Runtime
 Manifest v7. The model catalog remains schema 2 and Session catalog schema 21.
 The integration retains shared writable Thread clients, instance bearer/JWT

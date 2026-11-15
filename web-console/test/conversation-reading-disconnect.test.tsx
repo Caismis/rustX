@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { Server, snapshot, checkpoint, projectionHead, readingWindow } from './fixture';
-import type { ContentRef } from '../../protocol/app-server/v80';
+import type { ContentRef } from '../../protocol/app-server/v81';
 let frames: Map<number, FrameRequestCallback>, serial = 0;
 beforeEach(() => {
   frames = new Map(); vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.set(++serial, callback); return serial; });
@@ -61,8 +61,8 @@ it.each(['node', 'authority'] as const)('retains compaction-separated process DO
   const server = new Server(), process = { conversation_id: 'conversation-A', attempt_id: 'a', outcome: 'running' as const, control_cursor: '1', final_message_id_deferred: false, message_count: 2, tool_call_count: 1 };
   const entry = (cursor: string, id: string, text: string) => ({ cursor, turn_process: process, item: { type: 'message' as const, message: { role: 'assistant' as const, id, content: [{ type: 'reasoning' as const, text }] } } });
   const result = { cursor: '2', turn_process: process, item: { type: 'message' as const, message: { role: 'tool' as const, id: 'result', occurrence: { assistant_message_id: 'first', block_index: 0 }, tool_call_id: 'call', tool_id: 'read', result: { status: { type: 'success' as const }, duration_ms: '1', content: [] } } } };
-  const head = { ...projectionHead(), conversation_id: 'conversation-A', transcript_anchor: '2' };
-  const older = { ...head, checkpoint_id: 'checkpoint-older', activation_id: '0', transcript_anchor: '1' };
+  const head = { ...projectionHead(), conversation_id: 'conversation-A', activation_id: '2', transcript_anchor: '2' };
+  const older = { ...head, checkpoint_id: 'checkpoint-older', activation_id: '1', transcript_anchor: '1' };
   const value = { ...snapshot(), context: { compaction_count: 1, compaction_in_progress: false, projection_head: head }, transcript: { entries: [entry('1', 'first', 'Before compaction'), result, entry('3', 'second', 'After compaction')] } };
   server.snapshots.set('A', value); await server.attached('A');
   const read = vi.spyOn(server.client, 'projections').mockResolvedValue({ records: [older, head], next_activation: null });

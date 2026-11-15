@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Menu } from '@base-ui/react/menu';
 import clsx from 'clsx';
-import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v80';
+import type { WorkflowReferenceChoice } from '../../../../../../../protocol/app-server/v81';
 import { useTranslation } from '../../../../../locale/react';
 import {
   IconChevronDownOutline14,

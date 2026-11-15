@@ -1,8 +1,8 @@
 # TUI and App Server configuration
 
-The TUI is a projection/control client of App Server protocol v80. It does not parse
+The TUI is a projection/control client of App Server protocol v81. It does not parse
 TOML, resolve overlays or discover resources. Generated contracts live in
-[`protocol/app-server/v80.ts`](../protocol/app-server/v80.ts).
+[`protocol/app-server/v81.ts`](../protocol/app-server/v81.ts).
 
 Initial MCP preparation is native-owned. Early attachment remains asynchronous
 and the editor stays usable. On the first nonempty submission, the TUI sends
@@ -266,7 +266,7 @@ capacity/deletion blockers, committed Return data and a lossless next-page comma
 Workflow displays use native Tool/Scheduled origins; a Scheduled run has no outer
 canonical ToolCall or Human Attempt.
 
-The existing footer, working line and Session selector consume Native v80 Thread
+The existing footer, working line and Session selector consume Native v81 Thread
 status. Selector rows use their active-node Thread identity; the footer uses the
 exact focused attachment. Runtime waits come from Native activeFlags, with
 connection loss and incomplete repair shown as unavailable. Pure status reads and

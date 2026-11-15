@@ -1,6 +1,6 @@
 import { SettingsNotice } from '../SettingsFeedback';
 import { useRef, useState } from 'react';
-import type { ProviderWrite, SourceMutation } from '../../../../../protocol/app-server/v80';
+import type { ProviderWrite, SourceMutation } from '../../../../../protocol/app-server/v81';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { DialogSurface } from '../../../presentation/primitives/DialogSurface';

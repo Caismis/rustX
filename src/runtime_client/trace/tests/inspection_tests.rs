@@ -615,7 +615,7 @@ fn t08_t14_trace_assistant_compaction_and_lifecycle_heads_use_their_own_kind() {
             );
         } else if record.kind == TraceKind::Compaction {
             assert!(
-                matches!(head.content, TraceInspectionContent::Compaction { ref page } if page.total == 0)
+                matches!(head.content, TraceInspectionContent::Compaction { ref page, checkpoint: None } if page.total == 0)
             );
             assert_eq!(
                 head.record.native_id.as_deref(),

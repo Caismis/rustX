@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot, projectionHead } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v80';
+import type { CompactionOperationPhase, RuntimeClientContextView, RuntimeClientCompactionOperation } from '../../protocol/app-server/v81';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -14,6 +14,55 @@ async function observe(context: RuntimeClientContextView) {
 }
 function compact() { act(() => { expect(server.client.compact('A')).toBe(true); }); }
 const count = () => server.requests.filter(item => item.request.method === 'context/compact').length;
+const operation = (phase: CompactionOperationPhase, live = true): RuntimeClientCompactionOperation => ({
+  live, status: { operation_id: 'background-operation', admission_generation: '1',
+    triggering_attempt_id: 'ended-attempt', waiting_attempt_id: null,
+    phase, accepted_fragments: 2, diagnostic: null },
+});
+
+it('keeps one independent status across Attempt settlement, Ready and committed publication', async () => {
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  await observe({ ...base, compaction_operations: [operation('generating')] });
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
+  expect(screen.getByRole('status').textContent).toContain('Summarizing previous context');
+  expect(view.container.querySelector('[data-compaction-marker]')).toBeNull();
+  await observe({ ...base, compaction_operations: [operation('ready')] });
+  expect(screen.getByRole('status').textContent).toContain('Summary ready');
+  expect(view.container.querySelector('[data-shimmer]')).toBeNull();
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
+  await observe({ ...base, projection_head: projectionHead(), compaction_operations: [operation('committed', false)] });
+  expect(view.container.innerHTML).toBe('');
+  expect(count()).toBe(0);
+});
+
+it('shows each competing operation once and does not turn repeated chunk progress into Chat markers', async () => {
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  const context = { ...base, compaction_in_progress: true, compaction_operations: [operation('retrying')],
+    compaction_progress: { operation_id: 'foreground-operation', mode: 'overflow' as const, accepted_fragments: 3, source_ranges: [], generation: null } };
+  await observe(context);
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(2);
+  expect(screen.getByRole('status').textContent).toContain('Context limit reached');
+  await observe({ ...context, compaction_progress: { ...context.compaction_progress, accepted_fragments: 4 } });
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(2);
+  expect(view.container.querySelector('[data-compaction-marker]')).toBeNull();
+  await observe({ ...context, compaction_progress: { ...context.compaction_progress, operation_id: 'background-operation' } });
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
+});
+
+it('does not animate cold historical work or duplicate its typed failure using an unscoped diagnostic', async () => {
+  const view = render(<ContextSeat client={server.client} sessionId="A"/>);
+  await observe({ ...base, compaction_operations: [operation('generating', false)] });
+  expect(screen.getByRole('status').textContent).toContain('no longer active');
+  expect(view.container.querySelector('[data-shimmer]')).toBeNull();
+  const failed = operation('failed', false);
+  failed.status.diagnostic = 'Exact independent failure';
+  await observe({ ...base, compaction_error: failed.status.diagnostic, compaction_operations: [failed] });
+  expect(view.container.querySelectorAll('[data-compaction-operation]')).toHaveLength(1);
+  expect(view.container.querySelectorAll('button')).toHaveLength(1);
+  fireEvent.click(screen.getByRole('button', { name: 'Context summary · Context summary failed' }));
+  expect(screen.getByRole('status').textContent).toContain('Exact independent failure');
+  expect(view.container.querySelector('[data-compaction-marker]')).toBeNull();
+});
 it.each([null, 'Exact pre-commit failure'])('exact native release frees only A while its RPC remains held: %s', async error => {
   server.held.add('context/compact');
   server.handlers.set('context/compact', () => (compactReceipt(base)));
@@ -110,7 +159,7 @@ it('retains the exact manual receipt while newer native state owns the live seat
   expect(request.status).toBe('failed');
   await observe({ ...base, compaction_in_progress: true, compaction_progress: { operation_id: 'other-operation', mode: 'overflow', accepted_fragments: 1, source_ranges: [], generation: null } });
   expect(server.client.getSnapshot().views.A.compactionRequest).toEqual(request);
-  expect(screen.getByRole('status').textContent).toContain('Compacting context');
+  expect(screen.getByRole('status').textContent).toContain('Context limit reached');
   await observe({ ...base, compaction_count: 1, latest_compaction: { operation_id: 'other-operation', generation: '1', checkpoint_id: 'other-checkpoint', activation_id: '1', tokens_before: { input_tokens: '100', source: 'provider_reported' }, estimated_tokens_after: '20' } });
   expect(server.client.getSnapshot().views.A.compactionRequest).toEqual(request);
   expect(screen.getByRole('status').textContent).toContain('Context compacted');

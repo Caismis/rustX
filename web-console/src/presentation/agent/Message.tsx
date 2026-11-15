@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Derived from pinned Harness; see PROVENANCE.md. */
 import { useState, type ReactNode } from 'react';
-import { IconApiOutline14, IconChevronDownOutline14, IconChevronRightOutline14 } from '../primitives/icons';
+import { CompactionIcon } from '../primitives/CompactionIcon';
 import { TextShimmer } from '../primitives/TextShimmer';
 import { fileExtension, FileTypeIcon } from '../primitives/FileTypeIcon';
 import { fileSizeText } from '../primitives/file-size';
@@ -25,15 +25,15 @@ export function AssistantMessage({ label, children, stopped, actions }: { label:
 }
 
 /** Harness compaction marker/command. Only its expanded body contains summary text. */
-export function CompactionMessage({ title, summary, children, running = false, error = false }: { title: string; summary: string; children?: ReactNode; running?: boolean; error?: boolean }) {
+export function CompactionMessage({ title, summary, children, running = false, error = false, committed = false }: { title: string; summary: string; children?: ReactNode; running?: boolean; error?: boolean; committed?: boolean }) {
  const [open, setOpen] = useState(false);
  const expandable = !!children, expanded = expandable && open;
- return <div className={css.compactionRow} data-compaction-marker="" data-state={running ? 'running' : error ? 'error' : 'ok'}>
+  return <div className={css.compactionRow} data-compaction-marker={committed ? '' : undefined} data-state={running ? 'running' : error ? 'error' : 'ok'}>
   <button type="button" className={css.compactionButton} disabled={!expandable} aria-label={`${title} · ${summary}`} aria-expanded={expandable ? expanded : undefined} onClick={() => setOpen(value => !value)}>
    <span className={css.compactionLeading} aria-hidden="true">
-    <span className={css.compactionContextIcon} data-compaction-icon="context"><IconApiOutline14/></span>
+    <span className={css.compactionContextIcon} data-compaction-icon="context"><CompactionIcon kind="context"/></span>
     <span className={css.compactionDisclosureIcon} data-compaction-disclosure={expanded ? 'expanded' : 'collapsed'}>
-     {expanded ? <IconChevronDownOutline14/> : <IconChevronRightOutline14/>}
+     <CompactionIcon kind={expanded ? 'expanded' : 'collapsed'}/>
     </span>
    </span>
    <span className={css.compactionTitle}>{title}</span>

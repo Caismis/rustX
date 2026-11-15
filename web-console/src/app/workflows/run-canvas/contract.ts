@@ -3,7 +3,7 @@ import type {
   WorkflowFileDocument,
   WorkflowRunSnapshotChunk,
   WorkflowRunSnapshotHeader,
-} from '../../../../../protocol/app-server/v80';
+} from '../../../../../protocol/app-server/v81';
 
 export type { WorkflowRunSnapshotChunk, WorkflowRunSnapshotHeader };
 

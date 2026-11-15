@@ -54,6 +54,11 @@ import { ProviderEmulator } from "./support/provider-emulator.ts";
 import { TempFixture } from "./support/temp-fixture.ts";
 import { until } from "./support/app-server-peer.ts";
 import { mcpStartupGate, requireMcpStartupSupervisor, startupToolSchema, startupWait } from './support/mcp-startup-gate.ts';
+import { compactionCatalog, compactionModelFields, compactionPrompt, compactionSummary } from '../../test-support/compaction-client-fixture.mts';
+import { renderTranscript } from '../src/ui/components/transcript.ts';
+import { workingStatus } from '../src/ui/components/status.ts';
+import { defaultPreferences, compactionKey, withToggledCompaction } from '../src/ui/preferences.ts';
+import { blockText } from './support/render.ts';
 
 /** The cargo target directory, overridable for a non-default layout. */
 const BINARY =
@@ -211,6 +216,61 @@ async function openSession(
   await host.renameSession(created.session.id, "TUI integration fixture");
   return host.attach(created.session.id, created.session.active_node);
 }
+
+it('renders one native multi-call compaction through the actual TUI client and reconnect', { skip: SKIP, timeout: 420_000 }, async t => {
+  const provider = await ProviderEmulator.start('chunked_compaction');
+  const fixture = ServerFixture.create('rustx-tui-chunked-', provider.url());
+  writeFileSync(join(fixture.home, 'rustx/rustx.toml'), 'approval_mode = \"full_access\"\n' + compactionCatalog(provider.baseUrl, CREDENTIAL_VARIABLE)
+    + '[agent.model]\nmodel = "fixture/chat-model"\n' + compactionModelFields);
+  const external = await ExternalAppServer.start(fixture);
+  let host = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+  let passed = false;
+  try {
+    const session = await openSession(host, fixture.settings('chunked'));
+    await session.submitInbound([{ type: 'text', text: compactionPrompt }]);
+    await provider.awaitGate('first-prompt-summary', 300_000);
+    await until(() => !!session.state.context.compaction_operations?.length, 'native operation is visible');
+    const operations = session.state.context.compaction_operations!;
+    assert.equal(operations.length, 1);
+    const id = operations[0]!.status.operation_id;
+    assert.match(workingStatus(session.state)!, /context|summary|Compacting/);
+    assert.equal(renderTranscript(session.state, defaultPreferences()).filter(block => block.kind === 'compaction').length, 0);
+    await provider.releaseGate('first-prompt-summary');
+    await until(() => session.state.attempt?.phase.type === 'settled', 'multi-call attempt settles');
+    assert.equal(session.state.attempt?.phase.type, 'settled');
+    const head = session.state.context.projection_head;
+    assert.ok(head, 'only the native installed checkpoint becomes a marker');
+    const installed = session.state.context.compaction_operations!.find(value => value.status.operation_id === id)!;
+    assert.equal(installed.status.phase, 'committed');
+    assert.ok(installed.status.accepted_fragments > 12);
+    const requests = await provider.requests();
+    const summaries = requests.filter(request => request.model === 'summary-model');
+    assert.ok(summaries.length > 13);
+    assert.equal((summaries[0]!.body as { response_format: { type: string } }).response_format.type, 'json_schema');
+    assert.ok(summaries.slice(1).every(request => (request.body as { response_format?: unknown }).response_format === undefined));
+    const preferences = withToggledCompaction(defaultPreferences(), compactionKey(head));
+    const markers = renderTranscript(session.state, preferences).filter(block => block.kind === 'compaction');
+    assert.equal(markers.length, 1);
+    assert.match(blockText(markers[0]!), new RegExp(compactionSummary));
+    assert.doesNotMatch(blockText(markers[0]!), /private-summary-reasoning-522/);
+    await session.projections();
+    assert.equal(session.projectionHistory.length, 1);
+    const sessionId = session.sessionId, nodeId = session.nodeId;
+    await host.shutdown();
+    host = await AppServerHost.connectRemote({ endpoint: external.endpoint, token: TRANSPORT_TOKEN });
+    const restored = await host.attach(sessionId, nodeId);
+    assert.equal(restored.state.context.projection_head?.checkpoint_id, head.checkpoint_id);
+    assert.equal(renderTranscript(restored.state, preferences).filter(block => block.kind === 'compaction').length, 1);
+    t.diagnostic(JSON.stringify({ operation: id, fragments: installed.status.accepted_fragments, physicalRequests: summaries.length, checkpoint: head.checkpoint_id }));
+    passed = true;
+  } catch (error) {
+    t.diagnostic(`${external.diagnostics}\n${provider.diagnostics}`);
+    throw error;
+  } finally {
+    await host.shutdown(); await external.stop(); fixture.cleanup();
+    if (passed) await provider.finish(); else await provider.stop();
+  }
+});
 
 it('early TUI startup waits for live MCP discovery before its first provider request', { skip: SKIP, timeout: 120_000 }, async t => {
   requireMcpStartupSupervisor(BINARY);

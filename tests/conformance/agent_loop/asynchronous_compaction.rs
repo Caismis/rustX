@@ -291,6 +291,41 @@ async fn detached_summary_outlives_two_attempts_and_installs_only_after_idle() {
     }
     assert_terminal_is_last_owned(&journal, &first);
     assert_terminal_is_last_owned(&journal, &second);
+    let started = journal
+        .iter()
+        .find(|entry| {
+            matches!(&entry.event,
+                E::CompactionStarted { operation_id, .. } if operation_id == &ready.operation_id
+            )
+        })
+        .expect("native operation anchor");
+    let detail = rpc(
+        &driver.connection,
+        Method::TraceDetail {
+            target: driver.target.clone(),
+            record_id: format!("trace:{}", started.sequence),
+        },
+    )
+    .await
+    .unwrap();
+    let MethodResult::DomainPage { page } = detail else {
+        panic!("finite native compaction inspection");
+    };
+    let inspection = page.items[0].value.as_ref().unwrap();
+    assert_eq!(
+        inspection["content"]["checkpoint"]["checkpoint_id"],
+        serde_json::json!(head.candidate.checkpoint_id)
+    );
+    assert_eq!(
+        inspection["content"]["checkpoint"]["activation_id"],
+        head.activation.activation.0.to_string()
+    );
+    assert!(
+        inspection["content"]["checkpoint"]["summary_preview"]["text"]
+            .as_str()
+            .unwrap()
+            .contains(CHUNKED_SUMMARY)
+    );
     let statuses: Vec<_> = journal
         .iter()
         .filter_map(|entry| match &entry.event {

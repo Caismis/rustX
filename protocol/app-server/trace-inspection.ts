@@ -1,4 +1,4 @@
-import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v80.ts';
+import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v81.ts';
 
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const userSource=(value:unknown)=>value==='human'||value==='fleet'||value==='external_system'||value==='runtime'||object(value)&&(object(value.agent)&&typeof value.agent.agent_id==='string'||object(value.extension)&&typeof value.extension.contributor==='string');
@@ -27,6 +27,12 @@ export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceIn
    if(!object(field)||field.type!=='value'||field.field!=='definition'||typeof field.domain!=='string'||!/^trace\.records\.[1-9][0-9]*\.detail\.request\.tools$/.test(field.domain)||!coordinate(field.item_offset)||!Array.isArray(field.path)||field.path.length!==0||!count(field.encoded_bytes))throw Error('Original Tool definition selector changed.');
   }else if(definition.type!=='absent'&&definition.type!=='unavailable')throw Error('Original Tool definition evidence changed.');
  }else if(content.type==='compaction'){
+  if(content.checkpoint!=null){
+   const checkpoint=content.checkpoint;
+   if(!object(record.compaction)||record.compaction.outcome!=='committed'||!object(checkpoint)
+    ||typeof checkpoint.checkpoint_id!=='string'||!checkpoint.checkpoint_id||!count(checkpoint.activation_id)||!count(checkpoint.transcript_anchor)
+    ||checkpoint.summary_preview!=null&&(!object(checkpoint.summary_preview)||typeof checkpoint.summary_preview.text!=='string'||typeof checkpoint.summary_preview.truncated!=='boolean'))throw Error('Original Compaction checkpoint relation changed.');
+  }
   const collection=content.page;
   if(!object(collection)||collection.domain!==`${page.domain}.calls`||!count(collection.total)||!Array.isArray(collection.items)||collection.items.length>4
    ||collection.next_offset!=null&&!count(collection.next_offset))throw Error('Original Compaction Call collection changed.');

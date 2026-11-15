@@ -7544,6 +7544,7 @@ export type TraceInspectionContent =
     }
   | {
       page: TraceInspectionCompactionCalls;
+      checkpoint?: RuntimeClientProjectionHeadView | null;
       type: 'compaction';
     }
   | {

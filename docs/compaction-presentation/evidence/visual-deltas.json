@@ -1,0 +1,145 @@
+{
+  "scope": "Only the running Compaction role and native state text in the existing Trajectory row; screenshot comparator and noise policy unchanged.",
+  "references": [
+    {
+      "reference": "trajectory-calls-linux.png",
+      "pixels": 790,
+      "bounds": {
+        "minX": 33,
+        "minY": 552,
+        "maxX": 243,
+        "maxY": 566
+      },
+      "width": 1440,
+      "height": 1000,
+      "before_sha256": "49fd4e9a2baabe27ec5f4222185f025a212326a09c5858e0715cb6018c9a6ded",
+      "after_sha256": "e292d6a01de869d6a419e9af6d47c391480c1a36fd0c1d5725a0deea63c4e835"
+    },
+    {
+      "reference": "trajectory-inspector-1440-dark-linux.png",
+      "pixels": 799,
+      "bounds": {
+        "minX": 33,
+        "minY": 562,
+        "maxX": 243,
+        "maxY": 576
+      },
+      "width": 1440,
+      "height": 844,
+      "before_sha256": "f8e3783a76129615a84cdc3903b4166cb4992d2dec27468ece4c51b0bce0b829",
+      "after_sha256": "a790bf862503c69f7c647392d2e803e0738bc6232871e6ac4ab9b783b0b500e8"
+    },
+    {
+      "reference": "trajectory-inspector-1440-light-linux.png",
+      "pixels": 790,
+      "bounds": {
+        "minX": 33,
+        "minY": 562,
+        "maxX": 243,
+        "maxY": 576
+      },
+      "width": 1440,
+      "height": 844,
+      "before_sha256": "9b89052da3f31126311bb4efb9b64ad8bab257c37d3c26f7709f7b64ba0457c7",
+      "after_sha256": "2547d54f8f3243bb36ebca30b052449de89f88934282c72fd92a9998fa5b7c3e"
+    },
+    {
+      "reference": "trajectory-ledger-1440-dark-linux.png",
+      "pixels": 799,
+      "bounds": {
+        "minX": 33,
+        "minY": 562,
+        "maxX": 243,
+        "maxY": 576
+      },
+      "width": 1440,
+      "height": 844,
+      "before_sha256": "5041d594d577528e41decdc8d009019690f9454bc5a1ccc8a7fd87da40e90277",
+      "after_sha256": "ad110ff12067adec55a21e0529bcbdb18c42f9e3682625d007f175a2def8ecde"
+    },
+    {
+      "reference": "trajectory-ledger-1440-light-linux.png",
+      "pixels": 790,
+      "bounds": {
+        "minX": 33,
+        "minY": 562,
+        "maxX": 243,
+        "maxY": 576
+      },
+      "width": 1440,
+      "height": 844,
+      "before_sha256": "f9b1f30820d3beb3eed12a264a8bbe6f704816bc1cb7bac36fe0769f21063313",
+      "after_sha256": "b0d6c6b87c380ea26689ff9de8657061f372e717f561dd2fc323fc010310d910"
+    },
+    {
+      "reference": "trajectory-ledger-390-dark-linux.png",
+      "pixels": 293,
+      "bounds": {
+        "minX": 118,
+        "minY": 562,
+        "maxX": 171,
+        "maxY": 570
+      },
+      "width": 390,
+      "height": 844,
+      "before_sha256": "289be13c481cfe14b8f1ef3f0b1456c59133447a07bd98b409734d18b5f51c62",
+      "after_sha256": "46f1e5333e54d6c2753381f2b189bf9ac39a921f128f598f9d9423fa8ccd49ce"
+    },
+    {
+      "reference": "trajectory-ledger-390-light-linux.png",
+      "pixels": 286,
+      "bounds": {
+        "minX": 118,
+        "minY": 562,
+        "maxX": 171,
+        "maxY": 570
+      },
+      "width": 390,
+      "height": 844,
+      "before_sha256": "543c601629a9b903fd968b14392c8f87299c4b53cb1442728c026ac45b3fa025",
+      "after_sha256": "d3d85ec93bf5b792df8d0cffe17c9a55b495ee9ce8b99e1c06648256f7f51fd4"
+    },
+    {
+      "reference": "trajectory-resize-reset-linux.png",
+      "pixels": 790,
+      "bounds": {
+        "minX": 33,
+        "minY": 562,
+        "maxX": 243,
+        "maxY": 576
+      },
+      "width": 1050,
+      "height": 844,
+      "before_sha256": "efcfcfbf8d73f5b8ce56ee0ebab3047a7d7e37e51f156556e4aa626e82f40a32",
+      "after_sha256": "149098eb92375154b59f0a2cf887b1249b5623ec570de912e6a4739d7587a2fd"
+    },
+    {
+      "reference": "trajectory-resized-narrow-ledger-linux.png",
+      "pixels": 286,
+      "bounds": {
+        "minX": 118,
+        "minY": 562,
+        "maxX": 171,
+        "maxY": 570
+      },
+      "width": 1050,
+      "height": 844,
+      "before_sha256": "2a92a184710577d3656847af65ca4804556bcb6c1dafaedbd92500088efaafef",
+      "after_sha256": "14a3169e12d16749d0fb6f278c66966c69095a0a6622256c91faae5efdf17070"
+    },
+    {
+      "reference": "trajectory-truncated-diff-linux.png",
+      "pixels": 790,
+      "bounds": {
+        "minX": 33,
+        "minY": 552,
+        "maxX": 243,
+        "maxY": 566
+      },
+      "width": 1440,
+      "height": 1000,
+      "before_sha256": "5abc3815e3a34e231351a22d3b339c3fdff616e4d86ba9acc075bd0b5a9c5af4",
+      "after_sha256": "d75e5e4e8cd596d6784b9687df84bb796a6a98e96724e2ce1e3bc43601a5d73b"
+    }
+  ]
+}

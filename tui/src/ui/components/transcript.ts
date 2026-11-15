@@ -91,6 +91,7 @@ import {
 import {
   type PresentationPreferences,
   isToolCallExpanded,
+  compactionKey,
 } from "../preferences.ts";
 import { requesterLines } from "./questionnaire-answers.ts";
 import { type BackgroundRole, role, style } from "../theme.ts";
@@ -108,6 +109,12 @@ import {
  * lies about its own bytes.
  */
 export type TranscriptBlock =
+  | {
+      kind: 'compaction'; key: string; background: 'compaction';
+      head: NonNullable<PresentationState['context']['projection_head']>;
+      receipt: PresentationState['context']['latest_compaction'];
+      expanded: boolean;
+    }
   | {
       kind: "markdown";
       key: string;
@@ -151,6 +158,7 @@ export function renderTranscript(
   state: PresentationState,
   preferences: PresentationPreferences,
   correlation?: ToolCorrelation,
+  historicalCompactions: readonly NonNullable<PresentationState['context']['projection_head']>[] = [],
 ): TranscriptBlock[] {
   const context: TranscriptContext = {
     preferences,
@@ -159,15 +167,25 @@ export function renderTranscript(
     foreground:state.attempt?.foreground,
   };
   const blocks: TranscriptBlock[] = [];
+  const known = new Map(historicalCompactions.map(head => [compactionKey(head), head]));
   const projection = state.context.projection_head;
-  if (projection) {
-    const source = projection.destination_installation == null ? 'Local model projection' : 'Inherited model projection';
-    blocks.push({ kind: 'text', key: `projection:${projection.checkpoint_id}:provenance`,
-      text: role.meta(`${source} ${projection.activation_id} · canonical frontier ${projection.base_frontier} · origin ${projection.origin.conversation_id}/${projection.origin.activation}`) });
-    if (projection.summary_preview?.text) blocks.push({ kind: 'text', key: `projection:${projection.checkpoint_id}:summary`, text: projection.summary_preview.text });
-    if (projection.summary_preview?.truncated) blocks.push({kind:'text',key:`projection:${projection.checkpoint_id}:bounded`,text:role.meta('Bounded projection summary preview')});
-  }
+  if (projection) known.set(compactionKey(projection), projection);
+  const durable = state.transcript.filter(entry => 'cursor' in entry);
+  const first = durable[0], last = durable.at(-1);
+  const markers: Extract<TranscriptBlock, { kind: 'compaction' }>[] = [...known.values()].filter(head => {
+    const anchor = BigInt(head.transcript_anchor);
+    return last ? anchor <= BigInt(last.cursor) && (anchor >= BigInt(first!.cursor) || state.transcriptNextCursor == null)
+      : anchor === 0n && state.transcriptNextCursor == null;
+  }).sort((a,b) => {
+    const delta = BigInt(a.transcript_anchor) - BigInt(b.transcript_anchor) || BigInt(a.activation_id) - BigInt(b.activation_id);
+    return delta < 0n ? -1 : delta > 0n ? 1 : 0;
+  }).map(head => ({ kind: 'compaction', background: 'compaction', key: `compaction:${compactionKey(head)}`, head,
+    receipt: state.context.latest_compaction, expanded: preferences.expandedCompactions.has(compactionKey(head)) }));
+  let nextMarker = 0;
   for (const entry of state.transcript) {
+    while (nextMarker < markers.length && (entry.kind === 'streaming' || 'cursor' in entry && BigInt(entry.cursor) > BigInt(markers[nextMarker]!.head.transcript_anchor))) {
+      blocks.push(markers[nextMarker++]!);
+    }
     blocks.push(...renderEntryBlocks(entry, context));
     if (entry.kind === "committed" && entry.message.role === "assistant") {
       const response = entry.completedResponse;
@@ -182,6 +200,7 @@ export function renderTranscript(
     }
     blocks.push(...renderStatusAnnotations(entry, context));
   }
+  blocks.push(...markers.slice(nextMarker));
   for(const row of state.deferredTranscriptEntries ?? []) {
     blocks.push({kind:"text",key:`deferred-transcript:${row.offset}`,text:`Transcript record ${row.offset} · content deferred; /content loads bounded source bytes`});
     for(const status of context.statuses.byCursor.get(String(row.offset)) ?? [])blocks.push(statusBlock(status,status.opportunities.fresh_inbound != null ? 'attached' : 'standalone'));
