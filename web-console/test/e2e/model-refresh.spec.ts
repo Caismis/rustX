@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { chooseWorkspace, confirmSettingsAction, connectRemote, openEmptySession, openSettingsPage, returnHome } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -78,7 +78,7 @@ for (const width of [1440, 390]) test(`provider single-click navigation and work
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
     throw error;
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('provider rename saves the display name without changing its models', async ({page}) => {
@@ -133,7 +133,7 @@ test('provider rename saves the display name without changing its models', async
     await expect(model).toBeVisible();
     await openEmptySession(page, fixture, 'Workspace A');
     await expect(page.locator('[data-model-select]')).toContainText('fixture/console-model');
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('model connection tests identify an App Server without the probe method', async ({page}) => {
@@ -154,7 +154,7 @@ test('model connection tests identify an App Server without the probe method', a
     await openSettingsPage(page, 'Models');
     await page.getByRole('button', {name:'Test connection for console-model', exact:true}).click();
     await expect(page.locator('[data-toast]')).toHaveText('The connected App Server does not support model connection tests. Update or restart it and try again.');
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('model probe feedback follows explicit tests across provider switches and model edits', async ({page}) => {
@@ -212,7 +212,7 @@ compat = { chat_reasoning_replay = "omit" }
     await probe.click();
     await expect.poll(outcomes).toEqual(['connected', 'rejected', 'unavailable', 'connected']);
     await expect(toast).toHaveText('Connection successful');
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 test('deleting the default and then the last model preserves old conversations and gates new sends', async ({page}) => {
@@ -316,7 +316,10 @@ test('deleting the default and then the last model preserves old conversations a
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
     throw error;
-  } finally { await native.shutdown(); await fixture.stop(false); }
+  } finally {
+    try { await native.shutdown(); }
+    finally { await stopDogfoodPage(page, fixture, false); }
+  }
 });
 
 for (const replaceLastProvider of [false, true]) test(replaceLastProvider
@@ -500,5 +503,8 @@ compat = { chat_reasoning_replay = "omit" }
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
     throw error;
-  } finally { await native.shutdown(); await fixture.stop(false); }
+  } finally {
+    try { await native.shutdown(); }
+    finally { await stopDogfoodPage(page, fixture, false); }
+  }
 });

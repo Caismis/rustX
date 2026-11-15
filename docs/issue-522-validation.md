@@ -49,6 +49,30 @@ tests. The two real TUI Agent-interruption carriers pass an initial run and ten
 additional repetitions each, without retries or skips. These focused and
 repeated results do not establish a completed remote FULL CI run.
 
+### Browser fixture lifecycle and preparation
+
+Model-refresh scenarios retire and drain their browser Product Host routes before
+closing the Host or native process, using the shared `stopDogfoodPage` helper.
+The model-deletion assertions retain their original coverage, including old
+conversation history, unavailable-model send gates and cold reconnection.
+
+The distant-reading fixture still creates 300 real durable Attempts and proves
+all native settlement barriers. Its separate preparation allowance is six minutes;
+actual browser assertions retain their 120-second deadline. In run 43681127986,
+the four-minute setup allowance expired after 263 completed Attempts while the
+next Attempt was running and recent settlements took 754–992 ms each. This was
+continuing preparation rather than a stalled observation barrier. The finite
+six-minute setup allowance covers that measured work without reducing history,
+retrying a test, or weakening its reading and race assertions.
+
+The two failing scenarios pass locally against the immutable Playwright 1.63.0
+image filesystem (`sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7`),
+with its original Chromium, fonts and libraries mounted read-only through
+Bubblewrap. The run executes real App Server and Product Host processes and uses
+the production Web build, with no retries, skips or screenshot changes.
+All eight model-refresh scenarios also pass two complete repetitions (16 passing
+executions), for 18 passing fixed-browser executions across nine distinct scenarios.
+
 ### Earlier integration baseline (2026-11-13)
 
 The following results predate the current main integration:
