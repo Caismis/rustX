@@ -915,6 +915,26 @@ impl Discovery for CargoDiscovery<'_> {
         if let Some(listed) = self.cache.borrow().get(&key) {
             return Ok(listed.clone());
         }
+        // A single `[A-Za-z0-9_:]+` atom is purely a positional narrowing filter
+        // (never an option, whitespace-split rustdoc arg, or NUL-containing
+        // spawn failure). If a successful native global `--ignored` query for
+        // the exact same `(features, target)` already returned empty, any
+        // narrowed `--ignored` subset is empty too without spawning another
+        // native listing.
+        if ignored
+            && let [filter] = libtest
+            && !filter.is_empty()
+            && filter
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b':')
+            && self
+                .cache
+                .borrow()
+                .get(&(features.to_vec(), target.clone(), Vec::new(), true))
+                .is_some_and(BTreeSet::is_empty)
+        {
+            return Ok(BTreeSet::new());
+        }
         let listed = if target.kind == Kind::Doc {
             self.list_doctests(features, libtest, ignored)?
         } else {
@@ -2853,5 +2873,619 @@ fn flow_runs() {
         isolated(&mut run);
         assert!(run.output().unwrap().status.success());
         assert!(marker.exists());
+    }
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    /// Test-local `cargo` wrapper that isolates `CARGO_TARGET_DIR`, logs exact
+    /// NUL-delimited `argv` records, and optionally injects stderr warnings or
+    /// failures.
+    struct CargoWrapper {
+        _dir: tempfile::TempDir,
+        script_path: PathBuf,
+        log_path: PathBuf,
+        fail_path: PathBuf,
+        warn_path: PathBuf,
+    }
+
+    impl CargoWrapper {
+        fn new(target_dir: &Path) -> Self {
+            use std::io::Write;
+            use std::process::Stdio;
+
+            let dir = tempfile::tempdir().unwrap();
+            let script_path = dir.path().join("cargo");
+            let log_path = dir.path().join("calls.log");
+            let fail_path = dir.path().join("fail.msg");
+            let warn_path = dir.path().join("warn.msg");
+            let real_cargo = cargo_program();
+            let script = format!(
+                "#!/bin/sh\n\
+                 set -eu\n\
+                 export CARGO_TARGET_DIR={target}\n\
+                 export CARGO_NET_OFFLINE=true\n\
+                 printf '%s\\0' \"$#\" \"$@\" >> {log}\n\
+                 if [ -f {fail} ]; then\n\
+                   cat {fail} >&2\n\
+                   exit 1\n\
+                 fi\n\
+                 if [ -f {warn} ]; then\n\
+                   cat {warn} >&2\n\
+                 fi\n\
+                 exec {cargo} \"$@\"\n",
+                target = shell_quote(&target_dir.display().to_string()),
+                log = shell_quote(&log_path.display().to_string()),
+                fail = shell_quote(&fail_path.display().to_string()),
+                warn = shell_quote(&warn_path.display().to_string()),
+                cargo = shell_quote(&real_cargo),
+            );
+            // Write and chmod the executable in a child `sh` process so the
+            // parent test runner never holds a writable FD on `script_path`
+            // across parallel test `fork()`s (`ETXTBSY`).
+            let mut writer = Command::new("/bin/sh")
+                .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
+                .arg(&script_path)
+                .stdin(Stdio::piped())
+                .spawn()
+                .unwrap();
+            writer
+                .stdin
+                .take()
+                .unwrap()
+                .write_all(script.as_bytes())
+                .unwrap();
+            assert!(writer.wait().unwrap().success());
+            Self {
+                _dir: dir,
+                script_path,
+                log_path,
+                fail_path,
+                warn_path,
+            }
+        }
+
+        fn cargo(&self) -> String {
+            self.script_path.display().to_string()
+        }
+
+        fn set_fail(&self, message: Option<&str>) {
+            match message {
+                Some(text) => std::fs::write(&self.fail_path, text).unwrap(),
+                None if self.fail_path.exists() => std::fs::remove_file(&self.fail_path).unwrap(),
+                None => {}
+            }
+        }
+
+        fn set_warn(&self, message: Option<&str>) {
+            match message {
+                Some(text) => std::fs::write(&self.warn_path, text).unwrap(),
+                None if self.warn_path.exists() => std::fs::remove_file(&self.warn_path).unwrap(),
+                None => {}
+            }
+        }
+
+        fn take_calls(&self) -> Vec<Vec<String>> {
+            let Ok(bytes) = std::fs::read(&self.log_path) else {
+                return Vec::new();
+            };
+            std::fs::write(&self.log_path, b"").unwrap();
+            if bytes.is_empty() {
+                return Vec::new();
+            }
+            let fields: Vec<&[u8]> = bytes
+                .strip_suffix(b"\0")
+                .unwrap_or(&bytes)
+                .split(|&byte| byte == 0)
+                .collect();
+            let mut calls = Vec::new();
+            let mut index = 0;
+            while index < fields.len() {
+                let argc: usize = std::str::from_utf8(fields[index]).unwrap().parse().unwrap();
+                index += 1;
+                let end = index + argc;
+                let args = fields[index..end]
+                    .iter()
+                    .map(|slice| String::from_utf8(slice.to_vec()).unwrap())
+                    .collect();
+                calls.push(args);
+                index = end;
+            }
+            calls
+        }
+    }
+
+    fn create_fixture(ignored_doctest: bool) -> tempfile::TempDir {
+        let fixture = tempfile::tempdir().unwrap();
+        let root = fixture.path();
+        for (path, text) in FIXTURE {
+            let path = root.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        if ignored_doctest {
+            let lib_rs = root.join("src/lib.rs");
+            let mut content = std::fs::read_to_string(&lib_rs).unwrap();
+            content.push_str(
+                "\n/// ```rust,ignore\n\
+                 /// assert_eq!(lane_fixture::ignored_doc_api(), 7);\n\
+                 /// ```\n\
+                 pub fn ignored_doc_api() -> u32 {\n\
+                     hidden_value()\n\
+                 }\n",
+            );
+            std::fs::write(lib_rs, content).unwrap();
+        }
+        let mut lock = Command::new(cargo_program());
+        lock.arg("generate-lockfile")
+            .current_dir(root)
+            .env("CARGO_TARGET_DIR", root.join("target"))
+            .env("CARGO_NET_OFFLINE", "true");
+        assert!(lock.status().unwrap().success());
+        fixture
+    }
+
+    fn to_strings(items: &[&str]) -> Vec<String> {
+        items.iter().map(|&item| item.to_owned()).collect()
+    }
+
+    fn expected_doc_args(features: &[&str], libtest: &[&str], ignored: bool) -> Vec<String> {
+        let mut args = to_strings(&["test", "--doc", "--locked", "--color", "never"]);
+        args.extend(features.iter().map(|&item| item.to_owned()));
+        args.push("--".to_owned());
+        args.extend(libtest.iter().map(|&item| item.to_owned()));
+        args.push("--list".to_owned());
+        if ignored {
+            args.push("--ignored".to_owned());
+        }
+        args
+    }
+
+    fn normalize_error_diagnostic(message: &str) -> String {
+        let tail = message.split_once(": ").map_or(message, |(_, tail)| tail);
+        tail.lines()
+            .map(|line| {
+                if line.trim_start().starts_with("Finished ")
+                    && let Some((prefix, elapsed)) = line.split_once(" target(s) in ")
+                    && let Some(secs) = elapsed.trim_end().strip_suffix('s')
+                    && !secs.is_empty()
+                    && secs.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+                {
+                    format!("{prefix} target(s) in <elapsed>")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn assert_same_native_outcome(
+        label: &str,
+        actual: &Result<BTreeSet<String>, String>,
+        native: &Result<BTreeSet<String>, String>,
+    ) {
+        match (actual, native) {
+            (Ok(left), Ok(right)) => assert_eq!(left, right, "{label}"),
+            (Err(left), Err(right)) => {
+                assert_eq!(
+                    normalize_error_diagnostic(left),
+                    normalize_error_diagnostic(right),
+                    "{label}"
+                );
+            }
+            _ => panic!("{label}: outcome mismatch: actual={actual:?}, native={native:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_global_ignored_shortcut_reuses_single_atom_and_keeps_positive_native() {
+        let fixture = create_fixture(false);
+        let root = fixture.path();
+        let wrapper = CargoWrapper::new(&root.join("target"));
+        let discovery = CargoDiscovery::new(wrapper.cargo(), root).unwrap();
+        let _ = wrapper.take_calls();
+
+        let features = to_strings(&["--all-features"]);
+        let doc = Target::new(Kind::Doc, "lane_fixture");
+
+        // Populate global doc inventory (`ignored=false` and `ignored=true`, where ignored is empty).
+        let (all_runnable, all_ignored) = discovery.runnable(&features, &doc, &[]).unwrap();
+        assert_eq!(all_runnable.len(), 2);
+        assert_eq!(all_ignored, 0);
+        assert_eq!(
+            wrapper.take_calls(),
+            vec![
+                expected_doc_args(&["--all-features"], &[], false),
+                expected_doc_args(&["--all-features"], &[], true),
+            ]
+        );
+
+        // Single plain ASCII identifier filter: positive query runs natively, ignored reuses empty global.
+        let filtered = discovery
+            .runnable(&features, &doc, &to_strings(&["api_value"]))
+            .unwrap();
+        assert_eq!(
+            wrapper.take_calls(),
+            vec![expected_doc_args(
+                &["--all-features"],
+                &["api_value"],
+                false
+            )]
+        );
+
+        // Must match an uncached fresh native CargoDiscovery exactly.
+        let native_wrapper = CargoWrapper::new(&root.join("target"));
+        let uncached = CargoDiscovery::new(native_wrapper.cargo(), root).unwrap();
+        let expected = uncached
+            .runnable(&features, &doc, &to_strings(&["api_value"]))
+            .unwrap();
+        assert_eq!(filtered, expected);
+
+        // Single `::`-separated owner symbol atom also reuses empty global ignored with 0 spawns.
+        assert_eq!(
+            discovery
+                .list(
+                    &features,
+                    &doc,
+                    &to_strings(&["context::status::AgentStatusSurfaceView"]),
+                    true,
+                )
+                .unwrap(),
+            BTreeSet::new()
+        );
+        assert!(wrapper.take_calls().is_empty());
+    }
+
+    #[test]
+    fn absent_or_nonempty_global_ignored_runs_native_without_prefetch() {
+        // 1. Absent global cache -> native filtered query with NO speculative global prefetch.
+        let empty_doc_fixture = create_fixture(false);
+        let empty_root = empty_doc_fixture.path();
+        let wrapper = CargoWrapper::new(&empty_root.join("target"));
+        let absent_discovery = CargoDiscovery::new(wrapper.cargo(), empty_root).unwrap();
+        let _ = wrapper.take_calls();
+
+        let features = to_strings(&["--all-features"]);
+        let doc = Target::new(Kind::Doc, "lane_fixture");
+        let lib = Target::new(Kind::Lib, "lane_fixture");
+
+        assert_eq!(
+            absent_discovery
+                .list(&features, &doc, &to_strings(&["api_value"]), true)
+                .unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            wrapper.take_calls(),
+            vec![expected_doc_args(&["--all-features"], &["api_value"], true)]
+        );
+
+        // 2. Non-empty global ignored on `lib` -> native filtered queries (matching & non-matching).
+        assert_eq!(
+            absent_discovery.list(&features, &lib, &[], true).unwrap(),
+            BTreeSet::from(["tests::alpha_measured".to_owned()])
+        );
+        assert_eq!(
+            absent_discovery
+                .list(&features, &lib, &to_strings(&["measured"]), true)
+                .unwrap(),
+            BTreeSet::from(["tests::alpha_measured".to_owned()])
+        );
+        assert_eq!(
+            absent_discovery
+                .list(&features, &lib, &to_strings(&["alpha_runs"]), true)
+                .unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            absent_discovery
+                .runnable(&features, &lib, &to_strings(&["alpha_runs"]))
+                .unwrap(),
+            (BTreeSet::from(["tests::alpha_runs".to_owned()]), 0)
+        );
+
+        // 3. Non-empty global ignored on `doc` (fixture created BEFORE fresh discovery owner).
+        let ignored_doc_fixture = create_fixture(true);
+        let ignored_root = ignored_doc_fixture.path();
+        let doc_wrapper = CargoWrapper::new(&ignored_root.join("target"));
+        let doc_discovery = CargoDiscovery::new(doc_wrapper.cargo(), ignored_root).unwrap();
+        let _ = doc_wrapper.take_calls();
+
+        let global_ignored = doc_discovery.list(&features, &doc, &[], true).unwrap();
+        assert_eq!(global_ignored.len(), 1);
+        assert!(
+            global_ignored
+                .iter()
+                .all(|name| name.contains("ignored_doc_api"))
+        );
+        let _ = doc_wrapper.take_calls();
+
+        assert_eq!(
+            doc_discovery
+                .list(&features, &doc, &to_strings(&["ignored_doc_api"]), true)
+                .unwrap(),
+            global_ignored
+        );
+        assert_eq!(
+            doc_wrapper.take_calls(),
+            vec![expected_doc_args(
+                &["--all-features"],
+                &["ignored_doc_api"],
+                true
+            )]
+        );
+
+        assert_eq!(
+            doc_discovery
+                .list(&features, &doc, &to_strings(&["api_value"]), true)
+                .unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            doc_wrapper.take_calls(),
+            vec![expected_doc_args(&["--all-features"], &["api_value"], true)]
+        );
+    }
+
+    #[test]
+    fn empty_global_ignored_requires_exact_features_and_target_and_success() {
+        let fixture = create_fixture(false);
+        let root = fixture.path();
+        let wrapper = CargoWrapper::new(&root.join("target"));
+        let discovery = CargoDiscovery::new(wrapper.cargo(), root).unwrap();
+        let _ = wrapper.take_calls();
+
+        let all_features = to_strings(&["--all-features"]);
+        let doc = Target::new(Kind::Doc, "lane_fixture");
+        let bin = Target::new(Kind::Bin, "lane_fixture");
+        let lib = Target::new(Kind::Lib, "lane_fixture");
+
+        // Populate empty global ignored for `(&["--all-features"], &doc)` and `(&["--all-features"], &bin)`.
+        assert_eq!(
+            discovery.list(&all_features, &doc, &[], true).unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            discovery.list(&all_features, &bin, &[], true).unwrap(),
+            BTreeSet::new()
+        );
+        let _ = wrapper.take_calls();
+
+        // Different features vectors never borrow `(&["--all-features"], &doc)`.
+        assert_eq!(
+            discovery
+                .list(&[], &doc, &to_strings(&["api_value"]), true)
+                .unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            wrapper.take_calls(),
+            vec![expected_doc_args(&[], &["api_value"], true)]
+        );
+
+        let no_default = to_strings(&["--no-default-features"]);
+        assert_eq!(
+            discovery
+                .list(&no_default, &doc, &to_strings(&["api_value"]), true)
+                .unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            wrapper.take_calls(),
+            vec![expected_doc_args(
+                &["--no-default-features"],
+                &["api_value"],
+                true
+            )]
+        );
+
+        // Different target with same features never borrows `doc` or `bin` empty sets.
+        assert_eq!(
+            discovery
+                .list(&all_features, &lib, &to_strings(&["measured"]), true)
+                .unwrap(),
+            BTreeSet::from(["tests::alpha_measured".to_owned()])
+        );
+
+        // Failed global producer never inserts empty into cache.
+        let fail_wrapper = CargoWrapper::new(&root.join("target"));
+        let fail_discovery = CargoDiscovery::new(fail_wrapper.cargo(), root).unwrap();
+        let _ = fail_wrapper.take_calls();
+
+        fail_wrapper.set_fail(Some("error: simulated global failure\n"));
+        let err = fail_discovery
+            .list(&all_features, &doc, &[], true)
+            .unwrap_err();
+        assert!(err.contains("error: simulated global failure"), "{err}");
+        fail_wrapper.set_fail(None);
+        let _ = fail_wrapper.take_calls();
+
+        assert_eq!(
+            fail_discovery
+                .list(&all_features, &doc, &to_strings(&["api_value"]), true)
+                .unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            fail_wrapper.take_calls(),
+            vec![expected_doc_args(&["--all-features"], &["api_value"], true)]
+        );
+    }
+
+    const DIAG_ENV: &str = "RUSTX_LANE_CHECK_DIAG_FIXTURE";
+
+    #[test]
+    #[ignore = "fixture subprocess, invoked by diagnostics preservation test"]
+    fn diagnostics_preservation_child() {
+        let root =
+            std::env::var_os(DIAG_ENV).expect("diagnostics parent must provide fixture root");
+        let root = PathBuf::from(root);
+        let wrapper = CargoWrapper::new(&root.join("target"));
+        let discovery = CargoDiscovery::new(wrapper.cargo(), &root).unwrap();
+        let _ = wrapper.take_calls();
+
+        let features = to_strings(&["--all-features"]);
+        let doc = Target::new(Kind::Doc, "lane_fixture");
+
+        // 1. Successful global ignored query relays warning stderr.
+        wrapper.set_warn(Some("warning: global-ignored-diag\n"));
+        assert_eq!(
+            discovery.list(&features, &doc, &[], true).unwrap(),
+            BTreeSet::new()
+        );
+        let _ = wrapper.take_calls();
+
+        // 2. Positive query still runs natively and relays warning stderr, while ignored reuses cache.
+        wrapper.set_warn(Some("warning: positive-query-diag\n"));
+        let (runnable, ignored) = discovery
+            .runnable(&features, &doc, &to_strings(&["api_value"]))
+            .unwrap();
+        assert_eq!(runnable.len(), 2);
+        assert_eq!(ignored, 0);
+        assert_eq!(
+            wrapper.take_calls(),
+            vec![expected_doc_args(
+                &["--all-features"],
+                &["api_value"],
+                false
+            )]
+        );
+        wrapper.set_warn(None);
+
+        // 3. Failed global query relays diagnostic stderr both in Err and process stderr.
+        let failing = CargoDiscovery::new(wrapper.cargo(), &root).unwrap();
+        wrapper.set_fail(Some("error: global-failure-diag\n"));
+        let err = failing.list(&features, &doc, &[], true).unwrap_err();
+        assert!(err.contains("error: global-failure-diag"), "{err}");
+    }
+
+    #[test]
+    fn diagnostics_and_warnings_are_preserved_across_global_positive_and_failed_queries() {
+        let fixture = create_fixture(false);
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "tests::diagnostics_preservation_child",
+                "--exact",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env(DIAG_ENV, fixture.path())
+            .output()
+            .unwrap();
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            output.status.success(),
+            "child failed:\nstdout:\n{}\nstderr:\n{stderr}",
+            String::from_utf8_lossy(&output.stdout),
+        );
+        assert!(stderr.contains("warning: global-ignored-diag"), "{stderr}");
+        assert!(stderr.contains("warning: positive-query-diag"), "{stderr}");
+        assert!(stderr.contains("error: global-failure-diag"), "{stderr}");
+
+        // Diagnostic normalization strips only command identity and Cargo's
+        // volatile `Finished ... target(s) in <secs>s` elapsed field, preserving
+        // all real error/warning text.
+        let fast = "\"/tmp/a/cargo\" \"test\": doctest discovery failed:\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\nerror: Unrecognized option: 'bogus'";
+        let slow = "\"/tmp/b/cargo\" \"test\": doctest discovery failed:\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\nerror: Unrecognized option: 'bogus'";
+        let diff = "\"/tmp/b/cargo\" \"test\": doctest discovery failed:\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\nerror: Unrecognized option: 'other'";
+        assert_eq!(
+            normalize_error_diagnostic(fast),
+            normalize_error_diagnostic(slow)
+        );
+        assert_ne!(
+            normalize_error_diagnostic(fast),
+            normalize_error_diagnostic(diff)
+        );
+    }
+
+    #[test]
+    fn excluded_argument_shapes_delegate_and_match_uncached_native_outcomes() {
+        let fixture = create_fixture(false);
+        let root = fixture.path();
+        let wrapper = CargoWrapper::new(&root.join("target"));
+        let metadata = metadata_targets(&wrapper.cargo(), root).unwrap();
+        let cached = CargoDiscovery::from_metadata(wrapper.cargo(), root, metadata.clone());
+        let native_wrapper = CargoWrapper::new(&root.join("target"));
+
+        let features = to_strings(&["--all-features"]);
+        let doc = Target::new(Kind::Doc, "lane_fixture");
+        let flow = Target::new(Kind::Test, "flow");
+
+        // Populate empty global ignored for both `doc` and `flow`.
+        assert_eq!(
+            cached.list(&features, &doc, &[], true).unwrap(),
+            BTreeSet::new()
+        );
+        assert_eq!(
+            cached.list(&features, &flow, &[], true).unwrap(),
+            BTreeSet::new()
+        );
+        let _ = wrapper.take_calls();
+
+        let doc_shapes: &[&[&str]] = &[
+            &["api_value", "--exact"],
+            &["--skip", "other"],
+            &["api_value", "other"],
+            &["--bogus"],
+            &["--skip"],
+            &["--exact", "--exact"],
+            &["--skip", "--exact"],
+            &[""],
+            &["foo --bogus"],
+            &["api_value --include-ignored"],
+            &["api_value "],
+            &["\"api_value\""],
+            &["api.value"],
+            &["api\\value"],
+            &["-api_value"],
+            &["alpha\0beta"],
+        ];
+
+        for shape in doc_shapes {
+            let args = to_strings(shape);
+            let actual = cached.list(&features, &doc, &args, true);
+            let uncached =
+                CargoDiscovery::from_metadata(native_wrapper.cargo(), root, metadata.clone());
+            let native = uncached.list(&features, &doc, &args, true);
+            assert_same_native_outcome(&format!("doc {shape:?}"), &actual, &native);
+
+            let calls = wrapper.take_calls();
+            if shape.iter().any(|item| item.contains('\0')) {
+                assert!(actual.is_err(), "doc NUL shape must error: {shape:?}");
+                assert!(
+                    calls.is_empty(),
+                    "doc NUL shape errors before wrapper exec: {calls:?}"
+                );
+            } else {
+                assert_eq!(
+                    calls,
+                    vec![expected_doc_args(&["--all-features"], shape, true)],
+                    "doc shape must delegate natively: {shape:?}"
+                );
+            }
+        }
+
+        let flow_shapes: &[&[&str]] = &[
+            &["flow_runs", "--exact"],
+            &["--skip", "other"],
+            &["flow_runs", "other"],
+            &["--bogus"],
+            &["--skip"],
+            &["--exact", "--exact"],
+            &[""],
+            &["foo --bogus"],
+            &["\"flow_runs\""],
+            &["alpha\0beta"],
+        ];
+        for shape in flow_shapes {
+            let args = to_strings(shape);
+            let actual = cached.list(&features, &flow, &args, true);
+            let uncached =
+                CargoDiscovery::from_metadata(native_wrapper.cargo(), root, metadata.clone());
+            let native = uncached.list(&features, &flow, &args, true);
+            assert_same_native_outcome(&format!("flow {shape:?}"), &actual, &native);
+        }
     }
 }

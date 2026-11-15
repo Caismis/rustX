@@ -613,7 +613,12 @@ executable once per `(features, target)` via Cargo `--no-run --message-format=js
 asks that native binary directly through `--list --format terse [--ignored]`
 (and runs `cargo test --doc --locked ... -- --list` across all emitted rustdoc
 blocks for doctests) — so filters, `--skip`, features and `cfg` are
-Cargo's, rustdoc's, and libtest's own semantics. Every test job declares its profiles
+Cargo's, rustdoc's, and libtest's own semantics. When a successful global
+`--ignored` query for an exact `(features, target)` already returned an empty
+set, a subsequent `ignored`-only query with a single non-empty `[A-Za-z0-9_:]+`
+filter atom reuses that empty result directly; all positive queries,
+non-empty/absent/failed globals, and all other argument shapes still query
+Cargo or the native binary directly. Every test job declares its profiles
 (`env: VERIFICATION_PROFILE: fast`, `full` or `fast full` — not a `RUST*`
 name, which the Rust cache would hash into its key) and must be gated by
 exactly `if: fromJSON(needs.plan.outputs.run)['<its id>']`; a FAST step may
