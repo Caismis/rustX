@@ -198,7 +198,7 @@ pub struct AgentStatusExtensionDocument {
 /// It carries no contributor settings today. That is a statement about the
 /// extension, not a placeholder: the list's bounds, transitions, and
 /// dependency rules are owned by
-/// [`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are
+/// `ConversationTodoList` and are
 /// not launch configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields, default)]
@@ -630,7 +630,7 @@ impl NativeAgentExtensions {
     /// The frozen Todo configuration, when the extension is composed.
     ///
     /// `Some` is the *whole* Todo composition decision: the conversation
-    /// composes a [`ConversationTodoList`](crate::tools::todo::ConversationTodoList),
+    /// composes a `ConversationTodoList`,
     /// publishes the `todo` Tool, and offers its bounded status presentation.
     #[must_use]
     pub const fn todo(&self) -> Option<&TodoExtensionConfig> {
@@ -662,7 +662,7 @@ impl NativeAgentExtensions {
     /// The Agent Status engine a composition materializes carries the exact
     /// frozen contributor configuration it was built from, and whether that
     /// engine exists at all *is* the composed/absent fact; the conversation's
-    /// [`ConversationTodoList`] exists for exactly as long as the Todo
+    /// `ConversationTodoList` exists for exactly as long as the Todo
     /// extension is composed, and its presence *is* that fact. Reading the
     /// owners back therefore yields the composition they were built from —
     /// **if** they were all built from the same one.
@@ -675,8 +675,6 @@ impl NativeAgentExtensions {
     /// ownership-transfer boundary **proves** that every materialized facet
     /// followed from that single stored decision, so a projection can never
     /// describe a composition the runtime is not actually running.
-    ///
-    /// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
     #[must_use]
     pub(crate) fn from_materialized(
         status_engine: Option<&AgentStatusEngine>,
@@ -903,18 +901,17 @@ impl NativeAgentExtensions {
 /// [`ConversationToolRuntime::extension_tool_plane`] is the only constructor
 /// in the process, and it reads the owners rather than a configuration
 /// value. So a plane that publishes `todo` exists only where a
-/// [`ConversationTodoList`] exists to serve it — "Tool offered, state absent"
+/// `ConversationTodoList` exists to serve it — "Tool offered, state absent"
 /// is not a state this type can hold, and the deterministic
 /// `tool_runtime.todos()` failure it would cause is unreachable. The reverse
 /// pairing, a Todo-owning conversation whose coordinator was composed from
 /// *another* conversation's plane, is refused at the `ConversationRuntime`
-/// ownership-transfer boundary through [`Self::shape`].
+/// ownership-transfer boundary through `Self::shape`.
 ///
 /// It is intentionally not `Clone`-cheap, not mutable, and not extendable:
 /// there is no `push`, no merge, and no registry. A composition's Tool
 /// surface is decided once, when its owners are materialized.
 ///
-/// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
 /// [`ConversationToolRuntime::extension_tool_plane`]: crate::tools::runtime::ConversationToolRuntime::extension_tool_plane
 #[derive(Clone)]
 pub struct ExtensionToolPlane {
@@ -943,7 +940,7 @@ impl ExtensionToolPlane {
     /// extension at all.
     ///
     /// This constructor is public where
-    /// [`Self::of_materialized_owners`] is not, and the asymmetry is the
+    /// `Self::of_materialized_owners` is not, and the asymmetry is the
     /// invariant: an **empty** plane is safe from anywhere, because the
     /// failure #259 is about — offering the model a Tool whose state owner
     /// does not exist — needs a *non-empty* plane. Only materializing the

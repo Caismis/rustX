@@ -1,7 +1,7 @@
 //! The conversation-owned task list: the state half of the **Todo Native
 //! Agent Extension** (Issue #259).
 //!
-//! One conversation owns one [`ConversationTodoList`]: the authoritative
+//! One conversation owns one `ConversationTodoList`: the authoritative
 //! set of tasks the model is tracking for that conversation, the id
 //! allocator that names them, and the mutation semantics that keep the
 //! dependency graph honest. The model-facing `todo` tool is a thin adapter
@@ -31,7 +31,7 @@
 //! its canonical history holds. Those are facts of the conversation, not of the
 //! current runtime: nothing deletes, rewrites, or hides them, and a later
 //! launch that composes Todo again rebuilds the latest accepted snapshot from
-//! them — see [`ConversationTodoList::rebuilt`], which reads the newest
+//! them — see `ConversationTodoList::rebuilt`, which reads the newest
 //! committed result rather than replaying mutations, so re-enabling produces
 //! no new `ToolResult`s and no duplicate events.
 //!
@@ -42,7 +42,7 @@
 //! result. That result is an ordinary durable Ledger fact, so the list needs
 //! no sidecar file, no separate durability path, and no migration: a
 //! restarted process rebuilds the list by reading the last snapshot the
-//! conversation ever committed ([`ConversationTodoList::rebuilt`]), and a
+//! conversation ever committed (`ConversationTodoList::rebuilt`), and a
 //! client renders the same list by reading the same fact from the
 //! transcript it already holds.
 //!
@@ -93,10 +93,10 @@
 //! rejected append, a poisoned attempt — leaves the conversation's list
 //! exactly as canonical history describes it.
 //!
-//! Provisional state is owned, not ambient. [`ConversationTodoList::open_batch`]
-//! hands out one [`TodoBatch`] at a time and refuses to take the list away
+//! Provisional state is owned, not ambient. `ConversationTodoList::open_batch`
+//! hands out one `TodoBatch` at a time and refuses to take the list away
 //! from a batch that already holds it; every mutation goes through the
-//! [`TodoWriter`] that batch hands its own executors, and a writer whose
+//! `TodoWriter` that batch hands its own executors, and a writer whose
 //! batch is closed writes nothing. So an executor driven outside the Agent
 //! Loop has no writer and mutates nothing, and one driven *beside* a running
 //! batch cannot slip a task into a list that batch is about to publish as
@@ -514,7 +514,7 @@ impl std::error::Error for TodoRebuildError {}
 /// The complete state of one conversation's list.
 ///
 /// This is the persistence format: it is what a successful mutation
-/// publishes, and it is what [`ConversationTodoList::rebuilt`] reads back.
+/// publishes, and it is what `ConversationTodoList::rebuilt` reads back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]

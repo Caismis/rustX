@@ -89,7 +89,7 @@ const INCARNATION_ALLOCATION_ATTEMPTS: usize = 8;
 /// The composition inputs one child process is spawned with.
 ///
 /// Everything the child needs that is not process-inheritable travels in
-/// the typed [`SubagentChildSpec`] over the control channel; this plan
+/// the typed `SubagentChildSpec` over the control channel; this plan
 /// carries the spawn-time locations only.
 #[derive(Debug, Clone)]
 pub struct SubagentSpawnPlan {

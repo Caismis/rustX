@@ -126,7 +126,7 @@ fn id(value: &str) -> WorkflowId {
 }
 
 fn definition(yaml: &str) -> WorkflowFileDocument {
-    serde_yaml::from_str(yaml).unwrap()
+    serde_yaml_ng::from_str(yaml).unwrap()
 }
 
 fn with_note(mut document: WorkflowFileDocument, text: &str) -> WorkflowFileDocument {
@@ -307,7 +307,7 @@ fn unselected_authored_identities_round_trip_and_save_as_unfinished() {
             value["block"]["nodes"]["review"] = node.clone();
             let document: WorkflowFileDocument = serde_json::from_value(value).unwrap();
             let round_trip: WorkflowFileDocument =
-                serde_yaml::from_slice(&document.canonical_bytes().unwrap()).unwrap();
+                serde_yaml_ng::from_slice(&document.canonical_bytes().unwrap()).unwrap();
             assert_eq!(document, round_trip);
             let (report, effects) = super::super::static_effects::measure(|| {
                 roots
@@ -1202,7 +1202,7 @@ fn native_examples_round_trip_semantically_through_canonical_serialization() {
             serde_json::from_str(&serde_json::to_string(&original).unwrap()).unwrap();
         assert_eq!(wire, original, "{name}");
         let bytes = candidate::encode(&wire).unwrap();
-        let canonical: WorkflowFileDocument = serde_yaml::from_slice(&bytes).unwrap();
+        let canonical: WorkflowFileDocument = serde_yaml_ng::from_slice(&bytes).unwrap();
         assert_eq!(canonical, original, "{name}");
         assert!(
             !String::from_utf8(bytes).unwrap().contains("port: null"),

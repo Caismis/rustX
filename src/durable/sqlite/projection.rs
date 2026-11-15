@@ -1617,28 +1617,24 @@ pub(super) fn validate_current_dependencies(
     Ok(())
 }
 
-#[allow(dead_code)] // Invoked by the Store schema integration hook.
 pub(super) fn create_auxiliary_lineage_schema(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
     auxiliary_lineage::create_schema(connection)
 }
 
-#[allow(dead_code)] // Invoked by the Store schema integration hook.
 pub(super) fn verify_auxiliary_lineage_schema(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
     auxiliary_lineage::verify_schema(connection)
 }
 
-#[allow(dead_code)] // Invoked by the Store bootstrap integration hook.
 pub(super) fn auxiliary_lineage_bootstrap(
     connection: &Connection,
 ) -> Result<(u64, String), ConversationStoreError> {
     auxiliary_lineage::bootstrap_coordinates(connection)
 }
 
-#[allow(dead_code)] // Invoked by the Store bootstrap integration hook.
 pub(super) fn verify_auxiliary_lineage_bootstrap(
     connection: &Connection,
     count: u64,
@@ -1661,7 +1657,6 @@ pub(super) fn read_auxiliary_lineage_dependencies(
     )
 }
 
-#[allow(dead_code)] // Invoked by the Store lineage installation hook.
 pub(super) fn install_inherited_auxiliary_audits(
     transaction: &Transaction<'_>,
     snapshots: &[crate::durable::reading::AuxiliaryAuditSnapshot],
@@ -1669,14 +1664,12 @@ pub(super) fn install_inherited_auxiliary_audits(
     auxiliary_lineage::install(transaction, snapshots)
 }
 
-#[allow(dead_code)] // Invoked by the Store reopen/bootstrap hook.
 pub(super) fn load_inherited_auxiliary_audits(
     connection: &Connection,
 ) -> Result<Vec<crate::durable::reading::AuxiliaryAuditSnapshot>, ConversationStoreError> {
     auxiliary_lineage::load_all(connection)
 }
 
-#[allow(dead_code)] // Invoked by the Store reopen/bootstrap hook.
 pub(super) fn verify_inherited_auxiliary_audits(
     connection: &Connection,
     expected: &[crate::durable::reading::AuxiliaryAuditSnapshot],

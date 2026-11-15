@@ -218,7 +218,7 @@ impl Driver {
             });
             std::fs::write(
                 workspace.join(".agents/workflows/image_review.yaml"),
-                serde_yaml::to_string(&workflow).unwrap(),
+                serde_yaml_ng::to_string(&workflow).unwrap(),
             )
             .unwrap();
             std::fs::write(

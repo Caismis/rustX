@@ -1261,7 +1261,7 @@ impl ConversationRuntime {
     ///
     /// This is the one explicit lifecycle boundary of Issue #61: the single
     /// `Inactive -> Running` transition of the shared
-    /// [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+    /// [`ConversationLifecycle`]
     /// every runtime-owned semantic boundary observes. Before it, the
     /// runtime is inert and a `RuntimeClientHost` may bind over it; at it,
     /// the Runtime Client host-binding decision is frozen. Activation is

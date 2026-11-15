@@ -15,7 +15,7 @@
 //!
 //! The mailbox no longer owns [`InboundSequence`] allocation and no longer
 //! holds a process-local payload queue: the durable
-//! [`ConversationStore`](crate::durable::ConversationStore) owns the accepted
+//! [`ConversationStore`] owns the accepted
 //! pending state and the one per-conversation sequence domain. The mailbox
 //! is the narrow acceptance/publisher seam that validates eligibility and
 //! lifecycle, durably accepts through the store, then publishes the
@@ -67,7 +67,7 @@ pub trait InboundObserver: Send + Sync {
 ///
 /// The sequence identifies one item of the conversation's inbound ordering
 /// domain. It is **not**
-/// [`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`
+/// [`RuntimeEventEnvelope`]`::sequence`
 /// and is never allocated from the Event Journal sequence; the durable
 /// Pending Inbound Inbox owns allocation, and the first successful
 /// acceptance of a conversation receives `1`.
@@ -224,7 +224,7 @@ pub enum MailboxError {
     /// The mailbox is owned by a conversation runtime that has not been
     /// activated yet, so the conversation accepts no inbound work.
     ///
-    /// See [`ConversationInboundMailbox::bind_inactive`]: this is the
+    /// See `ConversationInboundMailbox::bind_inactive`: this is the
     /// Issue #61 activation contract, and it is what makes the pending
     /// seed of the Runtime Client bootstrap handshake provably frozen.
     ConversationInactive {
@@ -1225,7 +1225,7 @@ impl ConversationInboundMailbox {
     ///
     /// This is a durable read of the same authority
     /// [`ConversationInboundMailbox::select_pending_batch`] reads and
-    /// [`ConversationInboundMailbox::accept_draft`] writes, so a caller that
+    /// `ConversationInboundMailbox::accept_draft` writes, so a caller that
     /// holds a lock which also serializes acceptance observes an exact
     /// answer: no item accepted before the observation can be missed, and no
     /// item accepted after it can be seen. The child conversation's terminal

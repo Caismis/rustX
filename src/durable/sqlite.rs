@@ -118,7 +118,7 @@ fn count_conversation_store_open() {
 /// Journal.
 ///
 /// Version 9 froze the Issue #111 durable **answer obligation**: the adoption
-/// transaction now commits a [`RuntimeEvent::InboundTurnAdopted`] fact naming
+/// transaction now commits a [`RuntimeEvent::InboundTurnAdopted`](crate::events::types::RuntimeEvent::InboundTurnAdopted) fact naming
 /// the exact adopted batch, and startup recovery decides continuation from
 /// that fact alone rather than from canonical shape.
 ///

@@ -370,8 +370,8 @@ fn parse_metadata(metadata: &serde_json::Value) -> Result<Vec<Target>, String> {
 }
 
 fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<String>> {
-    let workflow: serde_yaml::Value =
-        serde_yaml::from_str(text).map_err(|error| vec![format!("malformed workflow: {error}")])?;
+    let workflow: serde_yaml_ng::Value = serde_yaml_ng::from_str(text)
+        .map_err(|error| vec![format!("malformed workflow: {error}")])?;
     let jobs = workflow["jobs"]
         .as_mapping()
         .ok_or_else(|| vec!["the workflow has no jobs".to_owned()])?;
@@ -447,7 +447,7 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
     }
 }
 
-fn platform_of(job: &serde_yaml::Value) -> Result<Platform, String> {
+fn platform_of(job: &serde_yaml_ng::Value) -> Result<Platform, String> {
     match job["runs-on"].as_str() {
         Some(runner) if runner.starts_with("ubuntu-") => Ok(Platform::Linux),
         Some(runner) if runner.starts_with("macos-") => Ok(Platform::Macos),
@@ -459,7 +459,7 @@ fn platform_of(job: &serde_yaml::Value) -> Result<Platform, String> {
 /// one job condition the check understands: selection by the `plan` job's
 /// `run` map under the job's own id. Any other condition would make the job's
 /// selection something this check cannot see.
-fn profiles_of(id: &str, job: &serde_yaml::Value) -> Result<Vec<Profile>, String> {
+fn profiles_of(id: &str, job: &serde_yaml_ng::Value) -> Result<Vec<Profile>, String> {
     let gate = format!("fromJSON(needs.plan.outputs.run)['{id}']");
     if job["if"].as_str() != Some(gate.as_str()) {
         return Err(format!(
@@ -497,7 +497,7 @@ fn profiles_of(id: &str, job: &serde_yaml::Value) -> Result<Vec<Profile>, String
 fn affected_step(
     job: &str,
     profiles: &[Profile],
-    condition: &serde_yaml::Value,
+    condition: &serde_yaml_ng::Value,
 ) -> Result<bool, String> {
     let Some(condition) = condition.as_str() else {
         return if condition.is_null() {

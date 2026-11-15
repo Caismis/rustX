@@ -200,7 +200,7 @@ pub struct ConversationRuntimeConfig {
     ///
     /// This is the single authority from which every Todo facet follows.
     /// The conversation tool runtime is the composition's *materialization
-    /// owner*: it builds the [`ConversationTodoList`] exactly when
+    /// owner*: it builds the `ConversationTodoList` exactly when
     /// `extensions.todo()` is `Some`, and everything downstream — the
     /// extension Tool plane, the Agent Status presentation, the Runtime
     /// Client projection — is derived from what it materialized rather than

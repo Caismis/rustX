@@ -642,7 +642,7 @@ fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, String> {
         .find("\n---")
         .ok_or("SKILL.md frontmatter is missing its closing delimiter")?;
     let yaml = remainder.get(1..closing).unwrap_or_default();
-    let value: serde_yaml::Value = serde_yaml::from_str(yaml)
+    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(yaml)
         .map_err(|error| format!("frontmatter is not valid YAML: {error}"))?;
     let string = |key| value[key].as_str().map(str::to_owned);
     let metadata = value["metadata"]

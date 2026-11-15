@@ -241,7 +241,7 @@ fn every_shipped_workflow_is_discovered_and_compiles() {
         )
         .unwrap();
         let definition: WorkflowDefinition =
-            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            serde_yaml_ng::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         WorkflowProgram::compile(id.clone(), definition)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     }
@@ -251,7 +251,7 @@ fn every_shipped_workflow_is_discovered_and_compiles() {
 fn reference_authoring_errors_fail_before_execution() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
     let source: serde_json::Value =
-        serde_yaml::from_slice(&read_example(".agents/workflows/implement_and_review.yaml"))
+        serde_yaml_ng::from_slice(&read_example(".agents/workflows/implement_and_review.yaml"))
             .unwrap();
     let cases = [
         (

@@ -171,7 +171,7 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
     );
     let config = json!({"subagents": {}, "agent": {"workflows": []}});
     let original = template_source("typed_agent");
-    let mut invalid_reference: serde_json::Value = serde_yaml::from_str(&original).unwrap();
+    let mut invalid_reference: serde_json::Value = serde_yaml_ng::from_str(&original).unwrap();
     invalid_reference["block"]["nodes"]["summarize"]["task"][2]["path"] =
         json!(["args", "missing"]);
     let scenarios = [
@@ -184,7 +184,7 @@ fn cfg237_check_explain_zero_effects_precise_errors_and_authority() {
             None,
         ),
         (
-            serde_yaml::to_string(&invalid_reference).unwrap(),
+            serde_yaml_ng::to_string(&invalid_reference).unwrap(),
             config.clone(),
             Validity::Invalid,
             Some("block.nodes.summarize.task.2"),
@@ -267,7 +267,7 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
     );
     f.project(json!({"subagents": {}}));
     let original: serde_json::Value = serde_json::to_value(
-        serde_yaml::from_str::<crate::runtime::workflow::WorkflowDefinition>(&template_source(
+        serde_yaml_ng::from_str::<crate::runtime::workflow::WorkflowDefinition>(&template_source(
             "parallel_checks",
         ))
         .unwrap(),
@@ -287,7 +287,7 @@ fn cfg237_graph_paths_reach_diagnostics_with_zero_side_effects() {
     ] {
         let mut shape = original.clone();
         *shape.pointer_mut(pointer).unwrap() = value;
-        let source = serde_yaml::to_string(&shape).unwrap();
+        let source = serde_yaml_ng::to_string(&shape).unwrap();
         let file = install_workflow(&f, &source);
         for explain in [false, true] {
             let (report, effects) = super::static_effects::measure(|| {
@@ -374,7 +374,7 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
     );
     f.project(json!({"subagents": {}}));
     let definition: crate::runtime::workflow::WorkflowDefinition =
-        serde_yaml::from_str(&template_source("parallel_checks")).unwrap();
+        serde_yaml_ng::from_str(&template_source("parallel_checks")).unwrap();
     let root = serde_json::to_value(definition.block).unwrap();
     let original = json!({"description":"Nested checks", "block":{
         "input":root["input"], "nodes":{
@@ -397,7 +397,7 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
     ] {
         let mut shape = original.clone();
         *shape.pointer_mut(pointer).unwrap() = value;
-        install_workflow(&f, &serde_yaml::to_string(&shape).unwrap());
+        install_workflow(&f, &serde_yaml_ng::to_string(&shape).unwrap());
         let report = super::workflow_inspection::inspect(
             &crate::runtime::workflow::WorkflowId::parse("example").unwrap(),
             true,
@@ -417,7 +417,7 @@ fn cfg237_nested_paths_parser_locations_and_compiler_agreement() {
     );
     assert!(report.diagnostics[0].line.is_some());
     assert!(report.diagnostics[0].column.is_some());
-    install_workflow(&f, &serde_yaml::to_string(&original).unwrap());
+    install_workflow(&f, &serde_yaml_ng::to_string(&original).unwrap());
     let launch = analyze(&f.request, &f.host).unwrap();
     let id = crate::runtime::workflow::WorkflowId::parse("example").unwrap();
     let report = super::workflow_inspection::inspect(&id, true, &f.request, &f.host);
@@ -2545,7 +2545,7 @@ fn cfg274_obsolete_registration_and_manifest_fields_are_authoring_errors() {
         );
     }
     let mut value: serde_json::Value =
-        serde_yaml::from_str(&template_source("typed_agent")).unwrap();
+        serde_yaml_ng::from_str(&template_source("typed_agent")).unwrap();
     value["tools"] = json!([]);
     assert!(serde_json::from_value::<crate::runtime::workflow::WorkflowDefinition>(value).is_err());
 }

@@ -71,7 +71,7 @@
 //! # Ownership
 //!
 //! Recovery **policy** belongs to the [`ConversationRuntime`] and consumes
-//! [`ConversationStore`] evidence. The store exposes semantic durable facts
+//! [`ConversationStore`](crate::durable::ConversationStore) evidence. The store exposes semantic durable facts
 //! and semantic transactions; it never decides whether an ambiguous request is
 //! safe to replay. Nothing here reads a Runtime Client snapshot, a TUI cache,
 //! an attachment state, current Skill discovery, current `rustx.toml`, or a
@@ -85,7 +85,7 @@
 //! # Bounded working set
 //!
 //! The evidence fold pages the Event Journal
-//! ([`JournalStore::read_events`]) and retains only the *unresolved*
+//! ([`JournalStore::read_events`](crate::durable::store::journal::JournalStore::read_events)) and retains only the *unresolved*
 //! state. Reads are O(history); hot memory is O(unresolved work):
 //!
 //! ```text
@@ -96,7 +96,7 @@
 //!   + O(active Surface attribution)         (bounded by the active working set)
 //! ```
 //!
-//! The tool plane is split across two owners on purpose. [`AttemptEvidence`]
+//! The tool plane is split across two owners on purpose. `AttemptEvidence`
 //! owns a **bounded summary** of the attempt's foreground-tool external
 //! history (did execution happen; is any outcome unknown) that survives the
 //! release of every detailed entry — a fully canonicalized tool call never
@@ -1256,7 +1256,7 @@ pub enum ResumeDisposition {
     /// re-adopted.
     ///
     /// The permission is the durable **answer obligation** of
-    /// [`RuntimeEvent::InboundTurnAdopted`](crate::events::types::RuntimeEvent::InboundTurnAdopted):
+    /// [`RuntimeEvent::InboundTurnAdopted`]:
     /// an adoption transaction committed the turn and neither a
     /// `ModelRequestStarted` nor a *decided* attempt terminal has consumed it
     /// since — a recovery's own `RestartInterrupted` terminal transfers the

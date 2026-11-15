@@ -17,8 +17,10 @@ use crate::runtime::types::ConversationLifecycle;
 use crate::skills::{SkillDiscovery, SkillDiscoveryConfig, SkillSnapshot};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{ToolRegistration, ToolRegistry};
+#[cfg(all(test, feature = "mcp-fixture"))]
+use crate::tools::mcp::McpInvalidationState;
 #[cfg(test)]
-use crate::tools::mcp::{McpInvalidationState, McpServerRuntime};
+use crate::tools::mcp::McpServerRuntime;
 use crate::tools::mcp::{
     McpRuntimeGeneration, McpRuntimeLeaseAuthority, McpRuntimeLeaseSet, McpServerBindings,
 };
@@ -357,7 +359,7 @@ pub struct CapabilityResourceInputs {
 /// synchronization boundary.
 ///
 /// **Exception.** A commit made by the claiming `ConversationRuntime`
-/// (see [`CapabilityCoordinator::commit_runtime`]) fires no callback at
+/// (see `CapabilityCoordinator::commit_runtime`) fires no callback at
 /// all. That commit is one half of a runtime configuration publication, and the
 /// runtime publishes the whole generation — capability, availability, and
 /// resources — as a single observation. Firing here as well would let a
@@ -1995,8 +1997,7 @@ impl CapabilityCoordinator {
     }
 
     /// Installs the test-only MCP connect ownership pause.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn install_connect_ownership_pause(
         &self,
         pause: Arc<crate::tools::mcp::test_sync::ConnectOwnershipPause>,
@@ -2572,9 +2573,8 @@ impl CapabilityCoordinator {
     }
 
     /// The shared MCP invalidation state (test observability). Only
-    /// available under `#[cfg(test)]`; never used by production code.
-    #[cfg(test)]
-    #[allow(dead_code)]
+    /// available under `#[cfg(all(test, feature = "mcp-fixture"))]`; never used by production code.
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn mcp_invalidation(&self) -> Arc<McpInvalidationState> {
         self.inner.mcp_invalidation.clone()
     }

@@ -134,7 +134,7 @@ async fn direct_model_text_and_json_have_one_http_call_and_one_canonical_outer_r
             },"edges": [{"from":"workflow_start","to":"classify"},{"from":"classify","to":"done"}],}});
         let driver = Driver::start_with_workflow_capability(
             &emulator,
-            &serde_yaml::to_string(&definition).unwrap(),
+            &serde_yaml_ng::to_string(&definition).unwrap(),
             mode == "native",
         )
         .await;
@@ -236,7 +236,7 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
     let Some(emulator) = ProviderEmulator::start("workflow_tool").await else {
         return;
     };
-    let mut definition: serde_json::Value = serde_yaml::from_str(TOOL_WORKFLOW).unwrap();
+    let mut definition: serde_json::Value = serde_yaml_ng::from_str(TOOL_WORKFLOW).unwrap();
     let root = definition["block"].take();
     let inspect = root["nodes"]["inspect"].clone();
     // Three rounds without a break condition: the Loop completes its count.
@@ -249,7 +249,8 @@ async fn bounded_loop_exhaustion_keeps_one_outer_result_and_no_internal_provider
         "done":{"type":"return","outputs":[{"variable":"files","value_selector":["feedback","files"]}]}
     },"edges": [{"from":"workflow_start","to":"feedback"},{"from":"feedback","to":"done"}],});
     let driver =
-        Driver::start_with_workflow(&emulator, &serde_yaml::to_string(&definition).unwrap()).await;
+        Driver::start_with_workflow(&emulator, &serde_yaml_ng::to_string(&definition).unwrap())
+            .await;
     let handoff = driver.submit();
     let (events, outcome) = driver.settle(handoff).await;
     assert!(
@@ -1623,7 +1624,7 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
         let Some(emulator) = ProviderEmulator::start("workflow_tool").await else {
             return;
         };
-        let mut definition: serde_json::Value = serde_yaml::from_str(TOOL_WORKFLOW).unwrap();
+        let mut definition: serde_json::Value = serde_yaml_ng::from_str(TOOL_WORKFLOW).unwrap();
         definition["block"]["edges"][0]["to"] = serde_json::json!("question");
         definition["block"]["nodes"]["question"] = serde_json::json!({
             "type":"tool","selector":{"origin":"builtin","name":"ask_user"},
@@ -1644,7 +1645,7 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
                 serde_json::json!({"from":"human","to":"rejected","port":"timeout"}),
             ]);
         let driver =
-            Driver::start_with_workflow(&emulator, &serde_yaml::to_string(&definition).unwrap())
+            Driver::start_with_workflow(&emulator, &serde_yaml_ng::to_string(&definition).unwrap())
                 .await;
         let handoff = driver.submit();
         let mut seen = 0;
@@ -2176,7 +2177,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
         assert_eq!((questions, reviews, approvals), (2, 1, 0));
         assert_eq!(writes, 0);
         assert_eq!(check_commands, [] as [std::string::String; 0]);
-        let definition: serde_json::Value = serde_yaml::from_str(include_str!(
+        let definition: serde_json::Value = serde_yaml_ng::from_str(include_str!(
             "../../examples/local-runtime/.agents/workflows/implement_and_review.yaml"
         ))
         .unwrap();

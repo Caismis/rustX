@@ -11220,7 +11220,7 @@
       ]
     },
     "InboundSequence": {
-      "description": "A conversation-scoped inbound sequence number.\n\nThe sequence identifies one item of the conversation's inbound ordering\ndomain. It is **not**\n[`RuntimeEventEnvelope`](crate::events::types::RuntimeEventEnvelope)`::sequence`\nand is never allocated from the Event Journal sequence; the durable\nPending Inbound Inbox owns allocation, and the first successful\nacceptance of a conversation receives `1`.",
+      "description": "A conversation-scoped inbound sequence number.\n\nThe sequence identifies one item of the conversation's inbound ordering\ndomain. It is **not**\n[`RuntimeEventEnvelope`]`::sequence`\nand is never allocated from the Event Journal sequence; the durable\nPending Inbound Inbox owns allocation, and the first successful\nacceptance of a conversation receives `1`.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
@@ -14843,7 +14843,7 @@
       ]
     },
     "RuntimeClientAttemptFailure": {
-      "description": "The normalized client-visible failure of one attempt.\n\nThis is the external projection of the internal [`AttemptFailure`]\n([`crate::events::types::AttemptFailure`]): provider-specific fields\n(such as the raw provider error code) never appear here.",
+      "description": "The normalized client-visible failure of one attempt.\n\nThis is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields\n(such as the raw provider error code) never appear here.",
       "oneOf": [
         {
           "description": "A model request exhausted its retry policy.",
@@ -15538,7 +15538,7 @@
       ]
     },
     "ToolExecutionStatus": {
-      "description": "Typed execution status of a tool call.\n\nThe terminal vocabulary is explicit about **outcome certainty**: a\nterminal status may claim only facts the owning runtime/executor can\nprove. `Success`, `Failed`, `Denied`, `Cancelled`, and `TimedOut` are\nconfirmed terminal outcomes; `OutcomeUnknown` means an admitted call\ncrossed the external-effect frontier but rustX cannot prove its final\nexternal result. An unknown outcome is never silently collapsed into\nsuccess, generic failure, confirmed timeout, or confirmed cancellation,\nand every non-success status produces bounded model-facing feedback\nthrough [`Self::feedback_text`].",
+      "description": "Typed execution status of a tool call.\n\nThe terminal vocabulary is explicit about **outcome certainty**: a\nterminal status may claim only facts the owning runtime/executor can\nprove. `Success`, `Failed`, `Denied`, `Cancelled`, and `TimedOut` are\nconfirmed terminal outcomes; `OutcomeUnknown` means an admitted call\ncrossed the external-effect frontier but rustX cannot prove its final\nexternal result. An unknown outcome is never silently collapsed into\nsuccess, generic failure, confirmed timeout, or confirmed cancellation,\nand every non-success status produces bounded model-facing feedback\nthrough `Self::feedback_text`.",
       "oneOf": [
         {
           "description": "The tool completed successfully and the outcome is known.",
@@ -17373,7 +17373,7 @@
       ]
     },
     "RuntimeClientCursor": {
-      "description": "The external cursor of the Runtime Client observation stream.\n\nA cursor identifies one position in the externally visible\n`RuntimeClientEvent` sequence: cursor `C` means \"every Runtime Client\nevent through event `C` has been applied to the snapshot\". It is:\n\n- monotonic within the Runtime Client observation stream;\n- **not** an alias of `u64`;\n- **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);\n- **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);\n- **not** any future Event Journal sequence;\n- owned by the runtime observation stream, so it survives attachment\n  detach/reconnect;\n- independent of its numeric representation: protocol versioning never\n  derives anything from cursor encoding.\n\nCursor allocation is committed by exactly one linearization owner (the\nRuntime Client projection) together with event publication; overflow\nfails explicitly and never wraps.",
+      "description": "The external cursor of the Runtime Client observation stream.\n\nA cursor identifies one position in the externally visible\n`RuntimeClientEvent` sequence: cursor `C` means \"every Runtime Client\nevent through event `C` has been applied to the snapshot\". It is:\n\n- monotonic within the Runtime Client observation stream;\n- **not** an alias of `u64`;\n- **not** the mailbox [`InboundSequence`];\n- **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);\n- **not** any future Event Journal sequence;\n- owned by the runtime observation stream, so it survives attachment\n  detach/reconnect;\n- independent of its numeric representation: protocol versioning never\n  derives anything from cursor encoding.\n\nCursor allocation is committed by exactly one linearization owner (the\nRuntime Client projection) together with event publication; overflow\nfails explicitly and never wraps.",
       "type": "string",
       "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
     },
@@ -17795,7 +17795,7 @@
           ]
         },
         "todos": {
-          "description": "The conversation's task list, as of the newest committed `todo`\nresult — present exactly when this runtime composes the **Todo**\nAgent Extension (Issue #259).\n\nThis is a **projection of canonical history, not a second\nauthority**: the runtime derives it from exactly the tool results the\nLedger holds, the same fact the runtime's own\n[`ConversationTodoList`] is rebuilt from, so the two can never\ndisagree.\n\nIt is carried here rather than left for a client to scan out of the\ntranscript because a client holds only a bounded newest page of that\ntranscript. A conversation that committed a page or more of messages\nafter its last `todo` result would otherwise attach with no list at\nall, and would appear to have none until the reader happened to page\nfar enough back — while the runtime, reading the whole Ledger, still\nhad one.\n\nA conversation that never called `todo` carries the empty list.\n\n`None` is a different fact and must render differently: this runtime\ncomposes no Todo extension, so there is no current task list to show\nat all. Canonical history may still contain `todo` calls and results\nfrom a launch that did compose it; those remain renderable as\n*transcript history* and must not be folded back into a current panel.\n\n[`ConversationTodoList`]: crate::tools::todo::ConversationTodoList",
+          "description": "The conversation's task list, as of the newest committed `todo`\nresult — present exactly when this runtime composes the **Todo**\nAgent Extension (Issue #259).\n\nThis is a **projection of canonical history, not a second\nauthority**: the runtime derives it from exactly the tool results the\nLedger holds, the same fact the runtime's own\n`ConversationTodoList` is rebuilt from, so the two can never\ndisagree.\n\nIt is carried here rather than left for a client to scan out of the\ntranscript because a client holds only a bounded newest page of that\ntranscript. A conversation that committed a page or more of messages\nafter its last `todo` result would otherwise attach with no list at\nall, and would appear to have none until the reader happened to page\nfar enough back — while the runtime, reading the whole Ledger, still\nhad one.\n\nA conversation that never called `todo` carries the empty list.\n\n`None` is a different fact and must render differently: this runtime\ncomposes no Todo extension, so there is no current task list to show\nat all. Canonical history may still contain `todo` calls and results\nfrom a launch that did compose it; those remain renderable as\n*transcript history* and must not be folded back into a current panel.",
           "anyOf": [
             {
               "$ref": "#/$defs/TodoSnapshot"
@@ -19574,7 +19574,7 @@
       ]
     },
     "RuntimeClientJob": {
-      "description": "The external background execution read model.\n\nProjected from the authoritative [`ConversationBackgroundRegistry`]\n([`crate::tools::background::ConversationBackgroundRegistry`]); the\ncontainer shape belongs to the Runtime Client protocol while the\nlifecycle, progress, and result leaf types are stable runtime-owned\nvalue contracts. No internal task handles or process ids ever appear.",
+      "description": "The external background execution read model.\n\nProjected from the authoritative [`ConversationBackgroundRegistry`](crate::tools::background::ConversationBackgroundRegistry); the\ncontainer shape belongs to the Runtime Client protocol while the\nlifecycle, progress, and result leaf types are stable runtime-owned\nvalue contracts. No internal task handles or process ids ever appear.",
       "type": "object",
       "properties": {
         "deferred_fields": {
@@ -21835,7 +21835,7 @@
       ]
     },
     "TodoSnapshot": {
-      "description": "The complete state of one conversation's list.\n\nThis is the persistence format: it is what a successful mutation\npublishes, and it is what [`ConversationTodoList::rebuilt`] reads back.",
+      "description": "The complete state of one conversation's list.\n\nThis is the persistence format: it is what a successful mutation\npublishes, and it is what `ConversationTodoList::rebuilt` reads back.",
       "type": "object",
       "properties": {
         "tasks": {
@@ -22306,7 +22306,7 @@
           ]
         },
         {
-          "description": "An attempt started executing.\n\nThe event is self-contained: it carries the immutable model snapshot\nthe attempt froze at admission, so a continuously subscribed client\nknows the attempt's authoritative model without inferring it from\nevent ordering and without a second `checkpoint_get` round trip. The\nvalue is runtime-owned — a client never supplies or derives it — and\nit is exactly [`RuntimeClientAttempt::model`]\n([`super::snapshot::RuntimeClientAttempt`]) of the same attempt.\n\nIt is deliberately **not** the session's desired model: while this\nattempt runs on model A and the session is switched to model B, this\nevent keeps reporting A and\n[`SessionModelChanged`](Self::SessionModelChanged) reports B.",
+          "description": "An attempt started executing.\n\nThe event is self-contained: it carries the immutable model snapshot\nthe attempt froze at admission, so a continuously subscribed client\nknows the attempt's authoritative model without inferring it from\nevent ordering and without a second `checkpoint_get` round trip. The\nvalue is runtime-owned — a client never supplies or derives it — and\nit is exactly `model` on [`RuntimeClientAttempt`](super::snapshot::RuntimeClientAttempt) of the same attempt.\n\nIt is deliberately **not** the session's desired model: while this\nattempt runs on model A and the session is switched to model B, this\nevent keeps reporting A and\n[`SessionModelChanged`](Self::SessionModelChanged) reports B.",
           "type": "object",
           "properties": {
             "attempt_id": {
@@ -23319,7 +23319,7 @@
           ]
         },
         {
-          "description": "The runtime published the Agent Status committed with an existing\nprimary model turn.\n\nThe carried view derives from the exact composed status used by the\nmodel path; a client never causes a second composition.\n\nThe event describes **one complete transition of the bounded status\nwindow**, not just the new composition: the admission and, when the\nwindow was full, the eviction that admission caused. A client folds\nboth mechanically. It never applies a retention rule of its own,\nbecause the bound\n([`AGENT_STATUS_WINDOW`](super::AGENT_STATUS_WINDOW)) is projection\npolicy and is not part of this contract — which is exactly what makes\nfolding every event through cursor `C` and replacing state from the\nauthoritative snapshot at cursor `C` produce the same window.",
+          "description": "The runtime published the Agent Status committed with an existing\nprimary model turn.\n\nThe carried view derives from the exact composed status used by the\nmodel path; a client never causes a second composition.\n\nThe event describes **one complete transition of the bounded status\nwindow**, not just the new composition: the admission and, when the\nwindow was full, the eviction that admission caused. A client folds\nboth mechanically. It never applies a retention rule of its own,\nbecause the bound\n([`AGENT_STATUS_WINDOW`](super::snapshot::AGENT_STATUS_WINDOW)) is projection\npolicy and is not part of this contract — which is exactly what makes\nfolding every event through cursor `C` and replacing state from the\nauthoritative snapshot at cursor `C` produce the same window.",
           "type": "object",
           "properties": {
             "attempt_id": {
@@ -26438,7 +26438,7 @@
       "additionalProperties": false
     },
     "TodoExtensionDocument": {
-      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n[`ConversationTodoList`](crate::tools::todo::ConversationTodoList) and are\nnot launch configuration.",
+      "description": "The authored Todo extension (Issue #259).\n\nTodo is *one* capability with several faces, and `enabled` composes all\nof them together or none of them:\n\n```text\nenabled = true    conversation-owned ConversationTodoList authority\n                  the model-facing `todo` Tool\n                  the bounded read-only Todo status presentation\n                  the Runtime Client / TUI Todo projection\n\nenabled = false   none of the above for this runtime; canonical history\n                  keeps every Todo ToolCall/ToolResult it already holds\n```\n\nIt carries no contributor settings today. That is a statement about the\nextension, not a placeholder: the list's bounds, transitions, and\ndependency rules are owned by\n`ConversationTodoList` and are\nnot launch configuration.",
       "type": "object",
       "properties": {
         "enabled": {

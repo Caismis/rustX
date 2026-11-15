@@ -153,12 +153,12 @@ pub enum SubagentStartOutcome {
 pub enum SubagentStartError {
     /// The owning conversation is draining or draining-complete.
     ConversationInactive,
-    /// The task input is empty or its text exceeds [`MAX_TASK_BYTES`].
+    /// The task input is empty or its text exceeds `MAX_TASK_BYTES`.
     InvalidTask {
         /// The offending byte length.
         bytes: usize,
     },
-    /// The explicit context package exceeds [`MAX_CONTEXT_PACKAGE_BYTES`].
+    /// The explicit context package exceeds `MAX_CONTEXT_PACKAGE_BYTES`.
     ContextOversized {
         /// The offending byte length.
         bytes: usize,

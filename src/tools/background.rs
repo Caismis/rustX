@@ -74,7 +74,7 @@
 //! `ConversationRuntime` only while its background plane is **pristine**,
 //! and the claim shares the one registry synchronization boundary with
 //! `commit_dispatch_owned` (see
-//! [`ConversationBackgroundRegistry::claim_conversation_runtime_inactive`]):
+//! `ConversationBackgroundRegistry::claim_conversation_runtime_inactive`):
 //!
 //! ```text
 //! standalone ConversationToolRuntime

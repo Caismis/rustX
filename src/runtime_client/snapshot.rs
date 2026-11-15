@@ -216,7 +216,7 @@ pub struct RuntimeClientSnapshot {
     /// This is a **projection of canonical history, not a second
     /// authority**: the runtime derives it from exactly the tool results the
     /// Ledger holds, the same fact the runtime's own
-    /// [`ConversationTodoList`] is rebuilt from, so the two can never
+    /// `ConversationTodoList` is rebuilt from, so the two can never
     /// disagree.
     ///
     /// It is carried here rather than left for a client to scan out of the
@@ -234,8 +234,6 @@ pub struct RuntimeClientSnapshot {
     /// at all. Canonical history may still contain `todo` calls and results
     /// from a launch that did compose it; those remain renderable as
     /// *transcript history* and must not be folded back into a current panel.
-    ///
-    /// [`ConversationTodoList`]: crate::tools::todo::ConversationTodoList
     #[serde(default)]
     pub todos: Option<TodoSnapshot>,
     /// Durable Goal read model at this projection cursor; absent when the
@@ -460,8 +458,7 @@ pub struct InboundDrainView {
 
 /// The external background execution read model.
 ///
-/// Projected from the authoritative [`ConversationBackgroundRegistry`]
-/// ([`crate::tools::background::ConversationBackgroundRegistry`]); the
+/// Projected from the authoritative [`ConversationBackgroundRegistry`](crate::tools::background::ConversationBackgroundRegistry); the
 /// container shape belongs to the Runtime Client protocol while the
 /// lifecycle, progress, and result leaf types are stable runtime-owned
 /// value contracts. No internal task handles or process ids ever appear.

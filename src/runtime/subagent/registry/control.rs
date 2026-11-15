@@ -34,7 +34,7 @@ pub enum SubagentSteerError {
         /// The named child.
         subagent_id: SubagentId,
     },
-    /// The guidance input is empty or its text exceeds [`MAX_TASK_BYTES`].
+    /// The guidance input is empty or its text exceeds `MAX_TASK_BYTES`.
     InvalidMessage {
         /// The offending byte length.
         bytes: usize,
@@ -166,7 +166,7 @@ impl SubagentRegistry {
     ///
     /// The call is synchronous and never blocks on process teardown: the
     /// driver owns the Cancel frame, the escalation, and the reap; the
-    /// terminal settlement follows through [`Self::settle_from_driver`].
+    /// terminal settlement follows through `Self::settle_from_driver`.
     /// Cancelling an unknown, terminal, or abandoned record is a no-op
     /// returning the current snapshot.
     #[must_use]

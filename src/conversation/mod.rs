@@ -70,7 +70,7 @@ impl From<SurfaceError> for ConversationError {
 /// Produced by [`ConversationState::prepare_commit`] after every fallible
 /// condition (duplicate Ledger identity, already-active Surface identity) has
 /// been checked against the current state; consumed by
-/// [`ConversationState::install_prepared`], which is infallible under
+/// `ConversationState::install_prepared`, which is infallible under
 /// exclusive ownership. The exact message that was validated is carried
 /// inside the value, so a caller can never substitute a different message at
 /// install time.
@@ -362,7 +362,7 @@ impl ConversationState {
     /// caller validates every fallible condition (duplicate Ledger identity,
     /// already-active Surface identity) against the current state, then
     /// commits the exact same message durably, and only then installs it with
-    /// [`ConversationState::install_prepared`], which is infallible under
+    /// `ConversationState::install_prepared`, which is infallible under
     /// exclusive ownership.
     ///
     /// # Errors

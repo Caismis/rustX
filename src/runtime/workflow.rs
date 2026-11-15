@@ -3740,7 +3740,7 @@ pub enum WorkflowOutputSubmission {
 
 /// The one terminal-output authority of a Workflow-owned `AgentRun`.
 ///
-/// This is deliberately not a [`ToolExecutor`]. The model may see a
+/// This is deliberately not a [`ToolExecutor`](crate::tools::executor::ToolExecutor). The model may see a
 /// tool-shaped `workflow_output` declaration, but the call is consumed by
 /// the Agent Loop before ordinary Tool Plane preflight or dispatch.
 pub trait WorkflowOutputTerminal: Send + Sync {
@@ -6541,7 +6541,7 @@ chat_reasoning_replay = "omit"
     #[test]
     fn yaml_is_serialization_and_does_not_supply_identity() {
         let yaml = "description: Review\nblock:\n  input: {type: object, properties: {task: {type: string}}, required: [task]}\n  nodes:\n    workflow_start:\n      type: start\n    done:\n      type: return\n      outputs: [{variable: summary, value_selector: [args, task]}]\n  edges:\n  - from: workflow_start\n    to: done\n";
-        let definition: WorkflowDefinition = serde_yaml::from_str(yaml).expect("yaml");
+        let definition: WorkflowDefinition = serde_yaml_ng::from_str(yaml).expect("yaml");
         assert!(WorkflowId::parse("review_pr").is_ok());
         assert!(!yaml.contains("name:"));
         assert!(
@@ -6568,7 +6568,7 @@ block:
   - from: workflow_start
     to: done
 ";
-        assert!(serde_yaml::from_str::<WorkflowDefinition>(yaml).is_err());
+        assert!(serde_yaml_ng::from_str::<WorkflowDefinition>(yaml).is_err());
     }
 
     #[test]

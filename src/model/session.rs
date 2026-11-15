@@ -731,7 +731,7 @@ impl SessionModelState {
     ///   until one is applied.
     /// - When the configuration still resolves, publication is sound only
     ///   while primary and shared auxiliary resolve to effectively the same
-    ///   invocations against the new catalog ([`same_session_invocation`],
+    ///   invocations against the new catalog (`same_session_invocation`,
     ///   which re-resolves Lowest against each catalog's
     ///   `reasoning_profile_order` / `default_profile`). Otherwise —
     ///   including a selection that becomes admissible again — nothing
@@ -739,8 +739,6 @@ impl SessionModelState {
     ///   invocation preparation and adoption.
     ///
     /// A frozen authority owns no catalog and always refuses.
-    ///
-    /// [`ModelCatalog::same_invocation`]: crate::model::catalog::ModelCatalog::same_invocation
     #[must_use]
     pub fn publish_catalog(&mut self, registry: ModelBindingRegistry) -> bool {
         let ModelAuthority::Catalog(current) = &self.authority else {
