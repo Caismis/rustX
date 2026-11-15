@@ -3297,7 +3297,10 @@ async fn image_tool_round_trip_and_text_model_switch() {
         loop {
             match driver.compact_context().await {
                 Err(error)
-                    if matches!(error.data, Some(rustx::app_server::protocol::ErrorData::InvalidState)) =>
+                    if matches!(
+                        error.data,
+                        Some(rustx::app_server::protocol::ErrorData::InvalidState)
+                    ) =>
                 {
                     tokio::task::yield_now().await;
                 }
