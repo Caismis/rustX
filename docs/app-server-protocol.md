@@ -231,7 +231,7 @@ Trace. These asynchronous read-only methods neither resume nor settle a child,
 work after child process exit, and do not depend on its live inspection socket.
 `SubagentObservation.attempt_id` is the exact current child Attempt, cleared at
 settlement. Live repairs require that identity and exact request/tool identity;
-durable terminal facts always win. Clients must upgrade together to v80/v86.
+durable terminal facts always win. Clients must upgrade together to v80/v87.
 
 
 Child statistics remain available through `agent/statistics { target, agent_id }`.
@@ -357,7 +357,7 @@ Only App Server v80 / Runtime Client v87 are supported. Earlier peers are reject
 The earlier v22/v49 revision introduced native whole-conversation Turn/Step
 totals, measured request timing, the latest exact Attempt clock, and authored
 `SessionModelsView::Available.default_model` from the same creation capture as
-its catalog. The current v80/v86 pair retains these capabilities. A browser product preference can
+its catalog. The current v80/v87 pair retains these capabilities. A browser product preference can
 seed new Session intent; it does not alter authored configuration or existing
 Sessions.
 
@@ -2032,7 +2032,7 @@ the authored unit in that scope. Clients never write whole config documents.
 ## Current Session lifecycle contract
 
 Initialization requires exactly v80 and WebSocket requires `rustx.app-server.v80`.
-v78 and all earlier versions are rejected without fallback. Rust DTOs generate
+v79 and all earlier versions are rejected without fallback. Rust DTOs generate
 `v80.ts`, `v80.schema.json`, and the serialized fixtures; only the current version is kept.
 Manual runtime unload is absent from the public method/result vocabulary.
 Session lists have no residency field. Deletion blockers have no current-Session
