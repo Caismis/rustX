@@ -424,13 +424,6 @@ impl RuntimeInner {
             .as_ref()
             .and_then(|registry| registry.proactive.clone());
         let Some(work) = work else { return };
-        let publish_terminal = {
-            let mut state = work.state.lock().expect("asynchronous compaction state");
-            std::mem::take(&mut state.pending_terminal_publication)
-        };
-        if publish_terminal && let Err(error) = self.publish_async_status(&work) {
-            self.fail_async_durability(&error);
-        }
         if !wait
             && !work.exit_announced.load(Ordering::Acquire)
             && !work.joined.load(Ordering::Acquire)
@@ -471,14 +464,26 @@ impl RuntimeInner {
                 }
                 changed.await;
             }
+        } else if !work.joined.load(Ordering::Acquire) {
+            // The other reaper still owns confirmation of physical exit.
+            return;
         }
-        let terminal = matches!(
-            work.state
-                .lock()
-                .expect("asynchronous compaction state")
-                .phase,
-            Phase::Terminal
-        );
+        // A Ready operation may be cancelled while this reaper awaits its
+        // worker. Read publication debt only after physical join, and retain
+        // the registry entry until its current terminal fact is confirmed.
+        let publish_terminal = {
+            let mut state = work.state.lock().expect("asynchronous compaction state");
+            std::mem::take(&mut state.pending_terminal_publication)
+        };
+        if publish_terminal && let Err(error) = self.publish_async_status(&work) {
+            self.fail_async_durability(&error);
+        }
+        let terminal = {
+            let state = work.state.lock().expect("asynchronous compaction state");
+            matches!(state.phase, Phase::Terminal)
+                && !state.pending_terminal_publication
+                && state.published.as_ref() == Some(&state.status)
+        };
         if terminal && work.joined.load(Ordering::Acquire) {
             let mut slot = self
                 .async_compaction

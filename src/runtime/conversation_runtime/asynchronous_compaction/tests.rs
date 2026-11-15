@@ -84,7 +84,10 @@ async fn ready_background_cancels_and_joins_competing_blocking_scope() {
         FixtureModel, ScriptedAdapterFactory, fixture_session_model,
     };
 
-    let directory = tempfile::tempdir().unwrap();
+    let directory = tempfile::Builder::new()
+        .prefix(&"recovery-native-owner-".repeat(6))
+        .tempdir()
+        .unwrap();
     let (release_background, background_gate) = model_release();
     let mut background = summary_turn_script("covered old context");
     background.insert(1, FakeStep::ParkUntilReleased(background_gate));
@@ -128,25 +131,44 @@ async fn ready_background_cancels_and_joins_competing_blocking_scope() {
         parks.wait_for(|count| *count >= 1).await.unwrap();
     })
     .await;
-    // The whole request must exceed the hard limit, while the retained tail
-    // plus the captured-prefix Summary must fit. The blocking start and the
-    // successful background commit below prove both sides at the real cut.
-    let fresh_text = "new ".repeat(750);
+    // Leave headroom for the long native cwd and re-armed permission reminder.
+    // The complete old request must still exceed admission while the captured
+    // Summary replacement fits. The real blocking start and background commit
+    // below independently prove both inequalities.
+    let fresh_text = "new ".repeat(500);
     runtime.submit_inbound(text_content(&fresh_text)).unwrap();
-    within_liveness_guard("competing blocking Summary park", async {
+    // The admitted blocking scope may still be queued by Auxiliary capacity;
+    // its ownership, cancellation and physical join must precede activation.
+    within_liveness_guard("competing blocking Summary start", async {
         model
             .streams_started()
             .wait_for(|count| *count >= 2)
             .await
             .unwrap();
-        parks.wait_for(|count| *count >= 1).await.unwrap();
     })
     .await;
     release_background.send(true).unwrap();
-    let _ = within_liveness_guard(
-        "recovered Attempt settlement",
-        await_settled_ledger(&runtime, 0),
-    )
+    let _ = within_liveness_guard("recovered Attempt settlement", async {
+        let settled = runtime.child_attempt_settlement(0);
+        tokio::pin!(settled);
+        loop {
+            let changed = work.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            {
+                let state = work.state.lock().unwrap();
+                assert!(
+                    state.status.diagnostic.is_none(),
+                    "the background fixture must fit current admission: {:?}",
+                    state.status
+                );
+            }
+            tokio::select! {
+                ledger = &mut settled => break ledger,
+                () = changed => {}
+            }
+        }
+    })
     .await;
     assert!(
         model.streams_exited_count() >= 2,
@@ -439,7 +461,7 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
     assert!(runtime.inner.store.projection_head().unwrap().is_none());
     assert_eq!(model.requests()[1], frozen_primary);
     release_primary.send(true).unwrap();
-    let _ = within_liveness_guard("primary settlement", await_settled_ledger(&runtime, 0)).await;
+    let _ = within_liveness_guard("primary settlement", runtime.child_attempt_settlement(0)).await;
     within_liveness_guard("idle installation", async {
         loop {
             let changed = work.changed.notified();
@@ -477,8 +499,11 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
     runtime
         .submit_inbound(text_content("after idle activation"))
         .unwrap();
-    let _ =
-        within_liveness_guard("post-activation primary", await_settled_ledger(&runtime, 1)).await;
+    let _ = within_liveness_guard(
+        "post-activation primary",
+        runtime.child_attempt_settlement(1),
+    )
+    .await;
     assert_eq!(
         model.requests()[2]
             .effective_system_prompt
@@ -489,7 +514,7 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
     runtime
         .submit_inbound(text_content("after reminder consumption"))
         .unwrap();
-    let _ = within_liveness_guard("subsequent primary", await_settled_ledger(&runtime, 2)).await;
+    let _ = within_liveness_guard("subsequent primary", runtime.child_attempt_settlement(2)).await;
     assert!(
         !model.requests()[3]
             .effective_system_prompt
@@ -566,7 +591,7 @@ async fn late_ready_before_start_preserves_the_prepared_snapshot() {
         "primary provider has not started"
     );
     pre_start.release();
-    let _ = within_liveness_guard("primary settlement", await_settled_ledger(&runtime, 0)).await;
+    let _ = within_liveness_guard("primary settlement", runtime.child_attempt_settlement(0)).await;
     let snapshots = runtime
         .inner
         .store
@@ -998,8 +1023,93 @@ async fn explicit_cancel_targets_only_the_named_independent_operation() {
     assert!(!runtime.cancel_compaction(&admission.operation_id).unwrap());
     assert_eq!(model.requests().len(), 2);
     release_primary.send(true).unwrap();
-    let _ = within_liveness_guard("primary settlement", await_settled_ledger(&runtime, 0)).await;
+    let _ = within_liveness_guard("primary settlement", runtime.child_attempt_settlement(0)).await;
     assert!(runtime.inner.store.projection_head().unwrap().is_none());
+    runtime.shutdown().await.unwrap();
+}
+
+/// Cancellation after a reaper starts joining must still reach the Journal
+/// before that exact operation can be retired from the native registry.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancellation_during_reap_join_publishes_terminal_before_retirement() {
+    let directory = tempfile::tempdir().unwrap();
+    let (release_summary, summary_gate) = model_release();
+    let mut script = summary_turn_script("retained historical fact");
+    script.insert(1, FakeStep::ParkUntilReleased(summary_gate));
+    let mut first = runtime_inbound_message("reap-first");
+    first.content = text_content(&"historical source ".repeat(512));
+    let mut second = runtime_inbound_message("reap-second");
+    second.content = text_content(&"retained source ".repeat(512));
+    let (runtime, model) = headless_runtime_with_options(
+        &directory,
+        vec![script],
+        None,
+        None,
+        HeadlessRuntimeOptions {
+            initial_messages: vec![MessageBlock::User(first), MessageBlock::User(second)],
+            ..HeadlessRuntimeOptions::default()
+        },
+    )
+    .await;
+    // Open native admission without starting the automatic coordinator: this
+    // test owns the one reaper and controls its physical join directly.
+    assert!(runtime.inner.lifecycle.activate());
+    let admission = start_background(&runtime).await;
+    let work = runtime.inner.async_work(&admission).unwrap();
+    within_liveness_guard("Summary park", async {
+        model.parks().wait_for(|count| *count >= 1).await.unwrap();
+    })
+    .await;
+    let (entered, published) = tokio::sync::oneshot::channel();
+    let (release_publication, publication_release) = std::sync::mpsc::channel();
+    *work.ready_publication_gate.lock().unwrap() = Some(ReadyPublicationGate {
+        entered,
+        release: publication_release,
+    });
+    release_summary.send(true).unwrap();
+    within_liveness_guard("Ready publication pause", published)
+        .await
+        .unwrap();
+    let reaped = runtime.inner.reap_async_compaction(true);
+    tokio::pin!(reaped);
+    tokio::select! {
+        biased;
+        () = &mut reaped => panic!("the parked worker cannot already be joined"),
+        () = tokio::task::yield_now() => {}
+    }
+    assert!(
+        work.join.lock().unwrap().is_none(),
+        "the reaper claimed physical join ownership"
+    );
+    runtime.inner.cancel_async_compaction();
+    release_publication.send(()).unwrap();
+    within_liveness_guard("cancelled worker reaping", reaped).await;
+    let cut = runtime.inner.store.compaction_resource_cut().unwrap();
+    let statuses = runtime
+        .inner
+        .store
+        .latest_compaction_operations(cut.journal.0)
+        .unwrap();
+    let status = statuses
+        .iter()
+        .find(|s| s.operation_id == admission.operation_id)
+        .unwrap();
+    assert_eq!(
+        status.phase,
+        CompactionOperationPhase::Cancelled,
+        "physical join cannot retire an unpublished terminal cancellation"
+    );
+    assert!(
+        runtime
+            .inner
+            .async_compaction
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .proactive
+            .is_none()
+    );
     runtime.shutdown().await.unwrap();
 }
 
@@ -1220,7 +1330,7 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
     runtime.cancel_current_attempt(&trigger).unwrap();
     let _ = within_liveness_guard(
         "trigger Attempt settlement",
-        await_settled_ledger(&runtime, 0),
+        runtime.child_attempt_settlement(0),
     )
     .await;
     assert!(!runtime.has_current_attempt());
@@ -1234,7 +1344,7 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
         .unwrap();
     let _ = within_liveness_guard(
         "later Attempt settlement",
-        await_settled_ledger(&runtime, 1),
+        runtime.child_attempt_settlement(1),
     )
     .await;
     assert!(!admission.cancellation.is_cancelled());
@@ -1324,7 +1434,16 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
     runtime.inner.lock_state().manual_compaction = None;
     runtime.shutdown().await.unwrap();
     assert_eq!(model.streams_exited_count(), 3);
-    let events = runtime.inner.store.read_events(None, 128).unwrap().events;
+    let mut events = Vec::new();
+    let mut after = None;
+    loop {
+        let page = runtime.inner.store.read_events(after, 128).unwrap();
+        if page.events.is_empty() {
+            break;
+        }
+        after = page.events.last().map(|event| event.sequence);
+        events.extend(page.events);
+    }
     assert!(events.iter().any(|event| matches!(&event.event,
         RuntimeEvent::CompactionOperationUpdated { status }
             if status.operation_id == admission.operation_id && status.phase == CompactionOperationPhase::Cancelled
@@ -1346,7 +1465,7 @@ async fn settled_trigger_releases_its_abandoned_capture() {
     runtime
         .submit_inbound(text_content("finish the trigger"))
         .unwrap();
-    within_liveness_guard("trigger settlement", await_settled_ledger(&runtime, 0)).await;
+    within_liveness_guard("trigger settlement", runtime.child_attempt_settlement(0)).await;
     within_liveness_guard("abandoned capture status", async {
         loop {
             let changed = work.changed.notified();
@@ -1389,7 +1508,7 @@ async fn drain_releases_abandoned_capture_after_unrelated_attempt() {
     runtime
         .submit_inbound(text_content("unrelated turn"))
         .unwrap();
-    within_liveness_guard("unrelated settlement", await_settled_ledger(&runtime, 0)).await;
+    within_liveness_guard("unrelated settlement", runtime.child_attempt_settlement(0)).await;
     assert!(matches!(work.state.lock().unwrap().phase, Phase::Capturing));
     assert!(!admission.cancellation.is_cancelled());
     within_liveness_guard("abandoned capture drain", runtime.shutdown())

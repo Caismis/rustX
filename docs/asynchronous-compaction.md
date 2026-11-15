@@ -88,7 +88,10 @@ Attempt completion/cancellation stops its own primary work and waiters, while
 independent generation continues. Proven supersession revokes future starts
 without reclaiming physically held permits. Drain, deletion, authoritative
 durability failure and native cancellation retain physical join ownership.
-An already granted commit remains committed after cancellation.
+An already granted commit remains committed after cancellation. The reaper
+checks pending terminal publication after joining the physical worker, so a
+cancellation received during that join cannot disappear. It removes a terminal
+registry entry only after the exact current status has reached the Journal.
 
 `ConversationRuntime::cancel_compaction(OperationId)` targets only the matching
 independent operation. An accepted cancellation request does not claim physical
