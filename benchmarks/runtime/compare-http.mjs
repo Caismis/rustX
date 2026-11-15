@@ -19,42 +19,32 @@ function parseEnvelopeArguments(raw) {
  return parsed;
 }
 
-export function rustWorkspaceOf(body) {
- let cwdWorkspace=null;
- let readWorkspace=null;
- for(const message of body.messages??[]) {
-  if(message.role==='system' && typeof message.content==='string') {
-   const idx=message.content.indexOf(CWD_MARKER);
-   if(idx!==-1) {
-    const rest=message.content.slice(idx+CWD_MARKER.length);
-    const end=rest.indexOf('\n\n');
-    cwdWorkspace=end===-1?rest:rest.slice(0,end);
-   }
-  }
-  for(const call of message.tool_calls??[]) {
-   const args=parseEnvelopeArguments(call.function.arguments);
-   if(call.function.name==='read' && typeof args.arguments.path==='string') {
-    assert(args.arguments.path.endsWith('/note.txt'),`unexpected read fixture path: ${args.arguments.path}`);
-    const candidate=args.arguments.path.slice(0,-'/note.txt'.length);
-    if(readWorkspace!==null) assert.equal(candidate,readWorkspace);
-    readWorkspace=candidate;
-   }
-  }
- }
- if(cwdWorkspace!==null && readWorkspace!==null) assert.equal(readWorkspace,cwdWorkspace);
- return cwdWorkspace??readWorkspace??'/unused';
+function requireKnownWorkspace(record, label) {
+ assert.equal(typeof record.workspace,'string',`${label} missing immutable fixture workspace string`);
+ assert(record.workspace.length>0,`${label} workspace must not be empty`);
+ return record.workspace;
 }
 
-export function normalizedRustBody(body,dynamic=true) {
+export function normalizedRustBody(body,workspace,dynamic=true) {
+ if(dynamic) {
+  assert.equal(typeof workspace,'string','known fixture workspace string is required');
+  assert(workspace.length>0,'known fixture workspace must not be empty');
+ }
  const cloned=structuredClone(body);
- const workspace=dynamic?rustWorkspaceOf(cloned):'/unused';
+ let systemMessages=0;
+ const expectedCwdLine=`${CWD_MARKER}${workspace}`;
  for(const message of cloned.messages??[]) {
   if(message.role==='system') {
+   systemMessages+=1;
    assert.equal(typeof message.content,'string');
-   if(dynamic && workspace!=='/unused') {
-    const exact=`${CWD_MARKER}${workspace}`;
-    assert(message.content.includes(exact),'system prompt missing configured workspace cwd');
-    message.content=message.content.replace(exact,`${CWD_MARKER}<WORKSPACE>`);
+   if(dynamic) {
+    const first=message.content.indexOf(expectedCwdLine);
+    assert.notEqual(first,-1,`system prompt missing exact workspace cwd: ${workspace}`);
+    assert.equal(message.content.lastIndexOf(expectedCwdLine),first,'duplicate workspace cwd line in system prompt');
+    const after=first+expectedCwdLine.length;
+    assert(after===message.content.length || message.content.startsWith('\n\n',after),
+     `system prompt cwd line does not end at section boundary for ${workspace}`);
+    message.content=message.content.slice(0,first)+`${CWD_MARKER}<WORKSPACE>`+message.content.slice(after);
    }
    continue;
   }
@@ -63,17 +53,22 @@ export function normalizedRustBody(body,dynamic=true) {
    if(dynamic && block.type==='text' && typeof block.text==='string' && block.text.startsWith(TIME_PREFIX)) {
     const stamp=block.text.slice(TIME_PREFIX.length,-TIME_SUFFIX.length);
     assert(block.text.endsWith(TIME_SUFFIX));
-    assert(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(stamp));
+    assert(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(stamp));
     assert.equal(new Date(stamp.replace(' ','T')+'Z').toISOString().slice(0,19).replace('T',' '),stamp);
     block.text=`${TIME_PREFIX}<TIME>${TIME_SUFFIX}`;
    }
   }
   for(const call of message.tool_calls??[]) {
    const args=parseEnvelopeArguments(call.function.arguments);
-   if(dynamic && args.arguments.path===`${workspace}/note.txt`) args.arguments.path='<WORKSPACE>/note.txt';
+   if(dynamic && call.function.name==='read') {
+    assert.equal(args.arguments.path,`${workspace}/note.txt`,
+     `read tool path must target declared fixture workspace ${workspace}`);
+    args.arguments.path='<WORKSPACE>/note.txt';
+   }
    call.function.arguments=args;
   }
  }
+ if(dynamic) assert.equal(systemMessages,1,'rust request must contain exactly one system message');
  return cloned;
 }
 
@@ -90,12 +85,14 @@ export function comparePayloads(rust,pi) {
  const rightRequests=pi.wire_requests??pi.requests;
  assert.equal(rust.case,pi.scenario??pi.case);
  assert.equal(rust.wire_requests.length,rightRequests.length);
+ const rustWorkspace=requireKnownWorkspace(rust,'left rust measurement');
+ const piWorkspace=sameEngine?requireKnownWorkspace(pi,'right rust measurement'):null;
  const checked=[];
  for(let i=0;i<rightRequests.length;i++) {
   const r=rust.wire_requests[i],p=rightRequests[i];
   for(const key of ['method','path','protocol','model','index']) assert.deepEqual(r[key],p[key]);
-  const a=normalizedRustBody(r.body,true);
-  const b=sameEngine?normalizedRustBody(p.body,true):normalizedPi(p.body,piWorkspaceOf(p),true);
+  const a=normalizedRustBody(r.body,rustWorkspace,true);
+  const b=sameEngine?normalizedRustBody(p.body,piWorkspace,true):normalizedPi(p.body,piWorkspaceOf(p),true);
   // Compare the core independently, and retain the meaningful schema differences
   // for cross-engine comparisons; same-engine enforces full normalized equality.
   const {tools:rustTools,...rustCore}=a,{tools:piTools,...piCore}=b;
