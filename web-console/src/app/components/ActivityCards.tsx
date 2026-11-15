@@ -27,6 +27,7 @@ import { ArtifactResources } from '../../client/artifacts';
 import { IconRefreshOutline14, IconClockOutline16, IconCloseOutline16 } from '../../presentation/primitives/icons';
 
 import { useActivityRequest } from './useActivityRequest';
+import { ConversationRunCanvasHost } from '../workflows/run-canvas/ConversationRunCanvasHost';
 
 const detail = (value: string) => value.length > 1024 ? `${value.slice(0, 1024)}…` : value;
 type AgentWait = Extract<MethodResult, { type: 'agent_wait' }>;
@@ -102,12 +103,31 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
     openPreview: (artifact: Parameters<typeof preview.openPreview>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.openPreview({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,owned:ownsPreview,subscribeOwned:subscribePreview } });},
     download: (artifact: Parameters<typeof preview.download>[0]) => {if(artifact.source.kind==='session_file'&&artifact.source.conversationId!==agent.child_conversation_id)throw new Error('Obsolete Child delivery source');return preview.download({ ...artifact, source: { ...artifact.source,agentId:agent.agent_id,owned:ownsPreview,subscribeOwned:subscribePreview } });},
   } : undefined, [preview,agent.agent_id,agent.child_conversation_id,ownsPreview,subscribePreview]);
-  const workflows = useWorkflowContent(client, admission && sessionId && conversation?.checkpoint ? { id: sessionId, target: admission.target, attachmentObservation: admission, snapshot: conversation.snapshot, checkpoint: conversation.checkpoint } : undefined, visible && mode === 'chat' && conversation?.activationId === agent.activation_id, agent.agent_id);
+  const childWorkflowView = admission && sessionId && conversation?.checkpoint
+    ? { id: sessionId, target: admission.target, attachmentObservation: admission, snapshot: conversation.snapshot, checkpoint: conversation.checkpoint }
+    : undefined;
+  const workflows = useWorkflowContent(client, childWorkflowView, visible && mode === 'chat' && conversation?.activationId === agent.activation_id, agent.agent_id);
   const unavailable = agent.state === 'unavailable';
   const acceptsMessage = agent.state === 'active' || agent.state === 'inactive';
   const observationError = transcriptError?.owner === viewOwner ? transcriptError : undefined;
   const childSnapshot = conversation?.activationId === agent.activation_id ? conversation.snapshot : undefined;
-  return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
+  const ownerCurrent = !unavailable && (!client || !sessionId || !admission || client.isAttachmentObservationCurrent(sessionId, admission));
+  return <AgentConversationContext.Provider value={agent}><ArtifactContext.Provider value={artifacts}><PreviewContext.Provider value={scopedPreview}><ConversationRunCanvasHost
+    client={client}
+    sessionId={sessionId}
+    conversationId={agent.child_conversation_id}
+    attachmentTarget={admission?.target}
+    attachmentObservation={admission}
+    ownerCurrent={ownerCurrent}
+    agentId={agent.agent_id}
+    expectedActivationId={agent.activation_id}
+    liveCheckpointCut={conversation?.checkpoint?.read_cut}
+    inlineRuns={childSnapshot?.workflows?.runs}
+    liveRuns={workflows.currentSnapshot?.runs}
+    liveRunsCurrentCut={workflows.isCurrentCut}
+    liveWorkflowView={visible && conversation?.activationId === agent.activation_id ? childWorkflowView : undefined}
+    pendingInteractions={childSnapshot?.pending_interactions}
+  ><section className={css.agentConversation} data-agent-id={agent.agent_id} data-agent-state={agent.state} data-view={mode} data-activation-id={agent.current_activation ?? undefined} aria-label={tx('common:activity.agent-label', { name: agent.agent })}>
     <div hidden={mode !== 'chat'} className={css.agentChat}><JournalSourceProvider content={conversation?.content} messages={conversation?.snapshot?.messages} transcript={conversation?.snapshot?.transcript} source={client&&admission&&conversation?.checkpoint ? {client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><SubagentChat client={client} sessionId={sessionId} admission={admission} agent={agent} snapshot={conversation?.snapshot} workflows={workflows.snapshot} visible={visible && mode === 'chat'}>
       {transcriptLoading && !conversation && <p role="status">{tx('common:activity.reading')}</p>}
       {metricsError && <p role="alert">{metricsError}</p>}
@@ -147,5 +167,5 @@ export function AgentCard({ agent, metrics, metricsError, mode = 'chat', visible
         client,target:admission.target,agentId:agent.agent_id,cut:()=>conversation.checkpoint?.read_cut,owned:ownsContent,
       }:undefined}><ConversationStats statistics={metrics?.statistics} occupancy={metrics?.occupancy}/></JournalSourceProvider>
     </ComposerSeat>
-  </section></PreviewContext.Provider></ArtifactContext.Provider></AgentConversationContext.Provider>;
+  </section></ConversationRunCanvasHost></PreviewContext.Provider></ArtifactContext.Provider></AgentConversationContext.Provider>;
 }

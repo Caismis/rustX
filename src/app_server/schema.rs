@@ -1210,7 +1210,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     fixtures.push(request(
         "workflow-save",
         Method::SourcesWrite {
-            target,
+            target: target.clone(),
             expected_revision: revision.clone(),
             mutation: SourceMutation::Workflow {
                 id: id.clone(),
@@ -1240,6 +1240,172 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             }),
         },
     })));
+    let attachment_target = AttachmentTarget {
+        session_id: crate::local_runtime::session::SessionId::new(
+            "ses_00000000-0000-7000-8000-000000000001",
+        ),
+        conversation_id: crate::runtime::identity::ConversationId::new(
+            "conv_00000000-0000-7000-8000-000000000001",
+        ),
+        runtime_incarnation: serde_json::from_str("9007199254740993").expect("incarnation fixture"),
+        attachment_id: crate::runtime_client::types::AttachmentId::new("attachment-fixture"),
+    };
+    let run_id = crate::runtime::workflow::WorkflowRunId {
+        conversation_id: attachment_target.conversation_id.clone(),
+        origin: crate::runtime::workflow::WorkflowRunOrigin::Tool {
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-run-fixture"),
+        },
+        invocation: 1,
+    };
+    fixtures.push(request(
+        "workflow-trace-location",
+        Method::TraceLocateWorkflow {
+            target: attachment_target.clone(),
+            run_id: run_id.clone(),
+        },
+    ));
+    fixtures.push(request(
+        "agent-workflow-trace-location",
+        Method::AgentTraceLocateWorkflow {
+            target: attachment_target.clone(),
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
+            run_id: run_id.clone(),
+        },
+    ));
+    fixtures.push(success(
+        "workflow-trace-unavailable",
+        MethodResult::TraceWorkflowLocation { location: None },
+    ));
+    let snapshot_cut = crate::observation::cut::CheckpointReadCut {
+        canonical_foreground: None,
+        live_publication: None,
+        collection_cuts: std::collections::BTreeMap::new(),
+        domain_revisions: std::collections::BTreeMap::new(),
+        conversation_id: attachment_target.conversation_id.clone(),
+        activation_id: None,
+        revision: 12,
+        through: 12,
+        source_cut: None,
+    };
+    fixtures.push(request(
+        "workflow-run-snapshot-header",
+        Method::ConversationWorkflowRunSnapshotHeader {
+            target: attachment_target.clone(),
+            agent_id: None,
+            cut: Some(snapshot_cut.clone()),
+            run_id: run_id.clone(),
+        },
+    ));
+    fixtures.push(success(
+        "workflow-run-snapshot-header",
+        MethodResult::WorkflowRunSnapshotHeader {
+            header: Some(crate::runtime::workflow::WorkflowRunSnapshotHeader {
+                run_id: run_id.clone(),
+                workflow_id: id.clone(),
+                program_digest: program.tool_identity().program_digest,
+                source_revision: revision.clone(),
+                snapshot_digest: "0".repeat(64),
+                has_source_presentation: false,
+                byte_length: 128,
+                sha256: "a".repeat(64),
+            }),
+        },
+    ));
+    fixtures.push(request(
+        "workflow-run-snapshot-chunk",
+        Method::ConversationWorkflowRunSnapshotChunk {
+            target: attachment_target.clone(),
+            agent_id: None,
+            cut: Some(snapshot_cut.clone()),
+            run_id: run_id.clone(),
+            offset: 0,
+            limit: crate::runtime::workflow::WORKFLOW_SNAPSHOT_CHUNK_BYTES,
+        },
+    ));
+    fixtures.push(success(
+        "workflow-run-snapshot-chunk",
+        MethodResult::WorkflowRunSnapshotChunk {
+            chunk: Some(crate::runtime::workflow::WorkflowRunSnapshotChunk {
+                offset: 0,
+                data: "e30=".into(),
+                next_offset: None,
+            }),
+        },
+    ));
+    fixtures.push(request(
+        "session-workflow-run-snapshot-header",
+        Method::SessionWorkflowRunSnapshotHeader {
+            session_id: attachment_target.session_id.clone(),
+            node_id: None,
+            cut: snapshot_cut.clone(),
+            run_id: run_id.clone(),
+        },
+    ));
+    fixtures.push(request(
+        "session-workflow-run-snapshot-chunk",
+        Method::SessionWorkflowRunSnapshotChunk {
+            session_id: attachment_target.session_id.clone(),
+            node_id: None,
+            cut: snapshot_cut.clone(),
+            run_id: run_id.clone(),
+            offset: 0,
+            limit: crate::runtime::workflow::WORKFLOW_SNAPSHOT_CHUNK_BYTES,
+        },
+    ));
+    let node_instance = crate::runtime::workflow::WorkflowNodeInstance {
+        block: crate::runtime::workflow::WorkflowBlockInstance {
+            run: run_id,
+            definition: crate::runtime::workflow::WorkflowDefinitionPath {
+                workflow_id: id.clone(),
+                blocks: Vec::new(),
+            },
+            invocations: vec![0],
+        },
+        node: "start".into(),
+        visit: 1,
+    };
+    fixtures.push(request(
+        "conversation-workflow-trace-node",
+        Method::ConversationWorkflowTraceNode {
+            target: attachment_target.clone(),
+            agent_id: None,
+            cut: snapshot_cut.clone(),
+            instance: node_instance.clone(),
+        },
+    ));
+    fixtures.push(request(
+        "session-workflow-trace-node",
+        Method::SessionWorkflowTraceNode {
+            session_id: attachment_target.session_id,
+            node_id: None,
+            cut: snapshot_cut,
+            instance: node_instance.clone(),
+        },
+    ));
+    fixtures.push(success(
+        "workflow-trace-node",
+        MethodResult::WorkflowTraceNode {
+            node: Some(crate::durable::observation::WorkflowTraceNode {
+                id: "workflow-node:1".into(),
+                instance: node_instance,
+                kind: None,
+                state: crate::durable::observation::WorkflowNodeTraceState::Incomplete,
+                timing: crate::observation::trace::TraceTiming {
+                    started_at: chrono::DateTime::UNIX_EPOCH,
+                    ended_at: None,
+                    duration_ms: None,
+                },
+                input: None,
+                output: None,
+                input_preview: None,
+                output_preview: None,
+                input_omitted: false,
+                output_omitted: false,
+                child: None,
+                child_agent_id: None,
+            }),
+        },
+    ));
 }
 
 #[allow(clippy::too_many_lines)] // Native Scheduler wire examples include exact integer domains.

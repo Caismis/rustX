@@ -52,7 +52,12 @@ pub mod read_model;
 mod references;
 mod review;
 pub mod scheduled;
+pub mod snapshot;
 pub use review::{MAX_REVIEW_ACTIONS, REVIEW_TIMEOUT_PORT, WorkflowReviewAction};
+pub use snapshot::{
+    WORKFLOW_SNAPSHOT_CHUNK_BYTES, WorkflowRunDefinitionSnapshot, WorkflowRunSnapshotChunk,
+    WorkflowRunSnapshotHeader,
+};
 mod expressions;
 pub(crate) mod model;
 mod tool;
@@ -139,6 +144,16 @@ pub struct WorkflowBlockInstance {
     pub run: WorkflowRunId,
     pub definition: WorkflowDefinitionPath,
     pub invocations: Vec<u32>,
+}
+
+impl WorkflowBlockInstance {
+    /// True when block nesting matches the compiler/executor contract: root plus up to
+    /// `MAX_BLOCK_DEPTH` two-segment nested bodies (`invocations.len() == blocks.len() / 2 + 1`).
+    pub(crate) fn has_valid_nesting(&self) -> bool {
+        self.definition.blocks.len().is_multiple_of(2)
+            && self.definition.blocks.len() <= 2 * MAX_BLOCK_DEPTH
+            && self.invocations.len() == self.definition.blocks.len() / 2 + 1
+    }
 }
 
 /// One concrete node visit in an owning block instance.
@@ -1228,6 +1243,7 @@ pub struct WorkflowProgram {
         crate::tools::types::ToolDefinition,
     >,
     permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
+    snapshot: Arc<WorkflowRunDefinitionSnapshot>,
 }
 
 /// Immutable compiled graph of the root or of a body; a body's path is not empty.
@@ -1257,7 +1273,34 @@ impl WorkflowProgram {
         id: WorkflowId,
         definition: WorkflowDefinition,
     ) -> Result<Self, WorkflowCompileError> {
-        compile_program(id, definition)
+        compile_program(
+            id,
+            None,
+            crate::workflow_file::WorkflowFileDocument::from(definition),
+        )
+    }
+
+    /// Compiles and validates one full workflow document while preserving its
+    /// exact source revision and same-revision presentation metadata as an
+    /// immutable admission-bound snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WorkflowCompileError`] when the definition or presentation
+    /// document violates structural or capacity bounds.
+    pub fn compile_document(
+        id: WorkflowId,
+        source_revision: impl Into<String>,
+        document: crate::workflow_file::WorkflowFileDocument,
+    ) -> Result<Self, WorkflowCompileError> {
+        compile_program(id, Some(source_revision.into()), document)
+    }
+
+    /// Immutable definition + same-revision presentation snapshot captured when
+    /// this program was compiled/admitted.
+    #[must_use]
+    pub fn run_snapshot(&self) -> &Arc<WorkflowRunDefinitionSnapshot> {
+        &self.snapshot
     }
 
     /// The configured identity.
@@ -1750,8 +1793,14 @@ impl WorkflowCompileError {
 #[allow(clippy::too_many_lines)] // one bounded graph-to-program validation pipeline
 fn compile_program(
     id: WorkflowId,
-    definition: WorkflowDefinition,
+    source_revision: Option<String>,
+    document: crate::workflow_file::WorkflowFileDocument,
 ) -> Result<WorkflowProgram, WorkflowCompileError> {
+    document
+        .validate()
+        .map_err(|error| WorkflowCompileError::InvalidField(error.reason).at(error.path))?;
+    let snapshot_document = document.clone();
+    let definition = document.definition;
     if definition.timeout_ms == 0 || definition.timeout_ms > 86_400_000 {
         return Err(
             WorkflowCompileError::InvalidField("timeout_ms must be 1..=86400000".into())
@@ -1791,6 +1840,18 @@ fn compile_program(
         )
         .at("block"));
     }
+    let has_source_presentation = snapshot_document
+        .editor
+        .as_ref()
+        .is_some_and(|editor| editor.nodes.iter().any(|node| node.position.is_some()));
+    let source_revision = source_revision.unwrap_or_else(|| format!("program:{digest}"));
+    let snapshot = Arc::new(WorkflowRunDefinitionSnapshot {
+        workflow_id: id.clone(),
+        program_digest: digest.clone(),
+        source_revision,
+        has_source_presentation,
+        document: snapshot_document,
+    });
     Ok(WorkflowProgram {
         digest,
         id,
@@ -1804,6 +1865,7 @@ fn compile_program(
         timeout_ms: definition.timeout_ms,
         frozen_tools: BTreeMap::new(),
         permissions: definition.permissions,
+        snapshot,
     })
 }
 
@@ -4104,13 +4166,13 @@ impl WorkflowRuntime {
             agents_consumed: 0,
             model_calls_consumed: 0,
         });
-        self.emit_observability(
-            &run,
+        self.emit_workflow_start_observability(
             RuntimeEvent::WorkflowStarted {
                 tool_call_id,
                 workflow_id: program.id().clone(),
                 run_id: run.run_id.clone(),
             },
+            program.run_snapshot(),
         );
         let execution = {
             let id = run.run_id.clone();
@@ -4218,18 +4280,12 @@ impl WorkflowRuntime {
         }
     }
 
-    /// Appends one bounded best-effort observability fact to the conversation's
-    /// existing Event Journal. A failure is intentionally ignored: ordinary
-    /// Workflow lifecycle/join events never decide control flow or terminal
-    /// state, which remain owned by this `WorkflowRun` and its native child
-    /// registry. The successful child value and native terminal lifecycle fact
-    /// use the separate durable compound transition in `SubagentRegistry`.
-    fn emit_observability(&self, _run: &WorkflowRun, event: RuntimeEvent) {
+    fn build_observability_envelope(&self, event: RuntimeEvent) -> RuntimeEventEnvelope {
         #[cfg(test)]
         self.observations
             .send_modify(|events| events.push(event.clone()));
         let event_id = workflow_event_id(&event);
-        let envelope = RuntimeEventEnvelope {
+        RuntimeEventEnvelope {
             tool_occurrence: None,
             observation: None,
             schema_version: EVENT_SCHEMA_VERSION,
@@ -4240,7 +4296,28 @@ impl WorkflowRuntime {
             turn_id: None,
             timestamp: Utc::now(),
             event,
-        };
+        }
+    }
+
+    fn emit_workflow_start_observability(
+        &self,
+        event: RuntimeEvent,
+        snapshot: &WorkflowRunDefinitionSnapshot,
+    ) {
+        let envelope = self.build_observability_envelope(event);
+        if let Ok(committed) = self.event_store.publish_workflow_start(envelope, snapshot) {
+            self.read_model.publish_committed(committed.sequence);
+        }
+    }
+
+    /// Appends one bounded best-effort observability fact to the conversation's
+    /// existing Event Journal. A failure is intentionally ignored: ordinary
+    /// Workflow lifecycle/join events never decide control flow or terminal
+    /// state, which remain owned by this `WorkflowRun` and its native child
+    /// registry. The successful child value and native terminal lifecycle fact
+    /// use the separate durable compound transition in `SubagentRegistry`.
+    fn emit_observability(&self, _run: &WorkflowRun, event: RuntimeEvent) {
+        let envelope = self.build_observability_envelope(event);
         if let Ok(committed) = self.event_store.append_event(envelope) {
             // Every committed native progress fact releases its preceding
             // read-model revisions. Waiting for the outer run's terminal fact
@@ -6935,5 +7012,262 @@ block:
                 .as_str()
                 .starts_with("workflow-event:")
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn workflow_snapshot_start_failure_never_alters_execution_outcome() {
+        use crate::durable::{JournalStore, ObservationStore};
+        use crate::runtime::subagent::ipc::ChildResultStatus;
+
+        let plane = workflow_test_plane(1);
+        let mut child = stage_workflow_child(&plane);
+        let runtime = workflow_runtime(&plane);
+        let context = workflow_test_context(&plane);
+        let output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
+        let def = base_definition(
+            "work",
+            BTreeMap::from([
+                ("work".into(), agent(output)),
+                (
+                    "done".into(),
+                    return_node(BTreeMap::from([(
+                        "summary".to_owned(),
+                        reference("work.summary"),
+                    )])),
+                ),
+            ]),
+            vec![edge("work", "done")],
+        );
+        let document = crate::workflow_file::WorkflowFileDocument {
+            definition: def,
+            editor: None,
+        };
+        let program = Arc::new(
+            WorkflowProgram::compile_document(
+                WorkflowId::parse("obs_fault").expect("id"),
+                "rev-obs",
+                document,
+            )
+            .expect("compile program"),
+        );
+
+        // Inject failure in the atomic start+snapshot transaction.
+        plane.store.arm_fail_workflow_snapshot_times(1);
+
+        let (_, cancellation) = workflow_cancellation();
+        let task = tokio::spawn({
+            let program = Arc::clone(&program);
+            async move {
+                runtime
+                    .run_test_foreground(
+                        program,
+                        ToolCallId::new("obs-fault-call"),
+                        context,
+                        json!({"task": "produce summary"}),
+                        cancellation,
+                    )
+                    .await
+            }
+        });
+
+        child.expect_delegate().await;
+        child
+            .send_result(
+                ChildResultStatus::Succeeded,
+                Some(r#"{"summary":"execution succeeded despite start snapshot error"}"#),
+            )
+            .await;
+
+        let output = task
+            .await
+            .expect("join workflow task")
+            .expect("workflow succeeds despite start snapshot failure");
+        assert_eq!(
+            output,
+            json!({"summary": "execution succeeded despite start snapshot error"})
+        );
+
+        // Optional start observability failed cleanly without leaving any WorkflowStarted row or snapshot.
+        let events = plane.store.read_events(None, 200).expect("read events");
+        assert!(
+            !events
+                .events
+                .iter()
+                .any(|e| matches!(e.event, RuntimeEvent::WorkflowStarted { .. }))
+        );
+        let cut = plane.store.observation_read_cut().expect("cut");
+        let missing_run = WorkflowRunId {
+            conversation_id: plane.conversation_id.clone(),
+            origin: WorkflowRunOrigin::Tool {
+                attempt_id: crate::runtime::identity::AttemptId::new("obs-fault-attempt"),
+            },
+            invocation: 0,
+        };
+        assert!(
+            plane
+                .store
+                .observation_workflow_run_snapshot_header(&cut, &missing_run)
+                .expect("read absent snapshot")
+                .is_none()
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    #[allow(clippy::too_many_lines)] // Two overlapping runs gated at child delegation to verify revision isolation.
+    async fn workflow_concurrent_admission_layout_race_preserves_each_run_snapshot() {
+        use crate::durable::{JournalStore, ObservationStore};
+        use crate::runtime::subagent::ipc::ChildResultStatus;
+
+        let plane = workflow_test_plane(2);
+        let mut child1 = stage_workflow_child(&plane);
+        let mut child2 = stage_workflow_child(&plane);
+        let runtime = workflow_runtime(&plane);
+        let output = schema(json!({"summary": {"type": "string"}}), &["summary"]);
+        let def = base_definition(
+            "work",
+            BTreeMap::from([
+                ("work".into(), agent(output)),
+                (
+                    "done".into(),
+                    return_node(BTreeMap::from([(
+                        "summary".to_owned(),
+                        reference("work.summary"),
+                    )])),
+                ),
+            ]),
+            vec![edge("work", "done")],
+        );
+        let doc1 = crate::workflow_file::WorkflowFileDocument {
+            definition: def.clone(),
+            editor: Some(
+                serde_json::from_value(json!({
+                    "nodes": [{
+                        "address": { "block": [], "node": "work" },
+                        "position": { "x": 10.0, "y": 20.0 },
+                        "title": "Revision 1"
+                    }]
+                }))
+                .expect("editor 1"),
+            ),
+        };
+        let doc2 = crate::workflow_file::WorkflowFileDocument {
+            definition: def,
+            editor: Some(
+                serde_json::from_value(json!({
+                    "nodes": [{
+                        "address": { "block": [], "node": "work" },
+                        "position": { "x": 999.0, "y": 888.0 },
+                        "title": "Revision 2"
+                    }]
+                }))
+                .expect("editor 2"),
+            ),
+        };
+        doc1.validate().expect("doc1 valid");
+        let wf_id = WorkflowId::parse("race_wf").expect("wf id");
+        let prog1 = Arc::new(
+            WorkflowProgram::compile_document(wf_id.clone(), "rev-1", doc1).expect("compile rev1"),
+        );
+        let prog2 = Arc::new(
+            WorkflowProgram::compile_document(wf_id, "rev-2", doc2).expect("compile rev2"),
+        );
+        assert_eq!(
+            prog1.run_snapshot().program_digest,
+            prog2.run_snapshot().program_digest
+        );
+        assert_ne!(
+            prog1.run_snapshot().source_revision,
+            prog2.run_snapshot().source_revision
+        );
+
+        let ctx1 = workflow_test_context(&plane);
+        let ctx2 = workflow_test_context(&plane);
+        let (_, cancel1) = workflow_cancellation();
+        let (_, cancel2) = workflow_cancellation();
+
+        let t1 = tokio::spawn({
+            let runtime = runtime.clone();
+            async move {
+                runtime
+                    .run_test_foreground(
+                        prog1,
+                        ToolCallId::new("race-call-1"),
+                        ctx1,
+                        json!({"task": "run 1"}),
+                        cancel1,
+                    )
+                    .await
+            }
+        });
+        // Deterministic gate: wait until run 1 reaches active child delegation before starting run 2.
+        child1.expect_delegate().await;
+
+        let t2 = tokio::spawn({
+            let runtime = runtime.clone();
+            async move {
+                runtime
+                    .run_test_foreground(
+                        prog2,
+                        ToolCallId::new("race-call-2"),
+                        ctx2,
+                        json!({"task": "run 2"}),
+                        cancel2,
+                    )
+                    .await
+            }
+        });
+        child2.expect_delegate().await;
+
+        child1
+            .send_result(ChildResultStatus::Succeeded, Some(r#"{"summary":"out-1"}"#))
+            .await;
+        child2
+            .send_result(ChildResultStatus::Succeeded, Some(r#"{"summary":"out-2"}"#))
+            .await;
+
+        assert!(t1.await.expect("join t1").is_ok());
+        assert!(t2.await.expect("join t2").is_ok());
+
+        let events = plane.store.read_events(None, 200).expect("read events");
+        let started: Vec<(Option<ToolCallId>, WorkflowRunId)> = events
+            .events
+            .iter()
+            .filter_map(|e| match &e.event {
+                RuntimeEvent::WorkflowStarted {
+                    tool_call_id,
+                    run_id,
+                    ..
+                } => Some((tool_call_id.clone(), run_id.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(started.len(), 2);
+
+        let cut = plane.store.observation_read_cut().expect("cut");
+        for (call_id, run_id) in started {
+            let (header, doc) = plane
+                .store
+                .observation_workflow_run_snapshot_document(&cut, &run_id)
+                .expect("read snapshot")
+                .expect("snapshot bound");
+            let expected = match call_id
+                .as_ref()
+                .map(super::super::identity::ToolCallId::as_str)
+            {
+                Some("race-call-1") => ("rev-1", Some("Revision 1")),
+                Some("race-call-2") => ("rev-2", Some("Revision 2")),
+                other => panic!("unexpected call_id {other:?}"),
+            };
+            assert_eq!(header.source_revision, expected.0);
+            assert_eq!(
+                doc.editor
+                    .as_ref()
+                    .and_then(|e| e.nodes.first())
+                    .and_then(|n| n.title.as_deref()),
+                expected.1
+            );
+        }
     }
 }

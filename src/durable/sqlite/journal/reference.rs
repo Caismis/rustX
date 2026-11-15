@@ -1158,15 +1158,13 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
             }
             if node_id.node.is_empty()
                 || node_id.node.len() > 64
-                || node_id.block.definition.blocks.len()
-                    > 2 * crate::runtime::workflow::MAX_BLOCK_DEPTH
+                || !node_id.block.has_valid_nesting()
                 || node_id
                     .block
                     .definition
                     .blocks
                     .iter()
                     .any(|key| key.is_empty() || key.len() > 64)
-                || node_id.block.invocations.len() != node_id.block.definition.blocks.len() / 2 + 1
             {
                 return Err(ConversationStoreError::InvalidReference(
                     "Workflow output event has an invalid node identity".to_owned(),

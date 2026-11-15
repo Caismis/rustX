@@ -97,6 +97,75 @@ impl JournalStore for SqliteConversationStore {
         }
         self.append_event_internal(event, None)
     }
+    fn publish_workflow_start(
+        &self,
+        event: RuntimeEventEnvelope,
+        snapshot: &crate::runtime::workflow::WorkflowRunDefinitionSnapshot,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
+        let RuntimeEvent::WorkflowStarted {
+            workflow_id,
+            run_id,
+            ..
+        } = &event.event
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "publish_workflow_start requires a WorkflowStarted event".to_owned(),
+            ));
+        };
+        if workflow_id != &snapshot.workflow_id || run_id.conversation_id != self.conversation_id {
+            return Err(ConversationStoreError::InvalidReference(
+                "WorkflowStarted event disagrees with snapshot or conversation identity".to_owned(),
+            ));
+        }
+        let run_id = run_id.clone();
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("workflow start transaction: {error}")))?;
+        if let Some(existing) = find_event_by_id(&transaction, &event.event_id)? {
+            if same_event_ignoring_sequence(&existing, &event) {
+                super::workflow_snapshot::verify_idempotent_binding(
+                    &transaction,
+                    &self.conversation_id,
+                    existing.sequence,
+                    &run_id,
+                    snapshot,
+                )?;
+                transaction
+                    .commit()
+                    .map_err(|error| storage(format!("workflow start retry commit: {error}")))?;
+                return Ok(existing);
+            }
+            return Err(ConversationStoreError::TerminalViolation(
+                "WorkflowStarted retry conflicts with its durable fact".to_owned(),
+            ));
+        }
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected: WorkflowStarted event commit"));
+        }
+        process_death::reach("before:workflow_start");
+        let persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        process_death::reach("after:workflow_start_event_before_snapshot");
+        super::workflow_snapshot::publish_in_tx(
+            &transaction,
+            &self.conversation_id,
+            persisted.event.sequence,
+            &run_id,
+            snapshot,
+        )?;
+        #[cfg(test)]
+        if Self::consume(&self.fail_workflow_snapshot_remaining) {
+            return Err(storage(
+                "fault injected: workflow snapshot commit rolled back",
+            ));
+        }
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("workflow start commit: {error}")))?;
+        process_death::reach("after:workflow_start");
+        Ok(persisted.event)
+    }
     fn commit_subagent_terminal(
         &self,
         event: RuntimeEventEnvelope,
@@ -1080,6 +1149,7 @@ pub(super) fn requires_specialized_transition(event: &RuntimeEvent) -> bool {
             | RuntimeEvent::BackgroundTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalPublished { .. }
             | RuntimeEvent::SubagentTerminalSettled { .. }
+            | RuntimeEvent::WorkflowStarted { .. }
             | RuntimeEvent::WorkflowAgentOutputCommitted { .. }
             | RuntimeEvent::InteractionRequested { .. }
             | RuntimeEvent::InteractionSettled { .. }

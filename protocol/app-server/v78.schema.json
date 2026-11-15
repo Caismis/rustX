@@ -6291,6 +6291,27 @@
             "type",
             "page"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "run_id": {
+              "$ref": "#/$defs/WorkflowRunId"
+            },
+            "workflow_id": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "run_id",
+            "workflow_id"
+          ]
         }
       ]
     },
@@ -6586,6 +6607,28 @@
         },
         "output_omitted": {
           "type": "boolean"
+        },
+        "child": {
+          "description": "Exact admission identity retained at this cut; grants no child access.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubagentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "child_agent_id": {
+          "description": "Present only after the same concrete visit's ownership fact commits.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentId"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -8922,6 +8965,29 @@
         {
           "type": "object",
           "properties": {
+            "location": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/TraceWorkflowLocation"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "trace_workflow_location"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "conversation_id": {
               "$ref": "#/$defs/ConversationId"
             },
@@ -9670,6 +9736,75 @@
           "required": [
             "type",
             "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "header": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowRunSnapshotHeader"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_run_snapshot_header"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "chunk": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowRunSnapshotChunk"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_run_snapshot_chunk"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "node": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/WorkflowTraceNode"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "workflow_trace_node"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
           ]
         },
         {
@@ -14123,6 +14258,23 @@
     },
     "TraceToolLocation": {
       "description": "A contiguous native history window ending at the selected execution.",
+      "type": "object",
+      "properties": {
+        "record_id": {
+          "type": "string"
+        },
+        "page": {
+          "$ref": "#/$defs/TracePage"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "record_id",
+        "page"
+      ]
+    },
+    "TraceWorkflowLocation": {
+      "description": "A native history window containing one exact Workflow run's admitted start.",
       "type": "object",
       "properties": {
         "record_id": {
@@ -24777,6 +24929,79 @@
         "canonical_json_v1"
       ]
     },
+    "WorkflowRunSnapshotHeader": {
+      "description": "Compact header describing an immutable snapshot bound to one Workflow run.",
+      "type": "object",
+      "properties": {
+        "run_id": {
+          "$ref": "#/$defs/WorkflowRunId"
+        },
+        "workflow_id": {
+          "$ref": "#/$defs/WorkflowId"
+        },
+        "program_digest": {
+          "type": "string"
+        },
+        "source_revision": {
+          "type": "string"
+        },
+        "snapshot_digest": {
+          "type": "string"
+        },
+        "has_source_presentation": {
+          "type": "boolean"
+        },
+        "byte_length": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "workflow_id",
+        "program_digest",
+        "source_revision",
+        "snapshot_digest",
+        "has_source_presentation",
+        "byte_length",
+        "sha256"
+      ]
+    },
+    "WorkflowRunSnapshotChunk": {
+      "description": "Bounded chunk of an immutable run snapshot document.",
+      "type": "object",
+      "properties": {
+        "offset": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "data": {
+          "type": "string"
+        },
+        "next_offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "offset",
+        "data"
+      ]
+    },
     "EffectiveValueChunk": {
       "type": "object",
       "properties": {
@@ -32844,6 +33069,36 @@
           ]
         },
         {
+          "description": "Indexed read-only navigation to an exact admitted Workflow run.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/traceLocateWorkflow"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "run_id": {
+                  "$ref": "#/$defs/WorkflowRunId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "run_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -33913,6 +34168,39 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "agent/traceLocateWorkflow"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "$ref": "#/$defs/AgentId"
+                },
+                "run_id": {
+                  "$ref": "#/$defs/WorkflowRunId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "agent_id",
+                "run_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "agent/traceLocateTool"
             },
             "params": {
@@ -34585,6 +34873,149 @@
                 "content_ref",
                 "offset",
                 "max_bytes"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/workflowRunSnapshotHeader"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cut": {
+                  "$ref": "#/$defs/CheckpointReadCut"
+                },
+                "run_id": {
+                  "$ref": "#/$defs/WorkflowRunId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "cut",
+                "run_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/workflowRunSnapshotChunk"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cut": {
+                  "$ref": "#/$defs/CheckpointReadCut"
+                },
+                "run_id": {
+                  "$ref": "#/$defs/WorkflowRunId"
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 1,
+                  "maximum": 65536
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "cut",
+                "run_id",
+                "offset",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/workflowTraceNode"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/SessionNodeId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "cut": {
+                  "$ref": "#/$defs/CheckpointReadCut"
+                },
+                "instance": {
+                  "$ref": "#/$defs/WorkflowNodeInstance"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "cut",
+                "instance"
               ]
             }
           },
@@ -35697,6 +36128,166 @@
                 "domain",
                 "offset",
                 "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "conversation/workflowRunSnapshotHeader"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AgentId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "cut": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/CheckpointReadCut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "run_id": {
+                  "$ref": "#/$defs/WorkflowRunId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "run_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "conversation/workflowRunSnapshotChunk"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AgentId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "cut": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/CheckpointReadCut"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "run_id": {
+                  "$ref": "#/$defs/WorkflowRunId"
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "uint64",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 1,
+                  "maximum": 65536
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "run_id",
+                "offset",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "conversation/workflowTraceNode"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "agent_id": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/AgentId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "default": null
+                },
+                "cut": {
+                  "$ref": "#/$defs/CheckpointReadCut"
+                },
+                "instance": {
+                  "$ref": "#/$defs/WorkflowNodeInstance"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "cut",
+                "instance"
               ]
             }
           },

@@ -504,6 +504,11 @@ pub enum RuntimeClientRequest {
         offset: u64,
         limit: usize,
     },
+    WorkflowTraceNode {
+        id: RequestId,
+        cut: crate::observation::cut::CheckpointReadCut,
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+    },
     CheckpointValueRead {
         id: RequestId,
         cut: crate::observation::cut::CheckpointReadCut,
@@ -626,6 +631,15 @@ pub enum RuntimeClientRequest {
         id: RequestId,
         locator: super::trace::TraceToolLocator,
     },
+    TraceLocateWorkflow {
+        id: RequestId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+    AgentTraceLocateWorkflow {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
     AgentTraceLocateTool {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
@@ -674,6 +688,7 @@ impl RuntimeClientRequest {
             | Self::ObserveEvents { id, .. }
             | Self::ContentRead { id, .. }
             | Self::CheckpointPageGet { id, .. }
+            | Self::WorkflowTraceNode { id, .. }
             | Self::CheckpointValueRead { id, .. }
             | Self::InteractionPageGet { id, .. }
             | Self::InteractionValueRead { id, .. }
@@ -698,6 +713,8 @@ impl RuntimeClientRequest {
             | Self::AgentTrace { id, .. }
             | Self::AgentTraceDetail { id, .. }
             | Self::TraceLocateTool { id, .. }
+            | Self::TraceLocateWorkflow { id, .. }
+            | Self::AgentTraceLocateWorkflow { id, .. }
             | Self::AgentTraceLocateTool { id, .. }
             | Self::AgentTranscript { id, .. }
             | Self::AgentTurns { id, .. }
@@ -720,6 +737,7 @@ impl RuntimeClientRequest {
             Self::ObserveEvents { .. } => "observe_events",
             Self::ContentRead { .. } => "content_read",
             Self::CheckpointPageGet { .. } => "checkpoint_page_get",
+            Self::WorkflowTraceNode { .. } => "workflow_trace_node",
             Self::CheckpointValueRead { .. } => "checkpoint_value_read",
             Self::InteractionPageGet { .. } => "interaction_page_get",
             Self::InteractionValueRead { .. } => "interaction_value_read",
@@ -744,6 +762,8 @@ impl RuntimeClientRequest {
             Self::AgentTrace { .. } => "agent_trace",
             Self::AgentTraceDetail { .. } => "agent_trace_detail",
             Self::TraceLocateTool { .. } => "trace_locate_tool",
+            Self::TraceLocateWorkflow { .. } => "trace_locate_workflow",
+            Self::AgentTraceLocateWorkflow { .. } => "agent_trace_locate_workflow",
             Self::AgentTraceLocateTool { .. } => "agent_trace_locate_tool",
             Self::AgentTranscript { .. } => "agent_transcript",
             Self::AgentTurns { .. } => "agent_turns",
@@ -759,8 +779,10 @@ impl RuntimeClientRequest {
             Self::CheckpointGet { .. }
                 | Self::TracePageGet { .. }
                 | Self::CheckpointPageGet { .. }
+                | Self::WorkflowTraceNode { .. }
                 | Self::CheckpointValueRead { .. }
                 | Self::TraceLocateTool { .. }
+                | Self::TraceLocateWorkflow { .. }
                 | Self::InteractionPageGet { .. }
                 | Self::InteractionValueRead { .. }
                 | Self::ContentRead { .. }
@@ -776,6 +798,8 @@ impl RuntimeClientRequest {
         matches!(
             self,
             Self::TraceLocateTool { .. }
+                | Self::TraceLocateWorkflow { .. }
+                | Self::AgentTraceLocateWorkflow { .. }
                 | Self::InteractionPageGet { .. }
                 | Self::InteractionValueRead { .. }
                 | Self::AgentStatistics { .. }
@@ -902,6 +926,9 @@ pub enum RuntimeClientResult {
     TraceToolLocation {
         location: Option<super::trace::TraceToolLocation>,
     },
+    TraceWorkflowLocation {
+        location: Option<super::trace::TraceWorkflowLocation>,
+    },
     TranscriptWindow {
         window: Box<super::snapshot::ConversationWindow>,
     },
@@ -917,6 +944,9 @@ pub enum RuntimeClientResult {
     },
     CheckpointPage {
         page: super::checkpoint::CheckpointPage,
+    },
+    WorkflowTraceNode {
+        node: Option<crate::durable::observation::WorkflowTraceNode>,
     },
     DomainPage {
         page: super::checkpoint::CheckpointPage,

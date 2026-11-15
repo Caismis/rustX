@@ -10,6 +10,7 @@ import { useWorkflowNodes } from '../src/app/trajectory/useWorkflowNodes';
 import { translator } from '../src/locale/translation';
 import { workflowTraceFixture } from './workflow-trace-fixture';
 import type { CheckpointPage } from '../../protocol/app-server/v78';
+import { WorkflowRunCanvasContext } from '../src/app/workflows/run-canvas/context';
 
 afterEach(() => {
   cleanup();
@@ -254,4 +255,79 @@ it('an unrelated fresh Trace page cannot rebind a retained workflow to its cut',
     fresh = { ...fixture.cut, revision: '501', through: '501' };
   const cache = refreshTrace(fixture.cache, { records: [fixture.calls[0]], read_cut: fresh, next_cursor: null });
   expect(cache.readCuts?.[fixture.roots[0].id]).toEqual(fixture.cut);
+});
+
+it('Trajectory opens a WorkflowStarted-only root without nodes[0] inference and only uses cached workflow detail from the same cut', () => {
+  const fixture = workflowTraceFixture(0);
+  const root = fixture.roots[0];
+  const openRunCanvas = vi.fn();
+  const baseRender = (details: typeof fixture.cache.details) => (
+    <WorkflowRunCanvasContext.Provider value={{ openRunCanvas }}>
+      <Trajectory
+        cache={{ ...fixture.cache, details }}
+        loadEarlier={vi.fn()}
+        onSelect={vi.fn()}
+        onLoadDetail={vi.fn()}
+      />
+    </WorkflowRunCanvasContext.Provider>
+  );
+  const ui = render(baseRender({}));
+  fireEvent.click(screen.getAllByRole('button', { name: 'View run graph' })[0]);
+  expect(openRunCanvas).toHaveBeenCalledTimes(1);
+  expect(openRunCanvas.mock.calls[0][0]).toMatchObject({
+    conversationId: fixture.cut.conversation_id,
+    traceRoot: root,
+    traceCut: fixture.cut,
+    sourceMode: 'history',
+  });
+  expect(openRunCanvas.mock.calls[0][0].runId).toBeUndefined();
+
+  // Cached detail at the SAME cut supplies typed run_id & workflow_id directly; a stale cut detail does not.
+  const longRunId = {
+    conversation_id: fixture.cut.conversation_id,
+    origin: { type: 'tool' as const, attempt_id: `att"\\${'k'.repeat(200)}` },
+    invocation: '7',
+  };
+  const detailPage = (cut: typeof fixture.cut): CheckpointPage => ({
+    domain: `trace.records.${root.id.replace('trace:', '')}.detail`,
+    cursor: cut.revision,
+    read_cut: cut,
+    total: '1',
+    collections: [],
+    next_offset: null,
+    items: [{
+      offset: '0',
+      identity: root.id,
+      value: {
+        id: root.id,
+        kind: 'workflow',
+        record: root,
+        content: { type: 'workflow', run_id: longRunId, workflow_id: 'start_only_flow' },
+      } as unknown as Record<string, unknown>,
+      content: [],
+      deferred: true,
+      body_complete: false,
+    }],
+  });
+
+  openRunCanvas.mockClear();
+  ui.rerender(baseRender({
+    [root.id]: { epoch: fixture.cache.epoch, page: detailPage({ ...fixture.cut, revision: '999', through: '999' }) },
+  }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'View run graph' })[0]);
+  expect(openRunCanvas.mock.calls[0][0].runId).toBeUndefined();
+
+  openRunCanvas.mockClear();
+  ui.rerender(baseRender({
+    [root.id]: { epoch: fixture.cache.epoch, page: detailPage(fixture.cut) },
+  }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'View run graph' })[0]);
+  expect(openRunCanvas.mock.calls[0][0]).toMatchObject({
+    runId: longRunId,
+    workflowId: 'start_only_flow',
+    conversationId: longRunId.conversation_id,
+    traceRoot: root,
+    traceCut: fixture.cut,
+    sourceMode: 'history',
+  });
 });

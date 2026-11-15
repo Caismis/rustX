@@ -570,6 +570,9 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
+SQLite schema 88 binds admission-captured Workflow run definition snapshots
+(`workflow_definition_snapshots`, `workflow_snapshot_chunks`, and `workflow_run_snapshots`)
+atomically to `WorkflowStarted` events without staging tables or mutable YAML fallbacks.
 SQLite schema 85 binds request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
 change fingerprints for text requests. Schema 84 also admits bounded native
@@ -8425,3 +8428,38 @@ reads or delayed notifications from replacing newer status, and transport loss o
 observation gaps display unavailability rather than fabricated idle. Bounded
 read repair never loads a cold runtime or repeats semantic work. See the
 [status ownership matrix](app-server/shared-control.md#thread-runtime-status-v74-amendment).
+
+## Workflow run snapshot identity, publication, and read authorization (Issue #552)
+
+- **Admission-bound immutable snapshot.** `WorkflowProgram` captures
+  `WorkflowRunDefinitionSnapshot` from the exact parsed bytes at resource admission
+  and compile time. Executable `program_digest` remains strictly independent of
+  `source_revision`, `has_source_presentation`, and `editor` layout coordinates.
+- **Single-transaction run start.** `JournalStore::publish_workflow_start` commits
+  `WorkflowStarted`, content-addressed `(workflow_id, program_digest, source_revision)`
+  definition chunks (<= 65,536 bytes per chunk, 16 MiB document bound), and
+  `workflow_run_snapshots` (`ON DELETE CASCADE` on `events(sequence)`) atomically;
+  ordinary `append_event` refuses `RuntimeEvent::WorkflowStarted` so starts cannot
+  bypass snapshot capture, any write failure rolls back all four tables cleanly, and
+  optional observability failures never alter execution outcomes.
+- **Cut- and conversation-authorized reads.** Live (`conversation/workflowRunSnapshot*`)
+  and cold (`session/workflowRunSnapshot*`) snapshot reads enforce
+  `run_id.conversation_id` equality, `ObservationReadCut` (`committed_sequence <=
+  cut.read.journal`), chunk bounds (`1 <= limit <= 65_536`, `offset <= byte_length`),
+  and SHA-256 verification before decoding. Missing or pre-cut runs return `null`
+  with no fallback to mutable `.agents/workflows/<id>.yaml` files.
+
+- **Observation remains observation.** Run lookup, snapshot reads, trace paging,
+  exact selected-visit lookups (`conversation/workflowTraceNode`, cold
+  `session/workflowTraceNode`), `TraceInspectionContent::Workflow` root identity,
+  selected I/O and child navigation reuse native inspection authority without
+  scanning runs, reading eager I/O bodies, preparing or replaying a tool/model call,
+  or appending a second status journal. Historical unsettled states need an exact
+  current run and instance to claim a live owner; absent/malformed identities remain
+  incomplete, `WorkflowStarted`-only roots never fall back to `nodes[0]` or disk
+  source, and old-cut selected headers never leak across cut advancements.
+- **View and authoring ownership are separate.** Run Canvas has no editor actor or
+  save port. Conversation, attachment, activation, cut, visit and reader
+  replacement retire callbacks and fence held successes, held errors and lazy reads.
+  Status/paging updates preserve camera and focus;
+  explicit current-owner closure alone may restore the opener.

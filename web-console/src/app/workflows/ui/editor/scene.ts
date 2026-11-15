@@ -10,6 +10,8 @@ import { viewId } from './selection';
 import { previewRowCount } from './summary';
 import type { VariableSources } from './VariableLabel';
 
+import type { NodeRunOverlay } from '../../run-canvas/aggregation';
+
 export const NODE_WIDTH = 256;
 /** As Dify's LoopStart/IterationStart: a 44px square at (24, 68). */
 export const BODY_START_SIZE = 44;
@@ -32,6 +34,8 @@ export interface SceneData extends Record<string, unknown> {
   /** Titles for the references a card shows, shared by the block's nodes. */
   sources?: VariableSources;
   minSize: Size;
+  /** Read-only execution overlay attached by the Run Canvas viewer. */
+  runOverlay?: NodeRunOverlay;
 }
 export type SceneNode = Node<SceneData, 'workflow'>;
 export interface SceneEdgeData extends Record<string, unknown> { path: BlockPath; index: number }

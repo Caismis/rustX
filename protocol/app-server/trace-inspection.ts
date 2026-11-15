@@ -4,7 +4,7 @@ const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof va
 const userSource=(value:unknown)=>value==='human'||value==='fleet'||value==='external_system'||value==='runtime'||object(value)&&(object(value.agent)&&typeof value.agent.agent_id==='string'||object(value.extension)&&typeof value.extension.contributor==='string');
 const coordinate=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const count=(value:unknown):value is string=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;
-const contentKinds={attempt:'lifecycle',step:'lifecycle',request:'request',assistant:'messages',user:'messages',context:'messages',tool:'tool',compaction:'lifecycle',background:'lifecycle',subagent:'lifecycle',workflow:'lifecycle',interaction:'lifecycle',configuration:'lifecycle'} satisfies Record<TraceKind,string>;
+const contentKinds={attempt:'lifecycle',step:'lifecycle',request:'request',assistant:'messages',user:'messages',context:'messages',tool:'tool',compaction:'lifecycle',background:'lifecycle',subagent:'lifecycle',workflow:'workflow',interaction:'lifecycle',configuration:'lifecycle'} satisfies Record<TraceKind,string>;
 
 /** Decode only the complete native finite head, never a partial original TraceDetail. */
 export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceInspectionHead|undefined {
@@ -33,6 +33,12 @@ export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceIn
   const end=collection.items.length;
   if(BigInt(end)>BigInt(collection.total)||(collection.next_offset??null)!==(BigInt(end)<BigInt(collection.total)?end:null))throw Error('Original Trace message collection did not advance.');
   collection.items.forEach(traceInspectionMessage);
+ }else if(content.type==='workflow'){
+  const run=content.run_id;
+  if(!object(run)||typeof run.conversation_id!=='string'||!run.conversation_id||!object(run.origin)||!count(run.invocation)
+   ||!(run.origin.type==='tool'&&typeof run.origin.attempt_id==='string'&&run.origin.attempt_id.length>0
+    ||run.origin.type==='scheduled'&&typeof run.origin.start_id==='string'&&run.origin.start_id.length>0)
+   ||typeof content.workflow_id!=='string'||!content.workflow_id)throw Error('Original Workflow inspection head changed.');
  }
  // The wire value is the complete generated head family. Original unbounded
  // bodies have a different type and can only be opened through their sources.

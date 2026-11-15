@@ -4263,6 +4263,354 @@ export const fixtures = [
   },
   {
     "jsonrpc": "2.0",
+    "id": "workflow-trace-location",
+    "method": "session/traceLocateWorkflow",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "run_id": {
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "origin": {
+          "type": "tool",
+          "attempt_id": "attempt-run-fixture"
+        },
+        "invocation": "1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "agent-workflow-trace-location",
+    "method": "agent/traceLocateWorkflow",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "agent_id": "agent-fixture",
+      "run_id": {
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "origin": {
+          "type": "tool",
+          "attempt_id": "attempt-run-fixture"
+        },
+        "invocation": "1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "workflow-trace-unavailable",
+    "result": {
+      "type": "trace_workflow_location",
+      "location": null
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "workflow-run-snapshot-header",
+    "method": "conversation/workflowRunSnapshotHeader",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "agent_id": null,
+      "cut": {
+        "canonical_foreground": null,
+        "live_publication": null,
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "activation_id": null,
+        "revision": "12",
+        "through": "12",
+        "source_cut": null,
+        "domain_revisions": {},
+        "collection_cuts": {}
+      },
+      "run_id": {
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "origin": {
+          "type": "tool",
+          "attempt_id": "attempt-run-fixture"
+        },
+        "invocation": "1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "workflow-run-snapshot-header",
+    "result": {
+      "type": "workflow_run_snapshot_header",
+      "header": {
+        "run_id": {
+          "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+          "origin": {
+            "type": "tool",
+            "attempt_id": "attempt-run-fixture"
+          },
+          "invocation": "1"
+        },
+        "workflow_id": "parallel_review",
+        "program_digest": "04ce06b111b3414703ce316e7b2888acb959bca3c1712d4d0acf30ef40391836",
+        "source_revision": "sha256:a0b8ff6cabf4b3953f709882841b1627f2fb613838d2dd5a89f417336c89f001",
+        "snapshot_digest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "has_source_presentation": false,
+        "byte_length": 128,
+        "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "workflow-run-snapshot-chunk",
+    "method": "conversation/workflowRunSnapshotChunk",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "agent_id": null,
+      "cut": {
+        "canonical_foreground": null,
+        "live_publication": null,
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "activation_id": null,
+        "revision": "12",
+        "through": "12",
+        "source_cut": null,
+        "domain_revisions": {},
+        "collection_cuts": {}
+      },
+      "run_id": {
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "origin": {
+          "type": "tool",
+          "attempt_id": "attempt-run-fixture"
+        },
+        "invocation": "1"
+      },
+      "offset": 0,
+      "limit": 65536
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "workflow-run-snapshot-chunk",
+    "result": {
+      "type": "workflow_run_snapshot_chunk",
+      "chunk": {
+        "offset": 0,
+        "data": "e30=",
+        "next_offset": null
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "session-workflow-run-snapshot-header",
+    "method": "session/workflowRunSnapshotHeader",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": null,
+      "cut": {
+        "canonical_foreground": null,
+        "live_publication": null,
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "activation_id": null,
+        "revision": "12",
+        "through": "12",
+        "source_cut": null,
+        "domain_revisions": {},
+        "collection_cuts": {}
+      },
+      "run_id": {
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "origin": {
+          "type": "tool",
+          "attempt_id": "attempt-run-fixture"
+        },
+        "invocation": "1"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "session-workflow-run-snapshot-chunk",
+    "method": "session/workflowRunSnapshotChunk",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": null,
+      "cut": {
+        "canonical_foreground": null,
+        "live_publication": null,
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "activation_id": null,
+        "revision": "12",
+        "through": "12",
+        "source_cut": null,
+        "domain_revisions": {},
+        "collection_cuts": {}
+      },
+      "run_id": {
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "origin": {
+          "type": "tool",
+          "attempt_id": "attempt-run-fixture"
+        },
+        "invocation": "1"
+      },
+      "offset": 0,
+      "limit": 65536
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "conversation-workflow-trace-node",
+    "method": "conversation/workflowTraceNode",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "agent_id": null,
+      "cut": {
+        "canonical_foreground": null,
+        "live_publication": null,
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "activation_id": null,
+        "revision": "12",
+        "through": "12",
+        "source_cut": null,
+        "domain_revisions": {},
+        "collection_cuts": {}
+      },
+      "instance": {
+        "block": {
+          "run": {
+            "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+            "origin": {
+              "type": "tool",
+              "attempt_id": "attempt-run-fixture"
+            },
+            "invocation": "1"
+          },
+          "definition": {
+            "workflow_id": "parallel_review",
+            "blocks": []
+          },
+          "invocations": [
+            0
+          ]
+        },
+        "node": "start",
+        "visit": 1
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "session-workflow-trace-node",
+    "method": "session/workflowTraceNode",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": null,
+      "cut": {
+        "canonical_foreground": null,
+        "live_publication": null,
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "activation_id": null,
+        "revision": "12",
+        "through": "12",
+        "source_cut": null,
+        "domain_revisions": {},
+        "collection_cuts": {}
+      },
+      "instance": {
+        "block": {
+          "run": {
+            "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+            "origin": {
+              "type": "tool",
+              "attempt_id": "attempt-run-fixture"
+            },
+            "invocation": "1"
+          },
+          "definition": {
+            "workflow_id": "parallel_review",
+            "blocks": []
+          },
+          "invocations": [
+            0
+          ]
+        },
+        "node": "start",
+        "visit": 1
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "workflow-trace-node",
+    "result": {
+      "type": "workflow_trace_node",
+      "node": {
+        "id": "workflow-node:1",
+        "instance": {
+          "block": {
+            "run": {
+              "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+              "origin": {
+                "type": "tool",
+                "attempt_id": "attempt-run-fixture"
+              },
+              "invocation": "1"
+            },
+            "definition": {
+              "workflow_id": "parallel_review",
+              "blocks": []
+            },
+            "invocations": [
+              0
+            ]
+          },
+          "node": "start",
+          "visit": 1
+        },
+        "kind": null,
+        "state": {
+          "type": "incomplete"
+        },
+        "timing": {
+          "started_at": "1970-01-01T00:00:00Z",
+          "ended_at": null,
+          "duration_ms": null
+        },
+        "input": null,
+        "output": null,
+        "input_preview": null,
+        "output_preview": null,
+        "input_omitted": false,
+        "output_omitted": false,
+        "child": null,
+        "child_agent_id": null
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
     "id": "schedule-catalog",
     "method": "schedule/catalog",
     "params": {

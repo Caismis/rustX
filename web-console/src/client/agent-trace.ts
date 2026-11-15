@@ -28,6 +28,7 @@ export class AgentTraceReader {
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointValueRead',params:{target:this.proof.target,agent_id:this.agentId,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>this.current()&&owns());valid(cut,owns);return result.chunk;},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointPage',params:{target:this.proof.target,agent_id:this.agentId,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>this.current()&&owns());valid(cut,owns);return result.page;},
       content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Child Trace content source changed.');return this.client.reads.readContent(this.proof.target,this.agentId,reference,offset,()=>this.current()&&owns());},
+      workflowNode:async(cut,instance,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/workflowTraceNode',params:{target:this.proof.target,agent_id:this.agentId,cut,instance}},'workflow_trace_node',undefined,()=>this.current()&&owns());valid(cut,owns);return result.node??null;},
     };
   }
   private pageCut(page:TraceCache['page']){const cut=standaloneTraceCut(page,this.scope.child_conversation_id,this.scope.activation_id);this.validateCut(cut);}

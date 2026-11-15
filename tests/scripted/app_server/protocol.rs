@@ -838,7 +838,7 @@ async fn refusal(connection: &AppServerConnection, id: i64, call: Method) -> Err
     data
 }
 
-fn wire_text(text: &str) -> Vec<UserInputBlock> {
+pub(super) fn wire_text(text: &str) -> Vec<UserInputBlock> {
     vec![UserInputBlock::Text(crate::message::content::TextBlock {
         text: text.into(),
     })]
@@ -977,7 +977,7 @@ impl AttemptCompletion {
 }
 
 #[path = "child_delivery.rs"]
-mod child_delivery;
+pub(super) mod child_delivery;
 
 #[path = "live_model.rs"]
 mod live_model;

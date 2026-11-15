@@ -184,6 +184,9 @@ pub struct SessionController {
     cleanup_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
     #[cfg(test)]
     copy_gate: Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
+    #[cfg(test)]
+    trace_observation_read_gate:
+        Arc<std::sync::Mutex<Option<Arc<crate::runtime::conversation_runtime::Gate>>>>,
 }
 impl SessionController {
     pub(crate) async fn thread(
@@ -446,6 +449,8 @@ impl SessionController {
             cleanup_gate: Arc::new(std::sync::Mutex::new(None)),
             #[cfg(test)]
             copy_gate: Arc::new(std::sync::Mutex::new(None)),
+            #[cfg(test)]
+            trace_observation_read_gate: Arc::new(std::sync::Mutex::new(None)),
         }
     }
     #[cfg(test)]
@@ -454,6 +459,13 @@ impl SessionController {
         gate: Arc<crate::runtime::conversation_runtime::Gate>,
     ) {
         *self.cleanup_gate.lock().unwrap() = Some(gate);
+    }
+    #[cfg(test)]
+    pub(crate) fn install_trace_observation_read_gate(
+        &self,
+        gate: Arc<crate::runtime::conversation_runtime::Gate>,
+    ) {
+        *self.trace_observation_read_gate.lock().unwrap() = Some(gate);
     }
     /// # Errors
     /// Unknown identities are rejected without configuration resolution.
@@ -602,6 +614,8 @@ impl SessionController {
         SessionError,
     > {
         let access = self.acquire_read(id, node).await?;
+        #[cfg(test)]
+        let gate = self.trace_observation_read_gate.lock().unwrap().clone();
         tokio::task::spawn_blocking(move || {
             let store = crate::durable::SqliteConversationStore::open_existing(
                 access.conversation_id.clone(),
@@ -609,6 +623,10 @@ impl SessionController {
             )
             .map_err(SessionError::Store)?
             .with_lifecycle(access.allocation);
+            #[cfg(test)]
+            if let Some(gate) = gate {
+                gate.enter();
+            }
             let result = read(&store);
             Ok((access.conversation_id, result))
         })
