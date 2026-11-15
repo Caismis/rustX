@@ -3045,16 +3045,22 @@ fn flow_runs() {
     fn normalize_error_diagnostic(message: &str) -> String {
         let tail = message.split_once(": ").map_or(message, |(_, tail)| tail);
         tail.lines()
-            .map(|line| {
+            .filter_map(|line| {
+                if line
+                    .trim_start()
+                    .starts_with("Blocking waiting for file lock on ")
+                {
+                    return None;
+                }
                 if line.trim_start().starts_with("Finished ")
                     && let Some((prefix, elapsed)) = line.split_once(" target(s) in ")
                     && let Some(secs) = elapsed.trim_end().strip_suffix('s')
                     && !secs.is_empty()
                     && secs.bytes().all(|b| b.is_ascii_digit() || b == b'.')
                 {
-                    format!("{prefix} target(s) in <elapsed>")
+                    Some(format!("{prefix} target(s) in <elapsed>"))
                 } else {
-                    line.to_owned()
+                    Some(line.to_owned())
                 }
             })
             .collect::<Vec<_>>()
@@ -3384,19 +3390,25 @@ fn flow_runs() {
         assert!(stderr.contains("warning: positive-query-diag"), "{stderr}");
         assert!(stderr.contains("error: global-failure-diag"), "{stderr}");
 
-        // Diagnostic normalization strips only command identity and Cargo's
-        // volatile `Finished ... target(s) in <secs>s` elapsed field, preserving
-        // all real error/warning text.
-        let fast = "\"/tmp/a/cargo\" \"test\": doctest discovery failed:\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\nerror: Unrecognized option: 'bogus'";
-        let slow = "\"/tmp/b/cargo\" \"test\": doctest discovery failed:\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\nerror: Unrecognized option: 'bogus'";
-        let diff = "\"/tmp/b/cargo\" \"test\": doctest discovery failed:\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\nerror: Unrecognized option: 'other'";
+        // Diagnostic normalization strips only command identity, Cargo's
+        // informational lock-wait progress lines, and Cargo's volatile
+        // `Finished ... target(s) in <secs>s` elapsed field, preserving all
+        // real error/warning text.
+        let fast = "\"/tmp/a/cargo\" \"test\": doctest discovery failed:\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.00s\nwarning: doc lint\nerror: Unrecognized option: 'bogus'";
+        let slow_with_lock_wait = "\"/tmp/b/cargo\" \"test\": doctest discovery failed:\n    Blocking waiting for file lock on package cache\n    Blocking waiting for file lock on build directory\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\nwarning: doc lint\nerror: Unrecognized option: 'bogus'";
+        let diff_warning = "\"/tmp/b/cargo\" \"test\": doctest discovery failed:\n    Blocking waiting for file lock on package cache\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\nwarning: different doc lint\nerror: Unrecognized option: 'bogus'";
+        let diff_error = "\"/tmp/b/cargo\" \"test\": doctest discovery failed:\n    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.12s\nwarning: doc lint\nerror: Unrecognized option: 'other'";
         assert_eq!(
             normalize_error_diagnostic(fast),
-            normalize_error_diagnostic(slow)
+            normalize_error_diagnostic(slow_with_lock_wait)
         );
         assert_ne!(
             normalize_error_diagnostic(fast),
-            normalize_error_diagnostic(diff)
+            normalize_error_diagnostic(diff_warning)
+        );
+        assert_ne!(
+            normalize_error_diagnostic(fast),
+            normalize_error_diagnostic(diff_error)
         );
     }
 
