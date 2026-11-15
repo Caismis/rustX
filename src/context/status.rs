@@ -396,6 +396,17 @@ impl std::error::Error for AgentStatusSurfaceViewError {}
 ///     view.revision = rustx::conversation::SurfaceRevision::INITIAL;
 /// }
 /// ```
+///
+/// ```rust
+/// use rustx::context::AgentStatusSurfaceView;
+/// use rustx::conversation::{ConversationState, SurfaceRevision};
+///
+/// let state = ConversationState::new();
+/// let view = AgentStatusSurfaceView::from_snapshot(state.freeze_active_surface());
+/// assert_eq!(view.revision(), SurfaceRevision::INITIAL);
+/// assert_eq!(view.compaction_generation(), 0);
+/// assert!(view.active_message_ids().is_empty());
+/// ```
 #[derive(Debug, Clone, PartialEq)]
 pub struct AgentStatusSurfaceView {
     revision: crate::conversation::SurfaceRevision,

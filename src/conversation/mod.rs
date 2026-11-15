@@ -206,6 +206,15 @@ pub struct ConversationSurfaceSnapshot {
 /// let state = ConversationState::new();
 /// let _competing_authority = state.clone();
 /// ```
+///
+/// ```rust
+/// use rustx::conversation::{ConversationState, SurfaceRevision};
+///
+/// let state = ConversationState::new();
+/// assert_eq!(state.revision(), SurfaceRevision::INITIAL);
+/// assert_eq!(state.surface().revision(), SurfaceRevision::INITIAL);
+/// assert!(state.ledger().is_empty());
+/// ```
 #[derive(Debug, Default)]
 pub struct ConversationState {
     ledger: MessageLedger,

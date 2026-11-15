@@ -968,6 +968,15 @@ pub(crate) struct TodoUpdate {
 /// }
 /// ```
 ///
+/// ```rust
+/// use rustx::tools::{runtime::ConversationToolRuntime, todo::TodoSnapshot};
+///
+/// fn read_snapshot(runtime: &ConversationToolRuntime) -> Option<TodoSnapshot> {
+///     runtime.todo_snapshot()
+/// }
+/// let _ = read_snapshot;
+/// ```
+///
 /// [`ConversationToolRuntime::todo_snapshot`]: crate::tools::runtime::ConversationToolRuntime::todo_snapshot
 #[derive(Clone)]
 pub(crate) struct ConversationTodoList {

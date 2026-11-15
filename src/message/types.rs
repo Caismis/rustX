@@ -215,6 +215,18 @@ impl UserSource {
 ///     metadata.read_files = Vec::new();
 /// }
 /// ```
+///
+/// ```rust
+/// use rustx::message::types::CompactionSummaryMetadata;
+///
+/// let metadata = CompactionSummaryMetadata::new(
+///     vec!["a.rs".to_owned()],
+///     vec!["b.rs".to_owned()],
+/// )
+/// .expect("canonical compaction metadata");
+/// assert_eq!(metadata.read_files(), ["a.rs"]);
+/// assert_eq!(metadata.modified_files(), ["b.rs"]);
+/// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct CompactionSummaryMetadata {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -522,6 +534,22 @@ impl std::error::Error for AgentStatusMetadataError {}
 /// fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
 ///     metadata.modules = Vec::new();
 /// }
+/// ```
+///
+/// ```rust
+/// use chrono::Utc;
+/// use rustx::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
+///
+/// let metadata = AgentStatusGenerationMetadata::new(
+///     Utc::now(),
+///     [AgentStatusModuleId::Time, AgentStatusModuleId::Todo],
+/// )
+/// .expect("canonical status metadata");
+/// assert_eq!(
+///     metadata.modules(),
+///     &[AgentStatusModuleId::Time, AgentStatusModuleId::Todo]
+/// );
+/// assert!(metadata.contains(AgentStatusModuleId::Time));
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
 pub struct AgentStatusGenerationMetadata {

@@ -145,6 +145,30 @@ pub(crate) struct DisplayPreviewRepairReport {
 ///     let _ = controller.recover_deletion(id);
 /// }
 /// ```
+///
+/// ```rust
+/// use rustx::local_runtime::{
+///     SessionId, SessionTransitionResult,
+///     session::{SessionListPage, SessionSnapshot},
+///     session_controller::SessionController,
+/// };
+///
+/// let root = tempfile::tempdir().expect("tempdir");
+/// let controller = SessionController::open(root.path()).expect("open controller");
+/// let runtime = tokio::runtime::Builder::new_current_thread()
+///     .enable_all()
+///     .build()
+///     .expect("tokio runtime");
+/// let page: SessionListPage = runtime
+///     .block_on(controller.list_sessions(None, 0, 10))
+///     .expect("list sessions");
+/// assert!(page.sessions.is_empty());
+/// let _ = (
+///     SessionController::read_session,
+///     SessionController::recover_session_storage,
+///     Option::<(SessionId, SessionSnapshot, SessionTransitionResult)>::None,
+/// );
+/// ```
 #[derive(Clone, Debug)]
 pub struct SessionController {
     #[cfg(test)]
