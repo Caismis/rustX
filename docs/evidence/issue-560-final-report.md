@@ -47,6 +47,12 @@ historical measurements; they are not rerun timings for the corrected candidate.
 Fresh functional checks, negative controls and current-head FULL CI validate the
 correction without claiming another performance gain.
 
+The later [browser fixture follow-up](issue-560-browser-ci-disposition.md) records
+real native settlement before convergence rendering and removal of unused Tool
+preparation only from the text-only reading scenario. Its six fresh-fixture
+observations remain separate from the compiler and runtime measurements above;
+all 300 real reading Attempts and existing deadlines/assertions are retained.
+
 ## Ownership, dependencies and diagnostics
 
 The [guard/deployment map](issue-560-stage1-guard-disposition.md) explains removal
