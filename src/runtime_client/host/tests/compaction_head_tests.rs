@@ -36,18 +36,22 @@ fn cold_read_restores_full_bounded_progress_without_trace_or_completion() {
     };
     append(RuntimeEvent::CompactionStarted {
         operation_id: operation_id.clone(),
+        mode: crate::context::operation::CompactionMode::Overflow,
     });
     let started_cut = store.observation_read_cut().unwrap();
     let started = super::super::durable_bootstrap::read(&store, &started_cut).unwrap();
     assert!(!started.context.compaction_in_progress);
+    let started_progress = started.context.compaction_progress.unwrap();
+    assert_eq!(started_progress.accepted_fragments, 0);
     assert_eq!(
-        started
-            .context
-            .compaction_progress
-            .unwrap()
-            .accepted_fragments,
-        0
+        started_progress.mode,
+        crate::context::operation::CompactionMode::Overflow
     );
+    // Another operation's Started fact must never supply this operation's mode.
+    append(RuntimeEvent::CompactionStarted {
+        operation_id: CompactionOperationId::new("unrelated-manual"),
+        mode: crate::context::operation::CompactionMode::Manual,
+    });
     let ranges: Vec<_> = (0..32)
         .map(|projection_index| AuxiliarySourceRange {
             projection_index,
@@ -84,6 +88,7 @@ fn cold_read_restores_full_bounded_progress_without_trace_or_completion() {
     store
         .commit_auxiliary_request_start(
             &AuxiliaryRequestStart {
+                invocation: crate::model::auxiliary::fixture_invocation_identity(),
                 call_id: call_id.clone(),
                 ordinal: 0,
                 request_id: request_id.clone(),
@@ -146,7 +151,29 @@ fn cold_read_restores_full_bounded_progress_without_trace_or_completion() {
     assert!(!cold.context.compaction_in_progress);
     let progress = cold.context.compaction_progress.unwrap();
     assert_eq!(progress.operation_id, operation_id);
+    assert_eq!(
+        progress.mode,
+        crate::context::operation::CompactionMode::Overflow
+    );
     assert_eq!(progress.accepted_fragments, 1);
+    let source = store
+        .observation_state_source("context", &cut)
+        .unwrap()
+        .unwrap();
+    let field = store
+        .observation_state_value_read(
+            "context",
+            &source,
+            &cut,
+            &["compaction_progress".into(), "mode".into()],
+            0,
+            64,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<String>(&field.bytes).unwrap(),
+        "overflow"
+    );
     assert_eq!(progress.source_ranges, ranges);
     assert_eq!(cold.context.compaction_count, 0);
     append(RuntimeEvent::CompactionCancelled { operation_id });
@@ -162,6 +189,7 @@ fn committed_view(
     outcome: &crate::runtime::conversation_runtime::ManualCompactionOutcome,
 ) -> crate::observation::head::RuntimeClientCompactionView {
     let crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+        operation_id,
         generation,
         checkpoint_id,
         activation_id,
@@ -172,6 +200,7 @@ fn committed_view(
         panic!("expected committed compaction");
     };
     crate::observation::head::RuntimeClientCompactionView {
+        operation_id: operation_id.clone(),
         generation: *generation,
         checkpoint_id: checkpoint_id.clone(),
         activation_id: *activation_id,
@@ -376,6 +405,7 @@ fn original_compactions(
         .into_iter()
         .filter_map(|envelope| match envelope.event {
             RuntimeEvent::CompactionCompleted {
+                operation_id,
                 generation,
                 checkpoint_id,
                 activation_id,
@@ -384,6 +414,7 @@ fn original_compactions(
                 ..
             } => Some(
                 crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+                    operation_id,
                     generation,
                     checkpoint_id,
                     activation_id,
@@ -625,4 +656,177 @@ async fn manual_compaction_lost_stdio_response_reconciles_without_replaying_oper
     reconnected.detach();
     fixture.runtime.shutdown().await.unwrap();
     fixture.host.inner.drain_projection().await.unwrap();
+}
+
+#[test]
+fn cold_status_reads_two_admissions_at_cut_and_never_claims_live_work() {
+    use crate::context::operation::{
+        CompactionMode, CompactionOperationPhase as Phase, CompactionOperationStatus,
+    };
+    use crate::durable::{CanonicalStore, JournalStore, ObservationStore, SqliteConversationStore};
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEventEnvelope};
+    use crate::runtime::identity::{CompactionOperationId, ConversationId, EventId};
+    let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+    store.initialize(&[]).unwrap();
+    let envelope = |event| RuntimeEventEnvelope {
+        schema_version: EVENT_SCHEMA_VERSION,
+        event_id: EventId::new(""),
+        sequence: 0,
+        conversation_id: store.conversation_id().clone(),
+        attempt_id: None,
+        turn_id: None,
+        timestamp: chrono::DateTime::UNIX_EPOCH,
+        tool_occurrence: None,
+        observation: None,
+        event,
+    };
+    let append = |event| store.append_event(envelope(event));
+    let status =
+        |id: &str, admission_generation, accepted_fragments, phase| CompactionOperationStatus {
+            operation_id: CompactionOperationId::new(id),
+            admission_generation,
+            triggering_attempt_id: None,
+            waiting_attempt_id: None,
+            phase,
+            accepted_fragments,
+            diagnostic: None,
+        };
+    for (id, generation) in [("a", 1), ("b", 2)] {
+        store
+            .append_compaction_admission(
+                envelope(RuntimeEvent::CompactionStarted {
+                    operation_id: CompactionOperationId::new(id),
+                    mode: CompactionMode::Proactive,
+                }),
+                envelope(RuntimeEvent::CompactionOperationUpdated {
+                    status: status(id, generation, 0, Phase::Generating),
+                }),
+            )
+            .unwrap();
+    }
+    let cut = store.observation_read_cut().unwrap();
+    for count in 1..=40 {
+        let mut update = status("b", 2, 0, Phase::Generating);
+        update.diagnostic = Some(format!("update {count}"));
+        append(RuntimeEvent::CompactionOperationUpdated { status: update }).unwrap();
+    }
+    let historical = store
+        .latest_compaction_operations(cut.read.journal)
+        .unwrap();
+    assert_eq!(historical.len(), 2);
+    assert_eq!(historical[1].accepted_fragments, 0);
+    let current = store.observation_read_cut().unwrap();
+    let read = super::super::durable_bootstrap::read(&store, &current).unwrap();
+    assert_eq!(read.context.compaction_operations.len(), 2);
+    assert_eq!(
+        read.context.compaction_operations[1]
+            .status
+            .diagnostic
+            .as_deref(),
+        Some("update 40")
+    );
+    assert!(
+        read.context
+            .compaction_operations
+            .iter()
+            .all(|operation| !operation.live)
+    );
+    assert!(!read.context.compaction_in_progress);
+    append(RuntimeEvent::CompactionOperationUpdated {
+        status: status("b", 2, 0, Phase::NoEffect),
+    })
+    .unwrap();
+    assert!(
+        append(RuntimeEvent::CompactionOperationUpdated {
+            status: status("b", 2, 0, Phase::Generating)
+        })
+        .is_err()
+    );
+    assert!(
+        append(RuntimeEvent::CompactionOperationUpdated {
+            status: status("a", 1, 0, Phase::Committed)
+        })
+        .is_err()
+    );
+}
+
+/// Startup reconciliation precedes the live host binding, so the live seed
+/// must read the repaired native status at the same captured Journal cut.
+#[tokio::test]
+async fn live_bootstrap_keeps_reconciled_background_status_without_claiming_work() {
+    use crate::context::operation::{
+        CompactionMode, CompactionOperationPhase, CompactionOperationStatus,
+    };
+    use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEventEnvelope};
+    use crate::runtime::identity::{CompactionOperationId, EventId};
+
+    fn seed_orphan(store: &SqliteConversationStore) {
+        let operation_id = CompactionOperationId::new("recovered-proactive");
+        let status = CompactionOperationStatus {
+            operation_id: operation_id.clone(),
+            admission_generation: 1,
+            triggering_attempt_id: None,
+            waiting_attempt_id: None,
+            phase: CompactionOperationPhase::Generating,
+            accepted_fragments: 0,
+            diagnostic: None,
+        };
+        let envelope = |event| RuntimeEventEnvelope {
+            schema_version: EVENT_SCHEMA_VERSION,
+            event_id: EventId::new(""),
+            sequence: 0,
+            conversation_id: store.conversation_id().clone(),
+            attempt_id: None,
+            turn_id: None,
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            tool_occurrence: None,
+            observation: None,
+            event,
+        };
+        store
+            .append_compaction_admission(
+                envelope(RuntimeEvent::CompactionStarted {
+                    operation_id,
+                    mode: CompactionMode::Proactive,
+                }),
+                envelope(RuntimeEvent::CompactionOperationUpdated { status }),
+            )
+            .unwrap();
+    }
+
+    let (_, fixture) = host_fixture_before_activation(
+        vec![],
+        ToolRegistry::new(),
+        status_engine(),
+        false,
+        None,
+        Some(seed_orphan),
+    )
+    .await;
+    let checkpoint = fixture.host.checkpoint().unwrap();
+    let operations = &checkpoint.snapshot.context.compaction_operations;
+    assert_eq!(operations.len(), 1);
+    assert_eq!(
+        operations[0].status.operation_id.as_str(),
+        "recovered-proactive"
+    );
+    assert_eq!(
+        operations[0].status.phase,
+        CompactionOperationPhase::NoEffect
+    );
+    assert!(!operations[0].live);
+    assert!(
+        operations[0]
+            .status
+            .diagnostic
+            .as_deref()
+            .is_some_and(|value| value.contains("not resumed"))
+    );
+    let store = fixture.store.as_ref().unwrap();
+    assert_eq!(
+        store
+            .latest_compaction_operations(checkpoint.read_cut.through)
+            .unwrap(),
+        vec![operations[0].status.clone()]
+    );
 }

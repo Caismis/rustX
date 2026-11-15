@@ -143,27 +143,41 @@ pub(super) fn validate_call_start_input(
     Ok(())
 }
 
-pub(super) fn validate_request_start_input(
-    start: &AuxiliaryRequestStart,
+pub(super) fn validate_request_start_coordinates(
+    ordinal: u32,
+    request_id: &RequestId,
+    model: &str,
 ) -> Result<(), ConversationStoreError> {
-    if start.ordinal >= 3 {
+    if ordinal >= 3 {
         return Err(ConversationStoreError::InvalidReference(
             "auxiliary Call start allowance is three".into(),
         ));
     }
-
-    if start.request_id.as_str().is_empty()
-        || start.request_id.as_str().len() > AUXILIARY_REQUEST_ID_BYTES_MAX
+    if request_id.as_str().is_empty() || request_id.as_str().len() > AUXILIARY_REQUEST_ID_BYTES_MAX
     {
         return Err(ConversationStoreError::InvalidReference(format!(
             "auxiliary RequestId must contain 1..={AUXILIARY_REQUEST_ID_BYTES_MAX} bytes"
         )));
     }
-    if start.model.is_empty() || start.model.len() > AUXILIARY_REQUEST_MODEL_BYTES_MAX {
+    if model.is_empty()
+        || model.len() > AUXILIARY_REQUEST_MODEL_BYTES_MAX
+        || model.chars().any(char::is_control)
+    {
         return Err(ConversationStoreError::InvalidReference(format!(
-            "auxiliary request model name must contain 1..={AUXILIARY_REQUEST_MODEL_BYTES_MAX} bytes"
+            "auxiliary request model name must contain 1..={AUXILIARY_REQUEST_MODEL_BYTES_MAX} bytes without control characters"
         )));
     }
+    Ok(())
+}
+
+pub(super) fn validate_request_start_input(
+    start: &AuxiliaryRequestStart,
+) -> Result<(), ConversationStoreError> {
+    validate_request_start_coordinates(start.ordinal, &start.request_id, &start.model)?;
+    start
+        .invocation
+        .validate()
+        .map_err(|error| ConversationStoreError::InvalidReference(error.into()))?;
     let maximum_usage = ModelUsage {
         input_tokens: Some(u64::MAX),
         output_tokens: Some(u64::MAX),
@@ -181,6 +195,7 @@ pub(super) fn validate_request_start_input(
             ordinal: start.ordinal,
             request_id: start.request_id.clone(),
             model: start.model.clone(),
+            invocation: start.invocation.clone(),
             started_sequence: u64::MAX,
             terminal_sequence: Some(u64::MAX),
             local_terminal: Some(AuxiliaryRequestTerminal::Completed),

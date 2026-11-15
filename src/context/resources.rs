@@ -135,9 +135,26 @@ impl<'a> CompactionResources<'a> {
         limits: ResourceLimits,
     ) -> Result<Self, ConversationStoreError> {
         limits.validate()?;
+        Self::at_cut(store, store.compaction_resource_cut()?, limits)
+    }
+
+    /// Reattach bounded reads to an already captured immutable source cut.
+    /// This does not advance any source coordinate or acquire a transaction.
+    pub(crate) fn at_cut(
+        store: &'a dyn ConversationStore,
+        cut: ResourceReadCut,
+        limits: ResourceLimits,
+    ) -> Result<Self, ConversationStoreError> {
+        limits.validate()?;
+        if &cut.conversation_id != store.conversation_id() {
+            return Err(ConversationStoreError::ConversationIdMismatch {
+                stored: store.conversation_id().clone(),
+                requested: cut.conversation_id,
+            });
+        }
         Ok(Self {
             store,
-            cut: store.compaction_resource_cut()?,
+            cut,
             limits,
             remaining_items: limits.total_items,
             remaining_bytes: limits.total_bytes,

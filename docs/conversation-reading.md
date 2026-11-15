@@ -481,7 +481,7 @@ The immutable inherited transcript boundary was introduced in SQLite schema 58 a
 
 ## Request field metadata
 
-SQLite schema 89 stores frozen Request metadata separately from the native
+SQLite schema 90 stores frozen Request metadata separately from the native
 immutable selected-input tree. The Store owns that balanced tree and its canonical
 Original/Derived provenance. Request rows bind its root identity, digest and count;
 explicit historical reconstruction loads the selected input, while publication and
@@ -577,7 +577,7 @@ before successful completion; it does not prescan bodies under the capture barri
 
 ## Canonical append frontier
 
-Upstream schema 70 removed `surface_head.active_json`; the integrated schema 86 retains that layout.
+Upstream schema 70 removed `surface_head.active_json`; the integrated schema 87 retains that layout.
 The immutable Ledger and selected checkpoint remain the active-identity authorities.
 Cold/invalidated append validates the same bounded suffix and Original dependencies.
 Warm append may reuse a disposable connection-local validation count, checked

@@ -4,12 +4,12 @@ use super::super::sqlite_error;
 
 use super::{
     AuxiliaryAuditCut, AuxiliaryBusinessSource, AuxiliaryCallStart, AuxiliaryInputEvidence,
-    AuxiliaryRequestStart, CompactionOperationId, Connection, ConversationId,
-    ConversationStoreError, MessageId, ModelRequestOwner, ResourceLimits, RuntimeEvent,
-    RuntimeEventEnvelope, Transaction, call_audit_at_tx, call_row_tx, call_started_event_id,
-    journal_prefix, next_request_ordinal_tx, open_request_tx, owner_row_tx, params, request_row_tx,
-    request_snapshot_exists, request_started_event_id, seq_to_i64, validate_call_start_input,
-    validate_request_start_input, validate_terminal_envelope_shape,
+    CompactionOperationId, Connection, ConversationId, ConversationStoreError, MessageId,
+    ModelRequestOwner, ResourceLimits, RuntimeEvent, RuntimeEventEnvelope, Transaction,
+    call_audit_at_tx, call_row_tx, call_started_event_id, journal_prefix, next_request_ordinal_tx,
+    open_request_tx, owner_row_tx, params, request_row_tx, request_snapshot_exists,
+    request_started_event_id, seq_to_i64, validate_call_start_input,
+    validate_request_start_coordinates, validate_terminal_envelope_shape,
 };
 
 pub(super) fn ledger_frontier(connection: &Connection) -> Result<u64, ConversationStoreError> {
@@ -340,13 +340,7 @@ pub(in crate::durable::sqlite) fn validate_request_start_event_tx(
             "auxiliary request validation requires an auxiliary-owned start".into(),
         ));
     };
-    let start = AuxiliaryRequestStart {
-        call_id: call_id.clone(),
-        ordinal: *ordinal,
-        request_id: request_id.clone(),
-        model: model.clone(),
-    };
-    validate_request_start_input(&start)?;
+    validate_request_start_coordinates(*ordinal, request_id, model)?;
     if envelope.event_id != request_started_event_id(request_id) {
         return Err(ConversationStoreError::InvalidReference(
             "auxiliary request start has a noncanonical event identity".into(),

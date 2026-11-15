@@ -2,7 +2,7 @@
 //! Cloning never renews the absolute deadline or physical request allowance.
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::context::{ContextError, ContextErrorKind};
 use crate::durable::auxiliary::{AuxiliaryRequestStartCommit, AuxiliaryWriteFailure};
@@ -20,6 +20,18 @@ struct Authority {
     limits: Mutex<Limits>,
     starts: Mutex<BTreeMap<RequestId, bool>>,
     evidence: Mutex<BTreeMap<RequestId, crate::model::AuxiliaryRequestEvidence>>,
+    recovery_observer: OnceLock<RecoveryObserver>,
+    dispatch_check: OnceLock<RecoveryObserver>,
+}
+
+pub(crate) type AuthorityCallback = dyn Fn() -> Result<(), ContextError> + Send + Sync;
+
+struct RecoveryObserver(Arc<AuthorityCallback>);
+
+impl std::fmt::Debug for RecoveryObserver {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("RecoveryObserver(..)")
+    }
 }
 
 #[derive(Debug)]
@@ -35,6 +47,13 @@ struct Limits {
 struct PlannedWork {
     admitted: Option<usize>,
     recoveries: usize,
+    timing: PlannedTiming,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlannedTiming {
+    Blocking,
+    AuxiliaryScope,
 }
 
 /// A finite owner-issued allowance. Consumers pass clones to children; only
@@ -48,12 +67,44 @@ impl AuxiliaryAuthority {
     }
 
     pub(crate) fn new_planned(clock: Arc<dyn MonotonicClock>) -> Self {
+        Self::planned(clock, PlannedTiming::Blocking)
+    }
+
+    /// Independent generation keeps the existing Auxiliary scope deadline;
+    /// its source plan does not add or derive another operation timer.
+    pub(crate) fn new_asynchronous(clock: Arc<dyn MonotonicClock>) -> Self {
+        Self::planned(clock, PlannedTiming::AuxiliaryScope)
+    }
+
+    pub(crate) fn is_independent_compaction(&self) -> bool {
+        self.0
+            .limits
+            .lock()
+            .expect("auxiliary limits lock")
+            .planned
+            .as_ref()
+            .is_some_and(|work| work.timing == PlannedTiming::AuxiliaryScope)
+    }
+
+    /// Only foreground planned Compaction may use protected capacity.
+    pub(crate) fn uses_protected_capacity(&self) -> bool {
+        self.0
+            .limits
+            .lock()
+            .expect("auxiliary limits lock")
+            .planned
+            .as_ref()
+            .is_some_and(|planned| planned.timing == PlannedTiming::Blocking)
+    }
+
+    fn planned(clock: Arc<dyn MonotonicClock>, timing: PlannedTiming) -> Self {
         Self::create(
             clock,
             0,
             Some(PlannedWork {
                 admitted: None,
                 recoveries: 0,
+                timing,
             }),
         )
     }
@@ -70,7 +121,72 @@ impl AuxiliaryAuthority {
             clock,
             starts: Mutex::default(),
             evidence: Mutex::default(),
+            recovery_observer: OnceLock::new(),
+            dispatch_check: OnceLock::new(),
         }))
+    }
+
+    /// Registers the sole process-local observer of admitted asynchronous recovery charges.
+    pub(crate) fn on_recovery(&self, observer: Arc<AuthorityCallback>) -> Result<(), ContextError> {
+        let asynchronous = self
+            .0
+            .limits
+            .lock()
+            .expect("auxiliary limits lock")
+            .planned
+            .as_ref()
+            .is_some_and(|work| work.timing == PlannedTiming::AuxiliaryScope);
+        if !asynchronous {
+            return Err(ContextError::new(
+                ContextErrorKind::Internal,
+                "recovery observation requires asynchronous compaction authority",
+            ));
+        }
+        self.0
+            .recovery_observer
+            .set(RecoveryObserver(observer))
+            .map_err(|_| {
+                ContextError::new(
+                    ContextErrorKind::Internal,
+                    "asynchronous recovery observer already registered",
+                )
+            })
+    }
+
+    /// Registers the sole asynchronous business eligibility check for physical dispatch.
+    pub(crate) fn on_dispatch_check(
+        &self,
+        check: Arc<AuthorityCallback>,
+    ) -> Result<(), ContextError> {
+        if !self.is_independent_compaction() {
+            return Err(ContextError::new(
+                ContextErrorKind::Internal,
+                "dispatch check requires asynchronous compaction authority",
+            ));
+        }
+        self.0
+            .dispatch_check
+            .set(RecoveryObserver(check))
+            .map_err(|_| {
+                ContextError::new(
+                    ContextErrorKind::Internal,
+                    "asynchronous dispatch check already registered",
+                )
+            })
+    }
+
+    /// An asynchronous Summary cannot start without its native owner fence.
+    pub(super) fn dispatch_check(&self) -> Result<Option<Arc<AuthorityCallback>>, ContextError> {
+        if let Some(check) = self.0.dispatch_check.get() {
+            return Ok(Some(check.0.clone()));
+        }
+        if self.is_independent_compaction() {
+            return Err(ContextError::new(
+                ContextErrorKind::AuxiliaryNotStarted,
+                "asynchronous compaction dispatch check is not registered",
+            ));
+        }
+        Ok(None)
     }
 
     /// Admit one finite compaction plan. Re-entry can only reuse, not expand it.
@@ -108,14 +224,17 @@ impl AuxiliaryAuthority {
             };
         }
         work.admitted = Some(bound);
+        let timing = work.timing;
         limits.starts = bound + work.recoveries;
-        let extra = u64::try_from(bound - 1)
-            .unwrap_or(u64::MAX)
-            .saturating_mul(COMPACTION_PER_START_MILLIS);
-        let duration = CALL_DEADLINE_MILLIS
-            .saturating_add(extra)
-            .min(COMPACTION_MAX_DEADLINE_MILLIS);
-        limits.deadline_millis = self.0.admitted_at.saturating_add(duration);
+        if timing == PlannedTiming::Blocking {
+            let extra = u64::try_from(bound - 1)
+                .unwrap_or(u64::MAX)
+                .saturating_mul(COMPACTION_PER_START_MILLIS);
+            let duration = CALL_DEADLINE_MILLIS
+                .saturating_add(extra)
+                .min(COMPACTION_MAX_DEADLINE_MILLIS);
+            limits.deadline_millis = self.0.admitted_at.saturating_add(duration);
+        }
         Ok(())
     }
 
@@ -144,6 +263,10 @@ impl AuxiliaryAuthority {
         work.recoveries += 1;
         if work.admitted.is_some() {
             limits.starts += 1;
+        }
+        drop(limits);
+        if let Some(observer) = self.0.recovery_observer.get() {
+            (observer.0)()?;
         }
         Ok(())
     }
@@ -417,6 +540,38 @@ mod tests {
         AuxiliaryRequestEvidence, AuxiliaryUsageCompleteness, ModelUsage, UsageDetails,
     };
     use crate::runtime::monotonic::ManualMonotonicClock;
+
+    #[test]
+    fn asynchronous_recovery_notifies_once_after_charge_without_holding_limits() {
+        let authority = AuxiliaryAuthority::new_asynchronous(Arc::new(ManualMonotonicClock::new()));
+        authority.admit_work(1).unwrap();
+        let captured = authority.clone();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let observed = calls.clone();
+        authority
+            .on_recovery(Arc::new(move || {
+                assert_eq!(captured.remaining_starts(), 2);
+                observed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Err(ContextError::new(
+                    ContextErrorKind::AuxiliaryDurabilityFailed,
+                    "status publication failed",
+                ))
+            }))
+            .unwrap();
+        assert!(authority.on_recovery(Arc::new(|| Ok(()))).is_err());
+        let error = authority
+            .charge_recovery(&CancellationSignal::new())
+            .unwrap_err();
+        assert_eq!(error.kind, ContextErrorKind::AuxiliaryDurabilityFailed);
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            authority.remaining_starts(),
+            2,
+            "publication failure does not refund accepted recovery"
+        );
+        let ordinary = AuxiliaryAuthority::new_planned(Arc::new(ManualMonotonicClock::new()));
+        assert!(ordinary.on_recovery(Arc::new(|| Ok(()))).is_err());
+    }
 
     #[test]
     fn planned_call_reservation_does_not_authorize_an_unadmitted_start() {

@@ -1101,6 +1101,7 @@ fn cancelled_and_skipped_compactions_survive_cold_trace_reconstruction() {
         &store,
         E::CompactionStarted {
             operation_id: cancelled.clone(),
+            mode: crate::context::operation::CompactionMode::Manual,
         },
         1,
     );
@@ -1108,6 +1109,7 @@ fn cancelled_and_skipped_compactions_survive_cold_trace_reconstruction() {
         &store,
         E::CompactionStarted {
             operation_id: skipped.clone(),
+            mode: crate::context::operation::CompactionMode::Manual,
         },
         2,
     );
@@ -1162,6 +1164,7 @@ fn compaction_uses_the_next_boundary_even_far_back_in_history() {
                 operation_id: crate::runtime::identity::CompactionOperationId::new(format!(
                     "fixture-compaction-{index}"
                 )),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
             index * 2,
         );
@@ -3102,6 +3105,7 @@ fn compaction_and_request_only_input_never_become_context_facts() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "fixture-compaction",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
         5,
     );
@@ -4964,6 +4968,7 @@ fn tool_locator_never_fabricates_execution_for_proposals_or_inherited_history() 
     assert_eq!(child.presentation_frontier().unwrap(), 0);
 }
 
+mod compaction_tests;
 mod frozen_tests;
 mod header_tests;
 mod inspection_tests;

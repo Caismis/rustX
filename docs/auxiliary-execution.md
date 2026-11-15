@@ -10,6 +10,14 @@ Agent requests retain their native Snapshot, selected-input root/digest/count, C
 
 A Call records bounded purpose, trigger, business source, input-selection evidence and fingerprints. Purpose and trigger are consumer-defined attribution strings, each limited to 512 UTF-8 bytes, nonempty and without control characters. Trigger describes the activation cause, not a transport category. The Store has no business-purpose dispatch or consumer allowlist. Business sources may be native Compaction/Human references or opaque consumer-owned namespace/reference pairs with the same text bounds. Opaque references grant no storage, inheritance or execution authority.
 
+Each physical RequestStarted also retains a redacted frozen invocation identity:
+ProviderId, logical ModelRef and selected Profile, with the wire model kept
+separately. Native execution captures these from its actual resolved invocation;
+neither model-reference spelling nor a later Session selection supplies them.
+The identity JSON is capped at 2 KiB before hydration. Retry, exact replay,
+confirmation and inherited Summary evidence retain the same binding. Parameters,
+credentials, endpoints and reasoning text are absent from this identity.
+
 Suggested-input generation uses the same contract with consumer-defined attribution and frozen historical context or temporary draft input. Candidate presentation and expiry belong to the consumer. An explicit user submission follows the normal Human input path; generating or displaying candidates leaves canonical history and primary Agent obligations unchanged.
 
 Business source and input selection have independent coordinates: native source references must exist when the Call starts, but may be newer than its frozen input cut. Only selected historical input references must be visible at that input cut. A historical selection records the complete native ResourceReadCut, including canonical and projection coordinates; a Journal sequence alone does not identify canonical history. Temporary input has no implied historical cut or retained copy. Explicit selected message references are independently bounded. These facts describe what was selected, not how to reconstruct absent temporary bytes.
@@ -98,7 +106,8 @@ Real SQLite tests cover transaction atomicity, owner/index consistency, rollback
 Automatic and manual Summary and independent automatic Title use the same Runtime-owned bounded-retry executor.
 Native preparation reserves process total/general, Conversation total/general
 and write responsibility without waiting. Limits are 32/24 and 4/3; only
-native Compaction authority may omit the general reservations. A purpose or
+blocking/manual native Compaction authority may omit the general reservations.
+Session-owned proactive Summary uses ordinary general capacity. A purpose or
 trigger string grants no execution or protected-capacity authority. Both
 capacity and lifecycle-lock Busy refusals arbitrate under cancellation; an
 earlier cancellation remains cancellation, and active callers never wait for
@@ -137,10 +146,18 @@ capacity indefinitely. Live/unproven cleanup retains its old allocation.
 Compaction admits a finite plan of at most 256 normal Summary starts before any
 start. Twelve exceptional recovery actions are shared across re-entry, retries,
 format fallback, carryover degradation and replanning; at most three input
-reductions are permitted. The original absolute deadline is five minutes plus
+reductions are permitted. For blocking/manual work, the original absolute deadline is five minutes plus
 30 seconds per planned start after the first, capped at two hours. Automatic
-Compactions in one logical Agent step share this authority; a manual Compaction
+blocking Compactions in one logical Agent step share this authority; a manual Compaction
 gets an independent allowance. Each checkpoint has its own operation receipt.
+
+Independent asynchronous generation instead retains the existing Auxiliary
+scope deadline from original admission. Planning does not derive another
+compaction-wide deadline, and a fully accepted result awaiting installation has
+no age TTL. Waiting Attempts do not become cancellation parents or renew the
+scope. Native request/EOF timeouts, retries and physical joins remain effective;
+current installation authority is obtained separately after generation closes.
+See [asynchronous compaction](asynchronous-compaction.md).
 
 The model and resources remain frozen. Manual compaction transfers its native
 business tail before the manager lease is released, and a lost observer or

@@ -84,6 +84,13 @@ impl JournalStore for SqliteConversationStore {
         event: RuntimeEventEnvelope,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError> {
         if requires_specialized_transition(&event.event)
+            || matches!(
+                &event.event,
+                RuntimeEvent::CompactionStarted {
+                    mode: crate::context::operation::CompactionMode::Proactive,
+                    ..
+                }
+            )
             || (event.event.is_auxiliary_model_request()
                 && matches!(
                     event.event,
@@ -165,6 +172,53 @@ impl JournalStore for SqliteConversationStore {
             .map_err(|error| storage(format!("workflow start commit: {error}")))?;
         process_death::reach("after:workflow_start");
         Ok(persisted.event)
+    }
+    fn append_compaction_admission(
+        &self,
+        started: RuntimeEventEnvelope,
+        status: RuntimeEventEnvelope,
+    ) -> Result<(RuntimeEventEnvelope, RuntimeEventEnvelope), ConversationStoreError> {
+        use crate::context::operation::{CompactionMode, CompactionOperationPhase};
+        let valid = matches!(
+            (&started.event, &status.event),
+            (
+                RuntimeEvent::CompactionStarted { operation_id, mode: CompactionMode::Proactive },
+                RuntimeEvent::CompactionOperationUpdated { status }
+            ) if operation_id == &status.operation_id
+                && status.admission_generation > 0
+                && status.phase == CompactionOperationPhase::Generating
+                && status.waiting_attempt_id.is_none()
+                && status.accepted_fragments == 0
+                && status.diagnostic.is_none()
+        );
+        if !valid
+            || started.conversation_id != status.conversation_id
+            || started.timestamp != status.timestamp
+            || started.attempt_id.is_some()
+            || started.turn_id.is_some()
+            || status.attempt_id.is_some()
+            || status.turn_id.is_some()
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "proactive compaction admission requires one matching initial status".into(),
+            ));
+        }
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| storage(format!("compaction admission transaction: {error}")))?;
+        let started = persist_event_tx(&transaction, &self.conversation_id, started)?.event;
+        #[cfg(test)]
+        if Self::consume(&self.fail_event_remaining) {
+            return Err(storage("fault injected between proactive admission facts"));
+        }
+        let status = persist_event_tx(&transaction, &self.conversation_id, status)?.event;
+        process_death::reach("before:compaction_admission");
+        transaction
+            .commit()
+            .map_err(|error| storage(format!("compaction admission commit: {error}")))?;
+        process_death::reach("after:compaction_admission");
+        Ok((started, status))
     }
     fn commit_subagent_terminal(
         &self,
@@ -646,6 +700,7 @@ pub(super) fn persist_event_tx_internal(
         });
     }
     validate_event_identity(&event)?;
+    validate_compaction_status(transaction, &event)?;
     validate_compaction_progress(transaction, &event)?;
     validate_attempt_start_uniqueness(transaction, &event)?;
     validate_agent_admission_reference(transaction, &event)?;
@@ -747,6 +802,13 @@ pub(super) fn persist_event_tx_internal(
             ],
         )
         .map_err(|error| sqlite_error(&error, format!("insert runtime event: {error}")))?;
+    observation_state::index_compaction_operation(transaction, &event)?;
+    if let RuntimeEvent::CompactionOperationUpdated { status } = &event.event
+        && status.phase.is_terminal()
+        && status.phase != crate::context::operation::CompactionOperationPhase::Committed
+    {
+        transaction.execute("INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,?2) ON CONFLICT(lifecycle_key) DO UPDATE SET terminal_event_id=COALESCE(lifecycle_state.terminal_event_id,excluded.terminal_event_id)", params![format!("compaction:{}",status.operation_id),event.event_id.as_str()]).map_err(|e| storage(e.to_string()))?;
+    }
     auxiliary::index_event_tx(transaction, &event)?;
     // Missing auxiliary evidence is the fail-closed initial state. Independent
     // savepoints preserve own lifecycle facts if a different layout fails.
@@ -955,6 +1017,16 @@ pub(super) fn enrich_event_transcript(
 pub(super) fn validate_event_identity(
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
+    if let RuntimeEvent::CompactionOperationUpdated { status } = &envelope.event {
+        status
+            .validate()
+            .map_err(|reason| ConversationStoreError::InvalidReference(reason.into()))?;
+        if envelope.attempt_id.is_some() || envelope.turn_id.is_some() {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction operation status cannot belong to an attempt or turn".into(),
+            ));
+        }
+    }
     if matches!(
         &envelope.event,
         RuntimeEvent::TurnStarted | RuntimeEvent::TurnCompleted
@@ -979,6 +1051,90 @@ pub(super) fn validate_event_identity(
     {
         return Err(ConversationStoreError::InvalidReference(
             "event envelope attempt identity disagrees with its typed payload".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+/// Enforce status identity, bounded order and terminal fences before indexing.
+fn validate_compaction_status(
+    transaction: &Transaction<'_>,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    let RuntimeEvent::CompactionOperationUpdated { status } = &envelope.event else {
+        return Ok(());
+    };
+    if status.operation_id.as_str().len() > 256
+        || status
+            .triggering_attempt_id
+            .as_ref()
+            .is_some_and(|id| id.as_str().len() > 256)
+        || status
+            .waiting_attempt_id
+            .as_ref()
+            .is_some_and(|id| id.as_str().len() > 256)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction status identity exceeds its bound".into(),
+        ));
+    }
+    let started: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_started' AND json_extract(event_json,'$.event.mode')='proactive')", [status.operation_id.as_str()], |row| row.get(0)).map_err(|e| storage(e.to_string()))?;
+    if !started {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction status requires a proactive start".into(),
+        ));
+    }
+    let closed: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1 AND terminal_event_id IS NOT NULL)",
+        [format!("compaction:{}", status.operation_id)], |row| row.get(0),
+    ).map_err(|e| storage(e.to_string()))?;
+    if closed && status.phase != crate::context::operation::CompactionOperationPhase::Committed {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction lifecycle is already terminal".into(),
+        ));
+    }
+    let accepted: Option<u32> = transaction.query_row("SELECT json_extract(event_json,'$.event.accepted_fragments') FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_chunk_accepted' ORDER BY sequence DESC LIMIT 1", [status.operation_id.as_str()], |row| row.get(0)).optional().map_err(|e| storage(e.to_string()))?;
+    if status.accepted_fragments > accepted.unwrap_or(0) {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction status exceeds accepted fragment facts".into(),
+        ));
+    }
+    let recent = observation_state::latest_compaction_operations(
+        transaction,
+        u64::try_from(i64::MAX).expect("positive"),
+    )?;
+    let known: Option<u64> = transaction.query_row("SELECT journal_sequence FROM state_observation_sources WHERE domain='compaction_identity' AND source_id=?1", [status.operation_id.as_str()], |row| row.get(0)).optional().map_err(|e| storage(e.to_string()))?;
+    if status.phase == crate::context::operation::CompactionOperationPhase::Committed {
+        let completed: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_completed')", [status.operation_id.as_str()], |row| row.get(0)).map_err(|e| storage(e.to_string()))?;
+        if !completed {
+            return Err(ConversationStoreError::InvalidReference(
+                "committed status requires a completed compaction".into(),
+            ));
+        }
+    }
+    let matching = recent.iter().find(|old| {
+        old.operation_id == status.operation_id
+            && old.admission_generation == status.admission_generation
+    });
+    if let Some(old) = matching {
+        use crate::context::operation::CompactionOperationPhase as Phase;
+        if old.phase.is_terminal()
+            || status.accepted_fragments < old.accepted_fragments
+            || old.triggering_attempt_id != status.triggering_attempt_id
+            || matches!(old.phase, Phase::Ready)
+                && matches!(status.phase, Phase::Generating | Phase::Retrying)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid compaction status transition".into(),
+            ));
+        }
+    } else if known.is_some()
+        || recent
+            .iter()
+            .any(|old| old.admission_generation >= status.admission_generation)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "stale compaction admission".into(),
         ));
     }
     Ok(())
@@ -1396,7 +1552,7 @@ pub(super) fn lifecycle_keys(event: &RuntimeEventEnvelope) -> Vec<(String, bool)
                 (format!("auxiliary-request:{request_id}"), true),
             ];
         }
-        RuntimeEvent::CompactionStarted { operation_id } => {
+        RuntimeEvent::CompactionStarted { operation_id, .. } => {
             return vec![(format!("compaction:{operation_id}"), false)];
         }
         RuntimeEvent::CompactionCompleted { operation_id, .. }

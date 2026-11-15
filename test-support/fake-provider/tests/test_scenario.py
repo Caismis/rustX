@@ -315,9 +315,13 @@ def test_chunked_compaction_scenario_enforces_fallback_and_fragment_count():
     assert not final
     assert first_prompt.respond.script[0] == Gate("first-prompt-summary")
     assert '"response_format"' in first_prompt.expect.body_excludes
+    # An uncompacted primary may keep writing while Summary is in flight.
+    concurrent, final = scenario.select([*history, native, primary])
+    assert not final and concurrent.expect.model == "chat-model"
+    final_primary = recorded({"model": "chat-model", "messages": [{"role": "user", "content": "chunked compaction kept the user's goal"}]})
     with pytest.raises(ValueError, match="more than twelve fragments"):
-        scenario.select([*history, *([native] * 13), primary])
-    completed, final = scenario.select([*history, *([native] * 14), primary])
+        scenario.select([*history, *([native] * 13), final_primary])
+    completed, final = scenario.select([*history, *([native] * 14), final_primary])
     assert final
     assert completed.expect.model == "chat-model"
 
@@ -358,6 +362,26 @@ def test_chunked_tool_history_is_bounded_distinct_and_not_short_periodic():
     assert first != _chunked_write_content(2)
     assert 18_000 <= len(first) < 19_000
     assert len({first[i:i + 32] for i in range(0, len(first) - 32, 32)}) > 500
+
+
+def test_asynchronous_crash_scenario_accepts_only_the_expected_disconnect_prefix():
+    scenario = build("asynchronous_compaction_crash")
+    assert isinstance(scenario, AdaptiveScenario)
+    primary = recorded({"model": "chat-model"})
+    summary = recorded({"model": "summary-model"})
+    history = [primary] * 14
+    with pytest.raises(ValueError, match="unexpected crash-scenario Summary"):
+        scenario.select([primary, summary])
+    held_summary, final = scenario.select([*history, summary])
+    assert not final and held_summary.allow_disconnect
+    assert held_summary.respond.script[0] == Gate("crash-summary")
+    held_primary, final = scenario.select([*history, summary, primary])
+    assert not final and held_primary.allow_disconnect
+    assert held_primary.respond.script[0] == Gate("crash-primary")
+    later_summary, final = scenario.select([*history, summary, primary, summary])
+    assert not final and later_summary.allow_disconnect
+    with pytest.raises(ValueError, match="unexpected extra primary"):
+        scenario.select([*history, summary, primary, primary])
 
 
 def test_a_workspace_placeholder_without_a_workspace_fails_loudly():

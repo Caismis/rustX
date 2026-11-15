@@ -461,9 +461,11 @@ writer-absent registry entry so a later load can attempt exclusive recovery.
 An unproven physical exit must retain isolation. Neither failure is promoted
 to successful quiescence, and recovery never redispatches an old RequestId.
 
-Cancellation winning Summary operation admission settles the Agent Attempt as
-cancelled with its native reason. It emits neither CompactionFailed nor
-AttemptFailed, including when compaction was recovering a provider overflow.
+Attempt cancellation winning foreground Summary operation admission settles
+that Agent Attempt as cancelled with its native reason. It emits neither
+CompactionFailed nor AttemptFailed, including during provider-overflow recovery.
+Independent asynchronous admission and cancellation belong to the matching
+Session-scoped operation; they cannot cancel or reopen its triggering Attempt.
 Capacity and lifecycle-boundary refusals both arbitrate under the cancellation
 grant: completed cancellation cannot become Busy when Call slots are occupied
 or another native commit holds the lifecycle boundary. Active, uncancelled
@@ -571,7 +573,7 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 89 binds admission-captured Workflow run definition snapshots
+SQLite schema 90 binds admission-captured Workflow run definition snapshots
 (`workflow_definition_snapshots`, `workflow_snapshot_chunks`, and `workflow_run_snapshots`)
 atomically to `WorkflowStarted` events without staging tables or mutable YAML fallbacks.
 It also binds request fingerprints to the native JSON Schema capability
@@ -5140,6 +5142,29 @@ Delivery acceptance means the message was durably committed for delivery; it doe
 
 ## Compaction
 
+Asynchronous Summary lifetime belongs to the Session's active runtime. An
+Attempt's ordinary completion or cancellation cannot revoke that operation;
+blocking/manual work retains its native foreground owner. One proactive slot
+includes a retained ready result, with at most one competing foreground operation.
+The worker never installs. Current Safe Boundary, idle-maintenance or mandatory
+recovery authority validates before staging; ordinary late completion cannot
+change a frozen request or transient replay.
+
+Only a complete accepted ChunkPlan can seal source coverage. Comparable roots
+and strict continuous-prefix advancement permit current validation; equal
+coverage retains the active checkpoint, smaller coverage is superseded and
+incomparable coverage is refused. Installation preserves the exact current suffix
+and later appends, reprices the complete primary request and commits through
+current source/owner fences and Head CAS. Operation identity and admission
+generation fence all callbacks and progress. Clone/Fork/import does not transfer
+native installation coverage authority.
+
+Asynchronous generation retains its original Auxiliary deadline, request/EOF
+timeouts and cumulative work allowance, without an added compaction-wide
+deadline or ready-result TTL. Joining/retry/re-entry never renews it. A new
+blocking replacement keeps the separately derived blocking deadline. See
+[asynchronous compaction](asynchronous-compaction.md).
+
 Compaction preserves immutable canonical facts and commits a typed historical
 projection. It materializes Derived summary context with scoped provenance and
 retained Original references, makes a complete inclusion/exclusion decision
@@ -7984,8 +8009,9 @@ outside this historical rule.
 Default Summary planning renders history once. Exact monotone whole-request prices
 from `DefaultTokenEstimator` support complete binary interval selection without
 per-message rounded token sums: deleting a prefix with fixed core inputs cannot
-increase primary/recent prices. Summary chunks are priced separately. Production image/upload capture freezes validated resources for the logical
-generation (manual Compaction: operation lifetime). Shared upload-then-image
+increase primary/recent prices. Summary chunks are priced separately. Primary
+image/upload capture freezes validated resources for the logical generation;
+Compaction capture freezes its own resources for the operation lifetime. Shared upload-then-image
 materialization preserves surviving message bytes under prefix deletion: newest-16
 cannot promote an older omitted occurrence whose sixteen newer occurrences survive.
 Historical-only and complete-primary image unions are frozen separately for slot
@@ -8039,7 +8065,7 @@ invented wire ID. Nullable `wire_id` distinguishes absence from explicit correla
 transmitted stored results use actual accepted native IDs. Stateless/full replay IDs
 match the adapter's relevant wire segment, independent of covered historical occurrences.
 Ambiguous duplicate unresolved wire IDs are rejected before detached wire mutation.
-This required observation change is carried by App Server v50 and Runtime Client v73.
+This required observation change is carried by App Server v50 and Runtime Client v80.
 
 ## PR #477 bounded activation header integrity
 
@@ -8370,7 +8396,7 @@ See [the storage and lifecycle contract](issue-520/README.md).
   document. Graph/node/depth, editor, value, context and decoder safeguards
   remain independent; source admission does not promise arbitrary execution
   payload or model-context capacity.
-- Workflow file data crosses v73 control records through native-owned document
+- Workflow file data crosses v80 control records through native-owned document
   scratch and 65,536-byte chunks. A ready scratch document is neither a partial
   source file nor a source commit. Only the existing revision-fenced source
   transaction publishes the complete canonical file with one atomic replacement.
@@ -8418,7 +8444,7 @@ visibility cannot prove owner release. Revision/incarnation fences prevent old
 reads or delayed notifications from replacing newer status, and transport loss or
 observation gaps display unavailability rather than fabricated idle. Bounded
 read repair never loads a cold runtime or repeats semantic work. See the
-[status ownership matrix](app-server/shared-control.md#thread-runtime-status-v74-amendment).
+[status ownership matrix](app-server/shared-control.md#thread-runtime-status-v80-amendment).
 
 ## Workflow run snapshot identity, publication, and read authorization (Issue #552)
 

@@ -20,7 +20,24 @@ use crate::model::{
 };
 use crate::runtime::cancellation::CancellationSignal;
 
-use super::executor::{AuxiliaryExecutor, AuxiliaryReservation, AuxiliaryScope, FrozenCall};
+use super::executor::{
+    AuxiliaryDispatchCheck, AuxiliaryExecutor, AuxiliaryReservation, AuxiliaryScope, FrozenCall,
+};
+
+struct SummaryDispatchCheck(Arc<super::authority::AuthorityCallback>);
+impl AuxiliaryDispatchCheck for SummaryDispatchCheck {
+    fn check(&self) -> BoxFuture<'_, Result<(), ContextError>> {
+        Box::pin(async move { (self.0)() })
+    }
+}
+
+pub(super) fn dispatch_check(
+    authority: &super::authority::AuxiliaryAuthority,
+) -> Result<Option<Arc<dyn AuxiliaryDispatchCheck>>, ContextError> {
+    Ok(authority
+        .dispatch_check()?
+        .map(|check| Arc::new(SummaryDispatchCheck(check)) as Arc<dyn AuxiliaryDispatchCheck>))
+}
 
 struct Operation {
     executor: AuxiliaryExecutor,
@@ -291,7 +308,7 @@ impl PreparedSummary for Prepared {
                     invocation,
                     timeout: self.timeout,
                     resource_revision: self.resource_revision,
-                    dispatch_check: None,
+                    dispatch_check: dispatch_check(&self.budget.authority())?,
                     title_source: None,
                 })?
                 .await

@@ -3,7 +3,7 @@ import {canonicalLocatorKey} from '../../../../protocol/app-server/content-ident
 import { traceStateLabel } from '../../bindings/status-labels';
 import type { Translate } from '../../locale/translation';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from pinned Harness ui-trajectory/layout.ts; see PROVENANCE.md. */
-import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v79';
+import type { TraceContextKind, TraceContextPresentation, TraceRecord } from '../../../../protocol/app-server/v80';
 import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
 
 /** The Harness detail tab identities. Labels follow the locale; ids never do. */
@@ -95,7 +95,16 @@ export function systemPresentation(tx: Translate, record: TraceRecord): { label:
 }
 
 export function recordLabel(tx: Translate, record: TraceRecord): string {
-  if (record.kind === 'compaction') return record.state === 'completed' ? tx('trajectory:compacted') : record.state === 'running' ? tx('trajectory:copy.compacting') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, record.state) });
+  if (record.kind === 'compaction') {
+    switch (record.compaction?.outcome) {
+      case 'committed': return tx('trajectory:compacted');
+      case 'skipped': return tx('trajectory:compaction.skipped');
+      case 'superseded': return tx('trajectory:compaction.superseded');
+      case 'no_effect': return tx('trajectory:compaction.no-effect');
+    }
+    if (record.compaction?.status?.phase === 'ready') return tx('trajectory:compaction.ready');
+    return record.state === 'running' ? tx('trajectory:copy.compacting') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, record.state) });
+  }
   return tx(`trajectory:kind.${record.kind}`);
 }
 
@@ -208,7 +217,7 @@ export function trajectoryItems(tx: Translate, projection: TrajectoryProjection,
 
 /** Never correlate incomplete scope, or ambiguous proposals. Session/Conversation
  * isolation is supplied by the native Trace cache, not reconstructed from IDs. */
-function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v79').RuntimeClientToolOccurrence|null}):string|undefined {
+function callScope(record:TraceRecord,call:{occurrence?:import('../../../../protocol/app-server/v80').RuntimeClientToolOccurrence|null}):string|undefined {
  const owner=traceAttemptKey(record.location),step=traceStepKey(record.location);
  if(owner==null||step==null||!call.occurrence)return;
  return displayKey(owner,step,traceOccurrenceKey(call.occurrence));

@@ -28,6 +28,7 @@ pub(super) struct AnchorFacts {
     pub attachments: Vec<TraceArtifact>,
     pub tool: Option<TraceToolSummary>,
     pub request: Option<AnchorRequest>,
+    pub compaction: Option<crate::observation::trace::types::TraceCompaction>,
     pub has_detail: bool,
     pub truncated: bool,
     pub fields: Vec<TraceFieldSource>,
@@ -67,6 +68,7 @@ impl AnchorFacts {
             attachments: Vec::new(),
             tool: None,
             request: None,
+            compaction: None,
             has_detail: false,
             truncated: false,
             fields: header.fields.clone(),
@@ -160,7 +162,48 @@ impl TraceProjection<'_> {
         } else {
             self.ending(anchor.sequence, &endings)?
         };
+        if let (Some(compaction), Some(end)) = (&mut facts.compaction, &ending) {
+            use crate::observation::trace::types::TraceCompactionOutcome as Outcome;
+            compaction.outcome = match end.kind {
+                K::CompactionCompleted => Some(Outcome::Committed),
+                K::CompactionFailed => Some(Outcome::Failed),
+                K::CompactionCancelled => Some(Outcome::Cancelled),
+                K::CompactionSkipped => Some(Outcome::Skipped),
+                _ => None,
+            };
+        }
         facts.terminal(ending, anchor.sequence);
+        if facts.compaction.is_some()
+            && let Some(update) = self.ending(anchor.sequence, &[K::CompactionOperationUpdated])?
+            && let D::CompactionStatus { status } = update.fact
+        {
+            use crate::context::operation::CompactionOperationPhase as Phase;
+            use crate::observation::trace::types::TraceCompactionOutcome as Outcome;
+            let compaction = facts.compaction.as_mut().expect("compaction anchor");
+            // A Committed status is not a substitute for its actual Completed fact.
+            if compaction.outcome.is_none() {
+                compaction.outcome = match status.phase {
+                    Phase::Failed => Some(Outcome::Failed),
+                    Phase::Cancelled => Some(Outcome::Cancelled),
+                    Phase::Superseded => Some(Outcome::Superseded),
+                    Phase::NoEffect => Some(Outcome::NoEffect),
+                    _ => None,
+                };
+                if let Some(outcome) = compaction.outcome {
+                    facts.state = match outcome {
+                        Outcome::Failed => TraceState::Failed,
+                        Outcome::Cancelled => TraceState::Cancelled,
+                        _ => TraceState::Completed,
+                    };
+                    facts.timing.ended_at = Some(update.timestamp);
+                    facts.timing.duration_ms = u64::try_from(
+                        (update.timestamp - facts.timing.started_at).num_milliseconds(),
+                    )
+                    .ok();
+                }
+            }
+            compaction.status = Some(status);
+        }
         Ok(facts)
     }
     fn workflow_nodes(
@@ -248,16 +291,8 @@ impl TraceProjection<'_> {
                 self.tool_start(facts, occurrence.as_ref(), call_id.clone(), tool_id.clone())?;
                 vec![K::ToolExecutionCompleted, K::ToolExecutionFailed]
             }
-            D::CompactionStart { native_id } => {
-                facts.kind = TraceKind::Compaction;
-                facts.native_id.clone_from(native_id);
-                facts.has_detail = true;
-                vec![
-                    K::CompactionCompleted,
-                    K::CompactionFailed,
-                    K::CompactionCancelled,
-                    K::CompactionSkipped,
-                ]
+            D::CompactionStart { native_id, mode } => {
+                compaction_start(facts, native_id.as_deref(), *mode)
             }
             D::BackgroundStart {
                 native_id,
@@ -293,7 +328,7 @@ impl TraceProjection<'_> {
                 vec![K::InteractionSettled]
             }
             D::Configuration { change } => configuration_start(facts, change),
-            D::CanonicalToolCommit { .. } | D::Terminal(_) => {
+            D::CanonicalToolCommit { .. } | D::CompactionStatus { .. } | D::Terminal(_) => {
                 return Err(ConversationStoreError::InvalidReference(
                     "native fact is not a Trace anchor".into(),
                 ));
@@ -333,6 +368,26 @@ impl TraceProjection<'_> {
         facts.tool = Some(tool);
         Ok(())
     }
+}
+fn compaction_start(
+    facts: &mut AnchorFacts,
+    native_id: Option<&str>,
+    mode: crate::context::operation::CompactionMode,
+) -> Vec<K> {
+    facts.kind = TraceKind::Compaction;
+    facts.native_id = native_id.map(str::to_owned);
+    facts.has_detail = true;
+    facts.compaction = Some(crate::observation::trace::types::TraceCompaction {
+        mode,
+        status: None,
+        outcome: None,
+    });
+    vec![
+        K::CompactionCompleted,
+        K::CompactionFailed,
+        K::CompactionCancelled,
+        K::CompactionSkipped,
+    ]
 }
 /// A Session-level record between Attempts: its own native position, no
 /// owning Attempt, Step or request.

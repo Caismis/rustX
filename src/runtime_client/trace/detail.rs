@@ -77,7 +77,7 @@ impl TraceProjection<'_> {
                     }
                 }
             }
-            E::CompactionStarted { operation_id } => {
+            E::CompactionStarted { operation_id, .. } => {
                 detail.kind = TraceKind::Compaction;
                 if let Some(event) = self
                     .store

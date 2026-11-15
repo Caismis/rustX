@@ -10,6 +10,14 @@ use crate::durable::{ConversationStoreError, NativeTodoObservation, TranscriptCu
 /// frontiers those reads are admitted against.
 #[allow(clippy::missing_errors_doc)]
 pub trait ObservationStore: Send + Sync + 'static {
+    /// Seeks original Call starts owned by this exact Compaction at the read cut.
+    fn observation_compaction_call_ids(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        operation: &crate::runtime::identity::CompactionOperationId,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::durable::observation::TraceCompactionCallIds, ConversationStoreError>;
     fn observation_workflow_nodes(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -524,6 +532,17 @@ pub trait ObservationStore: Send + Sync + 'static {
         attempt: Option<&AttemptId>,
         limit: usize,
     ) -> Result<Vec<crate::durable::observation::ObservationEventHeader>, ConversationStoreError>;
+    /// Exact bounded start mode for one operation before this Journal position.
+    fn compaction_start_mode_before(
+        &self,
+        operation_id: &crate::runtime::identity::CompactionOperationId,
+        before: u64,
+    ) -> Result<crate::context::operation::CompactionMode, ConversationStoreError>;
+    /// Latest status for the two most recently admitted operations at this cut.
+    fn latest_compaction_operations(
+        &self,
+        through: u64,
+    ) -> Result<Vec<crate::context::operation::CompactionOperationStatus>, ConversationStoreError>;
     /// Exact committed call occurrence under one native Attempt and frozen read cut.
     fn tool_call_occurrence_at(
         &self,

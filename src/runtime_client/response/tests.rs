@@ -646,6 +646,7 @@ fn context_measurement_survives_pending_and_failed_compaction() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "fixture-compaction",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
     );
     let pending = crate::context::occupancy::read(&store, store.presentation_frontier().unwrap())

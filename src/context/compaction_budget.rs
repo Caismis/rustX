@@ -63,6 +63,17 @@ impl CompactionBudget {
         }))
     }
 
+    /// Independent asynchronous work shares finite start/recovery accounting
+    /// while retaining only the native Auxiliary scope's original timer.
+    #[must_use]
+    pub(crate) fn asynchronous(id: CompactionOperationId, clock: Arc<dyn MonotonicClock>) -> Self {
+        Self(Arc::new(Operation {
+            id,
+            authority: AuxiliaryAuthority::new_asynchronous(clock),
+            state: Arc::default(),
+        }))
+    }
+
     /// Admit the conservative finite normal-work bound before any Summary start.
     /// Re-entry may reuse a smaller or equal bound, but cannot expand it.
     ///
@@ -210,6 +221,33 @@ mod tests {
     use crate::runtime::identity::{AuxiliaryCallId, ConversationId, SystemUuidV7Generator};
     use crate::runtime::monotonic::ManualMonotonicClock;
 
+    #[test]
+    fn asynchronous_plan_keeps_the_original_auxiliary_scope_deadline() {
+        let clock = Arc::new(ManualMonotonicClock::new());
+        clock.advance(10_000);
+        let budget = CompactionBudget::asynchronous(
+            CompactionOperationId::new("independent-summary"),
+            clock.clone(),
+        );
+        let native_deadline = budget.deadline_millis();
+        assert_eq!(native_deadline, 10_000 + COMPACTION_DEADLINE_MILLIS);
+        budget.admit_work(256).unwrap();
+        assert_eq!(budget.remaining_starts(), 256);
+        assert_eq!(budget.deadline_millis(), native_deadline);
+        let cancellation = CancellationSignal::new();
+        budget.charge_recovery(&cancellation).unwrap();
+        assert_eq!(budget.remaining_starts(), 257);
+        assert_eq!(budget.deadline_millis(), native_deadline);
+        let later = budget.next_operation(CompactionOperationId::new("same-allowance"));
+        later.admit_work(16).unwrap();
+        assert_eq!(later.deadline_millis(), native_deadline);
+        clock.advance(COMPACTION_DEADLINE_MILLIS);
+        assert_eq!(
+            later.check(&cancellation).unwrap_err().kind,
+            ContextErrorKind::AuxiliaryDeadlineExceeded
+        );
+    }
+
     fn budget() -> (
         CompactionBudget,
         Arc<ManualMonotonicClock>,
@@ -241,6 +279,7 @@ mod tests {
 
     fn new_request(call_id: AuxiliaryCallId) -> AuxiliaryRequestStart {
         AuxiliaryRequestStart {
+            invocation: crate::model::auxiliary::fixture_invocation_identity(),
             call_id,
             request_id: RequestId::generate_auxiliary(&SystemUuidV7Generator).unwrap(),
             ordinal: 0,

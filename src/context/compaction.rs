@@ -28,6 +28,12 @@ use crate::runtime::cancellation::CancellationSignal;
 use crate::runtime::identity::{AttemptId, ConversationId, TurnId};
 use crate::tools::types::ModelToolDefinition;
 
+mod install;
+pub(crate) use install::{
+    ActivationOutcome, ActivationPreview, CurrentInstallation, activate_generated,
+    preview_generated,
+};
+
 /// Optional execution attribution persisted with the compaction completion.
 #[derive(Debug, Clone)]
 #[allow(clippy::struct_field_names)] // These are three independent identity domains.
@@ -67,6 +73,9 @@ pub(crate) enum CompactionExecutionError {
     /// The durable authority rejected the atomic compaction transition, or
     /// returned a result that violated the transition contract.
     Durable(String),
+    /// Another valid activation won the expected-Head compare-and-swap.
+    /// No receipt exists for this candidate; the current owner may revalidate.
+    HeadChanged,
     /// Commit is confirmed; execution must reconcile or stop without a contradictory failure fact.
     Committed {
         completed: Box<ExecutedCompaction>,
@@ -77,6 +86,161 @@ pub(crate) enum CompactionExecutionError {
 impl From<ContextError> for CompactionExecutionError {
     fn from(error: ContextError) -> Self {
         Self::Context(error)
+    }
+}
+
+/// Owned copy of request-time constraints. A background Summary must not
+/// borrow a triggering Attempt's staged inputs or carryover.
+struct FrozenConstraints {
+    focus: Option<String>,
+    must_cover_through: Option<crate::runtime::identity::MessageId>,
+    fresh_inbound: Option<crate::runtime::inbound::FreshInboundTurn>,
+    protected_context_ids: Vec<crate::runtime::identity::MessageId>,
+    staged_request_context: Vec<crate::message::types::MessageBlock>,
+    carryover: Option<crate::model::RenderedUnresolvedOutputCarryover>,
+    carryover_fallbacks: Vec<super::engine::CompactionCarryover>,
+    carryover_anchor: Option<crate::model::RequestOnlyInsertionAnchor>,
+    estimate_correction: Option<super::engine::EstimateCorrection>,
+}
+
+impl FrozenConstraints {
+    fn capture(value: &CompactionConstraints<'_>) -> Self {
+        Self {
+            focus: value.focus.map(str::to_owned),
+            must_cover_through: value.must_cover_through.cloned(),
+            fresh_inbound: value.fresh_inbound.cloned(),
+            protected_context_ids: value.protected_context_ids.to_vec(),
+            staged_request_context: value.staged_request_context.to_vec(),
+            carryover: value.carryover.cloned(),
+            carryover_fallbacks: value.carryover_fallbacks.to_vec(),
+            carryover_anchor: value.carryover_anchor.cloned(),
+            estimate_correction: value.estimate_correction,
+        }
+    }
+
+    fn view(&self, next_carryover: usize) -> CompactionConstraints<'_> {
+        let carryover = if next_carryover == 0 {
+            self.carryover.as_ref()
+        } else {
+            self.carryover_fallbacks[next_carryover - 1].value.as_ref()
+        };
+        CompactionConstraints {
+            focus: self.focus.as_deref(),
+            must_cover_through: self.must_cover_through.as_ref(),
+            fresh_inbound: self.fresh_inbound.as_ref(),
+            protected_context_ids: &self.protected_context_ids,
+            staged_request_context: &self.staged_request_context,
+            carryover,
+            carryover_fallbacks: &self.carryover_fallbacks,
+            carryover_anchor: if next_carryover > 0 && carryover.is_none() {
+                None
+            } else {
+                self.carryover_anchor.as_ref()
+            },
+            estimate_correction: self.estimate_correction,
+        }
+    }
+}
+
+/// Immutable source and invocation inputs shared by generation and its result.
+struct CapturedSource {
+    history: crate::durable::projection::HistoricalModelInput,
+    cut: super::resources::ResourceReadCut,
+    previous: Option<crate::durable::projection::ProjectionCheckpoint>,
+    retired_count: usize,
+    attribution: CompactionAttribution,
+    engine: super::engine::ContextEngine,
+    projection: super::projection::ContextProjection,
+    tools: Vec<ModelToolDefinition>,
+    effective_system_prompt: String,
+    constraints: FrozenConstraints,
+    budgets: super::engine::CompactionBudgets,
+    primary_model: String,
+    maximum_summary_output: u32,
+}
+
+/// Frozen finite capture; it carries no permission to replace the Head.
+pub(crate) struct CapturedCompaction {
+    source: CapturedSource,
+    budget: super::compaction_budget::CompactionBudget,
+    prepared: Box<dyn super::summarizer::PreparedSummary>,
+    chunks: super::chunks::ChunkPlan,
+    next_carryover: usize,
+    carryover_level: Option<crate::model::CarryoverDetailLevel>,
+}
+
+#[allow(dead_code)] // The Session owner inspects the frozen prefix before spawning generation.
+impl CapturedCompaction {
+    pub(crate) fn source_history(&self) -> &crate::durable::projection::HistoricalModelInput {
+        &self.source.history
+    }
+
+    pub(crate) fn source_cut(&self) -> &super::resources::ResourceReadCut {
+        &self.source.cut
+    }
+
+    pub(crate) fn source_checkpoint(
+        &self,
+    ) -> Option<&crate::durable::projection::ProjectionCheckpoint> {
+        self.source.previous.as_ref()
+    }
+
+    pub(crate) fn retired_count(&self) -> usize {
+        self.source.retired_count
+    }
+}
+
+/// A locally validated Summary over one captured source. The candidate is
+/// evidence of the captured fit only: it is not authorized for async install.
+pub(crate) struct GeneratedCompaction {
+    source: CapturedSource,
+    captured_candidate: CheckpointCandidate,
+    summary: super::summarizer::SummaryGeneration,
+    completed_coverage: super::chunks::CompletedSourceCoverage,
+    after_projection: super::projection::ContextProjection,
+    after: u64,
+    carryover_level: Option<crate::model::CarryoverDetailLevel>,
+}
+
+#[allow(dead_code)] // The Session-scoped installer consumes these in #529.
+impl GeneratedCompaction {
+    pub(crate) fn source_history(&self) -> &crate::durable::projection::HistoricalModelInput {
+        &self.source.history
+    }
+
+    pub(crate) fn source_cut(&self) -> &super::resources::ResourceReadCut {
+        &self.source.cut
+    }
+
+    pub(crate) fn retired_count(&self) -> usize {
+        self.source.retired_count
+    }
+
+    pub(crate) fn source_checkpoint(
+        &self,
+    ) -> Option<&crate::durable::projection::ProjectionCheckpoint> {
+        self.source.previous.as_ref()
+    }
+
+    pub(crate) fn completed_coverage(&self) -> &super::chunks::CompletedSourceCoverage {
+        &self.completed_coverage
+    }
+
+    /// The candidate was priced against the capture and must be rebuilt for
+    /// current installation authority before an asynchronous commit.
+    pub(crate) fn captured_candidate(&self) -> &CheckpointCandidate {
+        &self.captured_candidate
+    }
+
+    pub(crate) fn generated_summary(&self) -> &DerivedModelMessage {
+        match &self.captured_candidate.items[0].message {
+            CheckpointMessage::Derived(summary) => summary,
+            CheckpointMessage::Original(_) => unreachable!("generated Summary is Derived"),
+        }
+    }
+
+    pub(crate) fn summary_generation(&self) -> &super::summarizer::SummaryGeneration {
+        &self.summary
     }
 }
 
@@ -119,6 +283,7 @@ pub(crate) async fn execute_compaction(
     };
     append(crate::events::types::RuntimeEvent::CompactionStarted {
         operation_id: attribution.operation_id.clone(),
+        mode: crate::context::operation::CompactionMode::Blocking,
     })?;
     let operation = context
         .summarizer
@@ -179,6 +344,7 @@ pub(crate) async fn execute_compaction_in_operation(
     operation: &dyn super::summarizer::SummaryOperation,
     progress: Option<&(dyn Fn(RuntimeEventEnvelope) + Send + Sync)>,
 ) -> Result<ExecutedCompaction, CompactionExecutionError> {
+    // Blocking and manual work retain the owner and deadline they admitted.
     let budget = operation.budget();
     if budget.operation_id() != &attribution.operation_id {
         return Err(ContextError::new(
@@ -188,22 +354,132 @@ pub(crate) async fn execute_compaction_in_operation(
         .into());
     }
     budget.check(cancellation)?;
-    let mut prepared = Some(operation.prepare()?);
     let owner = store
         .projection_owner(attribution.attempt_id.as_ref())
         .map_err(resource_failure)?;
-    let history = store.projected_history().map_err(resource_failure)?;
-    let previous = store.projection_head().map_err(resource_failure)?;
-    if previous.as_ref().map(|p| &p.candidate.checkpoint_id) != history.cut.checkpoint_id.as_ref() {
+    let captured = capture_compaction(
+        context,
+        conversation.revision(),
+        conversation_id,
+        store,
+        tools,
+        observed,
+        effective_system_prompt,
+        constraints,
+        cancellation,
+        attribution,
+        operation,
+    )
+    .await?;
+    let publish_progress = |envelope| -> Result<(), CompactionExecutionError> {
+        let persisted = store.append_event(envelope).map_err(resource_failure)?;
+        if let Some(progress) = progress {
+            progress(persisted);
+        }
+        Ok(())
+    };
+    let generated = generate_compaction(
+        captured,
+        store,
+        operation,
+        cancellation,
+        &publish_progress,
+        &|| Ok(()),
+    )
+    .await?;
+    activate_blocking_generated(
+        conversation,
+        store,
+        operation,
+        cancellation,
+        owner,
+        generated,
+    )
+}
+
+/// Preserve the admitted #522 owner, deadline and scope at blocking commit.
+pub(crate) fn activate_blocking_generated(
+    conversation: &mut ConversationState,
+    store: &dyn ConversationStore,
+    operation: &dyn super::summarizer::SummaryOperation,
+    cancellation: &CancellationSignal,
+    owner: crate::durable::projection::ProjectionOwner,
+    generated: GeneratedCompaction,
+) -> Result<ExecutedCompaction, CompactionExecutionError> {
+    let prefix_proof = super::coverage::VerifiedPrefixCoverage::seal(&generated)?;
+    operation.budget().check(cancellation)?;
+    let grant = operation.authorize_commit()?;
+    let GeneratedCompaction {
+        source,
+        mut captured_candidate,
+        after_projection,
+        after,
+        carryover_level,
+        ..
+    } = generated;
+    captured_candidate.prefix_coverage = Some(prefix_proof.record().clone());
+    let input = crate::durable::projection::ProjectionCommitInput {
+        grant,
+        operation_id: source.attribution.operation_id,
+        candidate: captured_candidate,
+        owner,
+        prefix_proof: Some(prefix_proof),
+        tokens_before: source.projection.estimated_input,
+        estimated_tokens_after: after_projection.estimated_input.input_tokens,
+        occupancy: Some(crate::context::occupancy::estimate(
+            after,
+            source.engine.config().context_window_tokens,
+            &source.primary_model,
+            &source.effective_system_prompt,
+            &source.tools,
+        )),
+        turn_id: source.attribution.turn_id,
+        timestamp: Utc::now(),
+    };
+    commit_compaction(conversation, store, input, carryover_level)
+}
+
+/// Freeze one historical cut and its Summary plan. The native caller must be
+/// at a structurally complete safe boundary before admitting this capture.
+/// The operation and its first reservation must remain with the native owner.
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+pub(crate) async fn capture_compaction(
+    context: &ContextRuntime,
+    revision: crate::conversation::SurfaceRevision,
+    conversation_id: &ConversationId,
+    store: &dyn ConversationStore,
+    tools: &[ModelToolDefinition],
+    observed: Option<&ProviderObservedInput>,
+    effective_system_prompt: &str,
+    constraints: &CompactionConstraints<'_>,
+    cancellation: &CancellationSignal,
+    attribution: CompactionAttribution,
+    operation: &dyn super::summarizer::SummaryOperation,
+) -> Result<CapturedCompaction, CompactionExecutionError> {
+    let budget = operation.budget();
+    if budget.operation_id() != &attribution.operation_id {
+        return Err(ContextError::new(
+            ContextErrorKind::AuxiliaryNotStarted,
+            "Summary operation belongs to another Compaction",
+        )
+        .into());
+    }
+    budget.check(cancellation)?;
+    let prepared = operation.prepare()?;
+    let (history, cut) = store.auxiliary_history().map_err(resource_failure)?;
+    let previous = store
+        .projection_at_journal_cut(cut.journal.0)
+        .map_err(resource_failure)?;
+    if &cut.conversation_id != conversation_id
+        || history.cut.ledger != cut.ledger
+        || history.cut.activation != cut.projection_activation
+        || previous.as_ref().map(|p| &p.candidate.checkpoint_id)
+            != history.cut.checkpoint_id.as_ref()
+    {
         return Err(CompactionExecutionError::Durable(
-            "projection changed during compaction capture".into(),
+            "compaction capture is not a consistent complete historical boundary".into(),
         ));
     }
-    let mut resources = crate::context::resources::CompactionResources::capture(
-        store,
-        crate::context::resources::ResourceLimits::default(),
-    )
-    .map_err(resource_failure)?;
     let complete = super::engine::assemble_context_input(
         &history.messages,
         constraints.staged_request_context,
@@ -216,7 +492,7 @@ pub(crate) async fn execute_compaction_in_operation(
         .prepare_media(&history.messages, &complete, cancellation)
         .await?;
     let projection = engine.build_projection_input(
-        conversation.revision(),
+        revision,
         history.messages.clone(),
         tools,
         observed,
@@ -224,7 +500,8 @@ pub(crate) async fn execute_compaction_in_operation(
     );
     let mut budgets = context.compaction_budgets;
     budgets.summary_input_limit = budget.summary_input_limit(budgets.summary_input_limit);
-    let mut active_constraints = constraints.clone();
+    let constraints = FrozenConstraints::capture(constraints);
+    let mut active_constraints = constraints.view(0);
     let mut next_carryover = 0;
     let mut carryover_level = None;
     let retired_count = loop {
@@ -301,14 +578,85 @@ pub(crate) async fn execute_compaction_in_operation(
     let rendered = engine
         .rendered_input(&projection.messages)
         .map_err(|error| ContextError::new(ContextErrorKind::MalformedHistory, error))?;
-    let mut chunks = super::chunks::ChunkPlan::new(&rendered, retired_count)?;
+    let chunks =
+        super::chunks::ChunkPlan::new_captured(&history.messages, &rendered, retired_count, &cut)?;
     budget.admit_work(chunks.planned_bound())?;
+    Ok(CapturedCompaction {
+        source: CapturedSource {
+            history,
+            cut,
+            previous,
+            retired_count,
+            attribution,
+            engine,
+            projection,
+            tools: tools.to_vec(),
+            effective_system_prompt: effective_system_prompt.to_owned(),
+            constraints,
+            budgets,
+            primary_model: context.primary_model.clone(),
+            maximum_summary_output: context.maximum_summary_output,
+        },
+        budget,
+        prepared,
+        chunks,
+        next_carryover,
+        carryover_level,
+    })
+}
+
+/// Run the one ordered Summary generator over a detached capture. No mutable
+/// Conversation or installation authority enters this phase.
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn generate_compaction(
+    captured: CapturedCompaction,
+    store: &dyn ConversationStore,
+    operation: &dyn super::summarizer::SummaryOperation,
+    cancellation: &CancellationSignal,
+    progress: &(dyn Fn(RuntimeEventEnvelope) -> Result<(), CompactionExecutionError> + Send + Sync),
+    before_call: &(dyn Fn() -> Result<(), ContextError> + Send + Sync),
+) -> Result<GeneratedCompaction, CompactionExecutionError> {
+    let CapturedCompaction {
+        source,
+        budget,
+        prepared,
+        mut chunks,
+        mut next_carryover,
+        mut carryover_level,
+    } = captured;
+    if !budget.same_operation(&operation.budget()) {
+        return Err(ContextError::new(
+            ContextErrorKind::AuxiliaryNotStarted,
+            "Summary generator does not own the captured operation",
+        )
+        .into());
+    }
+    budget.check(cancellation)?;
+    let mut prepared = Some(prepared);
+    let mut resources = super::resources::CompactionResources::at_cut(
+        store,
+        source.cut.clone(),
+        super::resources::ResourceLimits::default(),
+    )
+    .map_err(resource_failure)?;
+    let history = &source.history;
+    let previous = &source.previous;
+    let retired_count = source.retired_count;
+    let attribution = &source.attribution;
+    let conversation_id = &source.cut.conversation_id;
+    let engine = &source.engine;
+    let projection = &source.projection;
+    let tools = source.tools.as_slice();
+    let effective_system_prompt = source.effective_system_prompt.as_str();
+    let constraints = source.constraints.view(next_carryover);
+    let mut active_constraints = source.constraints.view(next_carryover);
+    let mut budgets = source.budgets;
     let monotone = engine.supports_monotone_compaction(&projection.messages);
     let mut summary: Option<super::summarizer::SummaryGeneration> = None;
     let mut reductions = 0u8;
     let mut accepted_fragments = 0u32;
     let mut output_budget = budgets.summary_output_budget;
-    let summary_output_ceiling = context.maximum_summary_output;
+    let summary_output_ceiling = source.maximum_summary_output;
     while !chunks.is_complete() {
         budget.check_start(cancellation)?;
         let estimate = |request: &super::summarizer::SummaryRequest| -> Result<u64, ContextError> {
@@ -348,12 +696,13 @@ pub(crate) async fn execute_compaction_in_operation(
                 let reduced = reduce_summary(
                     reduction,
                     operation,
-                    &engine,
+                    engine,
                     budgets,
                     &mut output_budget,
                     summary_output_ceiling,
                     resources.cut(),
                     cancellation,
+                    before_call,
                 )
                 .await?;
                 if reduced.text == previous.text {
@@ -387,6 +736,7 @@ pub(crate) async fn execute_compaction_in_operation(
             }
             Err(error) => return Err(error.into()),
         };
+        before_call()?;
         let call = match prepared.take() {
             Some(call) => call,
             None => operation.prepare()?,
@@ -402,31 +752,26 @@ pub(crate) async fn execute_compaction_in_operation(
                 // publishing a progress fact that cannot be substantiated.
                 if accepted.generation.is_some() {
                     accepted_fragments += 1;
-                    let persisted = store
-                        .append_event(crate::events::types::RuntimeEventEnvelope {
-                            tool_occurrence: None,
-                            observation: None,
-                            schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
-                            event_id: crate::runtime::identity::EventId::new(""),
-                            sequence: 0,
-                            conversation_id: conversation_id.clone(),
-                            attempt_id: attribution.attempt_id.clone(),
-                            turn_id: attribution.turn_id.clone(),
-                            timestamp: Utc::now(),
-                            event: crate::events::types::RuntimeEvent::CompactionChunkAccepted {
-                                operation_id: attribution.operation_id.clone(),
-                                accepted_fragments,
-                                source_ranges: request
-                                    .fragment
-                                    .as_ref()
-                                    .map_or_else(Vec::new, |fragment| fragment.ranges.clone()),
-                                generation: accepted.generation.clone(),
-                            },
-                        })
-                        .map_err(resource_failure)?;
-                    if let Some(progress) = progress {
-                        progress(persisted);
-                    }
+                    progress(crate::events::types::RuntimeEventEnvelope {
+                        tool_occurrence: None,
+                        observation: None,
+                        schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
+                        event_id: crate::runtime::identity::EventId::new(""),
+                        sequence: 0,
+                        conversation_id: conversation_id.clone(),
+                        attempt_id: attribution.attempt_id.clone(),
+                        turn_id: attribution.turn_id.clone(),
+                        timestamp: Utc::now(),
+                        event: crate::events::types::RuntimeEvent::CompactionChunkAccepted {
+                            operation_id: attribution.operation_id.clone(),
+                            accepted_fragments,
+                            source_ranges: request
+                                .fragment
+                                .as_ref()
+                                .map_or_else(Vec::new, |fragment| fragment.ranges.clone()),
+                            generation: accepted.generation.clone(),
+                        },
+                    })?;
                 }
                 summary = Some(accepted);
             }
@@ -484,6 +829,16 @@ pub(crate) async fn execute_compaction_in_operation(
             Err(error) => return Err(error.into()),
         }
     }
+    // Only ChunkPlan can mint this witness, after every frozen source range
+    // has actually been accepted. Later reductions retain the same coverage.
+    let completed_coverage = chunks.completed_coverage()?;
+    if usize::try_from(completed_coverage.source_count()).ok() != Some(retired_count) {
+        return Err(ContextError::new(
+            ContextErrorKind::Internal,
+            "completed Summary coverage disagrees with the captured source",
+        )
+        .into());
+    }
     let mut summary = summary.ok_or_else(|| {
         ContextError::new(
             ContextErrorKind::NoProgress,
@@ -521,7 +876,7 @@ pub(crate) async fn execute_compaction_in_operation(
             }
         }
     }
-    if let Some(previous) = &previous
+    if let Some(previous) = previous
         && includes_previous_summary
     {
         let source = CheckpointSourceRef {
@@ -606,6 +961,7 @@ pub(crate) async fn execute_compaction_in_operation(
             expected_head: history.cut.checkpoint_id.clone(),
             read_cut: resources.cut().clone(),
             base_frontier: history.cut.ledger,
+            prefix_coverage: None,
             items,
             summary_metadata: Some(metadata.clone()),
             summary_generation: summary.generation.clone(),
@@ -623,7 +979,7 @@ pub(crate) async fn execute_compaction_in_operation(
                 ))
             })?;
         let after_projection = engine.build_projection_input(
-            conversation.revision(),
+            projection.surface_revision,
             compiled.messages.into(),
             tools,
             None,
@@ -668,7 +1024,7 @@ pub(crate) async fn execute_compaction_in_operation(
                 return Err(ContextError::new(
                     ContextErrorKind::CannotFit,
                     format!("final Summary plus protected/fixed request input still exceeds primary admission after bounded reductions; {}",
-                        super::planning::primary_fit_evidence(&engine, &after_projection.messages, effective_system_prompt, tools, &active_constraints, after, limit)),
+                        super::planning::primary_fit_evidence(engine, &after_projection.messages, effective_system_prompt, tools, &active_constraints, after, limit)),
                 ).into());
             }
             return Err(ContextError::new(
@@ -689,12 +1045,13 @@ pub(crate) async fn execute_compaction_in_operation(
         let reduced = reduce_summary(
             reduction,
             operation,
-            &engine,
+            engine,
             budgets,
             &mut output_budget,
             summary_output_ceiling,
             resources.cut(),
             cancellation,
+            before_call,
         )
         .await?;
         if reduced.text == summary.text {
@@ -708,36 +1065,46 @@ pub(crate) async fn execute_compaction_in_operation(
         reductions += 1;
     };
     budget.check(cancellation)?;
-    let grant = operation.authorize_commit()?;
-    let fingerprint = candidate.fingerprint();
-    let owner_for_install = owner.clone();
-    let input = crate::durable::projection::ProjectionCommitInput {
-        grant,
-        operation_id: attribution.operation_id.clone(),
-        candidate,
-        owner,
-        tokens_before: projection.estimated_input,
-        estimated_tokens_after: after_projection.estimated_input.input_tokens,
-        occupancy: Some(crate::context::occupancy::estimate(
-            after,
-            engine.config().context_window_tokens,
-            &context.primary_model,
-            effective_system_prompt,
-            tools,
-        )),
-        turn_id: attribution.turn_id,
-        timestamp: Utc::now(),
-    };
+    Ok(GeneratedCompaction {
+        source,
+        captured_candidate: candidate,
+        summary,
+        completed_coverage,
+        after_projection,
+        after,
+        carryover_level,
+    })
+}
+
+/// Commit a candidate already validated by the current installation owner.
+/// The caller supplies current Head/owner/cancellation authority; generation
+/// evidence by itself is never an installation grant.
+pub(crate) fn commit_compaction(
+    conversation: &mut ConversationState,
+    store: &dyn ConversationStore,
+    input: crate::durable::projection::ProjectionCommitInput,
+    carryover_level: Option<crate::model::CarryoverDetailLevel>,
+) -> Result<ExecutedCompaction, CompactionExecutionError> {
+    let fingerprint = input.candidate.fingerprint();
+    let owner_for_install = input.owner.clone();
+    let operation_id = input.operation_id.clone();
     let receipt = match store.commit_projection(input) {
         Ok(receipt) => receipt,
-        Err(error) => match store.projection_receipt(&attribution.operation_id, &fingerprint) {
+        Err(error) => match store.projection_receipt(&operation_id, &fingerprint) {
             Ok(Some(mut receipt)) => {
                 // This is first delivery after an uncertain native commit,
                 // unlike an ordinary duplicate operation receipt lookup.
                 receipt.newly_committed = true;
                 receipt
             }
-            Ok(None) => return Err(CompactionExecutionError::Durable(error.to_string())),
+            Ok(None) => {
+                return Err(match error {
+                    crate::durable::ConversationStoreError::ProjectionHeadChanged => {
+                        CompactionExecutionError::HeadChanged
+                    }
+                    error => CompactionExecutionError::Durable(error.to_string()),
+                });
+            }
             Err(lookup) => {
                 return Err(CompactionExecutionError::Durable(format!(
                     "uncertain checkpoint commit: {error}; lookup: {lookup}"
@@ -752,7 +1119,7 @@ pub(crate) async fn execute_compaction_in_operation(
     };
     let reload_current = || -> Result<ConversationState, String> {
         if store
-            .projection_owner(attribution.attempt_id.as_ref())
+            .projection_owner(owner_for_install.attempt_id.as_ref())
             .map_err(|e| e.to_string())?
             != owner_for_install
         {
@@ -807,6 +1174,7 @@ async fn reduce_summary(
     output_ceiling: u32,
     cut: &super::resources::ResourceReadCut,
     cancellation: &CancellationSignal,
+    before_call: &(dyn Fn() -> Result<(), ContextError> + Send + Sync),
 ) -> Result<super::summarizer::SummaryGeneration, ContextError> {
     let budget = operation.budget();
     loop {
@@ -825,6 +1193,7 @@ async fn reduce_summary(
                 ),
             ));
         }
+        before_call()?;
         match operation
             .prepare()?
             .summarize(request.clone(), Some(cut.clone()))

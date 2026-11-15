@@ -4947,7 +4947,6 @@
       ]
     },
     "TraceRecord": {
-      "description": "One bounded pageable ledger record.",
       "type": "object",
       "properties": {
         "fields": {
@@ -5007,6 +5006,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/TraceToolSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceCompaction"
             },
             {
               "type": "null"
@@ -5840,6 +5849,142 @@
         "block_index"
       ]
     },
+    "TraceCompaction": {
+      "description": "Original admission and independently published lifecycle at this read cut.",
+      "type": "object",
+      "properties": {
+        "mode": {
+          "$ref": "#/$defs/CompactionMode"
+        },
+        "status": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CompactionOperationStatus"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceCompactionOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "mode"
+      ]
+    },
+    "CompactionMode": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "blocking",
+            "manual",
+            "proactive"
+          ]
+        },
+        {
+          "description": "Recovery from an actual provider context-overflow rejection.",
+          "type": "string",
+          "const": "overflow"
+        }
+      ]
+    },
+    "CompactionOperationStatus": {
+      "description": "One runtime-admitted operation. Attribution never grants Attempt ownership.",
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "$ref": "#/$defs/CompactionOperationId"
+        },
+        "admission_generation": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "triggering_attempt_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "waiting_attempt_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "phase": {
+          "$ref": "#/$defs/CompactionOperationPhase"
+        },
+        "accepted_fragments": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "maximum": 4294967295
+        },
+        "diagnostic": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "operation_id",
+        "admission_generation",
+        "phase",
+        "accepted_fragments"
+      ]
+    },
+    "CompactionOperationId": {
+      "description": "One compaction operation, allocated before its lifecycle facts.",
+      "type": "string"
+    },
+    "CompactionOperationPhase": {
+      "description": "Generation readiness and projection commitment are distinct states.",
+      "type": "string",
+      "enum": [
+        "generating",
+        "retrying",
+        "ready",
+        "foreground_waiting",
+        "committed",
+        "failed",
+        "cancelled",
+        "superseded",
+        "no_effect"
+      ]
+    },
+    "TraceCompactionOutcome": {
+      "description": "One bounded pageable ledger record.",
+      "type": "string",
+      "enum": [
+        "committed",
+        "failed",
+        "cancelled",
+        "skipped",
+        "superseded",
+        "no_effect"
+      ]
+    },
     "TraceToolCall": {
       "description": "One canonical `ToolCall` the model proposed.\n\nA proposal proves that the generation assembled a call. It never proves\nthat execution started: a started Tool record is separate evidence.",
       "type": "object",
@@ -6267,6 +6412,23 @@
         {
           "type": "object",
           "properties": {
+            "page": {
+              "$ref": "#/$defs/TraceInspectionCompactionCalls"
+            },
+            "type": {
+              "type": "string",
+              "const": "compaction"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "definition": {
               "$ref": "#/$defs/TraceToolDefinitionSelection"
             },
@@ -6318,6 +6480,202 @@
             "run_id",
             "workflow_id"
           ]
+        }
+      ]
+    },
+    "TraceInspectionCompactionCalls": {
+      "description": "An operation-owned page; continuation is an exclusive Journal coordinate.",
+      "type": "object",
+      "properties": {
+        "domain": {
+          "type": "string"
+        },
+        "total": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TraceInspectionCompactionCall"
+          }
+        },
+        "next_offset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "domain",
+        "total",
+        "items"
+      ]
+    },
+    "TraceInspectionCompactionCall": {
+      "description": "A Call's exact native causality; physical requests have their own page.",
+      "type": "object",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "started_sequence": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "settled_sequence": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        },
+        "outcome": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryCallOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preceding_call": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AuxiliaryCallRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "previous_summary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SummaryGenerationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "strategy": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/StructuredOutputStrategy"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "requests_domain": {
+          "type": "string"
+        },
+        "request_count": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "call_id",
+        "started_sequence",
+        "requests_domain",
+        "request_count"
+      ]
+    },
+    "AuxiliaryCallId": {
+      "type": "string",
+      "pattern": "^aux_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "AuxiliaryCallOutcome": {
+      "description": "Terminal outcome of one auxiliary Call.",
+      "type": "string",
+      "enum": [
+        "completed",
+        "failed",
+        "cancelled"
+      ]
+    },
+    "AuxiliaryCallRef": {
+      "description": "Exact settled Call preceding another Call in a Compaction operation.\nThis names audit causality even when the Call failed or never dispatched.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "through_journal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "call_id",
+        "through_journal"
+      ]
+    },
+    "SummaryGenerationRef": {
+      "description": "Exact auxiliary Summary Call that generated one retained checkpoint.\n\nThis is source execution provenance, not an input-identity inference. The\nsource Conversation and original inclusive Journal cut remain stable across\nrepeated Clone/Fork operations.",
+      "type": "object",
+      "properties": {
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "call_id": {
+          "$ref": "#/$defs/AuxiliaryCallId"
+        },
+        "through_journal": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "conversation_id",
+        "call_id",
+        "through_journal"
+      ]
+    },
+    "StructuredOutputStrategy": {
+      "description": "Preparation strategy, not another model capability or user-facing setting.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "native",
+            "prompt"
+          ]
+        },
+        {
+          "description": "Explicit Native-to-Prompt downgrade bound to one Compaction owner.\nAuxiliary admission verifies this identity against its business source.",
+          "type": "object",
+          "properties": {
+            "prompt_fallback": {
+              "type": "object",
+              "properties": {
+                "operation_id": {
+                  "$ref": "#/$defs/CompactionOperationId"
+                }
+              },
+              "required": [
+                "operation_id"
+              ]
+            }
+          },
+          "required": [
+            "prompt_fallback"
+          ],
+          "additionalProperties": false
         }
       ]
     },
@@ -11717,10 +12075,6 @@
         }
       ]
     },
-    "AuxiliaryCallId": {
-      "type": "string",
-      "pattern": "^aux_[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
-    },
     "ScheduleCatalogPage": {
       "description": "A finite catalog page. Failed sources remain explicit instead of becoming empty.",
       "type": "object",
@@ -12701,15 +13055,6 @@
         "result"
       ]
     },
-    "AuxiliaryCallOutcome": {
-      "description": "Terminal outcome of one auxiliary Call.",
-      "type": "string",
-      "enum": [
-        "completed",
-        "failed",
-        "cancelled"
-      ]
-    },
     "ResultAvailability": {
       "type": "string",
       "enum": [
@@ -13629,6 +13974,10 @@
       "description": "Public metadata for one committed compaction.\n\nEvery field is derived from an actual local checkpoint commit. The\nindependent projection disclosure carries summary content; canonical\nexecution rows never acquire a fabricated summary identity.",
       "type": "object",
       "properties": {
+        "operation_id": {
+          "description": "Stable native operation that installed this checkpoint.",
+          "$ref": "#/$defs/CompactionOperationId"
+        },
         "generation": {
           "description": "The local committed projection generation.",
           "type": "string",
@@ -13654,6 +14003,7 @@
       },
       "additionalProperties": false,
       "required": [
+        "operation_id",
         "generation",
         "checkpoint_id",
         "activation_id",
@@ -14168,6 +14518,16 @@
           "anyOf": [
             {
               "$ref": "#/$defs/TraceToolOutcomeUpdate"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "compaction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TraceCompaction"
             },
             {
               "type": "null"
@@ -20221,6 +20581,13 @@
             }
           ]
         },
+        "compaction_operations": {
+          "description": "At most two most recently admitted asynchronous compaction operations.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/RuntimeClientCompactionOperation"
+          }
+        },
         "compaction_progress": {
           "description": "Latest accepted fragment, scoped to the currently active operation.",
           "anyOf": [
@@ -20310,12 +20677,33 @@
       "maxLength": 64,
       "pattern": "^[A-Za-z0-9_-]+$(?![\\s\\S])"
     },
+    "RuntimeClientCompactionOperation": {
+      "description": "A bounded operation observation and whether this process still owns the work.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/CompactionOperationStatus"
+        },
+        "live": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "live"
+      ]
+    },
     "RuntimeClientCompactionProgress": {
       "description": "Native accepted work for the currently active Compaction operation.",
       "type": "object",
       "properties": {
         "operation_id": {
           "$ref": "#/$defs/CompactionOperationId"
+        },
+        "mode": {
+          "description": "The native trigger fixed at operation admission.",
+          "$ref": "#/$defs/CompactionMode"
         },
         "accepted_fragments": {
           "type": "integer",
@@ -20343,13 +20731,10 @@
       "additionalProperties": false,
       "required": [
         "operation_id",
+        "mode",
         "accepted_fragments",
         "source_ranges"
       ]
-    },
-    "CompactionOperationId": {
-      "description": "One compaction operation, allocated before its lifecycle facts.",
-      "type": "string"
     },
     "AuxiliarySourceRange": {
       "description": "A half-open byte range in the deterministic rendered text of one selected\nprojection occurrence, rather than an offset in canonical JSON. Empty\nrendered occurrences use `[0, 0)` and still identify their coverage.",
@@ -20392,28 +20777,6 @@
         "user",
         "assistant",
         "tool"
-      ]
-    },
-    "SummaryGenerationRef": {
-      "description": "Exact auxiliary Summary Call that generated one retained checkpoint.\n\nThis is source execution provenance, not an input-identity inference. The\nsource Conversation and original inclusive Journal cut remain stable across\nrepeated Clone/Fork operations.",
-      "type": "object",
-      "properties": {
-        "conversation_id": {
-          "$ref": "#/$defs/ConversationId"
-        },
-        "call_id": {
-          "$ref": "#/$defs/AuxiliaryCallId"
-        },
-        "through_journal": {
-          "type": "string",
-          "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
-        }
-      },
-      "additionalProperties": false,
-      "required": [
-        "conversation_id",
-        "call_id",
-        "through_journal"
       ]
     },
     "CapabilityView": {
@@ -22728,6 +23091,24 @@
             "type",
             "item",
             "transcript_cursor"
+          ]
+        },
+        {
+          "description": "An asynchronous compaction operation changed its bounded status.",
+          "type": "object",
+          "properties": {
+            "context": {
+              "$ref": "#/$defs/RuntimeClientContextView"
+            },
+            "type": {
+              "type": "string",
+              "const": "context_compaction_operation_updated"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "context"
           ]
         },
         {

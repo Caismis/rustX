@@ -25,7 +25,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v79';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v80';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -33,7 +33,7 @@ import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import { CodeBlock } from '../../presentation/markdown/CodeBlock';
 import { Artifact } from '../components/Artifact';
 import { cellKind, cellLabel, isErrorRecord } from './TrajectoryCell';
-import { isBetweenTurnsItem, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
+import { isBetweenTurnsItem, recordLabel, type InspectableDisplayItem, type TrajectoryFacet } from './layout';
 import { formatDurationMillis, formatDurationMs, formatStartedAt, instantMillis, wireCount } from './timeline';
 import css from './Trajectory.module.css';
 import { useWorkflowNodeContent } from './useWorkflowNodeContent';
@@ -573,7 +573,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v79').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v80').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;
@@ -733,7 +733,9 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
     if (record.kind === 'compaction') {
       return <>
         <dl className={`${css.overview} ${css.summaryScrollRegion}`} data-summary-scroll-region="">
-          <div><dt>{tx('trajectory:details.status')}</dt><StatusValue state={state} nativeState={record.state} /></div>
+          <div><dt>{tx('trajectory:details.status')}</dt>{record.compaction?.outcome != null || record.compaction?.status?.phase === 'ready'
+            ? <dd className={state === 'error' ? css.error : undefined}>{recordLabel(tx, record)}</dd>
+            : <StatusValue state={state} nativeState={record.state} />}</div>
           <div><dt>{tx('trajectory:timing.duration')}</dt><dd>{formatDurationMillis(tx, wireCount(record.timing.duration_ms))}</dd></div>
           <div><dt>{tx('trajectory:usage.tokens')}</dt><dd>—</dd></div>
         </dl>

@@ -117,6 +117,8 @@ pub struct CheckpointCandidate {
     pub read_cut: ResourceReadCut,
     pub base_frontier: LedgerFrontier,
     pub items: Vec<CheckpointItem>,
+    /// Authenticated continuous-prefix coverage, only for native Summary projections.
+    pub prefix_coverage: Option<super::coverage::PrefixCoverage>,
     /// Trusted cumulative file facts, validated from canonical sources and earlier checkpoints.
     pub summary_metadata: Option<crate::message::types::CompactionSummaryMetadata>,
     /// The explicitly named Summary-generation dependency, when one exists.
@@ -141,6 +143,12 @@ impl CheckpointCandidate {
     pub fn validate_budget(&self) -> Result<(), String> {
         if self.base_frontier > self.read_cut.ledger || self.items.len() > 8192 {
             return Err("checkpoint base frontier or item count exceeds authority".into());
+        }
+        if let Some(coverage) = &self.prefix_coverage {
+            coverage.validate_shape().map_err(str::to_owned)?;
+            if coverage.capture_cut.conversation_id != self.read_cut.conversation_id {
+                return Err("coverage capture belongs to another conversation".into());
+            }
         }
         let mut refs = 0_usize;
         for item in &self.items {
@@ -614,6 +622,7 @@ mod tests {
             },
             base_frontier: LedgerFrontier(100),
             items,
+            prefix_coverage: None,
             summary_metadata: None,
             summary_generation: None,
         }

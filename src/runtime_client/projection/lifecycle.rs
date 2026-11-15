@@ -305,10 +305,23 @@ impl RuntimeClientProjection {
         // metadata from the same durable bootstrap cut.
     }
 
-    /// Seeds the latest committed completion without publishing a live transition.
-    pub(crate) fn bootstrap_compaction(&mut self, compaction: Option<RuntimeClientCompactionView>) {
+    /// Seeds bounded historical compaction facts without claiming live ownership.
+    pub(crate) fn bootstrap_compaction(
+        &mut self,
+        compaction: Option<RuntimeClientCompactionView>,
+        operations: Vec<crate::context::operation::CompactionOperationStatus>,
+    ) {
         self.snapshot.context.compaction_count = u64::from(compaction.is_some());
         self.snapshot.context.latest_compaction = compaction;
+        self.snapshot.context.compaction_operations = operations
+            .into_iter()
+            .map(
+                |status| crate::runtime_client::snapshot::RuntimeClientCompactionOperation {
+                    status,
+                    live: false,
+                },
+            )
+            .collect();
     }
 
     /// Installs constructor-prepared finite historical readings without a live cursor.

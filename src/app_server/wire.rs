@@ -756,7 +756,7 @@ mod tests {
             "the complete nested public surface was audited"
         );
         let types = std::fs::read_to_string(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v79.ts"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("protocol/app-server/v80.ts"),
         )
         .unwrap();
         for domain in [
@@ -933,6 +933,7 @@ mod tests {
             ..Default::default()
         });
         native_round_trip(&crate::observation::head::RuntimeClientCompactionView {
+            operation_id: crate::runtime::identity::CompactionOperationId::new("summary-operation"),
             generation: EXACT,
             checkpoint_id: crate::runtime::identity::CheckpointId::new("summary"),
             activation_id: crate::context::checkpoint::ProjectionActivationId(EXACT),
@@ -954,6 +955,19 @@ mod tests {
                 owner: None,
                 metadata: None,
             }],
+        });
+    }
+
+    #[test]
+    fn independent_compaction_admission_generation_is_lossless() {
+        native_round_trip(&crate::context::operation::CompactionOperationStatus {
+            operation_id: crate::runtime::identity::CompactionOperationId::new("summary-operation"),
+            admission_generation: 9_007_199_254_740_993,
+            triggering_attempt_id: Some(crate::runtime::identity::AttemptId::new("trigger")),
+            waiting_attempt_id: None,
+            phase: crate::context::operation::CompactionOperationPhase::Ready,
+            accepted_fragments: 13,
+            diagnostic: None,
         });
     }
 }

@@ -354,6 +354,57 @@ impl ProviderEmulator {
             let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
         }
     }
+
+    /// Stop an intentionally interrupted adaptive scenario after every
+    /// actually matched response settled. This is not normal completion: the
+    /// scenario must remain incomplete and the provider must report its
+    /// expected nonzero exit. Any mismatch or unfinished response still fails.
+    pub async fn finish_expected_partial(mut self) -> serde_json::Value {
+        let report: serde_json::Value = self
+            .client
+            .post(format!("{}/__control/shutdown", self.base_url()))
+            .send()
+            .await
+            .expect("control request")
+            .json()
+            .await
+            .expect("control JSON");
+        let child = self.child.take().expect("the child is taken once");
+        let status = tokio::time::timeout(AWAIT_TIMEOUT, child.wait_with_output())
+            .await
+            .expect("the provider emulator exited in time")
+            .expect("wait for the provider emulator");
+        assert_eq!(report["scenario"], self.scenario);
+        assert_eq!(
+            report["complete"], false,
+            "the crash prefix is intentionally incomplete"
+        );
+        assert_eq!(report["ok"], false);
+        assert!(
+            report["requestCount"]
+                .as_u64()
+                .is_some_and(|count| count > 0)
+        );
+        assert_eq!(report["stepsMatched"], report["requestCount"]);
+        assert_eq!(report["stepsSettled"], report["requestCount"]);
+        assert!(
+            report["failures"].as_array().is_some_and(Vec::is_empty),
+            "{report}"
+        );
+        assert!(
+            report["unsettledSteps"]
+                .as_array()
+                .is_some_and(Vec::is_empty),
+            "{report}"
+        );
+        assert_eq!(
+            status.status.code(),
+            Some(1),
+            "unexpected provider exit: {:?}",
+            status.status
+        );
+        report
+    }
 }
 
 impl Drop for ProviderEmulator {

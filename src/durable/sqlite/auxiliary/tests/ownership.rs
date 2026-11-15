@@ -74,6 +74,7 @@ fn request_start(
     request_id: RequestId,
 ) -> AuxiliaryRequestStart {
     AuxiliaryRequestStart {
+        invocation: crate::model::auxiliary::fixture_invocation_identity(),
         call_id,
         ordinal,
         request_id,
@@ -1812,6 +1813,7 @@ fn business_sources_may_follow_the_frozen_input_cut() {
             "later-operation-start".into(),
             RuntimeEvent::CompactionStarted {
                 operation_id: operation_id.clone(),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
         ))
         .unwrap();

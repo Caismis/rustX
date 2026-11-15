@@ -347,11 +347,13 @@ use crate::tools::types::ModelToolDefinition;
 
 mod activity;
 mod admission;
+mod asynchronous_compaction;
 mod attempt;
 pub mod auxiliary;
 mod bootstrap;
 mod child;
 mod compaction;
+mod compaction_observation;
 mod configuration;
 mod controls;
 mod drain;
@@ -954,6 +956,7 @@ pub(crate) struct RuntimeInner {
     auxiliary: crate::runtime::auxiliary::executor::AuxiliaryExecutor,
     external_auxiliary: Arc<auxiliary::ExternalAuxiliary>,
     manual_tail: Mutex<Option<ManualTail>>,
+    async_compaction: Mutex<Option<asynchronous_compaction::Registry>>,
     /// Root-local optional work remains owned through its Catalog business tail.
     session_title_task: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// The immutable result of this runtime's startup recovery (Issue #12,

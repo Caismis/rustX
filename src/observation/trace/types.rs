@@ -419,6 +419,26 @@ pub enum TraceToolOutcome {
 }
 
 /// One bounded pageable ledger record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TraceCompactionOutcome {
+    Committed,
+    Failed,
+    Cancelled,
+    Skipped,
+    Superseded,
+    NoEffect,
+}
+
+/// Original admission and independently published lifecycle at this read cut.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceCompaction {
+    pub mode: crate::context::operation::CompactionMode,
+    pub status: Option<crate::context::operation::CompactionOperationStatus>,
+    pub outcome: Option<TraceCompactionOutcome>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TraceRecord {
@@ -438,6 +458,7 @@ pub struct TraceRecord {
     pub preview: Option<TracePreview>,
     pub request: Option<TraceRequestSummary>,
     pub tool: Option<TraceToolSummary>,
+    pub compaction: Option<TraceCompaction>,
     /// Canonical `ToolCall` proposals of an Assistant record, in block order.
     pub calls: Vec<TraceToolCall>,
     /// Exact native detached execution / Subagent / Workflow / interaction ID.
@@ -485,6 +506,7 @@ pub struct TraceLifecycle {
     pub timing: TraceTiming,
     pub request: Option<TraceRequestOutcome>,
     pub tool: Option<TraceToolOutcomeUpdate>,
+    pub compaction: Option<TraceCompaction>,
     pub message_id: Option<MessageId>,
     pub attachments: Vec<TraceArtifact>,
     pub truncated: bool,

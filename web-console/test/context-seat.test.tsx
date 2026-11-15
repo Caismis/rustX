@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot, projectionHead } from './fixture';
-import type { RuntimeClientContextView } from '../../protocol/app-server/v79';
+import type { RuntimeClientContextView } from '../../protocol/app-server/v80';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });
@@ -98,6 +98,23 @@ it('observes native operations and preserves the exact pre-commit diagnostic', a
   fireEvent.click(screen.getByRole('button', { name: 'compact · Compaction failed' }));
   expect(screen.getByRole('status').textContent).toContain('Summary provider rejected model fixture/exact');
   expect(count()).toBe(0);
+});
+
+it('retains the exact manual receipt while newer native state owns the live seat', async () => {
+  server.held.add('context/compact');
+  render(<ContextSeat client={server.client} sessionId="A"/>);
+  compact();
+  const pending = await server.waitFor('context/compact', 1);
+  await act(async () => server.socket.deliver({ jsonrpc: '2.0', id: pending.id, error: { code: -32000, message: 'manual failure' } }));
+  const request = server.client.getSnapshot().views.A.compactionRequest!;
+  expect(request.status).toBe('failed');
+  await observe({ ...base, compaction_in_progress: true, compaction_progress: { operation_id: 'other-operation', mode: 'overflow', accepted_fragments: 1, source_ranges: [], generation: null } });
+  expect(server.client.getSnapshot().views.A.compactionRequest).toEqual(request);
+  expect(screen.getByRole('status').textContent).toContain('Compacting context');
+  await observe({ ...base, compaction_count: 1, latest_compaction: { operation_id: 'other-operation', generation: '1', checkpoint_id: 'other-checkpoint', activation_id: '1', tokens_before: { input_tokens: '100', source: 'provider_reported' }, estimated_tokens_after: '20' } });
+  expect(server.client.getSnapshot().views.A.compactionRequest).toEqual(request);
+  expect(screen.getByRole('status').textContent).toContain('Context compacted');
+  expect(screen.getByRole('status').textContent).not.toContain('manual failure');
 });
 it.each([undefined, { estimated: false, model_deferred:false, model_source:null, input_tokens: '25', context_window_tokens: '100', model: 'frozen/model', breakdown: { system_tokens: '5', tool_tokens: '10', message_tokens: '10' } }])('an idle seat renders nothing and never discloses request occupancy: %j', async occupancy => {
   const view = render(<ContextSeat client={server.client} sessionId="A"/>);
@@ -203,7 +220,7 @@ it('a committed checkpoint leaves the live status seat, including after remount'
   await observe({ ...base, compaction_count: 1,
     manual_compaction: { request_id: requestId, released: true, skipped: false, cancelled: false, error: null },
     projection_head: { ...projectionHead(), checkpoint_id: 'checkpoint-outside-window', activation_id: '4' },
-    latest_compaction: { generation: '1', checkpoint_id: 'checkpoint-outside-window', activation_id: '4',
+    latest_compaction: { operation_id: 'manual-compaction-operation-1', generation: '1', checkpoint_id: 'checkpoint-outside-window', activation_id: '4',
       tokens_before: { input_tokens: '100', source: 'provider_reported' }, estimated_tokens_after: '20' },
   });
   expect(server.client.getSnapshot().views.A.compactionRequest?.status).toBe('succeeded');

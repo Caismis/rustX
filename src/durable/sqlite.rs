@@ -313,10 +313,10 @@ fn count_conversation_store_open() {
 /// Version 84 requires exact Workflow run/instance indexes for bounded historical reads.
 /// Version 85 records Session configuration commits as Journal facts with
 /// their own transcript positions.
-/// Version 89 combines shared Auxiliary authority, resource permissions, Tool
-/// invocation envelopes and model-derived compaction settlement with admission-bound
-/// immutable Workflow run definition snapshots and chunked durable snapshot storage.
-pub const SQLITE_SCHEMA_VERSION: i64 = 89;
+/// Version 90 combines the current Workflow snapshots, Auxiliary/resource
+/// authority and invocation envelopes with independent Compaction operation
+/// facts and authenticated prefix coverage.
+pub const SQLITE_SCHEMA_VERSION: i64 = 90;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]

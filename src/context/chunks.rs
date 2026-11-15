@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::checkpoint::SummaryGenerationRef;
 use super::error::{ContextError, ContextErrorKind};
@@ -106,6 +107,32 @@ pub struct SummaryCarryover {
     pub generation: Option<SummaryGenerationRef>,
 }
 
+/// Native evidence that one bound frozen rendering was consumed completely.
+/// Construction belongs to the validated cursor; serialized metadata cannot
+/// recreate this capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CompletedSourceCoverage {
+    source_count: u32,
+    rendered_bytes: u64,
+    rendered_digest: String,
+    capture_digest: String,
+}
+
+impl CompletedSourceCoverage {
+    pub(crate) fn source_count(&self) -> u32 {
+        self.source_count
+    }
+    pub(crate) fn rendered_bytes(&self) -> u64 {
+        self.rendered_bytes
+    }
+    pub(crate) fn rendered_digest(&self) -> &str {
+        &self.rendered_digest
+    }
+    pub(crate) fn capture_digest(&self) -> &str {
+        &self.capture_digest
+    }
+}
+
 #[derive(Debug)]
 struct Source {
     text: String,
@@ -158,6 +185,7 @@ pub(crate) struct ChunkPlan {
     offset: usize,
     bound: usize,
     accepted: usize,
+    capture_digest: Option<String>,
 }
 
 /// Maximum exact searches for an estimator without a monotonicity contract.
@@ -275,6 +303,60 @@ impl ChunkPlan {
             offset: 0,
             bound: progress_units.min(MAX_PLANNED_CHUNKS),
             accepted: 0,
+            capture_digest: None,
+        })
+    }
+
+    /// Bind the exact original source identity and cut to its frozen native
+    /// media rendering before any fragment can be accepted.
+    pub(crate) fn new_captured(
+        original: &SelectedModelInput,
+        rendered: &SelectedModelInput,
+        retired_count: usize,
+        cut: &super::resources::ResourceReadCut,
+    ) -> Result<Self, ContextError> {
+        if original.len() != rendered.len() {
+            return Err(failure(
+                ContextErrorKind::MalformedHistory,
+                "frozen source rendering changed the projection occurrence count",
+            ));
+        }
+        let identity = super::coverage::capture_digest(cut, original, retired_count)?;
+        let mut plan = Self::new(rendered, retired_count)?;
+        plan.capture_digest = Some(identity);
+        Ok(plan)
+    }
+
+    pub(crate) fn completed_coverage(&self) -> Result<CompletedSourceCoverage, ContextError> {
+        if !self.is_complete() || self.accepted == 0 {
+            return Err(failure(
+                ContextErrorKind::NoProgress,
+                "the frozen source cursor has not accepted complete coverage",
+            ));
+        }
+        let capture_digest = self.capture_digest.as_ref().ok_or_else(|| {
+            failure(
+                ContextErrorKind::AuxiliaryNotStarted,
+                "unbound source planning cannot authorize prefix retirement",
+            )
+        })?;
+        let mut digest = Sha256::new();
+        let mut rendered_bytes = 0_u64;
+        for (index, source) in self.sources.iter().enumerate() {
+            serde_json::to_writer(
+                crate::model::projected::DigestWriter(&mut digest),
+                &(index, &source.role, &source.text),
+            )
+            .map_err(|_| failure(ContextErrorKind::Internal, "frozen source digest failed"))?;
+            rendered_bytes = rendered_bytes.saturating_add(source.text.len() as u64);
+        }
+        Ok(CompletedSourceCoverage {
+            source_count: u32::try_from(self.sources.len()).map_err(|_| {
+                failure(ContextErrorKind::Internal, "captured source count overflow")
+            })?,
+            rendered_bytes,
+            rendered_digest: format!("{:x}", digest.finalize()),
+            capture_digest: capture_digest.clone(),
         })
     }
 
@@ -768,6 +850,126 @@ mod tests {
         plan.accept(&request).unwrap();
         assert!(plan.is_complete());
         assert!(plan.accept(&request).is_err());
+    }
+
+    fn capture_cut() -> super::super::resources::ResourceReadCut {
+        super::super::resources::ResourceReadCut {
+            conversation_id: crate::runtime::identity::ConversationId::new(
+                "conv_019a0000-0000-7000-8000-000000000003",
+            ),
+            ledger: super::super::resources::LedgerFrontier(2),
+            journal: super::super::resources::JournalFrontier(7),
+            transcript: crate::durable::TranscriptCursor::new(2),
+            projection_activation: super::super::checkpoint::ProjectionActivationId(0),
+        }
+    }
+
+    #[test]
+    fn completed_source_witness_requires_every_exact_accepted_fragment() {
+        let messages = input(vec![user(&"雪🦀payload".repeat(30)), user("last")]);
+        let cut = capture_cut();
+        let mut plan = ChunkPlan::new_captured(&messages, &messages, 2, &cut).unwrap();
+        assert!(plan.completed_coverage().is_err());
+        let first = plan.next(None, None, None, 30, true, cost).unwrap();
+        let mut wrong_range = first.clone();
+        wrong_range.fragment.as_mut().unwrap().ranges[0].byte_start += 1;
+        assert!(plan.accept(&wrong_range).is_err());
+        let mut wrong_text = first.clone();
+        wrong_text.fragment.as_mut().unwrap().text.push('x');
+        assert!(plan.accept(&wrong_text).is_err());
+        assert!(plan.completed_coverage().is_err());
+        plan.accept(&first).unwrap();
+        assert!(!plan.is_complete());
+        assert!(plan.completed_coverage().is_err());
+        assert!(
+            plan.accept(&first).is_err(),
+            "a stale fragment cannot advance again"
+        );
+
+        let mut accepted = 1;
+        while !plan.is_complete() {
+            let request = plan.next(None, None, None, 30, true, cost).unwrap();
+            plan.accept(&request).unwrap();
+            accepted += 1;
+            assert!(accepted <= plan.planned_bound());
+        }
+        assert!(accepted > 1);
+        let witness = plan.completed_coverage().unwrap();
+        assert_eq!(witness.source_count(), 2);
+        assert_eq!(
+            witness.capture_digest(),
+            super::super::coverage::capture_digest(&cut, &messages, 2).unwrap()
+        );
+        assert_eq!(
+            witness.rendered_bytes(),
+            plan.sources
+                .iter()
+                .map(|source| source.text.len() as u64)
+                .sum::<u64>()
+        );
+        let mut digest = Sha256::new();
+        for (index, source) in plan.sources.iter().enumerate() {
+            serde_json::to_writer(
+                crate::model::projected::DigestWriter(&mut digest),
+                &(index, &source.role, &source.text),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            witness.rendered_digest(),
+            format!("{:x}", digest.finalize())
+        );
+    }
+
+    #[test]
+    fn completed_witness_separately_binds_capture_cut_and_rendered_sources() {
+        fn complete(
+            original: &SelectedModelInput,
+            rendered: &SelectedModelInput,
+            cut: &super::super::resources::ResourceReadCut,
+        ) -> CompletedSourceCoverage {
+            let mut plan = ChunkPlan::new_captured(original, rendered, 1, cut).unwrap();
+            let request = plan.next(None, None, None, u64::MAX, true, cost).unwrap();
+            plan.accept(&request).unwrap();
+            plan.completed_coverage().unwrap()
+        }
+        let original = input(vec![user("original upload identity")]);
+        let rendered = input(vec![user("resolved /frozen/upload-a.txt")]);
+        let different_rendering = input(vec![user("resolved /frozen/upload-b.txt")]);
+        let different_original = input(vec![user("different original identity")]);
+        let cut = capture_cut();
+        let first = complete(&original, &rendered, &cut);
+        let changed_render = complete(&original, &different_rendering, &cut);
+        assert_eq!(first.capture_digest(), changed_render.capture_digest());
+        assert_ne!(first.rendered_digest(), changed_render.rendered_digest());
+        let changed_source = complete(&different_original, &rendered, &cut);
+        assert_ne!(first.capture_digest(), changed_source.capture_digest());
+        assert_eq!(first.rendered_digest(), changed_source.rendered_digest());
+        let mut later = cut.clone();
+        later.ledger = super::super::resources::LedgerFrontier(3);
+        assert_ne!(
+            first.capture_digest(),
+            complete(&original, &rendered, &later).capture_digest()
+        );
+        let too_many = input(vec![user("first"), user("second")]);
+        assert!(matches!(
+            ChunkPlan::new_captured(&too_many, &rendered, 1, &cut),
+            Err(ContextError {
+                kind: ContextErrorKind::MalformedHistory,
+                ..
+            })
+        ));
+
+        let mut unbound = ChunkPlan::new(&rendered, 1).unwrap();
+        let request = unbound
+            .next(None, None, None, u64::MAX, true, cost)
+            .unwrap();
+        unbound.accept(&request).unwrap();
+        assert!(unbound.is_complete());
+        assert_eq!(
+            unbound.completed_coverage().unwrap_err().kind,
+            ContextErrorKind::AuxiliaryNotStarted
+        );
     }
 
     #[test]

@@ -1367,6 +1367,7 @@ fn primary_request_predecessor_filters_auxiliary_start_before_limit() {
     store
         .commit_auxiliary_request_start(
             &AuxiliaryRequestStart {
+                invocation: crate::model::auxiliary::fixture_invocation_identity(),
                 call_id,
                 ordinal: 0,
                 request_id: RequestId::new("auxiliary-between-primary-requests"),

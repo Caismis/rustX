@@ -1378,6 +1378,7 @@ fn historical_summary_input(
             timestamp: chrono::Utc::now(),
             event: RuntimeEvent::CompactionStarted {
                 operation_id: fixture.budget.operation_id().clone(),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
         })
         .unwrap();
@@ -1552,4 +1553,225 @@ async fn lifecycle_refusal_neither_reserves_capacity_nor_loses_release_wakes() {
     drop(admitted);
     drop(fixture.reservation);
     fixture.executor.drain().await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn proactive_summary_uses_general_capacity_and_preserves_foreground_reservations() {
+    let process = super::super::capacity::ProcessCapacity::new();
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let cancellation = CancellationSignal::new();
+    let executors: Vec<_> = (0..9)
+        .map(|_| {
+            let store =
+                Arc::new(SqliteConversationStore::in_memory(ConversationId::generate()).unwrap());
+            let lifecycle = ConversationLifecycle::new();
+            assert!(lifecycle.activate());
+            AuxiliaryExecutor::new(
+                store,
+                Arc::new(crate::runtime::types::SystemClock),
+                clock.clone(),
+                lifecycle,
+                Arc::new(DurabilityGate::new()),
+                process.conversation(),
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut general = Vec::new();
+    for (index, executor) in executors.iter().take(8).enumerate() {
+        let background = CompactionBudget::asynchronous(
+            CompactionOperationId::new(format!("background-{index}")),
+            clock.clone(),
+        );
+        background.admit_work(1).unwrap();
+        let background_scope = AuxiliaryExecutor::scope(&background, &cancellation);
+        general.push(executor.reserve(&background_scope).unwrap());
+        assert!(executor.0.resources.lifecycle.idle_epoch().is_none());
+        let ordinary = executor.general_scope(3, &cancellation);
+        general.push(executor.reserve_general(&ordinary).unwrap());
+        general.push(executor.reserve_general(&ordinary).unwrap());
+        assert_eq!(
+            executor.reserve_general(&ordinary).err().unwrap().kind,
+            ContextErrorKind::AuxiliaryBusy
+        );
+    }
+    let ninth_background = CompactionBudget::asynchronous(
+        CompactionOperationId::new("ninth-background"),
+        clock.clone(),
+    );
+    ninth_background.admit_work(1).unwrap();
+    let ninth_background_scope = AuxiliaryExecutor::scope(&ninth_background, &cancellation);
+    assert_eq!(
+        executors[8]
+            .reserve(&ninth_background_scope)
+            .err()
+            .unwrap()
+            .kind,
+        ContextErrorKind::AuxiliaryBusy
+    );
+    let mut foreground = Vec::new();
+    for (index, executor) in executors.iter().take(8).enumerate() {
+        let blocking = CompactionBudget::new(
+            CompactionOperationId::new(format!("foreground-{index}")),
+            clock.clone(),
+        );
+        blocking.admit_work(1).unwrap();
+        let scope = AuxiliaryExecutor::scope(&blocking, &cancellation);
+        foreground.push(executor.reserve(&scope).unwrap());
+        assert_eq!(
+            executor.reserve(&scope).err().unwrap().kind,
+            ContextErrorKind::AuxiliaryBusy
+        );
+    }
+    let blocking = CompactionBudget::new(
+        CompactionOperationId::new("ninth-foreground"),
+        clock.clone(),
+    );
+    blocking.admit_work(1).unwrap();
+    let scope = AuxiliaryExecutor::scope(&blocking, &cancellation);
+    assert_eq!(
+        executors[8].reserve(&scope).err().unwrap().kind,
+        ContextErrorKind::AuxiliaryBusy
+    );
+    drop(general.pop());
+    foreground.push(executors[8].reserve(&scope).unwrap());
+    drop(foreground);
+    drop(general);
+    // Failed and released reservations return all general and protected capacity.
+    let ordinary = executors[8].general_scope(3, &cancellation);
+    let remaining: Vec<_> = (0..3)
+        .map(|_| executors[8].reserve_general(&ordinary).unwrap())
+        .collect();
+    let protected = executors[8].reserve(&scope).unwrap();
+    assert_eq!(
+        executors[8].reserve(&scope).err().unwrap().kind,
+        ContextErrorKind::AuxiliaryBusy
+    );
+    drop((remaining, protected));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn asynchronous_dispatch_guard_fences_request_start_and_physical_grant() {
+    // 0: eligibility already lost before RequestStarted; 1: lost after the
+    // durable start but before the physical grant; 2: lost after the grant.
+    for boundary in 0..3 {
+        let mut fixture = fixture(Script::Complete);
+        let budget = CompactionBudget::asynchronous(
+            CompactionOperationId::new(format!("async-dispatch-{boundary}")),
+            fixture.clock.clone(),
+        );
+        budget.admit_work(1).unwrap();
+        let revoked = Arc::new(AtomicBool::new(boundary == 0));
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (guard_revoked, guard_calls) = (revoked.clone(), calls.clone());
+        budget
+            .authority()
+            .on_dispatch_check(Arc::new(move || {
+                guard_calls.fetch_add(1, Ordering::SeqCst);
+                if guard_revoked.load(Ordering::SeqCst) {
+                    Err(ContextError::new(
+                        ContextErrorKind::Cancelled,
+                        "superseded before dispatch",
+                    ))
+                } else {
+                    Ok(())
+                }
+            }))
+            .unwrap();
+        assert!(
+            budget
+                .authority()
+                .on_dispatch_check(Arc::new(|| Ok(())))
+                .is_err()
+        );
+        let scope = AuxiliaryExecutor::scope(&budget, &CancellationSignal::new());
+        let reservation = fixture.executor.reserve(&scope).unwrap();
+        let id = reservation.call_id().clone();
+        drop(std::mem::replace(&mut fixture.reservation, reservation));
+        fixture.scope = scope;
+        fixture.budget = budget;
+        *fixture.adapter.call.lock().unwrap() = Some(id.clone());
+        fixture.frozen.start.call_id = id.clone();
+        fixture.frozen.dispatch_check =
+            super::super::summary::dispatch_check(&fixture.budget.authority()).unwrap();
+        let gate = if boundary == 0 {
+            None
+        } else {
+            let (entered, ready) = oneshot::channel();
+            let (release, held) = mpsc::channel();
+            lock(&fixture.reservation.record.state).dispatch_gate = Some(DispatchTestGate {
+                after_grant: boundary == 2,
+                entered,
+                release: held,
+            });
+            Some((ready, release))
+        };
+        let reply = fixture.reservation.submit(fixture.frozen).unwrap();
+        if let Some((ready, release)) = gate {
+            tokio::time::timeout(std::time::Duration::from_secs(10), ready)
+                .await
+                .unwrap()
+                .unwrap();
+            revoked.store(true, Ordering::SeqCst);
+            release.send(()).unwrap();
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), reply)
+            .await
+            .unwrap()
+            .unwrap();
+        if boundary == 2 {
+            assert!(
+                result.unwrap().output.is_ok(),
+                "a granted physical request remains authoritative"
+            );
+        } else {
+            assert_eq!(result.unwrap_err().kind, ContextErrorKind::Cancelled);
+        }
+        assert_eq!(
+            fixture.adapter.entries.load(Ordering::SeqCst),
+            usize::from(boundary == 2)
+        );
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            if boundary == 0 { 1 } else { 2 }
+        );
+        let cut = fixture.store.auxiliary_audit_cut().unwrap();
+        let requests = fixture
+            .store
+            .read_auxiliary_call_requests(&id, cut, None, 4)
+            .unwrap();
+        assert_eq!(requests.len(), usize::from(boundary != 0));
+        if let Some(request) = requests.first() {
+            assert!(request.terminal_sequence.is_some());
+        }
+        fixture.scope.wait_closed().await;
+        fixture.executor.drain().await;
+    }
+}
+
+#[test]
+fn asynchronous_dispatch_guard_is_required_and_rejected_for_other_scopes() {
+    let clock = Arc::new(ManualMonotonicClock::new());
+    let asynchronous =
+        CompactionBudget::asynchronous(CompactionOperationId::new("async-guard"), clock.clone());
+    assert!(super::super::summary::dispatch_check(&asynchronous.authority()).is_err());
+    let blocking = CompactionBudget::new(CompactionOperationId::new("blocking"), clock.clone());
+    assert!(
+        blocking
+            .authority()
+            .on_dispatch_check(Arc::new(|| Ok(())))
+            .is_err()
+    );
+    assert!(
+        super::super::summary::dispatch_check(&blocking.authority())
+            .unwrap()
+            .is_none()
+    );
+    let ordinary = super::super::authority::AuxiliaryAuthority::new(clock, 3);
+    assert!(ordinary.on_dispatch_check(Arc::new(|| Ok(()))).is_err());
+    assert!(
+        super::super::summary::dispatch_check(&ordinary)
+            .unwrap()
+            .is_none()
+    );
 }

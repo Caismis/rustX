@@ -280,6 +280,14 @@ impl ProjectionStore for SqliteConversationStore {
     {
         projection::receipt(&*self.lock()?, operation, fingerprint)
     }
+    fn compaction_restart_evidence(
+        &self,
+        operation: &crate::runtime::identity::CompactionOperationId,
+    ) -> Result<crate::durable::projection::CompactionRestartEvidence, ConversationStoreError> {
+        self.read_transaction(|transaction| {
+            projection::restart_evidence(transaction, &self.conversation_id, operation)
+        })
+    }
     fn commit_projection(
         &self,
         input: crate::durable::projection::ProjectionCommitInput,

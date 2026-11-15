@@ -10,6 +10,140 @@ use crate::durable::ProjectionStore;
 use crate::durable::RequestStore;
 use crate::durable::inbox::ConversationInboundCapability;
 
+/// Native coverage belongs to the source execution domain. Clone and Fork
+/// retain the checkpoint's content but establish a new opaque coverage root.
+#[tokio::test]
+#[allow(clippy::too_many_lines)] // Exercise native commit, both copy paths, and Store admission together.
+async fn native_coverage_becomes_opaque_on_clone_and_fork() {
+    use crate::context::coverage::{CoverageRoot, PrefixCoverage, capture_digest};
+    use crate::context::{
+        CompactionBudgets, CompactionConstraints, ContextConfig, ContextEngine, ContextRuntime,
+        DefaultTokenEstimator,
+    };
+    use crate::model::projected::CheckpointSourceRef;
+    use crate::runtime::CancellationSignal;
+    use crate::scripted_suites::support::context::{FakeContextSummarizer, FakeSummaryStep};
+    use std::sync::Arc;
+
+    let source_id = ConversationId::generate();
+    let source = SqliteConversationStore::in_memory(source_id.clone()).unwrap();
+    let body = "old source text ".repeat(200);
+    let history = vec![
+        user("first", &body),
+        user("second", &body),
+        user("third", &body),
+    ];
+    source.initialize(&history).unwrap();
+    let mut state = crate::conversation::ConversationState::from_messages(history).unwrap();
+    let context = ContextRuntime::with_scripted_summarizer(
+        ContextEngine::new(
+            ContextConfig {
+                context_window_tokens: 10_000,
+                reserve_tokens: 0,
+                keep_recent_tokens: 0,
+            },
+            Arc::new(DefaultTokenEstimator),
+        )
+        .unwrap(),
+        Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
+            "short summary".into(),
+        )])),
+        None,
+        CompactionBudgets::new(1, 1, 1_000_000),
+    );
+    crate::context::compaction::execute_compaction(
+        &mut state,
+        &context,
+        &source_id,
+        &source,
+        &[],
+        None,
+        "",
+        &CompactionConstraints::default(),
+        &CancellationSignal::new(),
+        crate::context::compaction::CompactionAttribution::default(),
+    )
+    .await
+    .unwrap();
+    let source_head = source.projection_head().unwrap().unwrap();
+    let source_coverage = source_head
+        .candidate
+        .prefix_coverage
+        .clone()
+        .expect("native source coverage");
+    source.append_canonical(&user("later", "new tail")).unwrap();
+    let cut = source
+        .read_lineage_cut(source.load_head().unwrap().revision)
+        .unwrap();
+
+    for boundary in [None, Some(MessageId::new("later"))] {
+        let destination_id = ConversationId::generate();
+        let seed = lineage_cut(
+            &destination_id,
+            &cut,
+            boundary.as_ref(),
+            LineageSide::Before,
+        )
+        .unwrap();
+        assert!(!seed.projections().is_empty());
+        assert!(
+            seed.projections()
+                .iter()
+                .all(|checkpoint| checkpoint.candidate.prefix_coverage.is_none())
+        );
+        let destination = SqliteConversationStore::in_memory(destination_id.clone()).unwrap();
+        destination.initialize_lineage(&seed).unwrap();
+        let head = destination.projection_head().unwrap().unwrap();
+        assert!(head.candidate.prefix_coverage.is_none());
+        assert_eq!(head.activation.origin.conversation_id, source_id);
+        let copied_history = destination.projected_history().unwrap();
+        assert_eq!(copied_history.messages[0].canonical_id(), None);
+        let destination_cut = destination.compaction_resource_cut().unwrap();
+        let opaque = CheckpointSourceRef {
+            conversation_id: destination_id.clone(),
+            checkpoint_id: head.candidate.checkpoint_id.clone(),
+            content_digest: head.fingerprint.clone(),
+        };
+        let new_coverage = PrefixCoverage::from_capture(
+            destination_cut.clone(),
+            1,
+            capture_digest(&destination_cut, &copied_history.messages, 1).unwrap(),
+            0,
+            "a".repeat(64),
+            Some((&opaque, None)),
+        )
+        .unwrap();
+        assert!(matches!(
+            &new_coverage.root,
+            CoverageRoot::OpaqueCheckpoint { .. }
+        ));
+        assert_eq!(new_coverage.compare(&source_coverage), None);
+
+        // Even a self-consistent imported seed cannot claim native coverage
+        // without going through this destination's own sealed generation.
+        let mut forged = seed.projections().to_vec();
+        forged.last_mut().unwrap().candidate.prefix_coverage = Some(new_coverage);
+        let checkpoint = forged.last_mut().unwrap();
+        checkpoint.fingerprint = checkpoint.candidate.fingerprint();
+        let forged_seed = seed.clone().with_projections(forged).unwrap();
+        let rejected = SqliteConversationStore::in_memory(destination_id).unwrap();
+        assert!(matches!(
+            rejected.initialize_lineage(&forged_seed),
+            Err(crate::durable::ConversationStoreError::InvalidReference(message))
+                if message.contains("cannot install source-native coverage")
+        ));
+    }
+    assert_eq!(
+        source
+            .projection_head()
+            .unwrap()
+            .unwrap()
+            .candidate
+            .prefix_coverage,
+        Some(source_coverage)
+    );
+}
+
 #[test]
 fn historical_fork_excludes_checkpoint_activated_after_selected_ledger() {
     use crate::context::resources::LedgerFrontier;

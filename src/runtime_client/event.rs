@@ -194,6 +194,8 @@ pub enum RuntimeClientEvent {
         /// The durable transcript position of this change.
         transcript_cursor: RuntimeClientTranscriptCursor,
     },
+    /// An asynchronous compaction operation changed its bounded status.
+    ContextCompactionOperationUpdated { context: RuntimeClientContextView },
     /// A context compaction operation began.
     ContextCompactionStarted {
         /// Authoritative context state at this lifecycle boundary.

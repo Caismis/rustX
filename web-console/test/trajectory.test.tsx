@@ -10,10 +10,10 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Trajectory } from '../src/app/trajectory/Trajectory';
 import { prependTrace, beginTraceDetail, completeTraceDetail, fillTraceGap, refreshTrace, replaceTrace, selectTrace, type TraceCache } from '../src/client/trace';
-import { completeHistoryThrough, ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
+import { completeHistoryThrough, ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, recordLabel, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v79';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v80';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -352,10 +352,33 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s without surf
   for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(false);
   expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe(tx('trajectory:copy.compacting'));
   for (const state of ['incomplete', 'failed', 'completed', 'cancelled', 'skipped'] as const) {
-    const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
-    expect(item.label).toBe(state === 'completed' ? tx('trajectory:compacted') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, state) }));
+    const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state,
+      compaction: { mode: 'blocking', status: null, outcome: state === 'completed' ? 'committed' : state === 'skipped' ? 'skipped' : state === 'cancelled' ? 'cancelled' : null } })])).find(item => item.type === 'RecordRow')!;
+    expect(item.label).toBe(state === 'completed' ? tx('trajectory:compacted') : state === 'skipped' ? tx('trajectory:compaction.skipped') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, state) }));
     if (state === 'incomplete') expect(recordText(tx, item.record)).toBe(item.label);
   }
+});
+
+it.each(['en', 'zh'] as const)('non-committed compaction outcomes do not claim a checkpoint in %s', locale => {
+  const tx = translator(locale);
+  for (const outcome of ['skipped', 'superseded', 'no_effect'] as const) {
+    const record = traceRecord(21, { kind: 'compaction', request: null, state: 'completed',
+      compaction: { mode: 'proactive', status: null, outcome } });
+    const item = flattenTrajectory(tx, projectTrajectory(tx, [record])).find(item => item.type === 'RecordRow')!;
+    expect(item.label).not.toBe(tx('trajectory:compacted'));
+    expect(recordText(tx, record)).toBe(item.label);
+  }
+});
+
+it.each(['ready', 'superseded', 'no_effect'] as const)('compaction Inspector preserves the native %s state shown in the ledger', phase => {
+  const ready = phase === 'ready';
+  const record = traceRecord(21, { kind: 'compaction', request: null, has_detail: false, state: ready ? 'running' : 'completed',
+    compaction: { mode: 'proactive', status: { operation_id: 'op', admission_generation: '1', triggering_attempt_id: null,
+      waiting_attempt_id: null, phase, accepted_fragments: 1, diagnostic: null }, outcome: ready ? null : phase } });
+  show(cacheOf([record]));
+  fireEvent.click(row('RecordRow', record.id));
+  const status = within(screen.getByRole('tabpanel')).getByText('Status').nextElementSibling;
+  expect(status?.textContent).toBe(recordLabel(translator('en'), record));
 });
 
 it('T1-09 search reveals both collapsed kinds without any detail/history reads', () => {

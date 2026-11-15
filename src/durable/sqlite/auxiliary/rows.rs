@@ -56,6 +56,7 @@ pub(super) struct RequestRow {
     pub(super) ordinal: u32,
     pub(super) request_id: RequestId,
     pub(super) model: String,
+    pub(super) invocation: crate::model::auxiliary::AuxiliaryInvocationIdentity,
     pub(super) started_sequence: u64,
     pub(super) terminal_sequence: Option<u64>,
     pub(super) terminal_kind: Option<AuxiliaryRequestTerminal>,
@@ -78,13 +79,14 @@ pub(super) fn request_row_query<P: rusqlite::Params>(
         i64,
         String,
         String,
+        Option<String>,
         i64,
         Option<i64>,
         Option<String>,
     )> = connection
         .query_row(
             &format!(
-                "SELECT call_id,ordinal,request_id,model,started_sequence,
+                "SELECT call_id,ordinal,request_id,model,CASE WHEN length(CAST(invocation_json AS BLOB))<=2048 THEN invocation_json END,started_sequence,
                         terminal_sequence,terminal_kind
                  FROM auxiliary_requests WHERE {predicate}"
             ),
@@ -98,6 +100,7 @@ pub(super) fn request_row_query<P: rusqlite::Params>(
                     row.get(4)?,
                     row.get(5)?,
                     row.get(6)?,
+                    row.get(7)?,
                 ))
             },
         )
@@ -109,6 +112,7 @@ pub(super) fn request_row_query<P: rusqlite::Params>(
             ordinal,
             request_id,
             model,
+            invocation,
             started_sequence,
             terminal_sequence,
             terminal_kind,
@@ -123,6 +127,12 @@ pub(super) fn request_row_query<P: rusqlite::Params>(
                 })?,
                 request_id: RequestId::new(request_id),
                 model,
+                invocation: decode(
+                    &invocation.ok_or_else(|| {
+                        storage("auxiliary invocation identity exceeds its bound")
+                    })?,
+                    "auxiliary invocation identity",
+                )?,
                 started_sequence: sequence_from_i64(started_sequence)?,
                 terminal_sequence: terminal_sequence.map(sequence_from_i64).transpose()?,
                 terminal_kind: terminal_kind

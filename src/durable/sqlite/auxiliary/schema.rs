@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS auxiliary_requests (
     request_id TEXT NOT NULL UNIQUE
         CHECK(length(CAST(request_id AS BLOB)) BETWEEN 1 AND 512),
     model TEXT NOT NULL CHECK(length(CAST(model AS BLOB)) BETWEEN 1 AND 512),
+    invocation_json TEXT NOT NULL CHECK(json_valid(invocation_json) AND length(CAST(invocation_json AS BLOB)) <= 2048),
     started_sequence INTEGER NOT NULL UNIQUE REFERENCES events(sequence),
     terminal_sequence INTEGER UNIQUE REFERENCES events(sequence),
     terminal_kind TEXT CHECK(terminal_kind IN ('completed','failed')),
@@ -425,6 +426,7 @@ pub(in crate::durable::sqlite) fn verify_schema(
                 "ordinal",
                 "request_id",
                 "model",
+                "invocation_json",
                 "started_sequence",
                 "terminal_sequence",
                 "terminal_kind",

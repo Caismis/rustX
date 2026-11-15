@@ -481,7 +481,7 @@ fn assert_one_summary_chain(
             .iter()
             .all(|fact| fact.attempt_id.is_none() && fact.turn_id.is_none())
     );
-    let RuntimeEvent::CompactionStarted { operation_id } = &facts[0].event else {
+    let RuntimeEvent::CompactionStarted { operation_id, .. } = &facts[0].event else {
         panic!("operation starts before its child");
     };
     let RuntimeEvent::AuxiliaryCallStarted {
@@ -599,7 +599,7 @@ fn assert_no_manager_operation(fixture: &Fixture, id: &ConversationId) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_and_journal() {
-    bounded(async {
+    Box::pin(bounded(async {
         for lose_reply in [false, true] {
             let f = Fixture::with_summary_gate().await;
             let _headers = ReleaseHeaders(f.gates.clone());
@@ -750,7 +750,7 @@ async fn committed_summary_reply_loss_and_cold_successor_preserve_exact_receipt_
             );
             f.close().await;
         }
-    })
+    }))
     .await;
 }
 
@@ -890,6 +890,7 @@ async fn parked_completed_compaction_reply_does_not_retain_the_deleted_allocatio
         release.send(()).unwrap();
         let receipt = compaction_receipt(reply.await.unwrap());
         let crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+            operation_id,
             generation,
             checkpoint_id,
             activation_id,
@@ -900,6 +901,7 @@ async fn parked_completed_compaction_reply_does_not_retain_the_deleted_allocatio
             panic!("expected committed compaction");
         };
         assert_eq!(receipt.generation, generation);
+        assert_eq!(receipt.operation_id, operation_id);
         assert_eq!(receipt.checkpoint_id, checkpoint_id);
         assert_eq!(receipt.activation_id, activation_id);
         assert_eq!(receipt.tokens_before, tokens_before);

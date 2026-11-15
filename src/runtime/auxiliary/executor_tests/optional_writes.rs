@@ -177,6 +177,7 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
             timestamp: chrono::Utc::now(),
             event: RuntimeEvent::CompactionStarted {
                 operation_id: CompactionOperationId::new(uuid::Uuid::now_v7().to_string()),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
         })
         .unwrap();

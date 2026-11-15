@@ -40,7 +40,15 @@ struct AuditedSnapshot {
     encoded_bytes: usize,
 }
 
-type RequestRow = (u32, String, String, i64, Option<i64>, Option<String>);
+type RequestRow = (
+    u32,
+    String,
+    String,
+    Option<String>,
+    i64,
+    Option<i64>,
+    Option<String>,
+);
 type AuditRow = (i64, i64, String, Option<String>, Option<i64>);
 type OwnerRow = (
     String,
@@ -397,7 +405,7 @@ fn local_snapshot(
 
     let mut statement = connection
         .prepare(
-            "SELECT ordinal,request_id,model,started_sequence,terminal_sequence,terminal_kind
+            "SELECT ordinal,request_id,model,CASE WHEN length(CAST(invocation_json AS BLOB))<=2048 THEN invocation_json END,started_sequence,terminal_sequence,terminal_kind
              FROM auxiliary_requests
              WHERE call_id=?1 AND started_sequence<=?2
              ORDER BY ordinal
@@ -427,6 +435,7 @@ fn local_snapshot(
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
                 ))
             },
         )
@@ -439,9 +448,32 @@ fn local_snapshot(
         ));
     }
     let mut requests = BTreeMap::new();
-    for (ordinal, request_id, model, request_started, request_terminal, request_terminal_kind) in
-        request_rows
+    let mut first_binding = None;
+    for (
+        ordinal,
+        request_id,
+        model,
+        invocation_json,
+        request_started,
+        request_terminal,
+        request_terminal_kind,
+    ) in request_rows
     {
+        let invocation_json = invocation_json
+            .ok_or_else(|| invalid("auxiliary Summary invocation identity exceeds its bound"))?;
+        let invocation: crate::model::auxiliary::AuxiliaryInvocationIdentity =
+            serde_json::from_str(&invocation_json)
+                .map_err(|_| invalid("invalid auxiliary Summary invocation identity"))?;
+        invocation.validate().map_err(invalid)?;
+        if let Some((first_model, first_invocation)) = &first_binding {
+            if first_model != &model || first_invocation != &invocation {
+                return Err(invalid(
+                    "auxiliary Summary retry changed its frozen model binding",
+                ));
+            }
+        } else {
+            first_binding = Some((model.clone(), invocation.clone()));
+        }
         let request_id = RequestId::new(request_id);
         let request_started = sequence_from_i64(request_started)?;
         let request_started_sql = seq_to_i64(request_started)?;
@@ -611,6 +643,7 @@ fn local_snapshot(
                 ordinal,
                 request_id: request_id.clone(),
                 model,
+                invocation,
                 started_sequence: request_started,
                 terminal_sequence,
                 local_terminal,
@@ -939,6 +972,7 @@ fn validate_call_metadata(call: &AuxiliaryCallAudit) -> Result<(), ConversationS
 }
 
 fn validate_request_audit(request: &AuxiliaryRequestAudit) -> Result<(), ConversationStoreError> {
+    request.invocation.validate().map_err(invalid)?;
     if request
         .generation
         .as_ref()
@@ -954,7 +988,10 @@ fn validate_request_audit(request: &AuxiliaryRequestAudit) -> Result<(), Convers
             "inherited Summary RequestId must contain 1..={AUXILIARY_REQUEST_ID_BYTES_MAX} bytes"
         )));
     }
-    if request.model.is_empty() || request.model.len() > AUXILIARY_REQUEST_MODEL_BYTES_MAX {
+    if request.model.is_empty()
+        || request.model.len() > AUXILIARY_REQUEST_MODEL_BYTES_MAX
+        || request.model.chars().any(char::is_control)
+    {
         return Err(invalid(format!(
             "inherited Summary model must contain 1..={AUXILIARY_REQUEST_MODEL_BYTES_MAX} bytes"
         )));
@@ -1238,7 +1275,17 @@ pub(super) fn validate_snapshot_facts(
     {
         return Err(invalid("inherited Summary request ordinals are not dense"));
     }
+    let first_binding = request_starts
+        .get(&0)
+        .map(|request| (&request.model, &request.invocation));
     for (ordinal, request) in &request_starts {
+        if first_binding.is_some_and(|(model, invocation)| {
+            model != &request.model || invocation != &request.invocation
+        }) {
+            return Err(invalid(
+                "inherited Summary retry changed its frozen model binding",
+            ));
+        }
         if request.terminal_sequence.is_some() != request_terminals.contains_key(ordinal) {
             return Err(invalid(
                 "inherited Summary request terminal is absent from its closure",

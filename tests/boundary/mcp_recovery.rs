@@ -473,6 +473,7 @@ where
         capability,
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            asynchronous: None,
             workspace_changes: None,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: policy,

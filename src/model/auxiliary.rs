@@ -272,6 +272,59 @@ pub struct AuxiliaryCallStart {
     pub selected_message_ids: Vec<MessageId>,
 }
 
+/// Redacted frozen model binding copied from the executing native invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AuxiliaryInvocationIdentity {
+    /// Actual resolved provider; the logical model name does not imply it.
+    #[schemars(with = "String")]
+    pub provider: crate::model::catalog::ProviderId,
+    /// Logical model reference selected in the frozen catalog.
+    pub model_ref: crate::model::catalog::ModelRef,
+    /// Actual selected profile, if any.
+    pub profile: Option<crate::model::catalog::ModelProfileId>,
+}
+
+impl AuxiliaryInvocationIdentity {
+    /// Capture the binding actually used for physical execution.
+    #[must_use]
+    pub fn from_resolved(invocation: &crate::model::ResolvedModelInvocation) -> Self {
+        Self {
+            provider: invocation.provider().clone(),
+            model_ref: invocation.model_ref().clone(),
+            profile: invocation.profile().cloned(),
+        }
+    }
+
+    pub(crate) fn validate(&self) -> Result<(), &'static str> {
+        let model = self.model_ref.as_str();
+        if self.provider.as_str().len() > 128
+            || self.provider.as_str().chars().any(char::is_control)
+            || crate::model::catalog::ProviderId::parse(self.provider.as_str()).is_err()
+            || model.len() > 512
+            || model.chars().any(char::is_control)
+            || crate::model::catalog::ModelRef::parse(model).is_err()
+            || self.profile.as_ref().is_some_and(|profile| {
+                profile.as_str().len() > 128
+                    || profile.as_str().chars().any(char::is_control)
+                    || crate::model::catalog::ModelProfileId::parse(profile.as_str()).is_err()
+            })
+        {
+            return Err("invalid bounded auxiliary invocation identity");
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn fixture_invocation_identity() -> AuxiliaryInvocationIdentity {
+    AuxiliaryInvocationIdentity {
+        provider: crate::model::catalog::ProviderId::new("fixture-provider"),
+        model_ref: crate::model::catalog::ModelRef::parse("fixture/logical-model").unwrap(),
+        profile: None,
+    }
+}
+
 /// Identity of one physical request inside an auxiliary Call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -279,8 +332,10 @@ pub struct AuxiliaryRequestStart {
     pub call_id: AuxiliaryCallId,
     pub ordinal: u32,
     pub request_id: RequestId,
-    /// Provider-neutral model name, byte-bounded by the Store.
+    /// Exact provider wire model name, byte-bounded by the Store.
     pub model: String,
+    /// Frozen resolved identity, independent of the mutable Session model.
+    pub invocation: AuxiliaryInvocationIdentity,
 }
 
 /// Closed provider completion kind retained in auxiliary audit evidence.
@@ -379,6 +434,7 @@ pub struct AuxiliaryRequestAudit {
     pub ordinal: u32,
     pub request_id: RequestId,
     pub model: String,
+    pub invocation: AuxiliaryInvocationIdentity,
     pub started_sequence: u64,
     pub terminal_sequence: Option<u64>,
     pub local_terminal: Option<AuxiliaryRequestTerminal>,

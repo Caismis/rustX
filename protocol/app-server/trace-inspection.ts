@@ -1,10 +1,10 @@
-import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v79.ts';
+import type {CheckpointPage,TraceInspectionHead,TraceInspectionMessage,TraceKind} from './v80.ts';
 
 const object=(value:unknown):value is Record<string,unknown>=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const userSource=(value:unknown)=>value==='human'||value==='fleet'||value==='external_system'||value==='runtime'||object(value)&&(object(value.agent)&&typeof value.agent.agent_id==='string'||object(value.extension)&&typeof value.extension.contributor==='string');
 const coordinate=(value:unknown)=>typeof value==='number'&&Number.isSafeInteger(value)&&value>=0;
 const count=(value:unknown):value is string=>typeof value==='string'&&/^(0|[1-9][0-9]{0,19})$/.test(value)&&BigInt(value)<=18446744073709551615n;
-const contentKinds={attempt:'lifecycle',step:'lifecycle',request:'request',assistant:'messages',user:'messages',context:'messages',tool:'tool',compaction:'lifecycle',background:'lifecycle',subagent:'lifecycle',workflow:'workflow',interaction:'lifecycle',configuration:'lifecycle'} satisfies Record<TraceKind,string>;
+const contentKinds={attempt:'lifecycle',step:'lifecycle',request:'request',assistant:'messages',user:'messages',context:'messages',tool:'tool',compaction:'compaction',background:'lifecycle',subagent:'lifecycle',workflow:'workflow',interaction:'lifecycle',configuration:'lifecycle'} satisfies Record<TraceKind,string>;
 
 /** Decode only the complete native finite head, never a partial original TraceDetail. */
 export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceInspectionHead|undefined {
@@ -18,7 +18,7 @@ export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceIn
  const record=value.record,content=value.content;
  if(record.id!==recordId||record.kind!==value.kind||typeof record.position!=='string'||!object(record.location)||!object(record.timing)||typeof record.state!=='string'||typeof record.has_detail!=='boolean'||typeof record.truncated!=='boolean'
   ||!Array.isArray(record.fields)||!Array.isArray(record.collections)||!Array.isArray(record.calls)||!Array.isArray(record.attachments)
-  ||content.type!==contentKinds[value.kind as TraceKind])throw Error('Original Trace inspection facts changed.');
+  ||(content.type!==contentKinds[value.kind as TraceKind]&&!(value.kind==='compaction'&&record.native_id==null&&content.type==='lifecycle')))throw Error('Original Trace inspection facts changed.');
  if(content.type==='tool'){
   if(!object(record.tool)||!Array.isArray(record.tool.fields)||!object(content.definition))throw Error('Original Tool inspection head changed.');
   const definition=content.definition;
@@ -26,6 +26,19 @@ export function traceInspectionHead(page:CheckpointPage,recordId:string):TraceIn
    const field=definition.field;
    if(!object(field)||field.type!=='value'||field.field!=='definition'||typeof field.domain!=='string'||!/^trace\.records\.[1-9][0-9]*\.detail\.request\.tools$/.test(field.domain)||!coordinate(field.item_offset)||!Array.isArray(field.path)||field.path.length!==0||!count(field.encoded_bytes))throw Error('Original Tool definition selector changed.');
   }else if(definition.type!=='absent'&&definition.type!=='unavailable')throw Error('Original Tool definition evidence changed.');
+ }else if(content.type==='compaction'){
+  const collection=content.page;
+  if(!object(collection)||collection.domain!==`${page.domain}.calls`||!count(collection.total)||!Array.isArray(collection.items)||collection.items.length>4
+   ||collection.next_offset!=null&&!count(collection.next_offset))throw Error('Original Compaction Call collection changed.');
+  const items=collection.items;
+  if(BigInt(items.length)>BigInt(collection.total)||((collection.next_offset!=null)!==(BigInt(items.length)<BigInt(collection.total))))throw Error('Original Compaction Call collection did not advance.');
+  let previous=0n;
+  for(const call of items){
+   if(!object(call)||typeof call.call_id!=='string'||!count(call.started_sequence)||BigInt(call.started_sequence)<=previous
+    ||call.requests_domain!==`${collection.domain}.${call.call_id}.requests`||!count(call.request_count))throw Error('Original Compaction Call identity changed.');
+   previous=BigInt(call.started_sequence);
+  }
+  if(collection.next_offset!=null&&BigInt(collection.next_offset)!==previous)throw Error('Original Compaction Call cursor changed.');
  }else if(content.type==='messages'){
   const collection=content.page;
   if(!object(collection)||collection.domain!==`${page.domain}.messages`||!count(collection.total)||!Array.isArray(collection.items)||collection.items.length>32

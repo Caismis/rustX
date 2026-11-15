@@ -330,7 +330,30 @@ impl AgentExecution<'_> {
         let staged_context = self.stage_context(accepted)?;
         self.logical_step.context_ids = staged_context.iter().map(|m| m.id().clone()).collect();
         self.freeze_model_media(&staged_context).await?;
+        // Select once before staging; a later completion waits for the next
+        // safe boundary and cannot rewrite this primary request.
+        let ready = self
+            .asynchronous
+            .as_ref()
+            .and_then(|owner| owner.take_ready());
         let mut staged = self.stage_model_turn(request_ordinal, &staged_context)?;
+        if let Some(delivery) = ready {
+            let installed = self.consume_background_compaction(
+                delivery,
+                &CompactionInput {
+                    request: &staged.request,
+
+                    tools: &staged.request.tools,
+                    staged_request_context: &staged_context,
+                    estimated_input: staged.estimated_input,
+                },
+                None,
+                false,
+            )?;
+            if installed {
+                staged = self.stage_model_turn(request_ordinal, &staged_context)?;
+            }
+        }
         let budgets = self.compaction_budgets();
         let hard_input_limit = self
             .context_runtime
@@ -352,8 +375,27 @@ impl AgentExecution<'_> {
             }
             staged = self.stage_model_turn(request_ordinal, &staged_context)?;
         }
-        let mandatory = staged.estimated_input > hard_input_limit
+        let mut mandatory = staged.estimated_input > hard_input_limit
             || staged.projection.estimated_input.input_tokens > hard_input_limit;
+        if mandatory {
+            let joined = self
+                .wait_for_background_compaction(
+                    &CompactionInput {
+                        request: &staged.request,
+
+                        tools: &staged.request.tools,
+                        staged_request_context: &staged_context,
+                        estimated_input: staged.estimated_input,
+                    },
+                    None,
+                )
+                .await?;
+            if joined {
+                staged = self.stage_model_turn(request_ordinal, &staged_context)?;
+                mandatory = staged.estimated_input > hard_input_limit
+                    || staged.projection.estimated_input.input_tokens > hard_input_limit;
+            }
+        }
         let projection_pressure = match self
             .context_runtime
             .engine
@@ -387,26 +429,34 @@ impl AgentExecution<'_> {
             // `perform_compaction` owns the post-surface-rewrite
             // invalidation of the opaque provider continuation; no caller
             // clears it a second time.
-            self.perform_compaction_with_need(
-                must_cover.as_ref(),
-                fresh.as_ref(),
-                &CompactionInput {
-                    tools: &staged.request.tools,
-                    staged_request_context: &staged_context,
-                    estimated_input: staged.estimated_input,
-                },
-                None,
-                None,
-                if mandatory {
-                    CompactionNeed::Mandatory
-                } else {
-                    CompactionNeed::Optional
-                },
-            )
-            .await?;
-            // Restage over the rewritten Surface: the staged context blocks
-            // are unchanged, the Surface revision and projection are not.
-            staged = self.stage_model_turn(request_ordinal, &staged_context)?;
+            let compaction_input = CompactionInput {
+                request: &staged.request,
+
+                tools: &staged.request.tools,
+                staged_request_context: &staged_context,
+                estimated_input: staged.estimated_input,
+            };
+            if !mandatory && self.start_background_compaction(&compaction_input).await? {
+                // Generation is owned by the Session; the admissible request
+                // proceeds with its unchanged staged projection.
+            } else {
+                self.perform_bounded_compaction(
+                    must_cover.as_ref(),
+                    fresh.as_ref(),
+                    &compaction_input,
+                    None,
+                    None,
+                    if mandatory {
+                        CompactionNeed::Mandatory
+                    } else {
+                        CompactionNeed::Optional
+                    },
+                )
+                .await?;
+                // Restage over the rewritten Surface: the staged context blocks
+                // are unchanged, the Surface revision and projection are not.
+                staged = self.stage_model_turn(request_ordinal, &staged_context)?;
+            }
         }
         // Carryover is auxiliary continuity context. If the canonical
         // projection is runnable, reduce only this request-only value until

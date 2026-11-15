@@ -340,6 +340,8 @@ pub(crate) struct AgentExecutionRuntimePolicy {
     pub(crate) permission_task_message: Option<MessageId>,
     /// One-shot candidate from an outstanding native adoption during recovery.
     pub(crate) recovered_permission_task_message: Option<MessageId>,
+    /// Session-owned asynchronous compaction; it never owns this Attempt.
+    pub(crate) asynchronous: Option<Arc<dyn crate::context::asynchronous::CompactionCoordinator>>,
 }
 
 /// One agent attempt execution.
@@ -351,6 +353,7 @@ pub(crate) struct AgentExecutionRuntimePolicy {
 /// bounded current read model, the retained continuation state, and the
 /// pending `FreshInbound` trigger and attempt-local `PostToolBatch` opportunity.
 pub struct AgentExecution<'a> {
+    asynchronous: Option<Arc<dyn crate::context::asynchronous::CompactionCoordinator>>,
     workspace_changes: Option<Arc<crate::workspace_changes::ChangeRecording>>,
     request: AgentExecutionRequest,
     capability: AttemptCapabilityLease,

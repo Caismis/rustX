@@ -184,6 +184,7 @@ async fn issue204_bash_hard_deadline_settles_proven_timed_out() {
         capability.into_lease(),
         &cancellation,
         crate::agent::execution::AgentExecutionRuntimePolicy {
+            asynchronous: None,
             workspace_changes: None,
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: ToolExecutionDeadlinePolicy {

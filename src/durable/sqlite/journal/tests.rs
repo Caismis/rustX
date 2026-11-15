@@ -26,6 +26,81 @@ use rusqlite::{TransactionBehavior, params};
 use std::sync::{Arc, Mutex};
 
 #[test]
+fn proactive_admission_commits_start_and_status_together_or_neither() {
+    use crate::context::operation::{
+        CompactionMode, CompactionOperationPhase, CompactionOperationStatus,
+    };
+    use crate::runtime::identity::CompactionOperationId;
+    let store = store();
+    let conversation = store.conversation_id().clone();
+    let operation = CompactionOperationId::new("atomic-proactive-admission");
+    let started = envelope(
+        &conversation,
+        "proactive-start",
+        None,
+        RuntimeEvent::CompactionStarted {
+            operation_id: operation.clone(),
+            mode: CompactionMode::Proactive,
+        },
+    );
+    let status = envelope(
+        &conversation,
+        "proactive-status",
+        None,
+        RuntimeEvent::CompactionOperationUpdated {
+            status: CompactionOperationStatus {
+                operation_id: operation,
+                admission_generation: 1,
+                triggering_attempt_id: None,
+                waiting_attempt_id: None,
+                phase: CompactionOperationPhase::Generating,
+                accepted_fragments: 0,
+                diagnostic: None,
+            },
+        },
+    );
+    assert!(
+        store.append_event(started.clone()).is_err(),
+        "proactive start requires the atomic admission path"
+    );
+    let mut mismatched = status.clone();
+    let RuntimeEvent::CompactionOperationUpdated { status: changed } = &mut mismatched.event else {
+        unreachable!()
+    };
+    changed.operation_id = CompactionOperationId::new("other");
+    assert!(
+        store
+            .append_compaction_admission(started.clone(), mismatched)
+            .is_err()
+    );
+    store.arm_fail_event_times(1);
+    assert!(
+        store
+            .append_compaction_admission(started.clone(), status.clone())
+            .is_err()
+    );
+    assert!(store.read_events(None, 8).unwrap().events.is_empty());
+    assert!(
+        store
+            .latest_compaction_operations(i64::MAX as u64)
+            .unwrap()
+            .is_empty()
+    );
+
+    let (first, second) = store.append_compaction_admission(started, status).unwrap();
+    assert_eq!(second.sequence, first.sequence + 1);
+    let events = store.read_events(None, 8).unwrap().events;
+    assert_eq!(events, vec![first, second]);
+    assert_eq!(
+        store
+            .latest_compaction_operations(i64::MAX as u64)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn compaction_progress_requires_open_owner_strict_sequence_and_bounded_ranges() {
     use crate::model::auxiliary::{AuxiliarySourceRange, AuxiliarySourceRole};
     use crate::runtime::identity::CompactionOperationId;
@@ -61,6 +136,7 @@ fn compaction_progress_requires_open_owner_strict_sequence_and_bounded_ranges() 
             None,
             RuntimeEvent::CompactionStarted {
                 operation_id: operation.clone(),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
         ))
         .unwrap();
@@ -1602,7 +1678,8 @@ fn event_journal_enforces_dependencies_order_and_terminal_absorption() {
                 RuntimeEvent::CompactionStarted {
                     operation_id: crate::runtime::identity::CompactionOperationId::new(
                         "fixture-compaction"
-                    )
+                    ),
+                    mode: crate::context::operation::CompactionMode::Blocking,
                 },
             ))
             .is_err()
@@ -1616,6 +1693,7 @@ fn event_journal_enforces_dependencies_order_and_terminal_absorption() {
                 operation_id: crate::runtime::identity::CompactionOperationId::new(
                     "fixture-compaction",
                 ),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
         ))
         .unwrap();
@@ -1629,7 +1707,8 @@ fn event_journal_enforces_dependencies_order_and_terminal_absorption() {
                 RuntimeEvent::CompactionStarted {
                     operation_id: crate::runtime::identity::CompactionOperationId::new(
                         "fixture-compaction"
-                    )
+                    ),
+                    mode: crate::context::operation::CompactionMode::Blocking,
                 },
             ))
             .is_err()

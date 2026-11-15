@@ -550,6 +550,11 @@ pub enum RuntimeEvent {
     /// Context compaction started.
     CompactionStarted {
         operation_id: crate::runtime::identity::CompactionOperationId,
+        mode: crate::context::operation::CompactionMode,
+    },
+    /// Session-owned operation state, independent of an Attempt lifecycle.
+    CompactionOperationUpdated {
+        status: crate::context::operation::CompactionOperationStatus,
     },
     /// One locally accepted Summary fragment; this does not commit a checkpoint.
     CompactionChunkAccepted {

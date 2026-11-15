@@ -75,6 +75,7 @@ impl RuntimeClientProjection {
                 && matches!(
                     event,
                     RuntimeEvent::CompactionStarted { .. }
+                        | RuntimeEvent::CompactionOperationUpdated { .. }
                         | RuntimeEvent::CompactionChunkAccepted { .. }
                         | RuntimeEvent::CompactionSkipped { .. }
                         | RuntimeEvent::CompactionCancelled { .. }
@@ -126,6 +127,7 @@ impl RuntimeClientProjection {
             if matches!(
                 event,
                 RuntimeEvent::CompactionStarted { .. }
+                    | RuntimeEvent::CompactionOperationUpdated { .. }
                     | RuntimeEvent::CompactionChunkAccepted { .. }
                     | RuntimeEvent::CompactionSkipped { .. }
                     | RuntimeEvent::CompactionCancelled { .. }
@@ -550,6 +552,7 @@ impl RuntimeClientProjection {
                 }]
             }
             RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionOperationUpdated { .. }
             | RuntimeEvent::CompactionChunkAccepted { .. }
             | RuntimeEvent::CompactionSkipped { .. }
             | RuntimeEvent::CompactionCancelled { .. }
@@ -642,7 +645,50 @@ impl RuntimeClientProjection {
         event: &RuntimeEvent,
     ) -> Vec<RuntimeClientEvent> {
         match event {
-            RuntimeEvent::CompactionStarted { operation_id } => {
+            RuntimeEvent::CompactionOperationUpdated { status } => {
+                if attempt_id.is_some() || status.validate().is_err() {
+                    return Vec::new();
+                }
+                let operations = &mut self.snapshot.context.compaction_operations;
+                if let Some(existing) = operations.iter_mut().find(|entry| {
+                    entry.status.operation_id == status.operation_id
+                        && entry.status.admission_generation == status.admission_generation
+                }) {
+                    use crate::context::operation::CompactionOperationPhase as Phase;
+                    if existing.status.phase.is_terminal()
+                        || status.accepted_fragments < existing.status.accepted_fragments
+                        || matches!(existing.status.phase, Phase::Ready)
+                            && matches!(status.phase, Phase::Generating | Phase::Retrying)
+                        || existing.status.triggering_attempt_id != status.triggering_attempt_id
+                        || existing.status == *status
+                    {
+                        return Vec::new();
+                    }
+                    existing.status = status.clone();
+                    existing.live = !status.phase.is_terminal();
+                } else {
+                    if operations.iter().any(|entry| {
+                        entry.status.admission_generation >= status.admission_generation
+                            || entry.status.operation_id == status.operation_id
+                    }) {
+                        return Vec::new();
+                    }
+                    if operations.len() == 2 {
+                        operations.remove(0);
+                    }
+                    operations.push(super::super::snapshot::RuntimeClientCompactionOperation {
+                        status: status.clone(),
+                        live: !status.phase.is_terminal(),
+                    });
+                }
+                vec![RuntimeClientEvent::ContextCompactionOperationUpdated {
+                    context: self.snapshot.context.clone(),
+                }]
+            }
+            RuntimeEvent::CompactionStarted { operation_id, mode } => {
+                if *mode == crate::context::operation::CompactionMode::Proactive {
+                    return Vec::new();
+                }
                 if self.snapshot.context.compaction_in_progress
                     && self
                         .snapshot
@@ -656,6 +702,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_progress =
                     Some(super::super::snapshot::RuntimeClientCompactionProgress {
                         operation_id: operation_id.clone(),
+                        mode: *mode,
                         accepted_fragments: 0,
                         source_ranges: Vec::new(),
                         generation: None,
@@ -752,6 +799,7 @@ impl RuntimeClientProjection {
             }
             #[cfg(test)]
             RuntimeEvent::CompactionCompleted {
+                operation_id,
                 generation,
                 checkpoint_id,
                 activation_id,
@@ -762,6 +810,7 @@ impl RuntimeClientProjection {
             } => self.fold_compaction_completed(
                 attempt_id,
                 &RuntimeClientCompactionView {
+                    operation_id: operation_id.clone(),
                     generation: *generation,
                     checkpoint_id: checkpoint_id.clone(),
                     activation_id: *activation_id,
@@ -799,8 +848,16 @@ impl RuntimeClientProjection {
         compaction: &RuntimeClientCompactionView,
         occupancy: Option<&crate::observation::occupancy::RuntimeClientContextOccupancy>,
     ) -> Vec<RuntimeClientEvent> {
-        self.snapshot.context.compaction_in_progress = false;
-        self.snapshot.context.compaction_progress = None;
+        if self
+            .snapshot
+            .context
+            .compaction_progress
+            .as_ref()
+            .is_some_and(|progress| progress.operation_id == compaction.operation_id)
+        {
+            self.snapshot.context.compaction_in_progress = false;
+            self.snapshot.context.compaction_progress = None;
+        }
         self.snapshot.context.occupancy = occupancy.cloned();
         self.snapshot.context.compaction_count = self
             .snapshot

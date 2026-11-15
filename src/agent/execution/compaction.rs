@@ -19,6 +19,8 @@ use crate::tools::types::ModelToolDefinition;
 
 /// The complete frozen primary request inputs relevant to compaction fit.
 pub(super) struct CompactionInput<'a> {
+    pub(super) request: &'a crate::model::ModelRequest,
+
     pub(super) tools: &'a [ModelToolDefinition],
     pub(super) staged_request_context: &'a [MessageBlock],
     pub(super) estimated_input: u64,
@@ -28,6 +30,20 @@ pub(super) struct CompactionInput<'a> {
 /// zero measurement and cannot establish a rapid refill.
 struct CompletedCompaction {
     input_tokens_after: Option<u64>,
+    already_recorded: bool,
+}
+
+enum BlockingRun {
+    Completed(CompletedCompaction),
+    Retry,
+    Terminal(Terminal),
+}
+
+enum CompetitionWinner {
+    Background(Option<crate::context::asynchronous::CompactionDelivery>),
+    Blocking(
+        Box<Result<crate::context::compaction::GeneratedCompaction, CompactionExecutionError>>,
+    ),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +56,8 @@ pub(super) enum CompactionNeed {
 pub(super) enum CompactionOutcome {
     Committed,
     Deferred,
+    /// A competing result changed while this blocking scope was being closed.
+    Retry,
 }
 
 #[derive(Clone, Copy)]
@@ -181,6 +199,458 @@ fn deferrable_proactive_failure(kind: ContextErrorKind) -> bool {
 }
 
 impl AgentExecution<'_> {
+    /// A lost competition may re-enter once using the existing logical-step
+    /// allowance and its original absolute blocking deadline.
+    pub(super) async fn perform_bounded_compaction(
+        &mut self,
+        must_cover_through: Option<&MessageId>,
+        fresh_inbound: Option<&FreshInboundTurn>,
+        input: &CompactionInput<'_>,
+        overflow: Option<&ModelError>,
+        estimate_correction: Option<EstimateCorrection>,
+        need: CompactionNeed,
+    ) -> Result<CompactionOutcome, Terminal> {
+        for _ in 0..2 {
+            let outcome = self
+                .perform_compaction_with_need(
+                    must_cover_through,
+                    fresh_inbound,
+                    input,
+                    overflow,
+                    estimate_correction,
+                    need,
+                )
+                .await?;
+            if outcome != CompactionOutcome::Retry {
+                return Ok(outcome);
+            }
+        }
+        Err(Self::context_failure_terminal(&ContextError::new(
+            ContextErrorKind::NoProgress,
+            "compaction competition changed twice before current admission could be repaired",
+        )))
+    }
+
+    /// Price the exact prospective primary input without mutating its frozen
+    /// accepted contributors before a checkpoint activation is confirmed.
+    fn compaction_installation_input(
+        &self,
+        request: &crate::model::ModelRequest,
+    ) -> Result<(crate::context::AcceptedContext, crate::model::ModelRequest), ContextError> {
+        let mut context = self.logical_step.accepted_context.clone().ok_or_else(|| {
+            ContextError::new(
+                ContextErrorKind::Internal,
+                "compaction has no accepted primary context",
+            )
+        })?;
+        context
+            .refresh_permission_reminder(crate::runtime::permission::permission_reminder_text(
+                self.permission_reminder.mode,
+            ))
+            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
+        let mut request = request.clone();
+        request.effective_system_prompt = self.request_effective_system_prompt(
+            crate::context::render_effective_system_prompt(&context.system_sections),
+        );
+        Ok((context, request))
+    }
+
+    /// Start a Session-owned proactive operation without retaining this Attempt
+    /// as its cancellation parent or installation capability.
+    pub(super) async fn start_background_compaction(
+        &mut self,
+        input: &CompactionInput<'_>,
+    ) -> Result<bool, Terminal> {
+        let Some(coordinator) = self.asynchronous.clone() else {
+            return Ok(false);
+        };
+        let admission = match coordinator.admit(&self.request.attempt_id) {
+            Ok(Some(admission)) => admission,
+            Ok(None) => return Ok(true),
+            Err(error) => return self.background_error(error),
+        };
+        let budget = crate::context::compaction_budget::CompactionBudget::asynchronous(
+            admission.operation_id.clone(),
+            self.context_runtime.monotonic_clock.clone(),
+        );
+        let operation = match self
+            .context_runtime
+            .summarizer
+            .operation(budget, admission.cancellation.child())
+        {
+            Ok(operation) => operation,
+            Err(error) => {
+                let error = CompactionExecutionError::Context(error);
+                if let Err(publication) = coordinator.fail_admission(&admission, &error) {
+                    return self.background_error(CompactionExecutionError::Context(publication));
+                }
+                return self.background_error(error);
+            }
+        };
+        let observed = self.reusable_observation().cloned();
+        let must_cover = self.continuation_owner.clone();
+        let fresh = self.pending_fresh_inbound.clone();
+        let anchor = self
+            .logical_step
+            .frozen_carryover
+            .as_ref()
+            .and_then(|value| value.anchor.as_ref());
+        let carryover = self
+            .logical_step
+            .frozen_carryover
+            .as_ref()
+            .filter(|_| anchor.is_some())
+            .and_then(FrozenCarryover::admitted);
+        let captured = crate::context::compaction::capture_compaction(
+            &self.context_runtime,
+            self.conversation.revision(),
+            &self.request.conversation_id,
+            self.store.as_ref(),
+            input.tools,
+            observed.as_ref(),
+            &input.request.effective_system_prompt,
+            &CompactionConstraints {
+                must_cover_through: must_cover.as_ref(),
+                fresh_inbound: fresh.as_ref(),
+                protected_context_ids: &self.logical_step.context_ids,
+                staged_request_context: input.staged_request_context,
+                carryover: carryover.as_ref(),
+                carryover_anchor: anchor,
+                ..CompactionConstraints::default()
+            },
+            &admission.cancellation,
+            CompactionAttribution {
+                operation_id: admission.operation_id.clone(),
+                attempt_id: None,
+                turn_id: None,
+            },
+            operation.as_ref(),
+        )
+        .await;
+        match captured {
+            Ok(captured) => {
+                if let Err(error) = coordinator.start(admission.clone(), captured, operation) {
+                    if let Err(publication) = coordinator.fail_admission(&admission, &error) {
+                        return self
+                            .background_error(CompactionExecutionError::Context(publication));
+                    }
+                    return self.background_error(error);
+                }
+            }
+            Err(error) => {
+                operation.close().await;
+                if let Err(publication) = coordinator.fail_admission(&admission, &error) {
+                    return self.background_error(CompactionExecutionError::Context(publication));
+                }
+                return self.background_error(error);
+            }
+        }
+        Ok(true)
+    }
+
+    fn background_error(&mut self, error: CompactionExecutionError) -> Result<bool, Terminal> {
+        match error {
+            CompactionExecutionError::Context(error)
+                if error.kind == ContextErrorKind::NoEligibleHistory =>
+            {
+                self.compaction_control.skip_optional_until_progress();
+                Ok(true)
+            }
+            CompactionExecutionError::Context(error)
+                if deferrable_proactive_failure(error.kind)
+                    || error.kind == ContextErrorKind::Cancelled =>
+            {
+                self.compaction_control.suppress_optional_for_attempt();
+                Ok(true)
+            }
+            CompactionExecutionError::Context(error)
+                if error.kind == ContextErrorKind::AuxiliaryDurabilityFailed =>
+            {
+                let message = error.message;
+                self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+                self.durable_failure = Some(message.clone());
+                Err(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore { message },
+                    },
+                })
+            }
+            CompactionExecutionError::Context(error) => Err(Self::context_failure_terminal(&error)),
+            error => {
+                let message = format!("independent compaction durability failed: {error:?}");
+                self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+                self.durable_failure = Some(message.clone());
+                Err(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore { message },
+                    },
+                })
+            }
+        }
+    }
+
+    fn settle_background(
+        &mut self,
+        coordinator: &dyn crate::context::asynchronous::CompactionCoordinator,
+        admission: &crate::context::asynchronous::CompactionAdmission,
+        outcome: crate::context::asynchronous::CompactionDisposition,
+    ) -> Result<(), Terminal> {
+        coordinator.settle(admission, outcome).map_err(|error| {
+            if error.kind == ContextErrorKind::Cancelled && self.cancellation.is_cancelled() {
+                return self.cancelled_terminal();
+            }
+            let message = format!("compaction status could not be settled: {}", error.message);
+            self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+            self.durable_failure = Some(message.clone());
+            Terminal::Failed {
+                failure: AttemptFailure::Runtime {
+                    error: RuntimeError::DurableStore { message },
+                },
+            }
+        })
+    }
+
+    /// Consume exactly one result selected at the current preparation cut.
+    #[allow(clippy::too_many_lines)] // Keep installation and its complete settlement table together.
+    pub(super) fn consume_background_compaction(
+        &mut self,
+        delivery: crate::context::asynchronous::CompactionDelivery,
+        input: &CompactionInput<'_>,
+        correction: Option<EstimateCorrection>,
+        mandatory: bool,
+    ) -> Result<bool, Terminal> {
+        use crate::context::asynchronous::{CompactionDelivery, CompactionDisposition};
+        use crate::context::compaction::{
+            ActivationOutcome, CurrentInstallation, activate_generated,
+        };
+        let Some(coordinator) = self.asynchronous.clone() else {
+            return Ok(false);
+        };
+        let ready = match delivery {
+            CompactionDelivery::Ready(ready) => ready,
+            CompactionDelivery::Failed(error) => {
+                return self
+                    .background_error(CompactionExecutionError::Context(error))
+                    .map(|_| false);
+            }
+        };
+        let (activated_context, installation_request) = self
+            .compaction_installation_input(input.request)
+            .map_err(|error| Self::context_failure_terminal(&error))?;
+        let must_cover = self.continuation_owner.clone();
+        let fresh = self.pending_fresh_inbound.clone();
+        let anchor = self
+            .logical_step
+            .frozen_carryover
+            .as_ref()
+            .and_then(|value| value.anchor.as_ref());
+        let carryover = self
+            .logical_step
+            .frozen_carryover
+            .as_ref()
+            .filter(|_| anchor.is_some())
+            .and_then(FrozenCarryover::admitted);
+        let constraints = CompactionConstraints {
+            must_cover_through: must_cover.as_ref(),
+            fresh_inbound: fresh.as_ref(),
+            protected_context_ids: &self.logical_step.context_ids,
+            staged_request_context: input.staged_request_context,
+            carryover: carryover.as_ref(),
+            carryover_anchor: anchor,
+            estimate_correction: correction,
+            ..CompactionConstraints::default()
+        };
+        let signal = self.cancellation.signal();
+        let current = CurrentInstallation {
+            context: &self.context_runtime,
+            request: &installation_request,
+            constraints: &constraints,
+            attempt_id: Some(&self.request.attempt_id),
+            turn_id: Some(TurnId::new(self.turn.to_string())),
+            installer_cancellation: Some(&signal),
+        };
+        let result = activate_generated(
+            &ready.generated,
+            &mut self.conversation,
+            self.store.as_ref(),
+            &ready.admission.cancellation,
+            &current,
+        );
+        match result {
+            Ok(ActivationOutcome::Committed(completed)) => {
+                let after = match &completed.persisted_event.event {
+                    RuntimeEvent::CompactionCompleted { occupancy, .. } => {
+                        occupancy.as_ref().map(|value| value.input_tokens)
+                    }
+                    _ => None,
+                };
+                if completed.newly_committed {
+                    self.record_persisted_event(completed.persisted_event);
+                    self.permission_reminder.mark_after_compaction();
+                    self.logical_step.accepted_context = Some(activated_context);
+                }
+                self.retire_continuation();
+                self.measurements.withdraw();
+                let hard = self
+                    .context_runtime
+                    .engine
+                    .admissible_input_limit(self.compaction_budgets().primary_output_budget)
+                    .ok();
+                self.compaction_control.record_success(
+                    mandatory,
+                    Some(input.estimated_input),
+                    after,
+                    hard,
+                );
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Committed,
+                )?;
+                Ok(true)
+            }
+            Ok(ActivationOutcome::Superseded) => {
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Superseded,
+                )?;
+                Ok(false)
+            }
+            Ok(ActivationOutcome::Incomparable) => {
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Incomparable,
+                )?;
+                Ok(false)
+            }
+            Ok(ActivationOutcome::Inadmissible(error)) => {
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Defer(Some(error.message)),
+                )?;
+                Ok(false)
+            }
+            Err(CompactionExecutionError::HeadChanged) => {
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Defer(None),
+                )?;
+                Ok(false)
+            }
+            Err(CompactionExecutionError::Context(error))
+                if error.kind == ContextErrorKind::Cancelled =>
+            {
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Defer(None),
+                )?;
+                if self.cancellation.is_cancelled() {
+                    Err(self.cancelled_terminal())
+                } else {
+                    Ok(false)
+                }
+            }
+            Err(CompactionExecutionError::Committed { completed, error }) => {
+                if completed.newly_committed {
+                    self.record_persisted_event(completed.persisted_event);
+                    self.permission_reminder.mark_after_compaction();
+                    self.logical_step.accepted_context = Some(activated_context);
+                }
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Committed,
+                )?;
+                let message = format!("committed projection could not be installed: {error}");
+                self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+                self.durable_failure = Some(message.clone());
+                Err(Terminal::Failed {
+                    failure: AttemptFailure::Runtime {
+                        error: RuntimeError::DurableStore { message },
+                    },
+                })
+            }
+            Err(error) => {
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Failed(format!("{error:?}")),
+                )?;
+                self.background_error(error).map(|_| false)
+            }
+        }
+    }
+
+    /// Mandatory pressure may join this exact independent operation without
+    /// transferring cancellation or refreshing its allowance.
+    pub(super) async fn wait_for_background_compaction(
+        &mut self,
+        input: &CompactionInput<'_>,
+        correction: Option<EstimateCorrection>,
+    ) -> Result<bool, Terminal> {
+        let Some(coordinator) = self.asynchronous.clone() else {
+            return Ok(false);
+        };
+        let Some(admission) = coordinator.active() else {
+            return Ok(false);
+        };
+        let anchor = self
+            .logical_step
+            .frozen_carryover
+            .as_ref()
+            .and_then(|value| value.anchor.as_ref());
+        let carryover = self
+            .logical_step
+            .frozen_carryover
+            .as_ref()
+            .filter(|_| anchor.is_some())
+            .and_then(FrozenCarryover::admitted);
+        let constraints = CompactionConstraints {
+            must_cover_through: self.continuation_owner.as_ref(),
+            fresh_inbound: self.pending_fresh_inbound.as_ref(),
+            protected_context_ids: &self.logical_step.context_ids,
+            staged_request_context: input.staged_request_context,
+            carryover: carryover.as_ref(),
+            carryover_anchor: anchor,
+            estimate_correction: correction,
+            ..CompactionConstraints::default()
+        };
+        match coordinator.can_join(
+            &admission,
+            &self.context_runtime,
+            input.request,
+            &constraints,
+        ) {
+            Ok(true) => {}
+            Ok(false) => return Ok(false),
+            Err(error) => return self.background_error(error).map(|_| false),
+        }
+        let signal = self.cancellation.signal();
+        let delivery = coordinator
+            .wait(&admission, &self.request.attempt_id, &signal)
+            .await;
+        if self.cancellation.is_cancelled() {
+            if let Some(crate::context::asynchronous::CompactionDelivery::Ready(ready)) = &delivery
+            {
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    crate::context::asynchronous::CompactionDisposition::Defer(None),
+                )?;
+            }
+            return Err(self.cancelled_terminal());
+        }
+        match delivery {
+            Some(delivery) => self.consume_background_compaction(delivery, input, correction, true),
+            None => Ok(false),
+        }
+    }
+
     /// Runs one compaction: plan, summarize, verify progress and fit, and
     /// commit immutable typed checkpoint content and its durable activation.
     ///
@@ -252,6 +722,11 @@ impl AgentExecution<'_> {
         self.logical_step.compaction_budget = Some(budget.clone());
         self.emit(RuntimeEvent::CompactionStarted {
             operation_id: operation_id.clone(),
+            mode: if overflow.is_some() {
+                crate::context::operation::CompactionMode::Overflow
+            } else {
+                crate::context::operation::CompactionMode::Blocking
+            },
         });
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
@@ -287,10 +762,11 @@ impl AgentExecution<'_> {
         if let Some(gate) = admission_gate {
             gate.enter();
         }
+        let blocking_cancellation = self.cancellation.signal().child();
         let operation = match self
             .context_runtime
             .summarizer
-            .operation(budget.clone(), self.cancellation.signal().child())
+            .operation(budget.clone(), blocking_cancellation.clone())
         {
             Ok(operation) => operation,
             Err(error) if error.kind == ContextErrorKind::Cancelled => {
@@ -308,8 +784,24 @@ impl AgentExecution<'_> {
         // Context owns carryover fallback and final fit within this one
         // operation, so an already accepted Summary fragment is never replayed
         // merely because a less detailed carryover is needed.
-        let result = self
-            .run_compaction(
+        let result = if need == CompactionNeed::Mandatory
+            && self
+                .asynchronous
+                .as_ref()
+                .and_then(|owner| owner.active())
+                .is_some()
+        {
+            self.run_compaction_competing(
+                must_cover_through,
+                fresh_inbound,
+                input,
+                estimate_correction,
+                operation.as_ref(),
+                &blocking_cancellation,
+            )
+            .await
+        } else {
+            self.run_compaction(
                 must_cover_through,
                 fresh_inbound,
                 input,
@@ -317,21 +809,30 @@ impl AgentExecution<'_> {
                 need,
                 operation.as_ref(),
             )
-            .await;
+            .await
+            .map(BlockingRun::Completed)
+        };
         operation.close().await;
         match result {
-            Ok(completed) => {
+            Ok(BlockingRun::Retry) => Ok(CompactionOutcome::Retry),
+            Ok(BlockingRun::Terminal(terminal)) => Err(terminal),
+            Ok(BlockingRun::Completed(completed)) => {
                 // The typed checkpoint and Projection Head are committed.
                 // Complete replay replaces all primary continuation ownership;
                 // the old request measurement is no longer evidence for it.
-                self.retire_continuation();
-                self.measurements.withdraw();
-                self.compaction_control.record_success(
-                    need == CompactionNeed::Mandatory,
-                    Some(input.estimated_input),
-                    completed.input_tokens_after,
-                    hard_limit,
-                );
+                if !completed.already_recorded {
+                    self.retire_continuation();
+                    self.measurements.withdraw();
+                    if let Some(owner) = &self.asynchronous {
+                        owner.head_changed();
+                    }
+                    self.compaction_control.record_success(
+                        need == CompactionNeed::Mandatory,
+                        Some(input.estimated_input),
+                        completed.input_tokens_after,
+                        hard_limit,
+                    );
+                }
                 Ok(CompactionOutcome::Committed)
             }
             Err(error) => self.compaction_failure_or_defer(&operation_id, &error, overflow, need),
@@ -359,25 +860,8 @@ impl AgentExecution<'_> {
         need: CompactionNeed,
         operation: &dyn crate::context::summarizer::SummaryOperation,
     ) -> Result<CompletedCompaction, ContextError> {
-        // Compaction activates a new context, so its next actual request has a
-        // native reminder even when the old context had already consumed it.
-        // Price that complete prospective request before checkpoint authority
-        // can be granted; do not mutate accepted input on a deferred attempt.
-        let mut activated_context =
-            self.logical_step.accepted_context.clone().ok_or_else(|| {
-                ContextError::new(
-                    ContextErrorKind::Internal,
-                    "compaction has no accepted primary context",
-                )
-            })?;
-        activated_context
-            .refresh_permission_reminder(crate::runtime::permission::permission_reminder_text(
-                self.permission_reminder.mode,
-            ))
-            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
-        let effective_system_prompt = self.request_effective_system_prompt(
-            crate::context::render_effective_system_prompt(&activated_context.system_sections),
-        );
+        let (activated_context, installation_request) =
+            self.compaction_installation_input(input.request)?;
         let operation_id = operation.budget().operation_id().clone();
         let cancellation = self.cancellation.signal();
         // Resolved before the exclusive borrow of the conversation: the
@@ -429,7 +913,7 @@ impl AgentExecution<'_> {
             self.store.as_ref(),
             input.tools,
             observed.as_ref(),
-            &effective_system_prompt,
+            &installation_request.effective_system_prompt,
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
@@ -451,12 +935,290 @@ impl AgentExecution<'_> {
             Some(&progress),
         )
         .await;
+        self.finish_blocking_result(result, activated_context)
+    }
+
+    /// Race one independently owned background result with the already
+    /// admitted blocking generator. Only this Attempt owns the blocking
+    /// cancellation and settlement; the background waiter transfers neither.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+    async fn run_compaction_competing(
+        &mut self,
+        must_cover_through: Option<&MessageId>,
+        fresh_inbound: Option<&FreshInboundTurn>,
+        input: &CompactionInput<'_>,
+        estimate_correction: Option<EstimateCorrection>,
+        operation: &dyn crate::context::summarizer::SummaryOperation,
+        blocking_cancellation: &crate::runtime::cancellation::CancellationSignal,
+    ) -> Result<BlockingRun, ContextError> {
+        use crate::context::asynchronous::{CompactionDelivery, CompactionDisposition};
+        use crate::context::compaction::{
+            ActivationPreview, CurrentInstallation, preview_generated,
+        };
+
+        let Some(coordinator) = self.asynchronous.clone() else {
+            return self
+                .run_compaction(
+                    must_cover_through,
+                    fresh_inbound,
+                    input,
+                    estimate_correction,
+                    CompactionNeed::Mandatory,
+                    operation,
+                )
+                .await
+                .map(BlockingRun::Completed);
+        };
+        let Some(admission) = coordinator.active() else {
+            return self
+                .run_compaction(
+                    must_cover_through,
+                    fresh_inbound,
+                    input,
+                    estimate_correction,
+                    CompactionNeed::Mandatory,
+                    operation,
+                )
+                .await
+                .map(BlockingRun::Completed);
+        };
+        let (activated_context, installation_request) =
+            self.compaction_installation_input(input.request)?;
+        let operation_id = operation.budget().operation_id().clone();
+        let attempt_id = self.request.attempt_id.clone();
+        let attempt_signal = self.cancellation.signal();
+        let store = self.store.clone();
+        let owner = match store.projection_owner(Some(&attempt_id)) {
+            Ok(owner) => owner,
+            Err(error) => {
+                return self
+                    .finish_blocking_result(
+                        Err(CompactionExecutionError::Durable(error.to_string())),
+                        activated_context,
+                    )
+                    .map(BlockingRun::Completed);
+            }
+        };
+        let observed = self.reusable_observation().cloned();
+        let frozen_carryover = self.logical_step.frozen_carryover.clone();
+        let anchor = frozen_carryover
+            .as_ref()
+            .and_then(|value| value.anchor.clone());
+        let carryover = frozen_carryover
+            .as_ref()
+            .filter(|_| anchor.is_some())
+            .and_then(FrozenCarryover::admitted);
+        let mut carryover_fallbacks = Vec::new();
+        if let Some(mut next) = frozen_carryover.filter(|_| anchor.is_some()) {
+            while next.degrade() {
+                carryover_fallbacks.push(crate::context::engine::CompactionCarryover {
+                    level: next.level,
+                    value: next.admitted(),
+                });
+            }
+        }
+        let protected_ids = self.logical_step.context_ids.clone();
+        let constraints = CompactionConstraints {
+            must_cover_through,
+            fresh_inbound,
+            protected_context_ids: &protected_ids,
+            staged_request_context: input.staged_request_context,
+            carryover: carryover.as_ref(),
+            carryover_fallbacks: &carryover_fallbacks,
+            carryover_anchor: anchor.as_ref(),
+            estimate_correction,
+            focus: None,
+        };
+        let captured = match crate::context::compaction::capture_compaction(
+            &self.context_runtime,
+            self.conversation.revision(),
+            &self.request.conversation_id,
+            store.as_ref(),
+            input.tools,
+            observed.as_ref(),
+            &installation_request.effective_system_prompt,
+            &constraints,
+            blocking_cancellation,
+            CompactionAttribution {
+                operation_id: operation_id.clone(),
+                attempt_id: Some(attempt_id.clone()),
+                turn_id: Some(TurnId::new(self.turn.to_string())),
+            },
+            operation,
+        )
+        .await
+        {
+            Ok(captured) => captured,
+            Err(error) => {
+                return self
+                    .finish_blocking_result(Err(error), activated_context)
+                    .map(BlockingRun::Completed);
+            }
+        };
+        let event_observer = self.observer;
+        let progress_store = store.clone();
+        let progress_attempt = attempt_id.clone();
+        let progress = move |envelope| -> Result<(), CompactionExecutionError> {
+            let persisted = progress_store
+                .append_event(envelope)
+                .map_err(|error| CompactionExecutionError::Durable(error.to_string()))?;
+            if let Some(observer) = event_observer {
+                observer.observe_event(
+                    &progress_attempt,
+                    &persisted.event,
+                    persisted.sequence,
+                    persisted.tool_occurrence.as_ref(),
+                    persisted.observation.as_deref(),
+                );
+            }
+            Ok(())
+        };
+        let before_call = || Ok(());
+        let mut generation = Box::pin(crate::context::compaction::generate_compaction(
+            captured,
+            store.as_ref(),
+            operation,
+            blocking_cancellation,
+            &progress,
+            &before_call,
+        ));
+        let mut waiting = Box::pin(coordinator.wait(&admission, &attempt_id, &attempt_signal));
+        let winner = tokio::select! {
+            biased;
+            delivery = &mut waiting => CompetitionWinner::Background(delivery),
+            generated = &mut generation => CompetitionWinner::Blocking(Box::new(generated)),
+        };
+        drop(waiting);
+        let generated = match winner {
+            CompetitionWinner::Blocking(generated) => *generated,
+            CompetitionWinner::Background(Some(CompactionDelivery::Ready(ready))) => {
+                let current = CurrentInstallation {
+                    context: &self.context_runtime,
+                    request: &installation_request,
+                    constraints: &constraints,
+                    attempt_id: Some(&attempt_id),
+                    turn_id: Some(TurnId::new(self.turn.to_string())),
+                    installer_cancellation: Some(&attempt_signal),
+                };
+                match preview_generated(&ready.generated, store.as_ref(), &current) {
+                    Ok(ActivationPreview::Eligible(_)) => {
+                        // The preview grants nothing. Stop and physically join
+                        // our blocking scope before revalidating and committing.
+                        blocking_cancellation.cancel();
+                        drop(generation);
+                        operation.close().await;
+                        self.emit(RuntimeEvent::CompactionCancelled { operation_id });
+                        if let Some(terminal) = self.durable_failure_terminal_from_state() {
+                            return Ok(BlockingRun::Terminal(terminal));
+                        }
+                        match self.consume_background_compaction(
+                            CompactionDelivery::Ready(ready),
+                            input,
+                            estimate_correction,
+                            true,
+                        ) {
+                            Ok(true) => {
+                                return Ok(BlockingRun::Completed(CompletedCompaction {
+                                    input_tokens_after: None,
+                                    already_recorded: true,
+                                }));
+                            }
+                            Ok(false) => return Ok(BlockingRun::Retry),
+                            Err(terminal) => return Ok(BlockingRun::Terminal(terminal)),
+                        }
+                    }
+                    Ok(ActivationPreview::Superseded) => {
+                        if let Err(terminal) = self.settle_background(
+                            coordinator.as_ref(),
+                            &ready.admission,
+                            CompactionDisposition::Superseded,
+                        ) {
+                            return Ok(BlockingRun::Terminal(terminal));
+                        }
+                    }
+                    Ok(ActivationPreview::Incomparable) => {
+                        if let Err(terminal) = self.settle_background(
+                            coordinator.as_ref(),
+                            &ready.admission,
+                            CompactionDisposition::Incomparable,
+                        ) {
+                            return Ok(BlockingRun::Terminal(terminal));
+                        }
+                    }
+                    Ok(ActivationPreview::Inadmissible(error)) => {
+                        if let Err(terminal) = self.settle_background(
+                            coordinator.as_ref(),
+                            &ready.admission,
+                            CompactionDisposition::Defer(Some(error.message)),
+                        ) {
+                            return Ok(BlockingRun::Terminal(terminal));
+                        }
+                    }
+                    Err(CompactionExecutionError::Context(error))
+                        if deferrable_proactive_failure(error.kind) =>
+                    {
+                        if let Err(terminal) = self.settle_background(
+                            coordinator.as_ref(),
+                            &ready.admission,
+                            CompactionDisposition::Defer(Some(error.message)),
+                        ) {
+                            return Ok(BlockingRun::Terminal(terminal));
+                        }
+                    }
+                    Err(error) => {
+                        if let Err(terminal) = self.settle_background(
+                            coordinator.as_ref(),
+                            &ready.admission,
+                            CompactionDisposition::Failed(format!("{error:?}")),
+                        ) {
+                            return Ok(BlockingRun::Terminal(terminal));
+                        }
+                        return self
+                            .finish_blocking_result(Err(error), activated_context)
+                            .map(BlockingRun::Completed);
+                    }
+                }
+                generation.await
+            }
+            CompetitionWinner::Background(Some(CompactionDelivery::Failed(error))) => {
+                if error.kind == ContextErrorKind::AuxiliaryDurabilityFailed {
+                    self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+                    self.durable_failure = Some(error.message.clone());
+                    return Err(error);
+                }
+                self.compaction_control.suppress_optional_for_attempt();
+                generation.await
+            }
+            CompetitionWinner::Background(None) => generation.await,
+        };
+        let result = match generated {
+            Ok(generated) => crate::context::compaction::activate_blocking_generated(
+                &mut self.conversation,
+                store.as_ref(),
+                operation,
+                blocking_cancellation,
+                owner,
+                generated,
+            ),
+            Err(error) => Err(error),
+        };
+        self.finish_blocking_result(result, activated_context)
+            .map(BlockingRun::Completed)
+    }
+
+    fn finish_blocking_result(
+        &mut self,
+        result: Result<crate::context::compaction::ExecutedCompaction, CompactionExecutionError>,
+        activated_context: crate::context::AcceptedContext,
+    ) -> Result<CompletedCompaction, ContextError> {
         let completed = match result {
             Ok(completed) => completed,
             Err(CompactionExecutionError::Context(error)) => return Err(error),
             Err(CompactionExecutionError::Committed { completed, error }) => {
                 if completed.newly_committed {
                     self.record_persisted_event(completed.persisted_event);
+                    self.permission_reminder.mark_after_compaction();
+                    self.logical_step.accepted_context = Some(activated_context);
                 }
                 self.install_committed_carryover(completed.carryover_level)?;
                 self.durable_failure_kind = Some(DurableFailureKind::Compaction);
@@ -470,6 +1232,12 @@ impl AgentExecution<'_> {
                 self.durable_failure = Some(format!(
                     "the compaction transition cannot be committed durably: {error}"
                 ));
+                return Err(ContextError::new(ContextErrorKind::Internal, error));
+            }
+            Err(CompactionExecutionError::HeadChanged) => {
+                let error = "blocking compaction lost its projection head".to_owned();
+                self.durable_failure_kind = Some(DurableFailureKind::Compaction);
+                self.durable_failure = Some(error.clone());
                 return Err(ContextError::new(ContextErrorKind::Internal, error));
             }
         };
@@ -487,7 +1255,10 @@ impl AgentExecution<'_> {
             self.logical_step.accepted_context = Some(activated_context);
         }
         self.install_committed_carryover(completed.carryover_level)?;
-        Ok(CompletedCompaction { input_tokens_after })
+        Ok(CompletedCompaction {
+            input_tokens_after,
+            already_recorded: false,
+        })
     }
 
     /// A selected carryover level becomes effective only after the checkpoint

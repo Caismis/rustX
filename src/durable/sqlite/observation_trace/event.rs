@@ -243,7 +243,8 @@ fn terminal_owner(
         E::ToolMessageCommitted{..}=>{
             event.tool_occurrence.as_ref().map(|occurrence|find(connection,"SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<?3 ORDER BY sequence DESC LIMIT 1",params![occurrence.ledger_position,occurrence.block_index.get(),before])).transpose().map(Option::flatten)
         },
-        E::CompactionCompleted{operation_id,..}|E::CompactionFailed{operation_id,..}|E::CompactionCancelled{operation_id}|E::CompactionSkipped{operation_id}=>find(connection,"SELECT sequence FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![operation_id.as_str(),before]),
+        E::CompactionCompleted{operation_id,..}|E::CompactionFailed{operation_id,..}|E::CompactionCancelled{operation_id}|E::CompactionSkipped{operation_id}=>compaction_start(connection,operation_id,before),
+        E::CompactionOperationUpdated{status}=>compaction_start(connection,&status.operation_id,before),
         E::BackgroundTerminalPublished{execution_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE json_extract(event_json,'$.event.execution_id')=?1 AND json_extract(event_json,'$.event.type')='background_execution_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![execution_id.as_str(),before]),
         E::SubagentTerminalPublished{subagent_id,..}|E::SubagentTerminalSettled{subagent_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_subagent_id_kind_idx WHERE json_extract(event_json,'$.event.subagent_id')=?1 AND json_extract(event_json,'$.event.type')='subagent_ownership_committed' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![subagent_id.as_str(),before]),
         E::WorkflowCompleted{run_id,..}|E::WorkflowFailed{run_id,..}|E::WorkflowCancelled{run_id,..}=>{
@@ -256,6 +257,17 @@ fn terminal_owner(
         E::InteractionSettled{interaction_id,..}=>find(connection,"SELECT sequence FROM events INDEXED BY events_interaction_id_kind_idx WHERE json_extract(event_json,'$.event.interaction_id')=?1 AND json_extract(event_json,'$.event.type')='interaction_requested' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",params![interaction_id.as_str(),before]),
         _=>Ok(Some(before)),
     }
+}
+fn compaction_start(
+    connection: &Connection,
+    operation: &crate::runtime::identity::CompactionOperationId,
+    before: u64,
+) -> Result<Option<u64>, ConversationStoreError> {
+    find(
+        connection,
+        "SELECT sequence FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_started' AND sequence<?2 ORDER BY sequence DESC LIMIT 1",
+        params![operation.as_str(), before],
+    )
 }
 fn adoption(
     connection: &Connection,
@@ -383,7 +395,7 @@ fn core_data(
             ledger_position: position(connection, message_id)?
                 .ok_or_else(|| storage("native Tool C absent"))?,
         }),
-        E::CompactionStarted { operation_id } => {
+        E::CompactionStarted { operation_id, mode } => {
             alias(
                 fields,
                 event,
@@ -393,8 +405,12 @@ fn core_data(
             )?;
             Ok(TraceFactData::CompactionStart {
                 native_id: (operation_id.as_str().len() <= 512).then(|| operation_id.to_string()),
+                mode: *mode,
             })
         }
+        E::CompactionOperationUpdated { status } => Ok(TraceFactData::CompactionStatus {
+            status: status.clone(),
+        }),
         _ => Err(storage("not a typed native Trace start")),
     }
 }
@@ -669,7 +685,8 @@ fn data(
         | E::AssistantMessageCommitted { .. }
         | E::ToolExecutionStarted { .. }
         | E::ToolMessageCommitted { .. }
-        | E::CompactionStarted { .. } => core_data(connection, event, fields),
+        | E::CompactionStarted { .. }
+        | E::CompactionOperationUpdated { .. } => core_data(connection, event, fields),
         E::BackgroundExecutionCommitted { .. }
         | E::SubagentOwnershipCommitted { .. }
         | E::WorkflowStarted { .. }

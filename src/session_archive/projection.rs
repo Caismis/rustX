@@ -474,6 +474,7 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::ToolExecutionSettlementObserved { .. }
         | RuntimeEvent::ToolMessageCommitted { .. }
         | RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionOperationUpdated { .. }
         | RuntimeEvent::CompactionChunkAccepted { .. }
         | RuntimeEvent::CompactionSkipped { .. }
         | RuntimeEvent::CompactionCancelled { .. }
@@ -655,6 +656,7 @@ mod tests {
         };
         let request_id = crate::runtime::identity::RequestId::new("request");
         let request = AuxiliaryRequestAudit {
+            invocation: crate::model::auxiliary::fixture_invocation_identity(),
             call_id: crate::runtime::identity::AuxiliaryCallId::generate(),
             ordinal: 0,
             request_id: request_id.clone(),
