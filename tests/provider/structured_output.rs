@@ -365,6 +365,74 @@ async fn assert_format_error(
 }
 
 #[tokio::test]
+async fn anthropic_whole_format_extra_inputs_rejection_is_narrowly_typed() {
+    let message = "output_config.format: Extra inputs are not permitted";
+    let detail = json!({"type":"invalid_request_error", "message":message});
+    assert_format_error(
+        ModelProtocol::AnthropicMessages,
+        detail.clone(),
+        400,
+        true,
+        ModelErrorKind::NativeFormatUnsupported,
+    )
+    .await;
+    assert_format_error(
+        ModelProtocol::AnthropicMessages,
+        detail.clone(),
+        400,
+        false,
+        ModelErrorKind::InvalidRequest,
+    )
+    .await;
+    for protocol in [
+        ModelProtocol::OpenAiChatCompletions,
+        ModelProtocol::OpenAiResponses,
+    ] {
+        assert_format_error(
+            protocol,
+            detail.clone(),
+            400,
+            true,
+            ModelErrorKind::InvalidRequest,
+        )
+        .await;
+    }
+    for (status, expected) in [
+        (401, ModelErrorKind::Authentication),
+        (413, ModelErrorKind::InvalidRequest),
+        (429, ModelErrorKind::RateLimit),
+        (500, ModelErrorKind::ProviderError),
+    ] {
+        assert_format_error(
+            ModelProtocol::AnthropicMessages,
+            detail.clone(),
+            status,
+            true,
+            expected,
+        )
+        .await;
+    }
+    for detail in [
+        json!({"type":"invalid_request_error", "message":"output_config.format.schema.properties.x: Extra inputs are not permitted"}),
+        json!({"type":"invalid_request_error", "message":format!("Schema validation failed: {message}")}),
+        json!({"type":"invalid_request_error", "message":format!("{message}; invalid schema")}),
+        json!({"type":"invalid_request_error", "message":message, "code":"invalid_schema"}),
+        json!({"type":"invalid_request_error", "message":message, "param":"output_config.format.schema"}),
+        json!({"type":"invalid_request_error", "message":message, "param":"thinking"}),
+        json!({"type":"unrelated_error", "message":message}),
+    ] {
+        assert_format_error(
+            ModelProtocol::AnthropicMessages,
+            detail,
+            400,
+            true,
+            ModelErrorKind::InvalidRequest,
+        )
+        .await;
+    }
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)] // One cross-protocol matrix keeps positive and exclusion evidence adjacent.
 async fn native_format_rejections_accept_only_complete_protocol_field_diagnostics() {
     for protocol in PROTOCOLS {

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 
 from fake_provider.scenario import (
     AdaptiveScenario,
@@ -692,6 +693,28 @@ def compaction_twice_explicit_summary() -> Scenario:
     return _compaction_twice("compaction_twice_explicit_summary", SUMMARY_MODEL)
 
 
+def compaction_anthropic_format_rejection() -> Scenario:
+    """Two operations each reject Native once, then accept their Prompt retry."""
+    base = _compaction_twice("compaction_anthropic_format_rejection", ANTHROPIC_MODEL)
+    steps = []
+    for step in base.steps:
+        if step.expect.model != ANTHROPIC_MODEL:
+            steps.append(step)
+            continue
+        expect = replace(step.expect, protocol=ANTHROPIC_MESSAGES)
+        native = replace(expect, json_subset={"output_config": {"format": {"type": "json_schema"}}})
+        steps.append(Step(native, HttpError(400, {
+            "type": "error",
+            "error": {
+                "type": "invalid_request_error",
+                "message": "output_config.format: Extra inputs are not permitted",
+            },
+        })))
+        prompt = replace(expect, body_excludes=(*expect.body_excludes, '"output_config"'))
+        steps.append(replace(step, expect=prompt))
+    return Scenario(base.name, *steps)
+
+
 CHUNKED_PROMPT = "conformance: write the chunked compaction history"
 CHUNKED_SUMMARY = "chunked compaction kept the user's goal"
 PRIMARY_REASONING = "private-primary-reasoning-522"
@@ -951,6 +974,7 @@ SCENARIOS = {
     "compaction_session_summary": compaction_session_summary,
     "compaction_explicit_summary": compaction_explicit_summary,
     "compaction_cross_provider_summary": compaction_cross_provider_summary,
+    "compaction_anthropic_format_rejection": compaction_anthropic_format_rejection,
     "compaction_transient_summary": compaction_transient_summary,
     "compaction_twice_session_summary": compaction_twice_session_summary,
     "compaction_twice_explicit_summary": compaction_twice_explicit_summary,

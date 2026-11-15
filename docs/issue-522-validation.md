@@ -122,7 +122,7 @@ protocol artifacts are byte-identical to the checked-in artifacts. Linux
 `rust-contracts` and `rust-boundaries` lane coverage checks passed. A remote FULL
 CI result for the new integrated commit has not yet been established.
 
-### Review follow-up (2026-11-13)
+### Provider format rejection and recovery
 
 The native-format classifiers now recognize complete protocol-field rejection
 messages when optional `code` or `param` metadata is absent. Recognition remains
@@ -132,6 +132,18 @@ defects, unrelated fields, authentication, rate limits and context overflow do
 not authorize a format downgrade. The HTTP matrix includes the
 [type/message-only example documented by the OpenAI Agents SDK](https://openai.github.io/openai-agents-python/models/#structured-outputs-support)
 and the [Anthropic error envelope](https://platform.claude.com/docs/en/api/errors#error-shapes).
+
+Anthropic also recognizes the whole-field diagnostic
+`output_config.format: Extra inputs are not permitted` reported in
+[vercel/ai#14773](https://github.com/vercel/ai/issues/14773). This establishes the
+response shape, not present model or endpoint capabilities. The exact message
+requires the same Native-request, HTTP-400, error-type and metadata checks.
+The nested `output_config.format.schema.properties.x` form and prefixed or
+extended schema explanations remain ordinary invalid requests. Real HTTP
+coverage checks these exclusions. A composed two-compaction scenario observes
+one rejected Native Call and exactly one Prompt downgrade per operation;
+the later operation starts with Native again, so no provider-wide capability
+or Session preference is changed.
 
 The composed real-HTTP compaction regression checks that the rejected Native
 request does not advance its source cursor. Adding the Prompt schema makes that
