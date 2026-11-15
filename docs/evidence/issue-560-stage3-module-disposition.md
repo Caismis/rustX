@@ -1,6 +1,6 @@
 # Issue #560 Stage 3 Module Split & Test Disposition Map
 
-Base Stage 2 commit: `da202eac4b1ab1bbb1f4ee154060d5de18ad58d8` (with pre-Stage3 test-fixture sibling-layout repair commit `dc517428c8a604f9b7ae0d7b04c7d9fd7e241558`)  
+Base Stage 2 commit: `da202eac4b1ab1bbb1f4ee154060d5de18ad58d8` (with pre-Stage3 test-fixture sibling-layout repair commit `dc517428c8a604f9b7ae0d7b04c7d9fd7e241558`)
 Scope: Production module decomposition for `src/tools/workspace_python.rs`, `src/local_runtime/session_controller.rs`, and `src/runtime/workflow.rs`, plus cohesive test-only file extraction for `src/local_runtime/dispatcher.rs`, `src/local_runtime/config.rs`, and `src/local_runtime/launch_tests.rs`.
 
 ## 1. Inspectable Move Map & Visibility Reasoning
