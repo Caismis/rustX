@@ -172,10 +172,11 @@ pub(crate) fn is_native_format_rejection(
             ) && matches!(
                 param,
                 None | Some("output_config.format" | "output_config.format.type")
-            ) && crate::model::adapter::structured::explicit_format_rejection_message(
+            ) && (crate::model::adapter::structured::explicit_format_rejection_message(
                 message,
                 "output_config.format",
-            )))
+            ) || message.trim()
+                == "output_config.format: Extra inputs are not permitted")))
 }
 
 pub(crate) fn normalize_http_error_for_format(
