@@ -457,8 +457,8 @@ async fn proactive_generation_and_ready_reconcile_after_real_process_death() {
             serde_json::from_value(marker(&mut lines, INFO_MARKER, &emulator).await).unwrap();
         assert!(info.root.starts_with(root.path()));
         let (summary_gate, primary_gate) = tokio::join!(
-            emulator.await_gate("crash-summary"),
-            emulator.await_gate("crash-primary")
+            emulator.await_gate_with_timeout("crash-summary", std::time::Duration::from_secs(300)),
+            emulator.await_gate_with_timeout("crash-primary", std::time::Duration::from_secs(300))
         );
         let summary_index = summary_gate["requestIndex"].as_u64().unwrap();
         let primary_index = primary_gate["requestIndex"].as_u64().unwrap();

@@ -2444,7 +2444,7 @@ it. An accepted response is never retracted. See
 [file delivery](file-delivery.md#delivery-access-for-app-server-clients) for
 the synchronization.
 
-The internal Runtime Client vocabulary is v86. Only App Server v80 clients
+The internal Runtime Client vocabulary is v87. Only App Server v80 clients
 are generated; earlier versions are rejected, with no aliases or compatibility
 decoder. The current storage/control formats are Event envelope 1, SQLite 90, Session
 catalog 21 and subagent IPC v40. The child specification freezes MCP Resource source

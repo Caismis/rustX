@@ -142,8 +142,8 @@ async fn detached_summary_outlives_two_attempts_and_installs_only_after_idle() {
     let driver = Driver::start(&emulator, &setup).await;
     driver.submit(CHUNKED_PROMPT);
     let _ = tokio::join!(
-        emulator.await_gate("async-summary"),
-        emulator.await_gate("async-primary")
+        emulator.await_gate_with_timeout("async-summary", std::time::Duration::from_secs(300)),
+        emulator.await_gate_with_timeout("async-primary", std::time::Duration::from_secs(300))
     );
     let first = driver.submitted_attempt().expect("first Attempt started").1;
     assert!(driver.store.projection_head().unwrap().is_none());
@@ -240,6 +240,7 @@ async fn detached_summary_outlives_two_attempts_and_installs_only_after_idle() {
 
     driver.submit(FINAL_TURN);
     let (_, outcome) = driver.settle().await;
+
     assert!(
         matches!(outcome, RuntimeClientOutcome::Completed { .. }),
         "{outcome:?}"
@@ -272,6 +273,11 @@ async fn detached_summary_outlives_two_attempts_and_installs_only_after_idle() {
     assert_eq!(final_body.matches(FINAL_TURN).count(), 1);
     assert!(final_body.contains(CHUNKED_SUMMARY));
     assert!(!final_body.contains("chunked-call-001"));
+    assert!(!final_body.contains(SUMMARY_REASONING));
+    assert!(
+        final_body.contains(PRIMARY_REASONING),
+        "the new model receives readable reasoning from retained canonical tail, not retired source"
+    );
 
     let mut journal = Vec::new();
     let mut after = None;

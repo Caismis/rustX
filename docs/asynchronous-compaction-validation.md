@@ -44,9 +44,19 @@ zero. Window headroom is distinct from the native hard input admission limit.
 These deterministic fixtures establish ordering, latency hiding and bounded
 accounting. They do not calibrate a production trigger optimum or billed cost.
 
-The current stack must rerun this scenario against the shared Auxiliary model
-policy and native permission-reminder activation. Measurements from the earlier
-implementation are not evidence for this protocol generation.
+A current controlled HTTP run recorded 21 accepted fragments and 22 physical
+requests with no blocking replacement. The next primary started 167 ms after
+Summary admission; Ready followed at 4,141 ms, and installation followed Ready
+by 411 ms. Estimated primary occupancy was 29,995 of 256,000 tokens, with
+226,005 tokens of window headroom. All 22 requests lacked provider usage;
+input, output, reasoning and rejected-request spend therefore remain unknown.
+These fixture measurements do not claim production latency or pricing.
+
+Large-history conformance uses a separate five-minute preparation gate budget
+for its roughly 46 real tool/provider turns. Ordinary control waits remain at
+two minutes, and native request/stream/operation deadlines are unchanged. CI's
+prior two-minute preparation cut expired after 46 settled primary calls in one
+case, and after reaching the Summary gate in the process-death case.
 
 ## Verification gates
 

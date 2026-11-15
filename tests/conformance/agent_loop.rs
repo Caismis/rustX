@@ -2026,7 +2026,7 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
     // This barrier is reached on the Prompt retry after the Native failure.
     // A Session update now cannot alter any remaining call in this operation.
     tokio::select! {
-        _ = emulator.await_gate("first-prompt-summary") => {}
+        _ = emulator.await_gate_with_timeout("first-prompt-summary", std::time::Duration::from_secs(300)) => {}
         (_, early_outcome) = driver.settle_observing(|event| {
             if let RuntimeClientEvent::InteractionPending { interaction } = event {
                 panic!("unexpected interaction while waiting for Summary: {interaction:?}");
@@ -2506,7 +2506,33 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
         after = rustx::context::resources::LedgerFrontier(page.rows.last().unwrap().0);
         at_cut.extend(page.rows.into_iter().map(|(_, message)| message));
     }
-    let retired_count = at_cut.len() - head.original_items as usize;
+    // The installed checkpoint also retains post-capture appends. Identify
+    // the retired prefix against original canonical identities, never by
+    // subtracting its current tail size from the older capture length.
+    let installed = driver.store.projection_head().unwrap().unwrap();
+    let retained: std::collections::BTreeSet<_> = installed
+        .candidate
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let rustx::context::checkpoint::CheckpointMessage::Original(source) = &item.message {
+                Some(source.message_id.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let retired_count = at_cut
+        .iter()
+        .take_while(|message| !retained.contains(message.id()))
+        .count();
+    assert!(
+        at_cut
+            .iter()
+            .skip(retired_count)
+            .all(|message| retained.contains(message.id()))
+    );
+
     let expected_lengths: Vec<_> = at_cut
         .into_iter()
         .take(retired_count)
@@ -2803,7 +2829,10 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
 
     emulator.release_gate("session-model-updated").await;
     let (_, outcome) = driver.settle().await;
-    assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
 
     let (snapshot, _) = driver.snapshot().expect("snapshot");
     let attempt = snapshot.attempt.as_ref().expect("the settled attempt");
@@ -2830,7 +2859,10 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
 
     driver.submit(SECOND_ATTEMPT);
     let (_, outcome) = driver.settle().await;
-    assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
 
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 2);

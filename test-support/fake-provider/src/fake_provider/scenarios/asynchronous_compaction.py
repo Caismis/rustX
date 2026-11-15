@@ -72,7 +72,9 @@ def asynchronous_compaction() -> AdaptiveScenario:
                 return Step(
                     Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=SECOND_MODEL,
                            body_contains=(CHUNKED_SUMMARY, NEXT_TURN, FINAL_TURN),
-                           body_excludes=("chunked-call-001", PRIMARY_REASONING, SUMMARY_REASONING)),
+                           # A model switch uses the native readable replay for the
+                           # retained primary tail; private Summary reasoning is never replayed.
+                           body_excludes=("chunked-call-001", SUMMARY_REASONING)),
                     Stream(Text("asynchronous compaction complete"), Finish("stop")),
                 ), True
             return Step(

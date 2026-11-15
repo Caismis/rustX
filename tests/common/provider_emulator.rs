@@ -223,7 +223,21 @@ impl ProviderEmulator {
     ///
     /// Panics when the gate is never reached within the deadlock timeout.
     pub async fn await_gate(&self, name: &str) -> serde_json::Value {
-        self.await_observation("gate_reached", Some(name)).await
+        self.await_gate_with_timeout(name, AWAIT_TIMEOUT).await
+    }
+
+    /// Wait for a gate after a bounded, unusually large fixture preparation.
+    /// This changes only the control barrier, never the native request policy.
+    ///
+    /// # Panics
+    /// The provider is unreachable or the gate is not reached within `timeout`.
+    pub async fn await_gate_with_timeout(
+        &self,
+        name: &str,
+        timeout: Duration,
+    ) -> serde_json::Value {
+        self.await_observation("gate_reached", Some(name), timeout)
+            .await
     }
 
     /// Blocks until the provider observes the client closing the connection.
@@ -232,14 +246,20 @@ impl ProviderEmulator {
     ///
     /// Panics when no disconnect is observed within the deadlock timeout.
     pub async fn await_client_disconnect(&self) -> serde_json::Value {
-        self.await_observation("client_disconnected", None).await
+        self.await_observation("client_disconnected", None, AWAIT_TIMEOUT)
+            .await
     }
 
-    async fn await_observation(&self, kind: &str, name: Option<&str>) -> serde_json::Value {
+    async fn await_observation(
+        &self,
+        kind: &str,
+        name: Option<&str>,
+        timeout: Duration,
+    ) -> serde_json::Value {
         let url = format!(
             "{}/__control/observations/await?kind={kind}&timeoutMs={}{}",
             self.base_url(),
-            AWAIT_TIMEOUT.as_millis(),
+            timeout.as_millis(),
             name.map(|name| format!("&name={name}")).unwrap_or_default(),
         );
         let response = self.client.get(&url).send().await.expect("control request");
