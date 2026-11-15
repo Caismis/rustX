@@ -50,6 +50,15 @@ Native tests use Cargo's emitted artifact metadata and explicit physical staging
 including ordinary-library versus libtest/profile/feature identity. No old-layout
 guessing or production environment override remains.
 
+Independent review corrected an early description of guard installation as
+atomic. The retained runtime installer uses create-new/write/validate on final
+filenames, as it did at the issue base. Interrupted writes can invalidate that
+directory, selecting the existing fresh fallback; a concurrent installer may
+also validate complete bytes while another writer still holds the script open,
+creating an inherited execution-availability race. Byte validation and fail-closed
+selection remain effective. This bounded change preserves that implementation
+and discloses the limitation instead of claiming atomic publication.
+
 The [module map](issue-560-stage3-module-disposition.md) separates workspace
 Python guard/interpreter/owner, Session Controller reads/uploads/lineage/settings,
 and Workflow compiler/catalog responsibilities through private modules. Public
@@ -210,6 +219,13 @@ mistyped zero-test filters, a local cold-driver `finally` bookkeeping bug
 postprocessing `KeyError` after valid runtime execution. Original files remain;
 reconciliation checks raw statuses/hashes rather than trusting a completion
 marker. See JSON `invalid_experiments` and `local_receipts`.
+
+Independent review also found that the new comparator Node tests had only local
+execution. The existing `quality` job now installs the existing pinned Node
+version and executes both comparator suites (17 tests). This follow-up adds no
+Rust selection, cache-writer or job-topology change. The recorded checker timings
+retain their actual earlier workflow hash; added quality setup/test cost is not
+measured here and earns no speedup credit.
 
 ## Verification and reproduction
 

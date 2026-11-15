@@ -143,6 +143,14 @@ jobs:
       - name: Test current and historical benchmark controllers and summaries
         run: python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v
 
+      - name: Install pinned Node for benchmark contract tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Test benchmark request comparison and normalization contracts
+        run: node --test benchmarks/runtime/compare-http.test.mjs benchmarks/runtime/pi-oracle.test.mjs
+
       - name: Test native test preparation and artifact staging
         run: python3 -m unittest discover -s test-support -p 'test_*.py' -v
 

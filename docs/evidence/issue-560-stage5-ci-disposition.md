@@ -29,6 +29,7 @@ No second scheduler, new job topology, weakened gate, or `save-if` relaxation is
 | Strict Clippy (all features, all targets) | `quality` | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` |
 | Strict rustdoc | `quality` | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked` |
 | Benchmark & native-prep Python unit suites | `quality` | `python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v` & `-s test-support` |
+| Benchmark request-comparison Node contracts | `quality` | Pinned `NODE_VERSION`; `node --test benchmarks/runtime/compare-http.test.mjs benchmarks/runtime/pi-oracle.test.mjs` |
 | Default-feature binary builds & native consumers | `tui`, `desktop-macos`, `browser-prepare` | `cargo build --bins --locked` (`tui`, `desktop-macos`); `node scripts/browser-artifact.ts pack` (`browser-prepare`) |
 | FAST Linux unit/contract & process feedback | `rust-fast` | `prepare_native_tests.py` + `cargo test --lib --all-features --locked ...` + `--test process` + `check_test_lanes -- --job rust-fast` |
 | Documentation & runtime-example contracts | `documentation-contracts` / `rust-contracts` | `cargo test --test contracts --all-features --locked` |
