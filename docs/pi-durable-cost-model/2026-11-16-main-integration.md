@@ -176,3 +176,13 @@ checkpoint/registration fold, and settlement facts are extracted from both
 full transitions and typed deltas. All six browser scenarios across child
 capabilities, composer, file delivery and Retry pass in the pinned container.
 Actual native action coordinates and UI residency checks remain unchanged.
+
+The following remote browser run passed those regressions but caught a mobile
+template-picker geometry sampling race. The trace shows the loading popup
+positioned at y=812; native analysis then replaces the short loading content
+with a 380px list between visibility and bounding-box reads, before Floating
+UI's existing resize update. The test now waits for the actual candidate and
+polls the original viewport limits and adds the missing top-edge check.
+Both viewport cases pass locally before and after the synchronization change.
+No picker positioning, timeout budget for opening, screenshot reference or
+product behavior was changed.
