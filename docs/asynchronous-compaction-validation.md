@@ -75,9 +75,13 @@ case, and after reaching the Summary gate in the process-death case.
 
 ## Verification gates
 
-Use Rust 1.98.1, the locked provider emulator and the repository FULL profile.
-Build all native targets before running the uninterrupted executable suites.
-Keep Cargo artifact discovery and rebuilds outside real process-test execution.
+Use Rust 1.100.0 / MSRV 1.100, the locked provider emulator and the repository
+FULL profile. Prepare Rust process-test harnesses with
+`test-support/prepare_native_tests.py` and matching Cargo flags. The preparer
+uses emitted compiler-artifact identities for the exact checkout, target,
+profile and features, and stages real companions beside each harness. Client
+integration builds the production executable set with `cargo build --bins --locked`.
+Keep artifact discovery and rebuilds outside real process-test execution.
 Use one active source workspace per Cargo target directory so type metadata
 cannot be confused with another branch's contract.
 
@@ -87,8 +91,10 @@ schemas, all TypeScript projects, provider tests, complete clients, i18n,
 source provenance/notices, production bundles and real-browser acceptance.
 Unfinished or unexecuted gates are not passing results.
 
-Local verification uses the WSL Linux toolchain and the repository's locked
-provider emulator. Supported-host document isolation, macOS native boundaries
+Current local verification uses a Linux container with Rust 1.100.0 and the
+repository's locked provider emulator. The PR description records current
+local suites and final-head CI; the controlled measurements above retain their
+original fixture scope. Supported-host document isolation, macOS native boundaries
 and the complete fixed-image browser suite are validated by the FULL CI jobs.
 Their results must be attached to the exact pull-request head.
 
