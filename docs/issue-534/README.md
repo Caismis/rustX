@@ -1,82 +1,82 @@
-# Issue #534：源读取分段证据
+# Issue #534: Segmented Source-Reading Evidence
 
-关联：[Issue #534](https://github.com/Caismis/rustX/issues/534)、[Issue #516](https://github.com/Caismis/rustX/issues/516)、[PR #517](https://github.com/Caismis/rustX/pull/517)。
+Related: [Issue #534](https://github.com/Caismis/rustX/issues/534), [Issue #516](https://github.com/Caismis/rustX/issues/516), and [PR #517](https://github.com/Caismis/rustX/pull/517).
 
-本组只评估完整几何源的读取阶段。实现方向为：`readGeometrySource` 首次读取确定长度/版本后，以两条滚动 lane 读取其余 2 MiB 页；`readWorkspacePreview` 的字节路径直接读取页缓冲，省去 64 KiB 分块保留和最终拼接。原有容量、权限与版本校验保持生效。
+This set of measurements evaluates only the read phase for a complete geometry source. The implementation direction is: after `readGeometrySource` determines the length/version on the initial read, it reads the remaining 2 MiB pages through two rolling lanes; the byte path in `readWorkspacePreview` reads directly into page buffers, avoiding retention of 64 KiB chunks and the final concatenation. Existing capacity, permission, and version checks remain in force.
 
-本轮只实现预读与减复制；持续传输协议和 native 导入链路未改。
+This round implements only read-ahead and reduced copying; persistent source transport and the native import path were not changed.
 
-正式结果保存在 [source-reading.json](source-reading.json)，共 30 个样本。环境为 Node v24.21.0、Linux 6.14.0-37-generic、Intel Core i9-14900K，32 个逻辑 CPU。本次最终运行位于独立工作树 `/tmp/rustx-issue-534`，HEAD 为 `01a9b5d9681da3107c7e7a5591ee9dcb128f968c`（实现提交）；以下 SHA-256 同时固定候选生产源码：
+The formal results are in [source-reading.json](source-reading.json), with 30 samples total. The environment was Node v24.21.0, Linux 6.14.0-37-generic, Intel Core i9-14900K, 32 logical CPUs. The final run was performed in the isolated worktree `/tmp/rustx-issue-534`, at HEAD `01a9b5d9681da3107c7e7a5591ee9dcb128f968c` (implementation commit). The following SHA-256 hashes also pin the candidate production source files:
 
-- `geometry-source.ts`：`1d913cc4e281bf76e0bb89547e77431f2b729d7154a9321239ddce70e06eadce`
-- `workspace-preview.ts`：`eae8e3930df8ff9b24d10d1732cf68e70fdc014ca9e99e649f59050b2969e6d3`
+- `geometry-source.ts`: `1d913cc4e281bf76e0bb89547e77431f2b729d7154a9321239ddce70e06eadce`
+- `workspace-preview.ts`: `eae8e3930df8ff9b24d10d1732cf68e70fdc014ca9e99e649f59050b2969e6d3`
 
-下表原始耗时按配对编号 1/2/3 排列，单位 ms；“缩短”按两组中位数计算，负数表示回退。
+The raw durations below are ordered by pair number 1/2/3 and are in ms. “Reduction” is calculated from the two medians; a negative value indicates a regression.
 
-| 组别 | 基线原始耗时 | 候选原始耗时 | 基线中位数 | 候选中位数 | 缩短 |
+| Group | Baseline raw durations | Candidate raw durations | Baseline median | Candidate median | Reduction |
 | --- | --- | --- | ---: | ---: | ---: |
-| 单源，0 ms 人为延迟 | 128.295 / 126.762 / 130.905 | 134.110 / 125.348 / 133.657 | 128.295 | 133.657 | -4.18% |
-| 单源，10 ms 人为延迟 | 1314.203 / 1281.032 / 1289.083 | 678.080 / 802.039 / 704.295 | 1289.083 | 704.295 | 45.36% |
-| 单源，50 ms 人为延迟 | 5286.483 / 5297.920 / 5291.783 | 2775.462 / 2819.394 / 2728.958 | 5291.783 | 2775.462 | 47.55% |
-| 共享双源 + 下载需求，10 ms | 106.736 / 96.213 / 100.417 | 95.334 / 96.497 / 93.347 | 100.417 | 95.334 | 5.06% |
-| Workbench 热本地 | 270.371 / 276.288 / 277.555 | 122.079 / 122.333 / 121.392 | 276.288 | 122.079 | 55.81% |
+| Single source, 0 ms artificial delay | 128.295 / 126.762 / 130.905 | 134.110 / 125.348 / 133.657 | 128.295 | 133.657 | -4.18% |
+| Single source, 10 ms artificial delay | 1314.203 / 1281.032 / 1289.083 | 678.080 / 802.039 / 704.295 | 1289.083 | 704.295 | 45.36% |
+| Single source, 50 ms artificial delay | 5286.483 / 5297.920 / 5291.783 | 2775.462 / 2819.394 / 2728.958 | 5291.783 | 2775.462 | 47.55% |
+| Shared two sources + download demand, 10 ms | 106.736 / 96.213 / 100.417 | 95.334 / 96.497 / 93.347 | 100.417 | 95.334 | 5.06% |
+| Workbench hot local | 270.371 / 276.288 / 277.555 | 122.079 / 122.333 / 121.392 | 276.288 | 122.079 | 55.81% |
 
-零延迟组中位数慢 5.362 ms（4.18%），三次配对中第一次与第三次较慢、第二次较快，样本不足以断言稳定回退或无回退；本组不宣称提升。零延迟适配器在返回 Promise 前完成同步复制，因此观测活跃物理读取为 1。10/50 ms 组的观测并发从 1 变为 2，页请求仍各为 100 次；优势来自重叠等待。热本地组实际 `fs.read` 从 3200 次降为 100 次，物理读取最大并发从 1 变为 2。
+The median in the zero-delay group is 5.362 ms slower (4.18%). Of the three pairs, the first and third were slower, while the second was faster. The sample is too small to conclude either a stable regression or no regression; no improvement is claimed for this group. The zero-delay adapter performs synchronous copying before returning a Promise, so the observed active physical-read count is 1. In the 10/50 ms groups, observed concurrency changed from 1 to 2, while page requests remained at 100 each; the advantage comes from overlapping waits. In the hot-local group, actual `fs.read` calls fell from 3200 to 100, and maximum physical-read concurrency rose from 1 to 2.
 
-共享组的六个样本均为 17 次读取、最大活跃物理读取 2；下载需求始终是第 3 个准入请求，随后两个几何源均完成，没有被后续预读挤占到末尾。基线下载完成时间为 20.646 / 19.918 / 20.210 ms，候选为 21.399 / 20.651 / 20.641 ms。基线两个源已经占满两个共享 slot，因此本组只获得小幅收益，符合预期。这里的下载是加入实际共享准入器的受控原始字节需求，未执行浏览器下载交付。
+All six samples in the shared group had 17 reads and a maximum of 2 active physical reads. The download demand was consistently the third admitted request; both geometry sources then completed, and the download was not displaced to the end by subsequent read-ahead. Download completion times were 20.646 / 19.918 / 20.210 ms for the baseline and 21.399 / 20.651 / 20.641 ms for the candidate. The two baseline sources already occupied both shared slots, so this group yields only a small benefit, as expected. The download here is a controlled raw-byte demand submitted to the actual shared admission controller; browser download delivery was not executed.
 
-分段中位数如下，单位 ms，每格为“基线 → 候选”。各列独立取中位数，不能将中位数相加还原总体中位数。
+Segment medians are below, in ms, with each cell showing “baseline → candidate.” Each column is independently median-aggregated; adding the medians does not reconstruct the overall median.
 
-| 组别 | 首个页完成 | 页读取活跃区间并集 | 页读取区间以外余量 |
+| Group | First page completed | Union of active page-read intervals | Remainder outside page-read intervals |
 | --- | ---: | ---: | ---: |
-| 单源，0 ms | 0.653 → 0.364 | 46.368 → 40.478 | 81.927 → 93.179 |
-| 单源，10 ms | 9.822 → 10.757 | 1071.008 → 655.433 | 218.075 → 73.588 |
-| 单源，50 ms | 50.755 → 50.904 | 5070.924 → 2710.409 | 220.860 → 65.906 |
-| 共享双源 + 下载需求 | 10.594 → 10.587 | 99.097 → 94.272 | 1.320 → 1.063 |
-| Workbench 热本地 | 1.464 → 0.797 | 182.341 → 93.373 | 95.214 → 28.321 |
+| Single source, 0 ms | 0.653 → 0.364 | 46.368 → 40.478 | 81.927 → 93.179 |
+| Single source, 10 ms | 9.822 → 10.757 | 1071.008 → 655.433 | 218.075 → 73.588 |
+| Single source, 50 ms | 50.755 → 50.904 | 5070.924 → 2710.409 | 220.860 → 65.906 |
+| Shared two sources + download demand | 10.594 → 10.587 | 99.097 → 94.272 | 1.320 → 1.063 |
+| Workbench hot local | 1.464 → 0.797 | 182.341 → 93.373 | 95.214 → 28.321 |
 
-热本地组另有真实 `fs.read` 回调区间并集中位数 117.048 → 89.574 ms，其区间以外余量为 160.507 → 32.251 ms。首个页完成仅表示字节页可用，并非首屏渲染完成。
+The hot-local group also has a median of 117.048 → 89.574 ms for the union of actual `fs.read` callback intervals, with a remainder outside those intervals of 160.507 → 32.251 ms. First-page completion means only that the byte page is available; it does not mean that the first screen has rendered.
 
-进程采样内存的每样本 `sampledMax` 再取中位数如下，单位 MiB，每格为“基线 → 候选”。
+The medians of each sample's process-memory `sampledMax` are below, in MiB, with each cell showing “baseline → candidate.”
 
-| 组别 | RSS | heapUsed | external | arrayBuffers |
+| Group | RSS | heapUsed | external | arrayBuffers |
 | --- | ---: | ---: | ---: | ---: |
-| 单源，0 ms | 584.164 → 594.180 | 8.015 → 8.027 | 496.781 → 504.781 | 482.202 → 482.202 |
-| 单源，10 ms | 552.062 → 572.352 | 8.279 → 8.412 | 614.781 → 484.781 | 602.202 → 472.202 |
-| 单源，50 ms | 551.957 → 549.984 | 8.926 → 8.738 | 612.781 → 428.781 | 602.202 → 418.202 |
-| 共享双源 + 下载需求 | 398.160 → 366.285 | 9.260 → 9.251 | 280.781 → 268.781 | 270.202 → 258.202 |
-| Workbench 热本地 | 571.250 → 570.520 | 10.415 → 9.909 | 443.719 → 450.781 | 433.140 → 436.202 |
+| Single source, 0 ms | 584.164 → 594.180 | 8.015 → 8.027 | 496.781 → 504.781 | 482.202 → 482.202 |
+| Single source, 10 ms | 552.062 → 572.352 | 8.279 → 8.412 | 614.781 → 484.781 | 602.202 → 472.202 |
+| Single source, 50 ms | 551.957 → 549.984 | 8.926 → 8.738 | 612.781 → 428.781 | 602.202 → 418.202 |
+| Shared two sources + download demand | 398.160 → 366.285 | 9.260 → 9.251 | 280.781 → 268.781 | 270.202 → 258.202 |
+| Workbench hot local | 571.250 → 570.520 | 10.415 → 9.909 | 443.719 → 450.781 | 433.140 → 436.202 |
 
-本轮不宣称降低进程内存峰值。10 ms 组采样 RSS 中位数增加 20.289 MiB、arrayBuffers 减少 130 MiB；0 ms 组 RSS 增加 10.016 MiB，热本地组 arrayBuffers 增加 3.062 MiB。不同计数与不同组的变化不一致。这些进程计数包含 200 MiB 内存夹具，受分配器与 GC 回收/记账时机影响；本组无法确定观测差异的具体归因，也不是几何页缓冲活跃数量或精确驻留峰值。
+This round does not claim to reduce peak process memory. In the 10 ms group, median sampled RSS increased by 20.289 MiB while `arrayBuffers` decreased by 130 MiB; in the 0 ms group, RSS increased by 10.016 MiB, and in the hot-local group, `arrayBuffers` increased by 3.062 MiB. Changes across these different counters and groups are inconsistent. These process counters include the 200 MiB memory fixture and are affected by allocator and GC reclamation/accounting timing. This group cannot determine the specific cause of the observed differences, and these counters are not the number of active geometry page buffers or an exact resident-memory peak.
 
-新增滚动 lane 的逻辑活跃页预算为每个 owner 最多 2 页（4 MiB）；两个 mounted owner 可合计最多 4 页引用（8 MiB），全局物理活跃读取仍受共享准入器限制为 2。逻辑页预算不等于分配器/GC 保留内存上限，完整输出缓冲另按每源至多 200 MiB 计算。
+The new rolling lanes have a logical active-page budget of at most 2 pages (4 MiB) per owner. Two mounted owners can reference at most 4 pages (8 MiB) in total; global physical active reads remain limited to 2 by the shared admission controller. The logical page budget is not an allocator/GC retained-memory limit. The complete output buffer is separately bounded at up to 200 MiB per source.
 
-运行命令（仓库根目录；正式运行时避免与构建、测试或其他基准并行）：
+Run command (from the repository root; during formal runs, avoid running alongside builds, tests, or other benchmarks):
 
 ```sh
 node --experimental-transform-types --expose-gc web-console/scripts/geometry-source-benchmark.ts --output docs/issue-534/source-reading.json
 ```
 
-`--smoke --output /tmp/source-reading-smoke.json` 使用 8 MiB、一组配对，供快速检查，不作为正式性能证据。
+`--smoke --output /tmp/source-reading-smoke.json` uses 8 MiB and one pair for a quick check; it is not formal performance evidence.
 
-脚本以 `git show c076354d647c1a1832e9af5e005696ecb5579285` 固定基线的两份生产源码，通过 Node 模块加载钩子与当前生产函数分别运行，未在脚本复制被测算法。其他相对依赖来自同一检出；JSON 记录两份生产文件的 SHA-256、加载依赖的 SHA-256、revision、工作区状态、Node/OS/CPU 和原始命令。正式每组至少三组配对，奇数组基线先、偶数组当前先。
+The script pins the two baseline production source files from `git show c076354d647c1a1832e9af5e005696ecb5579285` and runs them alongside the current production functions using a Node module-loading hook; it does not duplicate the algorithms under test in the script. Other relative dependencies come from the same checkout. The JSON records the SHA-256 hashes of the two production files and loaded dependencies, the revision, worktree state, Node/OS/CPU details, and raw command. Each formal group has at least three paired runs; the baseline runs first in odd-numbered pairs and the current version first in even-numbered pairs.
 
-| 组别 | 数据与路径 | 目的 |
+| Group | Data and path | Purpose |
 | --- | --- | --- |
-| controlled-single | 200 MiB；2 MiB 页；每次读取人为加入 0/10/50 ms 延迟 | 单独观察串行与两 lane 对固定页延迟的影响 |
-| controlled-shared | 两个 16 MiB 源与一个 2 MiB 下载；10 ms 人为延迟；使用实际 `previewDemands().privateReads` | 验证共享物理并发最多 2，排队下载取得初始两页后的下一个准入位置 |
-| workspace-hot-local | 200 MiB；实际 `readGeometrySource → readWorkspacePreview → fs.read` | 观察刚写入本地文件的热路径，包括安全目录遍历与版本复核 |
+| controlled-single | 200 MiB; 2 MiB pages; 0/10/50 ms artificial delay added to each read | Observe separately the effect of serial reads versus two lanes under fixed per-page latency |
+| controlled-shared | Two 16 MiB sources and one 2 MiB download; 10 ms artificial delay; uses actual `previewDemands().privateReads` | Verify that shared physical concurrency is at most 2 and that the queued download gets the next admission slot after the initial two pages |
+| workspace-hot-local | 200 MiB; actual `readGeometrySource → readWorkspacePreview → fs.read` | Observe the hot path for a recently written local file, including safe directory traversal and version revalidation |
 
-计时不含模块初始化、文件生成/写入、显式 GC、结果散列与报告输出。每次结果都在计时后验证完整 SHA-256 和版本。只创建一个至多 200 MiB 的临时文件，结束清理。正式 JSON 保存每页提交/准入/结束时间与 offset、每个真实 `fs.read` 的开始/回调时间与字节数、实际读取次数和物理最大并发。
+Timing excludes module initialization, file creation/writing, explicit GC, result hashing, and report output. Every result is checked after timing for full SHA-256 and version. Only one temporary file, at most 200 MiB, is created and is cleaned up at the end. The formal JSON records each page's submission/admission/completion times and offset, the start/callback times and byte count for each actual `fs.read`, actual read counts, and maximum physical concurrency.
 
-分段使用页读取活跃区间与 `fs.read` 回调区间的并集；并行区间不能相加。区间以外余量混合了调度、准入、校验、分配、拷贝、主动让出及采样/埋点开销，**不等于纯拼装 CPU 时间，也不是完整 waterfall**。进程内存每 5 ms 加首尾采样；`sampledMax` 只是采样最大值，不是精确峰值。
+Segmentation uses the union of page-read active intervals and `fs.read` callback intervals; overlapping intervals cannot be added. The remainder outside those intervals mixes scheduling, admission, validation, allocation, copying, cooperative yielding, and sampling/instrumentation overhead. It is **not pure assembly CPU time and is not a complete waterfall**. Process memory is sampled every 5 ms, plus at the beginning and end; `sampledMax` is only the maximum sampled value, not an exact peak.
 
-人为延迟不代表真实网络。本组未覆盖 HTTP、native delivery 传输、浏览器、解析或 GPU，不能证明 200 ms 首屏或 50 ms 交互目标，也不将 #534 标为完成。热本地文件结果不代表冷盘或远端文件系统。
+Artificial delay does not represent a real network. This group does not cover HTTP, native delivery transport, the browser, parsing, or GPU work; it cannot prove the 200 ms first-screen or 50 ms interaction targets, and it does not mark #534 complete. Hot-local file results do not represent cold disks or remote filesystems.
 
-## 验证
+## Validation
 
-[validation.json](validation.json) 保存命令、实现 revision、生产文件散列与结果。独立实现工作树中，TypeScript、生产构建、provenance/geometry runtime/i18n/notices 检查通过；45 个相关单测文件一次运行 504 项通过。复用了原检出的锁定 Web/TUI 依赖及未修改的 native 文件系统构建产物；临时 Vite 测试配置仅允许工作树外的依赖路径，不修改产品配置、断言、超时或测试选择。缺失的锁定图标依赖以 `corepack pnpm install --frozen-lockfile --ignore-scripts` 补齐，锁文件没有修改。
+[validation.json](validation.json) records commands, implementation revision, production file hashes, and results. In the isolated implementation worktree, TypeScript, the production build, and the provenance/geometry runtime/i18n/notices checks passed; 504 tests across 45 related test files passed in one run. The run reused the checkout's locked Web/TUI dependencies and unmodified native filesystem build artifacts. The temporary Vite test configuration only allowed dependency paths outside the worktree; it did not modify product configuration, assertions, timeouts, or test selection. The missing locked icon dependency was restored with `corepack pnpm install --frozen-lockfile --ignore-scripts`; the lockfile was not modified.
 
-本机 Chrome 的生产几何 fixture 补充诊断 9 项中 8 项通过，覆盖代码加载取消、双 owner、受控整模 LOD、焦点、退休后迟到结果及约 200 MiB STL。一项自然 LOD 测试在粗模 GPU/下一帧代理时间必须先于最终模型的顺序断言失败；记录中粗模实际提交早于最终模型，但代理轮询结果次序相反。相同原版断言在额外三次基线运行中也失败一次，候选随后三次通过；[全部结果与观测](browser/functional-validation.json) 一并保留，不将后续通过替代原始失败。该 fixture 为 168,057 字节，首页即 EOF，不进入并发读取；CAD Worker、渲染器和该测试均未修改。此对照支持既有时序敏感性的判断，不能证明不存在其他浏览器回归。
+The local Chrome production geometry-fixture supplemental diagnostics passed 8 of 9 checks. They covered cancellation during code loading, two owners, controlled full-model LOD, focus, late results after retirement, and an approximately 200 MiB STL. One natural LOD test failed its ordering assertion that the coarse-model GPU/next-frame proxy time must precede the final model: the record shows the coarse model was submitted before the final model, but the proxy polling results appeared in the opposite order. The same original assertion also failed once in three additional baseline runs, then passed in three candidate runs; [all results and observations](browser/functional-validation.json) are retained together, and the later passes do not replace the original failure. The fixture is 168,057 bytes, with EOF at the first page, so it does not enter concurrent reading; the CAD Worker, renderer, and test were not modified. This comparison supports the judgment that the behavior was already timing-sensitive; it does not prove the absence of other browser regressions.
 
-当前版本的 [STL 大模型](browser/stl-200mib-latency.json)、[STL 平面](browser/stl-735000-vertices-latency.json) 与 [CAD 装配](browser/cad-96-parts-latency.json) 结果保留原始交互和 GPU/下一帧代理时间。这些不是浏览器前后配对提升证据，也没有认证严格预算。环境缺少 Docker/Podman，固定镜像浏览器验收与远端 CI 尚待执行。
+The current-version results for [large STL](browser/stl-200mib-latency.json), [STL plane](browser/stl-735000-vertices-latency.json), and [CAD assembly](browser/cad-96-parts-latency.json) retain the raw interaction and GPU/next-frame proxy timings. These are not paired before/after browser improvement evidence and do not certify strict budgets. Docker/Podman was unavailable in the environment. **At the time these local diagnostics were recorded, pinned-container browser acceptance and remote CI were still pending.**
