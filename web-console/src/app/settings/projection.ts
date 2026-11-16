@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v78';
+} from '../../../../protocol/app-server/v79';
 import type { ConnectionState } from '../../client/contracts';
 
 /** Each Settings target names one exact configuration owner. The catalog scope
@@ -59,7 +59,6 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
     case 'description': return document.agent?.description;
     case 'project_guidance': return document.agent?.agents_md;
     case 'approval': return document.approval_mode;
-    case 'context': return document.context;
     case 'model_timeout': return document.model_timeout_policy;
     case 'tool_deadline': return document.tool_deadline_policy;
     case 'capacity': return document.subagents;
@@ -103,7 +102,6 @@ export function unitProvenancePath(mutation: SourceMutation): string | undefined
     case 'description': return 'agent.description';
     case 'project_guidance': return 'agent.agents_md';
     case 'approval': return 'approval_mode';
-    case 'context': return 'context';
     case 'model_timeout': return 'model_timeout_policy';
     case 'tool_deadline': return 'tool_deadline_policy';
     case 'capacity': return 'subagents';

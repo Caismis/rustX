@@ -1,4 +1,4 @@
-import type { RuntimeClientContextView } from '../../../../protocol/app-server/v78';
+import type { RuntimeClientContextView } from '../../../../protocol/app-server/v79';
 import type { AppServerClient } from '../../client/app-server';
 import type { CompactionRequestEvidence } from '../../client/contracts';
 import { useClientSelector, sameValue } from '../../client/selectors';
@@ -12,6 +12,8 @@ export function compactionPresentation(context?: RuntimeClientContextView, reque
   if (request?.status === 'submitting') return { state: 'submitting' as const };
   if (request?.status === 'uncertain') return { state: 'uncertain' as const };
   const newerCommit = !!request && (context?.compaction_count ?? 0) > request.baselineCount;
+  if (request?.status === 'skipped' && !newerCommit) return { state: 'skipped' as const };
+  if (request?.status === 'cancelled' && !newerCommit) return { state: 'cancelled' as const };
   if (request?.status === 'succeeded' && !newerCommit) return { state: 'succeeded' as const };
   if (request?.status === 'failed' && !newerCommit) return { state: 'failed' as const, diagnostic: request.diagnostic };
   if (context?.compaction_error) return { state: 'failed' as const, diagnostic: context.compaction_error };
@@ -32,6 +34,8 @@ export function ContextSeat({ client, sessionId }: { client: AppServerClient; se
   // Committed checkpoints have their own historical transcript seats. Only
   // live operation/receipt feedback belongs at the current reading frontier.
   if (!presentation || presentation.state === 'succeeded') return presentation && !head ? <div role="status"><CompactionMessage title={tx('agent:context.command-title')} summary={tx('agent:context.succeeded')}/></div> : null;
+  if (presentation.state === 'skipped') return <div role="status">{tx('agent:context.skipped')}</div>;
+  if (presentation.state === 'cancelled') return <div role="status">{tx('agent:context.cancelled')}</div>;
   const running = presentation.state === 'running' || presentation.state === 'submitting';
   const uncertain = presentation.state === 'uncertain' || presentation.state === 'running' && facts.request?.status === 'uncertain' && facts.context?.manual_compaction?.request_id !== facts.request.requestId;
   const diagnostic = presentation.diagnostic ?? (presentation.state === 'running' && facts.request?.status === 'failed' ? facts.request.diagnostic : undefined);

@@ -142,6 +142,7 @@ pub enum TraceState {
     Completed,
     Failed,
     Cancelled,
+    Skipped,
     TimedOut,
     Limited,
     Denied,

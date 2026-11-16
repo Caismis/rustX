@@ -1,9 +1,9 @@
 import { parseModelToolCall } from '../../../protocol/app-server/model-tool-call';
 import { canonicalLocatorKey } from '../../../protocol/app-server/content-identity';
-import type { CanonicalContentLocator, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage, TurnProcessView } from '../../../protocol/app-server/v78';
+import type { CanonicalContentLocator, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, RuntimeClientMessageDescriptor, RuntimeClientTranscriptEntry, RuntimeClientTranscriptPage, TurnProcessView } from '../../../protocol/app-server/v79';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { messageDescriptor } from '../../../protocol/app-server/message-descriptor';
-import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../../protocol/app-server/v78';
+import type { ForegroundToolExecution, SessionFileReference, ToolExecutionResult } from '../../../protocol/app-server/v79';
 import type { PresentRowView } from '../presentation/agent/PresentRow';
 
 /** Raw arguments can be partial while a call streams; then they show verbatim. */

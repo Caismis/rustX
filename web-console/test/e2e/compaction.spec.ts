@@ -56,13 +56,9 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await input.fill('/compact');
       await expect(page.getByRole('option', { name: copy('Compact compact', '压缩 compact'), exact: true })).toBeVisible();
       await input.press('Enter');
-      await expect(page.getByText(copy('Compaction failed', '上下文压缩失败'), { exact: true })).toBeVisible();
-      const diagnostic = page.locator('[data-context-seat]').getByRole('button', { name: copy('compact · Compaction failed', 'compact · 上下文压缩失败'), exact: true });
-      await diagnostic.focus(); await diagnostic.press('Enter');
-      await expect(page.getByRole('status').locator('[data-compaction-body] p')).not.toBeEmpty();
+      await expect(page.getByText(copy('No eligible history to compact', '没有可压缩的历史记录'), { exact: true })).toBeVisible();
+      await expect(page.locator('[data-compaction-marker]')).toHaveCount(0);
       await expect(page.getByRole('dialog')).toHaveCount(0);
-      await page.getByRole('button', { name: copy('Read current context', '读取当前上下文'), exact: true }).click();
-      await expect(page.getByText(copy('Compaction failed', '上下文压缩失败'), { exact: true })).toBeVisible();
       await input.fill('compaction-evidence-435 ' + 'Preserve these historical facts. '.repeat(512));
       await input.press('Enter');
       await expect(page.getByText('Original context ready.', { exact: true })).toBeVisible();
@@ -94,7 +90,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       }
       await page.getByRole('tab', { name: copy('Trajectory', '轨迹'), exact: true }).click();
       const compactionRows = page.locator('[data-display-type="RecordRow"][data-kind="compaction"]');
-      await expect(compactionRows).toHaveCount(2);
+      await expect(compactionRows).toHaveCount(1);
       const compactionRow = compactionRows.last();
       await expect(compactionRow).toHaveAttribute('data-between-turns', 'true');
       await compactionRow.click();
@@ -102,7 +98,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       const traceInspector = page.getByRole('complementary', { name: copy('Event details', '事件详情'), exact: true });
       await expect(traceInspector.getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
       await traceInspector.getByRole('tab', { name: copy('Raw Output', '原始输出'), exact: true }).click();
-      await expect(traceInspector.getByText('The user supplied compaction-evidence-435. Preserve that fact.', { exact: true })).toBeVisible();
+      await expect(traceInspector.getByRole('tabpanel', { name: copy('Raw Output', '原始输出'), exact: true })).toContainText('The user supplied compaction-evidence-435. Preserve that fact.');
       await traceInspector.getByRole('tab', { name: copy('Summary', '概述'), exact: true }).click();
       await page.screenshot({ path: `/tmp/rustx-compaction-trajectory-${locale}-${theme}.png` });
       await traceInspector.getByRole('button', { name: copy('Close details', '关闭详情'), exact: true }).click();

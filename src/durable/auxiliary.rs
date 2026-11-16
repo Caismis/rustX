@@ -187,3 +187,68 @@ pub(crate) fn call_settled_event_id(call_id: &AuxiliaryCallId) -> EventId {
 pub(crate) fn retry_event_id(request_id: &RequestId) -> EventId {
     EventId::new(format!("auxiliary-retry-scheduled:{request_id}"))
 }
+
+/// Validate bounded, ordered source evidence. Offsets address a runtime
+/// rendering, not canonical Ledger JSON; the Store does not reproduce it.
+pub(crate) fn validate_compaction_ranges(
+    ranges: &[crate::model::auxiliary::AuxiliarySourceRange],
+) -> Result<(), ConversationStoreError> {
+    use crate::model::auxiliary::AUXILIARY_SOURCE_RANGE_LIMIT_MAX;
+    let limits = crate::context::resources::ResourceLimits::default();
+    if ranges.is_empty() || ranges.len() > AUXILIARY_SOURCE_RANGE_LIMIT_MAX {
+        return Err(ConversationStoreError::InvalidReference(
+            "compaction source ranges must contain 1..=32 occurrences".into(),
+        ));
+    }
+    let mut previous = None;
+    for range in ranges {
+        if range.projection_index as usize >= limits.total_items
+            || range.byte_start > range.byte_end
+            || range.byte_end as usize > limits.record_bytes
+            || (range.byte_start == range.byte_end && range.byte_start != 0)
+            || previous
+                .is_some_and(|index: u32| index.checked_add(1) != Some(range.projection_index))
+            || (previous.is_some() && range.byte_start != 0)
+        {
+            return Err(ConversationStoreError::InvalidReference(
+                "invalid or unordered compaction projected source ranges".into(),
+            ));
+        }
+        previous = Some(range.projection_index);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod compaction_range_tests {
+    use super::*;
+    use crate::model::auxiliary::{AuxiliarySourceRange, AuxiliarySourceRole};
+
+    fn range(index: u32, start: u32, end: u32) -> AuxiliarySourceRange {
+        AuxiliarySourceRange {
+            projection_index: index,
+            role: AuxiliarySourceRole::User,
+            byte_start: start,
+            byte_end: end,
+        }
+    }
+
+    #[test]
+    fn bounded_ranges_require_order_and_valid_offsets() {
+        assert!(validate_compaction_ranges(&[range(3, 4, 9), range(4, 0, 10)]).is_ok());
+        assert!(validate_compaction_ranges(&[range(0, 0, 0)]).is_ok());
+        for invalid in [
+            vec![],
+            vec![range(0, 3, 2)],
+            vec![range(0, 1, 1)],
+            vec![range(1, 0, 1), range(1, 0, 1)],
+            vec![range(1, 0, 1), range(3, 0, 1)],
+            vec![range(0, 0, 1), range(1, 1, 2)],
+            vec![range(8192, 0, 1)],
+            vec![range(0, 0, 1_048_577)],
+            (0..33).map(|i| range(i, 0, 1)).collect(),
+        ] {
+            assert!(validate_compaction_ranges(&invalid).is_err());
+        }
+    }
+}

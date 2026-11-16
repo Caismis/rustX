@@ -1,6 +1,6 @@
 import {expect,it,vi} from 'vitest';
 import {readSourceSettings,sourceObservation} from '../../protocol/app-server/source-observation';
-import type {BoundedSourceSettings,SourceFieldRef,SourceValueChunk} from '../../protocol/app-server/v78';
+import type {BoundedSourceSettings,SourceFieldRef,SourceValueChunk} from '../../protocol/app-server/v79';
 import {cfg3Source} from './cfg3-data';
 
 const expired=()=>Object.assign(new Error('expired'),{error:{data:{kind:'read_cut_expired'}}});

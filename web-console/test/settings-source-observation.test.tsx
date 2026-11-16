@@ -8,7 +8,7 @@ import { boundedSettings } from "./fixture";
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v78';
+import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v79';
 import { waitForSettingsRevision, openSettingsPage, observedRevision, settingsReady, SettingsSurface } from './settings-harness';
 import { RpcFailure } from '../src/client/errors';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
@@ -81,14 +81,14 @@ const agentPage = () => { fireEvent.click(screen.getByRole('tab', { name: 'Agent
 const diagnostics = () => { fireEvent.click(screen.getByRole('tab', { name: 'Advanced' })); };
 /** The whole accepted projection, exposed only by the Advanced diagnostics. */
 const acceptedProjection = () => settingsContext().observation!;
-/** Save 19 with the acknowledgement held, freezing the projection the App Server
+/** Save a response timeout with the acknowledgement held, freezing the projection the App Server
  * captured while application was still preparing, then complete application. */
 async function saveHeldWrite(s: Server, native: Native) {
-  // The App Server process policy is a User-only advanced unit.
+  // Save an independent runtime-limit unit while process application advances.
   fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }));
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; native.application = native.applied('1', 'preparing');
   s.commit(write);
@@ -178,8 +178,8 @@ it('S6 a publication arriving during an outstanding convergence read still drive
   const native = new Native(); native.application = native.applied('1', 'applied');
   const s = await open(native); // settles at application 1
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   // Native commits the write and republishes application 2, still preparing.
   native.revision = 'user-2'; native.application = native.applied('2', 'preparing');
@@ -212,12 +212,12 @@ it('S7 an equal-version acknowledgement cannot regress a newer authoritative aut
   const native = new Native(); native.application = native.applied('7', 'applied');
   const s = await open(native);
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
   // An explicit authoritative read is outstanding before the save starts.
   fireEvent.click(screen.getByRole('button', { name: 'Reload configuration' }));
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   const read = sent(s, 'configuration/sourcesRead')[1];
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   // The acknowledgement captured revision B at application version 7.
   native.revision = 'user-2'; native.inheritGuidance = true;
@@ -249,14 +249,14 @@ it('S8 a write acknowledgement cannot cancel an outstanding newer-authority read
   const native = new Native(); native.application = native.applied('1', 'applied');
   const s = await open(native);
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
   // Native publishes application 2; the convergence read starts and is frozen.
   native.application = native.applied('2', 'preparing');
   await publish(s, native.applied('2', 'preparing'));
   await waitFor(() => expect(sent(s, 'configuration/sourcesRead').length).toBe(2));
   const read = sent(s, 'configuration/sourcesRead')[1];
   // The older acknowledgement lands while that read is outstanding.
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; s.commit(write); // captured before application 3
   // Native settles at application 3 while the read is outstanding; the
@@ -339,8 +339,8 @@ it('S10 target replacement fences stale reads, acknowledgements and the stale wo
   await openSettingsPage('Advanced');
   await waitForSettingsRevision('user-1');
   s.held.add('configuration/sourceWrite'); s.held.add('configuration/sourcesRead');
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2'; native.application = native.applied('2', 'preparing');
   s.commit(write);
@@ -383,8 +383,8 @@ it('S11 a superseded convergence worker transfers a publication that arrived beh
   const r1 = sent(s, 'configuration/sourcesRead')[1];
   s.commit(r1);
   // Step 3: deliver the successful sourceWrite acknowledgement.
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   native.revision = 'user-2';
   s.commit(write);

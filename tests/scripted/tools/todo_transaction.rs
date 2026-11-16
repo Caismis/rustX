@@ -91,11 +91,6 @@ fn request(
 
 fn context_runtime(model: &Arc<support::fake::FakeModel>) -> rustx::context::ContextRuntime {
     rustx::context::ContextRuntime::for_attempt(
-        rustx::context::SessionContextPolicy {
-            reserve_tokens: 0,
-            keep_recent_tokens: 0,
-            summary_output_cap: None,
-        },
         Arc::new(rustx::context::DefaultTokenEstimator),
         Some(rustx::context::AgentStatusEngine::default()),
         &support::attempt_model(model.clone(), "todo-transaction-model"),

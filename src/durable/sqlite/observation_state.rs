@@ -170,6 +170,10 @@ pub(super) fn todo_head(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep the closed event-to-observation mapping together"
+)]
 pub(super) fn event(
     connection: &Connection,
     event: &crate::events::types::RuntimeEventEnvelope,
@@ -178,6 +182,9 @@ pub(super) fn event(
     if matches!(
         event.event,
         RuntimeEvent::CompactionStarted { .. }
+            | RuntimeEvent::CompactionChunkAccepted { .. }
+            | RuntimeEvent::CompactionSkipped { .. }
+            | RuntimeEvent::CompactionCancelled { .. }
             | RuntimeEvent::CompactionFailed { .. }
             | RuntimeEvent::CompactionCompleted { .. }
     ) {
@@ -195,18 +202,53 @@ pub(super) fn event(
                 )
                 .map_err(|error| storage(error.to_string()))?;
         }
-        RuntimeEvent::CompactionStarted { .. } => {
+        RuntimeEvent::CompactionStarted { operation_id } => {
+            let value = crate::runtime_client::snapshot::RuntimeClientCompactionProgress {
+                operation_id: operation_id.clone(),
+                accepted_fragments: 0,
+                source_ranges: Vec::new(),
+                generation: None,
+            };
             super::observation_request::index_state(
                 connection,
                 "observation_context",
                 &format!("context/{}", event.sequence),
-                &serde_json::json!({}),
+                &serde_json::json!({"compaction_progress": value}),
+            )?;
+        }
+        RuntimeEvent::CompactionChunkAccepted {
+            operation_id,
+            accepted_fragments,
+            source_ranges,
+            generation,
+        } => {
+            let value = crate::runtime_client::snapshot::RuntimeClientCompactionProgress {
+                operation_id: operation_id.clone(),
+                accepted_fragments: *accepted_fragments,
+                source_ranges: source_ranges.clone(),
+                generation: generation.clone(),
+            };
+            super::observation_request::index_state(
+                connection,
+                "observation_context",
+                &format!("context/{}", event.sequence),
+                &serde_json::json!({"compaction_progress": value}),
+            )?;
+        }
+        RuntimeEvent::CompactionSkipped { .. } | RuntimeEvent::CompactionCancelled { .. } => {
+            super::observation_request::index_state(
+                connection,
+                "observation_context",
+                &format!("context/{}", event.sequence),
+                &serde_json::json!({"compaction_progress": null}),
             )?;
         }
         RuntimeEvent::CompactionFailed { error, .. } => {
             #[derive(serde::Serialize, schemars::JsonSchema)]
             struct Diagnostic<'a> {
                 compaction_error: &'a str,
+                compaction_progress:
+                    Option<crate::runtime_client::snapshot::RuntimeClientCompactionProgress>,
             }
             super::observation_request::index_state(
                 connection,
@@ -214,6 +256,7 @@ pub(super) fn event(
                 &format!("context/{}", event.sequence),
                 &Diagnostic {
                     compaction_error: error,
+                    compaction_progress: None,
                 },
             )?;
         }
@@ -222,10 +265,13 @@ pub(super) fn event(
             struct Diagnostic<'a> {
                 latest_compaction: crate::observation::head::RuntimeClientCompactionView,
                 occupancy: &'a Option<crate::context::occupancy::ContextOccupancy>,
+                compaction_progress:
+                    Option<crate::runtime_client::snapshot::RuntimeClientCompactionProgress>,
             }
             let value = Diagnostic {
                 latest_compaction: super::observation_occupancy::compaction(connection, event)?,
                 occupancy,
+                compaction_progress: None,
             };
             super::observation_request::index_state(
                 connection,

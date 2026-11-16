@@ -316,7 +316,10 @@ test('deleting the default and then the last model preserves old conversations a
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
     throw error;
-  } finally { await native.shutdown(); await stopDogfoodPage(page, fixture, false); }
+  } finally {
+    try { await native.shutdown(); }
+    finally { await stopDogfoodPage(page, fixture, false); }
+  }
 });
 
 for (const replaceLastProvider of [false, true]) test(replaceLastProvider
@@ -500,5 +503,8 @@ compat = { chat_reasoning_replay = "omit" }
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
     throw error;
-  } finally { await native.shutdown(); await stopDogfoodPage(page, fixture, false); }
+  } finally {
+    try { await native.shutdown(); }
+    finally { await stopDogfoodPage(page, fixture, false); }
+  }
 });

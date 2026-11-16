@@ -26,6 +26,82 @@ use rusqlite::{TransactionBehavior, params};
 use std::sync::{Arc, Mutex};
 
 #[test]
+fn compaction_progress_requires_open_owner_strict_sequence_and_bounded_ranges() {
+    use crate::model::auxiliary::{AuxiliarySourceRange, AuxiliarySourceRole};
+    use crate::runtime::identity::CompactionOperationId;
+    let store = store();
+    let conversation = store.conversation_id().clone();
+    let operation = CompactionOperationId::new("progress-test");
+    let range = AuxiliarySourceRange {
+        projection_index: 0,
+        role: AuxiliarySourceRole::User,
+        byte_start: 0,
+        byte_end: 1,
+    };
+    let chunk = |count, ranges| RuntimeEvent::CompactionChunkAccepted {
+        operation_id: operation.clone(),
+        accepted_fragments: count,
+        source_ranges: ranges,
+        generation: None,
+    };
+    assert!(
+        store
+            .append_event(envelope(
+                &conversation,
+                "orphan",
+                None,
+                chunk(1, vec![range.clone()])
+            ))
+            .is_err()
+    );
+    store
+        .append_event(envelope(
+            &conversation,
+            "begin",
+            None,
+            RuntimeEvent::CompactionStarted {
+                operation_id: operation.clone(),
+            },
+        ))
+        .unwrap();
+    assert!(
+        store
+            .append_event(envelope(
+                &conversation,
+                "jump",
+                None,
+                chunk(2, vec![range.clone()])
+            ))
+            .is_err()
+    );
+    assert!(
+        store
+            .append_event(envelope(&conversation, "empty", None, chunk(1, vec![])))
+            .is_err()
+    );
+    assert!(
+        store
+            .append_event(envelope(
+                &conversation,
+                "too-many",
+                None,
+                chunk(1, vec![range.clone(); 33])
+            ))
+            .is_err()
+    );
+    assert!(
+        store
+            .append_event(envelope(
+                &conversation,
+                "missing-generation",
+                None,
+                chunk(1, vec![range])
+            ))
+            .is_err()
+    );
+}
+
+#[test]
 fn background_terminal_publication_is_idempotent_and_terminal_unique() {
     let store = store();
     let conversation_id = store.conversation_id().clone();

@@ -252,8 +252,7 @@ impl UserConfigManager {
     ) -> Result<SourceCapture, LaunchFailure> {
         let capture = self.resolve_captured_layers(layers, false, None)?;
         let config = &capture.config;
-        config.context.validate().map_err(|e| e.to_string())?;
-        let (primary, summary) = crate::model::session::analyze_session_model_config(
+        crate::model::session::analyze_session_model_config(
             &capture.models,
             request
                 .model
@@ -261,21 +260,6 @@ impl UserConfigManager {
                 .unwrap_or_else(|| config.initial_model()),
         )
         .map_err(|e| e.to_string())?;
-        config
-            .context_policy()
-            .validate_budgets(
-                (primary.context_window, primary.max_output_tokens),
-                (summary.context_window, summary.max_output_tokens),
-            )
-            .map_err(|error| {
-                LaunchFailure::at(
-                    Some(self.sources.config_path.clone()),
-                    "context",
-                    "context budgets cannot fit the selected models",
-                    "correct reserves, recent-history budget, or explicit model limits",
-                    error.message,
-                )
-            })?;
         Ok(capture)
     }
 
@@ -516,12 +500,21 @@ impl UserConfigManager {
                             .binding(&selection.model)
                             .is_ok_and(|(provider, _)| provider.credential().is_ok())
                     }) && crate::model::session::analyze_session_model_config(&models, selection)
-                        .is_ok_and(|(primary, _)| {
-                            let budget = (primary.context_window, primary.max_output_tokens);
-                            config
-                                .context_policy()
-                                .validate_budgets(budget, budget)
+                        .is_ok_and(|(primary, auxiliary)| {
+                            crate::model::invocation::reasoning_output_minimum(
+                                auxiliary.protocol,
+                                &auxiliary.request_params,
+                            )
+                            .is_ok_and(|reasoning| {
+                                crate::context::policy::CompactionPolicy::resolve_with_reasoning(
+                                    primary.context_window,
+                                    primary.max_output_tokens,
+                                    auxiliary.context_window,
+                                    auxiliary.max_output_tokens,
+                                    reasoning,
+                                )
                                 .is_ok()
+                            })
                         })
                 });
             config.agent.model = replacement
@@ -1079,8 +1072,19 @@ pub(in crate::local_runtime) fn parse_layer(
     bytes: &[u8],
     workspace: bool,
 ) -> Result<RuntimeLayer, LaunchFailure> {
-    let layer: RuntimeLayer =
-        crate::toml_authoring::parse_detailed(bytes).map_err(|e| LaunchFailure::parse(path, e))?;
+    let layer =
+        super::super::authoring::parse_runtime_layer(bytes).map_err(|error| match error {
+            super::super::authoring::RuntimeLayerParseFailure::Invalid(error) => {
+                LaunchFailure::parse(path, error)
+            }
+            super::super::authoring::RuntimeLayerParseFailure::RemovedContext => LaunchFailure::at(
+                Some(path.into()),
+                "context",
+                "obsolete context settings",
+                super::super::authoring::REMOVED_CONTEXT_DIAGNOSTIC,
+                super::super::authoring::REMOVED_CONTEXT_DIAGNOSTIC.to_owned(),
+            ),
+        })?;
     source_restrictions(path, &layer, workspace)?;
     Ok(layer)
 }

@@ -261,7 +261,7 @@ test('dark desktop Advanced keeps useful controls without internal diagnostics',
   await openSettingsPage(page, 'Advanced');
   const settings = settingsPage(page);
   await expect(settings.getByText(/Revision: user-1/)).toHaveCount(0);
-  await expect(settings.getByLabel('Reserved tokens', { exact: true })).toBeVisible();
+  await expect(settings.getByLabel('Response start timeout (ms)', { exact: true })).toBeVisible();
   await expect(settings.getByRole('button', { name: 'Rescan configuration files' })).toBeVisible();
   await expectAccessible(page, settingsScope);
   await expectStableScreenshot(settings, 'settings-advanced-dark.png');

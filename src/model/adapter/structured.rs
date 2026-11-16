@@ -7,16 +7,29 @@
 use serde_json::{Value, json};
 
 use crate::model::error::{ModelError, ModelErrorKind, ModelRetryDisposition};
+use crate::model::structured::StructuredOutputStrategy;
 use crate::model::types::{ModelProtocol, ModelRequest};
 
 pub(crate) fn validate_request(request: &ModelRequest) -> Result<(), ModelError> {
     let Some(output) = &request.response_schema else {
         return Ok(());
     };
-    if output.is_native() != request.invocation.capabilities.json_schema_output {
+    if !output.matches_capability(request.invocation.capabilities.json_schema_output) {
         return Err(error(
             ModelErrorKind::Unsupported,
             "the prepared structured output strategy does not match the frozen native JSON Schema capability",
+        ));
+    }
+    if let StructuredOutputStrategy::PromptFallback { operation_id } = &output.strategy
+        && (operation_id.as_str().is_empty()
+            || !request.has_prompt_fallback_authorization(operation_id)
+            || !request
+                .effective_system_prompt
+                .ends_with(&output.schema.prompt_instruction()))
+    {
+        return Err(error(
+            ModelErrorKind::InvalidRequest,
+            "structured output fallback lacks exact operation authorization or its frozen prompt contract",
         ));
     }
     let params = request.request_params();
@@ -100,6 +113,68 @@ pub(crate) fn finalize_request(
         }
     }
     Ok(value)
+}
+
+/// Recognizes complete provider diagnostics about an output feature, never a
+/// field name embedded in a schema-validation explanation. The caller owns the
+/// HTTP/type/native-request checks and decides whether optional metadata agrees.
+pub(crate) fn explicit_format_rejection_message(message: &str, field: &str) -> bool {
+    let message = message.trim().trim_end_matches('.');
+    for quoted_field in [
+        field.to_owned(),
+        format!("'{field}'"),
+        format!("\"{field}\""),
+    ] {
+        if [
+            format!("Unsupported parameter: {quoted_field}"),
+            format!("Unsupported parameter: {quoted_field} is not supported with this model"),
+            format!("{quoted_field} is not supported"),
+            format!("{quoted_field} is not supported by this model"),
+        ]
+        .iter()
+        .any(|expected| message == expected)
+        {
+            return true;
+        }
+    }
+    let type_field = format!("{field}.type");
+    for quoted_field in [
+        type_field.clone(),
+        format!("'{type_field}'"),
+        format!("\"{type_field}\""),
+    ] {
+        if message
+            == format!(
+                "Unsupported value: {quoted_field} does not support 'json_schema' with this model"
+            )
+        {
+            return true;
+        }
+        let Some(values) = message
+            .strip_prefix(&quoted_field)
+            .and_then(|suffix| suffix.trim_start().strip_prefix(':'))
+            .and_then(|suffix| {
+                suffix
+                    .trim_start()
+                    .strip_prefix("value is not one of the allowed values ")
+            })
+            .and_then(|values| values.strip_prefix('['))
+            .and_then(|values| values.strip_suffix(']'))
+        else {
+            continue;
+        };
+        // The documented compatible-provider diagnostic advertises text / JSON
+        // object output instead of JSON Schema. Other enum failures, especially
+        // those inside the schema or including json_schema, are not evidence.
+        return !values.is_empty()
+            && values.split(',').all(|value| {
+                matches!(
+                    value.trim(),
+                    "'text'" | "'json_object'" | "\"text\"" | "\"json_object\""
+                )
+            });
+    }
+    false
 }
 
 fn error(kind: ModelErrorKind, message: &str) -> ModelError {

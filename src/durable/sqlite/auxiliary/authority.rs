@@ -101,14 +101,58 @@ pub(super) fn require_compaction_operation_through(
     Ok(())
 }
 
+fn validate_preceding_call(
+    connection: &Connection,
+    conversation: &ConversationId,
+    operation: &CompactionOperationId,
+    preceding: Option<&crate::model::auxiliary::AuxiliaryCallRef>,
+    through_journal: u64,
+) -> Result<(), ConversationStoreError> {
+    use rusqlite::OptionalExtension;
+    let latest: Option<String> = connection.query_row(
+        "SELECT json_extract(event_json,'$.event.call_id') FROM events INDEXED BY events_auxiliary_compaction_kind_idx WHERE json_extract(event_json,'$.event.business_source.operation_id')=?1 AND json_extract(event_json,'$.event.type')='auxiliary_call_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
+        params![operation.as_str(), seq_to_i64(through_journal)?], |row| row.get(0),
+    ).optional().map_err(|error| sqlite_error(&error, error.to_string()))?;
+    match (latest, preceding) {
+        (None, None) => Ok(()),
+        (Some(latest), Some(reference))
+            if latest == reference.call_id.as_str()
+                && reference.conversation_id == *conversation
+                && reference.through_journal > 0
+                && reference.through_journal <= through_journal =>
+        {
+            let settled: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM auxiliary_calls WHERE call_id=?1 AND settled_sequence IS NOT NULL AND settled_sequence<=?2)",
+                params![reference.call_id.as_str(), seq_to_i64(reference.through_journal)?], |row| row.get(0),
+            ).map_err(|error| sqlite_error(&error, error.to_string()))?;
+            if settled {
+                Ok(())
+            } else {
+                Err(ConversationStoreError::InvalidReference(
+                    "preceding Compaction Call is not settled at its declared cut".into(),
+                ))
+            }
+        }
+        _ => Err(ConversationStoreError::InvalidReference(
+            "preceding Compaction Call must name the latest settled Call of this operation".into(),
+        )),
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "Validate the complete frozen Call authority at its admission frontier"
+)]
 pub(super) fn validate_call_start_authority_tx(
     connection: &Connection,
     conversation_id: &ConversationId,
     start: &AuxiliaryCallStart,
+    through_journal: u64,
 ) -> Result<(), ConversationStoreError> {
     validate_call_start_input(start)?;
     match &start.input {
-        AuxiliaryInputEvidence::Historical { cut } => {
+        AuxiliaryInputEvidence::Historical { cut }
+        | AuxiliaryInputEvidence::Compaction { cut, .. } => {
             #[cfg(test)]
             let _probe = super::super::start_probe::activate(
                 start.call_id.as_str(),
@@ -119,6 +163,11 @@ pub(super) fn validate_call_start_authority_tx(
                     stored: conversation_id.clone(),
                     requested: cut.conversation_id.clone(),
                 });
+            }
+            if cut.journal.0 > through_journal {
+                return Err(ConversationStoreError::InvalidReference(
+                    "auxiliary historical input cut is after its Call admission frontier".into(),
+                ));
             }
             crate::durable::sqlite::compaction_resources::validate(
                 connection,
@@ -138,6 +187,28 @@ pub(super) fn validate_call_start_authority_tx(
             }
         }
     }
+    if let AuxiliaryInputEvidence::Compaction {
+        cut,
+        previous_summary: Some(previous),
+        ..
+    } = &start.input
+    {
+        let AuxiliaryBusinessSource::Compaction { operation_id, .. } = &start.business_source
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "compaction input requires a Compaction owner".into(),
+            ));
+        };
+        super::super::projection::auxiliary_lineage::validate_previous_summary(
+            connection,
+            conversation_id,
+            &start.call_id,
+            operation_id,
+            previous,
+            cut,
+            through_journal,
+        )?;
+    }
     // Business causality and input selection have independent coordinates.
     // A newly admitted operation may intentionally consume an older input cut.
     match &start.business_source {
@@ -149,16 +220,22 @@ pub(super) fn validate_call_start_authority_tx(
                 ));
             }
         }
-        AuxiliaryBusinessSource::Compaction { operation_id } => {
+        AuxiliaryBusinessSource::Compaction {
+            operation_id,
+            preceding_call,
+        } => {
             #[cfg(test)]
             let _probe = super::super::start_probe::activate(
                 start.call_id.as_str(),
                 super::super::AuxiliaryStartProbe::CompactionFrontier,
             );
-            require_compaction_operation_through(
+            require_compaction_operation_through(connection, operation_id, through_journal)?;
+            validate_preceding_call(
                 connection,
+                conversation_id,
                 operation_id,
-                journal_prefix(connection)?,
+                preceding_call.as_ref(),
+                through_journal,
             )?;
         }
         AuxiliaryBusinessSource::HumanMessage { message_id } => {
@@ -203,7 +280,12 @@ pub(in crate::durable::sqlite) fn validate_call_event_tx(
                 invocation_fingerprint: invocation_fingerprint.clone(),
                 selected_message_ids: selected_message_ids.clone(),
             };
-            validate_call_start_authority_tx(transaction, &envelope.conversation_id, &start)?;
+            validate_call_start_authority_tx(
+                transaction,
+                &envelope.conversation_id,
+                &start,
+                journal_prefix(transaction)?,
+            )?;
         }
         RuntimeEvent::AuxiliaryCallSettled {
             call_id,

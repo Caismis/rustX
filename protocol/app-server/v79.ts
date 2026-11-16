@@ -458,6 +458,10 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         request_id: ManualCompactionRequestId;
+        /**
+         * Optional focus hints; the native owner bounds their UTF-8 bytes.
+         */
+        instructions?: string | null;
       };
     }
   | {
@@ -2053,7 +2057,6 @@ export type EffectiveFieldName =
   | 'generation'
   | 'document'
   | 'root_agent'
-  | 'context'
   | 'model_timeout'
   | 'tool_deadline'
   | 'child_capacity'
@@ -2347,10 +2350,6 @@ export type ConfigMutation =
       unit: 'project_guidance';
     }
   | {
-      authored?: ContextLayer | null;
-      unit: 'context';
-    }
-  | {
       authored?: TimeoutLayer | null;
       unit: 'model_timeout';
     }
@@ -2550,18 +2549,6 @@ export type AgentSkillSelection = AllTools | string[];
  * via the `definition` "SubagentName".
  */
 export type SubagentName = string;
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "SummaryOutput".
- */
-export type SummaryOutput =
-  | {
-      mode: 'model_limit';
-    }
-  | {
-      tokens: number;
-      mode: 'limit';
-    };
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "IdleLiveness".
@@ -2786,6 +2773,9 @@ export type MethodResult =
   | {
       compaction?: RuntimeClientCompactionView | null;
       type: 'context_compacted';
+    }
+  | {
+      type: 'context_compaction_skipped';
     }
   | {
       page: ProjectionPage;
@@ -3815,6 +3805,7 @@ export type TraceState =
   | 'completed'
   | 'failed'
   | 'cancelled'
+  | 'skipped'
   | 'timed_out'
   | 'limited'
   | 'denied'
@@ -3837,6 +3828,8 @@ export type ModelErrorKind =
   | 'context_window_exceeded'
   | 'cancelled'
   | 'unsupported'
+  | 'native_format_unsupported'
+  | 'structured_output_contract_violation'
   | 'malformed_tool_proposal'
   | 'generation_degenerated'
   | 'generation_budget_exceeded';
@@ -3977,7 +3970,7 @@ export type ConfigurationChangeReason = 'source' | 'model_selection' | 'realloca
  * via the `definition` "ConfigurationDomain".
  */
 export type ConfigurationDomain =
-  'instructions' | 'context_policy' | 'tools' | 'skills' | 'model' | 'execution_policy';
+  'instructions' | 'tools' | 'skills' | 'model' | 'execution_policy';
 /**
  * The cursor domain of durable transcript paging.
  *
@@ -4029,6 +4022,8 @@ export type RuntimeClientAttemptFailure =
         | 'context_window_exceeded'
         | 'cancelled'
         | 'unsupported'
+        | 'native_format_unsupported'
+        | 'structured_output_contract_violation'
         | 'malformed_tool_proposal'
         | 'generation_degenerated'
         | 'generation_budget_exceeded';
@@ -5028,6 +5023,20 @@ export type RuntimeClientStatusSection =
       type: 'todo';
     };
 /**
+ * One compaction operation, allocated before its lifecycle facts.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "CompactionOperationId".
+ */
+export type CompactionOperationId = string;
+/**
+ * Model-visible role of one projected source occurrence.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliarySourceRole".
+ */
+export type AuxiliarySourceRole = 'user' | 'assistant' | 'tool';
+/**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ResourceFamily".
  */
@@ -5471,6 +5480,8 @@ export type RuntimeClientEvent =
                     | 'context_window_exceeded'
                     | 'cancelled'
                     | 'unsupported'
+                    | 'native_format_unsupported'
+                    | 'structured_output_contract_violation'
                     | 'malformed_tool_proposal'
                     | 'generation_degenerated'
                     | 'generation_budget_exceeded';
@@ -5728,6 +5739,21 @@ export type RuntimeClientEvent =
     }
   | {
       context: RuntimeClientContextView2;
+      attempt_id?: AttemptId | null;
+      type: 'context_compaction_progressed';
+    }
+  | {
+      context: RuntimeClientContextView2;
+      attempt_id?: AttemptId | null;
+      type: 'context_compaction_cancelled';
+    }
+  | {
+      context: RuntimeClientContextView2;
+      attempt_id?: AttemptId | null;
+      type: 'context_compaction_skipped';
+    }
+  | {
+      context: RuntimeClientContextView3;
       /**
        * The owning attempt for automatic compaction; absent for manual
        * idle maintenance.
@@ -5745,7 +5771,7 @@ export type RuntimeClientEvent =
        * idle maintenance.
        */
       attempt_id?: AttemptId | null;
-      context: RuntimeClientContextView3;
+      context: RuntimeClientContextView4;
       type: 'context_compacted';
     }
   | {
@@ -8546,6 +8572,8 @@ export type RuntimeClientAttemptPhase =
                     | 'context_window_exceeded'
                     | 'cancelled'
                     | 'unsupported'
+                    | 'native_format_unsupported'
+                    | 'structured_output_contract_violation'
                     | 'malformed_tool_proposal'
                     | 'generation_degenerated'
                     | 'generation_budget_exceeded';
@@ -8763,6 +8791,8 @@ export type RuntimeClientOutcome =
               | 'context_window_exceeded'
               | 'cancelled'
               | 'unsupported'
+              | 'native_format_unsupported'
+              | 'structured_output_contract_violation'
               | 'malformed_tool_proposal'
               | 'generation_degenerated'
               | 'generation_budget_exceeded';
@@ -10320,15 +10350,6 @@ export interface BackgroundStatusConfig {
  */
 export interface AgentProjectInstructionsDocument {
   inherit?: boolean;
-}
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ContextLayer".
- */
-export interface ContextLayer {
-  reserve_tokens?: string | null;
-  keep_recent_tokens?: string | null;
-  summary_output_cap?: SummaryOutput | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
@@ -14456,6 +14477,8 @@ export interface RuntimeClientAttempt {
                       | 'context_window_exceeded'
                       | 'cancelled'
                       | 'unsupported'
+                      | 'native_format_unsupported'
+                      | 'structured_output_contract_violation'
                       | 'malformed_tool_proposal'
                       | 'generation_degenerated'
                       | 'generation_budget_exceeded';
@@ -15678,6 +15701,10 @@ export interface RuntimeClientContextView {
    */
   occupancy?: RuntimeClientContextOccupancy | null;
   /**
+   * Latest accepted fragment, scoped to the currently active operation.
+   */
+  compaction_progress?: RuntimeClientCompactionProgress | null;
+  /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
    */
@@ -15709,9 +15736,58 @@ export interface RuntimeClientManualCompaction {
    */
   released: boolean;
   /**
+   * A confirmed native no-op, distinct from a committed checkpoint.
+   */
+  skipped: boolean;
+  /**
+   * Native cancellation released this command without a checkpoint.
+   */
+  cancelled: boolean;
+  /**
    * Exact pre-commit failure diagnostic, if released unsuccessfully.
    */
   error?: string | null;
+}
+/**
+ * Native accepted work for the currently active Compaction operation.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientCompactionProgress".
+ */
+export interface RuntimeClientCompactionProgress {
+  operation_id: CompactionOperationId;
+  accepted_fragments: number;
+  source_ranges: AuxiliarySourceRange[];
+  generation?: SummaryGenerationRef | null;
+}
+/**
+ * A half-open byte range in the deterministic rendered text of one selected
+ * projection occurrence, rather than an offset in canonical JSON. Empty
+ * rendered occurrences use `[0, 0)` and still identify their coverage.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "AuxiliarySourceRange".
+ */
+export interface AuxiliarySourceRange {
+  projection_index: number;
+  role: AuxiliarySourceRole;
+  byte_start: number;
+  byte_end: number;
+}
+/**
+ * Exact auxiliary Summary Call that generated one retained checkpoint.
+ *
+ * This is source execution provenance, not an input-identity inference. The
+ * source Conversation and original inclusive Journal cut remain stable across
+ * repeated Clone/Fork operations.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SummaryGenerationRef".
+ */
+export interface SummaryGenerationRef {
+  conversation_id: ConversationId;
+  call_id: AuxiliaryCallId;
+  through_journal: string;
 }
 /**
  * The active capability projection.
@@ -16514,6 +16590,8 @@ export interface RuntimeClientProtocolEvent {
                       | 'context_window_exceeded'
                       | 'cancelled'
                       | 'unsupported'
+                      | 'native_format_unsupported'
+                      | 'structured_output_contract_violation'
                       | 'malformed_tool_proposal'
                       | 'generation_degenerated'
                       | 'generation_budget_exceeded';
@@ -16771,6 +16849,21 @@ export interface RuntimeClientProtocolEvent {
       }
     | {
         context: RuntimeClientContextView2;
+        attempt_id?: AttemptId | null;
+        type: 'context_compaction_progressed';
+      }
+    | {
+        context: RuntimeClientContextView2;
+        attempt_id?: AttemptId | null;
+        type: 'context_compaction_cancelled';
+      }
+    | {
+        context: RuntimeClientContextView2;
+        attempt_id?: AttemptId | null;
+        type: 'context_compaction_skipped';
+      }
+    | {
+        context: RuntimeClientContextView3;
         /**
          * The owning attempt for automatic compaction; absent for manual
          * idle maintenance.
@@ -16788,7 +16881,7 @@ export interface RuntimeClientProtocolEvent {
          * idle maintenance.
          */
         attempt_id?: AttemptId | null;
-        context: RuntimeClientContextView3;
+        context: RuntimeClientContextView4;
         type: 'context_compacted';
       }
     | {
@@ -17493,6 +17586,10 @@ export interface RuntimeClientContextView1 {
    */
   occupancy?: RuntimeClientContextOccupancy | null;
   /**
+   * Latest accepted fragment, scoped to the currently active operation.
+   */
+  compaction_progress?: RuntimeClientCompactionProgress | null;
+  /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
    */
@@ -17509,7 +17606,10 @@ export interface RuntimeClientContextView1 {
   latest_compaction?: RuntimeClientCompactionView | null;
 }
 /**
- * Authoritative context state at this lifecycle boundary.
+ * The context diagnostics carried by the Runtime Client snapshot.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "RuntimeClientContextView".
  */
 export interface RuntimeClientContextView2 {
   /**
@@ -17530,6 +17630,10 @@ export interface RuntimeClientContextView2 {
    */
   occupancy?: RuntimeClientContextOccupancy | null;
   /**
+   * Latest accepted fragment, scoped to the currently active operation.
+   */
+  compaction_progress?: RuntimeClientCompactionProgress | null;
+  /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
    */
@@ -17546,7 +17650,7 @@ export interface RuntimeClientContextView2 {
   latest_compaction?: RuntimeClientCompactionView | null;
 }
 /**
- * The context diagnostics after this committed compaction.
+ * The context diagnostics carried by the Runtime Client snapshot.
  */
 export interface RuntimeClientContextView3 {
   /**
@@ -17566,6 +17670,51 @@ export interface RuntimeClientContextView3 {
    * Latest native measured request or committed compacted-context estimate.
    */
   occupancy?: RuntimeClientContextOccupancy | null;
+  /**
+   * Latest accepted fragment, scoped to the currently active operation.
+   */
+  compaction_progress?: RuntimeClientCompactionProgress | null;
+  /**
+   * Whether the runtime currently owns a context-compaction operation.
+   * This is live operation state, not inferred from token usage.
+   */
+  compaction_in_progress: boolean;
+  /**
+   * Runtime Client projection statistic: the number of committed
+   * compaction completions folded into this read model. The compaction
+   * generation remains the conversation-owned identity.
+   */
+  compaction_count: number;
+  /**
+   * The latest committed compaction metadata, when compaction occurred.
+   */
+  latest_compaction?: RuntimeClientCompactionView | null;
+}
+/**
+ * The context diagnostics carried by the Runtime Client snapshot.
+ */
+export interface RuntimeClientContextView4 {
+  /**
+   * Independent current historical projection, including inherited activations.
+   */
+  projection_head?: RuntimeClientProjectionHeadView | null;
+  /**
+   * Latest manual operation admitted in this runtime incarnation. Never inferred
+   * from a newer canonical checkpoint. Absence is insufficient evidence.
+   */
+  manual_compaction?: RuntimeClientManualCompaction | null;
+  /**
+   * Latest pre-commit diagnostic; cleared when the next compaction starts.
+   */
+  compaction_error?: string | null;
+  /**
+   * Latest native measured request or committed compacted-context estimate.
+   */
+  occupancy?: RuntimeClientContextOccupancy | null;
+  /**
+   * Latest accepted fragment, scoped to the currently active operation.
+   */
+  compaction_progress?: RuntimeClientCompactionProgress | null;
   /**
    * Whether the runtime currently owns a context-compaction operation.
    * This is live operation state, not inferred from token usage.
@@ -18635,7 +18784,6 @@ export interface EffectiveConfiguration {
   generation: RuntimeResourceRevision;
   document: RuntimeLayer;
   root_agent: AgentProfileDocument;
-  context: ContextPolicyDocument;
   model_timeout: ModelTimeoutPolicyDocument;
   tool_deadline: ToolDeadlinePolicyDocument;
   child_capacity: SubagentsDocument;
@@ -18708,7 +18856,6 @@ export interface RuntimeLayer {
   agent_id?: AgentId | null;
   approval_mode?: ExecutionPermissionMode | null;
   agent?: AgentProfileLayer | null;
-  context?: ContextLayer | null;
   model_timeout_policy?: TimeoutLayer | null;
   tool_deadline_policy?: ToolDeadlineLayer | null;
   mcp_startup_policy?: McpStartupPolicyLayer | null;
@@ -18838,32 +18985,6 @@ export interface NativeAgentExtensionsDocument1 {
   agent_status?: AgentStatusExtensionDocument1;
   todo?: TodoExtensionDocument1;
   goal?: GoalExtensionDocument1;
-}
-/**
- * The static current-runtime context policy document.
- *
- * There is deliberately no context window here: the window belongs to the
- * selected model and is derived per attempt from that attempt's immutable
- * model snapshot.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ContextPolicyDocument".
- */
-export interface ContextPolicyDocument {
-  /**
-   * Tokens permanently reserved out of whichever model window is in
-   * force.
-   */
-  reserveTokens: string;
-  /**
-   * Tokens of recent conversation history kept uncompressed.
-   */
-  keepRecentTokens: string;
-  /**
-   * The summary/output safety cap applied to the summary invocation
-   * through the runtime-owned protected max-output field.
-   */
-  summaryOutputCap?: number | null;
 }
 /**
  * The resolved native model request timeout policy.
@@ -21137,46 +21258,6 @@ export interface SubagentActivityCounters1 {
    * Tool executions finished (completed plus failed).
    */
   tool_executions: number;
-}
-/**
- * The context diagnostics carried by the Runtime Client snapshot.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "RuntimeClientContextView".
- */
-export interface RuntimeClientContextView4 {
-  /**
-   * Independent current historical projection, including inherited activations.
-   */
-  projection_head?: RuntimeClientProjectionHeadView | null;
-  /**
-   * Latest manual operation admitted in this runtime incarnation. Never inferred
-   * from a newer canonical checkpoint. Absence is insufficient evidence.
-   */
-  manual_compaction?: RuntimeClientManualCompaction | null;
-  /**
-   * Latest pre-commit diagnostic; cleared when the next compaction starts.
-   */
-  compaction_error?: string | null;
-  /**
-   * Latest native measured request or committed compacted-context estimate.
-   */
-  occupancy?: RuntimeClientContextOccupancy | null;
-  /**
-   * Whether the runtime currently owns a context-compaction operation.
-   * This is live operation state, not inferred from token usage.
-   */
-  compaction_in_progress: boolean;
-  /**
-   * Runtime Client projection statistic: the number of committed
-   * compaction completions folded into this read model. The compaction
-   * generation remains the conversation-owned identity.
-   */
-  compaction_count: number;
-  /**
-   * The latest committed compaction metadata, when compaction occurred.
-   */
-  latest_compaction?: RuntimeClientCompactionView | null;
 }
 /**
  * The deterministic capability projection.

@@ -12,7 +12,7 @@ The default Package glyph comes from the pinned Lucide/Iconify set (ISC).
 As in ZCode's ProviderLogo, an explicit provider field selects an asset; provider
 identity and protocol do not infer a logo. The optional native `icon` slug is
 carried through source read/write, redaction and TOML serialization, and omitted
-at the inference catalog boundary. App Server v78 is the mandatory contract;
+at the inference catalog boundary. App Server v79 is the mandatory contract;
 no old protocol path is retained. The picker uses existing Base UI modal and
 React Aria grid/search controls. Browser plugin is unavailable in this session;
 validation uses the repository's pinned Playwright/Chromium runner.
@@ -876,7 +876,7 @@ sidebar still predated main's Workflows entry; dialog geometry is unchanged.
 The branch also merges main at `d730966ce54ba330529bffb0279d6e0c4a44fd17`
 (PR #494). Native temporary questions and classification retain their execution,
 publication and cancellation owners. The combined vocabulary is App Server v54,
-Runtime Client v75, SQLite v78 and archive v10; request inspection retains schema 5
+Runtime Client v75, SQLite v79 and archive v10; request inspection retains schema 5
 without declared reasoning metadata. Generated artifacts contain both workspace
 change inspection and auxiliary delivery. The existing simplified header, Fork
 presentation, model editor and right-sidebar interactions are preserved.
@@ -3377,7 +3377,7 @@ icons remain stable on failure, summaries use native failure/stopped tones and
 lifecycle announcements are visually hidden. Keyboard expansion and running copy
 visibility follow the upstream flow.
 
-The Inspect pill is pure presentation. App Server v50 / Runtime Client v72 native
+The Inspect pill is pure presentation. App Server v50 / Runtime Client v79 native
 readers locate the canonical occurrence across the complete indexed Journal,
 including historical and exited child stores. RustX supplies bounded continuous
 windows, exact record IDs and lifecycle repairs, replacing Harness runtime/store
@@ -3516,7 +3516,7 @@ The integration keeps PR #461's native child conversation, Trace, attachment
 and file-delivery presentation. Agent workspace values now carry the frozen
 Session path, and retired worktree disposal and Candidate controls are absent.
 The historical entries above retain the versions reviewed at those snapshots.
-The combined current contracts are App Server v50, Runtime Client v72, SQLite 61,
+The combined current contracts are App Server v50, Runtime Client v79, SQLite 61,
 Session catalog16, Runtime Event1, Child IPC33 and Product Host file-read4; see the [format inventory](../docs/agent-workflow-shared-workspace.md#format-and-version-inventory)
 for owners and rejection behavior. Imports and generated client contracts use
 App Server v50. The source inventory
@@ -3597,7 +3597,7 @@ Session Lifecycle retains every dispatched Switch transaction. Fresh Host author
 
 Four dark shell references deliberately retained the enabled Stop control in the preceding repair: settings-shell-dark, desktop-expanded-dark, mobile-rail-dark and mobile-expanded-dark. Their reference/actual/diff inspection showed 952 changed pixels per reference confined to Stop, with identical dimensions and surrounding pixels. This refactor retains that control contract. Screenshot comparator, noise, stabilization, timeout and retry policies remain unchanged.
 
-Session tree metadata uses App Server v50 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v72 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
+Session tree metadata uses App Server v50 `session/node`, which reuses the native Session catalog's exact node map lookup. Immutable source identity and inherited transcript placement remain native facts. The matching Runtime Client v79 and SQLite v58 contracts reject prior peers/stores before dependent work. Current generated imports and local provenance hashes are synchronized.
 
 The intentional `mobile-settings-dark-linux.png` reference change removes the obsolete sidebar backdrop beneath the Settings modal after successful Settings navigation. The reference, actual and diff were inspected: modal content and geometry are identical, and the changed pixels are the surrounding backdrop. The pinned browser generator updates this one changed reference; screenshot thresholds, noise policy and stabilization are unchanged.
 
@@ -3793,7 +3793,7 @@ exercise workspace bytes, source/fork ownership and more than the old file limit
 The upload capability change is mandatory App Server v54. All current Web/TUI
 DTO imports and the binary carrier's control negotiation use v54; v50 artifacts
 are removed and old peers are rejected. This is a native protocol update only
-for other derived presentation files. Runtime Client v72 and TUI interactions
+for other derived presentation files. Runtime Client v79 and TUI interactions
 remain unchanged. The two old narrow attachment-card rasterizer-noise entries
 were removed along with that card. All four new attachment references compare
 exactly; no screenshot tolerance was expanded.
@@ -5501,7 +5501,7 @@ conditions, reuse exact numeric comparison, preserve prompt editor DOM during
 bounded expansion, correct inline variable spacing and narrow Loop/Assigner
 rows, and avoid automatic Output-name collisions. Dify's stores, component
 source and assets are not copied. No dependencies are added. Vision and AI
-generation controls are omitted. App Server v72 is the sole wire contract;
+generation controls are omitted. App Server v79 is the sole wire contract;
 v67 artifacts are removed. Runtime Client v81 is unchanged.
 
 Actual desktop and touch browser checks use the repository's exact pinned
@@ -5630,7 +5630,7 @@ configure/clear controls and keyboard-operable moves, inspired by ZCode's ordere
 reasoning control. No upstream mapping code or dependencies are imported. Profile
 identities remain stable keys, and the existing JSON editor and native whole-Model
 transaction retain parameter validation, scope and revision ownership. The mandatory
-App Server v72 imports are regenerated from Rust; Runtime Client is v83. Updated
+App Server v79 imports are regenerated from Rust; Runtime Client is v83. Updated
 local hashes and import inventories record these adaptations against the unchanged
 upstream baselines. Browser plugin is unavailable; validation uses the repository's
 pinned Playwright container and production native API path.

@@ -3,7 +3,7 @@ import {showSettings,openResourceModule,newSubagent} from './settings-harness';
 import { openMcpContractEditor } from './settings-harness';
 import { afterEach, expect, it } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v78';
+import type { Model, Request1, SourceSettings } from '../../protocol/app-server/v79';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';
 import { waitForSettingsRevision, openResourceRow, SettingsSurface } from './settings-harness';
 import { cfg3Client, cfg3Host } from './cfg3-fixture';

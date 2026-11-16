@@ -5,7 +5,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { localeController } from '../src/locale/controller';
 import { schedulerFixture } from './scheduler-fixture';
 import type { Server } from './fixture';
-import type { SessionModelConfig } from '../../protocol/app-server/v78';
+import type { SessionModelConfig } from '../../protocol/app-server/v79';
 
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.dispose(); localStorage.clear(); localeController.setLocale('en'); vi.restoreAllMocks(); });
@@ -22,8 +22,8 @@ const mutations = (server: Server) => server.requests.filter(row => ['thread/sta
 
 it.each(['untouched', 'profile', 'model'] as const)('preserves effective model policy on the first %s task gesture', async gesture => {
   const f = await setup(), read = f.server.workspaceHost.configureWorkspace!;
-  const auxiliary = { mode: 'explicit' as const, model: 'fixture/second', profile: 'medium', request_params: { temperature: 0.1 }, max_output_tokens: 64 };
-  const independent = { summaryModel: auxiliary, titleModel: auxiliary, classificationModel: auxiliary, btwModel: auxiliary };
+  const auxiliary = { mode: 'explicit' as const, model: 'fixture/second', profile: { mode: 'explicit' as const, id: 'medium' }, request_params: { temperature: 0.1 }, max_output_tokens: 64 };
+  const independent = { auxiliary };
   const configured: SessionModelConfig = { model: 'fixture/native', profile: 'medium', requestParams: { temperature: 0.2 }, maxOutputTokens: 1234, ...independent };
   f.server.workspaceHost.configureWorkspace = async (...args) => {
     const result = await read(...args);

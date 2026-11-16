@@ -344,6 +344,10 @@ impl LineageSeed {
     ///
     /// # Errors
     /// Rejects missing, extra, duplicate or oversized source evidence.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Validate the inherited audit closure together"
+    )]
     pub fn with_auxiliary_audits(
         mut self,
         mut audits: Vec<crate::durable::reading::AuxiliaryAuditSnapshot>,
@@ -355,29 +359,20 @@ impl LineageSeed {
             ));
         }
         crate::context::resources::bounded_encoded_len(&audits, limits.total_bytes)?;
-        let mut expected = std::collections::BTreeSet::new();
-        for checkpoint in &self.projections {
-            if let Some(reference) = &checkpoint.candidate.summary_generation {
-                expected.insert((
-                    reference.conversation_id.clone(),
-                    reference.call_id.clone(),
-                    reference.through_journal,
-                ));
-            }
-        }
-        let mut actual = std::collections::BTreeSet::new();
+        let mut by_key = std::collections::BTreeMap::new();
         for audit in &audits {
+            let key = (
+                audit.source_conversation_id.clone(),
+                audit.call_id.clone(),
+                audit.through_journal,
+            );
             if audit.through_journal == 0
                 || audit.records.is_empty()
                 || audit
                     .records
                     .iter()
                     .any(|record| record.journal_sequence > audit.through_journal)
-                || !actual.insert((
-                    audit.source_conversation_id.clone(),
-                    audit.call_id.clone(),
-                    audit.through_journal,
-                ))
+                || by_key.insert(key, audit).is_some()
             {
                 return Err(ConversationStoreError::InvalidReference(
                     "invalid or duplicate inherited Summary generation audit".into(),
@@ -396,7 +391,89 @@ impl LineageSeed {
                 ));
             }
         }
-        if actual != expected {
+        let mut pending: Vec<_> = self
+            .projections
+            .iter()
+            .filter_map(|checkpoint| checkpoint.candidate.summary_generation.clone())
+            .collect();
+        let mut expected = std::collections::BTreeSet::new();
+        while let Some(reference) = pending.pop() {
+            let key = (
+                reference.conversation_id,
+                reference.call_id,
+                reference.through_journal,
+            );
+            if !expected.insert(key.clone()) {
+                continue;
+            }
+            let audit = by_key.get(&key).ok_or_else(|| {
+                ConversationStoreError::InvalidReference(
+                    "missing Summary generation dependency".into(),
+                )
+            })?;
+            let crate::model::auxiliary::AuxiliaryAuditFact::CallStarted(call) =
+                &audit.records[0].fact
+            else {
+                unreachable!()
+            };
+            let preceding = match &call.business_source {
+                crate::model::auxiliary::AuxiliaryBusinessSource::Compaction {
+                    preceding_call: Some(reference),
+                    ..
+                } => Some(crate::context::checkpoint::SummaryGenerationRef {
+                    conversation_id: reference.conversation_id.clone(),
+                    call_id: reference.call_id.clone(),
+                    through_journal: reference.through_journal,
+                }),
+                _ => None,
+            };
+            let previous = match &call.input {
+                crate::model::auxiliary::AuxiliaryInputEvidence::Compaction {
+                    previous_summary,
+                    ..
+                } => previous_summary.clone(),
+                _ => None,
+            };
+            for (reference, requires_success) in preceding
+                .into_iter()
+                .map(|value| (value, false))
+                .chain(previous.into_iter().map(|value| (value, true)))
+            {
+                let parent_key = (
+                    reference.conversation_id.clone(),
+                    reference.call_id.clone(),
+                    reference.through_journal,
+                );
+                let parent = by_key.get(&parent_key).ok_or_else(|| {
+                    ConversationStoreError::InvalidReference(
+                        "missing preceding Summary audit".into(),
+                    )
+                })?;
+                let crate::model::auxiliary::AuxiliaryAuditFact::CallStarted(parent_call) =
+                    &parent.records[0].fact
+                else {
+                    unreachable!()
+                };
+                if reference.conversation_id != audit.source_conversation_id
+                    || reference.call_id == call.call_id
+                    || reference.through_journal >= call.started_sequence
+                    || parent.completeness
+                        != crate::durable::reading::AuxiliaryAuditCompleteness::CompleteAtCut
+                    || parent_call.outcome.is_none()
+                    || (requires_success
+                        && parent_call.outcome
+                            != Some(crate::model::auxiliary::AuxiliaryCallOutcome::Completed))
+                    || !matches!((&call.business_source, &parent_call.business_source),
+                        (crate::model::auxiliary::AuxiliaryBusinessSource::Compaction { operation_id: a, .. }, crate::model::auxiliary::AuxiliaryBusinessSource::Compaction { operation_id: b, .. }) if a == b)
+                {
+                    return Err(ConversationStoreError::InvalidReference(
+                        "invalid preceding Summary authority".into(),
+                    ));
+                }
+                pending.push(reference);
+            }
+        }
+        if expected.len() != by_key.len() {
             return Err(ConversationStoreError::InvalidReference(
                 "retained checkpoints and inherited Summary generation audits differ".into(),
             ));

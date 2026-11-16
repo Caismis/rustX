@@ -934,7 +934,6 @@ impl LocalConversationCore {
                     model_timeout_policy,
                     tool_deadline_policy,
                     context: ConversationContextConfig {
-                        policy: runtime_config.context_policy(),
                         estimator: Arc::clone(&dependencies.estimator),
                         // The root Agent's frozen native Agent Extension composition
                         // is materialized here, once, and never again (Issue #256).

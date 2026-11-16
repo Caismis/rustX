@@ -100,8 +100,8 @@ function admittedGeometry(input: Uint8Array<ArrayBuffer> | undefined, format: Ex
           previewTimer = setTimeout(finish, Math.min(L.previewTimeoutMs, Math.max(0, deadline - performance.now())));
           try { worker.postMessage({ kind: 'preview-start' }); } catch { finish(); }
         };
-        // Waiting for the first GPU frame belongs to the original admission
-        // deadline. Optional work gets its own budget only when it starts.
+        // The first GPU frame may take longer than optional preparation. The
+        // original deadline owns that wait; the preview budget starts on demand.
         if (!pending.length) finish();
         resolve({ ...result, prepareStart, pendingPreview: pending.length > 0, ready, startPreview, dispose });
       } catch { fail('invalid'); }

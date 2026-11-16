@@ -13,7 +13,7 @@ import { prependTrace, beginTraceDetail, completeTraceDetail, fillTraceGap, refr
 import { completeHistoryThrough, ledgerFocusTargets, ledgerRows, matchedRecordIds, isInspectable, projectTrajectory, trajectoryItems as flattenTrajectory, visibleItems, matchingCalls, preferredItem, systemPresentation, type InspectableDisplayItem, type TurnStructure } from '../src/app/trajectory/layout';
 import { searchItems } from '../src/app/trajectory/search';
 import { stepLessRecords, manyStepRecords, orderedStepRecords, structuralSearchRecords, requestDetail, toolDetail, traceRecord, traceTool } from './trace-fixture';
-import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v78';
+import type { TraceContextPresentation, TraceDetail, TraceRecord } from '../../protocol/app-server/v79';
 
 beforeEach(() => {
   vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(360);
@@ -351,7 +351,7 @@ it.each(['en', 'zh'] as const)('T1-08 Calls summary localizes in %s without surf
   expect(executions.map(record => record.state)).toEqual(states);
   for (const domain of domains) expect(visible.some(item => item.type === 'RecordRow' && item.record.id === domain.id)).toBe(false);
   expect(visible.find((item): item is InspectableDisplayItem => item.type === 'RecordRow' && item.record.id === 'trace:20')?.label).toBe(tx('trajectory:copy.compacting'));
-  for (const state of ['incomplete', 'failed', 'completed'] as const) {
+  for (const state of ['incomplete', 'failed', 'completed', 'cancelled', 'skipped'] as const) {
     const item = flattenTrajectory(tx, projectTrajectory(tx, [traceRecord(21, { kind: 'compaction', request: null, state })])).find(item => item.type === 'RecordRow')!;
     expect(item.label).toBe(state === 'completed' ? tx('trajectory:compacted') : tx('trajectory:copy.compaction-value', { p0: traceStateLabel(tx, state) }));
     if (state === 'incomplete') expect(recordText(tx, item.record)).toBe(item.label);

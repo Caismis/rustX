@@ -691,8 +691,9 @@ impl RuntimeClientHost {
     pub async fn compact_context(
         &self,
         request_id: Option<crate::runtime::identity::ManualCompactionRequestId>,
+        instructions: Option<String>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
-        self.inner.compact_context(request_id).await
+        self.inner.compact_context(request_id, instructions).await
     }
 
     /// Responds to one live native interaction through Runtime Client

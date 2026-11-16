@@ -375,7 +375,7 @@ fn whole_session_model_provenance_covers_every_field_and_catalog_default_choice(
         model: ModelRef::parse("host/two").unwrap(),
         profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
         request_params: serde_json::Map::default(),
-        max_output_tokens: Some(512),
+        max_output_tokens: None,
     };
     for selected in [
         model,

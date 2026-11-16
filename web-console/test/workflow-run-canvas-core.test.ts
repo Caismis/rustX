@@ -9,7 +9,7 @@ import type {
   WorkflowRunId,
   WorkflowRunView,
   WorkflowTraceNode,
-} from '../../protocol/app-server/v78';
+} from '../../protocol/app-server/v79';
 import { boundedDocument } from '../src/app/workflows/document/commands';
 import { organizeDocument } from '../src/app/workflows/ui/editor/layout';
 import { RpcFailure } from '../src/client/errors';

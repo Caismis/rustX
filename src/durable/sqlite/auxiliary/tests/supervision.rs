@@ -793,6 +793,7 @@ fn runtime_envelope(store: &SqliteConversationStore, event: RuntimeEvent) -> Run
 
 fn adapter_request(request_start: &AuxiliaryRequestStart) -> ModelRequest {
     ModelRequest {
+        prompt_fallback_authorization: crate::model::types::PromptFallbackAuthorization::default(),
         response_schema: None,
         response_byte_limit: None,
         images: crate::model::images::ResolvedImages::new(),

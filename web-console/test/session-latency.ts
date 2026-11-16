@@ -1,5 +1,5 @@
 import { ThreadStatusNotifications } from '../../protocol/app-server/thread-status';
-import type { ThreadStatusEntry } from '../../protocol/app-server/v78';
+import type { ThreadStatusEntry } from '../../protocol/app-server/v79';
 
 export type ThreadStatusTiming = { connection: number; time: number } & (
   | { kind: 'notification' | 'snapshot'; entry: ThreadStatusEntry }

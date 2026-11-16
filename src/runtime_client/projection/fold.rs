@@ -148,7 +148,13 @@ impl RuntimeClientProjection {
                 self.snapshot.context.manual_compaction =
                     Some(super::super::snapshot::RuntimeClientManualCompaction {
                         request_id,
-                        released: !matches!(event, RuntimeEvent::CompactionStarted { .. }),
+                        released: !matches!(
+                            event,
+                            RuntimeEvent::CompactionStarted { .. }
+                                | RuntimeEvent::CompactionChunkAccepted { .. }
+                        ),
+                        skipped: matches!(event, RuntimeEvent::CompactionSkipped { .. }),
+                        cancelled: matches!(event, RuntimeEvent::CompactionCancelled { .. }),
                         error: if let RuntimeEvent::CompactionFailed { error, .. } = &event {
                             Some(error.clone())
                         } else {

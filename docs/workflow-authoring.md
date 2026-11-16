@@ -764,7 +764,7 @@ no workspace resource and contributes no Session deletion blocker. See [capabili
 
 ### Large source transport
 
-App Server v74 uses `workflow/documentBegin`, `documentWrite`, `documentFinish`,
+App Server v79 uses `workflow/documentBegin`, `documentWrite`, `documentFinish`,
 `documentRead` and `documentRelease` for the same Workflow read/check/analyze/
 replace operations. Each document has connection- and scope-bound content
 identity, complete byte length and SHA-256. Chunks are at most 64 KiB.

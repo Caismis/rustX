@@ -1,8 +1,7 @@
 //! Typed semantic-unit authoring. Native writers canonicalize rustX-owned documents.
 //! Typed CAS persistence transfers application responsibility to the native coordinator.
 use super::super::authoring::{
-    ContextLayer, McpAuthoring, ModelLayer, RuntimeLayer, SubagentsLayer, TimeoutLayer,
-    ToolDeadlineLayer,
+    McpAuthoring, ModelLayer, RuntimeLayer, SubagentsLayer, TimeoutLayer, ToolDeadlineLayer,
 };
 use super::super::settings::{AdmittedSource, SourceDirectory, SourceReread};
 use super::UserConfigManager;
@@ -229,7 +228,6 @@ pub struct EffectiveConfiguration {
     pub generation: crate::runtime::identity::RuntimeResourceRevision,
     pub document: SourceDocumentView,
     pub root_agent: super::super::config::AgentProfileDocument,
-    pub context: super::super::config::ContextPolicyDocument,
     pub model_timeout: super::super::config::ModelTimeoutPolicyDocument,
     pub tool_deadline: super::super::config::ToolDeadlinePolicyDocument,
     pub child_capacity: super::super::config::SubagentsDocument,
@@ -296,9 +294,6 @@ pub enum ConfigMutation {
     },
     ProjectGuidance {
         authored: Option<super::super::config::AgentProjectInstructionsDocument>,
-    },
-    Context {
-        authored: Option<ContextLayer>,
     },
     ModelTimeout {
         authored: Option<TimeoutLayer>,
@@ -414,7 +409,7 @@ fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
 }
 fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<SourceDocumentView> {
     let (authored, diagnostic) =
-        match crate::toml_authoring::parse_detailed::<RuntimeLayer>(bytes.unwrap_or(b"")) {
+        match super::super::authoring::parse_runtime_layer(bytes.unwrap_or(b"")) {
             // A document violating its source contract is not editable either:
             // ordinary writes refuse it and manual repair accepts it.
             Ok(document) => {
@@ -437,13 +432,21 @@ fn view(path: PathBuf, bytes: Option<&[u8]>, workspace: bool) -> SourceView<Sour
             // A request_params failure names only its field path, category
             // and locations, so it can say why the source cannot be edited.
             // Other parser messages may quote authored text.
-            Err(failure) if failure.path.is_some() => (
+            Err(super::super::authoring::RuntimeLayerParseFailure::RemovedContext) => (
                 None,
-                Some(format!(
-                    "invalid rustx.toml; source was not loaded: {}",
-                    failure.into_detail()
-                )),
+                Some(super::super::authoring::REMOVED_CONTEXT_DIAGNOSTIC.into()),
             ),
+            Err(super::super::authoring::RuntimeLayerParseFailure::Invalid(failure))
+                if failure.path.is_some() =>
+            {
+                (
+                    None,
+                    Some(format!(
+                        "invalid rustx.toml; source was not loaded: {}",
+                        failure.into_detail()
+                    )),
+                )
+            }
             Err(_) => (
                 None,
                 Some("invalid rustx.toml; source was not loaded".into()),
@@ -506,10 +509,12 @@ fn agent_views(root: &Path, scope: SourceScope) -> Result<Vec<AgentSourceView>, 
         let parsed = bytes
             .as_ref()
             .and_then(|bytes| std::str::from_utf8(bytes).ok())
-            .and_then(|text| super::super::agent_resources::parse(text).ok());
-        let diagnostic = parsed
-            .is_none()
-            .then(|| "invalid named Agent definition".into());
+            .map(super::super::agent_resources::parse);
+        let diagnostic = match &parsed {
+            Some(Ok(_)) => None,
+            _ => Some("invalid named Agent definition".into()),
+        };
+        let parsed = parsed.and_then(Result::ok);
         result.push(AgentSourceView {
             scope,
             name,
@@ -716,7 +721,6 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
         M::ProjectGuidance { authored } => {
             document.agent.get_or_insert_default().agents_md = authored;
         }
-        M::Context { authored } => document.context = authored,
         M::ModelTimeout { authored } => document.model_timeout_policy = authored,
         M::ToolDeadline { authored } => document.tool_deadline_policy = authored,
         M::Capacity { authored } => document.subagents = authored,
@@ -1679,6 +1683,21 @@ fn verify_authored_documents(
 #[cfg(test)]
 mod mcp_write_tests {
     use super::*;
+
+    #[test]
+    fn removed_context_is_actionable_without_exposing_source_values() {
+        let bytes =
+            b"[context]\nreserve_tokens = 321\n[providers.local]\napi_key = 'SECRET_SENTINEL'\n";
+        let source = view(PathBuf::from("rustx.toml"), Some(bytes), false);
+        assert!(source.authored.is_none());
+        let diagnostic = source.diagnostic.unwrap();
+        assert!(diagnostic.contains("remove") && diagnostic.contains("agent.model"));
+        assert!(!diagnostic.contains("SECRET_SENTINEL"));
+        let failure = super::super::capture::parse_layer(Path::new("rustx.toml"), bytes, false)
+            .expect_err("obsolete context is rejected");
+        assert_eq!(failure.diagnostic.path, "context");
+        assert!(failure.diagnostic.correction.contains("remove"));
+    }
 
     #[test]
     fn editing_existing_settings_preserves_the_authored_mcp_startup_policy() {

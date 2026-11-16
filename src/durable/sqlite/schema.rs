@@ -442,6 +442,10 @@ pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
         "json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type'), sequence",
     ),
     (
+        "events_auxiliary_compaction_kind_idx",
+        "json_extract(event_json, '$.event.business_source.operation_id'), json_extract(event_json, '$.event.type'), sequence",
+    ),
+    (
         "events_request_id_kind_idx",
         "json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence",
     ),

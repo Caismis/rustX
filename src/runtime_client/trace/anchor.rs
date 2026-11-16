@@ -140,6 +140,7 @@ pub(super) fn terminal_state(class: TraceTerminalClass) -> TraceState {
         TraceTerminalClass::Completed => TraceState::Completed,
         TraceTerminalClass::Failed => TraceState::Failed,
         TraceTerminalClass::Cancelled => TraceState::Cancelled,
+        TraceTerminalClass::Skipped => TraceState::Skipped,
         TraceTerminalClass::TimedOut => TraceState::TimedOut,
         TraceTerminalClass::Limited => TraceState::Limited,
         TraceTerminalClass::Denied => TraceState::Denied,
@@ -188,6 +189,7 @@ impl TraceProjection<'_> {
         facts.has_detail = true;
         Ok(())
     }
+    #[allow(clippy::too_many_lines)] // Keep the exhaustive native Trace start vocabulary together.
     fn anchor_start(
         &self,
         facts: &mut AnchorFacts,
@@ -250,7 +252,12 @@ impl TraceProjection<'_> {
                 facts.kind = TraceKind::Compaction;
                 facts.native_id.clone_from(native_id);
                 facts.has_detail = true;
-                vec![K::CompactionCompleted, K::CompactionFailed]
+                vec![
+                    K::CompactionCompleted,
+                    K::CompactionFailed,
+                    K::CompactionCancelled,
+                    K::CompactionSkipped,
+                ]
             }
             D::BackgroundStart {
                 native_id,

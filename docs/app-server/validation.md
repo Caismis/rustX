@@ -143,7 +143,7 @@ instructions are in [shared-control.md](shared-control.md#existing-clients-and-s
 These targeted regressions do not replace final-head FULL verification for the
 approved Thread runtime-status amendment.
 
-## Thread runtime-status amendment (v74)
+## Thread runtime-status amendment (v79)
 
 This delta preserves the four review-boundary fixes above and uses existing
 Native owners: manager residency, Attempt/scheduled/manual physical task tails,
@@ -188,7 +188,7 @@ complete browser-shard coverage. Pending results are not counted as passes.
 | --- | --- |
 | Native Session runtime manager suite | 467 passed, 2 ignored |
 | Native status, logical Interaction accounting, fault cut and four-source lock recovery | 6 passed |
-| Protocol-version rejection over direct and stdio Runtime Client transports | 2 passed; historical v73 input remains independent of App Server v74 |
+| Protocol-version rejection over direct and stdio Runtime Client transports | 2 passed; historical v73 input remains independent of App Server v79 |
 | Complete documentation/protocol contracts suite | 31 passed |
 | Real App Server concurrent Sessions across external disconnect | Passed; instance status notices retain exact Thread identities and transcript isolation assertions |
 | Child physical-proof and resume suites | 4 and 9 passed |

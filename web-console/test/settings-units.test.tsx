@@ -12,7 +12,7 @@ import { AgentPage } from '../src/app/settings/agent/AgentPage';
 import { ToolsPage } from '../src/app/settings/tools/ToolsPage';
 import { AgentEditor } from '../src/app/resources/subagents/AgentEditor';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
-import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v78';
+import type { ModelLayer, RuntimeLayer, SourceScope, SourceSettings } from '../../protocol/app-server/v79';
 import { chooseOption, confirmAction, renderEditor, sameRevision } from './settings-harness';
 import type { WriteOutcome } from '../src/app/settings/machines/port';
 import { act } from '@testing-library/react';
@@ -418,13 +418,14 @@ it('the explicit Auxiliary Model variant owns complete labels in each locale wit
   expect(context()).toBe(snapshot);
 
   fireEvent.change(chinese.limit, { target: { value: '1024' } });
+  changeJson(chinese.params, '{"temperature": 0.4}');
   const zh = translator('zh');
   const title = zh('settings:extension-detail.agent-value', { p0: 'reviewer' });
   const form = screen.getByRole('form', { name: title });
   fireEvent.click(within(form).getByRole('button', { name: `${zh('settings:bridge.save')} ${title}` }));
   await waitFor(() => expect(write).toHaveBeenCalledTimes(1));
   expect(write.mock.calls[0]).toEqual([{ kind: 'agent', name: 'reviewer', authored: { model: {
-    ...model, auxiliary: { ...summary, max_output_tokens: { mode: 'limit', tokens: 1024 } },
+    ...model, auxiliary: { ...summary, max_output_tokens: { mode: 'limit', tokens: 1024 }, request_params: { temperature: .4 } },
   } } }, 'r1']);
 });
 

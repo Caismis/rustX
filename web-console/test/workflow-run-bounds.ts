@@ -1,5 +1,5 @@
 import bounds from './fixtures/workflow-run-bounds.json';
-import type { WorkflowFileDocument, WorkflowRunId, WorkflowTraceNode } from '../../protocol/app-server/v78';
+import type { WorkflowFileDocument, WorkflowRunId, WorkflowTraceNode } from '../../protocol/app-server/v79';
 
 /** Shared with the native compiler's inspection_bounds_fixture_is_admissible test.
  * JSON is decoded at this boundary; both documents must pass native admission. */

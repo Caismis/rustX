@@ -1,5 +1,45 @@
 use super::*;
 
+#[test]
+fn admitted_command_does_not_wait_for_revision_writer() {
+    let commands = Arc::new(Commands::default());
+    let (control, _controls) = mpsc::channel(1);
+    commands.state.lock().unwrap().active.insert(
+        "admitted".into(),
+        Entry {
+            cancellation: CancellationSignal::new(),
+            control,
+        },
+    );
+    let (entered, writing) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let writer = commands.clone();
+    let writer = std::thread::spawn(move || {
+        writer.revisions.send_modify(|revision| {
+            entered.send(()).unwrap();
+            released.recv().unwrap();
+            *revision += 1;
+        });
+    });
+    writing.recv().unwrap();
+    let (done, completed) = std::sync::mpsc::channel();
+    let waiter = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(commands.admitted_for_test("admitted"));
+        done.send(()).unwrap();
+    });
+    let observed = completed.recv_timeout(std::time::Duration::from_secs(2));
+    release.send(()).unwrap();
+    writer.join().unwrap();
+    waiter.join().unwrap();
+    assert!(
+        observed.is_ok(),
+        "native admission is observable while its revision publication is blocked"
+    );
+}
+
 fn parameters() -> ExecParams {
     ExecParams {
         command: vec!["unused".into()],

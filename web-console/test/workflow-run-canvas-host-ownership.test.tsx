@@ -1,7 +1,7 @@
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { useLayoutEffect, type ComponentProps } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CheckpointReadCut, MethodResult, Request, TraceRecord, WorkflowRunId } from '../../protocol/app-server/v78';
+import type { CheckpointReadCut, MethodResult, Request, TraceRecord, WorkflowRunId } from '../../protocol/app-server/v79';
 import { RpcFailure } from '../src/client/errors';
 import { Server } from './fixture';
 import { ConversationRunCanvasHost } from '../src/app/workflows/run-canvas/ConversationRunCanvasHost';

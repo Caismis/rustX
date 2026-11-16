@@ -77,7 +77,8 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
       const sourceFile = join(fixture.workspaceA, '.agents/agents/optional.toml');
       const preserved = readFileSync(sourceFile, 'utf8');
       expect(preserved).not.toMatch(/^(description|instructions)\s*=/m);
-      for (const fact of ['summary-b', 'deep', '2048', '0.2']) expect(preserved).toContain(fact);
+      for (const fact of ['summary-b', 'deep', '0.2']) expect(preserved).toContain(fact);
+      expect(preserved).toContain('2048');
       // Native writes keep provider-native parameters as JSON strings.
       expect(preserved).toMatch(/request_params = '\{"temperature":0\.2\}'/);
       // Acknowledge then reread: clean forms follow the native source, not old drafts.

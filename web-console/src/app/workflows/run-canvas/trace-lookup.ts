@@ -3,7 +3,7 @@ import type {
   CheckpointReadCut,
   TraceRecord,
   WorkflowRunId,
-} from '../../../../../protocol/app-server/v78';
+} from '../../../../../protocol/app-server/v79';
 import type { AppServerClient } from '../../../client/app-server';
 import type { TraceFieldReader } from '../../../client/trace';
 

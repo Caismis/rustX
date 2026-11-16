@@ -8,7 +8,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createActor } from 'xstate';
 import { useState } from 'react';
-import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v78';
+import type { ConfigRepairReceipt, ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v79';
 import { RepairNotice, repairNoticeText } from '../src/app/RepairNotice';
 import { repairChangeLabel } from '../src/app/settings/advanced/AutoRepair';
 import { inspectionAcknowledger, RepairAcknowledgements } from '../src/app/repair-notices';
@@ -873,8 +873,8 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   // An in-flight Save of another unit, held at native.
   await openSettingsPage('Advanced');
   s.held.add('configuration/sourceWrite');
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   const [write] = sent(s, 'configuration/sourceWrite');
   expect(write.params).toMatchObject({ expected_revision: 'user-1' });
   const before = s.client.getSnapshot();
@@ -890,7 +890,7 @@ it('WEB-BOUND-08 repair observations never touch a Settings draft, its CAS base,
   expect(sent(s, 'configuration/sourceWrite')).toEqual([write]);
   expect(sent(s, 'configuration/sourcesRead')).toHaveLength(reads);
   expect(sent(s, 'configuration/reconcile')).toHaveLength(0);
-  expect((screen.getByLabelText('Reserved tokens') as HTMLInputElement).value).toBe('19');
+  expect((screen.getByLabelText('Response start timeout (ms)') as HTMLInputElement).value).toBe('19000');
   await openSettingsPage('Agent');
   expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   s.client.disconnect();
@@ -1117,8 +1117,8 @@ it('LEDGER-EVICT-08 a warning whose receipt native forgets retires while W0 stay
   // The Settings draft and its CAS base are untouched.
   expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   await openSettingsPage('Advanced');
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();
@@ -1193,8 +1193,8 @@ it('CONVERGE-WEB a stale warning retires when native re-admits its forgotten Wor
   // The Settings draft and its CAS base are untouched.
   expect(automaticGuidance().getAttribute('aria-checked')).toBe('false');
   await openSettingsPage('Advanced');
-  fireEvent.change(screen.getByLabelText('Reserved tokens'), { target: { value: '19' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Save Context' }));
+  fireEvent.change(screen.getByLabelText('Response start timeout (ms)'), { target: { value: '19000' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Save Model timeout' }));
   await waitFor(() => expect(sent(s, 'configuration/sourceWrite')).toHaveLength(1));
   expect(sent(s, 'configuration/sourceWrite')[0].params).toMatchObject({ expected_revision: 'user-1' });
   s.client.disconnect();
