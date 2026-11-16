@@ -117,3 +117,13 @@ targets pass: cfg3 catalog 30, cfg3 managed output 2, contracts 31, durable 152,
 process 69, provider 195, subagent 45, and tools 130. Repeated targeted runs are
 not added to these totals. Full-library revalidation and exact-head remote FULL
 CI remain the final acceptance gates reported in the PR.
+
+The production candidate's full-library revalidation passed **6,235 tests,
+zero failures, 28 intentional ignores**. Remote FULL CI then exposed a race
+in the provider no-resend fixture: dropping its multithread executor could
+allow a worker to commit a known failed outcome before teardown. The fixture
+now hosts the first runtime on a dedicated current-thread executor and requires
+only the indeterminate-outcome class, rather than accepting multiple scheduler
+landings. Provider arrival/disconnect gates, exact frozen reconstruction, and
+zero-resend checks remain. All 53 composed conformance tests and both Clippy
+configurations pass after this test-only correction.
