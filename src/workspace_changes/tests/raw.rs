@@ -555,3 +555,86 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
         }
     }
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn imported_clean_filter_stat_cache_cannot_supply_the_before_image() {
+    let directory = repository();
+    let root = directory.path();
+    let marker = root.join(".git/filter-ran");
+    let filter = program(
+        root,
+        "tracked-clean-filter",
+        &format!(
+            "printf ran >> {}\nsed 's/original/FILTERED/g'",
+            shell_path(&marker)
+        ),
+    );
+    git(
+        root,
+        &["config", "filter.tracked.clean", &shell_path(&filter)],
+    );
+    git(root, &["config", "filter.tracked.required", "true"]);
+    fs::write(
+        root.join(".gitattributes"),
+        "native.txt filter=tracked\nshell.txt filter=tracked\n",
+    )
+    .unwrap();
+    for name in ["native.txt", "shell.txt"] {
+        let path = root.join(name);
+        fs::write(&path, "original before\n").unwrap();
+        // An old mtime before git add makes this a non-racy stat-cache hit,
+        // without sleeping or modifying the working file after it is staged.
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000),
+            ))
+            .unwrap();
+    }
+    git(root, &["add", "."]);
+    assert!(
+        marker.exists(),
+        "the real index must contain filtered blobs"
+    );
+    for name in ["native.txt", "shell.txt"] {
+        assert_eq!(
+            git(root, &["show", &format!(":{name}")]),
+            "FILTERED before\n"
+        );
+    }
+    fs::remove_file(&marker).unwrap();
+    // A second add hits the valid cached stat instead of invoking the filter.
+    git(root, &["add", "."]);
+    assert!(!marker.exists(), "fixture must exercise a valid stat cache");
+    // Missing imported entries are removed by the ordinary snapshot add;
+    // normalization must not make an already deleted file an error.
+    fs::remove_file(root.join("tracked.txt")).unwrap();
+    let metadata = git_files(root);
+    let store = Arc::default();
+    let record = start(root, &store, "tracked-filter");
+    record.before_tools().await;
+    record.capture(&root.join("native.txt"));
+    for name in ["native.txt", "shell.txt"] {
+        fs::write(root.join(name), "original after\n").unwrap();
+    }
+    record.finish().await;
+    for name in ["native.txt", "shell.txt"] {
+        text_change(
+            &store,
+            "tracked-filter",
+            name,
+            "original before\n",
+            "original after\n",
+            (1, 1),
+        )
+        .await;
+    }
+    assert_eq!(git_files(root), metadata);
+    assert!(
+        !marker.exists(),
+        "neither private snapshot may execute the filter"
+    );
+}

@@ -5,7 +5,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write as _,
     path::{Path, PathBuf},
-    sync::{Arc, OnceLock},
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 
@@ -16,6 +19,7 @@ pub(super) struct Repository {
     objects: PathBuf,
     exclusion: PathBuf,
     gate: Arc<tokio::sync::Mutex<()>>,
+    index_ready: Arc<AtomicBool>,
     pub cancellation: CancellationSignal,
     #[cfg(test)]
     pub commands: Arc<std::sync::atomic::AtomicUsize>,
@@ -187,16 +191,90 @@ impl Repository {
             .into_iter()
             .collect::<Result<Vec<_>, _>>()?;
         seed(&git_dir, &scratch.path().join("git"), config, format, &info)?;
-        Ok(Some(Self {
+        let repository = Self {
             root,
             objects,
             exclusion: scratch.root().to_owned(),
             scratch,
             gate: Arc::default(),
+            index_ready: Arc::default(),
             cancellation,
             #[cfg(test)]
             commands: Arc::default(),
-        }))
+        };
+        Ok(Some(repository))
+    }
+
+    /// The imported index was authored with different filter authority. Its
+    /// stat cache cannot certify our before-image even when the file is clean.
+    /// Normalize ordinary tracked entries once, before producing a baseline;
+    /// later snapshots reuse only entries prepared by our private Git config.
+    async fn normalize_imported_index(&self, lease: Arc<SnapshotLease>) -> Result<(), String> {
+        use std::io::{BufRead as _, Write as _};
+        // Stream the inventory through private scratch rather than imposing a
+        // new repository-size limit or retaining every pathname in memory.
+        let inventory = Arc::new(
+            tempfile::NamedTempFile::new_in(self.scratch.path())
+                .map_err(|error| error.to_string())?,
+        );
+        // First reconcile deletions and directory/symlink replacements using
+        // Git itself; renormalize requires existing, covered index entries.
+        self.run(
+            format!(
+                "{}; result=$?; if [ \"$result\" -gt 1 ]; then exit \"$result\"; fi; {} > {}",
+                self.add_command(),
+                invocation(&["ls-files", "--cached", "-v", "-z"]),
+                quote(&inventory.path().to_string_lossy())
+            ),
+            1024,
+            &self.cancellation,
+            (Arc::clone(&inventory), Arc::clone(&lease)),
+        )
+        .await?;
+        let entries =
+            std::io::BufReader::new(inventory.reopen().map_err(|error| error.to_string())?);
+        let mut paths = tempfile::NamedTempFile::new_in(self.scratch.path())
+            .map_err(|error| error.to_string())?;
+        for entry in entries.split(0) {
+            let entry = entry.map_err(|error| error.to_string())?;
+            // -v emits lowercase for assume-unchanged and S for skip-worktree.
+            // Renormalizing those would erase their intentional Git coverage.
+            if let Some(path) = entry.strip_prefix(b"H ") {
+                if let Ok(excluded) = self.exclusion.strip_prefix(&self.root) {
+                    let prefix = excluded.as_os_str().as_encoded_bytes();
+                    if path == prefix
+                        || path
+                            .strip_prefix(prefix)
+                            .is_some_and(|tail| tail.starts_with(b"/"))
+                    {
+                        continue;
+                    }
+                }
+                paths.write_all(path).map_err(|error| error.to_string())?;
+                paths.write_all(&[0]).map_err(|error| error.to_string())?;
+            }
+        }
+        if paths
+            .as_file()
+            .metadata()
+            .map_err(|error| error.to_string())?
+            .len()
+            != 0
+        {
+            let command = format!(
+                "GIT_LITERAL_PATHSPECS=1 {}",
+                invocation(&[
+                    "add",
+                    "--renormalize",
+                    "--ignore-errors",
+                    &format!("--pathspec-from-file={}", paths.path().to_string_lossy()),
+                    "--pathspec-file-nul",
+                ])
+            );
+            self.run(command, 1024, &self.cancellation, (paths, lease))
+                .await?;
+        }
+        Ok(())
     }
 
     async fn run(
@@ -269,13 +347,7 @@ impl Repository {
         Ok(output)
     }
 
-    pub async fn snapshot(&self) -> Result<String, String> {
-        // The physical command driver owns the lock until it has reaped Git,
-        // even when an attempt abandons its waiter during cancellation.
-        let guard = SnapshotLease {
-            _guard: Arc::clone(&self.gate).lock_owned().await,
-            scratch: Arc::clone(&self.scratch),
-        };
+    fn add_command(&self) -> String {
         let mut add = invocation(&["add", "--all", "--ignore-errors"]);
         if let Ok(relative) = self.exclusion.strip_prefix(&self.root) {
             // This one command needs exclude pathspec magic, all others are literal.
@@ -284,6 +356,23 @@ impl Repository {
                 quote(&format!(":(exclude){}", relative.to_string_lossy()))
             );
         }
+        add
+    }
+
+    pub async fn snapshot(&self) -> Result<String, String> {
+        // The physical command driver owns the lock until it has reaped Git,
+        // even when an attempt abandons its waiter during cancellation.
+        let guard = Arc::new(SnapshotLease {
+            _guard: Arc::clone(&self.gate).lock_owned().await,
+            scratch: Arc::clone(&self.scratch),
+        });
+        if !self.index_ready.load(Ordering::Acquire) {
+            self.normalize_imported_index(Arc::clone(&guard)).await?;
+            // Publish only a completed normalization. Cancellation leaves it
+            // retryable under the same lock after the physical child is reaped.
+            self.index_ready.store(true, Ordering::Release);
+        }
+        let add = self.add_command();
         let command = format!(
             "{add}; result=$?; if [ \"$result\" -gt 1 ]; then exit \"$result\"; fi; exec {}",
             invocation(&["write-tree"])

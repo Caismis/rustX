@@ -10,6 +10,18 @@ async fn text_and_read_turns_reuse_one_directory_and_index_without_new_objects()
     first.finish().await;
     let directory = first.directory.get().unwrap().path().to_owned();
     let objects = object_files(&directory.join("git/objects"));
+    let commands = Arc::clone(
+        &first
+            .baseline
+            .lock()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .repository
+            .commands,
+    );
+    let initial_commands = commands.load(Ordering::Relaxed);
+    let mut later_snapshots = 0;
     for tool in [false, true] {
         for turn in 0..8 {
             let record = start(dir.path(), &store, &format!("work-{tool}-{turn}"));
@@ -20,6 +32,12 @@ async fn text_and_read_turns_reuse_one_directory_and_index_without_new_objects()
             }
             record.finish().await;
             assert_eq!(object_files(&directory.join("git/objects")), objects);
+            later_snapshots += if tool { 2 } else { 1 };
+            assert_eq!(
+                commands.load(Ordering::Relaxed),
+                initial_commands + later_snapshots,
+                "later unchanged turns run only their incremental snapshots, never imported-index normalization"
+            );
         }
     }
     assert!(store.records.lock().unwrap().is_empty());
@@ -71,8 +89,8 @@ async fn changed_turn_keeps_the_inference_baseline_and_reads_comparisons_on_dema
     record.finish().await;
     assert_eq!(
         commands.load(Ordering::Relaxed),
-        3,
-        "two snapshot batches and one diff"
+        5,
+        "one imported-index normalization (two supervised batches), two snapshot batches and one diff"
     );
     raw::text_change(
         &store,
@@ -85,8 +103,8 @@ async fn changed_turn_keeps_the_inference_baseline_and_reads_comparisons_on_dema
     .await;
     assert_eq!(
         commands.load(Ordering::Relaxed),
-        7,
-        "size and blob reads for two sides"
+        9,
+        "normalization and snapshots plus size and blob reads for two sides"
     );
 }
 
@@ -410,15 +428,16 @@ async fn cancelled_git_reaps_before_the_next_snapshot_reuses_its_index() {
         .await;
         return;
     }
-    let dir = repository();
-    let owner = tempdir();
-    let marker = owner.path().join("once");
-    let wrapper = owner.path().join("git");
-    fs::write(
+    for phase in ["add", "--renormalize"] {
+        let dir = repository();
+        let owner = tempdir();
+        let marker = owner.path().join("once");
+        let wrapper = owner.path().join("git");
+        fs::write(
         &wrapper,
         r#"#!/bin/sh
 for argument do
-    if [ "$argument" = add ] && [ ! -f "$RUSTX_CHANGES_CANCEL_MARKER" ]; then
+    if [ "$argument" = "$RUSTX_CHANGES_CANCEL_MATCH" ] && [ ! -f "$RUSTX_CHANGES_CANCEL_MARKER" ]; then
         : > "$GIT_INDEX_FILE.lock"
         : > "$RUSTX_CHANGES_CANCEL_MARKER"
         sleep 30
@@ -428,19 +447,21 @@ exec /usr/bin/git "$@"
 "#,
     )
     .unwrap();
-    fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
-    let output = tokio::process::Command::new(std::env::current_exe().unwrap())
+        fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
+        let output = tokio::process::Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "workspace_changes::tests::work::cancelled_git_reaps_before_the_next_snapshot_reuses_its_index", "--test-threads=1"])
         .env(CHILD, dir.path())
+        .env("RUSTX_CHANGES_CANCEL_MATCH", phase)
         .env("RUSTX_CHANGES_CANCEL_MARKER", marker)
         .env("PATH", format!("{}:/usr/bin:/bin", owner.path().display()))
         .output().await.unwrap();
-    assert!(
-        output.status.success(),
-        "{}\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[tokio::test]
