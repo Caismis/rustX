@@ -206,7 +206,11 @@ pub(super) fn prepared_lock<'a>(
     let _scope = crate::durable::sqlite::query_work::scope("prepared_lock");
     #[cfg(test)]
     publication.preparation_stage("drain");
-    let observations = pending.drain();
+    let observations = {
+        #[cfg(test)]
+        let _scope = crate::durable::sqlite::query_work::scope("journal_drain");
+        pending.drain()
+    };
     #[cfg(test)]
     if !observations.is_empty() {
         let hook = publication.preparation_hook.lock().unwrap().take();

@@ -543,6 +543,7 @@ pub(crate) struct PendingObservations {
 #[cfg(test)]
 #[derive(Default)]
 struct QueueDiagnostic {
+    source_signals: usize,
     drain: Option<(&'static str, std::time::Instant)>,
     window: Option<(u64, u64, Option<u64>)>,
     ready: Option<(u64, std::time::Instant)>,
@@ -1647,6 +1648,10 @@ impl PendingObservations {
     }
 
     fn signal(&self) {
+        #[cfg(test)]
+        {
+            self.diagnostic.lock().unwrap().source_signals += 1;
+        }
         self.source_signaled.store(true, Ordering::Release);
         self.notify.notify_one();
     }
@@ -1949,6 +1954,10 @@ impl crate::durable::presentation::JournalObserver for PendingObservations {
 }
 #[cfg(test)]
 impl PendingObservations {
+    pub(crate) fn source_signal_count(&self) -> usize {
+        self.diagnostic.lock().unwrap().source_signals
+    }
+
     fn drain_stage(&self, name: &'static str) {
         self.diagnostic.lock().unwrap().drain = Some((name, std::time::Instant::now()));
     }
@@ -2430,7 +2439,7 @@ mod tests {
         queue.bind_journal(&store, 0);
         assert_eq!(store.observe_journal(queue.clone()).unwrap(), 0);
         let commit = |ordinal: usize| {
-            let event = store
+            store
                 .append_event(RuntimeEventEnvelope {
                     schema_version: crate::events::types::EVENT_SCHEMA_VERSION,
                     tool_occurrence: None,
@@ -2445,7 +2454,9 @@ mod tests {
                         attempt_id: AttemptId::new(format!("attempt-{ordinal}")),
                     },
                 })
-                .unwrap();
+                .unwrap()
+        };
+        let release = |event: &RuntimeEventEnvelope| {
             store
                 .mark_observation_ready(event.sequence, event.sequence)
                 .unwrap();
@@ -2454,12 +2465,28 @@ mod tests {
                 observation: Box::new(ConversationObservation::JournalSourceReady),
             });
         };
-        commit(0);
+        let signals = queue.source_signal_count();
+        let first = commit(0);
+        assert_eq!(queue.source_signal_count(), signals + 1);
+        // Commit and owner readiness are different wakeups for the same event.
+        // Let the reader consume both separately instead of relying on batching.
+        sqlite.begin_query_work();
+        assert!(
+            queue.drain().is_empty(),
+            "the owner has not released the event"
+        );
+        let before_ready = sqlite.finish_query_work();
+        assert_eq!(before_ready["BEGIN DEFERRED"].0, 1);
+        release(&first);
+        assert_eq!(queue.source_signal_count(), signals + 3);
+        sqlite.begin_query_work();
         assert_eq!(queue.drain().len(), 1);
+        let after_ready = sqlite.finish_query_work();
+        assert_eq!(after_ready["BEGIN DEFERRED"].0, 1);
         sqlite.begin_query_work();
         assert!(queue.drain().is_empty());
         assert!(sqlite.finish_query_work().is_empty());
-        commit(1);
+        release(&commit(1));
         assert_eq!(queue.drain().len(), 1);
     }
 

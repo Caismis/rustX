@@ -204,3 +204,21 @@ The corrected manager suite passes 480 tests (two intentional ignores), and
 both synchronization-probe tests pass. A four-thread local run of the original
 Linux contract selection passed 5,934 tests before this correction; that does
 not override the archived remote stall or count as validation of the correction.
+
+That corrected idle-claim test passed remotely. The next Linux contract run
+completed 5,934 tests but failed the observation-work fixture's attribution:
+`prepared_lock` counted 133 transactions against 128 tool-turn events. This
+scope includes both Journal draining and independent tool-result field reads.
+Furthermore, commit and readiness release can signal separately for one event,
+so event count was never a scheduling-independent upper bound on drain reads.
+The test now measures drain SQL separately, bounds it by this queue's actual
+source signals, and requires exactly one separate field-read transaction per
+completed tool. A deterministic existing queue regression now consumes commit
+and readiness separately: one event legitimately incurs two read transactions,
+then an unsignaled drain executes zero SQL. Notification byte limits and the
+zero-SQL retired-checkpoint check are unchanged. All instrumentation is test-only;
+no production notification, query, transaction or publication behavior changes.
+After this correction, both Clippy configurations pass and the complete local
+library suite passes 6,236 tests, zero failures, with 28 intentional ignores,
+using four test threads. The targeted split-notification and fixed-turn SQL
+contracts also pass independently.

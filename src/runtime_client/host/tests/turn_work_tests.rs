@@ -90,6 +90,7 @@ fn tool_call_step(turn: usize, definition: &ToolDefinition) -> Vec<GatedStep> {
 #[derive(Debug, Default)]
 struct TurnWork {
     sql: std::collections::BTreeMap<&'static str, ScopeWork>,
+    source_signals: usize,
     records: u64,
     encoded_bytes: usize,
     /// Delivered transitions, their read-domain facts, and their JSON bytes.
@@ -193,6 +194,7 @@ async fn measure_turns(tool: bool) -> TurnWork {
     let capture = std::env::var_os("RUSTX_N1_CAPTURE");
     let subscription = attachment.subscribe_events(initial.cursor).unwrap();
     let mut work = TurnWork::default();
+    let mut initial_signals = 0;
     for turn in 0..turns {
         if turn == WARM_TURNS {
             fixture.host.projection_settled().await;
@@ -201,6 +203,7 @@ async fn measure_turns(tool: bool) -> TurnWork {
             *profile.lock().unwrap() =
                 crate::runtime_client::projection::PublicationEncodingProfile::default();
             work = TurnWork::default();
+            initial_signals = inner.pending.source_signal_count();
         }
         fixture
             .host
@@ -232,6 +235,7 @@ async fn measure_turns(tool: bool) -> TurnWork {
         work.sql.insert(scope, measured);
     }
     store.finish_shared_query_work();
+    work.source_signals = inner.pending.source_signal_count() - initial_signals;
     let encoded = profile.lock().unwrap().clone();
     work.records = encoded.records;
     work.encoded_bytes = encoded.bytes;
@@ -330,13 +334,29 @@ async fn fixed_turn_observation_work() {
             .sum();
         let drains = work
             .sql
-            .get("prepared_lock")
+            .get("journal_drain")
             .map_or(0, |scope| scope.transactions);
-        // A Journal drain reads its sources only after a new signal, so the
-        // drains that read cannot outnumber the committed events.
+        eprintln!(
+            "{kind} measured source work: events={events} signals={} drain_transactions={drains}",
+            work.source_signals
+        );
+        // Commit and readiness release can signal separately for one event.
+        // Bound actual SQL reads by this queue's signals, not event count or
+        // the scheduling-dependent amount of coalescing between them.
         assert!(
-            drains <= events,
-            "{kind}: {drains} source read transactions for {events} events"
+            drains <= work.source_signals,
+            "{kind}: {drains} source read transactions for {} signals and {events} events",
+            work.source_signals
+        );
+        // Journal preparation separately authenticates the result field of
+        // each completed tool. These transactions are not source drain polls;
+        // coalescing must not be required to hide them inside the event bound.
+        assert_eq!(
+            work.sql
+                .get("prepared_lock")
+                .map_or(0, |scope| scope.transactions),
+            if tool { MEASURED_TURNS } else { 0 },
+            "{kind}: exactly one field read per completed tool"
         );
         // Each live read-back that runs is current when it owns the
         // connection; retired ones run no SQL.
