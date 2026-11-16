@@ -17,6 +17,9 @@ fn tempdir() -> tempfile::TempDir {
 fn git(cwd: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .current_dir(cwd)
+        // Fixture commits must finish all writes before a test snapshots .git.
+        // Detached auto-maintenance can otherwise remove its lock mid-assertion.
+        .args(["-c", "maintenance.auto=false", "-c", "gc.auto=0"])
         .args(args)
         .output()
         .unwrap();

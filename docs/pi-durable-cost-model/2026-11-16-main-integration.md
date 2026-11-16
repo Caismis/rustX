@@ -222,3 +222,19 @@ After this correction, both Clippy configurations pass and the complete local
 library suite passes 6,236 tests, zero failures, with 28 intentional ignores,
 using four test threads. The targeted split-notification and fixed-turn SQL
 contracts also pass independently.
+
+The first completed macOS FULL unit selection passed 5,088 tests and failed
+three workspace-change fixtures. Exact before/after Git-directory inventories
+show only `.git/objects/maintenance.lock` disappearing in the two immutability
+failures: the fixture's initial commit had started detached Git maintenance.
+Fixture Git commands now disable automatic maintenance and auto-GC; the strict
+whole-directory comparison remains unchanged. The custom-TMPDIR fixture passed
+an unresolved `/tmp` path to a capture interface that requires resolved native
+mutation paths. It now resolves the host temporary root, including macOS's
+`/private/tmp` alias, just as the existing common temporary-directory fixture
+does. Both workspace retention and external-temporary exclusion assertions
+remain intact. These fixes do not change production Git or capture behavior.
+The failed run is retained as evidence:
+https://github.com/Caismis/rustX/actions/runs/43836595861.
+The corrected workspace-change suite passes 75 tests locally, with one
+intentional ignore. Platform acceptance still requires the final macOS run.

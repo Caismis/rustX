@@ -483,7 +483,9 @@ async fn host_tmp_stays_excluded_when_the_platform_temporary_root_is_custom() {
     const CHILD: &str = "RUSTX_CHANGES_TEMP_CHILD";
     if std::env::var_os(CHILD).is_some() {
         let workspace = tempdir();
-        let outside = tempfile::tempdir_in("/tmp").unwrap();
+        // capture receives resolved native mutation paths, including the macOS
+        // /tmp -> /private/tmp alias when TMPDIR points somewhere else.
+        let outside = tempfile::tempdir_in(Path::new("/tmp").canonicalize().unwrap()).unwrap();
         let store = Arc::default();
         let record = start(workspace.path(), &store, "custom-temp");
         record.before_tools().await;
