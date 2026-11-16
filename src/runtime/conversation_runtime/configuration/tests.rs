@@ -310,12 +310,9 @@ fn configuration_change_fact_is_a_complete_transcript_row() {
             .append_configuration_change(envelope(None), "Instructions B", "{\"tools\":[\"B\"]}")
             .is_err()
     );
-    assert!(
-        store
-            .load_transcript_page(None, 8)
-            .unwrap()
-            .entries
-            .is_empty()
+    assert_eq!(
+        store.load_transcript_page(None, 8).unwrap().entries,
+        [] as [crate::durable::store::canonical::TranscriptEntry; 0]
     );
     let (event, cursor) = store
         .append_configuration_change(envelope(None), "Instructions B", "{\"tools\":[\"B\"]}")

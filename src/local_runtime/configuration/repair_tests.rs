@@ -231,7 +231,10 @@ fn the_issue_example_converges_to_its_documented_result() {
         ]
     );
     // One finite pass reaches the fixed point.
-    assert!(changes(std::str::from_utf8(&plan.candidate).unwrap()).is_empty());
+    assert_eq!(
+        changes(std::str::from_utf8(&plan.candidate).unwrap()),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
 }
 
 #[test]
@@ -431,7 +434,10 @@ fn native_tool_entries_are_classified_by_the_native_domain() {
         ordinary
     );
     // A non-string element is a known-field type error, never a selection edit.
-    assert!(changes("[agent.tools]\nbuiltin = [\"read\", 3, \"read\"]\n").is_empty());
+    assert_eq!(
+        changes("[agent.tools]\nbuiltin = [\"read\", 3, \"read\"]\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
 }
 
 #[test]
@@ -444,13 +450,25 @@ fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
         );
         assert_eq!(candidate(&text), "schema_version = 13 # authored\n");
     }
-    assert!(changes("schema_version = 13\n").is_empty());
-    assert!(changes("schema_version = 13 # authored\n").is_empty());
-    assert!(changes("[agent]\ndescription = 'x'\n").is_empty());
+    assert_eq!(
+        changes("schema_version = 13\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
+    assert_eq!(
+        changes("schema_version = 13 # authored\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
+    assert_eq!(
+        changes("[agent]\ndescription = 'x'\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
     assert!(!candidate("[agent]\nstale = 1\n").contains("schema_version"));
     // A non-integer version is a type error, not version metadata.
     for wrong in ["'10'", "10.0", "true"] {
-        assert!(changes(&format!("schema_version = {wrong}\n")).is_empty());
+        assert_eq!(
+            changes(&format!("schema_version = {wrong}\n")),
+            [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+        );
     }
 }
 
@@ -465,8 +483,9 @@ fn tagged_unions_close_only_their_selected_variant() {
         ]
     );
     // An unknown tag selects no variant: nothing under it is guessed.
-    assert!(
-        changes("[tool_deadline_policy.idle_liveness_ms]\nmode = 'future'\nextra = 1\n").is_empty()
+    assert_eq!(
+        changes("[tool_deadline_policy.idle_liveness_ms]\nmode = 'future'\nextra = 1\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
     );
 }
 
@@ -576,7 +595,7 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
             .unwrap(),
         modified
     );
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     assert!(fixture.receipt(&SourceTarget::User).is_none());
     // A healthy check takes no writer lock, so it creates no lock file.
     assert!(!lock_of(&fixture.path(&SourceTarget::User)).exists());
@@ -639,7 +658,7 @@ fn nonrepairable_sources_stay_unchanged_with_a_safe_unresolved_receipt() {
         assert!(!wire.contains("SECRET"), "{wire}");
         assert!(receipt.diagnostic.is_some());
     }
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     // Workspace process policy is a source restriction, not an unknown field.
     fixture.write(
         &fixture.workspace,
@@ -749,7 +768,7 @@ fn an_external_edit_before_the_writer_lock_supersedes_the_candidate() {
         RepairOutcome::Superseded
     );
     assert_eq!(fixture.read(&SourceTarget::User), external);
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     assert!(fixture.receipt(&SourceTarget::User).is_none());
 }
 
@@ -798,7 +817,7 @@ fn failures_before_publication_leave_the_source_unchanged() {
         assert_eq!(receipt.backup_available, point != "backup", "{point}");
         assert!(receipt.after_revision.is_none());
         if point == "backup" {
-            assert!(fixture.backups().is_empty());
+            assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
         }
     }
 }
@@ -1052,7 +1071,7 @@ fn semantic_diagnostics_never_echo_authored_values_or_identities() {
         for sentinel in ["SECRET", "sentinelagent", "example.com", "MODEL_API_KEY"] {
             assert!(!wire.contains(sentinel), "{wire}");
         }
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     }
 }
 
@@ -1134,10 +1153,22 @@ fn removed_context_settings_are_never_silently_repaired() {
             "{entry}"
         );
         assert_eq!(fixture.read(&SourceTarget::User), original);
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
         let diagnostic = unresolved_diagnostic(&fixture, &SourceTarget::User);
         assert!(diagnostic.contains("context"), "{diagnostic}");
         assert!(diagnostic.contains("remove"), "{diagnostic}");
+        std::fs::write(
+            fixture.path(&SourceTarget::User),
+            original.replace("legacy_field = true\n", ""),
+        )
+        .unwrap();
+        let directory = fixture.workspace.workspace().unwrap().to_path_buf();
+        let failure = fixture
+            .manager
+            .resolve_session(&super::super::SessionConfigInput::new(directory))
+            .unwrap_err();
+        assert_eq!(failure.diagnostic.path, "context");
+        assert!(!failure.incomplete);
     }
 }
 
@@ -1153,7 +1184,7 @@ fn obsolete_auxiliary_fields_are_diagnosed_without_repairing_the_file() {
         RepairOutcome::Unchanged
     );
     assert_eq!(fixture.read(&SourceTarget::User), original);
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     let diagnostic = unresolved_diagnostic(&fixture, &SourceTarget::User);
     assert!(
         diagnostic.contains("obsolete") && diagnostic.contains("agent.model.auxiliary"),
@@ -1191,7 +1222,7 @@ fn independent_constraints_hold_without_a_default_model() {
                 diagnostic.contains("automatic repair never corrects an invalid value"),
                 "{diagnostic}"
             );
-            assert!(fixture.backups().is_empty());
+            assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
             assert_eq!(fixture.sequence(), applications + 1);
         }
     }
@@ -1549,7 +1580,7 @@ fn a_workspace_moved_into_the_runtime_root_after_admission_receives_no_backup() 
                 .unwrap()
                 .contains("outside the Workspace")
         );
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
         let moved = fixture.manager.runtime_root().join("moved-workspace");
         let source = match case.target {
             SourceTarget::User => fixture.path(&SourceTarget::User),
@@ -1618,7 +1649,7 @@ fn an_overlapping_runtime_root_is_refused_before_anything_is_created() {
         assert_eq!(root.exists(), existed, "nothing is created");
         assert_eq!(fixture.read(&SourceTarget::User), user);
         assert_eq!(fixture.read(&fixture.workspace), workspace);
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
         assert_eq!(fixture.sequence(), 0);
         // Startup's User-only scope selects no Workspace, so it proves
         // nothing about directories a later boundary may select, and still
@@ -2118,7 +2149,7 @@ fn a_workspace_replaced_before_the_writer_lock_is_never_written() {
     assert_eq!(swap.moved(), REPAIRABLE);
     assert_eq!(Swap::entries(&swap.other), ["rustx.toml"]);
     assert!(fixture.receipt(&fixture.workspace).is_none());
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     assert_eq!(fixture.sequence(), 0);
 }
 
@@ -2349,7 +2380,10 @@ fn nothing_eligible_is_not_proof_of_health() {
         assert_eq!(fixture.read(&target), INTRINSICALLY_INVALID);
         let receipt = fixture.receipt(&target).unwrap();
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
-        assert!(receipt.changes.is_empty());
+        assert_eq!(
+            receipt.changes,
+            [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+        );
         assert!(!receipt.backup_available);
         let diagnostic = receipt.diagnostic.unwrap();
         assert!(
@@ -2363,7 +2397,7 @@ fn nothing_eligible_is_not_proof_of_health() {
         assert_eq!(fixture.repair(&target, &target), RepairOutcome::Unchanged);
         assert_eq!(fixture.sequence(), sequence);
     }
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
 }
 
 #[test]
@@ -2685,7 +2719,7 @@ fn a_failed_confirmation_fails_the_backup_and_the_leftover_entry_is_confirmed_ag
     expected.extend(confirmed(&root));
     assert_eq!(steps, expected);
     assert_backup_failed(&fixture, &original, &steps);
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     // Nothing is cleaned up; the unconfirmed entry is simply never trusted:
     // the next transaction confirms it before using it.
     assert!(storage.exists());
@@ -2720,7 +2754,7 @@ fn an_unconfirmed_runtime_root_ancestor_fails_the_backup() {
     expected.extend(confirmed(a.parent().unwrap()));
     assert_eq!(steps, expected);
     assert_backup_failed(&fixture, &original, &steps);
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
 }
 
 #[test]
@@ -3272,7 +3306,7 @@ fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
     assert_eq!(steps, []);
     assert_eq!(fixture.read(&SourceTarget::User), original);
     assert!(!fixture.manager.runtime_root().exists());
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     let receipt = fixture.receipt(&SourceTarget::User).unwrap();
     assert_eq!(fixture.sequence(), sequence + 1);
     assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
@@ -3919,7 +3953,7 @@ fn reading_present_sources_writes_nothing_and_repairs_nothing() {
         assert_eq!(namespace(&root), before, "{user}");
         assert_eq!(fixture.sequence(), 0);
         assert!(fixture.receipt(&SourceTarget::User).is_none());
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     }
     assert!(!lock_of(&fixture.path(&SourceTarget::User)).exists());
     assert!(!lock_of(&fixture.path(&fixture.workspace)).exists());

@@ -355,15 +355,8 @@ impl Fixture {
             UserConfigManager::new(paths.sources.clone()).unwrap(),
             CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())]),
             LocalRuntimeDependencies {
-                child_program: matches!(tool, Some("review" | "delivery-child")).then(|| {
-                    std::env::current_exe()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .parent()
-                        .unwrap()
-                        .join("rustx")
-                }),
+                child_program: matches!(tool, Some("review" | "delivery-child"))
+                    .then(|| crate::runtime::process_runner::companion_binary("rustx")),
                 ..LocalRuntimeDependencies::default()
             },
             residency,

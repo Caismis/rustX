@@ -38,7 +38,7 @@
 //! channel. rmcp's framing deliberately keeps decode failures to itself
 //! (plain noise is ignored; structurally invalid MCP/JSON-RPC data earns
 //! only a peer-facing `Invalid Request` reply), so the generic observation
-//! seam in [`framing`] records a confirmed structurally invalid peer
+//! seam in `framing` records a confirmed structurally invalid peer
 //! message as a rustX fact, ends the byte stream after the offending line,
 //! and poisons the connection generation: the in-flight operation fails
 //! with [`McpError::ProtocolViolation`] naming the server, and the
@@ -160,7 +160,7 @@ mod test_context;
 /// Deterministic MCP ownership synchronization seams used by the M9c
 /// regressions. Test-only: no production path constructs these.
 #[cfg(test)]
-#[allow(dead_code)]
+#[cfg_attr(not(feature = "mcp-fixture"), allow(dead_code))]
 pub(crate) mod test_sync;
 
 use std::collections::BTreeMap;

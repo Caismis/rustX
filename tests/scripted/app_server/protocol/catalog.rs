@@ -63,7 +63,7 @@ async fn archive_preflight_failures_reach_the_protocol_without_private_diagnosti
             }
         }
         assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     }).await;
 }
@@ -234,7 +234,10 @@ async fn issue422_multi_client_deletion_membership_converges_at_commit() {
             else {
                 panic!()
             };
-            assert!(sessions.is_empty());
+            assert_eq!(
+                sessions,
+                [] as [crate::app_server::thread_status::SessionSummary; 0]
+            );
             f.close().await;
         }
     })
@@ -449,7 +452,7 @@ async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retireme
                 break;
             }
         }
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         connection.close();
         f.close().await;
     })
@@ -704,7 +707,7 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                 f.manager.residency(&branch.active_conversation_id),
                 ResidencyState::Loaded
             );
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             inspector.close();
             connection.close();
             f.close().await;
@@ -755,7 +758,7 @@ async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
         let MethodResult::Node { node } = call(&connection, 8204, Method::SessionNode { session_id: source.id.clone(), node_id: branch.active_node.clone() }).await else { panic!("unattached read") };
         assert_eq!(node.conversation_id, branch.active_conversation_id);
         assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     }).await;
 }

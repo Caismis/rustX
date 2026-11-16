@@ -204,7 +204,10 @@ mod tests {
                 ["second.txt", "报告 file.md"]
             );
             assert_eq!(result.deliveries[0].description.as_deref(), Some("first"));
-            assert!(result.artifacts.is_empty());
+            assert_eq!(
+                result.artifacts,
+                [] as [crate::message::content::FileReference; 0]
+            );
             assert!(
                 result
                     .deliveries
@@ -224,7 +227,10 @@ mod tests {
         )
         .await;
         assert!(matches!(failed.status, ToolExecutionStatus::Failed { .. }));
-        assert!(failed.deliveries.is_empty());
+        assert_eq!(
+            failed.deliveries,
+            [] as [crate::tools::session_files::SessionFileReference; 0]
+        );
         let cancelled = run(
             &fixture,
             serde_json::json!({"files":[{"path":"ok.txt"}]}),
@@ -235,7 +241,10 @@ mod tests {
             cancelled.status,
             ToolExecutionStatus::Cancelled { .. }
         ));
-        assert!(cancelled.deliveries.is_empty());
+        assert_eq!(
+            cancelled.deliveries,
+            [] as [crate::tools::session_files::SessionFileReference; 0]
+        );
         for arguments in [
             serde_json::json!({"files":[]}),
             serde_json::json!({"files":[{"path":"ok.txt","extra":true}]}),
@@ -311,8 +320,14 @@ mod tests {
             result.status,
             ToolExecutionStatus::Cancelled { .. }
         ));
-        assert!(result.deliveries.is_empty());
-        assert!(result.artifacts.is_empty());
+        assert_eq!(
+            result.deliveries,
+            [] as [crate::tools::session_files::SessionFileReference; 0]
+        );
+        assert_eq!(
+            result.artifacts,
+            [] as [crate::message::content::FileReference; 0]
+        );
         assert_eq!(
             std::fs::read(fixture.runtime.workspace().root().join("ok.txt")).unwrap(),
             b"ORIGINAL"

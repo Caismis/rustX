@@ -42,8 +42,8 @@ fn structured() -> WorkflowModelOutput {
 fn both_model_outputs_round_trip_and_derive_one_native_local_type() {
     for output in [WorkflowModelOutput::Text {}, structured()] {
         let authored = definition(output.clone());
-        let yaml = serde_yaml::to_string(&authored).unwrap();
-        let loaded: WorkflowDefinition = serde_yaml::from_str(&yaml).unwrap();
+        let yaml = serde_yaml_ng::to_string(&authored).unwrap();
+        let loaded: WorkflowDefinition = serde_yaml_ng::from_str(&yaml).unwrap();
         assert_eq!(loaded, authored);
         let program = compile_test(loaded).unwrap();
         assert_eq!(

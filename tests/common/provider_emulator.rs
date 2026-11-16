@@ -260,7 +260,7 @@ impl ProviderEmulator {
             "{}/__control/observations/await?kind={kind}&timeoutMs={}{}",
             self.base_url(),
             timeout.as_millis(),
-            name.map(|name| format!("&name={name}")).unwrap_or_default(),
+            name.map_or_default(|name| format!("&name={name}")),
         );
         let response = self.client.get(&url).send().await.expect("control request");
         let status = response.status();
@@ -268,7 +268,7 @@ impl ProviderEmulator {
         assert!(
             status.is_success(),
             "the provider never reached {kind}{}: {body}\n{}",
-            name.map(|name| format!(" ({name})")).unwrap_or_default(),
+            name.map_or_default(|name| format!(" ({name})")),
             self.diagnostics()
         );
         body

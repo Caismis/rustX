@@ -411,10 +411,10 @@ fn paging_terminal_empty_and_running_attempts_keep_native_identity_order() {
     assert_eq!(all.turns[0].cursor.unwrap().get(), 1);
     assert_eq!(all.turns[1].cursor.unwrap().get(), 2);
     assert!(all.turns[2].cursor.is_none());
-    for offset in 0..3 {
+    for (offset, expected) in all.turns.iter().enumerate() {
         assert_eq!(
             store.conversation_turns(offset, 1).unwrap().turns[0],
-            all.turns[offset]
+            *expected
         );
     }
     assert!(matches!(

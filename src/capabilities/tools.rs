@@ -781,7 +781,7 @@ mod tests {
                 .all(|tool| !crate::tools::native::is_agent_control(&tool.name))
         );
         intent.profile.agents = vec![agent];
-        assert!(intent.profile.tools.builtin.is_empty());
+        assert_eq!(intent.profile.tools.builtin, [] as [std::string::String; 0]);
         let (_, active) = select_tools(&available, &[], &intent).unwrap();
         assert_eq!(
             names(&active),

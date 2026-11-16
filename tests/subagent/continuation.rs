@@ -630,7 +630,7 @@ async fn recovered_resume_diagnostic(
     let mut admissions = Vec::new();
     while after < cut.read.journal {
         let page = store.read_events(Some(after), 32).unwrap();
-        assert!(!page.events.is_empty());
+        assert_ne!(page.events, [] as [rustx::events::RuntimeEventEnvelope; 0]);
         for envelope in page.events {
             assert!(envelope.sequence > after);
             after = envelope.sequence;
@@ -788,7 +788,10 @@ async fn cold_trace_evidence(
     };
     assert_eq!(detail.read_cut, evidence.cut);
     assert_eq!(detail.domain, detail_domain);
-    assert!(!detail.items.is_empty());
+    assert_ne!(
+        detail.items,
+        [] as [rustx::observation::cut::CheckpointPageItem; 0]
+    );
     let mut inconsistent = evidence.cut.clone();
     inconsistent.source_cut.as_mut().unwrap().read.journal += 1;
     assert_trace_cut_rejected(process, agent, &evidence, &inconsistent).await;

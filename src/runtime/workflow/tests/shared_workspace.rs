@@ -528,7 +528,10 @@ async fn implement_check_repair_runs_in_the_shared_session_workspace() {
         vec![workspace.join(IMPLEMENT_FILE)],
         "no worktree, copy or Candidate holds another version of the work"
     );
-    assert!(plane.registry.unsettled_snapshot().is_empty());
+    assert_eq!(
+        plane.registry.unsettled_snapshot(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
 }
 
 /// C03/C04/C17: a rejected plan takes the Human Input's `no` exit to the
@@ -714,7 +717,10 @@ async fn pending_review_does_not_block_an_independent_parallel_branch() {
         })
         .await
         .unwrap();
-    assert!(!owner.pending_snapshot().is_empty());
+    assert_ne!(
+        owner.pending_snapshot(),
+        [] as [crate::runtime::interaction::InteractionRequest; 0]
+    );
     assert_eq!(
         std::fs::read_to_string(workspace.join(IMPLEMENT_FILE)).unwrap(),
         "independent"

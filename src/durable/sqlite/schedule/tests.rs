@@ -102,7 +102,10 @@ fn one_shot_commits_one_native_pending_and_no_canonical_message() {
     );
     assert_eq!(inbound.message.source, UserSource::Runtime);
     assert_eq!(inbound.message.kind, InboundKind::Message);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(store.load_pending().unwrap().len(), 1);
     assert!(matches!(
         store
@@ -118,7 +121,10 @@ fn one_shot_commits_one_native_pending_and_no_canonical_message() {
     ));
     assert_eq!(store.schedule_summary().unwrap().pending.len(), 1);
     store.adopt_pending_batch(inbound.sequence, None).unwrap();
-    assert!(store.schedule_summary().unwrap().pending.is_empty());
+    assert_eq!(
+        store.schedule_summary().unwrap().pending,
+        [] as [crate::scheduler::ScheduleTriggerId; 0]
+    );
     assert_eq!(store.load_canonical().unwrap().len(), 1);
 }
 #[test]
@@ -139,7 +145,10 @@ fn failure_rolls_back_target_schedule_generation_and_sequence() {
         store.schedule_get(&schedule.id).unwrap(),
         Some(schedule.clone())
     );
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(store.schedule_summary().unwrap().generation, generation);
     let ScheduleAdmission::Admitted { inbound, .. } = store
         .admit_scheduled_target(&schedule.id, 1, &clock)
@@ -313,7 +322,10 @@ fn cas_mutation_and_due_admission_have_one_winner() {
             .unwrap(),
         ScheduleAdmission::AlreadyAdvanced { .. }
     ));
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     store
         .schedule_command(
             &binding,
@@ -460,7 +472,10 @@ fn deleted_and_pruned_definitions_cannot_bypass_native_aggregate_capacity() {
             )
             .unwrap();
     }
-    assert!(store.schedule_list(0, 100).unwrap().is_empty());
+    assert_eq!(
+        store.schedule_list(0, 100).unwrap(),
+        [] as [crate::scheduler::ScheduleSnapshot; 0]
+    );
     assert_eq!(store.schedule_summary().unwrap().pending.len(), 256);
     let schedule = create(&store, &binding, &clock, "next", after());
     assert_eq!(schedule.id.ordinal, 257);
@@ -496,7 +511,10 @@ fn reserved_native_provenance_cannot_be_spoofed_by_ordinary_producers() {
     let mut draft = crate::durable::sqlite::test_support::draft("fake");
     draft.message_id = Some(trigger.message_id());
     assert!(store.accept_inbound(draft).is_err());
-    assert!(store.schedule_summary().unwrap().pending.is_empty());
+    assert_eq!(
+        store.schedule_summary().unwrap().pending,
+        [] as [crate::scheduler::ScheduleTriggerId; 0]
+    );
 }
 #[test]
 fn read_bounds_and_foreign_binding_are_enforced() {
@@ -702,7 +720,10 @@ fn reconciliation_prunes_display_history_without_refunding_native_capacity_or_co
     assert_eq!(generation, before.generation + 1);
     assert_eq!(store.prune_schedules(&clock).unwrap(), (0, generation));
     assert_eq!(store.schedule_summary().unwrap().pending.len(), 201);
-    assert!(store.schedule_list(0, 100).unwrap().is_empty());
+    assert_eq!(
+        store.schedule_list(0, 100).unwrap(),
+        [] as [crate::scheduler::ScheduleSnapshot; 0]
+    );
     let retry = store
         .schedule_command(
             &binding,
@@ -999,7 +1020,10 @@ fn receipt_failure_rolls_back_mutation_ordinal_generation_and_request_charge() {
             .schedule_command(&binding, &make, &clock, &authority)
             .is_err()
     );
-    assert!(store.schedule_list(0, 100).unwrap().is_empty());
+    assert_eq!(
+        store.schedule_list(0, 100).unwrap(),
+        [] as [crate::scheduler::ScheduleSnapshot; 0]
+    );
     assert_eq!(store.schedule_summary().unwrap().generation, 0);
     store
         .lock()
@@ -1134,5 +1158,8 @@ fn cron_exhaustion_completes_temporal_state_and_invalid_saved_rule_disables_with
     assert_eq!(current.revision, 2);
     assert_eq!(current.state, ScheduleState::Disabled);
     assert!(current.last_failure.is_some());
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
 }

@@ -868,11 +868,11 @@ impl AgentExecution<'_> {
                 selected_history_count: history.messages.len(),
                 request_only_at: inserted_at,
             },
-            input_manifest,
-            retire_continuation,
             projection,
             snapshot,
             request,
+            input_manifest,
+            retire_continuation,
             estimated_input,
         })
     }

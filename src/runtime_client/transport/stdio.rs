@@ -723,7 +723,10 @@ mod tests {
     /// record is an explicit framing error.
     #[tokio::test]
     async fn eof_distinguishes_boundary_from_truncation() {
-        assert!(records(b"", 1024).await.expect("clean eof").is_empty());
+        assert_eq!(
+            records(b"", 1024).await.expect("clean eof"),
+            [] as [std::vec::Vec<u8>; 0]
+        );
         let error = records(b"{\"a\":1}", 1024)
             .await
             .expect_err("a partial record is truncated");

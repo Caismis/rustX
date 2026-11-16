@@ -291,8 +291,7 @@ pub(super) fn validate_subagent_catalog(
     let skills = crate::skills::SkillSnapshot::new(candidate.skill_packages().to_vec());
     let selected = candidate
         .resolved_profile()
-        .map(|profile| profile.agents.clone())
-        .unwrap_or_default();
+        .map_or_default(|profile| profile.agents.clone());
     let admitted = prepared.subagent_catalog().selected_definitions(&selected);
     SubagentResolver::validate_catalog(
         &admitted,

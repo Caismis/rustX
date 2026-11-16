@@ -719,7 +719,7 @@ impl ManagedOutputContinuation {
     /// The complete textual rendering of this continuation.
     ///
     /// The provider-independent bounded model-facing projection uses
-    /// [`Self::render_bounded`] rather than this complete rendering. The
+    /// `Self::render_bounded` rather than this complete rendering. The
     /// diagnostic is bounded here, but a pathological locator may still be
     /// longer than the model-result budget until the canonical projection
     /// applies its structural bound.
@@ -901,7 +901,7 @@ pub enum ToolCancellationPhase {
 /// external result. An unknown outcome is never silently collapsed into
 /// success, generic failure, confirmed timeout, or confirmed cancellation,
 /// and every non-success status produces bounded model-facing feedback
-/// through [`Self::feedback_text`].
+/// through `Self::feedback_text`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]

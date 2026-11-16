@@ -1421,7 +1421,10 @@ mod tests {
                 permission_reminder: None,
             };
             let accepted = assembly.assemble(&input(), &native, &[]).await.unwrap();
-            assert!(accepted.user_messages.is_empty());
+            assert_eq!(
+                accepted.user_messages,
+                [] as [crate::context::assembly::AcceptedUserContext; 0]
+            );
             assert_eq!(
                 render_effective_system_prompt(&accepted.system_sections),
                 "core\n\nprofile\n\nworkspace\n\nextension system\n\nskills"
@@ -1705,7 +1708,10 @@ mod tests {
             accepted.system_sections[0].contributor,
             ContextContributorIdentity::Native(NativeContextContributor::CoreSystemIdentity)
         );
-        assert!(accepted.user_messages.is_empty());
+        assert_eq!(
+            accepted.user_messages,
+            [] as [crate::context::assembly::AcceptedUserContext; 0]
+        );
         assert_eq!(
             accepted.system_sections[5].contributor,
             ContextContributorIdentity::Native(NativeContextContributor::SkillGuidance)
@@ -1722,8 +1728,14 @@ mod tests {
             .assemble(&input(), &NativeContextInput::default(), &[])
             .await
             .expect("empty native context assembles");
-        assert!(accepted.user_messages.is_empty());
-        assert!(accepted.system_sections.is_empty());
+        assert_eq!(
+            accepted.user_messages,
+            [] as [crate::context::assembly::AcceptedUserContext; 0]
+        );
+        assert_eq!(
+            accepted.system_sections,
+            [] as [crate::context::assembly::AcceptedSystemSection; 0]
+        );
         assert_eq!(
             render_effective_system_prompt(&accepted.system_sections),
             ""
@@ -1787,9 +1799,7 @@ mod tests {
                 key,
                 attestation,
                 Arc::new(move |_: &ContributorInputSnapshot| {
-                    Ok(request_time
-                        .map(|text| vec![user(text)])
-                        .unwrap_or_default())
+                    Ok(request_time.map_or_else(Vec::new, |text| vec![user(text)]))
                 }),
             )
             .expect("register extension");

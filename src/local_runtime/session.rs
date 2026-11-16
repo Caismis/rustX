@@ -1,6 +1,6 @@
 //! Native local user-session state (Issue #88).
 //!
-//! A product [`Session`] is deliberately above the conversation runtime. Its
+//! A product `Session` is deliberately above the conversation runtime. Its
 //! graph contains nodes, and every node points at exactly one independent
 //! durable [`ConversationId`]. Conversation tables therefore remain linear;
 //! this module never adds branch columns or teaches `ConversationSurface`
@@ -373,7 +373,7 @@ pub struct SessionUserMessageBoundary {
 /// `messages` and `canonical` together fix what the copy *is*; neither
 /// records its append boundaries. `projections` independently preserves every
 /// eligible historical activation, including distinct activations at one Ledger
-/// frontier, so later fork/tree reads retain the source semantics — see [`lineage_cut`].
+/// frontier, so later fork/tree reads retain the source semantics — see `lineage_cut`.
 ///
 /// Native `read_lineage_cut(R)` freezes authority (R, C): R selects structural
 /// history/canonical closure, C selects temporal execution-derived meaning.

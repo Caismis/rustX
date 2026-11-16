@@ -125,7 +125,10 @@ fn deep_lineage_reopen_preserves_response_facts_without_execution_ownership() {
         );
         assert_eq!(projected.statistics, Some(inherited_totals.clone()));
         assert_eq!(child.presentation_frontier().unwrap(), 0);
-        assert!(child.read_events(None, 128).unwrap().events.is_empty());
+        assert_eq!(
+            child.read_events(None, 128).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
         assert_eq!(
             crate::context::occupancy::read(&child, 0).unwrap(),
             origin_occupancy
@@ -281,7 +284,10 @@ fn interrupted_process_content_retains_native_origin_outcome_and_destination_loc
         .read_lineage_cut(source.load_head().unwrap().revision)
         .map(|cut| cut.completed_responses)
         .unwrap();
-    assert!(provenance.is_empty());
+    assert_eq!(
+        provenance,
+        [] as [crate::durable::response::CompletedResponseProvenance; 0]
+    );
     let history = source
         .load_surface_history(source.load_head().unwrap().revision)
         .unwrap();

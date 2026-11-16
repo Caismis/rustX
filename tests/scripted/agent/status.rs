@@ -640,7 +640,7 @@ async fn committed_todo_state_emits_one_bounded_post_tool_reminder() {
         )
     );
     assert_eq!(head.key, TODO_STATUS_EMISSION_KEY);
-    assert!(!head.fingerprint.is_empty());
+    assert_ne!(head.fingerprint, "");
     assert_eq!(
         common::read_event_history(fixture.store.as_ref(), &result.attempt_id)
             .iter()

@@ -15,7 +15,7 @@ async fn clients_cannot_manufacture_canonical_upload_facts() {
                 .submit_inbound(vec![UserContentBlock::UploadedFile(reference)])
                 .is_err()
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;

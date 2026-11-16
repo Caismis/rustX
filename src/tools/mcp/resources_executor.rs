@@ -400,7 +400,10 @@ mod tests {
             matches!(result.status, ToolExecutionStatus::Failed { ref error }
             if error.contains("unauthorized"))
         );
-        assert!(result.content.is_empty());
+        assert_eq!(
+            result.content,
+            [] as [crate::tools::types::ToolResultContent; 0]
+        );
         let executor = ResourceExecutor {
             operation: ResourceTool::List,
             ..executor

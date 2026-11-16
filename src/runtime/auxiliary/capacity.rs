@@ -392,7 +392,10 @@ mod tests {
         assert_eq!(available(&conversation), [31, 24, 3, 3, 31]);
         let (replacement, refused) = contend(vec![conversation.clone(); 3], false);
         assert_eq!(replacement.len(), 3);
-        assert!(refused.is_empty());
+        assert_eq!(
+            refused,
+            [] as [crate::runtime::auxiliary::capacity::CapacityDomain; 0]
+        );
         drop(protected);
         drop(replacement);
         assert_eq!(available(&conversation), [32, 24, 4, 3, 32]);
@@ -471,7 +474,10 @@ mod tests {
             assert_eq!(available(&conversation), [32, 24, 4, 3, 32]);
             let (general, refused) = contend(vec![conversation.clone(); 3], false);
             assert_eq!(general.len(), 3);
-            assert!(refused.is_empty());
+            assert_eq!(
+                refused,
+                [] as [crate::runtime::auxiliary::capacity::CapacityDomain; 0]
+            );
             let protected = conversation.reserve_compaction().unwrap();
             assert_eq!(available(&conversation), [28, 21, 0, 0, 28]);
             drop(general);

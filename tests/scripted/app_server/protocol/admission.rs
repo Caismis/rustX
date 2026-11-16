@@ -15,7 +15,7 @@ async fn direct_connection_runs_shared_transport_neutral_conformance() {
         )
         .await;
         assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -106,7 +106,7 @@ async fn a_draining_host_refuses_attach_before_waiting_for_the_session_catalog()
         drop(response);
         drop(catalog);
         probe.before_shutdown.release();
-        assert!(drain.await.unwrap().is_empty());
+        assert_eq!(drain.await.unwrap(), [] as [std::string::String; 0]);
         connection.close();
         connection.close();
         drop(connection);
@@ -157,7 +157,7 @@ async fn host_request_owner_outlives_dropped_protocol_waiter() {
         assert!(futures_util::poll!(&mut drain).is_pending());
         assert!(f.host.finish_drain().is_err());
         probe.before_operation.release();
-        assert!(drain.await.is_empty());
+        assert_eq!(drain.await, [] as [std::string::String; 0]);
         assert!(
             f.host
                 .forced_resources(false)
@@ -194,14 +194,14 @@ async fn ux04_initialize_identity_is_owned_by_host_not_connection_or_endpoint() 
         let MethodResult::Initialized { authority_id, .. } = result else {
             panic!("initialize result")
         };
-        assert!(!authority_id.is_empty());
+        assert_ne!(authority_id, "");
         identities.push(authority_id);
         connection.close();
     }
     assert_eq!(identities[0], identities[1]);
     assert_ne!(identities[0], identities[2]);
     other.close().await;
-    assert!(f.provider.request_bodies().is_empty());
+    assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
     f.close().await;
 }
 
@@ -290,7 +290,7 @@ async fn manual_compaction_correlation_is_bounded_before_admission() {
             if !valid {
                 native.inner.unpark_projection_worker();
             }
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         }
         f.close().await;
     })
@@ -489,7 +489,7 @@ async fn metadata_reads_bypass_full_ordinary_and_observation_lanes_without_borro
         drop(other_metadata); // Abandoned response disposition also releases exactly one.
         assert!(matches!(connection.handle_request(request(303, settings())).await, Response::Success(_)));
         drop((replacement, outbound, controls, observations, ordinary, attachments));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert_eq!(connection.attachment_counts(), (1, 0));
         connection.close();
         f.close().await;
@@ -568,7 +568,7 @@ async fn session_creation_uses_bounded_metadata_while_cold_attachments_remain_ow
             .await;
         assert!(matches!(read.produced(), Response::Success(_)));
         assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         drop((held, second, control, read));
         connection.close();
         f.close().await;

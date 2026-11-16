@@ -973,7 +973,32 @@ async fn issue552_rpc_header_and_chunk_authorization_routing_and_warmed_cache_de
         let target1 = attach(&connection, &f, 1).await;
 
         // Establish a completed canonical turn on session 0 so we can create an explicit branched node later.
-        let settled_before = runtime0.settlement_ordinal_for_test();
+        let MethodResult::Checkpoint {
+            checkpoint: seed_anchor,
+        } = call(
+            &connection,
+            next_id,
+            Method::SessionCheckpoint {
+                target: target0.clone(),
+                trace_records: vec![],
+            },
+        )
+        .await
+        else {
+            panic!("expected initial checkpoint for subscription cursor");
+        };
+        next_id += 1;
+        call(
+            &connection,
+            next_id,
+            Method::SessionSubscribe {
+                target: target0.clone(),
+                after_cursor: seed_anchor.cursor,
+            },
+        )
+        .await;
+        next_id += 1;
+        let seed_completion = super::protocol::AttemptCompletion::capture(&f, &target0);
         f.gates[0].release();
         call(
             &connection,
@@ -986,7 +1011,7 @@ async fn issue552_rpc_header_and_chunk_authorization_routing_and_warmed_cache_de
         )
         .await;
         next_id += 1;
-        let _ = runtime0.child_attempt_settlement(settled_before).await;
+        seed_completion.observed(&connection, &target0).await;
 
         // Checkpoint before Run 1 (valid earlier cut before advancing surface).
         let MethodResult::Checkpoint {
@@ -2143,7 +2168,7 @@ async fn issue552_cold_workflow_trace_node_retains_host_operation_and_associatio
             assert!(f.host.finish_drain().is_err());
 
             gate.release();
-            assert!(drain.await.is_empty());
+            assert_eq!(drain.await, [] as [std::string::String; 0]);
             if let Some(serving) = serving {
                 serving.await.unwrap().unwrap();
             }

@@ -117,29 +117,55 @@ struct State {
     closed: bool,
     active: BTreeMap<String, Entry>,
 }
-pub(super) struct Commands(Mutex<State>, tokio::sync::watch::Sender<u64>);
+pub(super) struct Commands {
+    state: Mutex<State>,
+    revisions: tokio::sync::watch::Sender<u64>,
+    #[cfg(test)]
+    pre_publish: Mutex<Option<oneshot::Sender<()>>>,
+}
 impl Default for Commands {
     fn default() -> Self {
-        Self(Mutex::default(), tokio::sync::watch::channel(0).0)
+        Self {
+            state: Mutex::default(),
+            revisions: tokio::sync::watch::channel(0).0,
+            #[cfg(test)]
+            pre_publish: Mutex::default(),
+        }
     }
 }
 impl Commands {
     #[cfg(test)]
     pub(crate) async fn admitted_for_test(&self, id: &str) {
-        let mut revision = self.1.subscribe();
+        let mut revisions = self.revisions.subscribe();
         loop {
-            // A watch predicate holds its value's read lock. Admission publishes
-            // while holding the command registry, so never take that registry
-            // from inside the predicate. Subscribe before checking to retain
-            // every admission that races the following await.
-            if self.0.lock().expect("commands").active.contains_key(id) {
+            // State owns admission. A blocked watch writer cannot hide an
+            // already admitted command; changed() retains racing publications.
+            if self.state.lock().expect("commands").active.contains_key(id) {
                 return;
             }
-            revision.changed().await.unwrap();
+            revisions
+                .changed()
+                .await
+                .expect("commands watch sender retained while observing admission");
         }
     }
+    #[cfg(test)]
+    fn watch_receiver_for_test(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.revisions.subscribe()
+    }
+    #[cfg(test)]
+    fn arm_pre_publish_for_test(&self) -> oneshot::Receiver<()> {
+        let (sender, receiver) = oneshot::channel();
+        let previous = self
+            .pre_publish
+            .lock()
+            .expect("pre-publish witness")
+            .replace(sender);
+        assert!(previous.is_none(), "pre-publish witness already armed");
+        receiver
+    }
     pub fn close(&self) {
-        let mut state = self.0.lock().expect("connection commands");
+        let mut state = self.state.lock().expect("connection commands");
         state.closed = true;
         for entry in state.active.values() {
             entry.cancellation.cancel();
@@ -159,7 +185,7 @@ impl Commands {
             .unwrap_or_else(|| uuid::Uuid::now_v7().to_string());
         let cancellation = events.closed.child();
         let (control, controls) = mpsc::channel(2);
-        let mut state = self.0.lock().expect("connection commands");
+        let mut state = self.state.lock().expect("connection commands");
         if state.closed || state.active.len() >= 4 || state.active.contains_key(&process_id) {
             return Err(domain(ErrorData::EnvironmentCapacityOrConflict));
         }
@@ -170,14 +196,19 @@ impl Commands {
                 control,
             },
         );
-        self.1.send_modify(|revision| *revision += 1);
+        drop(state);
+        #[cfg(test)]
+        if let Some(witness) = self.pre_publish.lock().expect("pre-publish witness").take() {
+            let _ = witness.send(());
+        }
+        self.revisions.send_modify(|revision| *revision += 1);
         let (sender, received) = oneshot::channel();
         let commands = self.clone();
         tokio::spawn(async move {
             let _owner = owner;
             let result = run(params, environment, events, cancellation, controls).await;
             commands
-                .0
+                .state
                 .lock()
                 .expect("connection commands")
                 .active
@@ -187,7 +218,7 @@ impl Commands {
         Ok(received)
     }
     fn control(&self, process_id: &str) -> Result<mpsc::Sender<Control>, RpcError> {
-        let state = self.0.lock().expect("connection commands");
+        let state = self.state.lock().expect("connection commands");
         if state.closed {
             return Err(domain(ErrorData::ConnectionClosed));
         }
@@ -233,7 +264,7 @@ impl Commands {
             .map_err(|_| domain(ErrorData::EnvironmentResourceNotFound))?
     }
     pub fn terminate(&self, process_id: &str) -> Result<(), RpcError> {
-        let state = self.0.lock().expect("connection commands");
+        let state = self.state.lock().expect("connection commands");
         if state.closed {
             return Err(domain(ErrorData::ConnectionClosed));
         }

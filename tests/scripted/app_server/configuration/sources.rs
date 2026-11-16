@@ -169,14 +169,14 @@ async fn c01_c02_c03_zero_session_source_authority_is_inert_and_isolated() {
                 .unwrap();
             source_settled(&f, &target).await;
         }
-        assert!(
+        assert_eq!(
             f.manager
                 .sessions
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
         assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
         assert!(
@@ -187,7 +187,7 @@ async fn c01_c02_c03_zero_session_source_authority_is_inert_and_isolated() {
                 .unwrap()
                 .is_empty()
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         {
             let applications = f.manager.applications.lock();
             let mut versions = std::collections::BTreeMap::new();
@@ -262,14 +262,14 @@ async fn c06_zero_session_process_hot_restart_reopen_and_revert() {
             );
         }
         assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
-        assert!(
+        assert_eq!(
             f.manager
                 .sessions
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
     })
     .await;
@@ -335,7 +335,7 @@ async fn c05_broken_source_retains_revision_inventory_and_explicit_validated_rep
         assert!(unresolved.prospective_diagnostic.is_some());
         assert!(unresolved.prospective_resources.is_some());
         assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
     })
     .await;
 }
@@ -488,7 +488,7 @@ async fn c11_c12_model_selection_and_source_authoring_have_disjoint_durable_owne
                 .unwrap(),
             other
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;

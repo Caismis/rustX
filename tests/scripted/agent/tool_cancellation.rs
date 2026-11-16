@@ -982,7 +982,10 @@ async fn issue136_incomplete_proposal_has_no_tool_execution_authority() {
     )
     .await;
 
-    assert!(tool_messages(&audit).is_empty());
+    assert_eq!(
+        tool_messages(&audit),
+        [] as [crate::message::types::ToolMessageBlock; 0]
+    );
     assert!(!audit.event_history.iter().any(|event| matches!(
         event,
         RuntimeEvent::ToolExecutionStarted { .. } | RuntimeEvent::ToolExecutionCompleted { .. }

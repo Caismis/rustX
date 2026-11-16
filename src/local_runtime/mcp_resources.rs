@@ -182,7 +182,10 @@ mod tests {
         let (catalog, effects) = super::super::static_effects::measure(|| load(&user, None));
         let id = McpServerId::new("docs");
         assert!(catalog.definitions[&id].is_ok());
-        assert!(catalog.invalid_scopes.is_empty());
+        assert_eq!(
+            catalog.invalid_scopes,
+            [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+        );
         assert_eq!(catalog.revisions.len(), 1);
         assert!(matches!(catalog.origins[&id], Origin::User { .. }));
         assert_eq!(effects, [0; 11]);

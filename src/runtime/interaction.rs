@@ -2830,8 +2830,11 @@ mod tests {
         let (before, cursor, through) = projection.snapshot_cut().unwrap();
         assert_eq!(cursor, before_cursor);
         assert_eq!(through, before_through);
-        assert!(before.pending_interactions.is_empty());
-        assert!(
+        assert_eq!(
+            before.pending_interactions,
+            [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+        );
+        assert_eq!(
             crate::runtime_client::trace::TraceProjection::at_cut(
                 store.as_ref(),
                 &before_source_cut
@@ -2839,8 +2842,8 @@ mod tests {
             .unwrap()
             .page(None, 32)
             .unwrap()
-            .records
-            .is_empty()
+            .records,
+            [] as [crate::observation::trace::types::TraceRecord; 0]
         );
         gate.proceed();
         let ticket = task.await.unwrap();
@@ -2878,13 +2881,9 @@ mod tests {
         for observation in queue.drain() {
             projection.apply(observation);
         }
-        assert!(
-            projection
-                .snapshot()
-                .unwrap()
-                .0
-                .pending_interactions
-                .is_empty()
+        assert_eq!(
+            projection.snapshot().unwrap().0.pending_interactions,
+            [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
         );
     }
 
@@ -3340,7 +3339,10 @@ mod tests {
             Err(InteractionFailure::Invalid)
         ));
         assert_eq!(owner.pending_count(), 0);
-        assert!(audit.events().is_empty());
+        assert_eq!(
+            audit.events(),
+            [] as [crate::events::types::RuntimeEvent; 0]
+        );
     }
 
     #[tokio::test]
@@ -3391,7 +3393,10 @@ mod tests {
                 lifecycle,
                 audit.clone(),
             );
-            assert!(restarted.pending_snapshot().is_empty());
+            assert_eq!(
+                restarted.pending_snapshot(),
+                [] as [crate::runtime::interaction::InteractionRequest; 0]
+            );
             assert!(restarted.respond_async(&id, response).await.is_err());
             assert_eq!(audit.events().len(), if accepted { 2 } else { 1 });
         }
@@ -4656,7 +4661,10 @@ mod tests {
         ));
         assert_eq!(coordinator.pending_count(), 0);
         assert!(observer.pending.lock().unwrap().is_empty());
-        assert!(audit.events().is_empty());
+        assert_eq!(
+            audit.events(),
+            [] as [crate::events::types::RuntimeEvent; 0]
+        );
 
         // The next publication is unaffected: the fault was one commit, not a
         // coordinator state change.
@@ -4897,7 +4905,10 @@ mod tests {
             0,
             "no waiter and no prompt is recreated from durable state"
         );
-        assert!(restarted.pending_snapshot().is_empty());
+        assert_eq!(
+            restarted.pending_snapshot(),
+            [] as [crate::runtime::interaction::InteractionRequest; 0]
+        );
 
         // The historical identity grants nothing; a new ask allocates a new
         // one and is refused for the old one.
@@ -4971,6 +4982,6 @@ mod tests {
             },
             InteractionResponse::Approval { .. }
         ));
-        assert!(!request.id.as_str().is_empty());
+        assert_ne!(request.id.as_str(), "");
     }
 }

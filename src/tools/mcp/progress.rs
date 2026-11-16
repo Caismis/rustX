@@ -1016,7 +1016,10 @@ mod tests {
         let lease = router.lease(id(4), token(4));
         router.mark_remote_terminal(&id(4));
         let mut subscription = lease.subscribe();
-        assert!(subscription.drain().is_empty());
+        assert_eq!(
+            subscription.drain(),
+            [] as [rmcp::model::ProgressNotificationParam; 0]
+        );
         drop(lease);
         assert_eq!(router.tracked_requests(), 0);
 

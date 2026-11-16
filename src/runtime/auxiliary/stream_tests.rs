@@ -476,7 +476,7 @@ fn empty_and_refused_output_remain_context_acceptance_decisions() {
     let mut empty = fold();
     empty.accept(&event(ModelEvent::Started), 100).unwrap();
     empty.accept(&completed(None), 101).unwrap();
-    assert!(empty.finish(102).output.unwrap().text.is_empty());
+    assert_eq!(empty.finish(102).output.unwrap().text, "");
     let mut refused = fold();
     refused.accept(&event(ModelEvent::Started), 100).unwrap();
     refused.accept(&text(0, "provisional"), 101).unwrap();

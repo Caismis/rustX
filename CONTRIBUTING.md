@@ -89,7 +89,7 @@ Core correctness must not depend only on live model behavior.
 
 ### Repository Rust toolchain
 
-`rust-toolchain.toml` pins Rust 1.98.1, including Cargo, Clippy and rustfmt.
+`rust-toolchain.toml` pins Rust 1.100.0, including Cargo, Clippy and rustfmt.
 Every Cargo-bearing CI job explicitly installs that release before its Rust
 cache step. Rust toolchain upgrades are intentional repository changes, not
 automatic CI drift; an upgrade owns any resulting compiler/lint repairs.
@@ -102,8 +102,12 @@ Before merge, the baseline local Rust checks are:
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test --all-targets --all-features
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked
+python3 test-support/prepare_native_tests.py -- cargo test --all-targets --all-features --locked --no-run
+cargo test --all-targets --all-features --locked
+cargo test --doc --all-features --locked
 ```
 
 ### Full pre-PR and CI validation
@@ -120,13 +124,15 @@ line available:
 (cd test-support/fake-provider && uv run --frozen pytest)
 
 # Rust validation with uv-dependent tests required rather than skipped.
-# One command covers every target, conformance included; tests/README.md
-# documents the CI lanes' own selectors for focused runs.
-cargo build --bins --all-features
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
+# Standalone pure unit tests need no native binary staging; boundary/supervisor/
+# renderer tests require staging the current package binaries beside each
+# emitted test harness executable first (`test-support/prepare_native_tests.py`).
+python3 test-support/prepare_native_tests.py -- cargo test --all-targets --all-features --locked --no-run
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked
+cargo test --doc --all-features --locked
 
 # The CI lanes' selectors against Cargo discovery on this platform.
-cargo run --all-features --example check_test_lanes
+cargo run --profile test --all-features --locked --example check_test_lanes
 
 # TUI's locked pnpm workflow.
 nvm install --lts
@@ -135,7 +141,7 @@ corepack enable
 (cd tui && corepack install)
 (cd tui && pnpm install --frozen-lockfile)
 (cd tui && pnpm typecheck)
-cargo build --bins
+cargo build --bins --locked
 (cd tui && RUSTX_REQUIRE_PROVIDER_EMULATOR=1 pnpm test)
 
 # Generated App Server protocol, development launchers and Web.

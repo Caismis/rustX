@@ -50,7 +50,7 @@ pub(super) fn occupancy_origin_read_model(
         assert_eq!(&chunk.cut, cut);
         assert_eq!(chunk.domain, domain);
         assert_eq!(chunk.item_offset, 0);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,
@@ -59,7 +59,7 @@ pub(super) fn occupancy_origin_read_model(
         let original = base64::engine::general_purpose::STANDARD
             .decode(chunk.bytes_base64)
             .unwrap();
-        assert!(!original.is_empty());
+        assert_ne!(original, [] as [u8; 0]);
         assert!(original.len() <= 65_536);
         if offset == 0 {
             assert_eq!(
@@ -81,7 +81,7 @@ pub(super) fn occupancy_origin_read_model(
                 65_536,
             )
             .unwrap();
-            assert!(eof.bytes_base64.is_empty());
+            assert_eq!(eof.bytes_base64, "");
             assert!(eof.next_offset.is_none());
             assert!(
                 crate::runtime_client::occupancy::value_read(

@@ -648,8 +648,7 @@ impl UserConfigManager {
     fn workflow_vocabulary(&self, target: &SourceTarget) -> WorkflowVocabulary {
         let user = self.resource_root(&SourceTarget::User).join("agents");
         let profiles = super::agent_resources::load_authorized(target.workspace(), &user)
-            .map(|(catalog, _)| catalog.names().into_iter().cloned().collect())
-            .unwrap_or_default();
+            .map_or_default(|(catalog, _)| catalog.names().into_iter().cloned().collect());
         WorkflowVocabulary {
             profiles,
             builtin_tools: crate::runtime::workflow::selectable_builtin_tools(),

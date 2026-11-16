@@ -570,7 +570,7 @@ mod tests {
         );
         assert!(named.tools.iter().any(|tool| tool.name == "grep"));
         assert!(!root.tools.iter().any(|tool| tool.name == "grep"));
-        assert!(named.skills.is_empty());
+        assert_eq!(named.skills, [] as [std::string::String; 0]);
         assert_eq!(
             named.diagnostics,
             [AgentProfileDiagnostic::SkillUnavailable {
@@ -649,7 +649,10 @@ mod tests {
                 .collect();
             let before = availability.clone();
             let resolved = resolve(&profile, &available(), &availability, AgentScope::Root);
-            assert!(resolved.tools.is_empty());
+            assert_eq!(
+                resolved.tools,
+                [] as [crate::tools::types::ToolDefinition; 0]
+            );
             assert!(
                 matches!(&resolved.diagnostics[0], AgentProfileDiagnostic::Tool(ToolSelectionError::SourceUnavailable { reason, .. }) if *reason == expected)
             );
@@ -705,7 +708,10 @@ mod tests {
             &CapabilityAvailability::new(),
             AgentScope::Root,
         );
-        assert!(root.diagnostics.is_empty());
+        assert_eq!(
+            root.diagnostics,
+            [] as [crate::runtime::agent_profile::AgentProfileDiagnostic; 0]
+        );
         assert_eq!(root.tools.len(), 1);
         assert_eq!(root.tools[0].name, "present");
         let child = resolve(
@@ -714,7 +720,10 @@ mod tests {
             &CapabilityAvailability::new(),
             AgentScope::OneShotChild,
         );
-        assert!(child.diagnostics.is_empty());
+        assert_eq!(
+            child.diagnostics,
+            [] as [crate::runtime::agent_profile::AgentProfileDiagnostic; 0]
+        );
         assert_eq!(child.tools, root.tools);
     }
     #[test]
@@ -972,7 +981,10 @@ mod composition_tests {
         // Only the explicitly selected eligible Skills are visible.
         // `internal-only` is never widened by automatic root selection.
         assert_eq!(root.skills, ["backend-conventions", "rust-review"]);
-        assert!(root.diagnostics.is_empty());
+        assert_eq!(
+            root.diagnostics,
+            [] as [crate::runtime::agent_profile::AgentProfileDiagnostic; 0]
+        );
 
         // Root visibility removes nothing from the catalog: a named Agent
         // selects its independent profile against the same frozen catalog.
@@ -987,7 +999,10 @@ mod composition_tests {
             &authority,
         );
         assert_eq!(named.skills, ["backend-conventions", "legacy-java"]);
-        assert!(named.diagnostics.is_empty());
+        assert_eq!(
+            named.diagnostics,
+            [] as [crate::runtime::agent_profile::AgentProfileDiagnostic; 0]
+        );
         assert!(
             skills
                 .packages()
@@ -1006,7 +1021,7 @@ mod composition_tests {
             .unwrap(),
             &authority,
         );
-        assert!(ineligible.skills.is_empty());
+        assert_eq!(ineligible.skills, [] as [std::string::String; 0]);
         assert_eq!(
             ineligible.diagnostics,
             [AgentProfileDiagnostic::SkillUnavailable {
@@ -1086,7 +1101,10 @@ mod composition_tests {
                 scope: AgentScope::Root,
             },
         );
-        assert!(resolved.tools.is_empty());
+        assert_eq!(
+            resolved.tools,
+            [] as [crate::tools::types::ToolDefinition; 0]
+        );
         assert_eq!(
             resolved.diagnostics,
             [AgentProfileDiagnostic::Tool(

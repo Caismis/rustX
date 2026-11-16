@@ -762,7 +762,10 @@ fn terminal_staging_uses_the_proposal_state_machine_atomically() {
             .expect("audit")
             .is_none()
     );
-    assert!(store.load_canonical().expect("canonical").is_empty());
+    assert_eq!(
+        store.load_canonical().expect("canonical"),
+        [] as [rustx::message::MessageBlock; 0]
+    );
 
     let valid_id = ToolCallId::new("valid-terminal");
     store
@@ -814,14 +817,17 @@ fn orphan_completion_cannot_become_an_audited_tool_proposal() {
         .terminalize_publication_audit(&start.stream_id, fixed_time())
         .expect("the empty stream can settle as Incomplete")
         .0;
-    assert!(audit.proposed_call_ids().is_empty());
-    assert!(
+    assert_eq!(
+        audit.proposed_call_ids(),
+        [] as [rustx::runtime::ToolCallId; 0]
+    );
+    assert_eq!(
         store
             .load_publication_audit(&start.stream_id)
             .expect("audit")
             .expect("audit exists")
-            .proposed_call_ids()
-            .is_empty()
+            .proposed_call_ids(),
+        [] as [rustx::runtime::ToolCallId; 0]
     );
     let events_before = event_count(&store);
     let rejected = store.append_event(envelope(
@@ -1446,7 +1452,10 @@ fn the_three_settlements_are_mutually_exclusive() {
         ),
         "canonical acceptance after an audit must be forbidden, got {rejected:?}"
     );
-    assert!(store.load_canonical().expect("canonical").is_empty());
+    assert_eq!(
+        store.load_canonical().expect("canonical"),
+        [] as [rustx::message::MessageBlock; 0]
+    );
     // A second audit is equally forbidden: a stream settles exactly once.
     assert!(matches!(
         store.terminalize_publication_audit(&start.stream_id, fixed_time()),
@@ -1507,7 +1516,13 @@ fn canonical_acceptance_clears_staging_and_creates_no_audit() {
         report.publication_classes().is_empty(),
         "a settled stream is never reclassified"
     );
-    assert!(report.reconciliation().publication_audits.is_empty());
+    assert_eq!(
+        report.reconciliation().publication_audits,
+        [] as [(
+            rustx::runtime::identity::PublicationStreamId,
+            rustx::publication::PublicationAuditKind
+        ); 0]
+    );
     let store = durable.open();
     assert!(
         store
@@ -1580,8 +1595,14 @@ fn recovery_consolidates_many_frames_into_one_bounded_audit() {
     // A second restart after a successful recovery changes nothing: durable
     // state stops changing (the recovery-prefix invariant).
     let second = recover_reopened(&durable);
-    assert!(second.publication_classes().is_empty());
-    assert!(second.reconciliation().publication_audits.is_empty());
+    assert_eq!(second.publication_classes(), []);
+    assert_eq!(
+        second.reconciliation().publication_audits,
+        [] as [(
+            rustx::runtime::identity::PublicationStreamId,
+            rustx::publication::PublicationAuditKind
+        ); 0]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1631,7 +1652,7 @@ fn recovery_audit_extends_transcript_without_rewriting_canonical_history() {
         serde_json::to_vec(&canonical).unwrap(),
     );
     drop(store);
-    assert!(recover_reopened(&durable).publication_classes().is_empty());
+    assert_eq!(recover_reopened(&durable).publication_classes(), []);
     assert_eq!(
         durable
             .open()
@@ -2531,11 +2552,9 @@ fn publication_generation_rejections_are_side_effect_free() {
         store.read_events(None, 256).expect("events").events.len(),
         before_events
     );
-    assert!(
-        store
-            .load_unsettled_publication_streams()
-            .expect("streams")
-            .is_empty()
+    assert_eq!(
+        store.load_unsettled_publication_streams().expect("streams"),
+        [] as [rustx::publication::PublicationStreamRecord; 0]
     );
 
     store.open_publication_stream(&valid).expect("valid open");
@@ -2655,7 +2674,10 @@ fn publication_generation_rejections_are_side_effect_free() {
         store.read_events(None, 256).expect("events").events.len(),
         c_events
     );
-    assert!(store.load_canonical().expect("canonical").is_empty());
+    assert_eq!(
+        store.load_canonical().expect("canonical"),
+        [] as [rustx::message::MessageBlock; 0]
+    );
     store
         .commit_canonical_publication(
             &valid.stream_id,

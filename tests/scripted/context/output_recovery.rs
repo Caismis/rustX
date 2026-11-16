@@ -201,11 +201,11 @@ async fn reasoning_output_growth(output_cap: Option<u32>) {
             store.load_head().unwrap().compaction_generation,
             head.compaction_generation
         );
-        assert!(
+        assert_eq!(
             store
                 .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::durable::projection::ProjectionCheckpoint; 0]
         );
         let events = store.read_events(None, 128).unwrap().events;
         assert!(!events.iter().any(|event| matches!(

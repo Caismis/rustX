@@ -392,7 +392,10 @@ pub(super) fn historical_summary_audit_fixture(
     checkpoint.fingerprint = checkpoint.candidate.fingerprint();
     let page = store.read_auxiliary_audit(audit_cut, None, 32).unwrap();
     assert!(page.next_offset.is_none());
-    assert!(source_cut.auxiliary_audits.is_empty());
+    assert_eq!(
+        source_cut.auxiliary_audits,
+        [] as [crate::durable::reading::AuxiliaryAuditSnapshot; 0]
+    );
     source_cut
         .auxiliary_audits
         .push(crate::durable::reading::AuxiliaryAuditSnapshot {
@@ -590,7 +593,10 @@ fn inherited_summary_audits_replay_in_canonical_database_key_order() {
 fn summary_checkpoint_overlap_does_not_inherit_auxiliary_execution() {
     let (_directory, catalog, _config) = open_catalog();
     let (store, cut) = source(&catalog, false);
-    assert!(!cut.projections.is_empty());
+    assert_ne!(
+        cut.projections,
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+    );
     let (summary_call, summary_request) = super::archive_tests::start_auxiliary(
         &store,
         crate::model::auxiliary::AuxiliaryAttribution::new("summary").unwrap(),
@@ -614,14 +620,17 @@ fn summary_checkpoint_overlap_does_not_inherit_auxiliary_execution() {
         cut.projections.len(),
         "the explicit Summary checkpoint is inherited"
     );
-    assert!(destination.read_events(None, 64).unwrap().events.is_empty());
+    assert_eq!(
+        destination.read_events(None, 64).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     let cut = destination.auxiliary_audit_cut().unwrap();
-    assert!(
+    assert_eq!(
         destination
             .read_auxiliary_audit(cut, None, 32)
             .unwrap()
-            .records
-            .is_empty()
+            .records,
+        [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
     );
     assert!(
         destination
@@ -701,12 +710,12 @@ fn named_summary_generation_dependency_survives_clone_and_source_deletion() {
             && record["completeness"] == "complete_at_cut"
     }));
     let destination_cut = destination.auxiliary_audit_cut().unwrap();
-    assert!(
+    assert_eq!(
         destination
             .read_auxiliary_audit(destination_cut, None, 32)
             .unwrap()
-            .records
-            .is_empty()
+            .records,
+        [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
     );
     assert!(
         destination
@@ -797,7 +806,7 @@ fn named_summary_generation_dependency_survives_clone_and_source_deletion() {
             crate::local_runtime::session::LineageSide::After,
         )
         .unwrap();
-    assert!(editor.is_empty());
+    assert_eq!(editor, [] as [crate::message::types::UserContentBlock; 0]);
     catalog
         .publish_session(&fork, SessionNodeOrigin::New)
         .unwrap();
@@ -833,11 +842,11 @@ fn named_summary_generation_dependency_survives_clone_and_source_deletion() {
         &excluded_fork.session_id,
         &excluded_fork.conversation_id,
     );
-    assert!(
+    assert_eq!(
         excluded_store
             .archive_inherited_auxiliary_audit_rows()
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [serde_json::Value; 0]
     );
 
     drop(destination);
@@ -940,12 +949,12 @@ fn clone_and_fork_do_not_inherit_overlapping_auxiliary_execution_after_source_de
             &destination.conversation_id,
         );
         let target_cut = target.auxiliary_audit_cut().unwrap();
-        assert!(
+        assert_eq!(
             target
                 .read_auxiliary_audit(target_cut, None, 32)
                 .unwrap()
-                .records
-                .is_empty()
+                .records,
+            [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
         );
         for call_id in [&btw_call, &classification_call] {
             assert!(
@@ -974,10 +983,16 @@ fn clone_and_fork_do_not_inherit_overlapping_auxiliary_execution_after_source_de
         let inherited = target
             .read_lineage_cut(target.load_head().unwrap().revision)
             .unwrap();
-        assert!(!inherited.canonical.is_empty());
+        assert_ne!(
+            inherited.canonical,
+            [] as [crate::message::types::MessageBlock; 0]
+        );
         assert_eq!(inherited.turns.len(), expected_turns);
         assert_eq!(inherited.completed_responses.len(), expected_responses);
-        assert!(target.read_events(None, 64).unwrap().events.is_empty());
+        assert_eq!(
+            target.read_events(None, 64).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
     }
 
     drop(store);
@@ -1006,16 +1021,19 @@ fn clone_and_fork_do_not_inherit_overlapping_auxiliary_execution_after_source_de
         let inherited = target
             .read_lineage_cut(target.load_head().unwrap().revision)
             .unwrap();
-        assert!(!inherited.canonical.is_empty());
+        assert_ne!(
+            inherited.canonical,
+            [] as [crate::message::types::MessageBlock; 0]
+        );
         assert_eq!(inherited.turns.len(), expected_turns);
         assert_eq!(inherited.completed_responses.len(), expected_responses);
         let target_cut = target.auxiliary_audit_cut().unwrap();
-        assert!(
+        assert_eq!(
             target
                 .read_auxiliary_audit(target_cut, None, 32)
                 .unwrap()
-                .records
-                .is_empty()
+                .records,
+            [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
         );
         for call_id in [&btw_call, &classification_call] {
             assert!(
@@ -1115,13 +1133,13 @@ fn verify_copy(copy: &PreparedLineage, expected: &LineageSeed, artifact: bool, c
                 .load_surface_snapshot(store.load_head().unwrap().revision)
                 .unwrap()
         );
-        assert!(store.read_events(None, 64).unwrap().events.is_empty());
-        assert!(
-            store
-                .read_request_snapshots(None, 64)
-                .unwrap()
-                .snapshots
-                .is_empty()
+        assert_eq!(
+            store.read_events(None, 64).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
+        assert_eq!(
+            store.read_request_snapshots(None, 64).unwrap().snapshots,
+            [] as [crate::model::snapshot::RequestSnapshot; 0]
         );
         assert_eq!(store.presentation_frontier().unwrap(), 0);
         assert_eq!(
@@ -1291,7 +1309,7 @@ fn artifact_tree_preserves_selected_occupancy_and_native_history_after_restart()
                     super::super::LineageSide::After,
                 )
                 .unwrap();
-            assert!(draft.is_empty());
+            assert_eq!(draft, [] as [crate::message::types::UserContentBlock; 0]);
             let expected = super::super::lineage_cut(
                 &copy.conversation_id,
                 &selected,

@@ -208,7 +208,7 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
         ascending: true,
         limit: 32,
     };
-    assert!(
+    assert_eq!(
         store
             .observation_trace_facts(
                 &native,
@@ -217,8 +217,8 @@ fn t08_t12_t14_t19_headless_request_keeps_real_giant_owner_fields_without_native
                     TraceFactKind::TurnStarted
                 ])
             )
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [crate::durable::trace::TraceFactHeader; 0]
     );
     let facts = store
         .observation_trace_facts(&native, &query(vec![TraceFactKind::ModelRequestStarted]))
@@ -354,11 +354,9 @@ pub(super) fn trace_commit_raw_publication(
         .commit_canonical_publication(&start.stream_id, &message, event)
         .unwrap();
     assert_eq!(receipt.ledger_position, 1);
-    assert!(
-        store
-            .load_unsettled_publication_streams()
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        store.load_unsettled_publication_streams().unwrap(),
+        [] as [crate::publication::frame::PublicationStreamRecord; 0]
     );
     (message, raw, committed)
 }
@@ -1304,7 +1302,10 @@ fn t08_t12_t19_native_request_summary_survives_large_original_canonical_input() 
         .unwrap();
     assert_eq!(page.total, 1);
     assert_eq!(page.fields.len(), 1);
-    assert!(!page.fields[0].content.is_empty());
+    assert_ne!(
+        page.fields[0].content,
+        [] as [crate::observation::cut::ContentBinding; 0]
+    );
     assert_eq!(page.fields[0].collections[0].loaded, 0);
     assert_eq!(page.fields[0].collections[0].next_offset, Some(0));
     assert!(page.fields[0].deferred);

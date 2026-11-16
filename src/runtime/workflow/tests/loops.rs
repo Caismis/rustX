@@ -243,7 +243,10 @@ async fn a_loop_carries_its_variables_until_the_break_condition_holds() {
             })
             .collect::<Vec<_>>();
         assert_eq!(exits, [(u32::try_from(rounds).unwrap(), reason)]);
-        assert!(plane.registry.all_snapshots().is_empty());
+        assert_eq!(
+            plane.registry.all_snapshots(),
+            [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+        );
     }
 }
 

@@ -319,7 +319,10 @@ fn t14_t15_workflow_subdomain_page_and_value_use_the_same_native_owner_cut() {
     else {
         panic!("original native Workflow fixture");
     };
-    assert!(!original.runs.is_empty());
+    assert_ne!(
+        original.runs,
+        [] as [crate::runtime::workflow::read_model::WorkflowRunView; 0]
+    );
     let source =
         crate::observation::workflow_source::WorkflowReadSource::new(Arc::new(original.clone()));
     source.prepare();
@@ -4292,7 +4295,10 @@ fn inbound_diagnostics_fold_from_mailbox_observations() {
     // records the watermark.
     projection.apply(ConversationObservation::InboundDrained(drained));
     let (snapshot, _) = projection.snapshot().expect("snapshot");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     let last_drain = snapshot.inbound.last_drain.expect("drain recorded");
     assert_eq!(last_drain.watermark.get(), 2);
     assert_eq!(last_drain.count, 2);
@@ -4382,7 +4388,10 @@ fn interaction_pending_and_settled_fold_into_snapshot_and_events() {
         audit: Some((settled_audit, crate::durable::TranscriptCursor::new(2))),
     });
     let (snapshot, cursor) = projection.snapshot().expect("snapshot");
-    assert!(snapshot.pending_interactions.is_empty());
+    assert_eq!(
+        snapshot.pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
     assert_eq!(cursor, RuntimeClientCursor::new(2));
     let events = collect(&mut projection, RuntimeClientCursor::new(1));
     assert!(matches!(
@@ -4397,13 +4406,9 @@ fn interaction_pending_and_settled_fold_into_snapshot_and_events() {
 
     // The projection never turns a live prompt into a historical audit;
     // only the durable requested/settled audit observations do that.
-    assert!(
-        projection
-            .snapshot()
-            .expect("snapshot")
-            .0
-            .messages
-            .is_empty()
+    assert_eq!(
+        projection.snapshot().expect("snapshot").0.messages,
+        [] as [crate::message::types::MessageBlock; 0]
     );
 }
 
@@ -4505,7 +4510,10 @@ fn routed_interactions_keep_multiple_sources_and_removals_independent() {
             &primary
         )]
     );
-    assert!(snapshot.messages.is_empty());
+    assert_eq!(
+        snapshot.messages,
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 }
 
 /// The snapshot and its cursor linearize: the returned cursor is the
@@ -4515,7 +4523,10 @@ fn snapshot_and_cursor_are_linearized() {
     let mut projection = projection();
     let (snapshot, cursor) = projection.snapshot().expect("snapshot");
     assert_eq!(cursor, RuntimeClientCursor::new(0));
-    assert!(snapshot.messages.is_empty());
+    assert_eq!(
+        snapshot.messages,
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     apply_event(
         &mut projection,
         RuntimeEvent::AttemptStarted {
@@ -5084,7 +5095,10 @@ fn workflow_activations_do_not_become_continuable_agent_rows() {
     });
     projection.apply(ConversationObservation::SubagentActivity(workflow));
     let (snapshot, cursor) = projection.snapshot().unwrap();
-    assert!(snapshot.agents.is_empty());
+    assert_eq!(
+        snapshot.agents,
+        [] as [crate::runtime_client::snapshot::RuntimeClientAgent; 0]
+    );
     assert_eq!(cursor, RuntimeClientCursor::new(0));
 }
 
@@ -5505,7 +5519,10 @@ fn t14_native_admission_publishes_frozen_model_before_execution_starts() {
     assert_eq!(admitted.phase, RuntimeClientAttemptPhase::Admitted);
     assert_eq!(admitted.model.as_deref(), frozen.as_ref());
     assert_eq!(admitted.turn, 0);
-    assert!(admitted.foreground.is_empty());
+    assert_eq!(
+        admitted.foreground,
+        [] as [crate::observation::tool::ForegroundToolExecution; 0]
+    );
     let event = &projection.replay.back().unwrap().1;
     assert!(
         !event
@@ -6032,10 +6049,14 @@ fn assert_canonical_header_fact(
     header: &crate::durable::observation::MessageHeader,
     owns_header: bool,
 ) {
-    assert!(
-        !projection
-            .fold_canonical_header(None, header.clone(), header.transcript_cursor, owns_header)
-            .is_empty()
+    assert_ne!(
+        projection.fold_canonical_header(
+            None,
+            header.clone(),
+            header.transcript_cursor,
+            owns_header
+        ),
+        [] as [crate::runtime_client::event::RuntimeClientEvent; 0]
     );
 }
 
@@ -6079,10 +6100,9 @@ fn t14_t19_complete_canonical_head_omits_only_exact_unchanged_rows() {
         1
     );
     assert_eq!(projection.snapshot.message_descriptors.len(), 2);
-    assert!(
-        projection
-            .fold_canonical_header(None, earlier.clone(), earlier.transcript_cursor, false)
-            .is_empty()
+    assert_eq!(
+        projection.fold_canonical_header(None, earlier.clone(), earlier.transcript_cursor, false),
+        [] as [crate::runtime_client::event::RuntimeClientEvent; 0]
     );
     let mut changed_body = earlier.clone();
     let Some(MessageBlock::User(body)) = &mut changed_body.display else {
@@ -6098,10 +6118,9 @@ fn t14_t19_complete_canonical_head_omits_only_exact_unchanged_rows() {
     refined.content[0].content_ref.readable_end += 1;
     assert_canonical_header_fact(&mut projection, &refined, false);
     assert_canonical_header_fact(&mut projection, &earlier, false);
-    assert!(
-        projection
-            .fold_canonical_header(None, earlier.clone(), earlier.transcript_cursor, false)
-            .is_empty()
+    assert_eq!(
+        projection.fold_canonical_header(None, earlier.clone(), earlier.transcript_cursor, false),
+        [] as [crate::runtime_client::event::RuntimeClientEvent; 0]
     );
     assert_canonical_header_fact(&mut projection, &earlier, true);
 }
@@ -6154,7 +6173,7 @@ fn canonical_capture_case(
             })
         })
         .collect::<Vec<_>>();
-    assert!(!events.is_empty());
+    assert_ne!(events, [] as [serde_json::Value; 0]);
     let checkpoint = |value| {
         canonical_capture_wire(&Response::Success(Box::new(Success {
             jsonrpc: JsonRpcVersion::V2,

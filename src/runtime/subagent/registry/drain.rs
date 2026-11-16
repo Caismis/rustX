@@ -170,7 +170,6 @@ impl SubagentRegistry {
     /// Waits for the exact activation's terminal decision or abandoned publication.
     /// Inspect the snapshot's separate publication and physical settlement facts;
     /// returning a terminal decision is not a physical-settlement acknowledgement.
-    #[must_use]
     pub fn wait_until_settled(
         &self,
         subagent_id: &SubagentId,

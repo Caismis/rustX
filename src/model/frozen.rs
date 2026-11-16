@@ -179,16 +179,12 @@ impl FrozenModelInvocation {
             // catalog state the child deliberately does not hold.
             // The profile's own output default is catalog state the child
             // does not hold; its effect is already in `max_output_tokens`.
-            profiles: self
-                .profile
-                .as_ref()
-                .map(|id| {
-                    vec![ModelProfileView {
-                        id: id.clone(),
-                        max_output_tokens: None,
-                    }]
-                })
-                .unwrap_or_default(),
+            profiles: self.profile.as_ref().map_or_default(|id| {
+                vec![ModelProfileView {
+                    id: id.clone(),
+                    max_output_tokens: None,
+                }]
+            }),
             default_profile: self.profile.clone(),
             reasoning_profile_order: None,
             credential_source: self.binding.credential.view(),

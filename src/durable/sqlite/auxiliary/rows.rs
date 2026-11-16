@@ -74,7 +74,7 @@ pub(super) fn request_row_query<P: rusqlite::Params>(
     predicate: &str,
     parameters: P,
 ) -> Result<Option<RequestRow>, ConversationStoreError> {
-    let row: Option<(
+    type RequestTupleRow = (
         String,
         i64,
         String,
@@ -83,7 +83,8 @@ pub(super) fn request_row_query<P: rusqlite::Params>(
         i64,
         Option<i64>,
         Option<String>,
-    )> = connection
+    );
+    let row: Option<RequestTupleRow> = connection
         .query_row(
             &format!(
                 "SELECT call_id,ordinal,request_id,model,CASE WHEN length(CAST(invocation_json AS BLOB))<=2048 THEN invocation_json END,started_sequence,
@@ -238,11 +239,12 @@ pub(super) fn owner_row_tx(
     owner_row_query(transaction, request_id)
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn owner_row_query(
     transaction: &Connection,
     request_id: &RequestId,
 ) -> Result<Option<OwnerRow>, ConversationStoreError> {
-    let row: Option<(
+    type OwnerTupleRow = (
         String,
         Option<String>,
         Option<String>,
@@ -252,7 +254,8 @@ pub(super) fn owner_row_query(
         i64,
         Option<i64>,
         Option<String>,
-    )> = transaction
+    );
+    let row: Option<OwnerTupleRow> = transaction
         .query_row(
             "SELECT owner_kind,attempt_id,turn_id,retry_number,call_id,
                     auxiliary_ordinal,start_sequence,terminal_sequence,terminal_kind
@@ -361,7 +364,8 @@ pub(super) fn event_at_connection(
     connection: &Connection,
     sequence: u64,
 ) -> Result<Option<RuntimeEventEnvelope>, ConversationStoreError> {
-    let row: Option<(i64, String, i64, String, Option<String>, Option<String>)> = connection
+    type EventHeaderTupleRow = (i64, String, i64, String, Option<String>, Option<String>);
+    let row: Option<EventHeaderTupleRow> = connection
         .query_row(
             "SELECT length(CAST(event_json AS BLOB)),
                     event_id,schema_version,conversation_id,attempt_id,turn_id
@@ -448,7 +452,8 @@ pub(super) fn audit_fact_row(
     connection: &Connection,
     sequence: u64,
 ) -> Result<Option<AuditFactRow>, ConversationStoreError> {
-    let row: Option<(i64, i64, String, String, Option<String>, Option<i64>)> = connection
+    type AuditFactTupleRow = (i64, i64, String, String, Option<String>, Option<i64>);
+    let row: Option<AuditFactTupleRow> = connection
         .query_row(
             "SELECT sequence,audit_offset,kind,call_id,request_id,ordinal
              FROM auxiliary_audit_facts WHERE sequence=?1",

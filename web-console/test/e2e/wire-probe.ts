@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v80';
+import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, Notification, TraceDetail } from '../../../protocol/app-server/v80';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { METHOD_POLICY, requestLane, type MethodName } from '../../../protocol/app-server/method-policy';
@@ -10,7 +10,10 @@ type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M ex
 
 /** Observe the real socket; hold replies or lose a committed acknowledgement.
  * No snapshots, notifications, or semantic results are manufactured here. */
-export async function wireProbe(page: Page) {
+export async function wireProbe(page: Page, observer?: {
+  notification: (notification: Notification) => void;
+  retired: () => void;
+}) {
   const requests: { id: string | number; method: string; params: any }[] = [];
   const responses: { id: string | number; method: string; result: any }[] = [];
   const requestTimes = new Map<string | number, number>();
@@ -58,6 +61,7 @@ export async function wireProbe(page: Page) {
       if (id) { activeRead = id; server.send(reads.get(id)!.message); }
     };
     const retire = () => {
+      const firstRetirement = !retired;
       retired = true;
       for (const read of reads.values()) read.reject(new Error('Native read transport retired.'));
       reads.clear();
@@ -65,6 +69,7 @@ export async function wireProbe(page: Page) {
       methods.clear(); attaching.clear(); nodeReads.clear();
       for (const observation of attachments.values()) for (const waiter of observation.waiters) waiter.reject(new Error('Attached-target transport retired.'));
       attachments.clear();
+      if (firstRetirement) observer?.retired();
     };
     currentAttachedTarget = sessionId => {
       if (retired) return Promise.reject(new Error('Attached target requires the current browser transport.'));
@@ -137,6 +142,7 @@ export async function wireProbe(page: Page) {
       const deliver = () => {
         if (retired) return;
         socket.send(message);
+        if (response.method) observer?.notification(response);
         const observation = attachedSession ? attachments.get(attachedSession) : undefined;
         // A late held ACK still reaches the real browser, but only the newest
         // request of this Session may satisfy its current-target barrier.

@@ -562,7 +562,10 @@ fn accepted_inbound_is_never_adopted_by_a_dead_process() {
 
     let durable = lab.durable();
     assert_eq!(durable.store().load_pending().expect("pending").len(), 1);
-    assert!(durable.canonical().is_empty());
+    assert_eq!(
+        durable.canonical(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(durable.recover().pending_inbound(), 1);
 }
 
@@ -577,7 +580,10 @@ fn pending_adoption_is_atomic() {
 
     let durable = lab.durable();
     assert_eq!(durable.store().load_pending().expect("pending").len(), 1);
-    assert!(durable.canonical().is_empty());
+    assert_eq!(
+        durable.canonical(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(durable.recover().pending_inbound(), 1);
 }
 
@@ -591,7 +597,10 @@ fn adopted_inbound_is_canonical_and_no_longer_pending() {
     process.sigkill();
 
     let durable = lab.durable();
-    assert!(durable.store().load_pending().expect("pending").is_empty());
+    assert_eq!(
+        durable.store().load_pending().expect("pending"),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(shapes(&durable.canonical()), vec!["user"]);
     let report = durable.recover();
     assert_eq!(report.pending_inbound(), 0);
@@ -794,7 +803,10 @@ fn an_adopted_turn_survives_the_recovery_terminal_of_a_second_death() {
         vec!["user", "context", "assistant", "user"],
         "the adopted turn is canonical exactly once"
     );
-    assert!(durable.store().load_pending().expect("pending").is_empty());
+    assert_eq!(
+        durable.store().load_pending().expect("pending"),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(
         durable.count_events(|event| matches!(event, RuntimeEvent::InboundTurnAdopted { .. })),
         2,
@@ -876,7 +888,13 @@ fn tool_result_batch_commit_is_atomic() {
         shapes(&durable.canonical()),
         vec!["user", "context", "assistant-call"]
     );
-    assert!(tool_results(&durable.canonical()).is_empty());
+    assert_eq!(
+        tool_results(&durable.canonical()),
+        [] as [(
+            std::string::String,
+            crate::tools::types::ToolExecutionStatus
+        ); 0]
+    );
 
     let after = Lab::new();
     let mut process = after.spawn(child::TOOL_TURN, Some("after:append_canonical_batch"));
@@ -1534,7 +1552,13 @@ fn known_tool_outcome_is_preserved_into_the_canonical_slot() {
     process.sigkill();
 
     let durable = lab.durable();
-    assert!(tool_results(&durable.canonical()).is_empty());
+    assert_eq!(
+        tool_results(&durable.canonical()),
+        [] as [(
+            std::string::String,
+            crate::tools::types::ToolExecutionStatus
+        ); 0]
+    );
     let report = durable.recover();
     assert!(matches!(
         report.attempt_class(),
@@ -2622,7 +2646,10 @@ async fn death_before_projection_observation_leaves_none_and_repairs_exactly() {
 
     let (session, conversation) = lab.source_lineage();
     let durable = lab.lineage(&session, &conversation);
-    assert!(durable.store().load_pending().expect("pending").is_empty());
+    assert_eq!(
+        durable.store().load_pending().expect("pending"),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(shapes(&durable.canonical()), vec!["user"]);
     let report = durable.recover();
     assert_eq!(report.attempt_class(), &AttemptRecoveryClass::NotStarted);
@@ -2744,7 +2771,10 @@ fn committed_background_ownership_terminalizes_exactly_once() {
 
     // Recovery is absorbing: a second restart adds no second terminal.
     let repeated = durable.recover();
-    assert!(repeated.reconciliation().background_terminals.is_empty());
+    assert_eq!(
+        repeated.reconciliation().background_terminals,
+        [] as [crate::runtime::identity::ToolExecutionId; 0]
+    );
     assert_eq!(
         durable.count_events(|event| matches!(
             event,
@@ -3355,7 +3385,10 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: 
     process.sigkill();
     let before = {
         let durable = lab.durable();
-        assert!(durable.store().load_pending().unwrap().is_empty());
+        assert_eq!(
+            durable.store().load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         let events = durable.store().read_events(None, 256).unwrap().events;
         assert!(
             events
@@ -3386,7 +3419,10 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: 
     process.sigkill();
     let durable = lab.durable();
     let after = durable.store().load_goal().unwrap().unwrap();
-    assert!(durable.store().load_pending().unwrap().is_empty());
+    assert_eq!(
+        durable.store().load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     let events = durable.store().read_events(None, 256).unwrap().events;
     assert_eq!(
         events
@@ -3437,7 +3473,10 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: 
         process.sigkill();
         let durable = lab.durable();
         assert_eq!(durable.store().load_goal().unwrap(), Some(after));
-        assert!(durable.store().load_pending().unwrap().is_empty());
+        assert_eq!(
+            durable.store().load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         assert_eq!(
             durable.count_events(|event| matches!(
                 event,

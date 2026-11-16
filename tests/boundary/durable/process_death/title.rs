@@ -37,7 +37,7 @@ fn title_call_death_recovery_releases_only_a_confirmed_zero_request_association(
         let durable = lab.lineage(&session, &conversation);
         let call = only_call(&durable);
         assert!(call.outcome.is_none());
-        assert!(
+        assert_eq!(
             durable
                 .store()
                 .read_auxiliary_call_requests(
@@ -46,8 +46,8 @@ fn title_call_death_recovery_releases_only_a_confirmed_zero_request_association(
                     None,
                     3
                 )
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
         assert!(
             !durable

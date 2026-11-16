@@ -132,7 +132,7 @@ mod tests {
             parser.push(bytes, &capture).unwrap();
             assert!(parser.utf8.len() <= 3);
             assert!(parser.utf8.capacity() <= 2 * 65_536 + 8);
-            assert!(parser.declarations.is_empty());
+            assert_eq!(parser.declarations, [] as [std::string::String; 0]);
         };
         write(b"#");
         let comment = vec![b'x'; 65_536];
@@ -148,7 +148,10 @@ mod tests {
         for _ in 0..1024 {
             write(&comment);
         }
-        assert!(parser.finish(&capture).unwrap().is_empty());
+        assert_eq!(
+            parser.finish(&capture).unwrap(),
+            [] as [std::string::String; 0]
+        );
     }
 
     #[test]

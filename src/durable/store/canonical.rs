@@ -971,7 +971,7 @@ pub trait CanonicalStore: Send + Sync + 'static {
     /// Agent Status is admitted by `commit_model_turn_start`, which couples
     /// its canonical message to the start-owned emission settlement; this
     /// method is not that generation path. Inbound adoption appends its
-    /// selected User messages through [`InboxStore::adopt_pending_batch`]
+    /// selected User messages through [`InboxStore::adopt_pending_batch`](crate::durable::inbox::InboxStore::adopt_pending_batch)
     /// through its own atomic transition. Compaction uses `commit_projection`
     /// and creates no canonical Ledger message. The store remains the historical Ledger authority; hot runtime
     /// state is only a bounded current read model.

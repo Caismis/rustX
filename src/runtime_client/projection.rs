@@ -1,7 +1,7 @@
 //! The Runtime Client projection: the one linearization owner of externally
 //! visible Runtime Client state.
 //!
-//! [`RuntimeClientProjection`] owns:
+//! `RuntimeClientProjection` owns:
 //!
 //! ```text
 //! current snapshot read model
@@ -83,8 +83,8 @@
 //! INTERNAL / NOT EXPOSED          -> no snapshot change, no client event
 //! ```
 //!
-//! Internal provider/request mechanics ([`ModelRequestStarted`],
-//! [`ModelRequestFailed`], [`ModelRetryScheduled`]) and compaction
+//! Internal provider/request mechanics ([`RuntimeEvent::ModelRequestStarted`],
+//! [`RuntimeEvent::ModelRequestFailed`], [`RuntimeEvent::ModelRetryScheduled`]) and compaction
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break the Runtime Client protocol.
@@ -95,7 +95,7 @@
 //!
 //! # Module structure
 //!
-//! One owner, [`RuntimeClientProjection`], with its inherent implementation
+//! One owner, `RuntimeClientProjection`, with its inherent implementation
 //! grouped by responsibility. No child owns a lock, task or cursor of its own.
 //!
 //! - lifecycle: construction, bootstrap from the native durable cut, activation;
