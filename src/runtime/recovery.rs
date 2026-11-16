@@ -134,7 +134,7 @@ use crate::runtime::types::{CancellationReason, RuntimeClock, RuntimeError};
 use crate::tools::types::{ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus};
 
 mod frontier;
-#[cfg(debug_assertions)]
+#[cfg(test)]
 mod oracle;
 
 pub use frontier::RecoveryFrontier;
@@ -545,7 +545,7 @@ impl RecoveryEvidence {
         }
         let pending = store.load_pending()?;
         let frontier = Self::fold_journal(store, &conversation_id, store.recovery_frontier()?)?;
-        #[cfg(debug_assertions)]
+        #[cfg(test)]
         let checked = frontier.clone();
         let mut evidence = Self::from_frontier(
             conversation_id.clone(),
@@ -565,9 +565,9 @@ impl RecoveryEvidence {
                     })
             },
         )?;
-        // After the release verification, the debug oracle recomputes the
-        // whole fold and requires the persisted frontier to equal it.
-        #[cfg(debug_assertions)]
+        // Test builds compare the bounded recovery with an independent full fold.
+        // Normal debug and release runtimes never replay settled history.
+        #[cfg(test)]
         oracle::assert_matches_full_fold(store, &conversation_id, &checked);
         // Native attribution of the unresolved Assistants: the canonical
         // Tool-call index records the committing attempt, verified against

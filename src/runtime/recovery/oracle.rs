@@ -1,8 +1,8 @@
-//! Debug-only oracle for the persisted recovery frontier.
+//! Test-only oracle for the persisted recovery frontier.
 //!
-//! Every debug reconstruction recomputes the Journal fold from the first fact
+//! Every test reconstruction recomputes the Journal fold from the first fact
 //! and asserts that it equals the persisted frontier plus its folded tail.
-//! Release builds never read retained history for this.
+//! Normal debug and release runtimes never read retained history for this.
 
 use std::cell::Cell;
 
@@ -13,8 +13,7 @@ use crate::runtime::identity::ConversationId;
 thread_local! { static ENABLED: Cell<bool> = const { Cell::new(true) }; }
 
 /// Suspends the full-fold oracle on this thread while the guard lives, for
-/// tests that measure the bounded work of the release open path itself.
-#[cfg(test)]
+/// tests that measure the bounded work of the runtime open path itself.
 pub(crate) fn suspend_frontier_oracle() -> impl Drop {
     struct Restore(bool);
     impl Drop for Restore {

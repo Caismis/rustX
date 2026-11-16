@@ -68,7 +68,7 @@ fn every_native_append_advances_the_frontier_exactly() {
         value["repairs"].as_array().unwrap().as_slice(),
         [] as [serde_json::Value; 0]
     );
-    // The debug oracle recomputes the whole fold inside reconstruction.
+    // The test oracle recomputes the whole fold in both debug and release tests.
     RecoveryEvidence::reconstruct(&store).unwrap();
 }
 

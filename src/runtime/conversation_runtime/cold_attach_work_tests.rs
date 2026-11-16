@@ -43,7 +43,7 @@ async fn cold_attach(id: &ConversationId, path: &std::path::Path) -> ColdAttach 
         drop(runtime);
         statements
     };
-    // The debug oracle recomputes the whole Journal fold and checks the
+    // The test oracle recomputes the whole Journal fold and checks the
     // persisted frontier against it on the same history.
     crate::runtime::recovery::RecoveryEvidence::reconstruct(store.as_ref()).unwrap();
     ColdAttach {
