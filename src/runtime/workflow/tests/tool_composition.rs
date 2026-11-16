@@ -131,7 +131,7 @@ async fn committed_completion_is_not_overwritten_by_later_cancel_or_deadline() {
     let executor = crate::tools::native::test_workflow_executor(runtime, program());
     let (result, facts) = drive_executor(executor, context, cancellation, Some(hook)).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
-    assert!(facts.is_empty());
+    assert_eq!(facts, [] as [crate::tools::invocation::InvocationFact; 0]);
     let events = plane.store.read_events(None, 128).unwrap().events;
     assert_eq!(
         events
@@ -305,7 +305,6 @@ async fn fixed_admission_rejects_orchestration_background_and_composite_leaves()
         leaf.id = crate::runtime::identity::ToolId::new(format!("tool-{name}"));
         if crate::tools::native::is_domain_control(name) {
             leaf.execution_policy = ToolExecutionPolicy::ForegroundOnly;
-            leaf.concurrency_policy = crate::tools::types::ToolConcurrencyPolicy::Sequential;
         }
         if name == "background" {
             leaf.execution_policy = ToolExecutionPolicy::BackgroundOnly;

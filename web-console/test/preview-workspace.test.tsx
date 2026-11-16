@@ -303,3 +303,16 @@ it('Download failure followed by successful retry clears the obsolete notice wit
   expect(workspace()).toBe(retained); expect(owner.getSnapshot().mode).toBe('collapsed');
   expect(live()).toHaveLength(0); expect(leases.downloads).toHaveLength(2);
 });
+it('preserves a retirement camera flush through pane split and move without changing published snapshots', () => {
+  const first = owner.openPreview(artifact('first'))!, second = owner.openPreview(artifact('second'))!;
+  owner.measure(1000, owner.getSnapshot().geometryEpoch);
+  const before = workspace();
+  const pose = (x: number) => ({ copyId: 'copy', camera: { projection: 'perspective' as const, position: [x, 2, 3] as [number, number, number], target: [0, 0, 0] as [number, number, number], up: [0, 1, 0] as [number, number, number] } });
+  owner.getSnapshot().leases.get(second)!.signal.addEventListener('abort', () => owner.updateView(second, { geometry: pose(9) }), { once: true });
+  owner.split();
+  expect(workspace().tabs.find(tab => tab.id === second)!.view.geometry).toEqual(pose(9)); expect(before.tabs.find(tab => tab.id === second)!.view.geometry).toBeUndefined();
+  owner.getSnapshot().leases.get(second)!.signal.addEventListener('abort', () => owner.updateView(second, { geometry: pose(11) }), { once: true });
+  const split = workspace(); owner.move(second);
+  expect(workspace().tabs.find(tab => tab.id === second)!.view.geometry).toEqual(pose(11)); expect(split.tabs.find(tab => tab.id === second)!.view.geometry).toEqual(pose(9));
+  owner.closeTab(second); expect(workspace().tabs.map(tab => tab.id)).toEqual([first]);
+});

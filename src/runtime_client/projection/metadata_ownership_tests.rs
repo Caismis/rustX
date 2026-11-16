@@ -296,7 +296,7 @@ fn normal_encoding_preserves_wire_metadata_trace_cursors_and_event_order() {
     };
     assert_eq!(checkpoint.cursor.get(), next);
     assert_eq!(checkpoint.read_cut.revision, next);
-    assert!(!checkpoint.snapshot.trace.records.is_empty());
+    assert_ne!(checkpoint.snapshot.trace.records, [] as [crate::observation::trace::types::TraceRecord; 0]);
     assert_eq!(
         checkpoint.snapshot.trace.read_cut.as_ref(),
         Some(&nested_trace_cut)
@@ -313,7 +313,7 @@ fn forced_replacement_preserves_owned_metadata_when_inner_fields_are_cleared() {
     draft.replacement = true;
     let (output, path) = equivalent_success(draft);
     assert!(path.forced && !path.captured_eviction && !path.fitted && !path.budget_fallback);
-    assert!(!replacement(&output).snapshot.trace.records.is_empty());
+    assert_ne!(replacement(&output).snapshot.trace.records, [] as [crate::observation::trace::types::TraceRecord; 0]);
     let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &output.event else {
         unreachable!()
     };
@@ -353,7 +353,7 @@ fn fitting_evicts_loaded_messages_and_keeps_the_same_finite_fallback() {
         .insert(message.id().clone(), evidence.into());
     let (output, path) = equivalent_success(draft);
     assert!(path.fitted && !path.captured_eviction && !path.forced && !path.budget_fallback);
-    assert!(replacement(&output).snapshot.messages.is_empty());
+    assert_eq!(replacement(&output).snapshot.messages, [] as [crate::message::types::MessageBlock; 0]);
     let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &output.event else {
         unreachable!()
     };
@@ -1095,7 +1095,7 @@ fn cursor_relative_publication_round_trips_without_reencoding_unchanged_lists() 
     let RuntimeClientEvent::ReadDomainsPatched { transcript, .. } = &events[0] else {
         panic!("expected page edit")
     };
-    assert!(transcript.entries.values.is_empty());
+    assert_eq!(transcript.entries.values, [] as [std::sync::Arc<crate::observation::transcript::RuntimeClientTranscriptEntry>; 0]);
     let RuntimeClientEvent::MessageDescriptorPatched { head, .. } = &events[1] else {
         panic!("expected head edit")
     };

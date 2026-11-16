@@ -28,12 +28,12 @@ fn publication_is_idempotent_catalog_metadata_and_manual_name_wins() {
     let settings = catalog.settings_revision(&id).unwrap();
     let invalidations = catalog.summary_invalidations();
     let frontier = invalidations.frontier();
-    assert!(
+    assert_eq!(
         catalog
             .list_page(Some("bounded title"), 0, 32)
             .unwrap()
-            .sessions
-            .is_empty()
+            .sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
     );
     assert!(publish(&mut catalog, &id, &conversation).unwrap());
     let published = invalidations.frontier();

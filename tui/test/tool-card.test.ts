@@ -36,7 +36,7 @@ function tool(overrides: Partial<CorrelatedTool> = {}): CorrelatedTool {
     callId: "call-1",
     toolId: "tool-unknown",
     name: "unknown_tool",
-    argumentsText: "{}",
+    argumentsText: "{\"arguments\":{}}",
     lifecycle: { type: "assembled" },
     committed: false,
     resultCommitted: false,
@@ -167,13 +167,13 @@ describe("runtime-owned outcomes", () => {
     const specialized = card({
       toolId: "tool-bash",
       name: "bash",
-      argumentsText: '{"command":"ls"}',
+      argumentsText: "{\"arguments\":{\"command\":\"ls\"}}",
       lifecycle,
     });
     const generic = card({
       toolId: "tool-python-thing",
       name: "thing",
-      argumentsText: "{}",
+      argumentsText: "{\"arguments\":{}}",
       lifecycle,
     });
 
@@ -226,7 +226,7 @@ describe("progressive disclosure bounds call details too", () => {
    */
   it("bounds a huge generic argument object", () => {
     const items = Array.from({ length: 300 }, (_, index) => `item-${index}`);
-    const argumentsText = JSON.stringify({ items }, null, 0);
+    const argumentsText = JSON.stringify({ arguments: { items } });
     const collapsed = card({
       toolId: "tool-mcp-bulk",
       name: "bulk",
@@ -262,10 +262,10 @@ describe("progressive disclosure bounds call details too", () => {
     const call = {
       toolId: "tool-edit",
       name: "edit",
-      argumentsText: JSON.stringify({
+      argumentsText: JSON.stringify({ arguments: {
         path: "/workspace/src/lib.rs",
         edits: [{ oldText, newText }],
-      }),
+      } }),
       lifecycle: { type: "assembled" as const },
     };
 
@@ -293,7 +293,7 @@ describe("progressive disclosure bounds call details too", () => {
     const call = {
       toolId: "tool-bash",
       name: "bash",
-      argumentsText: JSON.stringify({ command }),
+      argumentsText: JSON.stringify({ arguments: { command } }),
       lifecycle: { type: "running" as const },
     };
 
@@ -312,7 +312,7 @@ describe("progressive disclosure bounds call details too", () => {
   it("bounds a long partially streamed argument fragment", () => {
     // Not JSON yet, and with no line structure to bound: the raw fallback is
     // bounded by characters so a streaming fragment cannot fill the terminal.
-    const fragment = `{"query":"${"x".repeat(4_000)}`;
+    const fragment = `{"arguments":{"query":"${"x".repeat(4_000)}`;
     const call = {
       toolId: "tool-mcp-search",
       name: "search",
@@ -339,7 +339,7 @@ describe("progressive disclosure bounds call details too", () => {
     const call = {
       toolId: "tool-bash",
       name: "bash",
-      argumentsText: JSON.stringify({ command }),
+      argumentsText: JSON.stringify({ arguments: { command } }),
       lifecycle: settled({
         content: [
           {
@@ -388,10 +388,10 @@ describe("progressive disclosure bounds call details too", () => {
     const rendered = card({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({
+      argumentsText: JSON.stringify({ arguments: {
         path: `a.rs\n${"b\n".repeat(50)}`,
         content: "x",
-      }),
+      } }),
     });
     // The subject shares the header line, and stays exactly one line of it.
     assert.match(rendered, /^◇ Write a\.rs …/m);
@@ -419,7 +419,7 @@ describe("progressive disclosure bounds call details too", () => {
     const collapsed = card({
       toolId: "tool-mcp-bulk",
       name: "bulk",
-      argumentsText: JSON.stringify({ items }),
+      argumentsText: JSON.stringify({ arguments: { items } }),
       lifecycle: settled({
         status: { type: "denied", reason: "human denied" },
         content: [{ type: "text", text: Array.from({ length: 50 }, (_, i) => `o${i}`).join("\n") }],
@@ -445,7 +445,7 @@ describe("the generic fallback", () => {
     const rendered = card({
       toolId: "tool-mcp-corpus-search",
       name: "search",
-      argumentsText: '{"query":"AttemptSettled","limit":5}',
+      argumentsText: "{\"arguments\":{\"query\":\"AttemptSettled\",\"limit\":5}}",
       lifecycle: { type: "running" },
     });
     assert.match(rendered, /search/);
@@ -458,7 +458,7 @@ describe("the generic fallback", () => {
   });
 
   it("shows a partially streamed argument fragment without crashing", () => {
-    const rendered = card({ argumentsText: '{"command":' });
+    const rendered = card({ argumentsText: '{"arguments":{"command":' });
     assert.match(rendered, /\{"command":/);
   });
 
@@ -500,7 +500,7 @@ describe("specialized native renderers", () => {
     const rendered = card({
       toolId: "tool-bash",
       name: "bash",
-      argumentsText: '{"command":"cargo test --all","timeout":600}',
+      argumentsText: "{\"arguments\":{\"command\":\"cargo test --all\",\"timeout\":600}}",
       lifecycle: settled({
         content: [
           {
@@ -529,7 +529,7 @@ describe("specialized native renderers", () => {
     const rendered = card({
       toolId: "tool-bash",
       name: "bash",
-      argumentsText: '{"command":"true"}',
+      argumentsText: "{\"arguments\":{\"command\":\"true\"}}",
       lifecycle: settled({
         content: [
           { type: "json", value: { exit_code: 0, stdout: "", stderr: "", combined: "" } },
@@ -546,7 +546,7 @@ describe("specialized native renderers", () => {
         toolId: "tool-read",
         name: "read",
         argumentsText:
-          '{"path":"/workspace/src/runtime/agent_loop.rs","offset":120,"limit":121}',
+          "{\"arguments\":{\"path\":\"/workspace/src/runtime/agent_loop.rs\",\"offset\":120,\"limit\":121}}",
       }),
       /Read[\s\S]*src\/runtime\/agent_loop\.rs[\s\S]*lines 120–240/,
     );
@@ -554,7 +554,7 @@ describe("specialized native renderers", () => {
       card({
         toolId: "tool-read",
         name: "read",
-        argumentsText: '{"path":"/workspace/a.rs","offset":10}',
+        argumentsText: "{\"arguments\":{\"path\":\"/workspace/a.rs\",\"offset\":10}}",
       }),
       /from line 10/,
     );
@@ -563,7 +563,7 @@ describe("specialized native renderers", () => {
     const bare = card({
       toolId: "tool-read",
       name: "read",
-      argumentsText: '{"path":"/workspace/a.rs"}',
+      argumentsText: "{\"arguments\":{\"path\":\"/workspace/a.rs\"}}",
     });
     assert.ok(!/lines |from line |first /.test(bare));
   });
@@ -573,7 +573,7 @@ describe("specialized native renderers", () => {
       toolId: "tool-grep",
       name: "grep",
       argumentsText:
-        '{"pattern":"AttemptSettled","path":"src/runtime","literal":true}',
+        "{\"arguments\":{\"pattern\":\"AttemptSettled\",\"path\":\"src/runtime\",\"literal\":true}}",
       lifecycle: settled({
         content: [{ type: "text", text: "src/runtime/a.rs:12:   AttemptSettled,\nsrc/runtime/b.rs:40: AttemptSettled {" }],
       }),
@@ -588,7 +588,7 @@ describe("specialized native renderers", () => {
     const rendered = card({
       toolId: "tool-glob",
       name: "glob",
-      argumentsText: '{"pattern":"**/*.rs"}',
+      argumentsText: "{\"arguments\":{\"pattern\":\"**/*.rs\"}}",
       lifecycle: settled({
         content: [{ type: "text", text: "a.rs\nb.rs\nc.rs" }],
       }),
@@ -601,10 +601,10 @@ describe("specialized native renderers", () => {
     const rendered = card({
       toolId: "tool-edit",
       name: "edit",
-      argumentsText: JSON.stringify({
+      argumentsText: JSON.stringify({ arguments: {
         path: "/workspace/src/lib.rs",
         edits: [{ oldText: "let x = 1;", newText: "let x = 2;" }],
-      }),
+      } }),
       lifecycle: settled({
         content: [{ type: "text", text: "Successfully replaced 1 block(s) in /workspace/src/lib.rs." }],
       }),
@@ -620,7 +620,7 @@ describe("specialized native renderers", () => {
     const rendered = card({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ path: "/workspace/notes.md", content: "a\nb\nc" }),
+      argumentsText: JSON.stringify({ arguments: { path: "/workspace/notes.md", content: "a\nb\nc" } }),
       lifecycle: settled({
         content: [
           { type: "text", text: "Successfully wrote 5 bytes to /workspace/notes.md" },
@@ -644,7 +644,8 @@ describe("specialized native renderers", () => {
       ["tool-edit", "edit", '{"path":"/workspace/a.rs","edits":"not-a-list"}'],
       ["tool-write", "write", '{"path":"/workspace/a.rs"}'],
     ] as const;
-    for (const [toolId, name, argumentsText] of shapes) {
+    for (const [toolId, name, business] of shapes) {
+      const argumentsText = JSON.stringify({ arguments: JSON.parse(business) });
       const rendered = card({ toolId, name, argumentsText });
       assert.match(rendered, new RegExp(name), toolId);
     }
@@ -654,7 +655,7 @@ describe("specialized native renderers", () => {
     const rendered = card({
       toolId: "tool-bash",
       name: "bash",
-      argumentsText: '{"command":"ls"}',
+      argumentsText: "{\"arguments\":{\"command\":\"ls\"}}",
       lifecycle: settled({ content: [{ type: "text", text: "plain output" }] }),
     });
     assert.match(rendered, /\$ ls/);
@@ -715,7 +716,7 @@ describe("boundedness in both dimensions", () => {
     const build = (payload: string) => ({
       toolId: "tool-mcp-ingest",
       name: "ingest",
-      argumentsText: JSON.stringify({ payload }),
+      argumentsText: JSON.stringify({ arguments: { payload } }),
     });
     const collapsed = assertBounded("generic JSON", build);
     assert.match(collapsed, /ingest/, "the identity survives the bound");
@@ -732,10 +733,10 @@ describe("boundedness in both dimensions", () => {
     const build = (payload: string) => ({
       toolId: "tool-edit",
       name: "edit",
-      argumentsText: JSON.stringify({
+      argumentsText: JSON.stringify({ arguments: {
         path: "/workspace/src/lib.rs",
         edits: [{ oldText: payload, newText: payload }],
-      }),
+      } }),
     });
     const collapsed = assertBounded("Edit", build);
     assert.match(collapsed, /src\/lib\.rs/);
@@ -746,7 +747,7 @@ describe("boundedness in both dimensions", () => {
     const build = (payload: string) => ({
       toolId: "tool-bash",
       name: "bash",
-      argumentsText: JSON.stringify({ command: payload }),
+      argumentsText: JSON.stringify({ arguments: { command: payload } }),
     });
     const collapsed = assertBounded("Bash", build);
     assert.match(collapsed, /\$ x/);
@@ -758,7 +759,7 @@ describe("boundedness in both dimensions", () => {
     assertBounded("Grep", (payload) => ({
       toolId: "tool-grep",
       name: "grep",
-      argumentsText: JSON.stringify({ pattern: payload }),
+      argumentsText: JSON.stringify({ arguments: { pattern: payload } }),
     }));
   });
 
@@ -766,7 +767,7 @@ describe("boundedness in both dimensions", () => {
     assertBounded("Read", (payload) => ({
       toolId: "tool-read",
       name: "read",
-      argumentsText: JSON.stringify({ path: payload }),
+      argumentsText: JSON.stringify({ arguments: { path: payload } }),
     }));
   });
 
@@ -774,7 +775,7 @@ describe("boundedness in both dimensions", () => {
     assertBounded("Write", (payload) => ({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ path: payload, content: "hi" }),
+      argumentsText: JSON.stringify({ arguments: { path: payload, content: "hi" } }),
     }));
   });
 
@@ -782,7 +783,7 @@ describe("boundedness in both dimensions", () => {
     const build = (payload: string) => ({
       toolId: "tool-unknown",
       name: "unknown_tool",
-      argumentsText: "{}",
+      argumentsText: "{\"arguments\":{}}",
       lifecycle: settled({ content: [{ type: "text" as const, text: payload }] }),
     });
     const collapsed = assertBounded("result text", build);
@@ -824,7 +825,7 @@ describe("boundedness in both dimensions", () => {
     const build = (payload: string) => ({
       toolId: "tool-write",
       name: "write",
-      argumentsText: JSON.stringify({ path: "/workspace/out.txt", content: "hi" }),
+      argumentsText: JSON.stringify({ arguments: { path: "/workspace/out.txt", content: "hi" } }),
       lifecycle: settled({
         content: [
           { type: "text" as const, text: `Successfully wrote 4 bytes to ${payload}` },
@@ -839,7 +840,7 @@ describe("boundedness in both dimensions", () => {
     const build = (payload: string) => ({
       toolId: "tool-mcp-ingest",
       name: "ingest",
-      argumentsText: JSON.stringify({ payload }),
+      argumentsText: JSON.stringify({ arguments: { payload } }),
       lifecycle: settled({ content: [{ type: "text" as const, text: payload }] }),
     });
     const collapsed = assertBounded("mixed", build);
@@ -927,7 +928,7 @@ describe("neutral Tool content and bounded lifecycle accents", () => {
     ];
     for (const toolId of ["tool-bash", "tool-read"]) {
       const bodies = statuses.map((status) => renderToolCard(tool({ toolId,
-        argumentsText: '{"command":"echo ok","path":"a.txt"}',
+        argumentsText: "{\"arguments\":{\"command\":\"echo ok\",\"path\":\"a.txt\"}}",
         lifecycle: settled({ status, content: [{ type: "text", text: "ok OUTPUT_SENTINEL" }] }),
       }), context).split("\n").find((line) => line.includes("OUTPUT_SENTINEL")));
       assert.ok(bodies[0]);
@@ -971,7 +972,7 @@ it("audits title, output and metadata contrast on the neutral surface in truecol
 describe("native Goal activity", () => {
   it("renders semantic results and keeps exact evidence in expanded execution details", () => {
     for (const [name, action, label] of [["create_goal", "", "Goal started"], ["update_goal", "complete", "Goal completed"], ["update_goal", "blocked", "Goal blocked"], ["get_goal", "", "Goal checked"]] as const) {
-      const execution = tool({ toolId: `native.${name}`, name, argumentsText: JSON.stringify({ action }), lifecycle: settled() });
+      const execution = tool({ toolId: `native.${name}`, name, argumentsText: JSON.stringify({ arguments: { action } }), lifecycle: settled() });
       const normal = plainText(renderToolCard(execution, context));
       assert.match(normal, new RegExp(label));
       assert.doesNotMatch(normal, /native\.|create_goal|update_goal|get_goal|call-1|action/);
@@ -1003,7 +1004,7 @@ it("Job and Agent controls display distinct identities without inventing lifecyc
 
 
 it('T08 T19 tiny opaque Tool integers retain the original raw JSON display', () => {
-  const text = card({argumentsText:'{"native_counter":18446744073709551615}'});
+  const text = card({argumentsText:"{\"arguments\":{\"native_counter\":18446744073709551615}}"});
   assert.match(text, /18446744073709551615/);
   assert.ok(!text.includes('18446744073709552000'));
 });
@@ -1020,4 +1021,16 @@ it('deferred canonical metadata never promotes J delivery fields into C content'
   const loaded = plainText(renderToolCard({...native,committedResult:result,committedResultDeferred:false}, expanded));
   assert.match(loaded, /Delivered 1 file/);
   assert.match(loaded, /original report.md/);
+});
+
+it("reads exactly one model envelope and keeps native invocation business fields independent", () => {
+  const wrapped = card({ toolId: "tool-bash", name: "bash", argumentsText: '{"arguments":{"command":"printf actual"},"execution_mode":"foreground"}' });
+  assert.match(wrapped, /Bash \$ printf actual/);
+  const flat = card({ toolId: "tool-bash", name: "bash", argumentsText: '{"command":"printf flat"}' });
+  assert.doesNotMatch(flat, /Bash \$/);
+  const generic = card({ toolId: "mcp-search", name: "search", argumentsText: '{"arguments":{"arguments":{"query":"preserved"},"elevation_reason":"business reason"},"elevation_reason":"runtime reason"}' }, expanded);
+  assert.match(generic, /"arguments"/);
+  assert.match(generic, /"query": "preserved"/);
+  assert.match(generic, /business reason/);
+  assert.doesNotMatch(generic, /runtime reason/);
 });

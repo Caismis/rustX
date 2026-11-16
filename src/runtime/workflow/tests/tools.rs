@@ -98,8 +98,6 @@ fn definition() -> ToolDefinition {
         )
         .into(),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -125,6 +123,11 @@ fn program_definition() -> WorkflowDefinition {
                 "no":returns("check", &["passed"])
             },"edges": [{"from":"workflow_start","to":"check"},{"from":"check","to":"branch"},{"from":"branch","to":"yes","port":"true"},{"from":"branch","to":"no","port":"false"}],}
     })).unwrap()
+}
+
+fn full_access_lifecycle() -> crate::agent::AttemptLifecycle {
+    crate::agent::AttemptLifecycle::default()
+        .with_approval_mode(crate::runtime::types::ApprovalMode::FullAccess)
 }
 
 fn context(
@@ -166,12 +169,12 @@ fn context_with_environment(
         plane.dir.path().join("workspace"),
         CapabilityRevision::new(1),
         Arc::new(ToolRegistry::new()), // deliberately inactive in the parent's model surface
-        Arc::new(crate::capabilities::AvailableToolCatalog::new(vec![
-            registration,
-        ])),
+        Arc::new(crate::capabilities::AvailableToolCatalog::new(
+            ToolRegistry::from_registrations([registration])
+                .unwrap()
+                .validated_registrations(),
+        )),
         Arc::new(SkillSnapshot::new(Vec::new())),
-        None,
-        None,
         environment,
         Arc::new(McpRuntimeLeaseAuthority::empty()),
         Arc::new(BTreeMap::new()),
@@ -181,6 +184,8 @@ fn context_with_environment(
         1,
         "Frozen workflow agent instructions",
         WorkflowCatalog::empty(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+        None,
     );
     let resources = Arc::new(
         crate::runtime::RuntimeResourceSnapshot::new(
@@ -197,9 +202,10 @@ fn context_with_environment(
         resources,
         SessionModelConfig::of(model),
         models,
-        ApprovalMode::Policy,
+        ApprovalMode::Plan,
     );
     context.native = Some(Arc::new(NativeInvocationServices {
+        task: None,
         lifecycle,
         runtime: crate::tools::runtime::ConversationToolRuntime::new(
             plane.conversation_id.clone(),
@@ -227,7 +233,7 @@ async fn native_view_contains_only_the_selected_path_in_start_order() {
         let context = context(
             &plane,
             Probe::new(ToolExecutionStatus::Success),
-            crate::agent::AttemptLifecycle::default(),
+            full_access_lifecycle(),
         );
         let (_, cancellation) = workflow_cancellation();
         runtime
@@ -273,7 +279,7 @@ async fn goal84_workflow_completion_and_goal_completion_are_independent() {
     let context = context(
         &plane,
         Probe::new(ToolExecutionStatus::Success),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let (_, cancellation) = workflow_cancellation();
     let value = workflow_runtime(&plane)
@@ -300,11 +306,7 @@ async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_
     let plane = workflow_test_plane(1);
     let runtime = workflow_runtime(&plane);
     let probe = Probe::new(ToolExecutionStatus::Success);
-    let context = context(
-        &plane,
-        probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
-    );
+    let context = context(&plane, probe.clone(), full_access_lifecycle());
     let frozen = context.resources().capability().clone();
     let (_, cancellation) = workflow_cancellation();
     let result = runtime
@@ -318,7 +320,10 @@ async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_
         .await
         .unwrap();
     assert_eq!(result, json!({"passed":false}));
-    assert!(frozen.tool_registry().model_definitions().is_empty());
+    assert_eq!(
+        frozen.tool_registry().model_definitions(),
+        [] as [crate::tools::types::ModelToolDefinition; 0]
+    );
     assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
     let received = probe.received.lock().unwrap();
     assert!(matches!(received[0].id, ToolInvocationId::Workflow { .. }));
@@ -412,11 +417,7 @@ async fn cancellation_before_node_admission_starts_zero_executors() {
     let plane = workflow_test_plane(1);
     let runtime = workflow_runtime(&plane);
     let probe = Probe::new(ToolExecutionStatus::Success);
-    let context = context(
-        &plane,
-        probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
-    );
+    let context = context(&plane, probe.clone(), full_access_lifecycle());
     let (trigger, cancellation) = workflow_cancellation();
     trigger.cancel(); // cancellation is observable before execute_block's node frontier
     assert!(
@@ -442,11 +443,7 @@ async fn cancellation_during_execution_drains_native_settlement_before_node_term
     Arc::get_mut(&mut probe).unwrap().release = Some(Arc::new(tokio::sync::Notify::new()));
     let gate = Arc::new(tokio::sync::Notify::new());
     Arc::get_mut(&mut probe).unwrap().settled = Some(gate.clone());
-    let context = context(
-        &plane,
-        probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
-    );
+    let context = context(&plane, probe.clone(), full_access_lifecycle());
     let (trigger, cancellation) = workflow_cancellation();
     let mut started = probe.started.subscribe();
     let mut cancelled = probe.cancelled.subscribe();
@@ -490,11 +487,7 @@ async fn native_observation_store_failure_has_no_permission_or_outcome_authority
     let plane = workflow_test_plane(1);
     let runtime = workflow_runtime(&plane);
     let probe = Probe::new(ToolExecutionStatus::Success);
-    let context = context(
-        &plane,
-        probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
-    );
+    let context = context(&plane, probe.clone(), full_access_lifecycle());
     // Fail every observation, including Prepared, Started, Progress and Completed.
     // The store's real append boundary consumes these injected failures.
     plane.store.arm_fail_event_times(100);
@@ -502,13 +495,9 @@ async fn native_observation_store_failure_has_no_permission_or_outcome_authority
     let (result, _) = run_outer(runtime, program(), context, cancellation).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
-    assert!(
-        plane
-            .store
-            .read_events(None, 128)
-            .unwrap()
-            .events
-            .is_empty()
+    assert_eq!(
+        plane.store.read_events(None, 128).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
 }
 
@@ -546,7 +535,10 @@ async fn durable_approval_preparation_failure_never_publishes_or_starts() {
     assert!(matches!(error, WorkflowRunError::InvocationAuthority(_)));
     assert_eq!(probe.starts.load(Ordering::SeqCst), 0);
     assert_eq!(coordinator.pending_count(), 0);
-    assert!(audit.events().is_empty());
+    assert_eq!(
+        audit.events(),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
 }
 async fn run_outer(
     runtime: WorkflowRuntime,
@@ -628,11 +620,7 @@ async fn outer_total_deadline_survives_new_leaf_at_capacity_one_and_drains_settl
     let settle = Arc::new(tokio::sync::Notify::new());
     Arc::get_mut(&mut probe).unwrap().release = Some(release.clone());
     Arc::get_mut(&mut probe).unwrap().settled = Some(settle.clone());
-    let mut context = context(
-        &plane,
-        probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
-    );
+    let mut context = context(&plane, probe.clone(), full_access_lifecycle());
     let clock = Arc::new(crate::runtime::ManualMonotonicClock::new());
     let services = Arc::make_mut(context.native.as_mut().unwrap());
     services.clock = clock.clone();
@@ -723,11 +711,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
     let mut child = stage_workflow_child(&plane);
     let runtime = workflow_runtime(&plane);
     let probe = Probe::new(ToolExecutionStatus::Success);
-    let context = context(
-        &plane,
-        probe.clone(),
-        crate::agent::AttemptLifecycle::default(),
-    );
+    let context = context(&plane, probe.clone(), full_access_lifecycle());
     let mut definition = program_definition();
     definition
         .block
@@ -750,6 +734,7 @@ async fn agent_tool_branch_return_uses_committed_typed_binding() {
                 schema: schema(json!({"passed":{"type":"boolean"}}), &["passed"]),
             },
             routes: Vec::new(),
+            permissions: None,
             on_error: WorkflowValueErrorStrategy::default(),
         },
     );
@@ -798,6 +783,7 @@ impl crate::agent::PreToolPolicy for Ask {
     fn evaluate<'a>(
         &'a self,
         view: &'a crate::agent::PreToolView<'a>,
+        _: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> futures_util::future::BoxFuture<
         'a,
         Result<crate::agent::PreToolDecision, crate::agent::LifecycleError>,
@@ -901,11 +887,7 @@ async fn normalization_and_schema_rejection_start_zero_executors() {
             registration.definition.input_schema =
                 schema(json!({"missing":{"type":"string"}}), &["missing"]).into();
         }
-        let context = context_with_registration(
-            &plane,
-            registration,
-            crate::agent::AttemptLifecycle::default(),
-        );
+        let context = context_with_registration(&plane, registration, full_access_lifecycle());
         let (_, cancellation) = workflow_cancellation();
         let error = runtime
             .run_test_foreground(
@@ -946,8 +928,8 @@ fn authority_rejects_changed_identity_and_unadmitted_selection() {
     );
     let definition = WorkflowDefinition {
         description: "unadmitted".into(),
-
         timeout_ms: 100,
+        permissions: None,
         block: WorkflowBlock {
             input: json!({"type":"object"}),
             nodes: {
@@ -1023,7 +1005,7 @@ impl ToolExecutor for Flaky {
                 self.ids.lock().unwrap().push(invocation.id.clone());
                 let failing = self
                     .failures
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                         left.checked_sub(1)
                     })
                     .is_ok();
@@ -1089,7 +1071,7 @@ async fn run_flaky(
     let context = context_with_registration(
         &plane,
         ToolRegistration::plain(definition(), flaky.clone()),
-        crate::agent::AttemptLifecycle::default(),
+        full_access_lifecycle(),
     );
     let (_, cancellation) = workflow_cancellation();
     let value = workflow_runtime(&plane)
@@ -1164,11 +1146,7 @@ async fn aggregate_skips_failed_producers_even_when_their_diagnostics_match_the_
         let probe = Probe::new(ToolExecutionStatus::Failed {
             error: "original failure diagnostic".into(),
         });
-        let context = context(
-            &plane,
-            probe.clone(),
-            crate::agent::AttemptLifecycle::default(),
-        );
+        let context = context(&plane, probe.clone(), full_access_lifecycle());
         let (_, cancellation) = workflow_cancellation();
         let value = workflow_runtime(&plane)
             .run_test_foreground(

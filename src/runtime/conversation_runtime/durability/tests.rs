@@ -711,7 +711,6 @@ async fn exhausted_subagent_publication_degrades_the_owning_runtime() {
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
@@ -721,6 +720,7 @@ async fn exhausted_subagent_publication_degrades_the_owning_runtime() {
                                 tool_call_id: ToolCallId::new("call-subagent-one"),
                             },
                             terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                         },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
@@ -784,7 +784,6 @@ async fn exhausted_subagent_publication_degrades_the_owning_runtime() {
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
@@ -794,6 +793,7 @@ async fn exhausted_subagent_publication_degrades_the_owning_runtime() {
                                 tool_call_id: ToolCallId::new("call-subagent-two"),
                             },
                             terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                         },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
@@ -898,8 +898,7 @@ async fn exhausted_subagent_publication_degrades_the_owning_runtime() {
     let pending_items = store
         .select_pending_batch()
         .expect("pending")
-        .map(|batch| batch.items)
-        .unwrap_or_default();
+        .map_or_else(Vec::new, |batch| batch.items);
     assert!(
         !pending_items.iter().any(|item| {
             item.correlation.as_deref()
@@ -982,7 +981,6 @@ async fn a_durability_failed_runtime_rejects_new_subagent_ownership() {
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
@@ -992,6 +990,7 @@ async fn a_durability_failed_runtime_rejects_new_subagent_ownership() {
                                 tool_call_id: ToolCallId::new("call-owned"),
                             },
                             terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                         },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
@@ -1065,7 +1064,6 @@ async fn a_durability_failed_runtime_rejects_new_subagent_ownership() {
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("explore"),
-                    approval_mode: crate::runtime::ApprovalMode::Policy,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -1075,6 +1073,7 @@ async fn a_durability_failed_runtime_rejects_new_subagent_ownership() {
                         tool_call_id: ToolCallId::new("call-rejected"),
                     },
                     terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &crate::runtime::cancellation::CancellationSignal::new(),
@@ -1177,7 +1176,6 @@ async fn an_owned_subagent_survives_a_later_durability_failure() {
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
@@ -1187,6 +1185,7 @@ async fn an_owned_subagent_survives_a_later_durability_failure() {
                                 tool_call_id: ToolCallId::new("call-owned"),
                             },
                             terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                         },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
@@ -1300,7 +1299,6 @@ async fn subagent_ownership_racing_a_durability_failure_linearizes_on_the_runtim
                         execution_policy:
                             crate::runtime::subagent::InheritedExecutionPolicy::default(),
                         resolved: test_resolved_subagent("explore"),
-                        approval_mode: crate::runtime::ApprovalMode::Policy,
                     },
                     admission: crate::runtime::subagent::ActivationAdmission {
                         attachments: Vec::new(),
@@ -1310,6 +1308,7 @@ async fn subagent_ownership_racing_a_durability_failure_linearizes_on_the_runtim
                             tool_call_id: ToolCallId::new("call-racing"),
                         },
                         terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                        approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                     },
                 },
                 &crate::runtime::cancellation::CancellationSignal::new(),
@@ -2000,7 +1999,6 @@ async fn every_reader_of_the_durability_failure_observes_the_single_authoritativ
                             execution_policy:
                                 crate::runtime::subagent::InheritedExecutionPolicy::default(),
                             resolved: test_resolved_subagent("explore"),
-                            approval_mode: crate::runtime::ApprovalMode::Policy,
                         },
                         admission: crate::runtime::subagent::ActivationAdmission {
                             attachments: Vec::new(),
@@ -2010,6 +2008,7 @@ async fn every_reader_of_the_durability_failure_observes_the_single_authoritativ
                                 tool_call_id: ToolCallId::new("call-owned"),
                             },
                             terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                         },
                     },
                     &crate::runtime::cancellation::CancellationSignal::new(),
@@ -2063,7 +2062,7 @@ async fn every_reader_of_the_durability_failure_observes_the_single_authoritativ
         failure.operation,
         DurableOperation::SubagentTerminalPublication
     );
-    assert!(!failure.diagnostic.is_empty());
+    assert_ne!(failure.diagnostic, "");
     let observed = observations
         .iter()
         .find_map(|observation| match observation {
@@ -2109,7 +2108,6 @@ async fn every_reader_of_the_durability_failure_observes_the_single_authoritativ
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("explore"),
-                    approval_mode: crate::runtime::ApprovalMode::Policy,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -2119,6 +2117,7 @@ async fn every_reader_of_the_durability_failure_observes_the_single_authoritativ
                         tool_call_id: ToolCallId::new("call-rejected"),
                     },
                     terminal: crate::runtime::subagent::SubagentTerminalMode::Normal,
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &crate::runtime::cancellation::CancellationSignal::new(),

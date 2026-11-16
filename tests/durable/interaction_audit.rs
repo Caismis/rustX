@@ -278,6 +278,7 @@ fn start_request(
 ) -> RequestId {
     let head = store.load_head().expect("head");
     let mut snapshot = RequestSnapshot::new(
+        rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt_id.clone(),
             turn: turn.clone(),
@@ -868,8 +869,14 @@ fn a_historical_approval_cannot_be_replayed_as_current_authority() {
     // tool never started, so its outcome is known: it did not run), and
     // the tool still never ran.
     assert!(!has_tool_start(&store));
-    assert!(report.reconciliation().background_terminals.is_empty());
-    assert!(report.reconciliation().subagent_terminals.is_empty());
+    assert_eq!(
+        report.reconciliation().background_terminals,
+        [] as [rustx::runtime::ToolExecutionId; 0]
+    );
+    assert_eq!(
+        report.reconciliation().subagent_terminals,
+        [] as [rustx::runtime::identity::SubagentId; 0]
+    );
 
     // Re-asserting the historical decision is a typed durable violation.
     assert!(matches!(

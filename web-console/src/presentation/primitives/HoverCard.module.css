@@ -21,9 +21,11 @@
   border-radius: 12px;
   background: var(--dsw-hovercard-bg);
   box-shadow: var(--dsw-shadow-lv3);
+  overflow: auto;
 }
 
 .preview {
+  max-height: 420px;
   display: flex;
   flex-direction: column;
   padding: 0;

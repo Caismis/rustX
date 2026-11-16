@@ -61,6 +61,8 @@ impl Family<'_> {
             | Method::ProjectionDetail { target, .. }
             | Method::TraceDetail { target, .. }
             | Method::TraceLocateTool { target, .. }
+            | Method::TraceLocateWorkflow { target, .. }
+            | Method::AgentTraceLocateWorkflow { target, .. }
             | Method::Transcript { target, .. }
             | Method::ConversationTurns { target, .. }
             | Method::Goal { target, .. }
@@ -88,6 +90,9 @@ impl Family<'_> {
             | Method::ConversationChangeDiff { target, .. }
             | Method::ConversationCheckpointPage { target, .. }
             | Method::ConversationCheckpointValueRead { target, .. }
+            | Method::ConversationWorkflowRunSnapshotHeader { target, .. }
+            | Method::ConversationWorkflowRunSnapshotChunk { target, .. }
+            | Method::ConversationWorkflowTraceNode { target, .. }
             | Method::SessionSubscribe { target, .. }
             | Method::TurnStart { target, .. }
             | Method::TurnSteer { target, .. }
@@ -156,6 +161,9 @@ impl Family<'_> {
             | Method::SessionTracePage { .. }
             | Method::SessionTraceValueRead { .. }
             | Method::SessionTraceContentRead { .. }
+            | Method::SessionWorkflowRunSnapshotHeader { .. }
+            | Method::SessionWorkflowRunSnapshotChunk { .. }
+            | Method::SessionWorkflowTraceNode { .. }
             | Method::SessionHistoryContentRead { .. }
             | Method::SessionHistoryPage { .. }
             | Method::SessionHistoryValueRead { .. }

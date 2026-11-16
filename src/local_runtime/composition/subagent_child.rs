@@ -30,6 +30,15 @@ use crate::tools::runtime::ConversationToolRuntime;
 use crate::tools::types::ToolDefinition;
 use std::sync::Arc;
 
+/// Rebuilds the parent-frozen native baseline. `PATH`, `HOME`, `LANG`, and
+/// `LC_ALL` are configured overrides here. Excluded executors still install
+/// their own baseline through `child_environment`.
+pub(crate) fn configured_child_environment(
+    entries: Vec<(String, String)>,
+) -> Result<ToolEnvironment, CurrentRuntimeConfigError> {
+    ToolEnvironment::from_configured(entries).map_err(CurrentRuntimeConfigError::Environment)
+}
+
 /// The cancellable-owned-work guard of one child preparation (Issue #145).
 ///
 /// External capability composition is no longer a cheap synchronous
@@ -599,15 +608,14 @@ impl LocalConversationCore {
 
             // 5-6. The child conversation tool runtime over the authoritative
             // project workspace selected by the parent and the exact
-            // spawn-incarnation-private runtime root. The child authorizes no
-            // environment entries. Its durable Message Ledger/Event Journal is
-            // deliberately one level above that physical root: execution
-            // artifacts can be discarded after settlement while the conversation
-            // identity remains inspectable.
-            let base_environment =
-                ToolEnvironment::from_authorized(spec.resolved.environment.clone())
-                    .map_err(CurrentRuntimeConfigError::Environment)
-                    .map_err(LocalRuntimeError::RuntimeConfig)?;
+            // spawn-incarnation-private runtime root. The frozen entries are
+            // the configured native baseline, including PATH and HOME. Its
+            // durable Message Ledger/Event Journal is deliberately one level
+            // above that physical root: execution artifacts can be discarded
+            // after settlement while the conversation identity remains
+            // inspectable.
+            let base_environment = configured_child_environment(spec.resolved.environment.clone())
+                .map_err(LocalRuntimeError::RuntimeConfig)?;
             let mut runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
                 &spec.workspace,
                 child_conversation_store_path(
@@ -668,15 +676,6 @@ impl LocalConversationCore {
             // 7. Definitions and authorization are frozen; resource bytes remain
             // ordinary live Tool inputs in the shared host filesystem.
             let skills = frozen_skills(spec);
-            let skill_dependencies = crate::skills::dependencies::merge_named_manifests(
-                spec.resolved
-                    .skills
-                    .iter()
-                    .map(|skill| (&skill.binding.skill_id, &skill.dependencies)),
-            )
-            .map_err(|error| LocalRuntimeError::Capability {
-                detail: error.to_string(),
-            })?;
 
             // 8. The deny-by-construction base registry: exactly the Builtin
             // capabilities the parent's resolution authorized, with their exact
@@ -700,36 +699,25 @@ impl LocalConversationCore {
             for binding in mcp_servers.values_mut() {
                 binding.credentials.capture_from(credentials);
             }
-            let capability = CapabilityCoordinator::with_backend(
-                CapabilityCoordinatorConfig {
-                    source_demand: crate::capabilities::source::ToolSourceDemand::default(),
-                    conversation_id: tool_runtime.conversation_id().clone(),
-                    workspace: tool_runtime.workspace().clone(),
-                    base_tool_registry: Arc::new(base_registry),
-                    // The child's extension Tool surfaces, derived from the owners
-                    // its own tool runtime materialized above. The child never
-                    // rereads a role file or a configuration document to reinterpret
-                    // which extensions it owns.
-                    extension_tools: tool_runtime
-                        .extension_tool_plane_for(&spec.resolved.extensions),
-                    agent_activation: AgentActivation::default(),
-                    skill_discovery: SkillDiscoveryConfig::default(),
-                    mcp_servers,
-                    base_environment,
-                    environment_store_root: spec
-                        .product_root
-                        .join("environments")
-                        .join(spec.child_conversation_id.as_str()),
-                },
-                Arc::new(
-                    crate::skills::environments::RunnerBackedSkillEnvironmentBackend::new(
-                        Arc::new(
-                            crate::runtime::process_runner::RunnerBackedProcessRunner::default(),
-                        ),
-                        preparation.cancellation(),
-                    ),
-                ),
-            )
+            let capability = CapabilityCoordinator::new(CapabilityCoordinatorConfig {
+                source_demand: crate::capabilities::source::ToolSourceDemand::default(),
+                conversation_id: tool_runtime.conversation_id().clone(),
+                workspace: tool_runtime.workspace().clone(),
+                base_tool_registry: Arc::new(base_registry),
+                // The child's extension Tool surfaces, derived from the owners
+                // its own tool runtime materialized above. The child never
+                // rereads a role file or a configuration document to reinterpret
+                // which extensions it owns.
+                extension_tools: tool_runtime.extension_tool_plane_for(&spec.resolved.extensions),
+                agent_activation: AgentActivation::default(),
+                skill_discovery: SkillDiscoveryConfig::default(),
+                mcp_servers,
+                base_environment,
+                environment_store_root: spec
+                    .product_root
+                    .join("environments")
+                    .join(spec.child_conversation_id.as_str()),
+            })
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             })?;
@@ -741,10 +729,7 @@ impl LocalConversationCore {
             // finishing a long MCP connect or uv build for an owner that is
             // already gone, and every preparatory supervised unit observes the
             // one preparation cancellation authority.
-            let candidate = if plan.is_empty()
-                && skill_dependencies.is_empty()
-                && !preparation_gate_armed(&runtime_root)
-            {
+            let candidate = if plan.is_empty() && !preparation_gate_armed(&runtime_root) {
                 capability
                     .prepare_selected_candidate(&plan, &preparation.cancellation())
                     .await
@@ -755,16 +740,9 @@ impl LocalConversationCore {
                 let cancellation = preparation.cancellation();
                 let step = async {
                     run_preparation_gate_if_armed(&runtime_root, &cancellation).await?;
-                    let mut candidate = capability
+                    let candidate = capability
                         .prepare_selected_candidate(&plan, &cancellation)
                         .await?;
-                    if let Err(error) = capability
-                        .prepare_frozen_skill_dependencies(&mut candidate, &skill_dependencies)
-                        .await
-                    {
-                        candidate.retire_uncommitted().await;
-                        return Err(error);
-                    }
                     Ok(candidate)
                 };
                 match preparation.guard(step).await {

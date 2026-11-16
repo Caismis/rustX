@@ -140,8 +140,7 @@ pub enum RuntimeClientEvent {
     /// knows the attempt's authoritative model without inferring it from
     /// event ordering and without a second `checkpoint_get` round trip. The
     /// value is runtime-owned — a client never supplies or derives it — and
-    /// it is exactly [`RuntimeClientAttempt::model`]
-    /// ([`super::snapshot::RuntimeClientAttempt`]) of the same attempt.
+    /// it is exactly `model` on [`RuntimeClientAttempt`](super::snapshot::RuntimeClientAttempt) of the same attempt.
     ///
     /// It is deliberately **not** the session's desired model: while this
     /// attempt runs on model A and the session is switched to model B, this
@@ -444,7 +443,7 @@ pub enum RuntimeClientEvent {
     /// window was full, the eviction that admission caused. A client folds
     /// both mechanically. It never applies a retention rule of its own,
     /// because the bound
-    /// ([`AGENT_STATUS_WINDOW`](super::AGENT_STATUS_WINDOW)) is projection
+    /// ([`AGENT_STATUS_WINDOW`](super::snapshot::AGENT_STATUS_WINDOW)) is projection
     /// policy and is not part of this contract — which is exactly what makes
     /// folding every event through cursor `C` and replacing state from the
     /// authoritative snapshot at cursor `C` produce the same window.

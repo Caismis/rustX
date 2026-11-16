@@ -3,31 +3,105 @@
     "type": "function",
     "function": {
       "name": "read",
-      "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+      "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
       "parameters": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "urn:rustx:invocation",
         "type": "object",
-        "additionalProperties": false,
+        "definitions": {
+          "json-schema:///": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "definitions": {
+              "schema0": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema0"
+                  }
+                ]
+              },
+              "schema1": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema1"
+                  }
+                ]
+              },
+              "schema2": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema2"
+                  }
+                ]
+              },
+              "schema3": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema3"
+                  }
+                ]
+              }
+            },
+            "x-rustx-schema-nodes": {
+              "schema0": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "$ref": "json-schema:///#/definitions/schema1"
+                  },
+                  "offset": {
+                    "$ref": "json-schema:///#/definitions/schema2"
+                  },
+                  "limit": {
+                    "$ref": "json-schema:///#/definitions/schema3"
+                  }
+                },
+                "required": [
+                  "path"
+                ]
+              },
+              "schema1": {
+                "type": "string",
+                "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+              },
+              "schema2": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0,
+                "description": "The 1-based line to start reading from. Zero is normalized to one."
+              },
+              "schema3": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1,
+                "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+              }
+            },
+            "allOf": [
+              {
+                "$ref": "json-schema:///#/definitions/schema0"
+              }
+            ],
+            "$id": "json-schema:///"
+          }
+        },
         "properties": {
-          "path": {
-            "type": "string",
-            "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+          "arguments": {
+            "$ref": "json-schema:///"
           },
-          "offset": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "description": "The 1-based line to start reading from. Zero is normalized to one."
-          },
-          "limit": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1,
-            "description": "An optional positive line limit. When omitted, Read continues until\nits complete-line 2000-line or 50KB boundary."
+          "elevation_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512,
+            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
-          "path"
-        ]
+          "arguments"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -35,24 +109,88 @@
     "type": "function",
     "function": {
       "name": "write",
-      "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+      "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
       "parameters": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "urn:rustx:invocation",
         "type": "object",
-        "additionalProperties": false,
+        "definitions": {
+          "json-schema:///": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "definitions": {
+              "schema0": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema0"
+                  }
+                ]
+              },
+              "schema1": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema1"
+                  }
+                ]
+              },
+              "schema2": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema2"
+                  }
+                ]
+              }
+            },
+            "x-rustx-schema-nodes": {
+              "schema0": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "$ref": "json-schema:///#/definitions/schema1"
+                  },
+                  "content": {
+                    "$ref": "json-schema:///#/definitions/schema2"
+                  }
+                },
+                "required": [
+                  "path",
+                  "content"
+                ]
+              },
+              "schema1": {
+                "type": "string",
+                "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+              },
+              "schema2": {
+                "type": "string",
+                "description": "The complete new UTF-8 content of the file."
+              }
+            },
+            "allOf": [
+              {
+                "$ref": "json-schema:///#/definitions/schema0"
+              }
+            ],
+            "$id": "json-schema:///"
+          }
+        },
         "properties": {
-          "path": {
-            "type": "string",
-            "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+          "arguments": {
+            "$ref": "json-schema:///"
           },
-          "content": {
-            "type": "string",
-            "description": "The complete new UTF-8 content of the file."
+          "elevation_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512,
+            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
-          "path",
-          "content"
-        ]
+          "arguments"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -60,45 +198,139 @@
     "type": "function",
     "function": {
       "name": "edit",
-      "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+      "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
       "parameters": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "urn:rustx:invocation",
         "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "path": {
-            "type": "string",
-            "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
-          },
-          "edits": {
-            "type": "array",
-            "items": {
-              "description": "One text replacement of an [`EditInput`].",
-              "type": "object",
-              "properties": {
-                "oldText": {
-                  "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
-                  "type": "string",
-                  "minLength": 1
-                },
-                "newText": {
-                  "description": "The replacement text.",
-                  "type": "string"
-                }
+        "definitions": {
+          "json-schema:///": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "definitions": {
+              "schema0": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema0"
+                  }
+                ]
               },
-              "additionalProperties": false,
-              "required": [
-                "oldText",
-                "newText"
-              ]
+              "schema1": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema1"
+                  }
+                ]
+              },
+              "schema2": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema2"
+                  }
+                ]
+              },
+              "schema3": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema3"
+                  }
+                ]
+              },
+              "schema4": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema4"
+                  }
+                ]
+              },
+              "schema5": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema5"
+                  }
+                ]
+              }
             },
-            "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
-            "minItems": 1
+            "x-rustx-schema-nodes": {
+              "schema0": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "path": {
+                    "$ref": "json-schema:///#/definitions/schema1"
+                  },
+                  "edits": {
+                    "$ref": "json-schema:///#/definitions/schema2"
+                  }
+                },
+                "required": [
+                  "path",
+                  "edits"
+                ]
+              },
+              "schema1": {
+                "type": "string",
+                "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+              },
+              "schema2": {
+                "type": "array",
+                "items": {
+                  "$ref": "json-schema:///#/definitions/schema3"
+                },
+                "description": "Replacements matched against one original file snapshot and committed\ntogether as one change.",
+                "minItems": 1
+              },
+              "schema3": {
+                "description": "One text replacement of an [`EditInput`].",
+                "type": "object",
+                "properties": {
+                  "oldText": {
+                    "$ref": "json-schema:///#/definitions/schema4"
+                  },
+                  "newText": {
+                    "$ref": "json-schema:///#/definitions/schema5"
+                  }
+                },
+                "additionalProperties": false,
+                "required": [
+                  "oldText",
+                  "newText"
+                ]
+              },
+              "schema4": {
+                "description": "The source text to replace. Exact matching is preferred; when exact\nmatching fails, the executor applies its documented NFKC-based fuzzy\nnormalization without guessing between ambiguous candidates.",
+                "type": "string",
+                "minLength": 1
+              },
+              "schema5": {
+                "description": "The replacement text.",
+                "type": "string"
+              }
+            },
+            "allOf": [
+              {
+                "$ref": "json-schema:///#/definitions/schema0"
+              }
+            ],
+            "$id": "json-schema:///"
+          }
+        },
+        "properties": {
+          "arguments": {
+            "$ref": "json-schema:///"
+          },
+          "elevation_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512,
+            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
-          "path",
-          "edits"
-        ]
+          "arguments"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -106,29 +338,103 @@
     "type": "function",
     "function": {
       "name": "glob",
-      "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.",
+      "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
       "parameters": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "urn:rustx:invocation",
         "type": "object",
-        "additionalProperties": false,
+        "definitions": {
+          "json-schema:///": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "definitions": {
+              "schema0": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema0"
+                  }
+                ]
+              },
+              "schema1": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema1"
+                  }
+                ]
+              },
+              "schema2": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema2"
+                  }
+                ]
+              },
+              "schema3": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema3"
+                  }
+                ]
+              }
+            },
+            "x-rustx-schema-nodes": {
+              "schema0": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "$ref": "json-schema:///#/definitions/schema1"
+                  },
+                  "path": {
+                    "$ref": "json-schema:///#/definitions/schema2"
+                  },
+                  "limit": {
+                    "$ref": "json-schema:///#/definitions/schema3"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              },
+              "schema1": {
+                "type": "string",
+                "description": "The glob pattern, matched against paths relative to the search root."
+              },
+              "schema2": {
+                "type": "string",
+                "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
+              },
+              "schema3": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1,
+                "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+              }
+            },
+            "allOf": [
+              {
+                "$ref": "json-schema:///#/definitions/schema0"
+              }
+            ],
+            "$id": "json-schema:///"
+          }
+        },
         "properties": {
-          "pattern": {
-            "type": "string",
-            "description": "The glob pattern, matched against paths relative to the search root."
+          "arguments": {
+            "$ref": "json-schema:///"
           },
-          "path": {
-            "type": "string",
-            "description": "An optional relative or absolute directory search root. Omit it to\nsearch the execution cwd."
-          },
-          "limit": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1,
-            "description": "The maximum number of results to return. Defaults to 1000; larger\nvalues are accepted and remain bounded by the tool's byte budget."
+          "elevation_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512,
+            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
-          "pattern"
-        ]
+          "arguments"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -136,48 +442,162 @@
     "type": "function",
     "function": {
       "name": "grep",
-      "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.",
+      "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
       "parameters": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "urn:rustx:invocation",
         "type": "object",
-        "additionalProperties": false,
+        "definitions": {
+          "json-schema:///": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "definitions": {
+              "schema0": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema0"
+                  }
+                ]
+              },
+              "schema1": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema1"
+                  }
+                ]
+              },
+              "schema2": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema2"
+                  }
+                ]
+              },
+              "schema3": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema3"
+                  }
+                ]
+              },
+              "schema4": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema4"
+                  }
+                ]
+              },
+              "schema5": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema5"
+                  }
+                ]
+              },
+              "schema6": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema6"
+                  }
+                ]
+              },
+              "schema7": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema7"
+                  }
+                ]
+              }
+            },
+            "x-rustx-schema-nodes": {
+              "schema0": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "pattern": {
+                    "$ref": "json-schema:///#/definitions/schema1"
+                  },
+                  "path": {
+                    "$ref": "json-schema:///#/definitions/schema2"
+                  },
+                  "glob": {
+                    "$ref": "json-schema:///#/definitions/schema3"
+                  },
+                  "ignoreCase": {
+                    "$ref": "json-schema:///#/definitions/schema4"
+                  },
+                  "literal": {
+                    "$ref": "json-schema:///#/definitions/schema5"
+                  },
+                  "context": {
+                    "$ref": "json-schema:///#/definitions/schema6"
+                  },
+                  "limit": {
+                    "$ref": "json-schema:///#/definitions/schema7"
+                  }
+                },
+                "required": [
+                  "pattern"
+                ]
+              },
+              "schema1": {
+                "type": "string",
+                "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+              },
+              "schema2": {
+                "type": "string",
+                "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
+              },
+              "schema3": {
+                "type": "string",
+                "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
+              },
+              "schema4": {
+                "type": "boolean",
+                "description": "Whether to match case-insensitively."
+              },
+              "schema5": {
+                "type": "boolean",
+                "description": "Whether to search for literal text instead of a regular expression."
+              },
+              "schema6": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0,
+                "description": "How many lines of surrounding context to return on each side.",
+                "maximum": 20
+              },
+              "schema7": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1,
+                "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+              }
+            },
+            "allOf": [
+              {
+                "$ref": "json-schema:///#/definitions/schema0"
+              }
+            ],
+            "$id": "json-schema:///"
+          }
+        },
         "properties": {
-          "pattern": {
-            "type": "string",
-            "description": "The pattern to search for. A regular expression unless `literal` is\ntrue."
+          "arguments": {
+            "$ref": "json-schema:///"
           },
-          "path": {
-            "type": "string",
-            "description": "An optional relative or absolute directory/file search root. Omit it\nto search the execution cwd."
-          },
-          "glob": {
-            "type": "string",
-            "description": "A glob restricting which files are searched, matched against paths\nrelative to the search root."
-          },
-          "ignoreCase": {
-            "type": "boolean",
-            "description": "Whether to match case-insensitively."
-          },
-          "literal": {
-            "type": "boolean",
-            "description": "Whether to search for literal text instead of a regular expression."
-          },
-          "context": {
-            "type": "integer",
-            "format": "uint32",
-            "minimum": 0,
-            "description": "How many lines of surrounding context to return on each side.",
-            "maximum": 20
-          },
-          "limit": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1,
-            "description": "The maximum number of matching lines to return. Defaults to 100.\nLarger values are accepted and are bounded by the tool's finite\ncontent budget rather than by a schema maximum."
+          "elevation_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512,
+            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
-          "pattern"
-        ]
+          "arguments"
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -185,27 +605,100 @@
     "type": "function",
     "function": {
       "name": "bash",
-      "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.\n\nExecution ownership: every call to this tool must include the top-level \"execution_mode\" field, set to \"foreground\" when the agent needs this call's terminal result before it can continue, or \"background\" when the work should keep running independently while the agent proceeds.",
+      "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.\n\nExecution ownership: every call to this tool must include the top-level \"execution_mode\" field, set to \"foreground\" when the agent needs this call's terminal result before it can continue, or \"background\" when the work should keep running independently while the agent proceeds.",
       "parameters": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "urn:rustx:invocation",
         "type": "object",
-        "additionalProperties": false,
+        "definitions": {
+          "json-schema:///": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "definitions": {
+              "schema0": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema0"
+                  }
+                ]
+              },
+              "schema1": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema1"
+                  }
+                ]
+              },
+              "schema2": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema2"
+                  }
+                ]
+              },
+              "schema3": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema3"
+                  }
+                ]
+              }
+            },
+            "x-rustx-schema-nodes": {
+              "schema0": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "command": {
+                    "$ref": "json-schema:///#/definitions/schema1"
+                  },
+                  "description": {
+                    "$ref": "json-schema:///#/definitions/schema2"
+                  },
+                  "timeout": {
+                    "$ref": "json-schema:///#/definitions/schema3"
+                  }
+                },
+                "required": [
+                  "command"
+                ]
+              },
+              "schema1": {
+                "type": "string",
+                "description": "The command handed to one `/bin/bash -c` invocation.",
+                "minLength": 1
+              },
+              "schema2": {
+                "type": "string",
+                "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
+                "minLength": 1,
+                "maxLength": 160
+              },
+              "schema3": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 1,
+                "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+              }
+            },
+            "allOf": [
+              {
+                "$ref": "json-schema:///#/definitions/schema0"
+              }
+            ],
+            "$id": "json-schema:///"
+          }
+        },
         "properties": {
-          "command": {
-            "type": "string",
-            "description": "The command handed to one `/bin/bash -c` invocation.",
-            "minLength": 1
+          "arguments": {
+            "$ref": "json-schema:///"
           },
-          "description": {
-            "type": "string",
-            "description": "A concise, active-voice explanation of why this command is being run,\nshown beside Bash in the UI. Supply description before command, e.g.\n\"Check installed spreadsheet libraries\" or \"Run the UI regression tests\".\nOne to 160 Unicode scalar values; whitespace-only values are rejected.\nPresentation only, never execution or approval authority.",
-            "minLength": 1,
-            "maxLength": 160
-          },
-          "timeout": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1,
-            "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+          "elevation_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512,
+            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           },
           "execution_mode": {
             "type": "string",
@@ -217,9 +710,10 @@
           }
         },
         "required": [
-          "command",
+          "arguments",
           "execution_mode"
-        ]
+        ],
+        "additionalProperties": false
       }
     }
   },
@@ -227,150 +721,464 @@
     "type": "function",
     "function": {
       "name": "todo",
-      "description": "Track multi-step work as a visible task list the user can see. Open a list before starting anything that takes several steps, and keep it current as you work: create one task per discrete step, mark exactly one task in_progress at a time, and mark a task completed immediately when it is done rather than in batches at the end. Never complete a task whose tests fail or whose work is unfinished \u2014 leave it in_progress and add a task for the remaining work. Change a task's status with {\"action\": \"update\", \"id\": N, \"status\": \"...\"}. Use blocked_by/add_blocked_by when one task genuinely cannot start before another finishes. Skip the list entirely for single-step work \u2014 it is overhead there. Every reply contains the complete list, so a list action is only needed to re-read it.",
+      "description": "Track multi-step work as a visible task list the user can see. Open a list before starting anything that takes several steps, and keep it current as you work: create one task per discrete step, mark exactly one task in_progress at a time, and mark a task completed immediately when it is done rather than in batches at the end. Never complete a task whose tests fail or whose work is unfinished — leave it in_progress and add a task for the remaining work. Change a task's status with {\"action\": \"update\", \"id\": N, \"status\": \"...\"}. Use blocked_by/add_blocked_by when one task genuinely cannot start before another finishes. Skip the list entirely for single-step work — it is overhead there. Every reply contains the complete list, so a list action is only needed to re-read it.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
       "parameters": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "urn:rustx:invocation",
         "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "action": {
-            "oneOf": [
-              {
+        "definitions": {
+          "json-schema:///": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "definitions": {
+              "schema0": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema0"
+                  }
+                ]
+              },
+              "schema1": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema1"
+                  }
+                ]
+              },
+              "schema2": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema2"
+                  }
+                ]
+              },
+              "schema3": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema3"
+                  }
+                ]
+              },
+              "schema4": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema4"
+                  }
+                ]
+              },
+              "schema5": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema5"
+                  }
+                ]
+              },
+              "schema6": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema6"
+                  }
+                ]
+              },
+              "schema7": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema7"
+                  }
+                ]
+              },
+              "schema8": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema8"
+                  }
+                ]
+              },
+              "schema9": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema9"
+                  }
+                ]
+              },
+              "schema10": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema10"
+                  }
+                ]
+              },
+              "schema11": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema11"
+                  }
+                ]
+              },
+              "schema12": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema12"
+                  }
+                ]
+              },
+              "schema13": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema13"
+                  }
+                ]
+              },
+              "schema14": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema14"
+                  }
+                ]
+              },
+              "schema15": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema15"
+                  }
+                ]
+              },
+              "schema16": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema16"
+                  }
+                ]
+              },
+              "schema17": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema17"
+                  }
+                ]
+              },
+              "schema18": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema18"
+                  }
+                ]
+              },
+              "schema19": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema19"
+                  }
+                ]
+              },
+              "schema20": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema20"
+                  }
+                ]
+              },
+              "schema21": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema21"
+                  }
+                ]
+              },
+              "schema22": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema22"
+                  }
+                ]
+              },
+              "schema23": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema23"
+                  }
+                ]
+              },
+              "schema24": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema24"
+                  }
+                ]
+              },
+              "schema25": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema25"
+                  }
+                ]
+              },
+              "schema26": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema26"
+                  }
+                ]
+              },
+              "schema27": {
+                "allOf": [
+                  {
+                    "$ref": "json-schema:///#/x-rustx-schema-nodes/schema27"
+                  }
+                ]
+              }
+            },
+            "x-rustx-schema-nodes": {
+              "schema0": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "$ref": "json-schema:///#/definitions/schema1"
+                  },
+                  "id": {
+                    "$ref": "json-schema:///#/definitions/schema8"
+                  },
+                  "subject": {
+                    "$ref": "json-schema:///#/definitions/schema9"
+                  },
+                  "description": {
+                    "$ref": "json-schema:///#/definitions/schema10"
+                  },
+                  "active_form": {
+                    "$ref": "json-schema:///#/definitions/schema11"
+                  },
+                  "owner": {
+                    "$ref": "json-schema:///#/definitions/schema12"
+                  },
+                  "status": {
+                    "$ref": "json-schema:///#/definitions/schema13"
+                  },
+                  "blocked_by": {
+                    "$ref": "json-schema:///#/definitions/schema20"
+                  },
+                  "add_blocked_by": {
+                    "$ref": "json-schema:///#/definitions/schema22"
+                  },
+                  "remove_blocked_by": {
+                    "$ref": "json-schema:///#/definitions/schema24"
+                  },
+                  "metadata": {
+                    "$ref": "json-schema:///#/definitions/schema26"
+                  },
+                  "include_deleted": {
+                    "$ref": "json-schema:///#/definitions/schema27"
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              },
+              "schema1": {
+                "oneOf": [
+                  {
+                    "$ref": "json-schema:///#/definitions/schema2"
+                  },
+                  {
+                    "$ref": "json-schema:///#/definitions/schema3"
+                  },
+                  {
+                    "$ref": "json-schema:///#/definitions/schema4"
+                  },
+                  {
+                    "$ref": "json-schema:///#/definitions/schema5"
+                  },
+                  {
+                    "$ref": "json-schema:///#/definitions/schema6"
+                  },
+                  {
+                    "$ref": "json-schema:///#/definitions/schema7"
+                  }
+                ],
+                "description": "The operation to perform."
+              },
+              "schema2": {
                 "type": "string",
                 "const": "create",
                 "description": "Add one task in `pending`."
               },
-              {
+              "schema3": {
                 "type": "string",
                 "const": "update",
                 "description": "Change one task's fields, status, or dependencies."
               },
-              {
+              "schema4": {
                 "type": "string",
                 "const": "list",
                 "description": "Show the list."
               },
-              {
+              "schema5": {
                 "type": "string",
                 "const": "get",
                 "description": "Show one task with its dependency edges."
               },
-              {
+              "schema6": {
                 "type": "string",
                 "const": "delete",
                 "description": "Tombstone one task."
               },
-              {
+              "schema7": {
                 "type": "string",
                 "const": "clear",
                 "description": "Drop every task."
-              }
-            ],
-            "description": "The operation to perform."
-          },
-          "id": {
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0,
-            "description": "The task to act on. Required by `update`, `get`, and `delete`."
-          },
-          "subject": {
-            "type": "string",
-            "description": "The imperative one-line subject. Required by `create`.",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "description": {
-            "type": "string",
-            "description": "Optional long-form detail of the task.",
-            "minLength": 1,
-            "maxLength": 4096
-          },
-          "active_form": {
-            "type": "string",
-            "description": "The present-continuous label shown while the task is in progress,\nfor example `writing the parser`.",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "owner": {
-            "type": "string",
-            "description": "Who is doing the task. Free-form.",
-            "minLength": 1,
-            "maxLength": 100
-          },
-          "status": {
-            "anyOf": [
-              {
+              },
+              "schema8": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0,
+                "description": "The task to act on. Required by `update`, `get`, and `delete`."
+              },
+              "schema9": {
+                "type": "string",
+                "description": "The imperative one-line subject. Required by `create`.",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "schema10": {
+                "type": "string",
+                "description": "Optional long-form detail of the task.",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "schema11": {
+                "type": "string",
+                "description": "The present-continuous label shown while the task is in progress,\nfor example `writing the parser`.",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "schema12": {
+                "type": "string",
+                "description": "Who is doing the task. Free-form.",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "schema13": {
+                "anyOf": [
+                  {
+                    "$ref": "json-schema:///#/definitions/schema14"
+                  },
+                  {
+                    "$ref": "json-schema:///#/definitions/schema19"
+                  }
+                ],
+                "description": "On `update`, the requested status. On `list`, the status to filter\nby."
+              },
+              "schema14": {
                 "oneOf": [
                   {
-                    "type": "string",
-                    "const": "pending",
-                    "description": "Queued, not started."
+                    "$ref": "json-schema:///#/definitions/schema15"
                   },
                   {
-                    "type": "string",
-                    "const": "in_progress",
-                    "description": "Being worked on now."
+                    "$ref": "json-schema:///#/definitions/schema16"
                   },
                   {
-                    "type": "string",
-                    "const": "completed",
-                    "description": "Finished."
+                    "$ref": "json-schema:///#/definitions/schema17"
                   },
                   {
-                    "type": "string",
-                    "const": "deleted",
-                    "description": "Tombstoned."
+                    "$ref": "json-schema:///#/definitions/schema18"
                   }
                 ],
                 "description": "The model-facing status spelling of the input contract."
               },
-              {
+              "schema15": {
+                "type": "string",
+                "const": "pending",
+                "description": "Queued, not started."
+              },
+              "schema16": {
+                "type": "string",
+                "const": "in_progress",
+                "description": "Being worked on now."
+              },
+              "schema17": {
+                "type": "string",
+                "const": "completed",
+                "description": "Finished."
+              },
+              "schema18": {
+                "type": "string",
+                "const": "deleted",
+                "description": "Tombstoned."
+              },
+              "schema19": {
                 "type": "null"
+              },
+              "schema20": {
+                "type": "array",
+                "items": {
+                  "$ref": "json-schema:///#/definitions/schema21"
+                },
+                "description": "On `create`, the ids this new task waits on."
+              },
+              "schema21": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "schema22": {
+                "type": "array",
+                "items": {
+                  "$ref": "json-schema:///#/definitions/schema23"
+                },
+                "description": "On `update`, ids to add to this task's dependencies. Additive — send\nonly what changes, never the whole set."
+              },
+              "schema23": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "schema24": {
+                "type": "array",
+                "items": {
+                  "$ref": "json-schema:///#/definitions/schema25"
+                },
+                "description": "On `update`, ids to remove from this task's dependencies. Additive."
+              },
+              "schema25": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "schema26": {
+                "type": "object",
+                "additionalProperties": true,
+                "description": "Free-form metadata. On `update` the record is merged key by key and\na `null` value removes that key."
+              },
+              "schema27": {
+                "type": "boolean",
+                "description": "On `list`, include tombstoned tasks. Omitted means they are hidden.",
+                "default": false
+              }
+            },
+            "allOf": [
+              {
+                "$ref": "json-schema:///#/definitions/schema0"
               }
             ],
-            "description": "On `update`, the requested status. On `list`, the status to filter\nby."
+            "$id": "json-schema:///"
+          }
+        },
+        "properties": {
+          "arguments": {
+            "$ref": "json-schema:///"
           },
-          "blocked_by": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
-            },
-            "description": "On `create`, the ids this new task waits on."
-          },
-          "add_blocked_by": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
-            },
-            "description": "On `update`, ids to add to this task's dependencies. Additive \u2014 send\nonly what changes, never the whole set."
-          },
-          "remove_blocked_by": {
-            "type": "array",
-            "items": {
-              "type": "integer",
-              "format": "uint64",
-              "minimum": 0
-            },
-            "description": "On `update`, ids to remove from this task's dependencies. Additive."
-          },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": true,
-            "description": "Free-form metadata. On `update` the record is merged key by key and\na `null` value removes that key."
-          },
-          "include_deleted": {
-            "type": "boolean",
-            "description": "On `list`, include tombstoned tasks. Omitted means they are hidden.",
-            "default": false
+          "elevation_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "maxLength": 512,
+            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
-          "action"
-        ]
+          "arguments"
+        ],
+        "additionalProperties": false
       }
     }
   }

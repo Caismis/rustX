@@ -27,6 +27,7 @@ async fn resumed_cancellation_before_delegate_is_proven_not_delivered() {
                 &id,
                 "never delivered",
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new(),
             )
             .await
@@ -76,6 +77,7 @@ async fn resumed_delegate_without_acceptance_is_delivery_unknown() {
                 &id,
                 "possibly delivered",
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new(),
             )
             .await
@@ -184,6 +186,7 @@ async fn staged_rollback_uncertainty_survives_prepare_and_durable_admission_roll
             &accepted.child_agent_id,
             "next",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new(),
         )
         .await;
@@ -258,7 +261,8 @@ async fn drain_cancels_reserved_resume_before_preparation() {
         &accepted.child_agent_id,
         "next",
         crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-        crate::runtime::cancellation::CancellationSignal::new(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+        CancellationSignal::new(),
     ));
     // One poll reserves the activation; its owner task has not run yet.
     assert!(futures_util::poll!(&mut resume).is_pending());
@@ -297,7 +301,8 @@ async fn stale_resume_cleanup_cannot_clear_a_newer_reservation() {
         &accepted.child_agent_id,
         "next",
         crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-        crate::runtime::cancellation::CancellationSignal::new(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+        CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut resume).is_pending());
     {
@@ -333,7 +338,8 @@ async fn concurrent_resume_reserves_exactly_one_activation_before_preparation() 
         &accepted.child_agent_id,
         "resume winner",
         crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-        crate::runtime::cancellation::CancellationSignal::new(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+        CancellationSignal::new(),
     ));
     // On this current-thread executor the first poll commits reservation,
     // then parks on its spawned preparation. That task cannot run until
@@ -346,6 +352,7 @@ async fn concurrent_resume_reserves_exactly_one_activation_before_preparation() 
                 &accepted.child_agent_id,
                 "resume loser",
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 crate::runtime::cancellation::CancellationSignal::new()
             )
             .await,
@@ -404,6 +411,7 @@ async fn interrupt_settles_only_captured_activation_and_agent_resumes() {
                 &accepted.child_agent_id,
                 "too late",
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 crate::runtime::cancellation::CancellationSignal::new()
             )
             .await,
@@ -436,6 +444,7 @@ async fn interrupt_settles_only_captured_activation_and_agent_resumes() {
             &accepted.child_agent_id,
             "continue",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new()
         ),
         next.accept_delegate(),
@@ -492,6 +501,7 @@ async fn agent_resume_preserves_identity_and_wait_captures_only_one_activation()
             &agent_id,
             "second activation",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new()
         ),
         second.accept_delegate(),

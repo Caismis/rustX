@@ -164,7 +164,7 @@ async fn detach_then_shutdown(child: &mut Child) {
     terminate(child);
 }
 
-const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":79,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
+const INITIALIZE: &str = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocol_version":80,"client":{"name":"boundary","version":"1"},"presentation":{"images":false,"questionnaires":false,"reviews":false}}}"#;
 
 #[tokio::test]
 async fn app_server_stdio_real_process_shared_conformance() {
@@ -234,9 +234,9 @@ async fn app_server_websocket_authentication_framing_and_protocol_errors() {
         let old_offer = format!("rustx.app-server.v53, rustx-token.{}", driver::TOKEN);
         for offer in [
             None,
-            Some("rustx.app-server.v79"),
+            Some("rustx.app-server.v80"),
             Some(old_offer.as_str()),
-            Some("rustx.app-server.v79, rustx-token.wrong"),
+            Some("rustx.app-server.v80, rustx-token.wrong"),
         ] {
             let mut request = url.as_str().into_client_request().unwrap();
             if let Some(offer) = offer {
@@ -403,7 +403,7 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
             detach_then_shutdown(&mut child).await;
             let output = child.wait_with_output().await.unwrap();
             assert!(!output.status.success());
-            assert!(output.stdout.is_empty());
+            assert_eq!(output.stdout, [] as [u8; 0]);
         }
     })
     .await;
@@ -440,7 +440,7 @@ async fn app_server_bootstrap_fails_before_readiness_and_owner_may_kill_stdio_ch
                 }
                 let output = command.output().await.unwrap();
                 assert!(!output.status.success());
-                assert!(output.stdout.is_empty());
+                assert_eq!(output.stdout, [] as [u8; 0]);
                 assert!(
                     !String::from_utf8(output.stderr)
                         .unwrap()
@@ -573,7 +573,7 @@ async fn app_server_explicit_user_config_fail_before_readiness() {
                 }
                 let output = command.output().await.unwrap();
                 assert!(!output.status.success());
-                assert!(output.stdout.is_empty());
+                assert_eq!(output.stdout, [] as [u8; 0]);
                 let error = String::from_utf8(output.stderr).unwrap();
                 assert!(!error.contains("listening"));
                 assert!(!error.contains("secret-sentinel"));
@@ -662,7 +662,7 @@ async fn attach(
     };
     assert_eq!(following, target);
     assert_eq!(after_cursor, checkpoint.cursor);
-    assert!(!registration_id.is_empty());
+    assert_ne!(registration_id, "");
     target
 }
 
@@ -830,7 +830,7 @@ async fn driver_fails_pending_requests_with_the_transport_cause() {
                     |_: &Upgrade, mut response: Response| {
                         response.headers_mut().insert(
                             "sec-websocket-protocol",
-                            "rustx.app-server.v79".parse().unwrap(),
+                            "rustx.app-server.v80".parse().unwrap(),
                         );
                         Ok(response)
                     },
@@ -1006,7 +1006,7 @@ async fn model_value(
         assert_eq!(chunk.cut, page.read_cut);
         assert_eq!(chunk.domain, page.domain);
         assert_eq!(chunk.item_offset, item_offset);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,
@@ -1252,11 +1252,9 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             1
         );
         assert!(!history.contains("B answered"));
-        assert!(
-            a_done["pending_interactions"]
-                .as_array()
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            a_done["pending_interactions"].as_array().unwrap(),
+            &Vec::<serde_json::Value>::new()
         );
         assert!(!a_done["transcript"].to_string().contains("cancelled"));
         assert_eq!(provider.requests().await.len(), 2, "no transport retry");
@@ -1433,7 +1431,13 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let authored = config.join("rustx.toml");
             let mut source: toml::Value = toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
             source["agent"].as_table_mut().unwrap().insert("skills".into(), "all".into());
-            source.as_table_mut().unwrap().insert("native_tools".into(), toml::Value::try_from(serde_json::json!({"bash": {"approval": "never"}})).unwrap());
+            // Host isolation / crash recovery is not a permission-mode test.
+            // Full Access admits write/bash so the fixture reaches process
+            // death and cold recovery without Ask stalls under Plan.
+            source.as_table_mut().unwrap().insert(
+                "approval_mode".into(),
+                toml::Value::String("full_access".into()),
+            );
             std::fs::write(&authored, toml::to_string_pretty(&source).unwrap()).unwrap();
             let mut text = std::fs::read_to_string(&authored).unwrap();
             write!(text, "\n[environment]\nRUSTX_HOST_MARKER = \"{identity}\"\n").unwrap();
@@ -1461,7 +1465,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let other = 1 - index;
             let list = result(client, Method::SessionList { query: Some(format!("user-{}-private", users[other].0)), offset: 0, limit: 32 }).await;
             let MethodResult::Sessions { sessions, .. } = list else { panic!("list") };
-            assert!(sessions.is_empty());
+            assert_eq!(sessions, [] as [rustx::app_server::thread_status::SessionSummary; 0]);
             let Response::Failure(failure) = rpc(client, 100, Method::SessionRead { session_id: targets[other].session_id.clone() }).await else { panic!("foreign Session must be absent") };
             assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: targets[other].session_id.clone() }));
         }
@@ -1491,7 +1495,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             assert!(!requests[0]["body"].to_string().contains(if *identity == "a" { "host-b-only" } else { "host-a-only" }));
             assert_eq!(std::fs::read(user.root.path().join("a/host-effect")).unwrap(), b"x");
             let projected = checkpoint_state(&clients[index], &targets[index]).await;
-            assert!(projected["messages"].to_string().contains(&format!("{identity}:unset")));
+            assert!(projected["messages"].to_string().contains(&format!("{identity}:fake-{identity}")));
             assert!(projected["messages"].to_string().contains(user.root.path().join("a").to_str().unwrap()));
         }
         let mut selections = Vec::new();
@@ -1550,7 +1554,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
         let cold = attach(&recovered, targets[1].session_id.clone(), 3).await;
         let after = checkpoint_state(&recovered, &cold).await;
         assert_eq!(after["model"]["configured"], serde_json::to_value(&selections[1]).unwrap(), "the active selection was durable before the process crash");
-        assert!(after["messages"].to_string().contains("b:unset"));
+        assert!(after["messages"].to_string().contains("b:fake-b"));
         assert!(!after["messages"].to_string().contains("result-b"));
         assert_eq!(std::fs::read(users[1].1.root.path().join("a/host-effect")).unwrap(), b"x");
         assert_eq!(pb.requests().await.len(), 2);
@@ -1631,7 +1635,7 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
             .unwrap()
             .read_to_string(&mut auxiliary_audit)
             .unwrap();
-        assert!(auxiliary_audit.is_empty());
+        assert_eq!(auxiliary_audit, "");
         client.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
@@ -1900,7 +1904,7 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
             before,
             "loading an unavailable selection persisted a replacement"
         );
-        let Response::Success(success) = rpc(
+        let model_set = rpc(
             &client,
             5,
             Method::ModelSet {
@@ -1911,9 +1915,9 @@ async fn app_server_retired_persisted_model_attaches_unavailable_without_rewriti
                 )),
             },
         )
-        .await
-        else {
-            panic!("model")
+        .await;
+        let Response::Success(success) = model_set else {
+            panic!("model set failed: {model_set:?}")
         };
         assert!(matches!(success.result, MethodResult::ModelSet { .. }));
         let MethodResult::DomainPage { page } = result(
@@ -1976,7 +1980,7 @@ async fn app_server_ordinary_clients_have_equal_delivery_eligibility() {
             driver::try_socket(
                 &url,
                 &format!(
-                    "rustx.app-server.v79, {}, rustx-delivery-access.obsolete",
+                    "rustx.app-server.v80, {}, rustx-delivery-access.obsolete",
                     driver::credential_offer(driver::TOKEN)
                 )
             )
@@ -2257,7 +2261,7 @@ async fn app_server_startup_repairs_the_user_source_before_process_policy() {
         assert_eq!(
             receipt.changes,
             vec![
-                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 11 },
+                ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
                 ConfigRepairChange::RemovedField { object_path: String::new() },
                 ConfigRepairChange::RemovedField {
                     object_path: "app_server".into()
@@ -2316,7 +2320,7 @@ async fn app_server_refuses_an_explicit_config_named_like_writer_metadata() {
             .await
             .unwrap();
         assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout, [] as [u8; 0]);
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("reserves for writer metadata"), "{stderr}");
         assert!(std::fs::symlink_metadata(&reserved).unwrap().is_file());
@@ -2644,5 +2648,118 @@ async fn auxiliary_classification_real_stdio_and_websocket_preserve_primary_and_
             provider.finish().await;
         }
     }))
+    .await;
+}
+
+async fn python_preparation_event(
+    listener: &tokio::net::UnixListener,
+) -> (tokio::net::UnixStream, serde_json::Value) {
+    let (stream, _) = listener.accept().await.unwrap();
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line).await.unwrap();
+    (reader.into_inner(), serde_json::from_str(&line).unwrap())
+}
+
+#[tokio::test]
+async fn workspace_python_survives_stdio_eof_and_joins_on_sigterm() {
+    bounded(async {
+        use std::os::unix::fs::PermissionsExt;
+        use tokio::io::AsyncReadExt;
+        let f = Fixture::new().await;
+        let gate_dir = tempfile::tempdir_in("/tmp").unwrap();
+        let socket = gate_dir.path().join("gate");
+        let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+        let bin = f.root.path().join("host-bin");
+        std::fs::create_dir(&bin).unwrap();
+        let uv = bin.join("uv");
+        std::fs::write(
+            &uv,
+            r"#!/usr/bin/python3
+import json, os, socket, subprocess, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(os.environ['UV_TEST_GATE'])
+if sys.argv[1] == '--version':
+    s.sendall((json.dumps(['version', os.getcwd(), os.getpid()]) + '\n').encode())
+    if s.recv(1) != b'1':
+        sys.exit(2)
+    print('uv 0.10.2')
+else:
+    subprocess.run(['/usr/bin/python3', '-m', 'venv', '--without-pip', sys.argv[-1]], check=True)
+    s.sendall((json.dumps(['created', os.getcwd(), os.getpid()]) + '\n').encode())
+",
+        )
+        .unwrap();
+        std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut child = f
+            .command("stdio")
+            .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+            .env("UV_TEST_GATE", &socket)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        for cwd in ["a", "b"] {
+            result(
+                &client,
+                rustx::app_server::protocol::Method::SessionCreate {
+                    dynamic_tools: Vec::new(),
+                    submission: None,
+                    settings: SessionPersistentState::from_input(&SessionConfigInput::new(
+                        f.root.path().join(cwd),
+                    )),
+                },
+            )
+            .await;
+        }
+        let mut versions = std::collections::BTreeMap::new();
+        for _ in 0..2 {
+            let (stream, event) = python_preparation_event(&listener).await;
+            assert_eq!(event[0], "version");
+            versions.insert(
+                event[1].as_str().unwrap().to_owned(),
+                (stream, event[2].as_i64().unwrap()),
+            );
+        }
+        client.close_output().await;
+        let mut diagnostics = BufReader::new(child.stderr.take().unwrap()).lines();
+        loop {
+            if diagnostics
+                .next_line()
+                .await
+                .unwrap()
+                .unwrap()
+                .contains("stdio detached")
+            {
+                break;
+            }
+        }
+        let a = f.root.path().join("a").display().to_string();
+        let b = f.root.path().join("b").display().to_string();
+        let (mut first, _) = versions.remove(&a).unwrap();
+        let (mut pending, pending_pid) = versions.remove(&b).unwrap();
+        first
+            .write_all(b"1")
+            .await
+            .expect("EOF did not cancel preparation");
+        let (_stream, event) = python_preparation_event(&listener).await;
+        assert_eq!(event[0], "created");
+        assert_eq!(event[1], a);
+        assert!(f.root.path().join("a/.venv/pyvenv.cfg").is_file());
+        assert!(child.try_wait().unwrap().is_none());
+        terminate(&child);
+        assert_eq!(
+            pending.read(&mut [0u8; 1]).await.unwrap(),
+            0,
+            "SIGTERM closes the held uv only after cancellation"
+        );
+        assert!(child.wait().await.unwrap().success());
+        assert_eq!(
+            kill(Pid::from_raw(i32::try_from(pending_pid).unwrap()), None),
+            Err(nix::errno::Errno::ESRCH),
+            "shutdown joined the uv process"
+        );
+        client.close().await;
+    })
     .await;
 }

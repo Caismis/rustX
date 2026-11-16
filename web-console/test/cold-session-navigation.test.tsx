@@ -26,7 +26,7 @@ async function fixture() {
   const source = snapshot('A'); source.transcript = { inherited_through: '0', entries: [] }; source.attempt = { attempt_id: 'running-A', phase: { type: 'running' }, turn: 1 };
   server.snapshots.set('A', source);
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   const ui = await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
   const editor = () => ui.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;
   await waitFor(() => expect(editor().disabled).toBe(false));

@@ -8,7 +8,7 @@ import { EXECUTABLES, INSTALLED_MANIFEST, buildOverrides, check, fileErrors, ide
 import { assign, cases, inventoryOf, playwrightList, verify, weightsOf, type Inventory, type ShardIdentity, type ShardRun } from '../scripts/browser-shards.ts';
 
 const identity: Identity = {
-  commit: 'a'.repeat(40), platform: 'linux', arch: 'x64', rust: '1.98.1',
+  commit: 'a'.repeat(40), platform: 'linux', arch: 'x64', rust: '1.100.0',
   cargo: { profile: 'dev', command: 'cargo build --bins --example document_artifact_fixture --locked', features: 'default', debuginfo: 'stripped' }, build: 'repository-defaults',
   node: { version: 'v24.19.0', abi: '137' }, pnpm: '11.13.1', playwright: '1.63.0', sources: { 'Cargo.lock': 'c'.repeat(64) },
 };
@@ -35,6 +35,18 @@ describe('sharded browser coverage', () => {
     expect(coverage.errors).toEqual([]);
     expect(coverage).toMatchObject({ total: 3, passed: 2, skipped: ['title c'] });
     expect(coverage.shards.map(({ index, tests }) => [index, tests])).toEqual([[1, 1], [2, 2]]);
+  });
+  it('FULL covers all discovered tests exactly once in three shards and requires the third report, including intentional skips', () => {
+    const three = { ...complete, shards: [['first.spec.ts'], ['second.spec.ts'], ['third.spec.ts']] };
+    const runs = [shard(1, report({ id: 'a' }), { total: 3 }), shard(2, report({ id: 'b' }), { total: 3 }), shard(3, report(skippedC), { total: 3 })];
+    const coverage = verify(three, runs, three.shards.length);
+    expect(coverage.errors).toEqual([]);
+    expect(coverage).toMatchObject({ total: 3, passed: 2, skipped: ['title c'] });
+    expect(coverage.shards.map(({ index, tests }) => [index, tests])).toEqual([[1, 1], [2, 1], [3, 1]]);
+    expect(verify(three, runs.slice(0, 2), three.shards.length).errors).toEqual([
+      'shard 3/3: missing its report', 'title c: never executed by any shard', 'shard 3/3: executed no test',
+    ]);
+    expect(verify(three, [...runs, runs[2]], three.shards.length).errors).toEqual(expect.arrayContaining(['shard 3/3: reported more than once']));
   });
   it('fails when a shard or its report is missing', () => {
     expect(verify(complete, [passing[0]], 2).errors).toEqual(['shard 2/2: missing its report', 'title b: never executed by any shard', 'title c: never executed by any shard', 'shard 2/2: executed no test']);
@@ -87,8 +99,10 @@ describe('browser selections', () => {
   const discovered = [found('smoke.spec.ts', 'boots', ['@smoke']), found('chat.spec.ts', 'sends'), found('chat.spec.ts', 'settles'), found('shell.spec.ts', 'frame'), found('other.spec.ts', 'x'),
     found('retry-presentation.spec.ts', 'en light 1440', ['@presentation']), found('retry-presentation.spec.ts', 'zh dark 390', ['@presentation'])];
   const identityOf = { commit: identity.commit, prepared: 'p' };
-  it('FULL selects every discovered test and splits whole files over two shards', () => {
-    const full = inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2], specs: [], presentation: false }, ['shell.spec.ts'], {});
+  it('FULL selects every discovered test and splits whole files over three shards', () => {
+    const full = inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2, 3], specs: [], presentation: false }, ['shell.spec.ts'], {});
+    expect(full.shards).toHaveLength(3);
+    expect(full.shards.every(files => files.length > 0)).toBe(true);
     expect(full.tests).toHaveLength(discovered.length);
     expect(full.discovered).toBe(discovered.length);
     expect(full.shards.flat().sort()).toEqual(['chat.spec.ts', 'other.spec.ts', 'retry-presentation.spec.ts', 'shell.spec.ts', 'smoke.spec.ts']);
@@ -130,7 +144,7 @@ describe('presentation contracts in the discovered suite', () => {
   });
   it('keeps the mandatory smoke tests in every FAST selection and every test in FULL', () => {
     for (const presentation of [false, true]) expect(inventoryOf(identityOf, discovered, { selection: 'fast', shards: [1], specs: [], presentation }, [], {}).tests.some(test => test.smoke)).toBe(true);
-    expect(inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2], specs: [], presentation: false }, [], {}).tests).toHaveLength(discovered.length);
+    expect(inventoryOf(identityOf, discovered, { selection: 'full', shards: [1, 2, 3], specs: [], presentation: false }, [], {}).tests).toHaveLength(discovered.length);
   });
 });
 
@@ -206,7 +220,7 @@ describe('prepared browser inputs', () => {
     expect(identityErrors({ ...identity, platform: 'darwin', arch: 'arm64' }, identity)).toEqual(['identity.platform: prepared "darwin", required "linux"', 'identity.arch: prepared "arm64", required "x64"']);
     expect(identityErrors({ ...identity, cargo: { ...identity.cargo, features: 'all' as 'default' }, node: { ...identity.node, abi: '127' } }, identity)).toEqual(['identity.cargo.features: prepared "all", required "default"', 'identity.node.abi: prepared "127", required "137"']);
     const { stage } = staged();
-    expect(() => install(stage, directory(), { ...identity, rust: '1.99.0' })).toThrow('identity.rust: prepared "1.98.1", required "1.99.0"');
+    expect(() => install(stage, directory(), { ...identity, rust: '1.99.0' })).toThrow('identity.rust: prepared "1.100.0", required "1.99.0"');
   });
   it('refuses inputs built under another build configuration, and never builds under an override', () => {
     expect(identityErrors({ ...identity, build: 'overridden' as 'repository-defaults' }, identity)).toEqual(['identity.build: prepared "overridden", required "repository-defaults"']);

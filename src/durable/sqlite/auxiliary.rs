@@ -2,7 +2,6 @@
 //! index writes, commits, confirmations, and bounded audit reads. Every
 //! helper runs inside the transaction its caller opened; this module root
 //! names the shared vocabulary its children use.
-#![allow(clippy::too_many_lines, clippy::type_complexity)]
 
 use std::collections::BTreeSet;
 

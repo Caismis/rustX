@@ -7,7 +7,7 @@ import { WorkspaceFiles, fileTabView } from './WorkbenchFiles';
 import { WorkbenchFileNavigator } from './WorkbenchNavigator';
 import { viewersForPath } from './workbench-documents/definitions';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
-import { IconPanelLeftOutline16, IconChevronDownOutline14, IconAgentPresetOutline16, IconClockOutline16 } from '../../presentation/primitives/icons';
+import { IconPanelLeftOutline16, IconChevronDownOutline14, IconAgentPresetOutline16, IconClockOutline16, IconQuestionOutline14 } from '../../presentation/primitives/icons';
 import { Menu } from '../../presentation/primitives/Menu';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { observeComposition } from '../../presentation/primitives/keyboard-composition';
@@ -28,9 +28,9 @@ import { ChangesReview } from './ChangesReview';
 import type { ChangesReviewRequest } from '../changes-review';
 const TerminalView = lazy(() => import('./WorkbenchTerminal'));
 const guideTab = (id: TabId): TabRecord => ({id,kind:'start',contentId:`start:${id}`,title:''});
-export interface WorkbenchHandle { openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void; openChanges(request:ChangesReviewRequest):void; openTask(id: string, title: string): void }
-export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, host, previews, scope, target, active = true, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
-  renderAgent?: (id: string, visible: boolean) => ReactNode; renderTask?: (id: string) => ReactNode; renderTaskTitle?: (id: string, fallback: string) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; active?: boolean; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
+export interface WorkbenchHandle { openSideQuestion(): void; openFile(path: string, line?: number): Promise<boolean>; openAgent(id: string, title: string): void; openChanges(request:ChangesReviewRequest):void; openTask(id: string, title: string): void }
+export function Workbench({ renderSideQuestion, renderAgent, renderTask, renderTaskTitle, fileRef, host, previews, scope, target, active = true, visible, floatingVisible, fullscreen, toggleFullscreen, closePanel }: {
+  renderSideQuestion?: (visible: boolean) => ReactNode; renderAgent?: (id: string, visible: boolean) => ReactNode; renderTask?: (id: string) => ReactNode; renderTaskTitle?: (id: string, fallback: string) => ReactNode; fileRef?: Ref<WorkbenchHandle>; host: ProductHostWorkspaces; previews: WorkbenchPreviewRetention; scope?: WorkspaceAuthorityScope; target?: WorkbenchTarget; active?: boolean; visible: boolean; floatingVisible: boolean; fullscreen: boolean; toggleFullscreen: () => void; closePanel: (resetPresentation?: boolean) => void;
 }) {
   const tx = useTranslation();
   const session = target && 'session_id' in target ? target : undefined;
@@ -109,7 +109,8 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
       if(active && active.id !== opened && active.kind==='start') dock.closeTab(active.id);
     }
   };
-  useImperativeHandle(fileRef, () => ({ openTask: (id, title) => open(dock.activeDockPaneId(), { kind: 'schedule', id, title }), openChanges: request => {
+  const openSideQuestion = (paneId = dock.activeDockPaneId()) => { if (renderSideQuestion) open(paneId, { kind: 'btw', id: 'btw', title: tx('agent:btw.title') }); };
+  useImperativeHandle(fileRef, () => ({ openSideQuestion, openTask: (id, title) => open(dock.activeDockPaneId(), { kind: 'schedule', id, title }), openChanges: request => {
     const id = `changes:${request.target.attachment_id}:${request.attemptId}`;
     reviews.current.set(id, request);
     open(dock.activeDockPaneId(), {kind:'changes',id,title:tx('artifacts:changes.title',{count:request.summary.total})});
@@ -230,25 +231,44 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
     window.addEventListener('keydown',key,true);return()=>{window.removeEventListener('keydown',key,true);composition.dispose();};
   });
   const isMac=/Mac/.test(navigator.platform);
-  const title=(tab:TabRecord)=>tab.kind==='changes'||tab.kind==='subagent'||tab.kind==='schedule'?tab.title:tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
-  const visibleFiles = Object.values(state.tabs).filter(tab => {
+  const title=(tab:TabRecord)=>tab.kind==='btw'?tx('agent:btw.title'):tab.kind==='changes'||tab.kind==='subagent'||tab.kind==='schedule'?tab.title:tab.kind==='file'?tab.title.split('/').at(-1):tab.kind==='terminal'?terminals.find(t=>t.id===tab.contentId)?.shell.split('/').at(-1) ?? tab.title:tx(tab.kind==='start'?'artifacts:workbench.start':'artifacts:workbench.file-tab');
+  // Only this scope's mounted geometry may occupy spare file-body slots.
+  const residency = useRef<{ owner: typeof retained; ids: TabId[] }>({ owner: retained, ids: [] });
+  if (residency.current.owner !== retained) residency.current = { owner: retained, ids: [] };
+  // Selected bodies retain their browsing contexts through collapse and Home.
+  // Actual visibility separately parks geometry without retiring its cached scene.
+  const selectedFiles = Object.values(state.tabs).filter(tab => {
     const pane = findTabPane(state, tab.id);
-    // Collapsing the dock preserves its selected body (notably HTML iframe state).
-    // Primary pages hide interaction separately; selected documents keep their
-    // browsing contexts under the same body cap. Preview mode still retires them.
-    return tab.kind === 'file' && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible || floatingVisible);
+    if (tab.kind !== 'file' || pane.activeTabId !== tab.id) return false;
+    const geometry = (views.get(tab.id)?.mode ?? viewersForPath(tab.title)[0]) === 'geometry';
+    return pane.host === 'float' ? floatingVisible : geometry ? visible && state.expanded : visible || floatingVisible;
   }).sort((left, right) => Number(findTabPane(state, right.id).id === state.activePaneId) - Number(findTabPane(state, left.id).id === state.activePaneId)).slice(0, PREVIEW_POLICY.activeBodies);
+  const selectedFileIds = new Set(selectedFiles.map(tab => tab.id));
+  const visibleFileIds = new Set(selectedFiles.filter(tab => {
+    const pane = findTabPane(state, tab.id);
+    return active && (pane.host === 'float' ? floatingVisible : visible && state.expanded);
+  }).map(tab => tab.id));
+  const hasVisibleSurface = visible || floatingVisible && state.floats.length > 0;
+  const mountedFileIds = new Set([
+    ...selectedFileIds,
+    ...(hasVisibleSurface ? residency.current.ids.filter(id => {
+      const tab = state.tabs[id];
+      return tab?.kind === 'file' && !selectedFileIds.has(id) && (views.get(id)?.mode ?? viewersForPath(tab.title)[0]) === 'geometry';
+    }) : []),
+  ].slice(0, PREVIEW_POLICY.activeBodies));
+  residency.current.ids = [...mountedFileIds];
   const body=(tab:TabRecord)=>{
     const pane=findTabPane(state,tab.id);
     return <div className={css.body}>
-    {tab.kind==='schedule' ? renderTask?.(tab.contentId) : tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={active && pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, active && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
+    {tab.kind==='btw' ? renderSideQuestion?.(active && pane.activeTabId === tab.id && state.activePaneId === pane.id && (pane.host === 'float' ? floatingVisible : visible && state.expanded)) : tab.kind==='schedule' ? renderTask?.(tab.contentId) : tab.kind==='changes' ? (reviews.current.has(tab.contentId) && <ChangesReview request={reviews.current.get(tab.contentId)!} visible={active && pane.activeTabId===tab.id && (pane.host==='float'?floatingVisible:visible)}/>) : tab.kind==='subagent'?renderAgent?.(tab.contentId, active && pane.activeTabId === tab.id && (pane.host === 'float' ? floatingVisible : visible)):tab.kind==='start'? <div className={css.guide}>
         <span className={css.hero}><CompassGlyph size={56}/></span>
+        {renderSideQuestion && <button type="button" className={css.entry} onClick={() => openSideQuestion(pane.id)}><span className={css.entryIcon}><IconQuestionOutline14 size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('agent:btw.title')}</span></span></button>}
         <button type="button" className={css.entry} disabled={!available} aria-keyshortcuts={isMac ? 'Alt+Meta+P' : 'Alt+Control+P'} onClick={() => open(pane.id, { kind: 'files' })}><span className={css.entryIcon}><GuideArtworkFiles size={26}/></span><span className={css.entryText}><span className={css.entryTitle}>{tx('artifacts:workbench.files')}</span><span className={css.entryDescription}>{tx('artifacts:workbench.files-description')}</span></span><ShortcutKeys keys={isMac ? ['⌥', '⌘', 'P'] : ['Alt', 'Ctrl', 'P']}/></button>
         <div className={`${css.entry} ${css.terminalEntry}`}><button type="button" className={css.launch} aria-label={tx('artifacts:workbench.new-terminal')} aria-keyshortcuts="Control+`" disabled={!available || busy || !shell} onClick={() => void create(pane.id)}/><span className={css.entryIcon}><PluginArtworkTerminal size={26}/></span><span className={css.entryText}><span className={css.titleRow}><span className={css.entryTitle}>{tx('artifacts:workbench.new-terminal')}</span><Menu open={menu === pane.id} autoFocus align="end" items={shells.map(s => ({ id: s, label: s.split('/').at(-1)! }))} selectedId={shell} onClose={() => setMenu(undefined)} onSelect={s => { setShell(s); setMenu(undefined); void create(pane.id, s); }} anchor={<button type="button" className={css.shellTrigger} disabled={busy || !shells.length} aria-label={tx('artifacts:workbench.shell')} aria-haspopup="menu" aria-expanded={menu === pane.id} onClick={() => setMenu(menu === pane.id ? undefined : pane.id)}><IconChevronDownOutline14/></button>}/></span><span className={css.entryDescription}>{tx('artifacts:workbench.terminal-description')}</span></span><ShortcutKeys keys={[isMac ? '⌃' : 'Ctrl', '`']}/></div>
-      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={navigatorFor(pane.id).view} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?visibleFiles.some(file => file.id === tab.id) ? <WorkbenchFileNavigator key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} navigator={navigatorFor(pane.id)} onNavigate={path=>open(pane.id,{kind:'file',path},true)} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/> : <p role="status">{tx('artifacts:document.capacity')}</p> :<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
+      </div> :tab.kind==='files'?<WorkspaceFiles call={call} view={navigatorFor(pane.id).view} onOpen={path=>open(pane.id,{kind:'file',path})}/>:tab.kind==='file'?mountedFileIds.has(tab.id) ? <WorkbenchFileNavigator visible={visibleFileIds.has(tab.id)} navigator={navigatorFor(pane.id)} onNavigate={path=>open(pane.id,{kind:'file',path},true)} key={`${tab.id}:${viewFor(tab.id).focusRevision ?? 0}`} onOpen={path=>open(pane.id,{kind:'file',path})} path={tab.title} call={call} view={viewFor(tab.id)}/> : <p role="status">{tx('artifacts:document.capacity')}</p> :<Suspense fallback={<p>{tx('artifacts:workbench.loading')}</p>}><TerminalView id={tab.contentId} call={call}/></Suspense>}
     </div>;
   };
-  const usesWorkspaceTools = Object.values(state.tabs).some(tab => !['subagent','changes','schedule'].includes(tab.kind) && findTabPane(state, tab.id).activeTabId === tab.id);
+  const usesWorkspaceTools = Object.values(state.tabs).some(tab => !['btw','subagent','changes','schedule'].includes(tab.kind) && findTabPane(state, tab.id).activeTabId === tab.id);
   return <div ref={root} className={css.root} hidden={!active || !visible && !floatingVisible} inert={!active} data-workbench>
     {visible&&error&&<p role="alert" className={css.notice}>{error}</p>}
     {visible&&!available&&usesWorkspaceTools&&<p className={css.notice}>{tx('artifacts:workbench.unavailable')}</p>}
@@ -256,8 +276,9 @@ export function Workbench({ renderAgent, renderTask, renderTaskTitle, fileRef, h
       canAddTab={id=>!getPane(state,id).tabs.some(t=>state.tabs[t].kind==='start')}
       canCloseTab={id=>canCloseTab(state,id)} onRoom={fits=>{room.current=fits;}}
       labels={{emptyPane:tx('artifacts:workbench.empty-pane'),splitPane:tx('artifacts:workbench.split'),splitPaneDisabled:tx('artifacts:workbench.split-limit'),splitPaneNarrow:tx('artifacts:workbench.split-room'),splitPaneShortcut:isMac?'Meta+\\':'Control+\\',splitPaneKeys:isMac?['⌘','\\']:['Ctrl','+','\\'],closeTab:tx('artifacts:workbench.close-tab'),closeTabShortcut:isMac?'Alt+Meta+W':'Alt+Control+W',closeTabKeys:isMac?['⌥','⌘','W']:['Ctrl','+','Alt','+','W'],addTab:tx('artifacts:workbench.add-tab'),dockFloat:tx('artifacts:workbench.dock'),closeFloat:tx('artifacts:workbench.close-tab'),dropZone:{center:tx('artifacts:workbench.drop-center'),left:tx('artifacts:workbench.drop-left'),right:tx('artifacts:workbench.drop-right'),top:tx('artifacts:workbench.drop-top'),bottom:tx('artifacts:workbench.drop-bottom')}}}
-      keepMounted={tab=>tab.kind==='subagent'||tab.kind==='schedule'||visibleFiles.some(file=>file.id===tab.id)} renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='schedule'?<IconClockOutline16/>:tab.kind==='subagent'?<IconAgentPresetOutline16/>:tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{tab.kind==='schedule' && renderTaskTitle ? renderTaskTitle(tab.contentId,title(tab)??'') : title(tab)}</span></span>}
+      keepMounted={tab=>tab.kind==='subagent'||tab.kind==='schedule'||mountedFileIds.has(tab.id)} renderTab={body} renderTabTitle={tab=><span className={css.tabTitle}>{tab.kind==='btw'?<IconQuestionOutline14/>:tab.kind==='schedule'?<IconClockOutline16/>:tab.kind==='subagent'?<IconAgentPresetOutline16/>:tab.kind==='start'?<CompassGlyph size={16}/>:tab.kind==='terminal'?<TerminalIcon/>:tab.kind==='files'?<FileTypeIcon kind="folder" size={16}/>:<FileTypeIcon path={tab.title} size={16}/>}<span>{tab.kind==='schedule' && renderTaskTitle ? renderTaskTitle(tab.contentId,title(tab)??'') : title(tab)}</span></span>}
       chrome={<>
+        {renderSideQuestion && <Tooltip label={tx('agent:btw.title')} side="bottom"><button type="button" className={panelCss.iconButton} aria-label={tx('agent:btw.title')} onClick={() => openSideQuestion()}><IconQuestionOutline14/></button></Tooltip>}
         <Tooltip label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} shortcutKeys={isMac?['⌥','⌘','↩']:['Ctrl','+','Alt','+','Enter']} side="bottom" delayMs={500}>
           <button type="button" className={panelCss.iconButton} aria-label={tx(fullscreen?'artifacts:workbench.restore':'artifacts:workbench.fullscreen')} aria-keyshortcuts={isMac?'Alt+Meta+Enter':'Alt+Control+Enter'} data-sidebar-right-mode={fullscreen?'push':'fullscreen'} onClick={toggleFullscreen}>{fullscreen?<ExitFullscreenGlyph/>:<FullscreenGlyph/>}</button>
         </Tooltip>

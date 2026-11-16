@@ -6,12 +6,19 @@ import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openWorkspaceSettings, openSettingsPage, returnHome } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { transitionFacts } from '../../../protocol/app-server/projection';
+import { sameTarget } from '../../../protocol/app-server/attachment-identity';
+import type { Notification, RuntimeClientEvent } from '../../../protocol/app-server/v80';
 
 function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 
 test('Harness New Conversation, permission, model, native process and Models convergence', async ({ page }) => {
   const fixture = await startDogfood('web_harness_convergence');
-  const wire = await wireProbe(page);
+  let observeNotification: ((notification: Notification) => void) | undefined;
+  let observeRetirement: (() => void) | undefined;
+  const wire = await wireProbe(page, {
+    notification: notification => observeNotification?.(notification),
+    retired: () => observeRetirement?.(),
+  });
   let passed = false;
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -101,10 +108,37 @@ test('Harness New Conversation, permission, model, native process and Models con
     wire.holdNext('thread/start');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.held()).toBe(1);
+    const created = wire.responses.find(row => row.method === 'thread/start')!.result.session;
     const named = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
-    try { await named.renameSession(wire.responses.find(row => row.method === 'thread/start')!.result.session.id, 'New session'); }
+    try { await named.renameSession(created.id, 'New session'); }
     finally { await named.shutdown(); }
     wire.releaseHeld();
+    const target = await wire.attachedTarget(created.id);
+    // Creation ACK is not execution settlement. Observe the real browser
+    // target's same Attempt before applying the unchanged rendering deadline.
+    type Settled = Extract<RuntimeClientEvent, { type: 'attempt_settled' }>;
+    const completed = new Promise<Settled>((resolve, reject) => {
+      let attemptId: string | undefined;
+      observeRetirement = () => reject(new Error('Browser transport retired before Attempt settlement.'));
+      observeNotification = notification => {
+        if (notification.method === 'session/closed' && sameTarget(notification.params.target, target)) {
+          reject(new Error('Native target closed before Attempt settlement.'));
+        }
+        if (notification.method !== 'session/event' || !sameTarget(notification.params.target, target)) return;
+        for (const fact of transitionFacts(notification.params.event)) {
+          if (fact.type === 'attempt_started') {
+            if (attemptId !== undefined) reject(new Error('Expected exactly one admitted Attempt.'));
+            attemptId = fact.attempt_id;
+          }
+          if (fact.type === 'attempt_settled' && fact.attempt_id === attemptId) resolve(fact);
+        }
+      };
+      // Install live observation and inspect already forwarded native facts in
+      // the same synchronous turn, including an immediately completed Attempt.
+      for (const notification of wire.notifications) observeNotification(notification as Notification);
+    });
+    try { expect((await completed).outcome).toMatchObject({ type: 'completed', finish_reason: { type: 'stop' } }); }
+    finally { observeNotification = undefined; observeRetirement = undefined; }
     await expect(page.getByRole('heading', { name: 'Workspace ready' })).toBeVisible();
     expect(await residentInput!.evaluate(node => node === document.querySelector('textarea[aria-label="Message"]'))).toBe(true);
     expect(await residentSeat!.evaluate(node => node === document.querySelector('[data-resident-composer]'))).toBe(true);

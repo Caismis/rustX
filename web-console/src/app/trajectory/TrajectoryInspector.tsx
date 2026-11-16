@@ -1,3 +1,4 @@
+import { modelToolCall } from '../../../../protocol/app-server/model-tool-call';
 import {traceInspectionHead} from '../../client/trace';
 import {traceRequestAccepts,sameTraceStep,traceOccurrenceKey,traceFieldKey} from '../../../../protocol/app-server/trace-identity';
 import type { TraceDisplayBlock } from '../../client/trace-content';
@@ -24,7 +25,7 @@ import { recordedToolDetails } from '../../bindings/recorded-tool-details';
  */
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { structuredPatch } from 'diff';
-import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v79';
+import type { TraceArtifact, TraceContentBlock, TraceDetail, TraceJson, TraceRecord, TraceToolDefinition, WorkflowNodeInstance } from '../../../../protocol/app-server/v80';
 import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { JsonTree, type JsonTreeLabels } from '../../presentation/primitives/JsonTree';
 import { IconCheckOutline16, IconChevronRightOutline14, IconCopyOutline16, IconWrapLinesOutline16 } from '../../presentation/primitives/icons';
@@ -388,7 +389,7 @@ function ToolResult({ record, detail, preview = false }: { record: TraceRecord; 
   const error = result.outcome !== 'success';
   const artifacts = [...new Map([...record.attachments, ...result.attachments, ...blockArtifacts(result.blocks)].map(artifact => [artifact.artifact_id, artifact])).values()];
   const imageRead = !error && record.tool?.tool_id === READ_IMAGE_TOOL && artifacts.some(artifact => artifact.image);
-  const args = detail?.arguments?.value;
+  const args = modelToolCall(detail?.arguments?.value)?.arguments;
   const path = args && typeof args === 'object' && 'path' in args && typeof args.path === 'string' ? args.path : undefined;
   const imageName = imageRead ? readImageName(path) ?? tx('tools:tool-card.read-image') : undefined;
   const blocks = imageRead ? result.blocks.filter(block => block.type !== 'text' || block.text.truncated || block.text.text !== READ_IMAGE_RECEIPT) : result.blocks;
@@ -572,7 +573,7 @@ export interface TrajectoryInspectorProps {
   facet: TrajectoryFacet;
   onFacet: (facet: TrajectoryFacet) => void;
   detail?: TraceDetail | undefined;
-  detailPage?:import('../../../../protocol/app-server/v79').CheckpointPage;
+  detailPage?:import('../../../../protocol/app-server/v80').CheckpointPage;
   detailReader?:import('../../client/trace').TraceFieldReader;
   loading?: boolean | undefined;
   stale?: boolean;
@@ -593,6 +594,7 @@ export interface TrajectoryInspectorProps {
   completeHistory: boolean;
   /** Open another loaded record's summary (or a named tab). */
   onOpen: (recordId: string, facet?: TrajectoryFacet) => void;
+  onOpenWorkflowCanvas?: (trigger: HTMLElement | null) => void;
 }
 
 /**
@@ -600,7 +602,7 @@ export interface TrajectoryInspectorProps {
  * @param props - the selected item, its fetched detail and navigation.
  * @returns the details panel contents.
  */
-export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen }: TrajectoryInspectorProps) {
+export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFacet, detail, loading,stale,error,onLoadDetail,onLoadEarlier, onClose, location, records, executions, requestNumbers, completeHistory, onOpen, onOpenWorkflowCanvas }: TrajectoryInspectorProps) {
   const tx = useTranslation();
   const inspection=detailPage?traceInspectionHead(detailPage,item.record.id):undefined;
   const messagesHead=inspection?.content.type==='messages'?inspection.content.page:undefined;
@@ -827,6 +829,7 @@ export function TrajectoryInspector({ detailPage,detailReader,item, facet, onFac
   return <>
     <div className={css.detailsHeader}>
       <div className={css.detailsTitle}>{title}</div>
+      {onOpenWorkflowCanvas && <Button size="sm" onClick={event => onOpenWorkflowCanvas(event.currentTarget)}>{tx('workflows:run-canvas.open')}</Button>}
       <button type="button" className={css.close} aria-label={tx('trajectory:details.close')} onClick={onClose}><span aria-hidden="true">×</span></button>
     </div>
     <div className={css.detailTabs} role="tablist" aria-label={tx('trajectory:details.event')}>

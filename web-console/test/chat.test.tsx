@@ -45,8 +45,8 @@ it('replacement drops stale partial content; incomplete Markdown stays visible',
 it('reasoning, refusal and native Tool identities are readable without fabricated runtime rows', () => {
   const s = snapshot(); s.messages = [{ role: 'assistant', id: 'm', content: [
     { type: 'reasoning', text: 'Reasoning fact' }, { type: 'refusal', text: 'Refusal fact' },
-    { type: 'tool_call', id: 'call-1', tool_id: 'tool', name: 'Same title', arguments: {} },
-    { type: 'tool_call', id: 'call-2', tool_id: 'tool', name: 'Same title', arguments: {} },
+    { type: 'tool_call', id: 'call-1', tool_id: 'tool', name: 'Same title', arguments: { arguments: {} } },
+    { type: 'tool_call', id: 'call-2', tool_id: 'tool', name: 'Same title', arguments: { arguments: {} } },
   ] }];
   s.transcript = { entries: s.messages.map(message => ({ cursor: '1', item: { type: 'message', message } })) };
   const ui = render(<><AgentTranscript snapshot={s} /><RuntimeFacts snapshot={s} /></>);
@@ -58,7 +58,7 @@ it('durable user/assistant order and tool artifact galleries follow only transcr
   const s = snapshot();
   s.transcript = { entries: [
     { cursor: '1', item: { type: 'message', message: { role: 'user', id: 'u', source: 'human', content: [{ type: 'text', text: 'First user' }] } } },
-    { cursor: '2', tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:1},assembly_complete:true, message_id: 'a', block_index: 1, call_id: 'native-call', tool_id: 'image-tool', name: 'image-tool', state: { type: 'settled', arguments: '{}', result: { status: { type: 'success' }, duration_ms: "1", artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } }], item: { type: 'message', message: { role: 'assistant', id: 'a', content: [{ type: 'text', text: 'Second assistant' }, { type: 'tool_call', id: 'native-call', tool_id: 'image-tool', name: 'image-tool', arguments: {} }] } } },
+    { cursor: '2', tool_calls: [{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:'a'},block_index:1},assembly_complete:true, message_id: 'a', block_index: 1, call_id: 'native-call', tool_id: 'image-tool', name: 'image-tool', state: { type: 'settled', arguments: "{\"arguments\":{}}", result: { status: { type: 'success' }, duration_ms: "1", artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } }], item: { type: 'message', message: { role: 'assistant', id: 'a', content: [{ type: 'text', text: 'Second assistant' }, { type: 'tool_call', id: 'native-call', tool_id: 'image-tool', name: 'image-tool', arguments: { arguments: {} } }] } } },
     { cursor: '3', item: { type: 'message', message: { role: 'tool', occurrence: { assistant_message_id: 'a', block_index: 1 }, id: 't', tool_call_id: 'native-call', tool_id: 'image-tool', result: { status: { type: 'success' }, duration_ms: "1", artifacts: [{ artifact_id: 'artifact_1', name: 'tool.png', mime_type: 'image/png' }] } } } },
   ] };
   const ui = render(<AgentTranscript snapshot={s} />);

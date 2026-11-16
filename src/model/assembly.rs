@@ -657,7 +657,7 @@ mod tests {
         };
         assert_eq!(block.text, "hello world");
         assert_eq!(turn.finish_reason, ModelFinishReason::Stop);
-        assert!(turn.tool_calls.is_empty());
+        assert_eq!(turn.tool_calls, [] as [crate::tools::types::ToolCall; 0]);
         assert!(turn.continuation.is_none());
     }
 
@@ -806,7 +806,7 @@ mod tests {
             matches!(&turn.content[0], AssistantContentBlock::Refusal(r) if r.text == "I cannot comply.")
         );
         assert_eq!(turn.finish_reason, ModelFinishReason::Refusal);
-        assert!(turn.tool_calls.is_empty());
+        assert_eq!(turn.tool_calls, [] as [crate::tools::types::ToolCall; 0]);
     }
 
     /// Multiple refusal deltas concatenate into one refusal block.

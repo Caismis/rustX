@@ -3,23 +3,30 @@ import { useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import clsx from 'clsx';
 import type { AppServerClient } from '../../client/app-server';
+import type { ProductHostWorkspaces } from '../../workspaces/host';
+import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useLocale } from '../../locale/react';
 import { Button } from '../../presentation/primitives/Button';
 import { Input } from '../../presentation/primitives/Input';
 import { IconClockOutline16, IconSearchOutline16, IconPlusOutline16, IconCloseOutline16 } from '../../presentation/primitives/icons';
 import { useTaskCatalog, taskKey, taskRef, type TaskRef } from './model';
 import { TaskDetail } from './TaskDetail';
+import { taskCreation } from './creation';
+import { TaskCreateDialog } from './TaskCreateDialog';
 import { useTaskCopy } from './copy';
 import { frequency, displayInstant } from './timing';
 import css from './TaskManager.module.css';
 import extra from './scheduler.module.css';
 
 type Filter = 'enabled' | 'disabled' | 'completed' | 'all';
-export function TaskManagerPage({ client, newTask, openSession }: { client: AppServerClient; newTask: () => void; openSession: (ref: TaskRef) => void }) {
+export function TaskManagerPage({ client, host, authority, openSession }: { client: AppServerClient; host: ProductHostWorkspaces; authority: WorkspaceAuthority; openSession: (ref: TaskRef) => void }) {
   const { model, records, connected, loading, issue } = useTaskCatalog(client), t = useTaskCopy(), locale = useLocale().active;
   useEffect(() => model.watchAll(), [model]);
   const [filter, setFilter] = useState<Filter>('enabled'), [query, setQuery] = useState('');
   const [selected, setSelected] = useState<{ ref: TaskRef; title: string }>();
+  const creation = taskCreation(client, host);
+  const [creating, setCreating] = useState(false);
+  const newTask = () => setCreating(true);
   const [contentMatches, setContentMatches] = useState<{ query: string; keys: ReadonlySet<string> }>();
   const [searching, setSearching] = useState(false), [searchFailed, setSearchFailed] = useState(false);
   const [now, setNow] = useState(Date.now);
@@ -82,5 +89,6 @@ export function TaskManagerPage({ client, newTask, openSession }: { client: AppS
       </ul>
     </div></div></div>
     {selected && <TaskDetail key={selectedKey} client={client} task={selected.ref} title={selected.title} close={() => setSelected(undefined)} openSession={openSession}/>}
+    <TaskCreateDialog client={client} host={host} authority={authority} creation={creation} open={creating} close={() => setCreating(false)} created={(ref, title) => { setCreating(false); setSelected({ ref, title }); void model.refresh(); }}/>
   </section>;
 }

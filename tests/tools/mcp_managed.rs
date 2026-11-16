@@ -1182,8 +1182,6 @@ def ping() -> str:
                 })
                 .into(),
                 execution_policy: rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-                concurrency_policy: rustx::tools::types::ToolConcurrencyPolicy::Sequential,
-                approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
                 replay_policy: rustx::tools::types::ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
             },

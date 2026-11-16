@@ -21,7 +21,7 @@ use crate::runtime::identity::{
 };
 
 /// The ABI version of the native context contribution contract.
-pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 5;
+pub const CONTEXT_COMPATIBILITY_ABI_VERSION: u32 = 6;
 
 /// The finite user-context semantic lanes owned by rustX.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -88,16 +88,19 @@ pub enum SystemSectionLane {
     /// Native capability guidance sections, including the request-time Skill
     /// catalog, rather than conversational User context facts.
     NativeCapabilityGuidance,
+    /// Sparse execution-permission mode reminder (Issue #544).
+    PermissionReminder,
 }
 
 impl SystemSectionLane {
     /// The contract's deterministic total order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::CoreRuntimeIdentity,
         Self::AgentProfile,
         Self::WorkspaceInstructions,
         Self::CertifiedExtension,
         Self::NativeCapabilityGuidance,
+        Self::PermissionReminder,
     ];
 
     /// Stable manifest spelling of one system-section lane.
@@ -109,6 +112,7 @@ impl SystemSectionLane {
             Self::WorkspaceInstructions => "workspace_instructions",
             Self::CertifiedExtension => "certified_extension",
             Self::NativeCapabilityGuidance => "native_capability_guidance",
+            Self::PermissionReminder => "permission_reminder",
         }
     }
 }
@@ -163,6 +167,8 @@ pub struct NativeContextInput {
     pub core_runtime_identity: Option<String>,
     /// Agent profile/persona content for the effective system prompt.
     pub agent_profile: Option<String>,
+    /// Sparse permission-mode reminder for this request, when eligible.
+    pub permission_reminder: Option<String>,
 }
 
 /// The semantic owner a deferred proposal is produced *for*.
@@ -992,7 +998,8 @@ impl ContextAssembly {
                         owner @ (NativeContextContributor::WorkspaceInstructions
                         | NativeContextContributor::SkillGuidance
                         | NativeContextContributor::CoreSystemIdentity
-                        | NativeContextContributor::AgentProfile),
+                        | NativeContextContributor::AgentProfile
+                        | NativeContextContributor::PermissionReminder),
                     ) => Ok(native_generation(*owner)),
                     _ => Err(ContextAssemblyError::InvalidProposal(
                         "accepted context has no authoritative producer generation".to_owned(),
@@ -1172,6 +1179,14 @@ pub(crate) fn native_system_sections(
         sections.push(native_section(
             SystemSectionLane::AgentProfile,
             NativeContextContributor::AgentProfile,
+            text.clone(),
+        ));
+    }
+    if let Some(text) = &native.permission_reminder {
+        validate_text(text, "permission reminder")?;
+        sections.push(native_section(
+            SystemSectionLane::PermissionReminder,
+            NativeContextContributor::PermissionReminder,
             text.clone(),
         ));
     }
@@ -1365,9 +1380,13 @@ mod tests {
                 skill_guidance: Some("skills".into()),
                 core_runtime_identity: Some("core".into()),
                 agent_profile: Some("profile".into()),
+                permission_reminder: None,
             };
             let accepted = assembly.assemble(&input(), &native, &[]).await.unwrap();
-            assert!(accepted.user_messages.is_empty());
+            assert_eq!(
+                accepted.user_messages,
+                [] as [crate::context::assembly::AcceptedUserContext; 0]
+            );
             assert_eq!(
                 render_effective_system_prompt(&accepted.system_sections),
                 "core\n\nprofile\n\nworkspace\n\nextension system\n\nskills"
@@ -1626,6 +1645,7 @@ mod tests {
                     agent_profile: Some("agent profile".to_owned()),
                     workspace_instructions: Some("workspace".to_owned()),
                     skill_guidance: Some("skill catalog".to_owned()),
+                    permission_reminder: None,
                 },
                 &[],
             )
@@ -1650,7 +1670,10 @@ mod tests {
             accepted.system_sections[0].contributor,
             ContextContributorIdentity::Native(NativeContextContributor::CoreSystemIdentity)
         );
-        assert!(accepted.user_messages.is_empty());
+        assert_eq!(
+            accepted.user_messages,
+            [] as [crate::context::assembly::AcceptedUserContext; 0]
+        );
         assert_eq!(
             accepted.system_sections[5].contributor,
             ContextContributorIdentity::Native(NativeContextContributor::SkillGuidance)
@@ -1667,8 +1690,14 @@ mod tests {
             .assemble(&input(), &NativeContextInput::default(), &[])
             .await
             .expect("empty native context assembles");
-        assert!(accepted.user_messages.is_empty());
-        assert!(accepted.system_sections.is_empty());
+        assert_eq!(
+            accepted.user_messages,
+            [] as [crate::context::assembly::AcceptedUserContext; 0]
+        );
+        assert_eq!(
+            accepted.system_sections,
+            [] as [crate::context::assembly::AcceptedSystemSection; 0]
+        );
         assert_eq!(
             render_effective_system_prompt(&accepted.system_sections),
             ""
@@ -1732,9 +1761,7 @@ mod tests {
                 key,
                 attestation,
                 Arc::new(move |_: &ContributorInputSnapshot| {
-                    Ok(request_time
-                        .map(|text| vec![user(text)])
-                        .unwrap_or_default())
+                    Ok(request_time.map_or_else(Vec::new, |text| vec![user(text)]))
                 }),
             )
             .expect("register extension");
@@ -2245,8 +2272,8 @@ mod tests {
     fn manifest_is_derived_from_contract_constants() {
         let manifest = ContextAssembly::compatibility_manifest();
         assert_eq!(
-            CONTEXT_COMPATIBILITY_ABI_VERSION, 5,
-            "revisioned native Goal User observations are a v4 ABI"
+            CONTEXT_COMPATIBILITY_ABI_VERSION, 6,
+            "sparse permission reminders are a v6 ABI"
         );
         assert_eq!(manifest.user_context_lanes, UserContextLane::ALL);
         assert_eq!(manifest.system_section_lanes, SystemSectionLane::ALL);

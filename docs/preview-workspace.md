@@ -19,6 +19,9 @@ incompatible logical workspace before publishing its next snapshot. An ordinary
 Session selection keeps other compatible logical workspaces and retires all their
 renderer resources. Returning reauthorizes and checks the current version before
 restoring selected visible documents from the bounded content cache.
+Geometry reauthorizes on return but retains its completed copy across version
+changes until explicit Refresh or retirement; its camera/part metadata is tied
+to that content generation. See [geometry previews](geometry-previews.md).
 
 Inside that exact scope, `samePreviewSource` compares the closed source union:
 
@@ -74,6 +77,7 @@ owners retain their existing independent byte/security limits.
 | Private Host read admission | 2 permits shared across Sessions (derivation of either source kind reserves one); at most 3 pending visible/Download intents, removed on cancellation |
 | Ordinary Artifact original transfers | Existing ArtifactResources limit of 2 per coordinator; public artifact/read does not enter private Host admission |
 | PDF-backed owners/workers | 2; includes DOCX/PPTX derived PDF, each retaining all prior page/canvas/text/watchdog bounds |
+| Geometry renderers/import Workers | At most 2 of each; hidden bodies retain source bytes only, sharing the existing inactive cache |
 | Host derivation | 1 active; at most 2 visible waiting intents, no retries or background conversion |
 
 The existing transcript's inline managed Artifact image owner is separate from

@@ -408,7 +408,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         "conv_ab537f72-9ee5-7ccf-989d-90fbe352ca87"
     );
     assert_eq!(agent_id.as_str(), "agent-a");
-    assert!(!attachment_id.as_str().is_empty());
+    assert_ne!(attachment_id.as_str(), "");
 
     // Multiple pipelined requests correlate by id.
     let responses: Vec<RuntimeClientResponse> = (1..=3)

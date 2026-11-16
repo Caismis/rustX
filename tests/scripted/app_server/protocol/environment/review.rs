@@ -114,7 +114,7 @@ pub(crate) async fn terminal_signals() {
         let worker = connection.clone();
         let mut command =
             tokio::spawn(async move { call(&worker, 3, Method::CommandExec(params)).await });
-        connection.command_admitted_for_test(id).await;
+        admit_or_fail(&connection, id, &mut command).await;
         input(&connection, id, b"READY\n").await;
         signal_marker(&connection, id, b"1\tREADY", &mut command).await;
         input(&connection, id, &[signal]).await;
@@ -147,7 +147,10 @@ pub(crate) async fn terminal_signals() {
     assert_eq!(result.status, ExecStatus::ProcessControlFailed);
     assert_eq!(result.exit_code, None);
     connection.close();
-    assert!(bounded(fixture.host.drain()).await.is_empty());
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
 }
 
 pub(crate) async fn output_after_cap() {
@@ -191,7 +194,10 @@ pub(crate) async fn output_after_cap() {
         assert!(result.stdout_truncated);
     }
     connection.close();
-    assert!(bounded(fixture.host.drain()).await.is_empty());
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
 }
 
 pub(crate) async fn watch_recheck() {
@@ -284,17 +290,50 @@ pub(crate) async fn watch_recheck() {
     }
     let returned = bounded(capacity.acquire_many(31)).await.unwrap();
     drop(returned);
-    std::fs::write(&next, b"still observed").unwrap();
-    loop {
-        if let NotificationMethod::FsChanged(change) =
-            bounded(connection.next_notification()).await.notification
-        {
-            assert!(!change.retired);
-            if change.watch_id == "directory" && change.changed_paths.contains(&next) {
-                break;
-            }
-        }
-    }
+    // A native event for this unchanged child proves the same directory
+    // observer handles a new mutation after the file observer has settled.
+    // Hold I/O so its identity check must publish a pathless resync hint.
+    // Observe the event before its paths are discarded, so an earlier queued
+    // resync cannot stand in for post-retirement native observation.
+    let (held, locked) = tokio::sync::oneshot::channel();
+    let (release, unlocked) = std::sync::mpsc::channel();
+    let native = fixture.manager.environment.clone();
+    let source = directory.clone();
+    let lock = tokio::task::spawn_blocking(move || {
+        native.with_paths(&[source.to_str().unwrap()], |_| {
+            held.send(()).unwrap();
+            unlocked.recv().unwrap();
+            Ok(())
+        })
+    });
+    bounded(locked).await.unwrap();
+    let change = super::observed_mutation_hint(&connection, "directory", &directory, &next, || {
+        std::fs::write(&next, b"still observed").unwrap();
+    })
+    .await;
+    assert_eq!(change.changed_paths, [] as [std::path::PathBuf; 0]);
+    release.send(()).unwrap();
+    bounded(lock).await.unwrap().unwrap();
+    let MethodResult::FileChunk { chunk } = call(
+        &connection,
+        4,
+        Method::FsReadFile {
+            path: next.display().to_string(),
+            offset: 0,
+            max_bytes: 64,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("read observed change")
+    };
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(chunk.data_base64)
+            .unwrap(),
+        b"still observed"
+    );
     let (scheduled, recheck) = tokio::sync::oneshot::channel();
     crate::app_server::filesystem::observe_recheck(directory.clone(), scheduled);
     let (held, locked) = tokio::sync::oneshot::channel();
@@ -327,14 +366,17 @@ pub(crate) async fn watch_recheck() {
     bounded(checking).await.unwrap();
     call(
         &connection,
-        4,
+        5,
         Method::FsUnwatch {
             watch_id: "directory".into(),
         },
     )
     .await;
     connection.close();
-    assert!(bounded(fixture.host.drain()).await.is_empty());
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
     let mut settled = Box::pin(fixture.host.settle_file_observers());
     assert!(
         settled.as_mut().now_or_never().is_none(),
@@ -434,8 +476,7 @@ pub(crate) async fn catalog_credentials() {
                 };
                 let transport = if let Some(header) = header {
                     let extra = option
-                        .map(|value| format!(", \"X-Option\" = {value:?}"))
-                        .unwrap_or_default();
+                        .map_or_else(String::new, |value| format!(", \"X-Option\" = {value:?}"));
                     let mut transport = format!(
                         "url = {endpoint:?}\n{} = {{ {header:?} = {:?}{} }}\n",
                         if reference {
@@ -546,7 +587,10 @@ pub(crate) async fn catalog_credentials() {
                 }
                 assert_eq!(fixture.manager.diagnostics().loaded, 0);
                 connection.close();
-                assert!(bounded(fixture.host.drain()).await.is_empty());
+                assert_eq!(
+                    bounded(fixture.host.drain()).await,
+                    [] as [std::string::String; 0]
+                );
             }
         }
     }

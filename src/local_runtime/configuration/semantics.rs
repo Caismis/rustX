@@ -225,7 +225,6 @@ pub(in crate::local_runtime) fn composition_semantics(
             let (field, reason) = error.classification();
             SemanticFailure::new(field, reason, error.to_string())
         })?;
-    let summary = summary.as_ref().unwrap_or(&primary);
     config
         .context_policy()
         .validate_budgets(

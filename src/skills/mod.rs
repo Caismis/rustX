@@ -1,9 +1,10 @@
-//! Skill discovery, package metadata, dependency declarations, version
-//! identity, catalog rendering, and shared Python/Node environments (M6).
+//! Skill discovery, package metadata, version identity, and catalog rendering.
 //!
 //! # Ownership
 //!
-//! The skills plane owns:
+//! Skills are discovered instruction resources. They are not dependency
+//! managers, execution environments, or permission grants. The skills plane
+//! owns:
 //!
 //! - the session-level Skill **source policy**, source identity, and
 //!   automatic root resolution (`source`);
@@ -15,16 +16,13 @@
 //! - Agent Skills `SKILL.md` frontmatter parsing and validation
 //!   (`package::SkillPackage`);
 //! - deterministic normalized frontmatter definition hashing (`identity`);
-//! - rustX dependency declaration parsing, normalization, and
-//!   merge/conflict detection (`dependencies`);
-//! - Python/Node environment identity and materialization
-//!   (`environments`);
 //! - compact model-visible Skill catalog rendering (`catalog`).
 //!
-//! Candidate preparation callers wait on an `EnvironmentStore`-owned
-//! `(ecosystem, digest)` build task. Caller cancellation stops only that
-//! caller's wait; the physical materialization remains owned until its
-//! supervised subprocess hierarchy settles and publication returns.
+//! Generic `metadata`, including any `rustx.python-dependencies` or
+//! `rustx.node-dependencies` strings, is uninterpreted descriptive text.
+//! Discovery does not parse it as a dependency syntax, probe interpreters,
+//! or write an environment. A malformed YAML document is still a malformed
+//! document and excludes only that candidate.
 //!
 //! Skills remain workflow/instruction packages: they are not tools and not
 //! a parallel execution protocol. Skill bodies and supporting files are
@@ -36,26 +34,15 @@
 //! versa.
 
 mod catalog;
-pub(crate) mod dependencies;
 mod diagnostics;
 pub(crate) mod discovery;
-pub mod environments;
 mod frontmatter;
 pub(crate) mod identity;
 pub(crate) mod package;
 pub mod source;
 
 pub use catalog::{SkillCatalogEntry, SkillReadTool, SkillSnapshot, render_skill_catalog};
-pub use dependencies::{
-    DependencyConflict, DependencyError, DependencyManifest, Ecosystem, merge_dependency_manifests,
-    parse_node_dependencies, parse_python_dependencies,
-};
 pub use diagnostics::{ShadowedSkill, SkillDiagnostic, SkillDiagnosticSeverity, SkillProvenance};
-pub use environments::{
-    ENVIRONMENT_MANIFEST_FILE, EnvironmentPreparationError, EnvironmentStore, NodeEnvironment,
-    PythonEnvironment, RuntimeVersions, SkillEnvironmentBackend, node_environment_digest,
-    python_environment_digest,
-};
 pub use package::{
     SkillDiscovery, SkillDiscoveryConfig, SkillDiscoveryOutcome, SkillPackage, SkillPackageError,
 };

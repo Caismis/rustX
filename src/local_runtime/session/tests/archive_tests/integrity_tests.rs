@@ -142,7 +142,7 @@ async fn archive_exports_the_verified_buffer_after_source_mutation() {
 #[tokio::test]
 async fn archive_checks_completion_for_empty_and_extended_artifacts() {
     let empty = Fixture::new(Vec::new());
-    assert!(decode(empty.prepare()).await[&empty.entry].is_empty());
+    assert_eq!(decode(empty.prepare()).await[&empty.entry], [] as [u8; 0]);
     let cut = empty.prepare();
     fs::write(&empty.artifact, b"B").unwrap();
     assert_stream_failure(cut).await;

@@ -301,7 +301,10 @@ mod tests {
         retained.retain(unit("a"), 11).expect("a");
         assert_eq!(retained.take(), vec![(unit("a"), 11)]);
         assert!(retained.is_empty());
-        assert!(retained.take().is_empty());
+        assert_eq!(
+            retained.take(),
+            [] as [(crate::runtime::identity::ProcessUnitId, i32); 0]
+        );
     }
 
     /// An unproven settlement renders one bounded diagnostic naming every

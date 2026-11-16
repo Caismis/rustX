@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. MarkdownBody and ImageBody adapted; see PROVENANCE.md. */
 import { LoadingIndicator } from '../../../presentation/primitives/LoadingIndicator';
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { MarkdownText } from '../../../presentation/markdown/MarkdownText';
 import { useLocale, useTranslation } from '../../../locale/react';
 import { splitFrontmatter } from './frontmatter';
@@ -17,10 +17,11 @@ import css from './MarkdownBody.module.css';
 import { FILE_PREVIEW_LIMITS } from '../../../../shared/file-preview.ts';
 import { validateRaster } from '../../../client/raster';
 import { DocumentDependencies } from './dependencies';
+import { GeometryDocument } from '../documents/GeometryDocument';
 const Excel = lazy(() => import('./excel/excel').then(m => ({ default: m.ExcelBody })));
 const Pdf = lazy(() => import('../documents/PdfPreview'));
 const limits = { maxBytes: FILE_PREVIEW_LIMITS.spreadsheetBytes, maxCells: FILE_PREVIEW_LIMITS.spreadsheetCells, timeoutMs: FILE_PREVIEW_LIMITS.parserTimeoutMs };
-export function DocumentBody({ mode, text, bytes, path, view, signal, retry, call, onOpen }: {mode: Viewer;text: string;bytes: Uint8Array<ArrayBuffer>;path: string;view: FileTabView;signal: AbortSignal;retry: () => void; call:WorkbenchCall;onOpen:(path:string)=>void}) {
+export function DocumentBody({ mode, text, bytes, path, view, signal, retry, call, onOpen, visible = true }: {visible?: boolean;mode: Viewer;text: string;bytes: Uint8Array<ArrayBuffer>;path: string;view: FileTabView;signal: AbortSignal;retry: () => void; call:WorkbenchCall;onOpen:(path:string)=>void}) {
   const tx = useTranslation(), locale = useLocale();
   const dependencies = useMemo(() => new DocumentDependencies(call, () => view.preview?.owner.refresh(), mode === 'html' ? bytes.byteLength : 0), [call, path, mode]);
   useEffect(() => () => dependencies.dispose(), [dependencies]);
@@ -29,6 +30,14 @@ export function DocumentBody({ mode, text, bytes, path, view, signal, retry, cal
 
   const split = useMemo(() => splitFrontmatter(text), [text]);
   const loading = <LoadingIndicator label={tx('artifacts:workbench.loading')}/>;
+  const geometryStarted = useRef(false);
+  if (mode === 'geometry' && visible) geometryStarted.current = true;
+  if (mode === 'geometry') {
+    if (!geometryStarted.current) return loading;
+    const owner = view.preview!.owner, snapshot = owner.getSnapshot();
+    const sameCopy = () => view.current() && view.preview?.owner === owner && owner.getSnapshot().revision === snapshot.revision && owner.getSnapshot().version === snapshot.version && owner.getSnapshot().data === snapshot.data;
+    return <GeometryDocument visible={visible} bytes={snapshot.data} name={path} copyId={`${snapshot.revision}:${snapshot.version}`} signal={signal} current={() => !signal.aborted && sameCopy()} takeSource={() => snapshot.data && sameCopy() ? owner.takeGeometryBytes(snapshot.data) : undefined} releaseSource={() => { if (snapshot.data && sameCopy()) owner.releaseGeometryBytes(snapshot.data); }} viewState={state} onViewStateChange={patch => { if (!signal.aborted && sameCopy()) change(patch); }} onGeometryRetire={geometry => { if (sameCopy()) view.document = { ...view.document, geometry }; }}/>
+  }
   if (mode === 'markdown') return <DocumentResources.Provider value={{image:(url,alt)=>{const resolved=relativeDocumentPath(path,url);return resolved?<WorkspaceImage key={resolved} path={resolved} alt={alt} dependencies={dependencies}/>:<span>{alt}</span>;},link:(url,children)=>{const resolved=relativeDocumentPath(path,url);return resolved?<a href={url} onClick={event=>{event.preventDefault();onOpen(resolved);}}>{children}</a>:undefined;}}}><div className={css.document} data-document-markdown>
     {split && <div className={css.frontmatter} data-document-frontmatter><FrontmatterFields source={split.source} fallback={<pre className={css.frontmatterSource}>{split.source}</pre>}/></div>}
     <MarkdownText text={split?.body ?? text} streaming={false}/>

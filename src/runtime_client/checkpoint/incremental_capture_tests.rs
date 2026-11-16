@@ -122,7 +122,7 @@ fn prepared_capture_borrows_cold_and_warm_domains_until_materialized() {
     pressured.remaining = 0;
     let (value, _) = pressured.prepared(&owner, build);
     assert!(matches!(value, std::borrow::Cow::Owned(_)));
-    assert!(value.into_owned().body.is_empty());
+    assert_eq!(value.into_owned().body, [] as [std::string::String; 0]);
     assert_eq!(
         clones.load(Ordering::Relaxed),
         0,

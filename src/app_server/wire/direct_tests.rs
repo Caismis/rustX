@@ -342,7 +342,7 @@ fn compact_plans_preserve_export_artifact_identity() {
         schema,
         include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/protocol/app-server/v79.schema.json"
+            "/protocol/app-server/v80.schema.json"
         ))
     );
     let fixtures = format!(

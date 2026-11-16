@@ -111,7 +111,7 @@ impl Owner {
         // Saturation permanently disables reuse; never wrap to an old proof.
         let _ = self
             .epoch
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                 Some(n.saturating_add(increment))
             });
     }

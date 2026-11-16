@@ -559,6 +559,10 @@ pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
         "(event_instance, event_kind) WHERE event_instance IS NOT NULL",
     ),
     (
+        "events_workflow_agent_node_idx",
+        "(event_workflow_agent_node, event_kind) WHERE event_workflow_agent_node IS NOT NULL",
+    ),
+    (
         "events_interaction_id_kind_idx",
         "(event_interaction_id, event_kind) WHERE event_interaction_id IS NOT NULL",
     ),
@@ -989,6 +993,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
     auxiliary::create_schema(connection)?;
     super::schedule::create_schema(connection)?;
     super::scheduled_workflow::create_schema(connection)?;
+    super::workflow_snapshot::create_schema(connection)?;
     request_owner_shape::create_schema(connection)?;
     projection::create_auxiliary_lineage_schema(connection)?;
     connection

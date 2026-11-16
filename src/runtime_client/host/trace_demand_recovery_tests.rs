@@ -331,7 +331,7 @@ async fn trace_only_page_fault_defers_to_explicit_reads_and_same_cut_retry_succe
     };
     assert_eq!(repaired.read_cut.source_cut, before.source_cut);
     assert_eq!(page.read_cut.as_ref(), Some(&repaired.read_cut));
-    assert!(!page.records.is_empty());
+    assert_ne!(page.records, [] as [crate::observation::trace::types::TraceRecord; 0]);
     fixture.runtime.shutdown().await.unwrap();
     inner.drain_projection().await.unwrap();
 }

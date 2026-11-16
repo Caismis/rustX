@@ -56,6 +56,8 @@ impl HttpPeer {
             binding: McpServerBinding {
                 credentials: crate::credentials::SourceCredentials::default(),
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
                 transport: McpTransportConfig::StreamableHttp {
                     endpoint: format!("http://{address}/mcp"),
                     headers: BTreeMap::new(),
@@ -95,7 +97,7 @@ impl HttpPeer {
     }
 
     async fn close(self, connection: &McpConnection) {
-        assert!(connection.close().await.is_empty());
+        assert_eq!(connection.close().await, [] as [std::string::String; 0]);
         self.shutdown.cancel();
         self.server.abort();
         let _ = self.server.await;
@@ -142,7 +144,10 @@ async fn negotiated_matrix_skips_unsupported_tool_lists_and_never_enumerates_at_
             discovered.capabilities,
             crate::tools::mcp::McpNegotiatedCapabilities { tools, resources }
         );
-        assert!(discovered.tools.is_empty());
+        assert_eq!(
+            discovered.tools,
+            [] as [crate::tools::mcp::executor::CanonicalMcpTool; 0]
+        );
         assert_eq!(
             peer.fixture.list_tools_calls.load(Ordering::SeqCst),
             usize::from(tools)
@@ -460,6 +465,8 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
         let binding = McpServerBinding {
             credentials: crate::credentials::SourceCredentials::default(),
             policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
             transport: McpTransportConfig::Stdio {
                 program: std::env::current_exe()
                     .unwrap()
@@ -483,7 +490,10 @@ async fn resource_only_stdio_negotiates_modern_and_legacy_without_tools_list() {
         let discovery = connected.discover().await.unwrap();
         assert!(discovery.capabilities.resources);
         assert!(!discovery.capabilities.tools);
-        assert!(discovery.tools.is_empty());
+        assert_eq!(
+            discovery.tools,
+            [] as [crate::tools::mcp::executor::CanonicalMcpTool; 0]
+        );
         if legacy {
             assert_eq!(
                 connected.protocol_version(),
@@ -564,24 +574,21 @@ fn resource_decoding_and_metadata_limits_reject_excess_without_allocating_decode
 }
 
 async fn run_helper(
-    entry: &(
-        crate::tools::types::ToolDefinition,
-        Arc<dyn crate::tools::executor::ToolExecutor>,
-    ),
+    entry: &crate::tools::executor::ToolRegistration,
     arguments: serde_json::Value,
     tools: &crate::tools::runtime::ConversationToolRuntime,
 ) -> ToolExecutionResult {
     use crate::tools::types::{ToolInvocation, ToolInvocationId, ToolInvocationMode};
     let progress = NoProgress;
     entry
-        .1
+        .executor
         .start(
             ToolInvocation {
                 id: ToolInvocationId::Agent {
                     call_id: crate::runtime::identity::ToolCallId::new("resource-helper"),
                 },
-                tool_id: entry.0.id.clone(),
-                tool_name: entry.0.name.clone(),
+                tool_id: entry.definition.id.clone(),
+                tool_name: entry.definition.name.clone(),
                 mode: ToolInvocationMode::Foreground,
                 arguments,
             },
@@ -623,10 +630,7 @@ async fn native_resource_helpers_route_only_frozen_sources_with_one_identity_ord
         if name != "excluded" {
             authorized.insert(
                 ToolSourceId::Mcp(McpServerId::new(name)),
-                crate::tools::mcp::McpResourceBinding::new(
-                    generation.binding(),
-                    crate::tools::types::ToolApprovalPolicy::Never,
-                ),
+                crate::tools::mcp::McpResourceBinding::new(generation.binding()),
             );
         }
         generations.push(generation);
@@ -637,7 +641,7 @@ async fn native_resource_helpers_route_only_frozen_sources_with_one_identity_ord
     assert_eq!(
         helpers
             .iter()
-            .map(|entry| entry.0.name.as_str())
+            .map(|entry| entry.definition.name.as_str())
             .collect::<Vec<_>>(),
         vec![
             "list_mcp_resources",
@@ -820,6 +824,8 @@ async fn opaque_http_diagnostics_never_replay_debug_escaped_response_headers() {
                     headers,
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             tools.workspace().clone(),
             Arc::default(),
@@ -897,13 +903,15 @@ async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() 
         peer.binding.policy,
         &generation.binding(),
         catalog,
-    );
+    )
+    .into_iter()
+    .map(|(definition, executor)| {
+        crate::tools::executor::ToolRegistration::plain(definition, executor)
+    })
+    .collect::<Vec<_>>();
     let resource = crate::tools::mcp::resource_definitions(BTreeMap::from([(
         ToolSourceId::Mcp(McpServerId::new("bounded")),
-        McpResourceBinding::new(
-            generation.binding(),
-            crate::tools::types::ToolApprovalPolicy::Never,
-        ),
+        McpResourceBinding::new(generation.binding()),
     )]));
     for (entry, arguments) in [
         (&ordinary[0], serde_json::json!({})),
@@ -929,7 +937,10 @@ async fn repeated_redaction_keeps_tool_and_resource_final_diagnostics_bounded() 
     }
     assert_eq!(peer.fixture.resource_state.reads.load(Ordering::SeqCst), 1);
     assert!(generation.retire_and_close().await.is_none());
-    assert!(retirement.settle_all().await.is_empty());
+    assert_eq!(
+        retirement.settle_all().await,
+        [] as [std::string::String; 0]
+    );
     peer.close(&connection).await;
 }
 
@@ -1076,10 +1087,7 @@ async fn resource_error_redaction_survives_named_helpers_and_aggregate_spills() 
         );
         sources.insert(
             ToolSourceId::Mcp(McpServerId::new(name)),
-            McpResourceBinding::new(
-                generation.binding(),
-                crate::tools::types::ToolApprovalPolicy::Never,
-            ),
+            McpResourceBinding::new(generation.binding()),
         );
         generations.push(generation);
         peers.push((peer, connection));
@@ -1241,7 +1249,10 @@ async fn management_catalog_reads_bounded_pages_without_business_calls() {
         .await
         .unwrap();
     assert!(page.capabilities.resources);
-    assert!(!page.resources.is_empty());
+    assert_ne!(
+        page.resources,
+        [] as [crate::tools::mcp::catalog::ResourceDescriptor; 0]
+    );
     assert_eq!(peer.fixture.resource_state.lists.load(Ordering::SeqCst), 2);
     assert_eq!(page.resources.len(), 2);
     assert_eq!(peer.fixture.resource_state.reads.load(Ordering::SeqCst), 0);

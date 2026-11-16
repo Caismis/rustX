@@ -8,8 +8,8 @@ import css from './WorkbenchNavigator.module.css';
 import fileCss from '../../presentation/right-panel/WorkbenchFiles.module.css';
 export interface WorkbenchNavigatorState { open: boolean; width: number; view: FileTabView }
 /** The same pane keeps its tree, width and reading position across file replacement. */
-export function WorkbenchFileNavigator({ navigator, path, call, view, onOpen, onNavigate }: {
-  navigator: WorkbenchNavigatorState; path: string; call: WorkbenchCall; view: FileTabView;
+export function WorkbenchFileNavigator({ navigator, path, call, view, onOpen, onNavigate, visible = true }: {
+  visible?: boolean; navigator: WorkbenchNavigatorState; path: string; call: WorkbenchCall; view: FileTabView;
   onOpen(path: string): void; onNavigate(path: string): void;
 }) {
   const tx = useTranslation(), [, redraw] = useReducer(n => n + 1, 0);
@@ -28,7 +28,7 @@ export function WorkbenchFileNavigator({ navigator, path, call, view, onOpen, on
   const label = tx(navigator.open ? 'artifacts:workbench.navigator-hide' : 'artifacts:workbench.navigator-show');
   const close = () => { navigator.open = false; redraw(); toggle.current?.focus({ preventScroll: true }); };
   return <div className={css.root} ref={root}>
-    <WorkspaceFile {...{ path, call, view, onOpen }} tools={<Tooltip label={label} side="bottom" delayMs={500}>
+    <WorkspaceFile {...{ path, call, view, onOpen, visible }} tools={<Tooltip label={label} side="bottom" delayMs={500}>
       <button ref={toggle} type="button" className={fileCss.tool} aria-label={label} aria-expanded={navigator.open} data-files-navigator-toggle onClick={() => { navigator.open = !navigator.open; redraw(); }}>{navigator.open ? <IconFolderOpenOutline16/> : <IconFolderClose16/>}</button>
     </Tooltip>} navigator={navigator.open && <aside className={`${css.navigator} ${css[mode]} ${dragging ? css.dragging : ''}`} style={{ '--files-navigator-width': `${width}px` } as CSSProperties} aria-label={tx('artifacts:workbench.files')} data-files-navigator data-files-navigator-mode={mode} onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); } }}>
       {mode !== 'fill' && <div className={css.separator} role="separator" aria-orientation="vertical" aria-label={tx('artifacts:workbench.navigator-resize')} aria-valuemin={minimum} aria-valuemax={maximum} aria-valuenow={width} tabIndex={0}

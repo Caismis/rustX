@@ -1105,7 +1105,7 @@ mod tests {
         else {
             panic!("bounded response was not accepted");
         };
-        assert!(!record.is_empty());
+        assert_ne!(record, "");
         assert!(outbound.association.is_none());
         assert!(
             matches!(

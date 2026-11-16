@@ -209,12 +209,9 @@ fn context_carriers_never_publish_a_negative_transcript_cursor() {
     let negative:bool=connection.query_row("SELECT position<0 AND native_reference_kind IS NULL FROM transcript_entries WHERE ledger_position=1",[],|row|row.get(0)).unwrap();
     assert!(negative);
     drop(connection);
-    assert!(
-        store
-            .load_transcript_page(None, 8)
-            .unwrap()
-            .entries
-            .is_empty()
+    assert_eq!(
+        store.load_transcript_page(None, 8).unwrap().entries,
+        [] as [crate::durable::store::canonical::TranscriptEntry; 0]
     );
     store
         .append_canonical(&user_message("visible", "user"))
@@ -289,12 +286,9 @@ fn hidden_context_carriers_do_not_encode_inbound_sequences_in_rowids() {
             .unwrap();
         assert_eq!(count, 3);
         drop(connection);
-        assert!(
-            store
-                .load_transcript_page(None, 8)
-                .unwrap()
-                .entries
-                .is_empty()
+        assert_eq!(
+            store.load_transcript_page(None, 8).unwrap().entries,
+            [] as [crate::durable::store::canonical::TranscriptEntry; 0]
         );
     }
 }

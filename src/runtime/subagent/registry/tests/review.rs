@@ -20,6 +20,7 @@ async fn admitting_generation_is_interruptible_and_waitable_before_owner_task_ru
         &first.child_agent_id,
         "next",
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
@@ -83,6 +84,7 @@ async fn resume_success_requires_exact_child_canonical_input_acknowledgement() {
             &first.child_agent_id,
             "resume input",
             message_origin.clone(),
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new(),
         ));
         assert!(futures_util::poll!(&mut send).is_pending());
@@ -242,7 +244,13 @@ async fn agent_listing_is_newest_admission_first_and_reports_more_than_sixty_fou
     );
     let empty = plane.registry.list_agents(0);
     assert_eq!(empty.matched, 70);
-    assert!(empty.agents.is_empty());
+    assert_eq!(
+        empty.agents,
+        [] as [(
+            crate::runtime::subagent::registry::agents::AgentSnapshot,
+            crate::runtime::subagent::registry::observation::SubagentSnapshot
+        ); 0]
+    );
 }
 
 #[tokio::test]
@@ -273,6 +281,7 @@ async fn fixed_resume_identity_conflict_attempts_exactly_once() {
             &first.child_agent_id,
             "resume",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new(),
         )
         .await;
@@ -306,6 +315,7 @@ async fn caller_cancellation_before_resume_commit_rolls_back_owned_reservation()
         &first.child_agent_id,
         "cancelled input",
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         signal.child(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
@@ -358,6 +368,7 @@ async fn resume_control_loss_before_delegate_never_reports_input_accepted() {
             &first.child_agent_id,
             "never delivered",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new(),
         )
         .await;
@@ -399,6 +410,7 @@ async fn failed_resume_rollback_retains_stopping_generation_and_fails_controls_c
                     &id,
                     "unproven",
                     AgentActivationOrigin::ClientControl,
+                    crate::runtime::types::ApprovalMode::FullAccess,
                     signal,
                 )
                 .await
@@ -445,6 +457,7 @@ async fn failed_resume_rollback_retains_stopping_generation_and_fails_controls_c
                 &first.child_agent_id,
                 "must reject",
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new()
             )
             .await,
@@ -476,6 +489,7 @@ async fn unpublished_memory_reservation_never_exposes_an_unconsumed_activation_i
                     &id,
                     "unpublished allocation",
                     AgentActivationOrigin::ClientControl,
+                    crate::runtime::types::ApprovalMode::FullAccess,
                     CancellationSignal::new(),
                 )
                 .await
@@ -635,6 +649,7 @@ async fn active_guidance_uses_real_child_durable_acceptance_and_ack_evidence() {
             &admitted.child_agent_id,
             "exactly once guidance",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new(),
         ));
         if let Some((original, mut commands)) = held_control {
@@ -692,6 +707,7 @@ async fn explicit_guidance_refusal_remains_refusal() {
         &admitted.child_agent_id,
         "refused",
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
@@ -742,6 +758,7 @@ async fn guidance_control_queue_loss_before_write_is_not_delivered() {
         &admitted.child_agent_id,
         "never written",
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());

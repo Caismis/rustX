@@ -639,7 +639,10 @@ fn a_seeded_lineage_retains_projection_dependencies_after_source_deletion() {
         source_id
     );
     destination.projected_history().unwrap();
-    assert!(destination.read_events(None, 64).unwrap().events.is_empty());
+    assert_eq!(
+        destination.read_events(None, 64).unwrap().events,
+        [] as [rustx::events::RuntimeEventEnvelope; 0]
+    );
     drop(destination);
     let reopened = SqliteConversationStore::open(destination_id, &destination_path).unwrap();
     reopened.initialize(seed.canonical()).unwrap();
@@ -1083,22 +1086,28 @@ fn mutation_remove_entire_selection_claims_nothing_and_creates_no_obligation() {
     let accepted = store.accept_inbound(human("remove")).unwrap();
     let selection = store.select_pending_batch().unwrap().unwrap();
     store.remove_pending(&pending_ref(&accepted)).unwrap();
-    assert!(
+    assert_eq!(
         store
             .adopt_pending_batch(selection.watermark, None)
             .unwrap()
-            .items
-            .is_empty()
+            .items,
+        [] as [rustx::durable::PendingInboundItem; 0]
     );
-    assert!(store.read_events(None, 64).unwrap().events.is_empty());
-    assert!(store.load_canonical().unwrap().is_empty());
-    assert!(store.load_pending().unwrap().is_empty());
-    assert!(
-        store
-            .load_transcript_page(None, 64)
-            .unwrap()
-            .entries
-            .is_empty()
+    assert_eq!(
+        store.read_events(None, 64).unwrap().events,
+        [] as [rustx::events::RuntimeEventEnvelope; 0]
+    );
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [rustx::message::MessageBlock; 0]
+    );
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
+    assert_eq!(
+        store.load_transcript_page(None, 64).unwrap().entries,
+        [] as [rustx::durable::TranscriptEntry; 0]
     );
 }
 
@@ -1290,7 +1299,10 @@ fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
         other.remove_pending(&pending_ref(&other_accepted)),
         Ok(Outcome::Applied { .. })
     ));
-    assert!(other.load_pending().unwrap().is_empty());
+    assert_eq!(
+        other.load_pending().unwrap(),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
     assert_eq!(store.load_pending().unwrap()[0].message, accepted.message);
 }
 

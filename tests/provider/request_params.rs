@@ -217,7 +217,7 @@ fn protected_key_collisions_fail_at_every_layer() {
         RequestParamsLayer::ModelParams,
         RequestParamsLayer::ModelProfile,
         RequestParamsLayer::SessionOverrides,
-        RequestParamsLayer::SummaryOverrides,
+        RequestParamsLayer::AuxiliaryOverrides,
     ];
     let cases = [
         (ModelProtocol::OpenAiChatCompletions, "messages"),

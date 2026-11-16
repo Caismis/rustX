@@ -1,3 +1,4 @@
+import { modelToolCall } from '../../../../protocol/app-server/model-tool-call.ts';
 import { unsignedQuantity } from '../../protocol/quantities.ts';
 /**
  * The one visual entity of one logical tool call.
@@ -126,7 +127,7 @@ export function renderToolCard(
   const tool = drawableTool(published);
   const goal = goalActivity(tool, context, part);
   if (goal !== undefined) return goal;
-  const args = sanitizeData(parseArguments(tool.argumentsText));
+  const args = sanitizeData(modelToolCall(parseArguments(tool.argumentsText))?.arguments);
   const renderer = rendererFor(tool.toolId);
   const call = presentCall(renderer.renderCall(args), tool, args);
   const lines: string[] = [];
@@ -186,7 +187,7 @@ function goalActivity(tool: CorrelatedTool, context: ToolRenderContext, part: To
   const operation = tool.toolId === "native.create_goal" ? "start" : tool.toolId === "native.update_goal" ? "update" : tool.toolId === "native.get_goal" ? "check" : undefined;
   if (!operation) return undefined;
   const success = part !== "call" && tool.lifecycle.type === "settled" && tool.lifecycle.result.status.type === "success";
-  const args = parseArguments(tool.argumentsText);
+  const args = modelToolCall(parseArguments(tool.argumentsText))?.arguments;
   const action = args && typeof args === "object" && "action" in args ? args.action : undefined;
   const label = operation === "start" ? success ? "Goal started" : "Starting Goal"
     : operation === "check" ? success ? "Goal checked" : "Checking Goal"

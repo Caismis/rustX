@@ -2,9 +2,7 @@ use crate::observation::capability_source::CapabilityReadSource;
 use crate::observation::capability_source::{CapabilityView, RuntimeClientTool};
 use crate::runtime_client::checkpoint;
 use crate::observation::preflight;
-use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use crate::tools::types::{ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
 fn tool(index: usize) -> RuntimeClientTool {
     RuntimeClientTool {
@@ -13,8 +11,6 @@ fn tool(index: usize) -> RuntimeClientTool {
         description: "unchanged 水🙂\\\"\n".repeat(64),
         input_schema: serde_json::json!({"type":"object","properties":{"n":{"minimum":-0.0}}}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -68,8 +64,6 @@ fn source(conversation: ConversationId) -> CapabilityReadSource {
             Vec::new(),
             Vec::new(),
         )),
-        None,
-        None,
         crate::tools::environment::ToolEnvironment::default(),
         Arc::new(crate::tools::mcp::McpRuntimeLeaseAuthority::empty()),
         Arc::default(),

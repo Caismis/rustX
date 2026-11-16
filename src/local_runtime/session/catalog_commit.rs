@@ -68,7 +68,7 @@ impl SessionCatalog {
     /// The caller holds the fixture catalog exclusively before starting measurement.
     /// Database initialization, identity reservations and the final durable catalog
     /// commit use their ordinary owners; no measured read path is replaced.
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn seed_benchmark_sessions(
         &mut self,
         state: &SessionPersistentState,

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { InspectableDisplayItem, TrajectoryFacet } from './layout';
-import { readTraceSource } from '../../client/trace-content';
-import { parseJson } from '../../presentation/primitives/json';
+import { readWorkflowNodeBody } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
 
 export function useWorkflowNodeContent(item: InspectableDisplayItem, facet: TrajectoryFacet) {
@@ -35,9 +34,7 @@ export function useWorkflowNodeContent(item: InspectableDisplayItem, facet: Traj
       fields
         .filter(([, field]) => field != null)
         .map(async ([key, field]) => {
-          const value = await readTraceSource(source.reader, source.cut, field!, current);
-          if (typeof value !== 'string') throw Error('Original Workflow node body is unavailable.');
-          return [key, parseJson(value)] as const;
+          return [key, await readWorkflowNodeBody(source.reader, source.cut, field!, current)] as const;
         }),
     )
       .then((values) => {

@@ -272,7 +272,7 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
             panic!("snapshot")
         };
         let snapshot = Box::new(checkpoint_12.snapshot);
-        assert!(snapshot.inbound.pending.is_empty());
+        assert_eq!(snapshot.inbound.pending, [] as [crate::runtime_client::snapshot::InboundItemView; 0]);
         assert!(
             f.manager
                 .load(&a.session_id, None)

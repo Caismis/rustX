@@ -23,6 +23,7 @@ async fn agent_bootstrap_ignores_activation_record_iteration_order() {
                 &first.child_agent_id,
                 message,
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 signal.clone()
             ),
             child.accept_delegate(),
@@ -67,6 +68,7 @@ async fn agent_bootstrap_ignores_activation_record_iteration_order() {
             &first.child_agent_id,
             "fourth",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             signal.clone()
         ),
         fourth_child.accept_delegate(),
@@ -136,6 +138,7 @@ async fn proven_child_loss_has_identical_resume_authority_before_and_after_reope
             &admitted.child_agent_id,
             "continue after proven loss",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             signal.clone()
         ),
         next.accept_delegate(),
@@ -245,7 +248,10 @@ async fn domain_tool_metadata_matches_registered_authority() {
                 crate::tools::native::register_subagent_child_tools(&mut child, &[definition])
                     .is_err()
             );
-            assert!(child.definitions().is_empty());
+            assert_eq!(
+                child.definitions(),
+                [] as [crate::tools::types::ToolDefinition; 0]
+            );
         }
     }
     let mut degraded = crate::tools::executor::ToolRegistry::new();
@@ -352,6 +358,7 @@ async fn admission_receipts_release_observation_frontier_after_owner_installatio
                 &first.child_agent_id,
                 "rollback",
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new()
             )
             .await
@@ -742,7 +749,10 @@ async fn t15_t18_t20_child_pending_head_uses_sparse_native_route_index_and_retir
         .unwrap();
     let retired = plane.registry.pending_interaction_head();
     assert_eq!(retired.cut.total, 0);
-    assert!(retired.head.is_empty());
+    assert_eq!(
+        retired.head,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 }
 
 #[tokio::test]

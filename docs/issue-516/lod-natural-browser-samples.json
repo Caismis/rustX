@@ -1,0 +1,1286 @@
+{
+  "browser": "Google Chrome 157.0.8103.38, installed; functional diagnostic, not pinned acceptance",
+  "date": "2026-11-05",
+  "evidence": {
+    "natural-unheld-CAD-LOD": {
+      "fixture": "bracket-array.step",
+      "expectedOccurrences": 96,
+      "nativeTiers": [
+        {
+          "level": 0,
+          "meshNames": [
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4"
+          ],
+          "root": {
+            "name": "",
+            "meshes": [],
+            "children": [
+              {
+                "name": "Bracket array",
+                "meshes": [],
+                "children": [
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      0,
+                      1,
+                      2,
+                      3,
+                      4,
+                      5,
+                      6,
+                      7,
+                      8,
+                      9,
+                      10,
+                      11
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      12,
+                      13,
+                      14,
+                      15,
+                      16,
+                      17,
+                      18,
+                      19,
+                      20,
+                      21,
+                      22,
+                      23
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      24,
+                      25,
+                      26,
+                      27,
+                      28,
+                      29,
+                      30,
+                      31,
+                      32,
+                      33,
+                      34,
+                      35
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      36,
+                      37,
+                      38,
+                      39,
+                      40,
+                      41,
+                      42,
+                      43,
+                      44,
+                      45,
+                      46,
+                      47
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      48,
+                      49,
+                      50,
+                      51,
+                      52,
+                      53,
+                      54,
+                      55,
+                      56,
+                      57,
+                      58,
+                      59
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      60,
+                      61,
+                      62,
+                      63,
+                      64,
+                      65,
+                      66,
+                      67,
+                      68,
+                      69,
+                      70,
+                      71
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      72,
+                      73,
+                      74,
+                      75,
+                      76,
+                      77,
+                      78,
+                      79,
+                      80,
+                      81,
+                      82,
+                      83
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      84,
+                      85,
+                      86,
+                      87,
+                      88,
+                      89,
+                      90,
+                      91,
+                      92,
+                      93,
+                      94,
+                      95
+                    ],
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "triangles": 9088,
+          "ms": 331.29999999981374,
+          "at": 811.5999999996275
+        },
+        {
+          "level": 1,
+          "meshNames": [
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4",
+            "Base plate",
+            "Upright",
+            "Left gusset",
+            "Right gusset",
+            "Washer 1",
+            "Bolt 1",
+            "Washer 2",
+            "Bolt 2",
+            "Washer 3",
+            "Bolt 3",
+            "Washer 4",
+            "Bolt 4"
+          ],
+          "root": {
+            "name": "",
+            "meshes": [],
+            "children": [
+              {
+                "name": "Bracket array",
+                "meshes": [],
+                "children": [
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      0,
+                      1,
+                      2,
+                      3,
+                      4,
+                      5,
+                      6,
+                      7,
+                      8,
+                      9,
+                      10,
+                      11
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      12,
+                      13,
+                      14,
+                      15,
+                      16,
+                      17,
+                      18,
+                      19,
+                      20,
+                      21,
+                      22,
+                      23
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      24,
+                      25,
+                      26,
+                      27,
+                      28,
+                      29,
+                      30,
+                      31,
+                      32,
+                      33,
+                      34,
+                      35
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      36,
+                      37,
+                      38,
+                      39,
+                      40,
+                      41,
+                      42,
+                      43,
+                      44,
+                      45,
+                      46,
+                      47
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      48,
+                      49,
+                      50,
+                      51,
+                      52,
+                      53,
+                      54,
+                      55,
+                      56,
+                      57,
+                      58,
+                      59
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      60,
+                      61,
+                      62,
+                      63,
+                      64,
+                      65,
+                      66,
+                      67,
+                      68,
+                      69,
+                      70,
+                      71
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      72,
+                      73,
+                      74,
+                      75,
+                      76,
+                      77,
+                      78,
+                      79,
+                      80,
+                      81,
+                      82,
+                      83
+                    ],
+                    "children": []
+                  },
+                  {
+                    "name": "Mounting bracket",
+                    "meshes": [
+                      84,
+                      85,
+                      86,
+                      87,
+                      88,
+                      89,
+                      90,
+                      91,
+                      92,
+                      93,
+                      94,
+                      95
+                    ],
+                    "children": []
+                  }
+                ]
+              }
+            ]
+          },
+          "triangles": 11776,
+          "ms": 436.70000000018626,
+          "at": 917
+        }
+      ],
+      "latency": {
+        "start": 312.69999999925494,
+        "first": 654.4000000003725,
+        "firstGpuReady": 649.8000000007451,
+        "lodFirst": 622.8000000007451,
+        "lodGpuReady": 604,
+        "lodSamples": [],
+        "lodStages": {
+          "coarse": {
+            "submission": 549.8000000007451,
+            "gpu": 604,
+            "opportunity": 622.8000000007451
+          }
+        },
+        "coarseFirst": 27.90000000037253,
+        "coarsePending": 0,
+        "coarseSamples": [],
+        "pending": 0,
+        "cancelled": 0,
+        "samples": [],
+        "gpuSamples": [],
+        "stages": []
+      },
+      "frames": [
+        {
+          "ms": 862.2999999998137,
+          "triangles": 9088,
+          "width": 720,
+          "height": 327,
+          "completeness": "preview",
+          "lod": "coarse"
+        },
+        {
+          "ms": 938.5,
+          "triangles": 17824,
+          "width": 720,
+          "height": 327,
+          "completeness": "complete",
+          "lod": "full"
+        },
+        {
+          "ms": 999.3999999994412,
+          "triangles": 17824,
+          "width": 720,
+          "height": 327,
+          "completeness": "complete",
+          "lod": "full"
+        },
+        {
+          "ms": 1063.8999999994412,
+          "triangles": 17824,
+          "width": 1440,
+          "height": 654,
+          "completeness": "complete",
+          "lod": "full"
+        }
+      ],
+      "imports": [
+        [
+          {
+            "name": "Base plate",
+            "vertices": 448,
+            "triangles": 444
+          },
+          {
+            "name": "Upright",
+            "vertices": 130,
+            "triangles": 120
+          },
+          {
+            "name": "Left gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Right gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Washer 1",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 1",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 2",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 2",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 3",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 3",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 4",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 4",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Base plate",
+            "vertices": 448,
+            "triangles": 444
+          },
+          {
+            "name": "Upright",
+            "vertices": 130,
+            "triangles": 120
+          },
+          {
+            "name": "Left gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Right gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Washer 1",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 1",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 2",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 2",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 3",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 3",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 4",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 4",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Base plate",
+            "vertices": 448,
+            "triangles": 444
+          },
+          {
+            "name": "Upright",
+            "vertices": 130,
+            "triangles": 120
+          },
+          {
+            "name": "Left gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Right gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Washer 1",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 1",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 2",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 2",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 3",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 3",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 4",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 4",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Base plate",
+            "vertices": 448,
+            "triangles": 444
+          },
+          {
+            "name": "Upright",
+            "vertices": 130,
+            "triangles": 120
+          },
+          {
+            "name": "Left gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Right gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Washer 1",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 1",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 2",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 2",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 3",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 3",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 4",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 4",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Base plate",
+            "vertices": 448,
+            "triangles": 444
+          },
+          {
+            "name": "Upright",
+            "vertices": 130,
+            "triangles": 120
+          },
+          {
+            "name": "Left gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Right gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Washer 1",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 1",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 2",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 2",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 3",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 3",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 4",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 4",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Base plate",
+            "vertices": 448,
+            "triangles": 444
+          },
+          {
+            "name": "Upright",
+            "vertices": 130,
+            "triangles": 120
+          },
+          {
+            "name": "Left gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Right gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Washer 1",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 1",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 2",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 2",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 3",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 3",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 4",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 4",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Base plate",
+            "vertices": 448,
+            "triangles": 444
+          },
+          {
+            "name": "Upright",
+            "vertices": 130,
+            "triangles": 120
+          },
+          {
+            "name": "Left gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Right gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Washer 1",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 1",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 2",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 2",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 3",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 3",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 4",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 4",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Base plate",
+            "vertices": 448,
+            "triangles": 444
+          },
+          {
+            "name": "Upright",
+            "vertices": 130,
+            "triangles": 120
+          },
+          {
+            "name": "Left gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Right gusset",
+            "vertices": 18,
+            "triangles": 8
+          },
+          {
+            "name": "Washer 1",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 1",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 2",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 2",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 3",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 3",
+            "vertices": 212,
+            "triangles": 204
+          },
+          {
+            "name": "Washer 4",
+            "vertices": 212,
+            "triangles": 208
+          },
+          {
+            "name": "Bolt 4",
+            "vertices": 212,
+            "triangles": 204
+          }
+        ]
+      ],
+      "roots": [
+        {
+          "name": "",
+          "meshes": [],
+          "children": [
+            {
+              "name": "Bracket array",
+              "meshes": [],
+              "children": [
+                {
+                  "name": "Mounting bracket",
+                  "meshes": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4,
+                    5,
+                    6,
+                    7,
+                    8,
+                    9,
+                    10,
+                    11
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Mounting bracket",
+                  "meshes": [
+                    12,
+                    13,
+                    14,
+                    15,
+                    16,
+                    17,
+                    18,
+                    19,
+                    20,
+                    21,
+                    22,
+                    23
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Mounting bracket",
+                  "meshes": [
+                    24,
+                    25,
+                    26,
+                    27,
+                    28,
+                    29,
+                    30,
+                    31,
+                    32,
+                    33,
+                    34,
+                    35
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Mounting bracket",
+                  "meshes": [
+                    36,
+                    37,
+                    38,
+                    39,
+                    40,
+                    41,
+                    42,
+                    43,
+                    44,
+                    45,
+                    46,
+                    47
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Mounting bracket",
+                  "meshes": [
+                    48,
+                    49,
+                    50,
+                    51,
+                    52,
+                    53,
+                    54,
+                    55,
+                    56,
+                    57,
+                    58,
+                    59
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Mounting bracket",
+                  "meshes": [
+                    60,
+                    61,
+                    62,
+                    63,
+                    64,
+                    65,
+                    66,
+                    67,
+                    68,
+                    69,
+                    70,
+                    71
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Mounting bracket",
+                  "meshes": [
+                    72,
+                    73,
+                    74,
+                    75,
+                    76,
+                    77,
+                    78,
+                    79,
+                    80,
+                    81,
+                    82,
+                    83
+                  ],
+                  "children": []
+                },
+                {
+                  "name": "Mounting bracket",
+                  "meshes": [
+                    84,
+                    85,
+                    86,
+                    87,
+                    88,
+                    89,
+                    90,
+                    91,
+                    92,
+                    93,
+                    94,
+                    95
+                  ],
+                  "children": []
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "importTimings": [
+        {
+          "startedAt": 480.29999999981374,
+          "completedAt": 922.6999999992549,
+          "elapsedMs": 442.3999999994412,
+          "profile": {
+            "importMs": 387.59999999962747,
+            "prepareMs": 0.20000000018626451,
+            "stages": [
+              {
+                "stage": "initializing",
+                "ms": 0.20000000018626451
+              },
+              {
+                "stage": "importing",
+                "ms": 7.099999999627471
+              },
+              {
+                "stage": "preparing",
+                "ms": 385.09999999962747
+              }
+            ],
+            "cad": [
+              {
+                "name": "geometry:cad-initialize",
+                "ms": 6.8999999994412065
+              },
+              {
+                "name": "geometry:cad-read",
+                "ms": 378
+              },
+              {
+                "name": "geometry:cad-convert",
+                "ms": 2.5
+              }
+            ]
+          }
+        }
+      ],
+      "createdContexts": 1,
+      "resources": {
+        "workers": 0,
+        "contexts": 1,
+        "buffers": 15,
+        "textures": 5,
+        "urls": 0
+      },
+      "method": "Natural unheld import with normal observation only: no Worker-message interception, delayed delivery, synthetic stages or triangle sampling. Native arrival, actual submitted LOD frames, GPU fences and frame opportunities are recorded independently."
+    },
+    "natural-unheld-CAD-retirement": {
+      "workers": 0,
+      "contexts": 0,
+      "buffers": 0,
+      "textures": 0,
+      "urls": 0
+    }
+  }
+}

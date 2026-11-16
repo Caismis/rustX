@@ -44,7 +44,7 @@ fn t08_t12_t14_t19_observed_turn_previews_preserve_idle_owned_and_inherited_inpu
     assert_eq!(page.turns[0].prompt, "Open turn one");
     assert_eq!(page.turns[0].response, format!("{}…", "水".repeat(119)));
     assert_eq!(page.turns[1].prompt, format!("{}…", "🙂".repeat(49)));
-    assert!(page.turns[2].prompt.is_empty());
+    assert_eq!(page.turns[2].prompt, "");
     let frozen = store
         .read_lineage_cut(store.load_head().unwrap().revision)
         .unwrap();
@@ -150,7 +150,7 @@ fn t08_t12_t14_t19_giant_local_outline_and_window_keep_the_original_cut() {
     };
     let window = store.read_window_headers(&at, 32).unwrap();
     assert_eq!(window.target.as_ref(), Some(&before.turns[0].id));
-    assert!(before.turns[0].response.is_empty());
+    assert_eq!(before.turns[0].response, "");
     commit_text(
         &store,
         &original,

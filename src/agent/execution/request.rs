@@ -239,6 +239,21 @@ impl AgentExecution<'_> {
         if let Err(error) = self.validate_pending_fresh_inbound() {
             return Err(Self::context_failure_terminal(&error));
         }
+        // Initial delegated input retains its canonical source. Only a new
+        // Human Message may replace an already-established task thereafter.
+        if self.permission_task.is_none() {
+            self.permission_task =
+                self.pending_fresh_inbound
+                    .as_ref()
+                    .and_then(|fresh| {
+                        fresh.message_ids().iter().rev().find_map(|id| {
+                            self.conversation.ledger().get(id).and_then(
+                                crate::runtime::permission::PermissionTaskEvidence::canonical,
+                            )
+                        })
+                    })
+                    .map(Arc::new);
+        }
         // Native inbound sequence order is retained by FreshInboundTurn.
         // The most recent Human Message replaces the current request's unused
         // Goal-create authorization. No Human in this batch leaves it intact:
@@ -264,6 +279,11 @@ impl AgentExecution<'_> {
                 attempt_id,
             } = &origin
             {
+                if let Some(message) = self.conversation.ledger().get(message_id) {
+                    self.permission_task =
+                        crate::runtime::permission::PermissionTaskEvidence::canonical(message)
+                            .map(Arc::new);
+                }
                 *self
                     .schedule_authorization
                     .get_mut()
@@ -289,7 +309,8 @@ impl AgentExecution<'_> {
         // model-visible dynamic-context admission path: an observer has no
         // privileged committer role and cannot bypass the policy below.
         let deferred = core::mem::take(&mut self.deferred_context);
-        let native = self.context_runtime.native_system.clone();
+        let mut native = self.context_runtime.native_system.clone();
+        native.permission_reminder = self.permission_reminder.pending_text();
         self.pending_post_tool_batch = None;
         let accepted = self
             .context_runtime
@@ -797,6 +818,7 @@ impl AgentExecution<'_> {
         drop(adapter_preflight_profile);
         let primary = self.request.model.primary();
         let mut snapshot = RequestSnapshot::from_selected(
+            self.permission_reminder.mode,
             staged.identity,
             crate::context::resources::LedgerFrontier(staged.projection.surface_revision.get()),
             accepted.system_sections.clone(),
@@ -816,6 +838,12 @@ impl AgentExecution<'_> {
             Self::context_failure_terminal(&ContextError::new(ContextErrorKind::CannotFit, error))
         })?;
         debug_assert_eq!(snapshot.request_id, staged.request_id);
+        debug_assert_eq!(snapshot.permission_mode, self.permission_reminder.mode);
+        snapshot.permission_task_message = self
+            .permission_task
+            .as_deref()
+            .and_then(crate::runtime::permission::PermissionTaskEvidence::message_id)
+            .cloned();
         snapshot.history_cut = staged.history_cut;
         snapshot.tool_associations = staged.tool_associations;
         if let Some(frozen) = &self.logical_step.frozen_carryover {

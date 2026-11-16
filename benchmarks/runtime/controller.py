@@ -180,6 +180,16 @@ def run(argv, stem, case, env, project):
     return result
 
 
+def child_base_env(environ=None):
+    """Strip secret variables while preserving caller/default tool caches."""
+    source = os.environ if environ is None else environ
+    return {
+        k: v
+        for k, v in source.items()
+        if not any(s in k.upper() for s in ('TOKEN', 'SECRET', 'CREDENTIAL', 'API_KEY'))
+    }
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--rust', type=Path, required=True)
@@ -190,7 +200,7 @@ def main():
     p.add_argument('--case', choices=CASES, action='append')
     args = p.parse_args()
     args.output.mkdir(parents=True, exist_ok=False)
-    env = {k: v for k, v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN', 'SECRET', 'CREDENTIAL', 'API_KEY'))}
+    env = child_base_env()
     manifest = {'observer_mode':args.observer_mode, 'clock_ticks':os.sysconf('SC_CLK_TCK'), 'rust': str(args.rust.resolve()), 'rust_sha256': hashlib.file_digest(args.rust.open('rb'), 'sha256').hexdigest(), 'pi': str(args.pi.resolve()), 'pairs': args.pairs, 'cases': args.case or CASES, 'scope': 'product runtime plus driver; sibling provider owned and reaped only by controller; samples include explicitly reported verification phases; evidence files written after cleanup endpoint'}
     (args.output / 'manifest.json').write_text(json.dumps(manifest, indent=2))
     records = []

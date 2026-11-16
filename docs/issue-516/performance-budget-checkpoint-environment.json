@@ -1,0 +1,35 @@
+{
+  "captureDate": "2026-11-03",
+  "hostCpu": "Intel Core i9-14900K",
+  "browser": "Chromium 153.0.8010.12",
+  "playwright": "1.63.0",
+  "browserImage": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "isolation": "Bubblewrap, image root read-only, private temporary browser data; native host loopback shared; tests keep exposeNetwork=<loopback>.",
+  "cpuAffinity": [
+    0,
+    1
+  ],
+  "cpuTopology": "Logical CPUs 0 and 1 are SMT siblings of one physical core. No additional memory quota.",
+  "renderer": "ANGLE/SwiftShader; no hardware GPU available",
+  "viewport": {
+    "width": 1440,
+    "height": 1000,
+    "deviceScaleFactor": 1
+  },
+  "method": "Unchanged geometry-performance.spec.ts. Five samples per action. Eight-step full drags, two rAF after each action. Nearest-rank P95 is maximum of five samples. First display includes Playwright click, readiness polling and two rAF. Development fixture; not an isolated production-engine measurement.",
+  "sourceNote": "Digests describe the retained checkpoint, including cleanup after experiments. Captures preceded runtime/license bookkeeping and mount-init cleanup; rejected batching and dynamic resolution are no longer in source. Do not treat captures as exact final-commit acceptance.",
+  "sha256": {
+    "web-console/src/app/components/documents/geometry/model.ts": "9c1693bddf1ba98b9b91fa0089373a10d0d14cf734d810325f49bec57945673a",
+    "web-console/src/app/components/documents/geometry/scene-resources.ts": "f7814ed44d355f65b1a881bb64605d7cd20359558e9b4e65839dc33173f080f2",
+    "web-console/src/app/components/documents/geometry/viewport.ts": "b08b8d75eb5e98c75d27be304feb3a14ef1aeee13a96985e2eea10ae7ebb0010",
+    "web-console/src/app/components/documents/geometry/worker.ts": "29d129bf7685cac0a627f32f8111e4d8f8b9cd1dd1c5d1103874b0bf31effab0",
+    "web-console/src/app/components/documents/geometry/optimize.ts": "182954b01fe78ab74015870d3fda45c83c3fc6a11a9d579f411aeb088c6c4f1f",
+    "web-console/test/e2e/geometry-performance.spec.ts": "5d240a435272bb8d3b7021d76e3eb1921669ac8bc4ef08abd9ab1d8fd1a7568f",
+    "web-console/test/e2e/geometry-observation.ts": "427e001fd558b8508f22c4aaad7fc3097dba6c6eee0268773161d9829ed895d9",
+    "web-console/test/fixtures/geometry.tsx": "c5258952ac863a9eb4c61750ea79ecc1d00db49f31a73c06f0a8b885ad4505a3",
+    "web-console/test/fixtures/geometry/bracket-array.step": "36e1bcdf85073c8744fe6a5a6e006b14ba64689ebd3bbb739ea34cd4fffdff46",
+    "web-console/package.json": "76ef232a4fe90fc63cf2ad2aa0a59963b68c12ef9279bc109741ea72cfa7ac97",
+    "web-console/pnpm-lock.yaml": "011ec157a921732b9af87308b0ef5e17d308477d48dfeb38bae0f4590d5b53e1",
+    "web-console/geometry-runtime.json": "52ac865d7a3702b863547c3d51df138b51f88eefea61a935e3cf1294c750feb0"
+  }
+}

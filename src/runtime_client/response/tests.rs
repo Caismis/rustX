@@ -220,6 +220,7 @@ fn start_request_with_window(
     context_window: u64,
 ) -> RequestSnapshot {
     let mut snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new(attempt),
             turn: TurnId::new("1"),
@@ -437,7 +438,10 @@ fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent(
     canonical_result(&store, "a", "intermediate", false);
     request(&store, "a", 1, Some(usage(None)));
     assistant(&store, "a", "closing");
-    assert!(tails(&page(&store, None, 64)).is_empty());
+    assert_eq!(
+        tails(&page(&store, None, 64)),
+        [] as [&crate::observation::turn::CompletedResponseView; 0]
+    );
     assert!(!is_completed_response(&store, &MessageId::new("closing")).unwrap());
     finish(&store, "a");
     let result = page(&store, None, 64);
@@ -537,7 +541,10 @@ fn published_read_cut_does_not_observe_a_later_completion() {
         std::sync::Arc::make_mut(entry).completed_response = None;
     }
     native_oracle_decorate_through(&store, &mut old, through).unwrap();
-    assert!(tails(&old).is_empty());
+    assert_eq!(
+        tails(&old),
+        [] as [&crate::observation::turn::CompletedResponseView; 0]
+    );
     assert_eq!(tails(&page(&store, None, 64)).len(), 1);
 }
 
@@ -563,7 +570,10 @@ fn interrupted_output_and_incomplete_usage_never_claim_completion_or_zero() {
             attempt_id: AttemptId::new("a"),
         },
     );
-    assert!(tails(&page(&store, None, 64)).is_empty());
+    assert_eq!(
+        tails(&page(&store, None, 64)),
+        [] as [&crate::observation::turn::CompletedResponseView; 0]
+    );
     append(
         &store,
         "b",
@@ -1527,11 +1537,11 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
         expected
     );
     assert_eq!(child.presentation_frontier().unwrap(), 0);
-    assert!(
+    assert_eq!(
         child
             .transcript_attempts(&[MessageId::new("response")], 0)
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [crate::runtime::identity::AttemptId; 0]
     );
     let selected_window = child
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
@@ -1654,7 +1664,10 @@ fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() 
         super::decorate_window(&store, &mut historical, 0),
         Err(crate::durable::ConversationStoreError::InvalidReference(_))
     ));
-    assert!(tails(&old_window).is_empty());
+    assert_eq!(
+        tails(&old_window),
+        [] as [&crate::observation::turn::CompletedResponseView; 0]
+    );
     assert!(
         old_window
             .entries

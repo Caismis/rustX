@@ -80,8 +80,10 @@ impl Serialize for MetadataRef<'_> {
             unresolved_output_carryover: _,
             unresolved_output_carryover_anchor: _,
             contributions: _,
+            permission_mode: _,
+            permission_task_message: _,
         } = s;
-        let fields = 24
+        let fields = 26
             + usize::from(s.continuation.is_some())
             + usize::from(s.unresolved_output_carryover_source.is_some())
             + usize::from(s.unresolved_output_carryover.is_some())
@@ -117,6 +119,8 @@ impl Serialize for MetadataRef<'_> {
             field!(continuation);
         }
         field!(continuation_source);
+        field!(permission_mode);
+        field!(permission_task_message);
         field!(request_context_ids);
         if s.unresolved_output_carryover_source.is_some() {
             field!(unresolved_output_carryover_source);

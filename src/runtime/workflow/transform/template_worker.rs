@@ -85,9 +85,7 @@ pub(super) async fn render_with_control(
     let (send, receive) = tokio::sync::oneshot::channel();
     std::mem::drop(tokio::spawn(async move {
         let _permit = permit;
-        let result = RunnerBackedProcessRunner::default()
-            .run(spec, control)
-            .await;
+        let result = RunnerBackedProcessRunner.run(spec, control).await;
         let cleaned = tokio::task::spawn_blocking(move || input.close()).await;
         let result = match cleaned {
             Ok(Ok(())) => result,
@@ -129,19 +127,7 @@ pub(super) async fn render_with_control(
 }
 
 fn renderer_binary() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_workflow-renderer") {
-        return PathBuf::from(path);
-    }
-    let executable = std::env::current_exe().expect("current executable");
-    let directory = executable.parent().expect("current executable directory");
-    if directory.ends_with("deps") {
-        directory
-            .parent()
-            .expect("binary directory")
-            .join("workflow-renderer")
-    } else {
-        directory.join("workflow-renderer")
-    }
+    crate::runtime::process_runner::companion_binary("workflow-renderer")
 }
 
 /// Called only by the dedicated single-threaded renderer binary.

@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
@@ -78,5 +78,5 @@ for (const renamed of [false, true]) test(`Human Input middle exit connects and 
     await page.screenshot({ animations: 'disabled', path: `/tmp/rustx-review-connections-${renamed}.png` });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

@@ -98,12 +98,12 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
         .unwrap();
     let expected = if request_start {
         assert_eq!(call.unwrap().outcome, Some(AuxiliaryCallOutcome::Cancelled));
-        assert!(
+        assert_eq!(
             fixture
                 .store
                 .read_auxiliary_call_requests(&record.call_id, cut, None, 32)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
         assert_eq!(
             fixture.store.auxiliary_integrity_counts_for_test(),

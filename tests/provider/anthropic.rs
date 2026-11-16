@@ -1796,6 +1796,7 @@ async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() 
             .await;
     let mut request = request_with_tools("hi");
     request.tools = vec![model_selectable_tool("bash", "tool-bash")];
+    let expected_schema = request.tools[0].input_schema.clone();
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
@@ -1808,6 +1809,11 @@ async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() 
             .expect("description")
             .contains("execution_mode"),
         "the compiled reminder is translated verbatim: {tool}"
+    );
+    assert_eq!(
+        &tool["input_schema"],
+        expected_schema.as_ref(),
+        "the adapter preserves the entire compiled schema"
     );
     assert_compiled_execution_mode_schema(&tool["input_schema"], "command");
 }

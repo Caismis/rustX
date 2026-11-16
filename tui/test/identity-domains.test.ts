@@ -72,7 +72,7 @@ function foregroundTool(): CorrelatedTool {
     callId: COLLIDING,
     toolId: "tool-unknown",
     name: "unknown_tool",
-    argumentsText: "{}",
+    argumentsText: "{\"arguments\":{}}",
     lifecycle: {
       type: "settled",
       result: toolResult({ content: [{ type: "text", text: longBody }] }),

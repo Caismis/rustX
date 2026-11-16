@@ -1390,7 +1390,7 @@ mod tests {
                 serde_json::from_value(value).expect("deserialize generation fact");
             assert_eq!(decoded, failure);
             let message = failure.message();
-            assert!(!message.is_empty());
+            assert_ne!(message, "");
             assert!(message.len() < 200);
         }
     }

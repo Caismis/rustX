@@ -1,0 +1,235 @@
+{
+  "date": "2026-11-05",
+  "method": "Standalone Node native-WASM API comparisons, not browser or first-display timing. Full JSON SHA256 includes hierarchy, names, colors, positions, normals, indices and face ranges. rustx.2 assets were preserved before rebuilding rustx.3.",
+  "baseline": "235559e788f6ce073fc2fca50028dbbb017c7fee",
+  "samples": [
+    {
+      "name": "cube.step",
+      "meshes": 1,
+      "finalTriangles": 12,
+      "digest": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+      "comparisonDigests": {
+        "rustx2": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "rustx3Default": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2",
+        "rustx3LodFinal": "d4d4d89a0990c86ac7d0185aa26abbd20b9040f538c70f18b36daeca4735bdd2"
+      },
+      "levels": [
+        {
+          "level": 0,
+          "triangles": 12,
+          "ms": 12.293534999999991
+        },
+        {
+          "level": 1,
+          "triangles": 12,
+          "ms": 14.765660999999994
+        }
+      ],
+      "totalMs": 17.02035300000003,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "cube-inch.step",
+      "meshes": 1,
+      "finalTriangles": 12,
+      "digest": "cb6f756e4338654d139ad671bb5f473fac6c8b12412a446e7c23a930cb95c5bc",
+      "comparisonDigests": {
+        "rustx2": "cb6f756e4338654d139ad671bb5f473fac6c8b12412a446e7c23a930cb95c5bc",
+        "rustx3Default": "cb6f756e4338654d139ad671bb5f473fac6c8b12412a446e7c23a930cb95c5bc",
+        "rustx3LodFinal": "cb6f756e4338654d139ad671bb5f473fac6c8b12412a446e7c23a930cb95c5bc"
+      },
+      "levels": [
+        {
+          "level": 0,
+          "triangles": 12,
+          "ms": 11.258691999999996
+        },
+        {
+          "level": 1,
+          "triangles": 12,
+          "ms": 13.33246600000001
+        }
+      ],
+      "totalMs": 14.759515000000022,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "cube.iges",
+      "meshes": 1,
+      "finalTriangles": 12,
+      "digest": "1a0027f5b3cb75fce52caf82baff2d009a4a08789c90331e4dd428a066eb2526",
+      "comparisonDigests": {
+        "rustx2": "1a0027f5b3cb75fce52caf82baff2d009a4a08789c90331e4dd428a066eb2526",
+        "rustx3Default": "1a0027f5b3cb75fce52caf82baff2d009a4a08789c90331e4dd428a066eb2526",
+        "rustx3LodFinal": "1a0027f5b3cb75fce52caf82baff2d009a4a08789c90331e4dd428a066eb2526"
+      },
+      "levels": [
+        {
+          "level": 0,
+          "triangles": 12,
+          "ms": 6.918301999999983
+        },
+        {
+          "level": 1,
+          "triangles": 12,
+          "ms": 8.673226999999997
+        }
+      ],
+      "totalMs": 10.036608999999999,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "cube.brep",
+      "meshes": 1,
+      "finalTriangles": 12,
+      "digest": "b1d086970572aab74e0ea5a53948e3813cd3d30ff7ddc3da5f73103de0329370",
+      "comparisonDigests": {
+        "rustx2": "b1d086970572aab74e0ea5a53948e3813cd3d30ff7ddc3da5f73103de0329370",
+        "rustx3Default": "b1d086970572aab74e0ea5a53948e3813cd3d30ff7ddc3da5f73103de0329370",
+        "rustx3LodFinal": "b1d086970572aab74e0ea5a53948e3813cd3d30ff7ddc3da5f73103de0329370"
+      },
+      "levels": [
+        {
+          "level": 0,
+          "triangles": 12,
+          "ms": 1.154704000000038
+        },
+        {
+          "level": 1,
+          "triangles": 12,
+          "ms": 1.9692039999999906
+        }
+      ],
+      "totalMs": 2.90620100000001,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "mounting-bracket.step",
+      "meshes": 12,
+      "finalTriangles": 2352,
+      "digest": "99bf033dde7c7451427e8b175275309bffc5e9543a23b5372ac2f2f926b2deb8",
+      "comparisonDigests": {
+        "rustx2": "99bf033dde7c7451427e8b175275309bffc5e9543a23b5372ac2f2f926b2deb8",
+        "rustx3Default": "99bf033dde7c7451427e8b175275309bffc5e9543a23b5372ac2f2f926b2deb8",
+        "rustx3LodFinal": "99bf033dde7c7451427e8b175275309bffc5e9543a23b5372ac2f2f926b2deb8"
+      },
+      "levels": [
+        {
+          "level": 0,
+          "triangles": 1136,
+          "ms": 80.83036100000004
+        },
+        {
+          "level": 1,
+          "triangles": 1484,
+          "ms": 107.7638300000001
+        }
+      ],
+      "totalMs": 139.18194100000005,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "bracket-array.step",
+      "meshes": 96,
+      "finalTriangles": 17824,
+      "digest": "af5653b586c1bada6ba09f000b015bb59298c58be70a2f1d899f74c79abdc40c",
+      "comparisonDigests": {
+        "rustx2": "af5653b586c1bada6ba09f000b015bb59298c58be70a2f1d899f74c79abdc40c",
+        "rustx3Default": "af5653b586c1bada6ba09f000b015bb59298c58be70a2f1d899f74c79abdc40c",
+        "rustx3LodFinal": "af5653b586c1bada6ba09f000b015bb59298c58be70a2f1d899f74c79abdc40c"
+      },
+      "levels": [
+        {
+          "level": 0,
+          "triangles": 9088,
+          "ms": 106.977263
+        },
+        {
+          "level": 1,
+          "triangles": 11776,
+          "ms": 155.7936850000001
+        }
+      ],
+      "totalMs": 260.246533,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "lod-assembly.step",
+      "meshes": 3,
+      "finalTriangles": 6136,
+      "digest": "9a33ca3931e3298608fd4e851569f99f8d1032260313e0766f22c34bafdd470f",
+      "comparisonDigests": {
+        "rustx2": "9a33ca3931e3298608fd4e851569f99f8d1032260313e0766f22c34bafdd470f",
+        "rustx3Default": "9a33ca3931e3298608fd4e851569f99f8d1032260313e0766f22c34bafdd470f",
+        "rustx3LodFinal": "9a33ca3931e3298608fd4e851569f99f8d1032260313e0766f22c34bafdd470f"
+      },
+      "levels": [
+        {
+          "level": 0,
+          "triangles": 338,
+          "ms": 5.463925999999901
+        },
+        {
+          "level": 1,
+          "triangles": 1294,
+          "ms": 11.086058999999977
+        }
+      ],
+      "totalMs": 55.35485100000005,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "lod-assembly.brep",
+      "meshes": 3,
+      "finalTriangles": 6136,
+      "digest": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+      "comparisonDigests": {
+        "rustx2": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+        "rustx3Default": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+        "rustx3LodFinal": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f"
+      },
+      "levels": [
+        {
+          "level": 0,
+          "triangles": 338,
+          "ms": 1.9262269999999262
+        },
+        {
+          "level": 1,
+          "triangles": 1294,
+          "ms": 7.20083499999987
+        }
+      ],
+      "totalMs": 50.403695999999854,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "lod-assembly-meshed.brep",
+      "meshes": 3,
+      "finalTriangles": 6136,
+      "digest": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+      "comparisonDigests": {
+        "rustx2": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+        "rustx3Default": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f",
+        "rustx3LodFinal": "26fb620477f960c6ff9f2e6bcd77aa26e9e007e71fbbe41d95568848c420129f"
+      },
+      "levels": [],
+      "totalMs": 46.28879800000004,
+      "scope": "repository fixture"
+    },
+    {
+      "name": "native-only-257-boxes.brep",
+      "meshes": 257,
+      "finalTriangles": 3084,
+      "digest": "7a33643202e499830d499462625f9aacf19e1984e94eceedfe03ad3367f74ba8",
+      "comparisonDigests": {
+        "rustx2": "7a33643202e499830d499462625f9aacf19e1984e94eceedfe03ad3367f74ba8",
+        "rustx3Default": "7a33643202e499830d499462625f9aacf19e1984e94eceedfe03ad3367f74ba8",
+        "rustx3LodFinal": "7a33643202e499830d499462625f9aacf19e1984e94eceedfe03ad3367f74ba8"
+      },
+      "levels": [],
+      "totalMs": 374.04500800000005,
+      "scope": "SDK only; exceeds client part admission"
+    }
+  ]
+}

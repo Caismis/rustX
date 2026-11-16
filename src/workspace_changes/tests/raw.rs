@@ -464,13 +464,13 @@ async fn removing_a_nested_repository_and_its_index_entry_records_the_gitlink_de
             &["ls-tree", "-z", before, "--", "nested"],
         );
         assert!(initial.starts_with("160000 commit "));
-        assert!(
+        assert_eq!(
             snapshot_git(
                 root,
                 record.directory.get().unwrap().path(),
                 &["ls-tree", "-z", after, "--", "nested"]
-            )
-            .is_empty()
+            ),
+            ""
         );
         assert_eq!(git_files(root), metadata);
     }

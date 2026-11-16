@@ -333,7 +333,7 @@ async fn durable_session_operations_never_compose_a_runtime() {
         assert_eq!(&summary, sessions.iter().find(|row| row.id == id).unwrap());
         assert_eq!(f.manager.diagnostics(), residency_before);
         assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         let MethodResult::Session { session: unchanged } = call(
             &connection,
             112,
@@ -719,7 +719,7 @@ async fn completed_response_cut_is_shared_by_branch_and_fork_and_distinct_from_r
             assert_eq!(totals.reported_usage.unwrap().total_tokens, Some(240));
             assert!(totals.latest_turn.is_none());
             assert_eq!(crate::context::occupancy::read(&copied, 0).unwrap().unwrap().input_tokens, 100);
-            assert!(copied.read_events(None, 128).unwrap().events.is_empty());
+            assert_eq!(copied.read_events(None, 128).unwrap().events, [] as [crate::events::types::RuntimeEventEnvelope; 0]);
             let child_id = session.id.clone(); let child_node = session.active_node.clone();
             drop(copied); drop(destination);
             let MethodResult::Attached { target: child_target, .. } = call(&connection, 4198, Method::SessionAttach { thread_id: f.manager.sessions.read_node(&child_id, &child_node).await.unwrap().conversation_id }).await else { panic!("attach inherited lineage") };
@@ -829,7 +829,7 @@ async fn durable_history_is_readable_before_and_during_runtime_preparation() {
         assert_eq!(conversation_id, id);
         assert_eq!(installed.cut.conversation_id, id);
         assert!(installed.page.entries.is_empty());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         connection.close();
         f.close().await;
     })

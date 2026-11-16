@@ -2,11 +2,7 @@
 name = "rustx"
 version = "0.1.0"
 edition = "2024"
-# 1.92 is the effective MSRV of the released `xberg` document decoders
-# (Issue #48): xberg 1.0.14 declares 1.91, but its PDF backend chain
-# (pdf_oxide 0.3.77 → hayro-jpeg2000 0.4.0, pulled in unconditionally
-# through pdf_oxide's `rendering` feature) requires 1.92.
-rust-version = "1.92"
+rust-version = "1.100"
 license = "MIT"
 description = "A standalone Rust execution runtime for durable, tool-using LLM agents."
 repository = "https://github.com/Caismis/rustX"
@@ -73,22 +69,26 @@ async-openai = { version = "0.41", default-features = true, features = ["chat-co
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 eventsource-stream = "0.2"
 bytes = "1"
-# Upstream's generated meta validators avoid retaining runtime trees for all
-# bundled drafts. Authored schemas and tool arguments are still validated.
-jsonschema = { version = "0.60.2", features = ["macros"] }
+tower = { version = "0.5", default-features = false }
+# Schemas never acquire host file/network authority from a reference URI.
+# Generated meta validators avoid retaining bundled-draft trees at runtime.
+jsonschema = { version = "0.60.2", default-features = false, features = ["macros"] }
+# Reuse the validator's resource resolver when compiling invocation envelopes.
+referencing = "=0.60.2"
 # The native-search substrate behind Glob and Grep. These are implementation
 # dependencies of the shared traversal and of the Grep engine only: no `rg`
 # executable is ever spawned, and none of their defaults are part of the
 # model-facing tool contract.
 globset = "0.4.19"
 ignore = "0.4.33"
-grep-matcher = "0.1.9"
+# POSIX/bash AST for Issue #544 Bash read-only admission (ZCode semantic port).
+brush-parser = "0.4.0"
 grep-regex = "0.1.14"
 grep-searcher = "0.1.17"
 nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir", "inotify", "event", "user", "poll", "socket", "resource", "term"] }
 rustix = { version = "1.1.4", features = ["fs", "termios", "pty"] }
 libc = "0.2"
-serde_yaml = "0.9"
+serde_yaml_ng = "0.10.0"
 serde_path_to_error = "0.1"
 toml = "0.8"
 url = "2"
@@ -148,6 +148,7 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 biodivine-lib-bdd = "0.6.3"
 minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }
+pep440_rs = "0.7.3"
 
 [lints.rust]
 # The runtime process-supervision capability and the per-invocation Bash
@@ -167,7 +168,6 @@ pedantic = "warn"
 rusqlite = { version = "0.40.2", features = ["trace"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
-nix = { version = "0.31.3", features = ["signal", "process", "fs", "dir"] }
 
 [profile.test]
 # Bound non-incremental harness compilation on standard runners while

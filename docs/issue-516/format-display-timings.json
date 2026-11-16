@@ -1,0 +1,98 @@
+[
+  {
+    "entry": "delivery",
+    "name": "cube.glb",
+    "displayMs": 1176,
+    "importMs": 0.7
+  },
+  {
+    "entry": "delivery",
+    "name": "cube.stl",
+    "displayMs": 856.8,
+    "importMs": 472.4
+  },
+  {
+    "entry": "delivery",
+    "name": "cube-ascii.stl",
+    "displayMs": 857.8,
+    "importMs": 471.6
+  },
+  {
+    "entry": "delivery",
+    "name": "cube.step",
+    "displayMs": 1365.2,
+    "importMs": 936.2
+  },
+  {
+    "entry": "delivery",
+    "name": "cube-inch.step",
+    "displayMs": 1889.2,
+    "importMs": 887.8
+  },
+  {
+    "entry": "delivery",
+    "name": "cube.iges",
+    "displayMs": 1462,
+    "importMs": 687.1
+  },
+  {
+    "entry": "delivery",
+    "name": "cube.brep",
+    "displayMs": 902.6,
+    "importMs": 584.1
+  },
+  {
+    "entry": "delivery",
+    "name": "cube-textured.glb",
+    "displayMs": 186.1,
+    "importMs": 58.5
+  },
+  {
+    "entry": "workspace",
+    "name": "cube.glb",
+    "displayMs": 159.3,
+    "importMs": 0.7
+  },
+  {
+    "entry": "workspace",
+    "name": "cube.stl",
+    "displayMs": 892.8,
+    "importMs": 462.6
+  },
+  {
+    "entry": "workspace",
+    "name": "cube-ascii.stl",
+    "displayMs": 879.6,
+    "importMs": 461.2
+  },
+  {
+    "entry": "workspace",
+    "name": "cube.step",
+    "displayMs": 1376.8,
+    "importMs": 916.7
+  },
+  {
+    "entry": "workspace",
+    "name": "cube-inch.step",
+    "displayMs": 1537.5,
+    "importMs": 918
+  },
+  {
+    "entry": "workspace",
+    "name": "cube.iges",
+    "displayMs": 1461.7,
+    "importMs": 661.6
+  },
+  {
+    "entry": "workspace",
+    "name": "cube.brep",
+    "displayMs": 900.9,
+    "importMs": 578.3
+  },
+  {
+    "entry": "workspace",
+    "name": "cube-textured.glb",
+    "displayMs": 192.4,
+    "importMs": 2.6
+  }
+]

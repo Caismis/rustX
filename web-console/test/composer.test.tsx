@@ -135,3 +135,33 @@ it('denied preference writes keep the Composer usable', async () => {
   await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Steer' })));
   expect(p.onSend).toHaveBeenCalledExactlyOnceWith('usable', [], 'steer', expect.any(Function));
 });
+
+
+it('prepares Send without locking the draft or admitting any submission gesture', async () => {
+  const p = props();
+  const ui = render(<AgentComposer {...p} submitPending/>);
+  const input = screen.getByLabelText('Message');
+  const preparing = screen.getByRole('button', { name: 'Preparing to send…' });
+  expect(preparing).toHaveProperty('disabled', true);
+  expect(preparing.getAttribute('aria-busy')).toBe('true');
+  expect(preparing.getAttribute('data-sending')).toBeNull();
+  expect(input).toHaveProperty('readOnly', false);
+  expect(input).toHaveProperty('disabled', false);
+  fireEvent.change(input, { target: { value: 'Editable pending draft' } });
+  await act(async () => {
+    fireEvent.click(preparing);
+    fireEvent.keyDown(input, { key: 'Enter' });
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+  });
+  expect(p.onSend).not.toHaveBeenCalled();
+  ui.rerender(<AgentComposer {...p}/>);
+  expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false);
+  expect(input).toHaveProperty('value', 'Editable pending draft');
+  expect(p.onSend).not.toHaveBeenCalled();
+  ui.rerender(<AgentComposer {...p} submitPending active/>);
+  expect(screen.getByRole('button', { name: 'Stop' })).toHaveProperty('disabled', false);
+  expect(screen.queryByRole('button', { name: 'Preparing to send…' })).toBeNull();
+  ui.rerender(<AgentComposer {...p} submitPending busy/>);
+  expect(screen.getByRole('button', { name: 'Sending…' }).getAttribute('data-sending')).toBe('true');
+});

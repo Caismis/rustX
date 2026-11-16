@@ -260,7 +260,10 @@ async fn many_provider_deltas_coalesce_into_few_publication_writes() {
         .map(|frame| frame.sequence)
         .collect();
     assert_eq!(sequences, vec![0, 1, 2, 3]);
-    assert!(run.audit.publication_audits.is_empty());
+    assert_eq!(
+        run.audit.publication_audits,
+        [] as [crate::publication::frame::PublicationAudit; 0]
+    );
 }
 
 /// Committed partial frames preserve interleaved block arrival order, while
@@ -323,7 +326,10 @@ async fn partial_block_order_and_final_canonical_content_are_both_exact() {
             )
             .collect::<Vec<_>>()
     );
-    assert!(observed.audit.publication_audits.is_empty());
+    assert_eq!(
+        observed.audit.publication_audits,
+        [] as [crate::publication::frame::PublicationAudit; 0]
+    );
 }
 
 /// **Regression 2.** The latency flush is decided by the injected clock
@@ -353,7 +359,7 @@ async fn latency_flush_is_driven_by_the_injected_clock() {
         0,
         "with no byte or latency trigger, only the canonical receipt publishes content"
     );
-    assert!(parked.audit.released_publication_text().is_empty());
+    assert_eq!(parked.audit.released_publication_text(), "");
     assert_eq!(
         parked.audit.canonical_notifications,
         vec![parked.audit.messages().last().unwrap().clone()]
@@ -579,7 +585,6 @@ async fn tool_proposal_boundaries_are_released_as_their_own_frames() {
         "alpha",
         "tool-alpha",
         rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
-        rustx::tools::types::ToolConcurrencyPolicy::Sequential,
     );
     let mut tools = ToolRegistry::new();
     support::fake::FakeTool::new(definition, support::fake::success_result("ok"))
@@ -699,7 +704,10 @@ async fn a_failed_publication_terminal_releases_no_final_payload() {
         "the buffered tail is released only after U commits"
     );
     assert!(matches!(run.audit.outcome, AttemptOutcome::Failed { .. }));
-    assert!(run.audit.canonical_notifications.is_empty());
+    assert_eq!(
+        run.audit.canonical_notifications,
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(
         run.audit.messages().len(),
         1,
@@ -899,7 +907,10 @@ async fn a_canonically_accepted_turn_creates_no_audit_and_no_staging() {
         panic!("the canonical message carries the assembled text");
     };
     assert_eq!(block.text, "hello world");
-    assert!(run.audit.publication_frames.is_empty());
+    assert_eq!(
+        run.audit.publication_frames,
+        [] as [crate::publication::frame::PublicationFrame; 0]
+    );
     assert_eq!(
         run.audit.canonical_notifications,
         vec![MessageBlock::Assistant(assistant.clone())],
@@ -1054,7 +1065,13 @@ async fn failed_overflow_audit_blocks_the_retry_request() {
         report.publication_classes().is_empty(),
         "no output was durably published, so recovery cannot invent an empty audit"
     );
-    assert!(report.reconciliation().publication_audits.is_empty());
+    assert_eq!(
+        report.reconciliation().publication_audits,
+        [] as [(
+            crate::runtime::identity::PublicationStreamId,
+            crate::publication::frame::PublicationAuditKind
+        ); 0]
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -32,7 +32,6 @@ impl CanonicalSelection {
     /// Iterate borrowed immutable canonical bodies without hydration or copying.
     /// # Panics
     /// Panics if the private canonical-body invariant is violated.
-    #[must_use]
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &MessageBlock> + ExactSizeIterator {
         self.records
             .iter()

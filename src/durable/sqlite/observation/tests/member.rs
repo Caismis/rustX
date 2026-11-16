@@ -53,7 +53,10 @@ fn t09_t12_t19_pending_layout_cleanup_failure_cannot_refuse_native_adoption() {
         let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
         assert_eq!(adopted.items.len(), 1);
         assert_eq!(adopted.items[0].message, accepted.message);
-        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            store.load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         assert_eq!(
             store.load_canonical().unwrap(),
             vec![MessageBlock::User(accepted.message.clone())]
@@ -640,7 +643,7 @@ pub(in crate::durable::sqlite) fn member_original_identity(
         let original = base64::engine::general_purpose::STANDARD
             .decode(chunk.data_base64)
             .unwrap();
-        assert!(!original.is_empty());
+        assert_ne!(original, [] as [u8; 0]);
         assert!(original.len() <= 65_536);
         bytes.extend(original);
         let Some(next) = chunk.next_offset else { break };

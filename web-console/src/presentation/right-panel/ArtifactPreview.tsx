@@ -11,7 +11,7 @@ import css from './ArtifactPreview.module.css';
 import type { PreviewViewStateProps } from './preview-view-state';
 import { useViewScroll } from './use-view-scroll';
 /** Finite artifact presentation only; the app supplies bytes from its native resource API. */
-export function ArtifactPreview({ name, path = name, text, url, image, markdown = false, error, notice, retryable = true, loading, refresh, retry, decodeError, children, viewers, renderText, viewState, onViewStateChange, onDownload, hasMore = false, moreLoading = false, onLoadMore }: PreviewViewStateProps & { children?: ReactNode; viewers?: ReactNode; renderText?: (text: string) => ReactNode; name: string; path?: string; text?: string; url?: string; image: boolean; markdown?: boolean; decodeError?: () => void; error?: string; notice?: string; retryable?: boolean; loading: boolean; refresh: () => void; retry: () => void; onDownload: () => void; hasMore?: boolean; moreLoading?: boolean; onLoadMore?: () => void }) {
+export function ArtifactPreview({ name, path = name, text, url, image, markdown = false, error, notice, retryable = true, loading, loadingLabel, refresh, retry, decodeError, children, viewers, renderText, viewState, onViewStateChange, onDownload, hasMore = false, moreLoading = false, onLoadMore }: PreviewViewStateProps & { children?: ReactNode; viewers?: ReactNode; renderText?: (text: string) => ReactNode; name: string; path?: string; text?: string; url?: string; image: boolean; markdown?: boolean; decodeError?: () => void; error?: string; notice?: string; retryable?: boolean; loading: boolean; loadingLabel?: ReactNode; refresh: () => void; retry: () => void; onDownload: () => void; hasMore?: boolean; moreLoading?: boolean; onLoadMore?: () => void }) {
   const tx = useTranslation();
   const wrap = viewState.wrap ?? true;
   const scroll = useViewScroll(viewState.bodyScrollTop ?? 0, viewState.bodyScrollLeft ?? 0,
@@ -23,7 +23,7 @@ export function ArtifactPreview({ name, path = name, text, url, image, markdown 
     <Tooltip label={tx('artifacts:artifact-preview.download-artifact')} side="bottom" delayMs={500}><button type="button" className={css.tool} data-preview-download aria-label={tx('artifacts:artifact-preview.download-artifact')} onClick={onDownload}><span aria-hidden="true"><IconDownloadOutline16/></span></button></Tooltip>
   </>}>
     {notice && <p role="note" className={css.status}>{notice}</p>}
-    {loading && <LoadingIndicator label={tx('artifacts:artifact-preview.reading-native-artifact')}/>}
+    {loading && <LoadingIndicator label={loadingLabel ?? tx('artifacts:artifact-preview.reading-native-artifact')}/>}
     {error && <div className={css.status} role="alert"><p>{error}</p>{retryable && <Button onClick={retry}>{tx('artifacts:artifact-preview.retry-preview')}</Button>}</div>}
     {(text !== undefined || image && url && !error) && <div className={css.body} ref={scroll.ref} onScroll={event => {
       scroll.onScroll(event);

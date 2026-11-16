@@ -6,7 +6,7 @@ use rustx::model::session::AuxiliaryModelPolicy;
 use rustx::model::types::ModelProtocol;
 use rustx::skills::{SkillDiscovery, SkillDiscoveryConfig};
 use rustx::tools::Workspace;
-use rustx::tools::types::{ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy};
+use rustx::tools::types::ToolExecutionPolicy;
 
 fn examples_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/local-runtime")
@@ -114,8 +114,8 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert_eq!(config.initial_model().max_output_tokens, Some(2_048));
     assert_eq!(
-        config.initial_model().summary_model,
-        AuxiliaryModelPolicy::Session
+        config.initial_model().auxiliary,
+        AuxiliaryModelPolicy::default()
     );
     assert_eq!(config.context.reserve_tokens, 4_096);
     assert_eq!(config.context.keep_recent_tokens, 12_000);
@@ -127,7 +127,6 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
     );
     assert!(config.agent.extensions.agent_status.background.enabled);
     assert!(config.mcp_servers.is_empty());
-    assert!(config.mcp_tool_policies.is_empty());
     assert_eq!(config.environment["RUSTX_EXAMPLE_MODE"], "local-runtime");
     assert!(
         config
@@ -167,17 +166,16 @@ fn committed_runtime_config_selects_a_catalog_model_and_configures_runtime_polic
         vec!["parallel_review", "implement_and_review"]
     );
 
-    let policies = config.native_tools.to_policies();
+    // Issue #544: composition uses product-default NativeToolPolicies; Bash
+    // remains ModelSelectable without authored native_tools overlays.
+    let policies = rustx::tools::NativeToolPolicies::default();
     assert_eq!(policies.read.execution, ToolExecutionPolicy::ForegroundOnly);
-    assert_eq!(policies.read.concurrency, ToolConcurrencyPolicy::Parallel);
     assert_eq!(
         policies.bash.execution,
         ToolExecutionPolicy::ModelSelectable
     );
     assert_eq!(policies.grep.execution, ToolExecutionPolicy::ForegroundOnly);
-    assert_eq!(policies.edit.approval, ToolApprovalPolicy::Always);
-    assert_eq!(policies.bash.concurrency, ToolConcurrencyPolicy::Sequential);
-    assert_eq!(policies.bash.approval, ToolApprovalPolicy::Always);
+    assert_eq!(policies.edit.execution, ToolExecutionPolicy::ForegroundOnly);
 }
 
 #[test]
@@ -204,7 +202,7 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
     assert!(file_names.contains(&"server.py"));
     assert!(file_names.contains(&"requirements.txt"));
     // The example declares no dependencies; rustX pins FastMCP itself.
-    assert!(package.requirements().is_empty());
+    assert_eq!(package.requirements(), Vec::<String>::new());
 }
 
 #[test]
@@ -222,7 +220,7 @@ fn committed_example_skill_is_found_by_project_agents_discovery() {
             .collect::<Vec<_>>(),
         vec!["review-guidance"]
     );
-    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(outcome.diagnostics, []);
     assert!(outcome.packages[0].description().contains("bounded"));
 }
 
@@ -243,7 +241,7 @@ fn every_shipped_workflow_is_discovered_and_compiles() {
         )
         .unwrap();
         let definition: WorkflowDefinition =
-            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            serde_yaml_ng::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         WorkflowProgram::compile(id.clone(), definition)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     }
@@ -253,7 +251,7 @@ fn every_shipped_workflow_is_discovered_and_compiles() {
 fn reference_authoring_errors_fail_before_execution() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
     let source: serde_json::Value =
-        serde_yaml::from_slice(&read_example(".agents/workflows/implement_and_review.yaml"))
+        serde_yaml_ng::from_slice(&read_example(".agents/workflows/implement_and_review.yaml"))
             .unwrap();
     let cases = [
         (

@@ -625,6 +625,7 @@ impl RuntimeResourceSnapshot {
             agent_profile: self.agent_profile().map(str::to_owned),
             workspace_instructions: self.project_instructions().map(str::to_owned),
             skill_guidance: self.skill_catalog().map(str::to_owned),
+            permission_reminder: None,
         }
     }
 
@@ -1133,10 +1134,9 @@ mod tests {
             std::fs::write(root.join("AGENTS.override.md"), "override").unwrap();
             std::fs::write(root.join("CLAUDE.md"), "other guidance").unwrap();
         }
-        assert!(
-            load_project_context_files(&workspace, &global)
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            load_project_context_files(&workspace, &global).unwrap(),
+            [] as [crate::runtime::resources::ProjectContextFile; 0]
         );
         std::fs::write(global.join("AGENTS.md"), "global").unwrap();
         std::fs::write(workspace.join("AGENTS.md"), "workspace").unwrap();

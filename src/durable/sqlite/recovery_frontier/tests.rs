@@ -64,7 +64,10 @@ fn every_native_append_advances_the_frontier_exactly() {
     let value = frontier(&store);
     assert_eq!(value["through"], next_event_sequence(&store));
     assert_eq!(value["attempts"].as_object().unwrap().len(), 1);
-    assert!(value["repairs"].as_array().unwrap().is_empty());
+    assert_eq!(
+        value["repairs"].as_array().unwrap().as_slice(),
+        [] as [serde_json::Value; 0]
+    );
     // The debug oracle recomputes the whole fold inside reconstruction.
     RecoveryEvidence::reconstruct(&store).unwrap();
 }
@@ -73,6 +76,12 @@ fn every_native_append_advances_the_frontier_exactly() {
 fn the_frontier_commits_and_rolls_back_with_its_fact() {
     let store = history();
     let before = frontier(&store);
+    assert!(
+        before
+            .get("primary")
+            .is_some_and(serde_json::Value::is_object),
+        "rollback equality must cover the primary-request pointer"
+    );
     let sequence = next_event_sequence(&store);
     for commit in [false, true] {
         let mut connection = store.lock().unwrap();
@@ -246,4 +255,82 @@ fn root_page_and_journal_wal_work() {
         assert_eq!((turn - 32) % 536, 0);
         assert_eq!(frontier(&store)["through"], next_event_sequence(&store));
     }
+}
+
+#[test]
+fn reopened_store_keeps_settled_request_and_exact_adoption_task() {
+    use crate::durable::InboxStore;
+    use crate::message::types::UserSource;
+    use crate::runtime::identity::{AgentId, MessageId};
+
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("permission-frontier.sqlite");
+    let conversation = ConversationId::generate();
+    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    store.initialize(&[]).unwrap();
+    super::super::append_completed_turns(&store, 0, 1, false);
+    let human = {
+        let mut draft = draft("later human");
+        draft.message_id = Some(MessageId::new("later-human"));
+        store.accept_inbound(draft).unwrap()
+    };
+    store.adopt_pending_batch(human.sequence, None).unwrap();
+    let notice = {
+        let mut draft = draft("runtime notice");
+        draft.message_id = Some(MessageId::new("later-notice"));
+        draft.source = UserSource::Runtime;
+        store.accept_inbound(draft).unwrap()
+    };
+    store.adopt_pending_batch(notice.sequence, None).unwrap();
+    let delegated = {
+        let mut draft = draft("later delegated");
+        draft.message_id = Some(MessageId::new("later-delegated"));
+        draft.source = UserSource::Agent {
+            agent_id: AgentId::new("delegate"),
+        };
+        store.accept_inbound(draft).unwrap()
+    };
+    store.adopt_pending_batch(delegated.sequence, None).unwrap();
+    let request_id: String = store
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT json_extract(event_json,'$.event.request_id') FROM events WHERE event_kind='model_request_started' ORDER BY sequence DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let request_sequence: u64 = store
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT max(sequence) FROM events WHERE event_kind='model_request_started'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    drop(store);
+
+    let store = SqliteConversationStore::open(conversation, &path).unwrap();
+    let report = crate::runtime::recovery::RecoveryPlan::classify(
+        &RecoveryEvidence::reconstruct(&store).unwrap(),
+    )
+    .reconcile(&store, &crate::runtime::types::SystemClock)
+    .unwrap();
+    assert_eq!(
+        report
+            .latest_primary_request()
+            .map(crate::runtime::identity::RequestId::as_str),
+        Some(request_id.as_str())
+    );
+    assert_eq!(
+        report
+            .continuation_task_message()
+            .map(crate::runtime::identity::MessageId::as_str),
+        Some("later-human")
+    );
+    replace_frontier(&store, |value| {
+        value["task"]["at"] = request_sequence.into();
+    });
+    rejected(&store, "adoption task pointer");
 }

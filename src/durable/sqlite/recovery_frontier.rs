@@ -52,6 +52,15 @@ pub(super) fn advance(
         None => None,
     };
     frontier.fold(conversation, event, owner.as_ref());
+    if let crate::events::types::RuntimeEvent::InboundTurnAdopted { message_ids } = &event.event {
+        let mut adopted = Vec::with_capacity(message_ids.len());
+        for message_id in message_ids {
+            adopted.push(super::canonical::ledger::load_message(
+                connection, message_id,
+            )?);
+        }
+        frontier.reduce_adoption_task(event.sequence, &adopted);
+    }
     let bytes = frontier
         .encode()
         .map_err(|error| storage(format!("encode recovery frontier: {error}")))?;

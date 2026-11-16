@@ -1184,14 +1184,12 @@ async fn http_errors_normalize() {
     for (fixture, status, reason, headers, expected_kind) in cases {
         let fixture = fixture.to_owned();
         let fixture_for_server = fixture.clone();
-        let headers: Vec<(String, String)> = headers
-            .map(|headers| {
-                headers
-                    .into_iter()
-                    .map(|(name, value)| (name.to_owned(), value.to_owned()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let headers: Vec<(String, String)> = headers.map_or_default(|headers| {
+            headers
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect()
+        });
         let server = crate::common::FixtureServer::start(move |_attempt, _head| {
             let mut reply = error_fixture(&fixture_for_server);
             reply.status = status;
@@ -1419,6 +1417,7 @@ async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() 
     .await;
     let mut request = request_with_tools("List");
     request.tools = vec![model_selectable_tool("bash", "tool-bash")];
+    let expected_schema = request.tools[0].input_schema.clone();
     let events = collect_events(&adapter(&server), request).await;
     assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
     let body: serde_json::Value =
@@ -1431,6 +1430,11 @@ async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() 
             .expect("description")
             .contains("execution_mode"),
         "the compiled reminder is translated verbatim: {function}"
+    );
+    assert_eq!(
+        &function["parameters"],
+        expected_schema.as_ref(),
+        "the adapter preserves the entire compiled schema"
     );
     assert_compiled_execution_mode_schema(&function["parameters"], "command");
 }

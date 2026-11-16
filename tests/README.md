@@ -183,6 +183,10 @@ invariant is a real process boundary.
 - `background/text_spill` — real bash background execution through the
   actual `bash-supervisor` binary: oversized output spills and the terminal
   inbound.
+- `skill_launch` — Linux only. Skill discovery of Python and Node metadata
+  records no `posix_spawn` or `exec` attempt. The recorder is an `LD_PRELOAD`
+  library loaded into a fresh copy of this test binary; its negative control
+  awaits `python3 --version` before the observer reads the log.
 - `tool_deadline` — the Issue #204 generic hard deadline bounding a real
   foreground Bash process: the supervisor's process-group kill and reap are
   the physical settlement behind the proven `TimedOut`.
@@ -351,7 +355,7 @@ fixtures and helpers, CI, manifests and all Rust.
 Chromium and one Playwright worker per runner; they differ only in the
 selection the plan passes to `browser-prepare`:
 
-- **FULL** — every test Playwright discovers, in two shards. The coverage
+- **FULL** — every test Playwright discovers, in three shards. The coverage
   gate fails unless all of them ran exactly once.
 - **FAST** — one shard of the `@smoke` tests (startup and admission, the
   development launcher with the real Web carrier, App Server and Host,
@@ -438,32 +442,39 @@ summarizes them and the lane check below verifies them against Cargo:
 | `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | core and full (required) |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
-- **quality** (ubuntu) — fmt and Clippy.
-- **rust-contracts** (ubuntu) — `cargo build --bins`, then
-  `cargo test --lib --bins --examples --all-features -- --skip boundary_suites::`
-  and `cargo test --test contracts --test provider --all-features`.
-  The build comes first because the bash tool's unit tests exec
-  `target/debug/bash-supervisor` and the interactive-process unit tests exec
-  `target/debug/interactive-supervisor`; `cargo test --bins` builds the bin
-  *test harnesses*, which are a different Cargo unit and place neither
-  executable there. The three bin harnesses define no test today, and of
-  the example harnesses only `session_list_benchmark` (workload checker)
+- **quality** (ubuntu) — `cargo fmt --all -- --check`, both default-feature and
+  `--all-features` workspace `--all-targets --locked` Clippy (`-D warnings`),
+  strict `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked`,
+  and the Python benchmark and native-test-preparation controller suites
+  (`benchmarks/runtime`, `test-support`).
+- **rust-contracts** (ubuntu) — `python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider`,
+  then
+  `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::`,
+  `cargo test --test contracts --test provider --all-features --locked`, and
+  explicit `cargo test --doc --all-features --locked` (executing both
+  positive API counterparts and `compile_fail` encapsulation proofs).
+  Preparation compiles the lane's targets once with `--all-features` (matching
+  the ordinary library unit that `--examples`, `--test contracts`, and `--test
+  provider` share) and physically stages the emitted package binaries beside
+  every emitted test harness executable so unit tests of `bash-supervisor`,
+  `interactive-supervisor`, and `workflow-renderer` use the same
+  executable-sibling contract as production without a duplicate default-feature
+  `cargo build --bins`. The four binary targets define no unit test today, and
+  of the example harnesses only `session_list_benchmark` (workload checker)
   and `check_test_lanes` (the lane checker's own tests) do. Bins and
   examples stay selected so Cargo's own target discovery picks up a future
   test; the lane check allows their harnesses to be empty.
-- **rust-boundaries** (ubuntu) — the emulator's pytest suite, then
-  `cargo test --all-features --test durable --test process --test subagent
+- **rust-boundaries** (ubuntu) — the emulator's pytest suite,
+  `python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --test durable --test process --test subagent --test tools --test conformance --test cfg3_catalog --test cfg3_managed_output`
+  (compiling and staging the real binaries beside the external and `--lib`
+  harnesses once with `--all-features`), then
+  `cargo test --all-features --locked --test durable --test process --test subagent
   --test tools --test conformance --test cfg3_catalog --test
-  cfg3_managed_output`, then `cargo test --lib --all-features -- boundary_suites::`.
-  Running the integration targets first also builds every
-  real executable against the library the tests link and places it at
-  `target/debug/`, where the text_spill suite execs `bash-supervisor`; a
-  separate `cargo build --bins` would compile another complete library
-  (without dev-dependency features) that no test in the lane links. Both
-  test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
+  cfg3_managed_output`, then `cargo test --lib --all-features --locked -- boundary_suites::`.
+  Both test steps set `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`.
 - **rust-platform-core** (macos; FAST) — the seven external boundary
-  targets, natively: compiled first (which, as in rust-boundaries, places
-  the real executables at `target/debug/`), then run with
+  targets, natively: compiled and staged first through
+  `test-support/prepare_native_tests.py`, then run with
   `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Real process start and termination,
   signals, PTY, stdio and WebSocket transports, the native configuration
   writer lock race (`cfg3_catalog`), SQLite and filesystem durability and
@@ -471,7 +482,9 @@ summarizes them and the lane check below verifies them against Cargo:
   of the macOS lane's compilation (721 s of about 1,450 s in run
   39015122730).
 - **rust-platform-boundaries** (macos; FULL) — one job: the same external
-  targets, compiled first, then `cargo test --lib --bins --all-features
+  targets compiled and staged first, then `--lib --bins --test durable` compiled
+  and staged (reusing the fresh ordinary library and binaries from the first
+  step without compiling a third library copy), then `cargo test --lib --bins --all-features
   -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
   primitives differ across OSes — plus the in-crate boundary suites) and the
@@ -504,8 +517,8 @@ summarizes them and the lane check below verifies them against Cargo:
   boundaries, plus Desktop adapter and TUI Save coverage. FAST selects it
   for Web, TUI and the native supervisor changes. Linux Host tests run
   in `web-client`.
-- **Browser and Web client** — five jobs. `browser-prepare` builds once from
-  the checked-out source: `cargo build --bins --example
+- **Browser and Web client** — preparation, Web client, selected shard jobs
+  and reporting. `browser-prepare` builds once from the checked-out source: `cargo build --bins --example
   document_artifact_fixture` and the only production Web build (`pnpm
   build`: Vite, then `provenance.ts --artifact` over the new `dist/`), both
   run by `web-console/scripts/browser-artifact.ts pack`. It records them
@@ -514,8 +527,8 @@ summarizes them and the lane check below verifies them against Cargo:
   compiler matched, the Cargo command, Node version and ABI, pnpm,
   Playwright, and checksums of the Cargo and pnpm manifests and lockfiles —
   and a checksum and mode per file, and takes Playwright's own `--list`
-  inventory of the suite. It assigns whole spec files to the two shards,
-  heaviest first onto the lighter shard, by their measured seconds in
+  inventory of the suite. It assigns whole spec files to the selected shards
+  (three for FULL), heaviest first onto the lightest shard, by their measured seconds in
   `web-console/test/e2e/shard-weights.json` (a file without a measurement
   weighs its test count at the measured mean); Playwright's own `--shard`
   splits by test count, which put 1,298 s on one shard and 397 s on the other
@@ -523,12 +536,18 @@ summarizes them and the lane check below verifies them against Cargo:
   reports with `node scripts/browser-shards.ts weights <report.json>...`;
   each file's weight is its mean wall span (until the next test starts, so
   fixture time outside a test's reported duration counts) over the runs
-  given. Runner speed varies, so several runs balance better than one.
+  given. The current weights use both complete shard reports from run
+  42743604185 (commit `277b889ac6b97f9e3801a645f78eb3052abbca0d`):
+  all 766 cases across 151 files, including its nine visual failures.
+  Runner speed varies, so several runs balance better than one.
+  FULL uses three shards within the unchanged 45-minute job budget: in run
+  42775024217, two shards left no safe headroom and shard 2 was cancelled at
+  the job deadline. FAST keeps its one- or two-shard selection.
   Weights only steer balance: coverage is verified independently of them. Node native addons are not shared: `pnpm install`
   rebuilds them from the lockfile in every job. `web-client` (launcher
   `typecheck`/`test`, Web `typecheck`, `pnpm exec vitest run` with the
   `*.measurement.tsx` counters excluded, `check:i18n`, `check:provenance`)
-  and the two `browser-shard` jobs install those inputs only after
+  and the selected `browser-shard` jobs install those inputs only after
   `browser-artifact.ts install` verifies the identity against their own
   checkout and runner and every checksum, into a checkout holding no build
   output; any mismatch fails, and nothing is rebuilt in its place. Each
@@ -588,10 +607,18 @@ fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
 second copy of it. Each Rust test lane ends with
-`cargo run --profile test --all-features --example check_test_lanes -- --job <job id>`, which reads the
-workflow's executing `cargo test` steps and asks libtest, through `--list`,
-what each one selects — so filters, `--skip`, features and `cfg` are
-Cargo's and libtest's own semantics. Every test job declares its profiles
+`cargo run --profile test --all-features --locked --example check_test_lanes -- --job <job id>`, which reads the
+workflow's executing `cargo test` steps, acquires the validated libtest harness
+executable once per `(features, target)` via Cargo `--no-run --message-format=json`,
+asks that native binary directly through `--list --format terse [--ignored]`
+(and runs `cargo test --doc --locked ... -- --list` across all emitted rustdoc
+blocks for doctests) — so filters, `--skip`, features and `cfg` are
+Cargo's, rustdoc's, and libtest's own semantics. When a successful global
+`--ignored` query for an exact `(features, target)` already returned an empty
+set, a subsequent `ignored`-only query with a single non-empty `[A-Za-z0-9_:]+`
+filter atom reuses that empty result directly; all positive queries,
+non-empty/absent/failed globals, and all other argument shapes still query
+Cargo or the native binary directly. Every test job declares its profiles
 (`env: VERIFICATION_PROFILE: fast`, `full` or `fast full` — not a `RUST*`
 name, which the Rust cache would hash into its key) and must be gated by
 exactly `if: fromJSON(needs.plan.outputs.run)['<its id>']`; a FAST step may
@@ -599,21 +626,26 @@ also be gated by the plan's affected-component map, and nothing else may
 make a test step conditional. Each profile's coverage is its own. It fails
 for:
 
-- a Cargo test target (lib, bin, example, integration test) selected by no
-  executing FULL Linux step (`--no-run` and FAST steps do not count);
-- a Linux-discovered runnable test that no FULL Linux step executes, the
-  capacity suite included;
-- a step that selects no runnable test of a lib or integration-test target;
+- a Cargo test target (lib, bin, example, integration test, bench, doc) selected by no
+  executing FULL Linux step (`--no-run` and `--all-targets` without `--doc`, as
+  well as FAST steps, do not count);
+- a Linux-discovered runnable test or doctest that no FULL Linux step executes,
+  the capacity suite and all discovered doctests included;
+- a step that selects no runnable test of a lib, integration-test, bench, or
+  doc target;
 - a positive filter that matches nothing, only `#[ignore]`d tests, or only
   `--skip`ped tests, and a `--skip` that excludes nothing;
 - a suite in its `REQUIREMENTS` table that is missing or not fully executed
   in its profile on its platform: FAST on Linux must always run
   `scripted_suites::`, `runtime::conversation_runtime::` and the `process`
   target (affected steps never satisfy this; the capacity suite is
-  excluded), FULL on Linux the whole `::scale::` suite, FULL on macOS
+  excluded), FULL on Linux the whole `::scale::` suite, key Stage 3/4 modularized
+  suites, pure `contracts`/`provider`/`runtime_benchmark` targets, and explicit
+  `doc` plus all 6 documented owner symbol suites, FULL on macOS
   `boundary_suites::` and the seven external boundary targets;
 - a test job without a declared profile or the canonical plan gate, and a
-  step or libtest output it cannot interpret exactly.
+  step, Cargo artifact receipt, libtest output, or rustdoc block output it
+  cannot interpret exactly.
 
 Discovery is always native: the macOS job checks macOS, and `--job` refuses
 a job of another platform. Run it without `--job` to check every target of
@@ -670,7 +702,8 @@ cancelled run is diagnostic evidence, not a timing baseline.
   test bodies. `browser-report` prints a per-shard table (tests, wall time,
   summed test time) in its step summary, and the critical path is
   `browser-prepare` plus the slower shard plus `browser-report`. Runner
-  minutes are the sum over all five jobs.
+  minutes are the sum over preparation, Web client, all selected shards and
+  reporting.
 
 ## Prerequisites
 
@@ -690,9 +723,12 @@ Mandatory prerequisites fail closed; only explicitly opt-in tooling may
 skip:
 
 - **Real executables.** Tests that exec `bash-supervisor`,
-  `interactive-supervisor`, `workflow-renderer` or `rustx` need `cargo build --bins` first;
-  integration targets receive `CARGO_BIN_EXE_*` from Cargo. A missing
-  executable fails the spawn.
+  `interactive-supervisor`, `workflow-renderer`, or `rustx` via sibling
+  resolution require `python3 test-support/prepare_native_tests.py -- cargo test ... --no-run`
+  so the current package binaries are staged beside every emitted test harness
+  executable; integration targets also receive `CARGO_BIN_EXE_*` from Cargo,
+  and external Node/TUI suites use `cargo build --bins`. A missing executable
+  fails the spawn clearly without falling back to ancestor directories.
 - **A verified case-insensitive filesystem on macOS.** The `process` target's
   reserved-configuration-name startup regression probes the temporary
   volume using file identity. If it is case sensitive, the fixture uses
@@ -831,46 +867,50 @@ cargo test --all-features --test process app_server::
 (cd web-console && pnpm exec vitest run test/model-retry.test.tsx)
 
 # The FAST Rust lane (CI: rust-fast), without the affected heavy groups:
-cargo test --all-features --no-run --lib --test process
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- \
+python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --test process
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked -- \
   --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: \
   --skip local_runtime::session_runtime_manager::tests:: \
   --skip local_runtime::session:: --skip runtime_client::response::
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --test process
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked --test process
 
 # The capacity suite (FULL), or one capacity test:
-cargo test --lib --all-features ::scale::
+cargo test --lib --all-features --locked ::scale::
 
 # FULL: the lanes below. Promote a pull request with the
 # `full-verification` label to run all of them in CI on its exact head.
 
-# Unit tests + in-crate deterministic contracts (CI: rust-contracts):
-cargo build --bins   # unit tests exec target/debug/{bash,interactive}-supervisor
-cargo test --lib --bins --examples --all-features -- --skip boundary_suites::
-cargo test --test contracts --test provider --all-features
+# Unit tests + in-crate deterministic contracts + doctests (CI: rust-contracts):
+python3 test-support/prepare_native_tests.py -- \
+  cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
+cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::
+cargo test --test contracts --test provider --all-features --locked
+cargo test --doc --all-features --locked
 
-# Boundary lane (CI: rust-boundaries); uv is mandatory. Running the
-# external targets first also places the real executables at target/debug/,
-# where the text_spill suite execs bash-supervisor:
+# Boundary lane (CI: rust-boundaries); uv is mandatory:
 BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
   --test conformance --test cfg3_catalog --test cfg3_managed_output'
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features $BOUNDARY_TARGETS
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features -- boundary_suites::
+python3 test-support/prepare_native_tests.py -- \
+  cargo test --all-features --locked --no-run --lib $BOUNDARY_TARGETS
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked $BOUNDARY_TARGETS
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked -- boundary_suites::
 
 # macOS core (CI: rust-platform-core): the seven external boundary targets
-# above. macOS full (CI: rust-platform-boundaries) adds, after the same
-# external-target compilation:
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features -- \
+# prepared above. macOS full (CI: rust-platform-boundaries) adds:
+python3 test-support/prepare_native_tests.py -- \
+  cargo test --lib --bins --test durable --all-features --locked --no-run
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features --locked -- \
   --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
 
 # Lane coverage for one CI job on its own platform, or every target here
 # (--all-features reuses the library the test targets already compiled):
-cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
-cargo run --profile test --all-features --example check_test_lanes
+cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts
+cargo run --profile test --all-features --locked --example check_test_lanes
 
-# Everything, the safety net (it does not prove the CI lanes' selection):
-RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features
+# Everything, the safety net (it does not prove the CI lanes' selection or `--doc`):
+python3 test-support/prepare_native_tests.py -- cargo test --all-targets --all-features --locked --no-run
+RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --locked
 
 # One domain target:
 cargo test --test durable --all-features

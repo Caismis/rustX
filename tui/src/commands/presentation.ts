@@ -1,4 +1,4 @@
-import { activeBackground, capabilitySummary, describeConfiguredProfile, describeProfile, inactiveToolsByOrigin, latestAgentStatus, originLabel, outcomeLabel, skills, toolsByOrigin, unavailableInputModalities } from "../presentation/selectors.ts";
+import { activeBackground, capabilitySummary, describeConfiguredAuxiliaryModel, describeConfiguredAuxiliaryProfile, describeConfiguredProfile, describeProfile, inactiveToolsByOrigin, latestAgentStatus, originLabel, outcomeLabel, skills, toolsByOrigin, unavailableInputModalities } from "../presentation/selectors.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { renderAgentStatusDetail } from "../ui/components/agent-status.ts";
 import { COMMANDS } from "./registry.ts";
@@ -139,19 +139,18 @@ export function renderModel(state: PresentationState): string {
     }
   }
 
-  const summary = session.summary ?? session.configured.summaryModel;
+  const auxiliaryConfigured = session.configured.auxiliary;
   lines.push(
-    `- summary model: ${
-      summary == null || summary.mode === "session"
-        ? "follows the attempt's primary model"
-        : `\`${summary.model}\``
-    }`,
+    `- configured auxiliary model: ${describeConfiguredAuxiliaryModel(auxiliaryConfigured)}`,
+    `- configured auxiliary profile strategy: ${describeConfiguredAuxiliaryProfile(auxiliaryConfigured)}`,
   );
-
-  const title = session.title ?? session.configured.titleModel;
-  lines.push(`- title model: ${title == null || title.mode === "session"
-    ? "follows the Session's primary model at title admission"
-    : `\`${title.model}\``}`);
+  const auxiliaryEffective = session.auxiliary;
+  if (auxiliaryEffective != null) {
+    lines.push(
+      `- effective auxiliary model: \`${auxiliaryEffective.effective.model}\` via ${auxiliaryEffective.effective.protocol}`,
+      `- effective auxiliary profile: ${describeProfile(auxiliaryEffective.effective)}`,
+    );
+  }
 
   const attempt = state.attempt;
   if (attempt !== undefined) {
@@ -220,7 +219,7 @@ function appendToolGroups(
     for (const tool of group.tools) {
       lines.push(
         `- \`${tool.name}\` — ${tool.description}`,
-        `  - execution: ${tool.execution_policy}, concurrency: ${tool.concurrency_policy}, approval: ${tool.approval_policy}, replay: ${tool.replay_policy}`,
+        `  - execution: ${tool.execution_policy}, replay: ${tool.replay_policy}`,
         `  - origin: ${originLabel(tool.origin)}`,
       );
     }

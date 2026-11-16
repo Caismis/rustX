@@ -23,7 +23,7 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     await native.renameSession(target.id, 'Cold target B');
     // This flow starts in A. Restore that view rather than briefly preparing
     // the unrelated default New Conversation Workspace on the way there.
-    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: [id] })), { endpoint: new URL(fixture.endpoint).href, id: source.id });
+    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: [id], route: { kind: 'session', sessionId: id } })), { endpoint: new URL(fixture.endpoint).href, id: source.id });
     const wire = await wireProbe(page);
     await routeWorkspaceHost(page, fixture);
     await page.setViewportSize({ width, height: 900 });
@@ -125,7 +125,7 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
     const target = (await native.createSession({ cwd: fixture.workspaceA })).session;
     await native.renameSession(source.id, 'Warm reconnect source');
     await native.renameSession(target.id, 'Cold reconnect target');
-    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: [id] })), { endpoint: new URL(fixture.endpoint).href, id: source.id });
+    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: [id], route: { kind: 'session', sessionId: id } })), { endpoint: new URL(fixture.endpoint).href, id: source.id });
     const wire = await wireProbe(page);
     await routeWorkspaceHost(page, fixture);
     await page.goto('/');

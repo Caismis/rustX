@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { translator } from '../../src/locale/translation';
@@ -230,6 +230,6 @@ for (const width of [1440, 390])
       await expect(ledger.locator('[data-workflow-node]')).toHaveCount(4);
       expect(errors).toEqual([]);
     } finally {
-      await fixture.stop(false);
+      await stopDogfoodPage(page, fixture, false);
     }
   });

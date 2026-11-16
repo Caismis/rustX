@@ -25,7 +25,7 @@ async fn first_turn_admission_preserves_precancel_and_committed_observer_order()
         assert!(matches!(result.outcome, AttemptOutcome::Cancelled { .. }));
         assert!(result.durable_failure.is_none());
         assert_eq!(adapter.request_count(), 0);
-        assert!(request_snapshot_history(store.as_ref()).is_empty());
+        assert_eq!(request_snapshot_history(store.as_ref()), [] as [crate::model::snapshot::RequestSnapshot; 0]);
         let events = event_history(store.as_ref());
         assert_eq!(observer.events(), events, "committed callbacks retain native order");
         if precancel {
@@ -70,7 +70,7 @@ async fn first_turn_admission_failure_never_publishes_a_partial_start_or_calls_p
         assert_eq!(result.durable_failure_kind, Some(super::DurableFailureKind::EventJournal));
         assert!(result.durable_failure.as_deref().unwrap().contains("runtime event could not be persisted"));
         assert_eq!(adapter.request_count(), 0);
-        assert!(request_snapshot_history(store.as_ref()).is_empty());
+        assert_eq!(request_snapshot_history(store.as_ref()), [] as [crate::model::snapshot::RequestSnapshot; 0]);
         let events = event_history(store.as_ref());
         assert!(matches!(events.as_slice(), [RuntimeEvent::AttemptFailed { .. }]), "only the separate failure terminal may commit: {events:?}");
         assert_eq!(observer.events(), events);

@@ -194,6 +194,17 @@ class ControllerTests(unittest.TestCase):
         record, _ = self.exercise(provider_exit=1)
         self.assertFalse(record['accepted'])
 
+    def test_child_base_env_preserves_caller_or_default_uv_cache_and_strips_secrets(self):
+        cleaned = controller.child_base_env({
+            'PATH': '/usr/bin',
+            'OPENAI_API_KEY': 'secret-key',
+            'SESSION_TOKEN': 'tok',
+            'UV_CACHE_DIR': '/tmp/caller-uv-cache',
+        })
+        self.assertEqual(cleaned, {'PATH': '/usr/bin', 'UV_CACHE_DIR': '/tmp/caller-uv-cache'})
+        unset = controller.child_base_env({'PATH': '/usr/bin', 'MY_CREDENTIAL': 'x'})
+        self.assertEqual(unset, {'PATH': '/usr/bin'})
+
     def test_provider_start_failure_kills_only_started_product_and_records_failure(self):
         record, events = self.exercise(startup_failure=True)
         self.assertFalse(record['accepted'])

@@ -75,9 +75,9 @@ if (new URL(location.href).searchParams.has('draft')) {
   server.workspaceHost.resolveWorkspace = async id => ({ cwd: catalog.workspaces.find(workspace => workspace.id === id)!.displayPath });
   server.workspaceHost.configureWorkspace = async id => ({ kind: 'read', projection: { ...cfg3Source(), prospective_approval_mode: 'full_access', target: { kind: 'workspace', directory: catalog.workspaces.find(workspace => workspace.id === id)!.displayPath } } });
   await server.connect();
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: [] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: [], route: { kind: 'new-conversation' } }));
 } else {
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
 }
 createRoot(document.getElementById('root')!).render(<App client={server.client} workspaceHost={server.workspaceHost}/>);

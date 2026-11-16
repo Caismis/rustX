@@ -179,7 +179,7 @@ impl Owner {
     pub(in crate::durable::sqlite) fn invalidate(&self) {
         let _ = self
             .epoch
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
                 Some(epoch.saturating_add(1))
             });
     }

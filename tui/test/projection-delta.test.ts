@@ -4,7 +4,7 @@ import {gunzipSync} from 'node:zlib';
 import {test} from 'node:test';
 import {checkpointSnapshot, foldRuntimeEvent, observationCheckpoint} from '../../protocol/app-server/projection.ts';
 import {deltaEvent, initialLiterals, advanceLiterals} from '../../protocol/app-server/test-support/projection-delta.ts';
-import type {Notification, RuntimeClientEvent, RuntimeClientCheckpoint} from '../../protocol/app-server/v79.ts';
+import type {Notification, RuntimeClientEvent, RuntimeClientCheckpoint} from '../../protocol/app-server/v80.ts';
 import {replaceFromSnapshot, reduce} from '../src/presentation/projection.ts';
 
 for (const name of ['incremental-native', 'incremental-canonical-native']) test(`terminal full and delta rendering agree at every native state: ${name}`, () => {

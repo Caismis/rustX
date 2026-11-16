@@ -49,6 +49,19 @@ fn process_gone(pid: i32) {
         "descendant must be physically absent"
     );
 }
+pub(super) async fn admit_or_fail<T: std::fmt::Debug>(
+    connection: &AppServerConnection,
+    id: &str,
+    command: &mut tokio::task::JoinHandle<T>,
+) {
+    bounded(async {
+        tokio::select! {
+            () = connection.command_admitted_for_test(id) => {}
+            early = command => panic!("command {id} finished before admission check: {early:?}"),
+        }
+    })
+    .await;
+}
 
 pub(crate) async fn buffered_scenario() {
     let fixture = Fixture::new().await;
@@ -119,10 +132,14 @@ pub(crate) async fn buffered_scenario() {
     .unwrap();
     assert_eq!(
         environment.lines().count(),
-        4,
-        "only native basics, no provider or App Server credentials"
+        18,
+        "native basics plus Git child defaults; no provider or App Server credentials"
     );
     assert!(environment.contains("LANG=C.UTF-8"));
+    assert!(environment.contains("GIT_CONFIG_COUNT=5\n"));
+    assert!(environment.contains("GIT_CONFIG_PARAMETERS=\n"));
+    assert!(environment.contains("GIT_CONFIG_KEY_4=core.fsmonitor\n"));
+    assert!(environment.contains("GIT_CONFIG_VALUE_4=false\n"));
     assert_eq!(fixture.manager.diagnostics().loaded, 0);
     connection.close();
 }
@@ -166,9 +183,9 @@ pub(crate) async fn connection_process_scenario() {
     cat.stream_stdin = true;
     cat.stream_stdout_stderr = true;
     let second_call = second.clone();
-    let second_result =
+    let mut second_result =
         tokio::spawn(async move { call(&second_call, 3, Method::CommandExec(cat)).await });
-    second.command_admitted_for_test("same").await;
+    admit_or_fail(&second, "same", &mut second_result).await;
     let payload = base64::engine::general_purpose::STANDARD.encode([0, 255, 10]);
     call(
         &second,
@@ -185,7 +202,7 @@ pub(crate) async fn connection_process_scenario() {
         panic!("cat result")
     };
     assert_eq!(result.status, ExecStatus::Completed);
-    assert!(result.stdout_base64.is_empty());
+    assert_eq!(result.stdout_base64, "");
     call(
         &first,
         3,
@@ -297,7 +314,7 @@ pub(crate) async fn terminal_scenario() {
         panic!("terminal result")
     };
     assert_eq!(result.status, ExecStatus::Completed);
-    assert!(result.stdout_base64.is_empty());
+    assert_eq!(result.stdout_base64, "");
     connection.close();
 }
 
@@ -621,9 +638,62 @@ pub(crate) async fn watch_registration_scenario() {
     connection.close();
 }
 
+pub(crate) async fn observed_mutation_hint(
+    connection: &AppServerConnection,
+    watch_id: &str,
+    source: &Path,
+    expected: &Path,
+    mutation: impl FnOnce(),
+) -> crate::app_server::filesystem::Changed {
+    use futures_util::FutureExt as _;
+    let mut phases = FixturePhase::new("native filesystem mutation hint");
+    phases.enter("drain earlier routed hints");
+    while connection.next_notification().now_or_never().is_some() {}
+    let published = crate::app_server::filesystem::observe_native_change(
+        source.to_path_buf(),
+        expected.to_path_buf(),
+    );
+    phases.enter("fresh native callback publication");
+    mutation();
+    bounded(published)
+        .await
+        .expect("fresh native callback publication");
+    phases.enter("routed hint after native publication");
+    let mut last = None;
+    let change = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let NotificationMethod::FsChanged(change) =
+                connection.next_notification().await.notification
+            {
+                if change.watch_id != watch_id {
+                    continue;
+                }
+                assert!(change.resync_required);
+                assert!(!change.retired);
+                // The receipt above proves observation of this exact native
+                // path even when a busy identity check discards routed paths.
+                if change.changed_paths.is_empty()
+                    || change.changed_paths.contains(&expected.to_path_buf())
+                {
+                    return change;
+                }
+                last = Some(change);
+            }
+        }
+    })
+    .await
+    .unwrap_or_else(|_| {
+        panic!(
+            "published native hint for {}: last={last:?}",
+            expected.display()
+        )
+    });
+    phases.finish();
+    change
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) async fn macos_watch_scenario() {
-    use std::os::unix::fs::PermissionsExt;
     let fixture = Fixture::with_session_count(None, 0).await;
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
@@ -648,51 +718,107 @@ pub(crate) async fn macos_watch_scenario() {
         1,
         "only the two immediate native sources consume descriptors"
     );
-    async fn hint(connection: &AppServerConnection, expected: &Path, retired: bool) {
-        tokio::time::timeout(std::time::Duration::from_secs(5), async {
-            loop {
-                let event = connection.next_notification().await;
-                if let NotificationMethod::FsChanged(changed) = event.notification {
-                    assert!(changed.resync_required);
-                    if changed.retired == retired
-                        && (retired || changed.changed_paths.contains(&expected.to_path_buf()))
-                    {
-                        break;
-                    }
-                }
-            }
-        })
-        .await
-        .expect("native descriptor event / physical retirement");
-    }
-    std::fs::write(&existing, b"after").unwrap();
-    hint(&connection, &existing, false).await;
+    macos_watch_existing(&connection, &source).await;
+    macos_watch_membership(&connection, &source, &capacity).await;
+    macos_watch_capacity(&connection, &source, &capacity).await;
+    connection.close();
+}
+
+#[cfg(target_os = "macos")]
+async fn macos_watch_existing(connection: &AppServerConnection, source: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let mut phases = FixturePhase::new("macOS descriptor existing children");
+    let existing = source.join("existing");
+    let child_directory = source.join("directory");
+    phases.enter("existing file contents");
+    observed_mutation_hint(connection, "macos", source, &existing, || {
+        std::fs::write(&existing, b"after").unwrap();
+    })
+    .await;
+    macos_watch_read(connection, &existing, b"after").await;
     let mode = std::fs::metadata(&child_directory)
         .unwrap()
         .permissions()
         .mode();
-    std::fs::set_permissions(
-        &child_directory,
-        std::fs::Permissions::from_mode(mode ^ 0o100),
-    )
-    .unwrap();
-    hint(&connection, &child_directory, false).await;
+    phases.enter("child directory attributes");
+    observed_mutation_hint(connection, "macos", source, &child_directory, || {
+        std::fs::set_permissions(
+            &child_directory,
+            std::fs::Permissions::from_mode(mode ^ 0o100),
+        )
+        .unwrap();
+    })
+    .await;
+    assert_eq!(
+        std::fs::metadata(&child_directory)
+            .unwrap()
+            .permissions()
+            .mode(),
+        mode ^ 0o100
+    );
+    phases.finish();
+}
+
+#[cfg(target_os = "macos")]
+async fn macos_watch_membership(
+    connection: &AppServerConnection,
+    source: &Path,
+    capacity: &tokio::sync::Semaphore,
+) {
+    let mut phases = FixturePhase::new("macOS descriptor membership refresh");
     let created = source.join("created");
-    std::fs::write(&created, b"new").unwrap();
-    hint(&connection, &source, false).await;
+    phases.enter("register created child");
+    observed_mutation_hint(connection, "macos", source, source, || {
+        std::fs::write(&created, b"new").unwrap();
+    })
+    .await;
     assert_eq!(capacity.available_permits(), 0);
-    std::fs::write(&created, b"changed").unwrap();
-    hint(&connection, &created, false).await;
-    std::fs::remove_file(&created).unwrap();
-    hint(&connection, &source, false).await;
+    macos_watch_read(connection, &created, b"new").await;
+    phases.enter("created child contents");
+    observed_mutation_hint(connection, "macos", source, &created, || {
+        std::fs::write(&created, b"changed").unwrap();
+    })
+    .await;
+    macos_watch_read(connection, &created, b"changed").await;
+    phases.enter("remove child descriptor");
+    observed_mutation_hint(connection, "macos", source, source, || {
+        std::fs::remove_file(&created).unwrap();
+    })
+    .await;
     assert_eq!(capacity.available_permits(), 1);
+    assert!(!created.exists());
+    let existing = source.join("existing");
     let renamed = source.join("renamed");
-    std::fs::rename(&existing, &renamed).unwrap();
-    hint(&connection, &source, false).await;
-    std::fs::write(&renamed, b"changed again").unwrap();
-    hint(&connection, &renamed, false).await;
+    phases.enter("rename child descriptor");
+    observed_mutation_hint(connection, "macos", source, source, || {
+        std::fs::rename(&existing, &renamed).unwrap();
+    })
+    .await;
+    assert_eq!(capacity.available_permits(), 1);
+    phases.enter("renamed child contents");
+    observed_mutation_hint(connection, "macos", source, &renamed, || {
+        std::fs::write(&renamed, b"changed again").unwrap();
+    })
+    .await;
+    macos_watch_read(connection, &renamed, b"changed again").await;
+    phases.finish();
+}
+
+#[cfg(target_os = "macos")]
+async fn macos_watch_capacity(
+    connection: &AppServerConnection,
+    source: &Path,
+    capacity: &Arc<tokio::sync::Semaphore>,
+) {
+    let mut phases = FixturePhase::new("macOS descriptor capacity and settlement");
+    let created = source.join("created");
+    let watch = || Method::FsWatch {
+        watch_id: "macos".into(),
+        path: source.display().to_string(),
+    };
+    phases.enter("unwatch physical settlement");
     call(
-        &connection,
+        connection,
         2,
         Method::FsUnwatch {
             watch_id: "macos".into(),
@@ -704,25 +830,74 @@ pub(crate) async fn macos_watch_scenario() {
         .unwrap();
     drop(all);
     // Initial refusal releases every partially registered source.
+    phases.enter("initial capacity refusal");
     std::fs::write(&created, b"third").unwrap();
     let held = capacity.clone().acquire_owned().await.unwrap();
     assert_eq!(
-        rejected(&connection, 3, watch()).await,
+        rejected(connection, 3, watch()).await,
         ErrorData::EnvironmentCapacityOrConflict
     );
     assert_eq!(capacity.available_permits(), 2);
     drop(held);
     std::fs::remove_file(&created).unwrap();
-    call(&connection, 4, watch()).await;
+    phases.enter("overflow physical retirement");
+    call(connection, 4, watch()).await;
     let held = capacity.clone().acquire_owned().await.unwrap();
+    let queued = connection.watch_retirement_for_test("macos");
     std::fs::write(&created, b"overflow").unwrap();
-    hint(&connection, &source, true).await;
+    bounded(queued).await.unwrap();
+    macos_retirement_hint(connection).await;
     drop(held);
     let all = bounded(capacity.clone().acquire_many_owned(3))
         .await
         .unwrap();
     drop(all);
-    connection.close();
+    phases.finish();
+}
+
+#[cfg(target_os = "macos")]
+async fn macos_retirement_hint(connection: &AppServerConnection) {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let NotificationMethod::FsChanged(change) =
+                connection.next_notification().await.notification
+            {
+                if change.watch_id != "macos" {
+                    continue;
+                }
+                assert!(change.resync_required);
+                if change.retired {
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("queued native descriptor retirement");
+}
+
+#[cfg(target_os = "macos")]
+async fn macos_watch_read(connection: &AppServerConnection, path: &Path, expected: &[u8]) {
+    let MethodResult::FileChunk { chunk } = call(
+        connection,
+        99,
+        Method::FsReadFile {
+            path: path.display().to_string(),
+            offset: 0,
+            max_bytes: 64,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("read observed child");
+    };
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(chunk.data_base64)
+            .unwrap(),
+        expected
+    );
 }
 
 pub(crate) async fn filesystem_scenario() {
@@ -1003,7 +1178,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
         .iter()
         .find(|skill| skill.catalog.name == "inspection")
         .unwrap();
-    assert!(!skill.metadata_revision.is_empty());
+    assert_ne!(skill.metadata_revision, "");
     assert_eq!(
         skill.provenance.source,
         crate::skills::SkillSource::Workspace
@@ -1115,9 +1290,9 @@ pub(crate) async fn output_capacity_and_timeout_scenario() {
     streamed.stream_stdin = true;
     streamed.output_bytes_cap = Some(262_144);
     let worker = connection.clone();
-    let slow =
+    let mut slow =
         tokio::spawn(async move { rejected(&worker, 3, Method::CommandExec(streamed)).await });
-    connection.command_admitted_for_test("slow").await;
+    admit_or_fail(&connection, "slow", &mut slow).await;
     call(
         &connection,
         4,
@@ -1181,11 +1356,11 @@ pub(crate) async fn host_drain_scenario() {
         .unwrap();
     // This shutdown guard is shorter than the command's 60-second deadline.
     // Drain must cancel the process before waiting for its request owner.
-    assert!(
+    assert_eq!(
         tokio::time::timeout(std::time::Duration::from_secs(10), fixture.host.drain())
             .await
-            .expect("host drain cancels independent work before its execution deadline")
-            .is_empty()
+            .expect("host drain cancels independent work before its execution deadline"),
+        [] as [std::string::String; 0]
     );
     process_gone(pid);
     match bounded(command).await.unwrap() {
@@ -1742,7 +1917,10 @@ pub(crate) async fn skill_catalog_page_scenario() {
             panic!("catalog page")
         };
         assert!(crate::bounded_file::json_fits(&page.data, 131_072));
-        assert!(!page.data.is_empty());
+        assert_ne!(
+            page.data,
+            [] as [crate::local_runtime::skill_management::SkillDescriptor; 0]
+        );
         total += page.data.len();
         pages += 1;
         revision = Some(page.revision);

@@ -274,7 +274,6 @@ fn spec(task: &str) -> SubagentStartSpec {
             title: "Explore task".into(),
             execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
             resolved: resolved("explore"),
-            approval_mode: crate::runtime::ApprovalMode::Policy,
         },
         admission: crate::runtime::subagent::ActivationAdmission {
             attachments: Vec::new(),
@@ -284,6 +283,7 @@ fn spec(task: &str) -> SubagentStartSpec {
                 tool_call_id: ToolCallId::new("call-1"),
             },
             terminal: SubagentTerminalMode::Normal,
+            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
         },
     }
 }
@@ -297,6 +297,8 @@ fn workflow_spec(conversation: &ConversationId, task: &str) -> SubagentStartSpec
             node_id: Box::new(node.clone()),
         },
         attachments: Vec::new(),
+        task: start.admission.task.clone(),
+        context: start.admission.context.clone(),
         terminal: SubagentTerminalMode::WorkflowOutput {
             output_schema: Some(serde_json::json!({
                 "type": "object",
@@ -309,7 +311,7 @@ fn workflow_spec(conversation: &ConversationId, task: &str) -> SubagentStartSpec
             run_id: node.block.run.clone(),
             node_id: Box::new(node.clone()),
         },
-        ..start.admission
+        approval_mode: start.admission.approval_mode,
     };
     start
 }

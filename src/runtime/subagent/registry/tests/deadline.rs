@@ -117,7 +117,10 @@ async fn deadline_starts_only_after_ownership_commit_and_settles_once() {
     // No deadline task exists, so elapsed manual time cannot create a
     // record or a cancellation fact here.
     plane.monotonic_clock.advance(1_000);
-    assert!(events(&plane).is_empty());
+    assert_eq!(
+        events(&plane),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
 
     hook.release();
     let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), committer)

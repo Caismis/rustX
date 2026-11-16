@@ -84,14 +84,20 @@ fn scheduler85_workflow_admission_is_atomic_and_survives_definition_deletion() {
             .admit_scheduled_target(&schedule.id, 1, &Clock(clock().0 + Duration::seconds(1)))
             .is_err()
     );
-    assert!(store.scheduled_workflow_pending(256).unwrap().is_empty());
+    assert_eq!(
+        store.scheduled_workflow_pending(256).unwrap(),
+        [] as [crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowHead; 0]
+    );
     assert_eq!(
         store.schedule_get(&schedule.id).unwrap().unwrap().revision,
         1
     );
     assert_eq!(store.schedule_summary().unwrap().generation, generation);
     let start = admit(&store, &schedule);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(
         store.schedule_summary().unwrap().pending,
         vec![start.trigger_id.clone()]
@@ -213,7 +219,10 @@ fn scheduler85_claim_is_not_reissued_after_reopen_or_cancellation() {
         )
         .unwrap();
     assert_eq!(result, ScheduledWorkflowSettlement::Settled);
-    assert!(store.schedule_summary().unwrap().pending.is_empty());
+    assert_eq!(
+        store.schedule_summary().unwrap().pending,
+        [] as [crate::scheduler::ScheduleTriggerId; 0]
+    );
     assert_eq!(
         store
             .scheduled_workflow_settle(

@@ -161,6 +161,53 @@ fn shared_native_configuration_changed_prompt_and_order_remain_exact_after_reope
 }
 
 #[test]
+fn native_configuration_reopen_preserves_nondefault_permission_task() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("permission-config.sqlite");
+    let conversation = ConversationId::generate();
+    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    store
+        .initialize(&[user_message("shared-original", "history")])
+        .unwrap();
+    let mut snapshot = configuration_snapshot(&store, 1);
+    snapshot.permission_mode = crate::runtime::types::ApprovalMode::Automatic;
+    snapshot.permission_task_message = Some(MessageId::new("shared-original"));
+    store
+        .commit_model_turn_start(&[], &snapshot, Utc::now())
+        .unwrap();
+    let (snapshot_json, configuration_json): (String, String) = store
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT payload.snapshot_json, configuration.configuration_json FROM request_snapshot_payloads AS payload JOIN request_owners AS owner ON owner.start_sequence=payload.started_sequence LEFT JOIN request_configurations AS configuration ON configuration.digest=json_extract(payload.snapshot_json,'$.configuration_digest') WHERE owner.request_id=?1",
+            [snapshot.request_id.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let stored: serde_json::Value = serde_json::from_str(&snapshot_json).unwrap();
+    assert_eq!(stored["permission_mode"], "automatic");
+    assert_eq!(stored["permission_task_message"], "shared-original");
+    assert_ne!(
+        stored["permission_mode"],
+        crate::runtime::types::ApprovalMode::default().as_str()
+    );
+    assert!(
+        !configuration_json.contains("permission_mode")
+            && !configuration_json.contains("permission_task_message"),
+        "shared configuration must not store per-request permission facts"
+    );
+    drop(store);
+    let store = SqliteConversationStore::open(conversation, &path).unwrap();
+    let loaded = store.load_request_snapshot(&snapshot.request_id).unwrap();
+    assert_eq!(loaded.permission_mode, snapshot.permission_mode);
+    assert_eq!(
+        loaded.permission_task_message,
+        snapshot.permission_task_message
+    );
+    assert_eq!(loaded, snapshot);
+}
+
+#[test]
 fn shared_native_configuration_corruption_is_rejected_by_scalar_full_and_retry_reads() {
     for corruption in [
         "UPDATE request_configurations SET configuration_json=json_set(configuration_json,'$.effective_system_prompt','tampered')",
@@ -208,7 +255,7 @@ fn shared_native_configuration_fresh_trigger_mutation_rolls_back_the_configurati
         Err(ConversationStoreError::InvalidReference(_))
     ));
     assert_eq!(configuration_count(&store), 0);
-    assert!(store.read_events(None, 32).unwrap().events.is_empty());
+    assert_eq!(store.read_events(None, 32).unwrap().events, [] as [crate::events::types::RuntimeEventEnvelope; 0]);
     store
         .lock()
         .unwrap()

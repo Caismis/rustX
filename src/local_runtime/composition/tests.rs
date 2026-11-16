@@ -61,7 +61,10 @@ fn mcp_call_script(tool_id: &ToolId, arguments: serde_json::Value) -> Vec<FakeSt
                 id: call_id,
                 tool_id: tool_id.clone(),
                 name: TOOL_NAME.to_owned(),
-                arguments,
+                arguments: serde_json::Value::Object(serde_json::Map::from_iter([(
+                    "arguments".to_owned(),
+                    arguments,
+                )])),
             },
         }),
         FakeStep::Emit(ModelEvent::Completed {
@@ -147,7 +150,10 @@ compat = { chat_reasoning_replay = "omit" }
 
     let echo_call_count_file = root.path().join("echo-call-count");
     let executable = std::env::current_exe().expect("test executable");
-    let mut config_document = serde_json::json!({"schema_version": 11, "agent_id": "agent-parent", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
+    // Tool-execution composition fixtures must not sit on Plan: MCP defaults
+    // are ExternalOrDelegated and Plan denies them without elevation_reason,
+    // so the parent never commits a ToolResult or continues into turn two.
+    let mut config_document = serde_json::json!({"schema_version": 12, "agent_id": "agent-parent", "approval_mode": "full_access", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "mcp_servers": {
             SERVER_NAME: {
                 "command": executable,
                 "args": fixture_spawn_args(test_name),
@@ -305,7 +311,7 @@ async fn named_subagent_and_mcp_share_one_frozen_parent_generation() {
         id: ToolCallId::new("mcp-call-163"),
         tool_id: fixture.tool_id.clone(),
         name: TOOL_NAME.to_owned(),
-        arguments: serde_json::json!({}),
+        arguments: serde_json::json!({"arguments":{}}),
     };
     let ledger = fixture
         .runtime
@@ -355,14 +361,14 @@ async fn named_subagent_and_mcp_share_one_frozen_parent_generation() {
             .count(),
         1
     );
-    assert!(
+    assert_eq!(
         fixture
             .runtime
             .runtime()
             .subagent_registry()
             .expect("parent subagent registry")
-            .all_snapshots()
-            .is_empty()
+            .all_snapshots(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
     );
     assert!(!journal.iter().any(|event| matches!(
         event,
@@ -397,7 +403,7 @@ async fn malformed_mcp_arguments_remain_a_normal_preflight_rejection() {
             id: expected_call_id.clone(),
             tool_id: fixture.tool_id.clone(),
             name: TOOL_NAME.to_owned(),
-            arguments: serde_json::json!({"unexpected": true}),
+            arguments: serde_json::json!({"arguments":{"unexpected": true}}),
         }
     );
     let tool_result = ledger
@@ -560,7 +566,10 @@ async fn first_request_waits_for_complete_selected_mcp_discovery() {
         !loading.is_finished(),
         "selected MCP discovery remains a startup prerequisite"
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     tokio::time::resume();
     gate.release();
     let fixture = tokio::time::timeout(std::time::Duration::from_secs(15), loading)
@@ -616,7 +625,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
     crate::launch_fixture::write_document(
         &root.path().join("rustx.toml"),
         &toml::to_string_pretty(&serde_json::json!({
-            "schema_version":11,
+            "schema_version":12,
             "context":{"reserve_tokens":0,"keep_recent_tokens":0},
             "agent":{"model":{"model":"scripted/scripted"},
                 "tools":{"builtin":["read"],"sources":{SERVER_NAME:[TOOL_NAME]}}},
@@ -658,7 +667,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
         "headless initialization settled before selected MCP discovery was released: {:?}",
         loading.await
     );
-    assert!(provider.request_bodies().is_empty());
+    assert_eq!(provider.request_bodies(), [] as [std::string::String; 0]);
     tokio::time::resume();
     gate.release();
     let runtime = tokio::time::timeout(std::time::Duration::from_secs(15), loading)

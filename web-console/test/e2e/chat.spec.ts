@@ -73,10 +73,13 @@ test('native history, rich settlement, real image previews, reconnect and native
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await page.locator(`button[data-session-id="${id}"]`).click();
-    // The initial DSH reading window covers this short conversation, even
-    // though its native transcript needs more than one bounded wire page.
-    await expect(page.getByText('Answer 0', { exact: true })).toBeAttached();
+    // DSH automatically assembles at least 50 ordinary messages and two Turns
+    // from bounded native pages. Explicit pagination reads the older remainder.
+    await expect.poll(() => page.getByRole('article', { name: /^(Your message|Assistant response)$/ }).count()).toBeGreaterThanOrEqual(50);
+    await expect.poll(() => page.getByLabel('Completed Turn', { exact: true }).count()).toBeGreaterThanOrEqual(2);
+    await expect(page.getByText('Answer 33', { exact: true })).toBeAttached();
     await loadOriginalHistory(page);
+    await expect(page.getByText('Answer 0', { exact: true })).toBeAttached();
     await expect(page.getByRole('button', { name: 'Load earlier', exact: true })).toHaveCount(0);
     // Historical tails retain native identity after paging; pointer reveal also
     // exposes equivalent keyboard controls without a permanent wide toolbar.
@@ -310,9 +313,10 @@ test('native history, rich settlement, real image previews, reconnect and native
     // Opening the normal detail tab owns automatic bounded reads at its retained cut.
     await inspector.getByRole('tab', { name: 'Payload', exact: true }).click();
     let selectedField = inspector.getByRole('tabpanel');
-    // Empty trees have no rows; their visible braces belong to the surrounding JSON view.
+    // Original Tool payloads retain the wire envelope, including an empty
+    // business arguments object; business cards alone unpack that object.
     await expect(selectedField.getByRole('tree',{name:'Payload JSON'})).toBeAttached();
-    await expect(selectedField).toHaveText(/^\{\s*\}$/);
+    await expect(selectedField).toHaveText(/^\{\s*arguments:\s*\{\s*\}\s*\}$/);
     await inspector.getByRole('tab', { name: 'Result', exact: true }).click();
     selectedField = inspector.getByRole('tabpanel');
     await expect(selectedField.getByRole('button',{name:'Preview artifact_1',exact:true})).toBeVisible();

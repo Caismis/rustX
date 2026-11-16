@@ -710,7 +710,7 @@ fn prepared_adoption_children_preserve_immediate_foreign_keys_and_isolate_partia
         );
         drop(connection);
         assert_eq!(store.load_canonical().unwrap().len(), 3);
-        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(store.load_pending().unwrap(), [] as [crate::durable::inbox::PendingInboundItem; 0]);
         assert_eq!(
             store.read_events(None, 8).unwrap().events[0].event,
             event.event

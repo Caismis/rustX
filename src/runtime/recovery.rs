@@ -71,7 +71,7 @@
 //! # Ownership
 //!
 //! Recovery **policy** belongs to the [`ConversationRuntime`] and consumes
-//! [`ConversationStore`] evidence. The store exposes semantic durable facts
+//! [`ConversationStore`](crate::durable::ConversationStore) evidence. The store exposes semantic durable facts
 //! and semantic transactions; it never decides whether an ambiguous request is
 //! safe to replay. Nothing here reads a Runtime Client snapshot, a TUI cache,
 //! an attachment state, current Skill discovery, current `rustx.toml`, or a
@@ -99,7 +99,7 @@
 //!   + O(unresolved Assistant attribution)   (read from the native index)
 //! ```
 //!
-//! The tool plane is split across two owners on purpose. [`AttemptEvidence`]
+//! The tool plane is split across two owners on purpose. `AttemptEvidence`
 //! owns a **bounded summary** of the attempt's foreground-tool external
 //! history (did execution happen; is any outcome unknown) that survives the
 //! release of every detailed entry — a fully canonicalized tool call never
@@ -451,6 +451,10 @@ pub struct RecoveryEvidence {
     /// The highest subagent ordinal that entered durable authority,
     /// published or not.
     highest_subagent_ordinal: u64,
+    /// Latest committed primary request, retained even after its Attempt settles.
+    latest_primary_request: Option<RequestId>,
+    /// Canonical task selected only from the exact unresolved adoption.
+    continuation_task_message: Option<MessageId>,
     /// Whether the Event Journal contains any attempt fact at all.
     saw_any_attempt: bool,
     /// The one adopted turn this conversation still owes a model answer for,
@@ -551,6 +555,15 @@ impl RecoveryEvidence {
             pending,
             store.load_unsettled_publication_streams()?,
             |sequence| Self::journal_fact(store, sequence),
+            |message_id| {
+                store
+                    .load_messages(std::slice::from_ref(message_id))?
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| {
+                        RecoveryError::Durable(format!("adoption task {message_id} is missing"))
+                    })
+            },
         )?;
         // After the release verification, the debug oracle recomputes the
         // whole fold and requires the persisted frontier to equal it.
@@ -592,6 +605,10 @@ impl RecoveryEvidence {
                     None => None,
                 };
                 frontier.fold(conversation_id, envelope, owner.as_ref());
+                if let RuntimeEvent::InboundTurnAdopted { message_ids } = &envelope.event {
+                    let adopted = store.load_messages(message_ids)?;
+                    frontier.reduce_adoption_task(envelope.sequence, &adopted);
+                }
             }
             cursor = page.next_sequence;
             if cursor.is_none() {
@@ -618,6 +635,84 @@ impl RecoveryEvidence {
             })
     }
 
+    fn pointer_in_fold(
+        frontier: &RecoveryFrontier,
+        source_sequence: u64,
+    ) -> Result<(), RecoveryError> {
+        if source_sequence == 0 || source_sequence > frontier.through {
+            return Err(RecoveryError::Durable(
+                "recovery frontier pointer is outside the authenticated fold".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Verifies a primary-request pointer against the one Journal row it names.
+    fn authenticate_primary_request(
+        frontier: &RecoveryFrontier,
+        fact: &mut impl FnMut(u64) -> Result<RuntimeEventEnvelope, RecoveryError>,
+    ) -> Result<Option<RequestId>, RecoveryError> {
+        let Some(pointer) = &frontier.latest_primary_request else {
+            return Ok(None);
+        };
+        Self::pointer_in_fold(frontier, pointer.source_sequence)?;
+        let row = fact(pointer.source_sequence)?;
+        match &row.event {
+            RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent { identity },
+                request_id,
+                ..
+            } if row.sequence == pointer.source_sequence
+                && request_id == &pointer.request_id
+                && identity.request_id() == pointer.request_id =>
+            {
+                Ok(Some(request_id.clone()))
+            }
+            _ => Err(RecoveryError::Durable(
+                "recovery frontier primary request pointer does not match its Journal row".into(),
+            )),
+        }
+    }
+
+    /// Verifies an adoption-task pointer against its adoption row and canonical provenance.
+    fn authenticate_continuation_task(
+        frontier: &RecoveryFrontier,
+        fact: &mut impl FnMut(u64) -> Result<RuntimeEventEnvelope, RecoveryError>,
+        message: &mut impl FnMut(&MessageId) -> Result<MessageBlock, RecoveryError>,
+    ) -> Result<Option<MessageId>, RecoveryError> {
+        let Some(pointer) = &frontier.continuation_task else {
+            return Ok(None);
+        };
+        if frontier.unanswered_adopted_turn.is_none() {
+            return Err(RecoveryError::Durable(
+                "recovery frontier adoption task has no unresolved obligation".into(),
+            ));
+        }
+        Self::pointer_in_fold(frontier, pointer.source_sequence)?;
+        let row = fact(pointer.source_sequence)?;
+        let named = matches!(
+            &row.event,
+            RuntimeEvent::InboundTurnAdopted { message_ids }
+                if row.sequence == pointer.source_sequence
+                    && message_ids.contains(&pointer.message_id)
+        );
+        if !named {
+            return Err(RecoveryError::Durable(
+                "recovery frontier adoption task pointer does not match its Journal row".into(),
+            ));
+        }
+        let loaded = message(&pointer.message_id)?;
+        if crate::conversation::message_id_of(&loaded) != pointer.message_id
+            || frontier::message_task_kind(&loaded) != Some(pointer.kind)
+        {
+            return Err(RecoveryError::Durable(
+                "recovery frontier adoption task provenance does not match its canonical message"
+                    .into(),
+            ));
+        }
+        Ok(Some(pointer.message_id.clone()))
+    }
+
     /// Materializes the evidence of a complete fold, verifying every Journal
     /// fact the frontier names for its open work.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)] // The fold plus the native reads of Phase 1.
@@ -631,7 +726,11 @@ impl RecoveryEvidence {
         pending: Vec<PendingInboundItem>,
         unsettled_publications: Vec<PublicationStreamRecord>,
         mut fact: impl FnMut(u64) -> Result<RuntimeEventEnvelope, RecoveryError>,
+        mut message: impl FnMut(&MessageId) -> Result<MessageBlock, RecoveryError>,
     ) -> Result<Self, RecoveryError> {
+        let latest_primary_request = Self::authenticate_primary_request(&frontier, &mut fact)?;
+        let continuation_task_message =
+            Self::authenticate_continuation_task(&frontier, &mut fact, &mut message)?;
         let disagrees = |what: &str| {
             RecoveryError::Durable(format!(
                 "recovery frontier disagrees with the Journal: {what}"
@@ -727,6 +826,8 @@ impl RecoveryEvidence {
             highest_attempt_ordinal: frontier.highest_attempt_ordinal,
             highest_subagent_ordinal: frontier.highest_subagent_ordinal,
             saw_any_attempt: frontier.saw_any_attempt,
+            latest_primary_request,
+            continuation_task_message,
             unanswered_adopted_turn: frontier.unanswered_adopted_turn,
             unadopted_goal_round: frontier.unadopted_goal_round,
             unsettled_publications,
@@ -910,7 +1011,7 @@ pub enum ResumeDisposition {
     /// re-adopted.
     ///
     /// The permission is the durable **answer obligation** of
-    /// [`RuntimeEvent::InboundTurnAdopted`](crate::events::types::RuntimeEvent::InboundTurnAdopted):
+    /// [`RuntimeEvent::InboundTurnAdopted`]:
     /// an adoption transaction committed the turn and neither a
     /// `ModelRequestStarted` nor a *decided* attempt terminal has consumed it
     /// since — a recovery's own `RestartInterrupted` terminal transfers the
@@ -952,6 +1053,10 @@ pub struct RecoveryPlan {
     resume: ResumeDisposition,
     next_attempt_ordinal: u64,
     highest_subagent_ordinal: u64,
+    /// Latest committed primary request, retained even after its Attempt settles.
+    latest_primary_request: Option<RequestId>,
+    /// Exact adopted input whose unanswered turn is resumed after restart.
+    continuation_task_message: Option<MessageId>,
     pending_inbound: usize,
     /// Every durably non-terminal attempt the fold observed.
     ///
@@ -1059,6 +1164,12 @@ impl RecoveryPlan {
         } else {
             ResumeDisposition::PendingInboundOnly
         };
+        let continuation_task_message = match &resume {
+            ResumeDisposition::ContinueAdoptedTurn { .. } => {
+                evidence.continuation_task_message.clone()
+            }
+            _ => None,
+        };
         Self {
             conversation_id: evidence.conversation_id.clone(),
             attempt,
@@ -1080,6 +1191,8 @@ impl RecoveryPlan {
             resume,
             next_attempt_ordinal: evidence.next_attempt_ordinal(),
             highest_subagent_ordinal: evidence.highest_subagent_ordinal,
+            latest_primary_request: evidence.latest_primary_request.clone(),
+            continuation_task_message,
             pending_inbound: evidence.pending.len(),
             unsettled_attempts: evidence.unsettled_attempts.keys().cloned().collect(),
             tool_summary: evidence.unsettled_attempts.values().next().map(|a| a.tools),
@@ -1406,6 +1519,8 @@ impl RecoveryPlan {
             reconciliation: committed,
             next_attempt_ordinal: self.next_attempt_ordinal,
             highest_subagent_ordinal: self.highest_subagent_ordinal,
+            latest_primary_request: self.latest_primary_request.clone(),
+            continuation_task_message: self.continuation_task_message,
             pending_inbound: self.pending_inbound,
         })
     }
@@ -1855,10 +1970,26 @@ pub struct RecoveryReport {
     reconciliation: RecoveryReconciliation,
     next_attempt_ordinal: u64,
     highest_subagent_ordinal: u64,
+    /// Latest committed primary request, retained even after its Attempt settles.
+    latest_primary_request: Option<RequestId>,
+    /// Adopted input identity of the native recovered continuation, if any.
+    continuation_task_message: Option<MessageId>,
     pending_inbound: usize,
 }
 
 impl RecoveryReport {
+    /// Exact unanswered adoption that recovery permits a new Attempt to resume.
+    #[must_use]
+    pub fn continuation_task_message(&self) -> Option<&MessageId> {
+        self.continuation_task_message.as_ref()
+    }
+
+    /// Exact latest Agent request-start authority, excluding Auxiliary calls.
+    #[must_use]
+    pub fn latest_primary_request(&self) -> Option<&RequestId> {
+        self.latest_primary_request.as_ref()
+    }
+
     /// The deterministic attempt-plane classification.
     #[must_use]
     pub fn attempt_class(&self) -> &AttemptRecoveryClass {
@@ -2021,6 +2152,8 @@ mod tests {
             highest_attempt_ordinal: None,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
+            latest_primary_request: None,
+            continuation_task_message: None,
             unanswered_adopted_turn: None,
             unadopted_goal_round: None,
             unsettled_publications: Vec::new(),
@@ -2074,6 +2207,11 @@ mod tests {
             previous.pending,
             previous.unsettled_publications,
             |sequence| Ok(events[usize::try_from(sequence).unwrap() - 1].clone()),
+            |_| {
+                Err(RecoveryError::Durable(
+                    "test frontier named an adoption task without a message fixture".into(),
+                ))
+            },
         )
         .unwrap();
         evidence.test_journal = events;
@@ -2121,7 +2259,10 @@ mod tests {
         );
 
         fold_all(&mut evidence, &[ownership, terminal]);
-        assert!(evidence.unsettled_subagents.is_empty());
+        assert_eq!(
+            evidence.unsettled_subagents,
+            [] as [crate::runtime::recovery::SubagentEvidence; 0]
+        );
     }
 
     fn trailing_human(id: &str) -> MessageBlock {
@@ -2178,7 +2319,7 @@ mod tests {
                 &[
                     round(&id, revision),
                     adopted(&[&id]),
-                    request_started(attempt(0), "answered"),
+                    request_started(attempt(0)),
                 ],
             );
             assert!(evidence.unadopted_goal_round.is_none());
@@ -2278,7 +2419,7 @@ mod tests {
             &[
                 adopted(&["msg-1"]),
                 started(attempt(0)),
-                request_started(attempt(0), "req-0"),
+                request_started(attempt(0)),
                 request_completed(attempt(0)),
                 completed(attempt(0)),
                 adopted(&["msg-2"]),
@@ -2306,7 +2447,7 @@ mod tests {
             &[
                 adopted(&["msg-1"]),
                 started(attempt(0)),
-                request_started(attempt(0), "req-0"),
+                request_started(attempt(0)),
                 request_completed(attempt(0)),
                 adopted_by(attempt(0), &["msg-2"]),
             ],
@@ -2333,7 +2474,7 @@ mod tests {
             &[
                 adopted(&["msg-1"]),
                 started(attempt(0)),
-                request_started(attempt(0), "req-0"),
+                request_started(attempt(0)),
                 request_completed(attempt(0)),
                 completed(attempt(0)),
             ],
@@ -2378,7 +2519,7 @@ mod tests {
             &[
                 adopted(&["msg-1"]),
                 started(attempt(0)),
-                request_started(attempt(0), "req-0"),
+                request_started(attempt(0)),
                 request_completed(attempt(0)),
                 adopted_by(attempt(0), &["msg-2"]),
                 tool_started(attempt(0), "call-1"),
@@ -2399,7 +2540,15 @@ mod tests {
         )
     }
 
-    fn request_started(attempt_id: AttemptId, request: &str) -> RuntimeEventEnvelope {
+    fn request_identity(attempt_id: &AttemptId) -> crate::model::RequestIdentity {
+        crate::model::RequestIdentity {
+            attempt_id: attempt_id.clone(),
+            turn: crate::runtime::identity::TurnId::new("1"),
+            retry_number: 0,
+        }
+    }
+
+    fn request_started(attempt_id: AttemptId) -> RuntimeEventEnvelope {
         envelope(
             RuntimeEvent::ModelRequestStarted {
                 owner: crate::model::ModelRequestOwner::Agent {
@@ -2409,7 +2558,7 @@ mod tests {
                         retry_number: 0,
                     },
                 },
-                request_id: RequestId::new(request),
+                request_id: request_identity(&attempt_id).request_id(),
                 model: "model-x".to_owned(),
             },
             Some(attempt_id),
@@ -2426,7 +2575,7 @@ mod tests {
                         retry_number: 0,
                     },
                 },
-                request_id: RequestId::new("req-0"),
+                request_id: request_identity(&attempt_id).request_id(),
                 finish_reason: ModelFinishReason::Stop,
                 usage: None,
                 generation: None,
@@ -2671,7 +2820,7 @@ mod tests {
     #[test]
     fn a_resolved_request_never_returns_to_never_started() {
         let a = attempt(0);
-        let request_id = RequestId::new("req-1");
+        let request_id = request_identity(&a).request_id();
         let mut evidence = base_evidence();
         fold_all(
             &mut evidence,
@@ -2830,5 +2979,216 @@ mod tests {
             evidence.tool_repairs.is_empty(),
             "resolved tool evidence of a settled attempt is dropped"
         );
+    }
+
+    fn user_message(id: &str, source: crate::message::types::UserSource) -> MessageBlock {
+        MessageBlock::User(crate::message::types::UserMessageBlock {
+            id: MessageId::new(id),
+            content: vec![crate::message::types::UserContentBlock::Text(
+                crate::message::content::TextBlock {
+                    text: id.to_owned(),
+                },
+            )],
+            source,
+            kind: crate::message::types::InboundKind::Message,
+            timestamp: None,
+        })
+    }
+
+    fn at(
+        sequence: u64,
+        event: RuntimeEvent,
+        attempt_id: Option<AttemptId>,
+    ) -> RuntimeEventEnvelope {
+        let mut envelope = envelope(event, attempt_id);
+        envelope.sequence = sequence;
+        envelope.event_id = EventId::new(format!("evt-{sequence}"));
+        envelope
+    }
+
+    fn primary_identity() -> crate::model::RequestIdentity {
+        crate::model::RequestIdentity {
+            attempt_id: attempt(1),
+            turn: crate::runtime::identity::TurnId::new("1"),
+            retry_number: 0,
+        }
+    }
+
+    fn primary_start(sequence: u64) -> RuntimeEventEnvelope {
+        let identity = primary_identity();
+        at(
+            sequence,
+            RuntimeEvent::ModelRequestStarted {
+                owner: crate::model::snapshot::ModelRequestOwner::Agent {
+                    identity: identity.clone(),
+                },
+                request_id: identity.request_id(),
+                model: "test".to_owned(),
+            },
+            Some(attempt(1)),
+        )
+    }
+
+    fn materialize(
+        frontier: &RecoveryFrontier,
+        rows: &[RuntimeEventEnvelope],
+        messages: &[MessageBlock],
+    ) -> Result<RecoveryEvidence, RecoveryError> {
+        RecoveryEvidence::from_frontier(
+            conversation(),
+            frontier.clone(),
+            Vec::new(),
+            std::collections::BTreeSet::new(),
+            Vec::new(),
+            Vec::new(),
+            |sequence| {
+                rows.iter()
+                    .find(|row| row.sequence == sequence)
+                    .cloned()
+                    .ok_or_else(|| {
+                        RecoveryError::Durable(format!("missing journal row {sequence}"))
+                    })
+            },
+            |message_id| {
+                messages
+                    .iter()
+                    .find(|message| crate::conversation::message_id_of(message) == *message_id)
+                    .cloned()
+                    .ok_or_else(|| RecoveryError::Durable(format!("missing message {message_id}")))
+            },
+        )
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)] // Exercise one frozen frontier against independent corruption cases.
+    fn reopen_keeps_settled_request_and_exact_unresolved_adoption_task() {
+        use crate::message::types::UserSource;
+        let mut frontier = RecoveryFrontier::default();
+        let started = primary_start(1);
+        let completed = at(
+            2,
+            RuntimeEvent::AttemptCompleted {
+                attempt_id: attempt(1),
+                finish_reason: ModelFinishReason::Stop,
+            },
+            Some(attempt(1)),
+        );
+        frontier.fold(&conversation(), &started, None);
+        frontier.fold(&conversation(), &completed, None);
+        let delegated = user_message(
+            "delegated-first",
+            UserSource::Agent {
+                agent_id: crate::runtime::identity::AgentId::new("delegate"),
+            },
+        );
+        let human = user_message("human-later", UserSource::Human);
+        let notice = user_message("notice", UserSource::Runtime);
+        let later_delegated = user_message(
+            "delegated-later",
+            UserSource::Agent {
+                agent_id: crate::runtime::identity::AgentId::new("other"),
+            },
+        );
+        frontier.reduce_adoption_task(3, &[delegated.clone(), notice.clone()]);
+        frontier.reduce_adoption_task(4, std::slice::from_ref(&notice));
+        frontier.reduce_adoption_task(5, std::slice::from_ref(&later_delegated));
+        assert_eq!(
+            frontier
+                .continuation_task
+                .as_ref()
+                .map(|task| task.message_id.as_str()),
+            Some("delegated-first"),
+            "a later delegated or notice-only batch must not replace the first delegated task"
+        );
+        let adopted = at(
+            6,
+            RuntimeEvent::InboundTurnAdopted {
+                message_ids: vec![MessageId::new("notice"), MessageId::new("human-later")],
+            },
+            None,
+        );
+        frontier.fold(&conversation(), &adopted, None);
+        frontier.reduce_adoption_task(6, &[notice.clone(), human.clone()]);
+        assert_eq!(
+            frontier.continuation_task.as_ref().map(|task| (
+                task.message_id.as_str(),
+                task.kind,
+                task.source_sequence,
+            )),
+            Some(("human-later", super::frontier::TaskProvenanceKind::Human, 6)),
+        );
+        let rows = [started.clone(), completed, adopted];
+        let messages = [human, notice];
+        let restored = RecoveryFrontier::decode(&frontier.encode().unwrap()).unwrap();
+        let evidence = materialize(&restored, &rows, &messages).unwrap();
+        assert_eq!(
+            evidence
+                .latest_primary_request
+                .as_ref()
+                .map(RequestId::as_str),
+            Some(primary_identity().request_id().as_str())
+        );
+        assert_eq!(
+            evidence
+                .continuation_task_message
+                .as_ref()
+                .map(MessageId::as_str),
+            Some("human-later")
+        );
+        let mut outside = restored.clone();
+        outside
+            .latest_primary_request
+            .as_mut()
+            .unwrap()
+            .source_sequence = 0;
+        let error = materialize(&outside, &rows, &messages)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("outside the authenticated fold"), "{error}");
+        let mut corrupted = restored.clone();
+        corrupted
+            .latest_primary_request
+            .as_mut()
+            .unwrap()
+            .source_sequence = 2;
+        let error = materialize(&corrupted, &rows, &messages)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("primary request pointer"), "{error}");
+        let mut wrong_request = restored.clone();
+        wrong_request
+            .latest_primary_request
+            .as_mut()
+            .unwrap()
+            .request_id = RequestId::new("wrong");
+        let error = materialize(&wrong_request, &rows, &messages)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("primary request pointer"), "{error}");
+        let mut wrong_owner_rows = rows.clone();
+        if let RuntimeEvent::ModelRequestStarted {
+            owner: crate::model::ModelRequestOwner::Agent { identity },
+            ..
+        } = &mut wrong_owner_rows[0].event
+        {
+            identity.retry_number += 1;
+        }
+        let error = materialize(&restored, &wrong_owner_rows, &messages)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("primary request pointer"), "{error}");
+        let mut consumed = restored.clone();
+        consumed.unanswered_adopted_turn = None;
+        let error = materialize(&consumed, &rows, &messages)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unresolved obligation"), "{error}");
+        let mut wrong_kind = restored;
+        wrong_kind.continuation_task.as_mut().unwrap().kind =
+            super::frontier::TaskProvenanceKind::Delegated;
+        let error = materialize(&wrong_kind, &rows, &messages)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("provenance"), "{error}");
     }
 }

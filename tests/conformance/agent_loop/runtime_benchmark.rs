@@ -49,10 +49,27 @@ fn lifecycle_sample(samples: &mut Vec<serde_json::Value>, phase: &str, began: In
     profiling::boundary(phase);
 }
 
+fn assistant_text(history_messages: &[MessageBlock]) -> String {
+    history_messages
+        .iter()
+        .filter_map(|m| match m {
+            MessageBlock::Assistant(m) => Some(m),
+            _ => None,
+        })
+        .flat_map(|m| m.content.iter())
+        .filter_map(|b| match b {
+            rustx::message::types::AssistantContentBlock::Text(t) => Some(t.text.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 fn verify_requests(
     store: Arc<SqliteConversationStore>,
     case: &str,
     workspace: &std::path::Path,
+    provider: &str,
+    endpoint: &str,
     requests: &[serde_json::Value],
 ) -> Vec<serde_json::Value> {
     use rustx::durable::presentation::{FactQuery, FactScope};
@@ -112,12 +129,81 @@ fn verify_requests(
                 index,
                 workspace.to_str().unwrap(),
                 &wire["body"],
-                &request_oracle::reconstructed_body(&request),
+                &request_oracle::reconstructed_body(&request, provider, endpoint),
             );
             // Retain plain values, never a Source/store owner across final close.
             json!({"snapshot":snapshot,"request":request})
         })
         .collect()
+}
+
+/// Ordinary conformance smoke driving the composed local runtime and emulator
+/// through the `tool` (`read`) case against the independent request oracle.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn runtime_benchmark_oracle_smoke_matches_composed_tool_contract() {
+    struct CleanupDir(PathBuf);
+    impl Drop for CleanupDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    let root = tempfile::tempdir().expect("temp root");
+    let workspace = root.path().join("workspace");
+    std::fs::create_dir(&workspace).expect("workspace");
+    let workspace = workspace.canonicalize().expect("canonical workspace");
+    std::fs::write(workspace.join(NOTE_PATH), NOTE_MARKER).expect("note fixture");
+    let Some(emulator) =
+        ProviderEmulator::start_with_workspace("runtime_benchmark_tool", Some(&workspace)).await
+    else {
+        return;
+    };
+    let endpoint = emulator.openai_base_url().clone();
+    let mut driver = Driver::start_in(root, &emulator, &Setup::new("emulator/chat-model")).await;
+    driver.submit("benchmark turn 0000");
+    let (events, outcome) = driver.settle().await;
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| matches!(event, RuntimeClientEvent::ToolExecutionSettled { .. }))
+    );
+    let requests = emulator.requests().await;
+    assert_eq!(requests.len(), 2);
+    let history_messages = driver.canonical_history();
+    assert_eq!(assistant_text(&history_messages), NOTE_MARKER);
+    let verified_requests = verify_requests(
+        driver.store.clone(),
+        "tool",
+        &workspace,
+        "emulator",
+        &endpoint,
+        &requests,
+    );
+    let database = driver.access.database_path.clone();
+    let cid = driver.access.node.conversation_id.clone();
+    driver.shutdown().await.unwrap();
+    if let Err(error) = (&mut driver.relay).await {
+        assert!(error.is_cancelled(), "event relay failed: {error}");
+    }
+    let root_path = driver.root.path().to_owned();
+    driver.root.disable_cleanup(true);
+    let _cleanup = CleanupDir(root_path);
+    drop(driver);
+    drop(SqliteConversationStore::open(cid.clone(), &database).unwrap());
+    let reopened = Arc::new(SqliteConversationStore::open_existing(cid, &database).unwrap());
+    assert_eq!(reopened.load_canonical().unwrap(), history_messages);
+    let reopened_requests = verify_requests(
+        reopened, "tool", &workspace, "emulator", &endpoint, &requests,
+    );
+    assert_eq!(
+        reopened_requests, verified_requests,
+        "exact frozen identities and input survive reopen"
+    );
+    emulator.finish().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -144,6 +230,7 @@ async fn measure_runtime() {
     let root = tempfile::tempdir_in(output.parent().unwrap()).unwrap();
     let workspace = root.path().join("workspace");
     std::fs::create_dir(&workspace).unwrap();
+    let workspace = workspace.canonicalize().expect("canonical workspace");
     std::fs::write(workspace.join(NOTE_PATH), NOTE_MARKER).unwrap();
     let scenario = format!("runtime_benchmark_{case}");
     // The external controller owns both siblings. Provider reaping can never
@@ -158,6 +245,7 @@ async fn measure_runtime() {
         &serde_json::from_str(&ready).expect("controller provider readiness"),
         &scenario,
     );
+    let endpoint = emulator.openai_base_url().clone();
     lifecycle_sample(&mut lifecycle, "after_provider_start", lifecycle_began);
     let began = Instant::now();
     let mut driver = Driver::start_in_with_status_clock(
@@ -231,18 +319,7 @@ async fn measure_runtime() {
     let expected_requests = history + measured + usize::from(case == "tool");
     assert_eq!(requests.len(), expected_requests);
     let history_messages = driver.canonical_history();
-    let text: String = history_messages
-        .iter()
-        .filter_map(|m| match m {
-            MessageBlock::Assistant(m) => Some(m),
-            _ => None,
-        })
-        .flat_map(|m| m.content.iter())
-        .filter_map(|b| match b {
-            rustx::message::types::AssistantContentBlock::Text(t) => Some(t.text.as_str()),
-            _ => None,
-        })
-        .collect();
+    let text = assistant_text(&history_messages);
     // Keep the frozen BEFORE oracle identical; this allocation is outside turn timing.
     #[allow(clippy::format_collect)]
     let expected = match case.as_str() {
@@ -255,7 +332,14 @@ async fn measure_runtime() {
             .collect(),
     };
     assert_eq!(text, expected);
-    let verified_requests = verify_requests(driver.store.clone(), &case, &workspace, &requests);
+    let verified_requests = verify_requests(
+        driver.store.clone(),
+        &case,
+        &workspace,
+        "emulator",
+        &endpoint,
+        &requests,
+    );
     lifecycle_sample(&mut lifecycle, "after_verification", lifecycle_began);
     let database = driver.access.database_path.clone();
     let cid = driver.access.node.conversation_id.clone();
@@ -289,7 +373,14 @@ async fn measure_runtime() {
     let began = Instant::now();
     let reopened = Arc::new(SqliteConversationStore::open_existing(cid, &database).unwrap());
     assert_eq!(reopened.load_canonical().unwrap(), history_messages);
-    let reopened_requests = verify_requests(reopened.clone(), &case, &workspace, &requests);
+    let reopened_requests = verify_requests(
+        reopened.clone(),
+        &case,
+        &workspace,
+        "emulator",
+        &endpoint,
+        &requests,
+    );
     assert_eq!(
         reopened_requests, verified_requests,
         "exact frozen identities and input survive reopen"

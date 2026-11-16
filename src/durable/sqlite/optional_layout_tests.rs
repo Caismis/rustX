@@ -118,5 +118,5 @@ fn failed_layout_rollback_never_releases_unreverted_changes() {
         .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
         .unwrap();
     connection.execute_batch("ROLLBACK").unwrap();
-    assert!(rows(&connection).is_empty());
+    assert_eq!(rows(&connection), [] as [i64; 0]);
 }

@@ -315,7 +315,7 @@ fn final_model_tool_raw_suffixes_reopen_with_live_or_unindexed_prefix() {
         candidate.boundary = None;
         assert!(fixture.store.settle_model_turn(candidate).is_err());
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
-        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        assert_eq!(fixture.store.load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
         {
             let connection = fixture.store.lock().unwrap();
             assert_eq!(
@@ -401,7 +401,7 @@ fn final_model_frames_keep_sequence_identity_and_proposal_validation_atomic() {
         }
         assert!(fixture.settle(None).is_err());
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
-        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        assert_eq!(fixture.store.load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
         let connection = fixture.store.lock().unwrap();
         assert_eq!(
             connection
@@ -456,7 +456,7 @@ fn final_model_tool_owner_mismatch_rolls_back_final_progress() {
         candidate.boundary = None;
         assert!(fixture.store.settle_model_turn(candidate).is_err());
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
-        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        assert_eq!(fixture.store.load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
         let connection = fixture.store.lock().unwrap();
         assert_eq!(
             connection
@@ -521,13 +521,10 @@ fn final_model_commit_contains_ordered_facts_and_readable_canonical_output() {
             .unwrap(),
         "final 水".as_bytes()
     );
-    assert!(
-        fixture
+    assert_eq!(fixture
             .store
             .load_unsettled_publication_streams()
-            .unwrap()
-            .is_empty()
-    );
+            .unwrap(), [] as [crate::publication::frame::PublicationStreamRecord; 0]);
     assert!(
         fixture.settle(None).is_err(),
         "a committed output cannot be accepted twice"
@@ -546,7 +543,7 @@ fn final_model_faults_roll_back_provider_frames_canonical_and_terminal_together(
         };
         fault.store(1, Ordering::SeqCst);
         assert!(fixture.settle(None).is_err());
-        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        assert_eq!(fixture.store.load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
         let streams = fixture.store.load_unsettled_publication_streams().unwrap();
         assert!(
@@ -588,7 +585,7 @@ fn final_model_adopts_finite_pending_order_without_terminal_and_preserves_cursor
     assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
     fixture.store.arm_fail_next_adopt_commit();
     assert!(fixture.settle(Some(batch.watermark)).is_err());
-    assert!(fixture.store.load_canonical().unwrap().is_empty());
+    assert_eq!(fixture.store.load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
     assert_eq!(fixture.store.load_pending().unwrap(), all_pending);
     let result = fixture.settle(Some(batch.watermark)).unwrap();
     let boundary = result.boundary.unwrap();
@@ -663,14 +660,11 @@ fn final_model_rejects_foreign_envelopes_and_wrong_terminal_without_partial_fact
         }
         assert!(fixture.store.settle_model_turn(candidate).is_err());
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
-        assert!(fixture.store.load_canonical().unwrap().is_empty());
-        assert!(
-            fixture
+        assert_eq!(fixture.store.load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
+        assert_eq!(fixture
                 .store
                 .load_unsettled_publication_streams()
-                .unwrap()
-                .is_empty()
-        );
+                .unwrap(), [] as [crate::publication::frame::PublicationStreamRecord; 0]);
     }
 }
 
@@ -1275,7 +1269,7 @@ fn final_model_settlement_configuration_trigger_rejects_even_coherent_corruption
             original
         );
         assert_eq!(fixture.store.presentation_frontier().unwrap(), frontier);
-        assert!(fixture.store.load_canonical().unwrap().is_empty());
+        assert_eq!(fixture.store.load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
         {
             let connection = fixture.store.lock().unwrap();
             let current: (String, String, String, String) = connection.query_row(
@@ -1369,7 +1363,7 @@ fn prepared_final_raw_constraint_failure_preserves_native_error_priority_and_rol
         "native duplicate precedes the independent raw retention failure: {error}"
     );
     assert_eq!(fixture.store.presentation_frontier().unwrap(), before);
-    assert!(fixture.store.load_canonical().unwrap().is_empty());
+    assert_eq!(fixture.store.load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
     let mut candidate = fixture.candidate(None);
     candidate.boundary = None;
     assert!(fixture.store.settle_model_turn(candidate).is_err());
@@ -1533,14 +1527,11 @@ fn publication_header_reuses_one_body_capture_and_only_rebinds_changed_tool_bloc
             observation::index::index_message(&connection, &fixture.message, Some(1)).unwrap();
         }
         assert_eq!(publication_display_rows(&fixture.store), actual, "{kind}");
-        assert!(
-            fixture
+        assert_eq!(fixture
                 .store
                 .transcript_header_page(&before, None, 32)
                 .unwrap()
-                .headers
-                .is_empty()
-        );
+                .headers, [] as [crate::durable::observation::TranscriptHeader; 0]);
         assert_eq!(
             fixture.store.load_canonical().unwrap(),
             vec![fixture.message.clone()]

@@ -151,6 +151,11 @@ impl ClientInner {
         attachments: Vec<crate::message::content::UploadedFileRef>,
     ) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.ensure_writable_runtime()?;
+        let approval_mode = self
+            .lock_published_state()
+            .projection
+            .snapshot_ref()
+            .effective_approval_mode;
         let accepted = self
             .agent_registry()?
             .send_message_with_attachments(
@@ -158,6 +163,7 @@ impl ClientInner {
                 &message,
                 &attachments,
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
+                approval_mode,
                 crate::runtime::cancellation::CancellationSignal::new(),
             )
             .await

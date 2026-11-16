@@ -48,8 +48,6 @@ fn fixed_tool() -> ToolDefinition {
         description: String::new(),
         input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -57,7 +55,7 @@ fn fixed_tool() -> ToolDefinition {
 
 fn tool_call_step(turn: usize, definition: &ToolDefinition) -> Vec<GatedStep> {
     let id = ToolCallId::new(format!("read-{turn:08}"));
-    let arguments = r#"{"path":"fixture.txt"}"#;
+    let arguments = r#"{"arguments":{"path":"fixture.txt"}}"#;
     vec![
         GatedStep::Emit(ModelEvent::Started),
         GatedStep::Emit(ModelEvent::ToolCallStarted {

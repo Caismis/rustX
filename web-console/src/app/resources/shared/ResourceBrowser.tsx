@@ -1,4 +1,4 @@
-import type { SourceScope, SourceSettings } from '../../../../../protocol/app-server/v79';
+import type { SourceScope, SourceSettings } from '../../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import type { CatalogView } from '../../../presentation/catalog/CatalogControls';

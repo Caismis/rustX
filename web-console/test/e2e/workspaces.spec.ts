@@ -38,7 +38,7 @@ test('two isolated Product Hosts/processes, cold Sessions and responsive Workspa
     const outside = join(a.directory, 'outside-host-roots'); mkdirSync(outside);
     const denied = await remoteA.createSession({ cwd: outside });
     const deniedBefore = await remoteA.readSettings(denied.session.id);
-    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: [id] })), { endpoint: a.endpoint, id: denied.session.id });
+    await page.addInitScript(({ endpoint, id }) => localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: [id], route: { kind: 'session', sessionId: id } })), { endpoint: a.endpoint, id: denied.session.id });
     await routeWorkspaceHost(page, a); await page.goto('/'); await expect(page).toHaveTitle(/rustX/);
     await connectRemote(page, a.endpoint, a.token);
     await expect(page.locator(`button[data-session-id="${id}"]`)).toBeVisible();

@@ -71,7 +71,7 @@ impl Cache {
         if invalidates {
             let _ = self
                 .source_epoch
-                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
                     Some(n.saturating_add(1))
                 });
         }

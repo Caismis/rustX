@@ -82,7 +82,6 @@ pub trait ModelAdapter: Send + Sync {
 
 /// A single-item stream that fails with the given normalized error, without
 /// `Started` and without any provider request.
-#[must_use]
 pub fn model_stream_of_failure(error: ModelError) -> ModelStream {
     Box::pin(futures_util::stream::once(async move {
         ModelStreamItem::Event(ModelEvent::Failed { error })

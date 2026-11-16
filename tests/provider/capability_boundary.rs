@@ -447,7 +447,10 @@ async fn chat_replay_concatenates_plaintext_and_skips_opaque_blocks() {
             .find(|message| message.get(field).is_some())
             .unwrap();
         assert_eq!(reasoning[field], "firstsecond");
-        assert!(reasoning["content"].as_array().unwrap().is_empty());
+        assert_eq!(
+            reasoning["content"].as_array().unwrap(),
+            &Vec::<serde_json::Value>::new()
+        );
     }
 }
 

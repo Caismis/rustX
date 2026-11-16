@@ -653,7 +653,7 @@ impl Owner {
     fn invalidate(&self) {
         let _ = self
             .epoch
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1));
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1));
     }
     pub fn capture(&self, connection: &Connection) -> Result<u64, ConversationStoreError> {
         // The caller's native read/write transaction must own its SQLite snapshot

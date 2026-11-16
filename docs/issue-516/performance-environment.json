@@ -1,0 +1,119 @@
+{
+  "date": "2026-11-03",
+  "timezone": "Asia/Shanghai",
+  "hostCpu": "AMD Ryzen 7 9800X3D 8-Core Processor",
+  "host": "Windows with Ubuntu 24.04 under WSL 2",
+  "runnerKernel": "6.18.33.2-microsoft-standard-WSL2",
+  "runnerNode": "24.21.0",
+  "browserImage": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "browserCpuQuota": 2,
+  "browserMemoryLimitBytes": 2147483648,
+  "viewports": [
+    [
+      1440,
+      1000
+    ],
+    [
+      390,
+      844
+    ]
+  ],
+  "browser": {
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "vendor": "Google Inc. (Google)",
+    "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+    "devicePixelRatio": 1
+  },
+  "artifacts": [
+    {
+      "file": "GeometryPreview-5WZG113V.js",
+      "rawBytes": 665533,
+      "gzipBytes": 165454,
+      "sha256": "92a0058876d659514e62ca875744613f977b3c60de702e117f0af561d4101b0d"
+    },
+    {
+      "file": "GeometryPreview-DNFY_fYT.css",
+      "rawBytes": 4748,
+      "gzipBytes": 1480,
+      "sha256": "46010493151e939c2451bc61345f52c7b09a073cec66a496ed9dc2ecc75c6239"
+    },
+    {
+      "file": "cad-worker-BAnTL3Pd.js",
+      "rawBytes": 63614,
+      "gzipBytes": 22279,
+      "sha256": "46ffd938db0cabeb7b0cc68d7454a1a6f4284fb0f978c5b7a62f1966ceeea29e"
+    },
+    {
+      "file": "stl-worker-A-LFrhC_.js",
+      "rawBytes": 118119,
+      "gzipBytes": 33653,
+      "sha256": "22017e0e1172564a24a12c7a8502e8c0a8e213f3f2980c8f8d94a22aedaa4757"
+    }
+  ],
+  "sourceSha256": {
+    "web-console/src/app/components/documents/geometry/viewport.ts": "514448cf244664c2c569d8cc08e22eff47537b9465877aa3ae5d410632da8315",
+    "web-console/src/app/components/documents/geometry/stl.ts": "7ad215de87d57e9743819eb4da512b80e47ef9705bd9155e79b4bbd11172306c",
+    "web-console/src/app/components/documents/geometry/scene-resources.ts": "da4c132e0a4fabdf0bed3029feb0426874cb4dff826d63913fa11260003e07d9",
+    "web-console/src/app/components/documents/geometry/glb.ts": "c0badb39846825d68377252bbf6960cbca84f3de1fe005b1b260492aff0ecaad",
+    "web-console/src/app/components/documents/geometry/GeometryPreview.tsx": "f5adc0683db7ce8bbefa80c955285a4a5a611e58babfd30af384c1faad29d0f2",
+    "web-console/src/app/components/documents/geometry/GeometryPreview.module.css": "9c905692d4581915cdd2d97a6898769ee7c4c9b1734707ec315dbb484bb97820",
+    "web-console/test/fixtures/geometry.tsx": "c5258952ac863a9eb4c61750ea79ecc1d00db49f31a73c06f0a8b885ad4505a3",
+    "web-console/test/e2e/geometry-performance.spec.ts": "5d240a435272bb8d3b7021d76e3eb1921669ac8bc4ef08abd9ab1d8fd1a7568f",
+    "web-console/test/e2e/geometry-observation.ts": "427e001fd558b8508f22c4aaad7fc3097dba6c6eee0268773161d9829ed895d9",
+    "web-console/test/e2e/geometry.spec.ts": "1ceabf5b89fc352931042c1a3959dc61a07fddafad152666f8eb77f83d53308f",
+    "web-console/test/e2e/geometry-sidebar.spec.ts": "ae5e1354146776b12126be25ed308ad49cc82e923075935bb655d4bb8504a99f"
+  },
+  "fixtures": {
+    "bracket-array.step": {
+      "bytes": 168057,
+      "sha256": "36e1bcdf85073c8744fe6a5a6e006b14ba64689ebd3bbb739ea34cd4fffdff46"
+    },
+    "cube-ascii.stl": {
+      "bytes": 1189,
+      "sha256": "39262dea81fb2b25423b1e4cd95ebc6a720f3db861bff493cfbf62211d230d7f"
+    },
+    "cube-embedded.glb": {
+      "bytes": 1628,
+      "sha256": "3f18b3fb4ebcd6ccbcd091f2dae72989adc6601def32636cef53b10e77b9b211"
+    },
+    "cube-inch.step": {
+      "bytes": 16204,
+      "sha256": "d7b687bd5d52be298c2f380fd1e4bfc9b6e4855bccc7f326ccc6412ff4f9ae7e"
+    },
+    "cube-textured.glb": {
+      "bytes": 1600,
+      "sha256": "9c5334a624533057c983461e0b77d2d3e0e20bcc7512c82ced229feb94a24f81"
+    },
+    "cube.brep": {
+      "bytes": 2523,
+      "sha256": "472ab523e2bb15d27e2bd08095e6cc7885461322e927854d653b555727e5c1af"
+    },
+    "cube.glb": {
+      "bytes": 992,
+      "sha256": "4e9507aec871302de6c8d7e0e4b9c8ec4e2e8850ea834b67a9ab21662b79b96b"
+    },
+    "cube.iges": {
+      "bytes": 13365,
+      "sha256": "93b123698582d115e676b36430ca3ddeaec376e3ec846cfc4bdaba5e6829aadf"
+    },
+    "cube.step": {
+      "bytes": 15391,
+      "sha256": "a4de49d2f2a2bf6eaeea0b4c9260b08e35465074994a308aab62ab4aed61b6fe"
+    },
+    "cube.stl": {
+      "bytes": 684,
+      "sha256": "afaa00309cfe945eec00f2ed87864c3d3268f3b0e7f4bdfe201da5eb7582795e"
+    },
+    "mounting-bracket.glb": {
+      "bytes": 771980,
+      "sha256": "e9df0c58af6125427193c3a9884b45268e00354587c13714218c0cf546af466a"
+    },
+    "mounting-bracket.step": {
+      "bytes": 162365,
+      "sha256": "a5c571259801d3377af64a122e04cfc9ea2d0d7d953e83d85a0364b2b345ba77"
+    }
+  },
+  "containerPeakBytes": 1215262720,
+  "containerSwapCurrentBytes": 0
+}

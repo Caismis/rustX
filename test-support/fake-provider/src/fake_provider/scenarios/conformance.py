@@ -720,7 +720,7 @@ def app_server_user(marker: str) -> Scenario:
                  "execution_mode": "foreground",
              })), Finish("tool_calls"))),
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=f"user-{marker}",
-                    body_contains=(f"{marker}:unset",)),
+                    body_contains=(f"{marker}:fake-{marker}",)),
              Stream(Gate("host-result"), Text(f"result-{marker}"), Finish()),
              allow_disconnect=marker == "b"),
     )

@@ -20,7 +20,7 @@ async function fixture() {
     return { type: 'node', node: { id: request.params.node_id, ordinal: '1', conversation_id: request.params.node_id === origin.source_node ? source.conversation_id : server.snapshots.get(request.params.session_id)!.conversation_id, origin: request.params.session_id === 'A' ? origin : { type: 'new' } } };
   });
   await server.attached('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: server.client.getSnapshot().endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   const ui = await act(async () => render(<App client={server.client} workspaceHost={server.workspaceHost}/>));
   await waitFor(() => expect((ui.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement).disabled).toBe(false));
   const editor = () => ui.getByRole('textbox', { name: 'Message' }) as HTMLTextAreaElement;

@@ -15,7 +15,7 @@ fn giant_selected_delivery(
         id: ToolCallId::new("selected-child-call"),
         tool_id: ToolId::new("tool-present"),
         name: "present".into(),
-        arguments: serde_json::json!({}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({})),
     };
     child
         .store
@@ -170,7 +170,7 @@ async fn selected_child_delivery_with_trace_fault() {
         .join("conversation.sqlite");
     let connection = rusqlite::Connection::open(&path).unwrap();
     let (sequence, header): (u64, Vec<u8>) = connection.query_row("SELECT sequence,observation_trace_fact FROM events WHERE observation_kind='attempt_started' ORDER BY sequence LIMIT 1", [], |row|Ok((row.get(0)?,row.get(1)?))).unwrap();
-    assert!(!header.is_empty());
+    assert_ne!(header, [] as [u8; 0]);
     let facts = child
         .store
         .observation_trace_facts(

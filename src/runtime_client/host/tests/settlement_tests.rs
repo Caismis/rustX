@@ -93,7 +93,10 @@ async fn projection_settled_joins_encoding_before_model_baseline() {
             .get("settlement-marker"),
         Some(&serde_json::json!("changed"))
     );
-    assert!(adapter.requests().is_empty());
+    assert_eq!(
+        adapter.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     inner.unpark_projection_worker();
     fixture.runtime.shutdown().await.unwrap();
     inner.drain_projection().await.unwrap();

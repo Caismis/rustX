@@ -45,6 +45,8 @@ async fn stdio_preparation(dir: &tempfile::TempDir, test: &str) -> StdioPreparat
             environment: control.environment(&RecoveryScript::default()),
         },
         policy: crate::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     let pause = Arc::new(ConnectOwnershipPause::default());
     let _release = ReleasePause(pause.clone());
@@ -387,11 +389,8 @@ async fn acquired_discovery_retains_unproven_stdio_settlement_before_releasing_i
         1,
         "unproven ownership evidence is never reaped"
     );
-    assert!(
-        coordinator
-            .current_snapshot()
-            .tool_registry()
-            .definitions()
-            .is_empty()
+    assert_eq!(
+        coordinator.current_snapshot().tool_registry().definitions(),
+        [] as [crate::tools::types::ToolDefinition; 0]
     );
 }

@@ -70,14 +70,14 @@ async fn native_source_application_identity_uses_exact_facts_not_projection() {
     std::fs::write(root.join("AGENTS.md"), "new native instructions").unwrap();
     assert_ne!(before_resource_change, capture(&f.manager));
     assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
-    assert!(
+    assert_eq!(
         f.manager
             .sessions
             .list_sessions(None, 0, 32)
             .await
             .unwrap()
-            .sessions
-            .is_empty()
+            .sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
     );
 }
 
@@ -245,7 +245,7 @@ async fn deleting_a_model_releases_creation_when_a_named_agent_depends_on_it() {
         .unwrap();
         std::fs::write(
             agent_directory.join("stable.toml"),
-            "instructions = 'Review changes'\n[model]\nmodel = 'local/b'\n[model.title_model]\nmode = 'explicit'\nmodel = 'local/a'\n",
+            "instructions = 'Review changes'\n[model]\nmodel = 'local/b'\n",
         )
         .unwrap();
         let settings = directory.join("rustx.toml");
@@ -271,7 +271,10 @@ async fn deleting_a_model_releases_creation_when_a_named_agent_depends_on_it() {
             .lock()
             .unwrap()[&old]
             .clone();
-        assert_eq!(old_binding.config.agent.agents, [agent.clone(), stable.clone()]);
+        assert_eq!(
+            old_binding.config.agent.agents,
+            [agent.clone(), stable.clone()]
+        );
         assert!(fixture.manager.configuration_runtime(&old).is_none());
 
         let original_model = issue459_authored_a(&fixture).await;
@@ -340,24 +343,53 @@ async fn deleting_a_model_releases_creation_when_a_named_agent_depends_on_it() {
         assert!(recovered.unavailable.is_none());
         assert_eq!(recovered.configured.model.as_str(), "local/b");
 
-        fixture.manager.unload(&old_session.active_conversation_id).await.unwrap();
-        fixture.manager.unload(&new_session.active_conversation_id).await.unwrap();
+        fixture
+            .manager
+            .unload(&old_session.active_conversation_id)
+            .await
+            .unwrap();
+        fixture
+            .manager
+            .unload(&new_session.active_conversation_id)
+            .await
+            .unwrap();
         assert!(fixture.manager.configuration_runtime(&old).is_none());
         assert!(fixture.manager.configuration_runtime(&created).is_none());
         write(
             &fixture,
             0,
-            ConfigMutation::Model { id: "local/a".into(), authored: Some(original_model) },
-        ).await;
+            ConfigMutation::Model {
+                id: "local/a".into(),
+                authored: Some(original_model),
+            },
+        )
+        .await;
         let restored = create().await.unwrap().session.id;
-        let restored = fixture.manager.sessions.configuration_bindings.lock().unwrap()[&restored].clone();
+        let restored = fixture
+            .manager
+            .sessions
+            .configuration_bindings
+            .lock()
+            .unwrap()[&restored]
+            .clone();
         assert_eq!(restored.session_model().model.as_str(), "local/a");
-        assert_eq!(restored.config.agent.agents, [agent.clone(), stable.clone()]);
+        assert_eq!(
+            restored.config.agent.agents,
+            [agent.clone(), stable.clone()]
+        );
         let main = restored.inspection.main.as_ref().unwrap();
         assert_eq!(main.agents, [agent, stable]);
-        assert!(!main.agent_controls.is_empty());
-        assert!(!restored.inspection.resource_diagnostics.iter()
-            .any(|item| item.reason == "selected Agent model is unavailable"));
+        assert_ne!(
+            main.agent_controls,
+            [] as [crate::runtime::capability_inspection::ToolInspection; 0]
+        );
+        assert!(
+            !restored
+                .inspection
+                .resource_diagnostics
+                .iter()
+                .any(|item| item.reason == "selected Agent model is unavailable")
+        );
         fixture.close().await;
     }))
     .await;
@@ -548,7 +580,7 @@ async fn issue419_initial_model_commit_readback_admission_and_later_switch() {
                 .unwrap();
             assert!(created.durability_diagnostic.is_none());
             assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             let persisted =
                 std::fs::read_to_string(f.archive_root.join("sessions/catalog.json")).unwrap();
             assert!(persisted.contains(&selection.model.to_string()));
@@ -707,17 +739,17 @@ async fn issue419_rejected_explicit_model_does_not_publish_or_substitute() {
         })
         .await;
     assert!(result.is_err());
-    assert!(
+    assert_eq!(
         f.manager
             .sessions
             .list_sessions(None, 0, 32)
             .await
             .unwrap()
-            .sessions
-            .is_empty()
+            .sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
     );
     assert!(f.manager.registry.0.lock().unwrap().entries.is_empty());
-    assert!(f.provider.request_bodies().is_empty());
+    assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -993,14 +1025,14 @@ async fn issue422_creation_previsibility_failure_removes_provisional_binding() {
             .unwrap()
             .is_empty()
     );
-    assert!(
+    assert_eq!(
         f.manager
             .sessions
             .list_sessions(None, 0, 32)
             .await
             .unwrap()
-            .sessions
-            .is_empty()
+            .sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
     );
     assert_eq!(log.next_after(frontier), None);
     f.close().await;

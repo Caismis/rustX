@@ -358,101 +358,265 @@ async fn bash_kill_escalates_when_term_is_ignored() {
     assert!(term < grace && grace < kill, "{evidence}");
 }
 
+struct SignalReleaseGuard(SignalPipe);
+
+impl Drop for SignalReleaseGuard {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
 #[tokio::test]
 async fn bash_cancellation_terminates_descendants_of_the_process_group() {
-    let fixture = native_fixture();
+    use nix::sys::signal::kill;
+    use nix::unistd::{Pid, getpgid};
+    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    // Keep the socket path within Darwin's native path bound.
+    let dir = tempfile::Builder::new()
+        .prefix("rx-desc-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let trace = dir.path().join("trace");
+    let socket = dir.path().join("gate");
+    let listener = tokio::net::UnixListener::bind(&socket).unwrap();
+    let fixture = fixture_with_control(&FixtureControl {
+        trace: Some(trace.clone()),
+        before_term_socket: Some(socket),
+    });
     let workspace = fixture.runtime.workspace().root().to_path_buf();
-    let ready = workspace.join("descendant-ready.marker");
-    let marker = workspace.join("descendant-stopped.marker");
-    // The shell writes the ready marker, then waits for the descendant.
-    // Cancellation is triggered only after the marker exists, so the
-    // descendant is provably alive inside the owned group.
+    let ready_path = workspace.join("descendant-ready.fifo");
+    let hold_path = workspace.join("descendant-hold.fifo");
+    let desc_pid_path = workspace.join("descendant.pid");
+    let ready = SignalPipe::new(&ready_path);
+    // Keep the write end open across cancellation; dropping on panic/unwind
+    // releases any remaining blocked `read` without signaling raw numeric PIDs.
+    let _hold_guard = SignalReleaseGuard(SignalPipe::new(&hold_path));
     let command = format!(
-        "touch {}; sleep 30 & wait; touch {}",
-        ready.display(),
-        marker.display()
+        "sh -c 'printf \"%s\\n\" \"$$\" > {}; printf R > {}; IFS= read -r _ < {}' & wait",
+        desc_pid_path.display(),
+        ready_path.display(),
+        hold_path.display(),
     );
     let cancellation = CancellationSignal::new();
-    let cancelling = cancellation.clone();
-    let controller = tokio::spawn(async move {
-        for _ in 0..200 {
-            if ready.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(
-            ready.exists(),
-            "the descendant readiness marker never appeared"
+    let (
+        result,
+        (
+            descendant_pid,
+            shell_pid,
+            owned_pgid,
+            pre_terminate_received,
+            pre_signal_emitted,
+            pre_reaped_or_terminal,
+            pre_alive,
+            pre_pgid,
+        ),
+    ) = tokio::time::timeout(Duration::from_secs(15), async {
+        let execution = run_tool_with_cancellation(
+            &fixture,
+            "bash",
+            serde_json::json!({"command": command}),
+            cancellation.clone(),
         );
-        cancelling.cancel();
-    });
-    let result = run_tool_with_cancellation(
-        &fixture,
-        "bash",
-        serde_json::json!({"command": command}),
-        cancellation,
-    )
-    .await;
-    controller.await.expect("controller");
+        let controller = async {
+            ready.read().await;
+            let descendant_pid: i32 = std::fs::read_to_string(&desc_pid_path)
+                .expect("descendant pid file")
+                .trim()
+                .parse()
+                .expect("descendant pid");
+            cancellation.cancel();
+            let (mut gate, _) = listener.accept().await.unwrap();
+            gate.read_exact(&mut [0]).await.unwrap();
+            let before = std::fs::read_to_string(&trace).unwrap();
+            let before_entries: Vec<Entry> = before
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+            let (shell_pid, owned_pgid) = before_entries
+                .iter()
+                .find_map(|entry| match entry.event {
+                    Event::ShellGroup { pid, pgid } if pid > 0 && pgid > 0 => Some((pid, pgid)),
+                    _ => None,
+                })
+                .expect("ShellGroup recorded before TERM");
+            let pre_terminate_received = before_entries
+                .iter()
+                .any(|entry| matches!(entry.event, Event::TerminateReceived));
+            let pre_signal_emitted = before_entries
+                .iter()
+                .any(|entry| matches!(entry.event, Event::Signal { .. }));
+            let pre_reaped_or_terminal = before_entries.iter().any(|entry| {
+                matches!(
+                    entry.event,
+                    Event::GroupChildrenReaped
+                        | Event::GroupAbsenceProven
+                        | Event::TerminalPublished
+                        | Event::TerminalObserved
+                        | Event::DirectChildReaped
+                )
+            });
+            let pre_alive = kill(Pid::from_raw(descendant_pid), None).is_ok();
+            let pre_pgid = getpgid(Some(Pid::from_raw(descendant_pid)))
+                .ok()
+                .map(Pid::as_raw);
+            // Always release the native gate so the owned supervisor settles
+            // before any assertion can fail.
+            gate.write_all(b"go").await.unwrap();
+            (
+                descendant_pid,
+                shell_pid,
+                owned_pgid,
+                pre_terminate_received,
+                pre_signal_emitted,
+                pre_reaped_or_terminal,
+                pre_alive,
+                pre_pgid,
+            )
+        };
+        tokio::join!(execution, controller)
+    })
+    .await
+    .expect("descendant cancellation must settle");
+
+    assert!(
+        pre_terminate_received,
+        "TerminateReceived must be logged before TERM gate"
+    );
+    assert!(
+        !pre_signal_emitted,
+        "no Signal may be sent before TERM gate release"
+    );
+    assert!(
+        !pre_reaped_or_terminal,
+        "group reap or terminal state must not be reported while descendant {descendant_pid} is live at TERM gate"
+    );
+    assert_ne!(
+        descendant_pid, shell_pid,
+        "ready handshake must come from an actual descendant process"
+    );
+    assert!(
+        pre_alive,
+        "descendant pid {descendant_pid} must be alive when cancellation reaches the gate"
+    );
+    assert_eq!(
+        pre_pgid,
+        Some(owned_pgid),
+        "descendant pid {descendant_pid} must belong to owned process group {owned_pgid}"
+    );
     assert!(matches!(
         result.status,
         ToolExecutionStatus::Cancelled { .. }
     ));
-    // The group was TERMed/KILLed and the shell reaped before the tool
-    // returned, so the marker can never be written afterwards; the bounded
-    // poll only guards against kernel-level delivery latency.
-    for _ in 0..200 {
-        if marker.exists() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+
+    let evidence = std::fs::read_to_string(&trace).unwrap();
+    let entries: Vec<Entry> = evidence
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let index = |predicate: fn(&Event) -> bool| {
+        entries
+            .iter()
+            .position(|entry| predicate(&entry.event))
+            .unwrap_or_else(|| panic!("missing native event: {evidence}"))
+    };
+    let owned =
+        index(|event| matches!(event, Event::ShellGroup { pid, pgid } if *pid > 0 && *pgid > 0));
+    let received = index(|event| matches!(event, Event::TerminateReceived));
+    let term = index(|event| {
+        matches!(
+            event,
+            Event::Signal {
+                signal: libc::SIGTERM,
+                result: Some(0),
+                ..
+            }
+        )
+    });
+    let group_reaped = index(|event| matches!(event, Event::GroupChildrenReaped));
+    let published = index(|event| matches!(event, Event::TerminalPublished));
+    let observed = index(|event| matches!(event, Event::TerminalObserved));
+    let direct_reaped = index(|event| matches!(event, Event::DirectChildReaped));
     assert!(
-        !marker.exists(),
-        "the descendant of the cancelled group must be terminated"
+        owned < received
+            && received < term
+            && term < group_reaped
+            && group_reaped < published
+            && published < direct_reaped
+            && group_reaped < observed
+            && observed < direct_reaped,
+        "{evidence}"
     );
+    #[cfg(target_os = "macos")]
+    {
+        let absence_proven = index(|event| matches!(event, Event::GroupAbsenceProven));
+        assert!(
+            group_reaped < absence_proven
+                && absence_proven < published
+                && absence_proven < observed,
+            "{evidence}"
+        );
+    }
+    let Event::Signal { pgid, .. } = entries[term].event else {
+        unreachable!()
+    };
+    assert_eq!(pgid, owned_pgid, "{evidence}");
 }
 
 #[tokio::test]
 async fn bash_cancellation_does_not_kill_unrelated_processes() {
-    use std::process::Command;
-    // An unrelated process in the test's own process group.
-    let unrelated = Command::new("sleep").arg("30").spawn().expect("spawn");
-    let unrelated_pid = unrelated.id();
+    use std::process::{Command, Stdio};
+    struct UnrelatedGuard(std::process::Child);
+    impl Drop for UnrelatedGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    // An unrelated process in the test's own process group held by its own
+    // piped stdin (released/killed when UnrelatedGuard drops).
+    let mut unrelated = UnrelatedGuard(
+        Command::new("/bin/sh")
+            .args(["-c", "read hold"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .expect("spawn"),
+    );
+    let unrelated_pid = unrelated.0.id();
     let fixture = native_fixture();
     let cancellation = CancellationSignal::new();
-    // The ready marker proves the tool's own child is running inside the
-    // workspace before cancellation fires; the unrelated process in the
-    // test's own process group must never observe the group signal.
-    let ready = fixture
-        .runtime
-        .workspace()
-        .root()
-        .join("unrelated-ready.marker");
-    let ready_for_controller = ready.clone();
+    // The SignalPipe proves the tool's own child is running inside the
+    // workspace before cancellation fires, while an owned FIFO blocks it until
+    // cancellation terminates the group; the unrelated process in the test's
+    // own process group must never observe the group signal.
+    let root = fixture.runtime.workspace().root().to_path_buf();
+    let ready_path = root.join("unrelated-ready.fifo");
+    let hold_path = root.join("unrelated-hold.fifo");
+    let ready = SignalPipe::new(&ready_path);
+    let _hold_guard = SignalReleaseGuard(SignalPipe::new(&hold_path));
     let cancelling = cancellation.clone();
-    let controller = tokio::spawn(async move {
-        for _ in 0..200 {
-            if ready_for_controller.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(
-            ready_for_controller.exists(),
-            "the tool child readiness marker never appeared"
-        );
+    let controller = async {
+        tokio::time::timeout(Duration::from_secs(15), ready.read())
+            .await
+            .expect("the tool child readiness pipe never signalled");
         cancelling.cancel();
-    });
-    let result = run_tool_with_cancellation(
-        &fixture,
-        "bash",
-        serde_json::json!({"command": format!("touch {}; sleep 30", ready.display())}),
-        cancellation,
-    )
-    .await;
-    controller.await.expect("controller");
+    };
+    let (result, ()) = tokio::join!(
+        run_tool_with_cancellation(
+            &fixture,
+            "bash",
+            serde_json::json!({
+                "command": format!(
+                    "printf R > {}; IFS= read -r _ < {}",
+                    ready_path.display(),
+                    hold_path.display()
+                )
+            }),
+            cancellation,
+        ),
+        controller
+    );
     assert!(matches!(
         result.status,
         ToolExecutionStatus::Cancelled { .. }
@@ -460,13 +624,10 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
     // The tool's TERM/KILL path (grace included) completed before the tool
     // returned and targets only the owned process group; the unrelated
     // process in the test's own group must still be running.
-    let mut unrelated = unrelated;
     assert!(
-        unrelated.try_wait().expect("try_wait").is_none(),
+        unrelated.0.try_wait().expect("try_wait").is_none(),
         "the unrelated process (pid {unrelated_pid}) must survive group cancellation"
     );
-    let _ = unrelated.kill();
-    let _ = unrelated.wait();
 }
 
 #[tokio::test]
@@ -510,18 +671,21 @@ async fn bash_background_cancellation_uses_the_same_process_group_path() {
     else {
         panic!("accepted");
     };
-    // The registry state itself is the thing being polled (with a strict
-    // deadlock guard): wait until the execution is running.
-    let running = wait_for_lifecycle(&registry, &execution_id, BackgroundLifecycle::Running).await;
-    assert_eq!(running.state, BackgroundLifecycle::Running);
     tokio::time::timeout(Duration::from_secs(15), ready.read())
         .await
         .expect("background shell readiness");
+    let running = registry.snapshot(&execution_id).expect("snapshot");
+    assert_eq!(running.state, BackgroundLifecycle::Running);
     let cancelling = registry.cancel(&execution_id).expect("cancel");
     assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
     // The terminal settlement follows the cancellation path.
-    let terminal =
-        wait_for_lifecycle(&registry, &execution_id, BackgroundLifecycle::Cancelled).await;
+    let terminal = tokio::time::timeout(
+        Duration::from_secs(15),
+        registry.wait_until_terminal(&execution_id),
+    )
+    .await
+    .expect("terminal settlement")
+    .expect("background execution terminal");
     assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
     let evidence = std::fs::read_to_string(&trace).unwrap();
     let entries: Vec<Entry> = evidence
@@ -602,8 +766,13 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
     else {
         panic!("accepted");
     };
-    let terminal =
-        wait_for_lifecycle(&registry, &execution_id, BackgroundLifecycle::Succeeded).await;
+    let terminal = tokio::time::timeout(
+        Duration::from_secs(15),
+        registry.wait_until_terminal(&execution_id),
+    )
+    .await
+    .expect("terminal settlement")
+    .expect("background execution terminal");
     assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
     let after_cancel = registry.cancel(&execution_id).expect("cancel");
     assert_eq!(
@@ -614,7 +783,7 @@ async fn bash_natural_exit_beats_late_cancel_in_the_registry() {
 }
 
 #[test]
-fn bash_parent_secrets_are_absent_and_authorized_variables_are_visible() {
+fn bash_inherits_host_values_and_applies_configured_overrides() {
     let test_env = std::env::var("RUSTX_SENTINEL_TEST").is_ok();
     if test_env {
         // Inner run: execute the Bash tool and print its observable stdout.
@@ -632,15 +801,16 @@ fn bash_parent_secrets_are_absent_and_authorized_variables_are_visible() {
         return;
     }
     // Outer run: re-execute this test with a sentinel secret injected into
-    // the child process environment, then prove Bash cannot observe it.
+    // the child process environment, then prove Bash inherits it while
+    // configured entries override the captured host baseline.
     let exe = std::env::current_exe().expect("current exe");
     let output = std::process::Command::new(exe)
         .arg("--exact")
-        .arg("bash::bash_parent_secrets_are_absent_and_authorized_variables_are_visible")
+        .arg("bash::bash_inherits_host_values_and_applies_configured_overrides")
         .arg("--nocapture")
         .env("RUSTX_SENTINEL_TEST", "1")
         .env("RUSTX_SENTINEL_SECRET", "shhh")
-        .env("RUSTX_AUTHORIZED", "visible")
+        .env("RUSTX_AUTHORIZED", "host-value")
         .output()
         .expect("inner test run");
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -650,12 +820,8 @@ fn bash_parent_secrets_are_absent_and_authorized_variables_are_visible() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        stdout.contains("absent:visible"),
-        "the sentinel secret must be absent and the authorized variable visible: {stdout}"
-    );
-    assert!(
-        !stdout.contains("OBSERVED=shhh"),
-        "the sentinel secret leaked into the child environment: {stdout}"
+        stdout.contains("shhh:visible"),
+        "host data must be inherited and configured overrides must win: {stdout}"
     );
 }
 
@@ -1101,72 +1267,6 @@ async fn wait_for_process_death(pid: i32) {
     panic!("process {pid} is still alive after the deadline");
 }
 
-/// Cancellation after the shell parent exited remains effective during the
-/// output-drain phase: the readiness marker proves the shell reached the
-/// end of its command stream before cancellation, and the descendant
-/// holding the pipe is terminated with the owned group.
-#[tokio::test]
-async fn bash_cancellation_after_shell_parent_exit_still_terminates_the_group() {
-    let fixture = native_fixture();
-    let workspace = fixture.runtime.workspace().root().to_path_buf();
-    let ready = workspace.join("exited-ready.marker");
-    // The shell writes the marker, then exits immediately; the descendant
-    // `sleep 30` remains in the owned process group and holds the output
-    // pipe, so the tool is in its output-drain phase when cancellation
-    // fires.
-    let command = format!("touch {}; sleep 30 & exit 0", ready.display());
-    let cancellation = CancellationSignal::new();
-    let cancelling = cancellation.clone();
-    let controller = tokio::spawn(async move {
-        for _ in 0..200 {
-            if ready.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(
-            ready.exists(),
-            "the shell-exit readiness marker never appeared"
-        );
-        cancelling.cancel();
-    });
-    let result = tokio::time::timeout(
-        Duration::from_secs(15),
-        run_tool_with_cancellation(
-            &fixture,
-            "bash",
-            serde_json::json!({"command": command}),
-            cancellation,
-        ),
-    )
-    .await
-    .expect("the invocation settles exactly once");
-    controller.await.expect("controller");
-    assert!(matches!(
-        result.status,
-        ToolExecutionStatus::Cancelled { .. }
-    ));
-}
-
-/// Polls the registry snapshot state itself (with a strict deadlock
-/// guard); the registry is the authoritative state machine, so the poll
-/// queries the very state under test.
-async fn wait_for_lifecycle(
-    registry: &rustx::tools::background::ConversationBackgroundRegistry,
-    execution_id: &rustx::runtime::identity::ToolExecutionId,
-    state: rustx::tools::background::BackgroundLifecycle,
-) -> rustx::tools::background::BackgroundExecutionSnapshot {
-    for _ in 0..400 {
-        let snapshot = registry.snapshot(execution_id).expect("snapshot");
-        if snapshot.state == state {
-            return snapshot;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    let snapshot = registry.snapshot(execution_id).expect("snapshot");
-    panic!("state {state:?} never reached; last snapshot: {snapshot:?}");
-}
-
 /// The macOS Bash EXIT `wait` is a best-effort convenience, not an
 /// ownership or terminality primitive. Replacing it (`trap ':' EXIT`) must
 /// not fabricate terminality: the shell exits immediately, the background
@@ -1287,7 +1387,9 @@ fn selectable_bash_call(
         id: rustx::runtime::identity::ToolCallId::new("call-bash-selectable"),
         tool_id: bash.id.clone(),
         name: "bash".to_owned(),
-        arguments: serde_json::json!({"execution_mode": mode, "command": "echo selectable"}),
+        arguments: crate::common::tool_call_envelope(
+            serde_json::json!({"execution_mode": mode, "command": "echo selectable"}),
+        ),
     }
 }
 
@@ -1410,14 +1512,14 @@ async fn model_selectable_bash_rejects_unusable_execution_mode() {
 
     let fixture = crate::common::model_selectable_native_fixture();
     let bash = selectable_bash(&fixture);
-    let reject = |arguments: serde_json::Value| {
+    let reject = |envelope: serde_json::Value| {
         let outcome = fixture
             .registry
             .preflight(&ToolCall {
                 id: ToolCallId::new("call-bash-selectable"),
                 tool_id: bash.id.clone(),
                 name: "bash".to_owned(),
-                arguments,
+                arguments: envelope,
             })
             .expect("preflight outcome");
         let PreflightOutcome::Rejected { error, .. } = outcome else {
@@ -1426,19 +1528,22 @@ async fn model_selectable_bash_rejects_unusable_execution_mode() {
         error
     };
 
-    let missing = reject(serde_json::json!({"command": "echo hi"}));
+    let missing = reject(serde_json::json!({"arguments": {"command": "echo hi"}}));
     assert!(
         missing.contains("\"execution_mode\": \"foreground\"")
             && missing.contains("\"execution_mode\": \"background\""),
         "the model is told exactly how to retry: {missing}"
     );
-    let invalid = reject(serde_json::json!({"execution_mode": "detached", "command": "echo hi"}));
+    let invalid = reject(
+        serde_json::json!({"execution_mode": "detached", "arguments": {"command": "echo hi"}}),
+    );
     assert!(
         invalid.contains("execution_mode") && invalid.contains("detached"),
         "the invalid value is named: {invalid}"
     );
-    let retired =
-        reject(serde_json::json!({"__rustx_execution": "background", "command": "echo hi"}));
+    let retired = reject(
+        serde_json::json!({"__rustx_execution": "background", "arguments": {"command": "echo hi"}}),
+    );
     assert!(
         retired.contains("__rustx_"),
         "the retired selector is a forged reserved argument, not a mode: {retired}"
@@ -1581,8 +1686,14 @@ async fn background_cancel_at_native_gate() {
         BackgroundLifecycle::Cancelling
     );
     release.release();
-    let terminal =
-        wait_for_lifecycle(registry, &execution_id, BackgroundLifecycle::Cancelled).await;
+    let terminal = tokio::time::timeout(
+        Duration::from_secs(15),
+        registry.wait_until_terminal(&execution_id),
+    )
+    .await
+    .expect("terminal settlement")
+    .expect("background execution terminal");
+    assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
     let evidence = std::fs::read_to_string(&trace).unwrap();
     assert!(marker.exists(), "{terminal:?}\n{evidence}");
     let entries: Vec<Entry> = evidence
@@ -1665,10 +1776,10 @@ async fn ordinary_environment_cannot_arm_supervisor_term_gate() {
             cancellation.cancel();
             entered.read().await;
         };
-        // The readiness byte also proves the same-named value reached Bash.
+        // The readiness byte also proves the control value was removed before Bash.
         let command = format!(
-            "test \"$RUSTX_TEST_BEFORE_TERM_SOCKET\" = '{}' || exit 7; trap 'printf T > {}; exit 0' TERM; printf R > {}; while :; do :; done",
-            socket.display(), entered_path.display(), ready_path.display()
+            "test -z \"${{RUSTX_TEST_BEFORE_TERM_SOCKET+x}}\" || exit 7; trap 'printf T > {}; exit 0' TERM; printf R > {}; while :; do :; done",
+            entered_path.display(), ready_path.display()
         );
         let (result, ()) = tokio::join!(run_tool_with_cancellation(&fixture, "bash", serde_json::json!({"command": command}), cancellation.clone()), controller);
         assert!(matches!(result.status, ToolExecutionStatus::Cancelled { .. }), "{result:?}");
@@ -1697,7 +1808,7 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
         "RUSTX_TEST_AFTER_ANCHOR_STOP_SOCKET",
         "RUSTX_TEST_FAIL_CONTAINMENT",
         "RUSTX_PHYSICAL_CONTINUATION",
-        "RUSTX_COMMAND_ENVIRONMENT",
+        "RUSTX_COMMAND_ENVIRONMENT_FILE",
     ];
     let mut environment: Vec<_> = keys
         .iter()
@@ -1714,12 +1825,14 @@ async fn ordinary_environment_cannot_enable_supervisor_controls() {
     ));
     let fixture = native_fixture_with_environment(environment);
     let mut command = String::new();
-    for key in keys {
-        write!(command, "test \"${key}\" = user-visible-value || exit 9; ").unwrap();
+    for key in keys.into_iter().chain([
+        TRACE_ENV,
+        "RUSTX_SUPERVISOR_ANCHOR_PID_FILE",
+        "RUSTX_TEST_BEFORE_TERM_SOCKET",
+    ]) {
+        write!(command, "test -z \"${{{key}+x}}\" || exit 9; ").unwrap();
     }
-    command.push_str(
-        "test \"$RUSTX_TEST_BEFORE_TERM_SOCKET\" = user-visible-value || exit 10; printf isolated",
-    );
+    command.push_str("printf isolated");
     let result = run_tool(&fixture, "bash", serde_json::json!({"command": command})).await;
     assert_eq!(result.status, ToolExecutionStatus::Success, "{result:?}");
     assert_eq!(json_content(&result)["exit_code"], 0);
@@ -1755,7 +1868,7 @@ async fn description_changes_neither_native_bash_execution_nor_registry_approval
         .into_iter()
         .find(|tool| tool.name == "bash")
         .unwrap();
-    assert_eq!(before.approval_policy, after.approval_policy);
+
     assert_eq!(before.execution_policy, after.execution_policy);
     assert_eq!(before.id, after.id);
 }

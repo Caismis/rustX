@@ -19,6 +19,7 @@ fn sibling_graph() -> WorkflowDefinition {
     WorkflowDefinition {
         description: "Concurrent paths and one join".into(),
         timeout_ms: 60_000,
+        permissions: None,
         block: WorkflowBlock {
             input: schema(json!({}), &[]),
             nodes: BTreeMap::from([

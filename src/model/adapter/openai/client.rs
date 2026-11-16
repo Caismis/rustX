@@ -108,11 +108,7 @@ impl HttpFailure {
     async fn from_response(response: Response) -> Self {
         let status = response.status();
         let retry_after_ms = parse_retry_after(response.headers());
-        let body = response
-            .bytes()
-            .await
-            .map(|b| b.to_vec())
-            .unwrap_or_default();
+        let body = response.bytes().await.map_or_default(|b| b.to_vec());
         let (message, provider_code, provider_type) = parse_error_body(&body, status);
         Self {
             status,

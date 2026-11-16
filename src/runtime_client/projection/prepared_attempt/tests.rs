@@ -38,8 +38,10 @@ fn source() -> Arc<Option<SharedAttempt>> {
         .into(),
         foreground: Vec::new().into(),
         model: Some(Box::new(AttemptModelView {
-            primary: model,
-            summary: AuxiliaryModelView::Session,
+            primary: model.clone(),
+            summary: AuxiliaryModelView::Session {
+                effective: Box::new(model),
+            },
         }))
         .into(),
         execution_settings: Some(AdmittedSettings {

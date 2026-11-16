@@ -97,9 +97,10 @@ test('interactive HTML packs local assets and executes inside an opaque sandbox'
   await page.evaluate(()=>localStorage.setItem('rustx-html-interactive-v1','false'));
   await page.reload();await page.locator('[data-preview-toggle]').click();
   await expect(panel.locator('iframe')).toHaveAttribute('sandbox','');
-  // The iframe's dock can still be sliding even when its contents are stable.
+  // Wait for the sliding dock to settle before cross-frame hit testing.
   await expect(panel.locator('iframe')).toBeInViewport({ratio:1});
   await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
+  await panel.locator('iframe').click({trial:true});
   await frame.getByRole('button',{name:'Count 0'}).click();
   await expect(frame.getByRole('button',{name:'Count 0'})).toBeVisible();
   await expect(frame.locator('#boundary')).toHaveText('');

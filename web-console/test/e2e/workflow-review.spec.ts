@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose, selectedSessionId } from './shell-actions';
 
@@ -128,5 +128,5 @@ for (const locale of ['en', 'zh'] as const) test(`native workflow review and nod
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(errors).toEqual([]); passed = true;
   } catch (error) { console.error(fixture.diagnostics()); await page.screenshot({ path: `/tmp/rustx-workflow-failure-${locale}.png` }).catch(() => {}); throw error; }
-  finally { await fixture.stop(passed); }
+  finally { await stopDogfoodPage(page, fixture, passed); }
 });

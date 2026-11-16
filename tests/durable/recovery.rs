@@ -247,6 +247,7 @@ fn snapshot_at(
 ) -> RequestSnapshot {
     let head = store.load_head().expect("head");
     let mut snapshot = RequestSnapshot::new(
+        rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt_id.clone(),
             turn: TurnId::new(turn),
@@ -463,7 +464,10 @@ fn crash_after_adoption_keeps_the_user_message_canonical_exactly_once() {
     assert!(report.reconciliation().is_empty());
 
     let store = durable.open();
-    assert!(store.load_pending().expect("pending").is_empty());
+    assert_eq!(
+        store.load_pending().expect("pending"),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
     let canonical = store.load_canonical().expect("canonical");
     let occurrences = canonical
         .iter()
@@ -553,7 +557,10 @@ fn crash_before_request_start_is_class_b_and_permits_continuation() {
     assert_eq!(terminal_count(&events, &attempt), 1);
     // The already-canonical user turn is intact and was not re-adopted.
     assert_eq!(store.load_canonical().expect("canonical").len(), 1);
-    assert!(store.load_pending().expect("pending").is_empty());
+    assert_eq!(
+        store.load_pending().expect("pending"),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
 }
 
 /// The answer obligation survives the recovery terminal that recovery itself
@@ -661,7 +668,10 @@ fn the_answer_obligation_survives_a_chain_of_recovery_terminals() {
     // The turn was never re-adopted, never duplicated, and never answered.
     let store = durable.open();
     assert_eq!(store.load_canonical().expect("canonical").len(), 1);
-    assert!(store.load_pending().expect("pending").is_empty());
+    assert_eq!(
+        store.load_pending().expect("pending"),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
     let events = all_events(&store);
     assert!(
         !events
@@ -2287,12 +2297,12 @@ fn recovery_preserves_surface_order_for_multiple_unsettled_assistants() {
         repaired,
         vec![MessageId::new("z-first"), MessageId::new("a-second")]
     );
-    assert!(
+    assert_eq!(
         recover(&store, &FixedClock)
             .unwrap()
             .reconciliation()
-            .repaired_tool_results
-            .is_empty()
+            .repaired_tool_results,
+        [] as [rustx::runtime::ToolCallId; 0]
     );
 }
 
@@ -2680,7 +2690,7 @@ fn repeated_restarts_settle_once_and_then_change_nothing() {
             report.attempt_class(),
             &AttemptRecoveryClass::AlreadyTerminal
         );
-        assert!(report.background_classes().is_empty());
+        assert_eq!(report.background_classes(), []);
         let store = durable.open();
         assert_eq!(all_events(&store), settled.0, "events unchanged");
         assert_eq!(store.load_pending().expect("pending"), settled.1);
@@ -2842,9 +2852,9 @@ fn the_recovery_fold_retains_only_unresolved_work() {
     let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
     let plan = RecoveryPlan::classify(&evidence);
     assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::AlreadyTerminal);
-    assert!(plan.background_classes().is_empty());
-    assert!(evidence.tool_repair_messages().is_empty());
-    assert!(evidence.pending_inbound().is_empty());
+    assert_eq!(plan.background_classes(), []);
+    assert_eq!(evidence.tool_repair_messages(), []);
+    assert_eq!(evidence.pending_inbound(), []);
     assert_eq!(evidence.next_attempt_ordinal(), 40);
     // 160 durable events and 40 request snapshots are behind this fold; the
     // classification carries none of them.
@@ -3533,7 +3543,7 @@ fn nonterminal_workflow_child_is_settled_without_parent_notification() {
     );
 
     let report = recover_reopened(&durable);
-    assert!(report.subagent_classes().is_empty());
+    assert_eq!(report.subagent_classes(), []);
     assert!(report.reconciliation().is_empty());
 }
 
@@ -3561,7 +3571,7 @@ fn a_durably_settled_subagent_needs_no_recovery() {
     }
 
     let report = recover_reopened(&durable);
-    assert!(report.subagent_classes().is_empty());
+    assert_eq!(report.subagent_classes(), []);
     assert!(report.reconciliation().is_empty());
     assert_eq!(
         report.highest_subagent_ordinal(),

@@ -76,6 +76,7 @@ macro_rules! table {
                 event_call_id GENERATED ALWAYS AS (json_extract(event_json,'$.event.call_id')) VIRTUAL,
                 event_instance GENERATED ALWAYS AS (json_extract(event_json,'$.event.instance')) VIRTUAL,
                 event_instance_run GENERATED ALWAYS AS (json_extract(event_json,'$.event.instance.block.run')) VIRTUAL,
+                event_workflow_agent_node GENERATED ALWAYS AS (COALESCE(json_extract(event_json,'$.event.origin.node_id'), json_extract(event_json,'$.event.node_id'))) VIRTUAL,
                 event_json TEXT NOT NULL,",
             crate::durable::sqlite::schema::events::constraint!(),
             ")"

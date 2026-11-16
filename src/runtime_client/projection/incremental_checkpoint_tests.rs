@@ -360,7 +360,7 @@ fn checkpoint_descriptor_and_metadata_rows_keep_the_admitted_owner() {
     let first = seed.checkpoint_prepared().unwrap().0;
     let frozen = serde_json::to_vec(&first).unwrap();
     let mut later = seed.checkpoint_prepared().unwrap().0;
-    assert!(!first.snapshot.message_descriptors.is_empty());
+    assert_ne!(first.snapshot.message_descriptors, [] as [std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>; 0]);
     assert!(std::sync::Arc::ptr_eq(&first.snapshot.message_descriptors[0], &later.snapshot.message_descriptors[0]));
     assert_eq!(first.content.len(), later.content.len());
     assert!(first.content.iter().zip(later.content.iter()).all(|(left,right)| left.same_owner(right)));

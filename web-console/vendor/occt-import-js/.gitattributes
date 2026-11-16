@@ -1,0 +1,4 @@
+# Preserve reviewed upstream distribution/license bytes across checkouts.
+dist/* -text
+LICENSE.md -text -whitespace
+dist/license.*.txt -whitespace

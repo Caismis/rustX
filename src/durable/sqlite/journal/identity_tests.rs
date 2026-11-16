@@ -49,7 +49,10 @@ fn journal_pages_reuse_statement_and_recheck_current_rows() {
         assert_eq!(page.events[0].sequence, sequence);
         cursor = page.next_sequence;
     }
-    assert!(store.read_events(cursor, 1).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(cursor, 1).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     assert_eq!(prepares.load(Ordering::Relaxed), 1);
     {
         let connection = store.lock().unwrap();

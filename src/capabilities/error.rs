@@ -1,7 +1,6 @@
 //! Capability preparation and commit errors (M6).
 
 use crate::runtime::identity::CapabilityRevision;
-use crate::skills::{DependencyConflict, EnvironmentPreparationError};
 
 /// A candidate capability preparation failure.
 ///
@@ -9,12 +8,10 @@ use crate::skills::{DependencyConflict, EnvironmentPreparationError};
 /// current active revision remains authoritative.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CapabilityPreparationError {
-    /// The merged dependency declarations conflict across active Skills.
-    DependencyConflict(DependencyConflict),
     /// The environment store is not disjoint from the model Workspace.
     EnvironmentStoreOverlapsWorkspace { store_root: String },
-    /// A shared environment identity/materialization failure.
-    Environment(EnvironmentPreparationError),
+    /// The runtime-private environment store root could not be created.
+    EnvironmentStoreUnavailable { detail: String },
     /// An MCP server could not be discovered or its catalog was unstable.
     Mcp(String),
     /// The composed canonical registry was rejected as invalid or colliding.
@@ -37,13 +34,12 @@ pub enum CapabilityPreparationError {
 impl core::fmt::Display for CapabilityPreparationError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::DependencyConflict(conflict) => write!(f, "{conflict}"),
             Self::EnvironmentStoreOverlapsWorkspace { store_root } => write!(
                 f,
                 "the environment store root {store_root:?} must be disjoint from the model \
                  Workspace"
             ),
-            Self::Environment(error) => write!(f, "{error}"),
+            Self::EnvironmentStoreUnavailable { detail } => write!(f, "{detail}"),
             Self::Mcp(error) => write!(f, "MCP preparation failed: {error}"),
             Self::ToolRegistry(error) => write!(f, "tool registry composition failed: {error}"),
             Self::ToolActivation(error) => write!(f, "tool activation failed: {error}"),
@@ -62,23 +58,11 @@ impl core::fmt::Display for CapabilityPreparationError {
 
 impl std::error::Error for CapabilityPreparationError {}
 
-impl From<DependencyConflict> for CapabilityPreparationError {
-    fn from(conflict: DependencyConflict) -> Self {
-        Self::DependencyConflict(conflict)
-    }
-}
-
 impl From<crate::capabilities::selected::SelectedMaterializationError>
     for CapabilityPreparationError
 {
     fn from(error: crate::capabilities::selected::SelectedMaterializationError) -> Self {
         Self::SelectedMaterialization(error)
-    }
-}
-
-impl From<EnvironmentPreparationError> for CapabilityPreparationError {
-    fn from(error: EnvironmentPreparationError) -> Self {
-        Self::Environment(error)
     }
 }
 

@@ -5,7 +5,7 @@ import { parse } from 'yaml';
 import { codeDefaults } from '../../src/app/workflows/document/code';
 import { codeDocument } from '../workflow-code-document';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote,openEmptySession,choose } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -71,6 +71,6 @@ for(const width of [1440,390])for(const language of ['python3','javascript'] as 
       expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
       await page.getByRole('button',{name:'返回工作流',exact:true}).first().click();await page.getByRole('button',{name:'code',exact:true}).click();await card.focus();await card.press('Enter');await expect(code.locator('.cm-line')).toHaveText(script.split('\n'));
       await expect(page.locator('vite-error-overlay')).toHaveCount(0);expect(errors).toEqual([]);
-    }finally{await fixture.stop(false);}
+    }finally{await stopDogfoodPage(page, fixture, false);}
   });
 });

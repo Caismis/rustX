@@ -740,7 +740,10 @@ mod tests {
             let delta: ListDelta<_> = ListDelta::between(&base, &next);
             assert_eq!(delta.apply(&base), Some(next));
         }
-        assert!(ListDelta::<_>::between(&base, &base).values.is_empty());
+        assert_eq!(
+            ListDelta::<_>::between(&base, &base).values,
+            [] as [&str; 0]
+        );
     }
 
     #[test]
@@ -798,7 +801,10 @@ mod tests {
         Arc::make_mut(&mut next[0].content_ref).content_revision = 2;
         Arc::make_mut(&mut next[0].content_ref).readable_end = 200;
         let mut delta: ListDelta<_, BindingDelta> = ListDelta::between(&base, &next);
-        assert!(delta.values.is_empty());
+        assert_eq!(
+            delta.values,
+            [] as [crate::observation::cut::ContentBinding; 0]
+        );
         assert_eq!(delta.apply(&base), Some(next.clone()));
         assert_eq!(
             serde_json::to_value(&delta).unwrap(),
@@ -822,7 +828,12 @@ mod tests {
             200,
         ));
         let delta: ListDelta<_, BindingDelta> = ListDelta::between(&base, &next);
-        assert!(delta.patches.is_empty());
+        assert_eq!(
+            delta.patches,
+            [] as [crate::runtime_client::delta::ListItemDelta<
+                crate::runtime_client::delta::BindingDelta,
+            >; 0]
+        );
         assert_eq!(delta.values, next);
     }
 
@@ -849,7 +860,11 @@ mod tests {
         refined.identity = None;
         refined.block_count = 2;
         let delta: ListDelta<_, DescriptorDelta> = ListDelta::between(&base, &next);
-        assert!(delta.values.is_empty());
+        assert_eq!(
+            delta.values,
+            [] as [std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>;
+                0]
+        );
         assert_eq!(delta.patches.len(), 1);
         assert!(delta.patches[0].delta.content.is_none());
         let encoded = serde_json::to_value(&delta).unwrap();

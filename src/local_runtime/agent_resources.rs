@@ -248,7 +248,10 @@ mod tests {
         );
         assert_eq!(sources[&name].layer, "user");
         assert!(sources[&name].overridden.is_none());
-        assert!(catalog.discovery_diagnostics.is_empty());
+        assert_eq!(
+            catalog.discovery_diagnostics,
+            [] as [crate::runtime::resources::RuntimeResourceLoadError; 0]
+        );
         assert_eq!(effects, [0; 11]);
         let (workspace, _) = load_authorized(Some(&root), &user).unwrap();
         assert!(workspace.get(&name).is_none());
@@ -291,7 +294,7 @@ mod tests {
                 ["alpha", "zeta"]
             );
             let alpha = SubagentName::parse("alpha").unwrap();
-            assert!(catalog.get(&alpha).unwrap().skills().is_empty());
+            assert_eq!(catalog.get(&alpha).unwrap().skills(), [] as [String; 0]);
             assert_eq!(
                 catalog.get(&alpha).unwrap().instructions(),
                 "project instructions"

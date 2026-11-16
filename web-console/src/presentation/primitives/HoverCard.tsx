@@ -1,8 +1,9 @@
 import { useTranslation } from '../../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. See PROVENANCE.md. */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode, RefObject, SyntheticEvent } from 'react'
 import { createPortal } from 'react-dom'
+import { autoUpdate, flip, hide, offset, shift, size, useFloating } from '@floating-ui/react-dom'
 import { writeClipboard } from './clipboard.ts'
 import { usePointerGrace } from './pointer-grace.ts'
 import css from './HoverCard.module.css'
@@ -10,13 +11,6 @@ import css from './HoverCard.module.css'
 const VIEWPORT_MARGIN = 8
 const PREVIEW_INSET = 24
 const PREVIEW_MAX_HEIGHT = 420
-
-interface CardPosition {
-  left: number
-  top: number
-  width?: number
-  maxHeight?: number
-}
 
 /**
  * Render an anchor with a hover-triggered preview card.
@@ -55,8 +49,6 @@ export function HoverCard({
   const copyingRef = useRef(false)
   const mountedRef = useRef(true)
   const [open, setOpen] = useState(false)
-  const [pos, setPos] = useState<CardPosition | null>(null)
-  const previewMounted = previewAnchor !== undefined && pos !== null
   const [copied, setCopied] = useState(false)
 
   const clearCopied = useCallback(() => {
@@ -115,72 +107,66 @@ export function HoverCard({
     return () => window.removeEventListener('keydown', dismiss)
   }, [open, previewAnchor, cancelClose, close])
 
-  // Fixed-position from the anchor rect before paint; track the anchor while
-  // open (capture-phase scroll catches nested panes).
-  useLayoutEffect(() => {
-    if (!open) { setPos(null); return }
-    const place = () => {
-      const wrapper = rootRef.current
-      /* v8 ignore next -- the ref is attached before the layout effect runs and the listeners die with it. */
-      if (wrapper === null) return
-      const r = wrapper.getBoundingClientRect()
-      const h = cardRef.current?.offsetHeight ?? 0
-      if (previewAnchor) {
-        if (r.bottom <= 0 || r.top >= window.innerHeight || wrapper.closest('[inert], [hidden]')) {
-          close()
-          return
-        }
-        const bounds = previewAnchor.current?.getBoundingClientRect() ?? r
-        const width = Math.max(0, Math.min(bounds.width - 2 * PREVIEW_INSET, window.innerWidth - 2 * VIEWPORT_MARGIN))
-        const frame = document.documentElement
-        const clearance = Number.parseFloat(getComputedStyle(frame).getPropertyValue('--dsh-frame-top-clearance'))
-        const topMargin = Number.isNaN(clearance) ? VIEWPORT_MARGIN
-          : Math.max(VIEWPORT_MARGIN, Math.min((frame.hasAttribute('data-fullscreen') ? 0 : clearance) + 20, r.bottom + VIEWPORT_MARGIN))
-        const belowTop = Math.max(topMargin, r.bottom + VIEWPORT_MARGIN)
-        const above = Math.max(0, r.top - VIEWPORT_MARGIN - topMargin)
-        const below = Math.max(0, window.innerHeight - belowTop - VIEWPORT_MARGIN)
-        const onTop = above >= Math.min(PREVIEW_MAX_HEIGHT, below)
-        const maxHeight = Math.min(PREVIEW_MAX_HEIGHT, onTop ? above : below)
-        setPos({
-          left: Math.max(VIEWPORT_MARGIN, Math.min(bounds.left + PREVIEW_INSET, window.innerWidth - width - VIEWPORT_MARGIN)),
-          top: onTop ? Math.max(topMargin, r.top - VIEWPORT_MARGIN - Math.min(h, maxHeight)) : belowTop,
-          width,
-          maxHeight,
-        })
-        return
+  const padding = () => {
+    const frame = document.documentElement
+    const clearance = Number.parseFloat(getComputedStyle(frame).getPropertyValue('--dsh-frame-top-clearance'))
+    return {
+      top: previewAnchor && !Number.isNaN(clearance)
+        ? Math.max(VIEWPORT_MARGIN, (frame.hasAttribute('data-fullscreen') ? 0 : clearance) + 20)
+        : VIEWPORT_MARGIN,
+      right: VIEWPORT_MARGIN, bottom: VIEWPORT_MARGIN, left: VIEWPORT_MARGIN,
+    }
+  }
+  const { refs, x, y, strategy, isPositioned, middlewareData } = useFloating({
+    open, placement: previewAnchor ? 'top-start' : 'right-start', strategy: 'fixed',
+    whileElementsMounted: (reference, floating, update) => {
+      const follow = () => {
+        if (rootRef.current?.closest('[inert], [hidden]')) { close(); return }
+        void update()
       }
-      const top = r.top + h > window.innerHeight - 8 ? window.innerHeight - h - 8 : r.top
-      setPos({ left: r.right + 8, top })
-    }
-    place()
-    const observer = previewAnchor && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(place) : undefined
-    for (const element of [rootRef.current, previewAnchor?.current, cardRef.current]) {
-      if (element) observer?.observe(element)
-    }
-    const followScroll = (event: Event) => {
-      if (previewAnchor && event.target instanceof Node && cardRef.current?.contains(event.target)) return
-      place()
-    }
-    window.addEventListener('scroll', followScroll, true)
-    window.addEventListener('resize', place)
-    return () => {
-      observer?.disconnect()
-      window.removeEventListener('scroll', followScroll, true)
-      window.removeEventListener('resize', place)
-    }
-  }, [open, previewAnchor, previewMounted, close])
-
-  // The first placement ran before the card mounted (height read 0): once the
-  // card's real height is measurable, correct the bottom-edge clamp. The
-  // correction converges — a clamped top satisfies the guard, so it runs once.
-  useLayoutEffect(() => {
-    if (!open || pos === null || previewAnchor) return
-    /* v8 ignore next -- the card is mounted whenever pos is set, so the ref is attached here. */
-    const h = cardRef.current?.offsetHeight ?? 0
-    if (pos.top + h > window.innerHeight - 8) {
-      setPos({ left: pos.left, top: window.innerHeight - h - 8 })
-    }
-  }, [open, pos, previewAnchor])
+      const stop = autoUpdate(reference, floating, follow)
+      // The file card determines preview width, even if its trigger has not resized.
+      const observer = previewAnchor?.current && typeof ResizeObserver !== 'undefined' ? new ResizeObserver(follow) : undefined
+      if (previewAnchor?.current) observer?.observe(previewAnchor.current)
+      const visibility = new MutationObserver(follow)
+      for (let element: HTMLElement | null = rootRef.current; element; element = element.parentElement) {
+        visibility.observe(element, { attributes: true, attributeFilter: ['hidden', 'inert'] })
+      }
+      return () => { stop(); observer?.disconnect(); visibility.disconnect() }
+    },
+    middleware: [
+      offset(VIEWPORT_MARGIN),
+      previewAnchor && {
+        name: 'previewAnchor',
+        fn: ({ rects }) => {
+          const bounds = previewAnchor.current?.getBoundingClientRect()
+          if (!bounds) return {}
+          const width = Math.max(0, Math.min(bounds.width - 2 * PREVIEW_INSET, window.innerWidth - 2 * VIEWPORT_MARGIN))
+          const floating = cardRef.current
+          if (floating && floating.style.width !== `${width}px`) {
+            floating.style.width = `${width}px`
+            return { reset: { rects: true } }
+          }
+          return { x: Math.max(VIEWPORT_MARGIN, Math.min(bounds.left + PREVIEW_INSET, window.innerWidth - rects.floating.width - VIEWPORT_MARGIN)) }
+        },
+      },
+      flip(() => ({ padding: padding(), ...(previewAnchor ? { fallbackPlacements: ['bottom-start'] as const } : { fallbackAxisSideDirection: 'end' as const }) })),
+      shift(() => ({ padding: padding(), crossAxis: !previewAnchor })),
+      size(() => ({
+        padding: padding(),
+        apply: ({ availableWidth, availableHeight, elements }) => {
+          elements.floating.style.maxWidth = `${Math.max(0, availableWidth)}px`
+          elements.floating.style.maxHeight = `${Math.max(0, Math.min(previewAnchor ? PREVIEW_MAX_HEIGHT : Infinity, availableHeight))}px`
+        },
+      })),
+      hide({ strategy: 'referenceHidden' }),
+    ],
+  })
+  const setRoot = useCallback((node: HTMLSpanElement | null) => { rootRef.current = node; refs.setReference(node) }, [refs.setReference])
+  const setCard = useCallback((node: HTMLDivElement | null) => { cardRef.current = node; refs.setFloating(node) }, [refs.setFloating])
+  useEffect(() => {
+    if (open && isPositioned && middlewareData.hide?.referenceHidden) close()
+  }, [open, isPositioned, middlewareData.hide?.referenceHidden, close])
 
   const copy = async (text: string): Promise<void> => {
     if (copied || copyingRef.current) return
@@ -204,11 +190,12 @@ export function HoverCard({
     cancelClose()
     close()
   }
-  const card = open && pos !== null && (
+  const card = open && (
     <div
-      ref={cardRef}
+      ref={setCard}
       className={`${css.card}${previewAnchor ? ` ${css.preview}` : ''}${copyable ? ` ${css.copyable}` : ''}${copied ? ` ${css.feedback}` : ''}`}
-      style={{ ...pos, minHeight: copied && copyHeightRef.current !== null ? copyHeightRef.current : undefined }}
+      data-hover-card={previewAnchor ? 'preview' : 'default'}
+      style={{ position: strategy, left: x ?? 0, top: y ?? 0, visibility: isPositioned ? undefined : 'hidden', minHeight: copied && copyHeightRef.current !== null ? copyHeightRef.current : undefined }}
       role={copyable ? 'button' : undefined}
       tabIndex={copyable ? 0 : undefined}
       aria-label={copyable ? tx('common:hover-card.value-value', { p0: copyLabel, p1: copyText }) : undefined}
@@ -237,7 +224,7 @@ export function HoverCard({
 
   return (
     <span
-      ref={rootRef}
+      ref={setRoot}
       className={css.root}
       onPointerEnter={event => {
         if (disabled || previewAnchor && event.pointerType === 'touch') return

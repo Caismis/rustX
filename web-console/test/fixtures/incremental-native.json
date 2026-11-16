@@ -27,7 +27,7 @@
           },
           "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
           "shutting_down": false,
-          "effective_approval_mode": "policy",
+          "effective_approval_mode": "plan",
           "messages": [],
           "message_descriptors": [],
           "publication_settlements": [],
@@ -95,8 +95,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -111,8 +109,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -126,8 +122,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -145,7 +139,7 @@
             "configured": {
               "model": "scripted/scripted",
               "requestParams": {},
-              "summaryModel": {
+              "auxiliary": {
                 "mode": "session"
               }
             },
@@ -1246,7 +1240,7 @@
                   },
                   "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
                   "shutting_down": false,
-                  "effective_approval_mode": "policy",
+                  "effective_approval_mode": "plan",
                   "messages": [
                     {
                       "role": "user",
@@ -1388,7 +1382,7 @@
                     "execution_settings": {
                       "read_image_active": false,
                       "resource_revision": "1",
-                      "approval_mode": "policy"
+                      "approval_mode": "plan"
                     }
                   },
                   "inbound": {
@@ -1416,8 +1410,6 @@
                           "type": "object"
                         },
                         "execution_policy": "foreground_only",
-                        "concurrency_policy": "sequential",
-                        "approval_policy": "never",
                         "replay_policy": "never",
                         "origin": "builtin"
                       }
@@ -1432,8 +1424,6 @@
                           "type": "object"
                         },
                         "execution_policy": "foreground_only",
-                        "concurrency_policy": "sequential",
-                        "approval_policy": "never",
                         "replay_policy": "never",
                         "origin": "builtin"
                       }
@@ -1447,8 +1437,6 @@
                           "type": "object"
                         },
                         "execution_policy": "foreground_only",
-                        "concurrency_policy": "sequential",
-                        "approval_policy": "never",
                         "replay_policy": "never",
                         "origin": "builtin"
                       }
@@ -1466,7 +1454,7 @@
                     "configured": {
                       "model": "scripted/scripted",
                       "requestParams": {},
-                      "summaryModel": {
+                      "auxiliary": {
                         "mode": "session"
                       }
                     },
@@ -1934,7 +1922,7 @@
               "execution_settings": {
                 "read_image_active": false,
                 "resource_revision": "1",
-                "approval_mode": "policy"
+                "approval_mode": "plan"
               }
             }
           ],
@@ -16752,7 +16740,7 @@
           },
           "conversation_id": "conv_7d0e433c-438a-7d1c-8bf7-e3e68527161b",
           "shutting_down": false,
-          "effective_approval_mode": "policy",
+          "effective_approval_mode": "plan",
           "messages": [
             {
               "role": "user",
@@ -18357,7 +18345,7 @@
             "execution_settings": {
               "read_image_active": false,
               "resource_revision": "1",
-              "approval_mode": "policy"
+              "approval_mode": "plan"
             }
           },
           "inbound": {
@@ -18445,8 +18433,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -18461,8 +18447,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -18476,8 +18460,6 @@
                   "type": "object"
                 },
                 "execution_policy": "foreground_only",
-                "concurrency_policy": "sequential",
-                "approval_policy": "never",
                 "replay_policy": "never",
                 "origin": "builtin"
               }
@@ -18495,7 +18477,7 @@
             "configured": {
               "model": "scripted/scripted",
               "requestParams": {},
-              "summaryModel": {
+              "auxiliary": {
                 "mode": "session"
               }
             },

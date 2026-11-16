@@ -18,6 +18,27 @@
 .workflowToggle:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .workflowToggle[aria-expanded='true'] svg { transform: rotate(90deg); }
 .workflowToggle:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
+.workflowCanvasButton {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  height: 22px;
+  margin-left: 6px;
+  padding: 0 7px;
+  border: 1px solid var(--dsw-alias-line-primary);
+  border-radius: 5px;
+  background: var(--dsw-alias-bg-secondary);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.workflowCanvasButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+.workflowCanvasButton:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
 .record[data-workflow-entry] { --trajectory-request-inset: 24px; }
 .record[data-workflow-node] { --trajectory-request-inset: 28px; }
 .record[data-workflow-open] .content,

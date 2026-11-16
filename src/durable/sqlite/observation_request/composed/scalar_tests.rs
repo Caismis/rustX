@@ -34,6 +34,7 @@ fn snapshot(turn: u32, retry: u32, wide: bool) -> RequestSnapshot {
         })
         .collect();
     RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new("shared-scalar-attempt"),
             turn: TurnId::new(turn.to_string()),

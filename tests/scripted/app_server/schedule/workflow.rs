@@ -65,7 +65,7 @@ async fn scheduler85_native_runtime_executes_pure_workflow_once_without_an_attem
         let store=runtime.tool_runtime().durable_store();let events=store.read_events(None,256).unwrap().events;
         assert_eq!(events.iter().filter(|event|matches!(&event.event,RuntimeEvent::WorkflowStarted{run_id,tool_call_id:None,..} if run_id==&start.run_id)).count(),1);
         assert!(events.iter().all(|event|!matches!(event.event,RuntimeEvent::AttemptStarted{..})));
-        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(store.load_pending().unwrap(), [] as [crate::durable::inbox::PendingInboundItem; 0]);
         assert!(matches!(f.manager.schedule_operation(&f.sessions[0].id,&f.sessions[0].active_node,ScheduleOperation::Admit{id:created.id,expected_revision:1}).await.unwrap(),ScheduleOperationResult::Admission(ScheduleAdmission::AlreadyAdvanced{..})));
         f.close().await;
     }).await;
@@ -335,7 +335,7 @@ async fn scheduled_review(mode: u8) {
         let ScheduledWorkflowState::Settled{outcome,..}=view.start.state else {panic!("native physical settlement")};
         match mode {0=>assert_eq!(outcome,ScheduledWorkflowOutcome::Completed),1=>assert_eq!(outcome,ScheduledWorkflowOutcome::Cancelled),_=>assert_eq!(outcome,ScheduledWorkflowOutcome::TimedOut)}
         assert_eq!(view.effects.len(),1);assert!(view.effects[0].physical_settlement_proven);
-        assert!(owner.pending_snapshot().is_empty());
+        assert_eq!(owner.pending_snapshot(), [] as [crate::runtime::interaction::InteractionRequest; 0]);
         assert!(events(&runtime).iter().all(|event|!matches!(event,RuntimeEvent::AttemptStarted{..})));
         f.close().await;
     }).await;
@@ -466,7 +466,10 @@ async fn reopened_workflow(claim_before_reopen: bool) {
                 view.start.state
             );
         }
-        assert!(view.effects.is_empty());
+        assert_eq!(
+            view.effects,
+            [] as [crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowEffect; 0]
+        );
         assert!(!view.capacity_blocked && !view.deletion_blocked);
         assert!(events(&runtime).iter().all(|event| !matches!(
             event,
@@ -593,7 +596,10 @@ async fn scheduler85_review_invalid_workflow_does_not_fence_valid_commands_or_ad
                     ScheduleCommandResult::Invalid { .. }
                 ));
             }
-            assert!(f.manager.diagnostics().schedule_write_fenced.is_empty());
+            assert_eq!(
+                f.manager.diagnostics().schedule_write_fenced,
+                [] as [crate::runtime::identity::ConversationId; 0]
+            );
             let valid = receipt(start(&f, 0, "valid-after-refusal").await.unwrap().unwrap());
             clock.add(60);
             assert!(matches!(

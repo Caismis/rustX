@@ -417,7 +417,12 @@ fn transcript_page_capture_reuses_same_owners_without_row_reindex_or_rebuild() {
     take_page_work();
     let mut first = Capture::new(7);
     let retained = head.capture(&mut first).0.into_entries();
-    assert!(!first.content.is_empty());
+    assert_ne!(
+        first.content,
+        [] as [crate::observation::metadata::MetadataFragment<
+            crate::observation::cut::ContentBinding,
+        >; 0]
+    );
     assert_eq!(take_work(), 2);
     assert_eq!(take_page_work(), [1, 0, 1, 1]);
     let old = head.clone();

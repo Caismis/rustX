@@ -187,7 +187,10 @@ mod tests {
         assert!(spool.bytes <= MAX_BYTES);
         spool.push("last".into(), vec![2]).unwrap();
         assert!(spool.spilled);
-        assert!(spool.facts.is_empty());
+        assert_eq!(
+            spool.facts,
+            [] as [(std::string::String, std::vec::Vec<u8>); 0]
+        );
         let root = spool.finish().unwrap();
         for n in 0..MAX_FACTS {
             assert_eq!(

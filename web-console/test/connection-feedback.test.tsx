@@ -45,7 +45,7 @@ it('a new outage retires recovery confirmation and the rail retains its accessib
 it('App exposes one physical outage control without a conversation-blocking banner or request replay', async () => {
   server = new Server(); const connection = new ConnectionController(server.client);
   await connection.connectRemote(endpoint, TOKEN); await server.client.attach('A');
-  localStorage.setItem('rustx-console-view-v2', JSON.stringify({ endpoint, openViews: ['A'] }));
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
   render(<App client={server.client} workspaceHost={server.workspaceHost} connection={connection}/>);
   const editor = screen.getByRole('textbox', { name: 'Message' });
   act(() => server!.socket.close());

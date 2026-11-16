@@ -93,6 +93,12 @@ pub use crate::context::contribution::ContributionStart;
 /// A provider-independent frozen request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestSnapshot {
+    /// Native execution mode frozen at this committed request start. Together
+    /// with `history_cut.activation` this reconstructs sparse reminder consumption.
+    pub permission_mode: crate::runtime::types::ApprovalMode,
+    /// Exact canonical task input retained across continuation/reconstruction.
+    /// Its original source is loaded by identity, never inferred from history.
+    pub permission_task_message: Option<MessageId>,
     /// Exact prepared structured output, omitted from routine observations.
     pub response_schema: Option<super::structured::PreparedResponseSchema>,
     /// Associations in actual-request coordinates, distinct from checkpoint and physical call coordinates.
@@ -292,6 +298,7 @@ impl RequestSnapshot {
     #[must_use]
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        permission_mode: crate::runtime::types::ApprovalMode,
         identity: RequestIdentity,
         canonical_frontier: crate::context::resources::LedgerFrontier,
         effective_system_prompt: String,
@@ -318,6 +325,7 @@ impl RequestSnapshot {
             None::<super::structured::PreparedResponseSchema>,
         ));
         Self::with_input(
+            permission_mode,
             identity,
             canonical_frontier,
             effective_system_prompt,
@@ -341,6 +349,7 @@ impl RequestSnapshot {
 
     #[allow(clippy::too_many_arguments)] // Freeze the admitted request and the exact staged context metadata.
     pub(crate) fn from_selected(
+        permission_mode: crate::runtime::types::ApprovalMode,
         identity: RequestIdentity,
         canonical_frontier: crate::context::resources::LedgerFrontier,
         system_sections: Vec<AcceptedSystemSection>,
@@ -355,6 +364,7 @@ impl RequestSnapshot {
     ) -> Result<Self, String> {
         let input = SnapshotInput::capture(request, selected)?;
         Ok(Self::with_input(
+            permission_mode,
             identity,
             canonical_frontier,
             request.effective_system_prompt.clone(),
@@ -374,6 +384,7 @@ impl RequestSnapshot {
 
     #[allow(clippy::too_many_arguments)] // One constructor for the complete snapshot representation.
     fn with_input(
+        permission_mode: crate::runtime::types::ApprovalMode,
         identity: RequestIdentity,
         canonical_frontier: crate::context::resources::LedgerFrontier,
         effective_system_prompt: String,
@@ -391,6 +402,8 @@ impl RequestSnapshot {
     ) -> Self {
         let provisional_message_id = identity.provisional_message_id();
         Self {
+            permission_mode,
+            permission_task_message: None,
             response_schema: input.response_schema,
             tool_associations: Vec::new().into(),
             history_cut: crate::durable::projection::RequestHistoryCut {
@@ -596,6 +609,7 @@ mod tests {
 
     fn frozen(request: &ModelRequest) -> RequestSnapshot {
         let mut snapshot = RequestSnapshot::new(
+            crate::runtime::types::ApprovalMode::FullAccess,
             RequestIdentity {
                 attempt_id: AttemptId::new("attempt-frozen"),
                 turn: TurnId::new("1"),
@@ -976,7 +990,7 @@ mod tests {
                             .map(|(_, id)| id.clone())
                             .collect();
                         if mode == 1 {
-                            assert!(actual_calls.is_empty());
+                            assert_eq!(actual_calls, [] as [std::string::String; 0]);
                         } else {
                             assert_eq!(actual_calls, calls);
                         }

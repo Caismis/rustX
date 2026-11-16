@@ -606,11 +606,9 @@ fn bounded_work_publication_queries_prune_reused_wire_ids_by_owner() {
             .unwrap();
         transaction.commit().unwrap();
         drop(connection);
-        assert!(
-            store
-                .load_unsettled_publication_streams()
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            store.load_unsettled_publication_streams().unwrap(),
+            [] as [crate::publication::frame::PublicationStreamRecord; 0]
         );
         let mut connection = store.lock().unwrap();
         samples.push((size, query_work::finish(&connection)));

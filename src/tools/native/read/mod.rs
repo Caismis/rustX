@@ -455,6 +455,7 @@ mod tests {
                     questionnaire_requester: None,
                     todos: None,
                     subagent: None,
+                    bound_mutation: None,
                 },
             )
         };
@@ -563,7 +564,10 @@ mod tests {
 
         let outcome = SkillDiscovery::with_config(SkillDiscoveryConfig::workspace_root(skill_root))
             .discover();
-        assert!(outcome.diagnostics.is_empty());
+        assert_eq!(
+            outcome.diagnostics,
+            [] as [crate::skills::SkillDiagnostic; 0]
+        );
         let location = outcome.packages[0].location();
         let result = reader
             .read("read-linked-skill", serde_json::json!({ "path": location }))
@@ -678,6 +682,7 @@ mod tests {
                 questionnaire_requester: None,
                 todos: None,
                 subagent: None,
+                bound_mutation: None,
             };
             ReadTool.start(invocation, context).completion
         }

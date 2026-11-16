@@ -402,7 +402,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
         let diagnostic = model.unavailable.clone().expect("reported unavailable");
         assert!(diagnostic.contains("fast"), "{diagnostic}");
         assert_eq!(model.effective, selected.effective);
-        assert_eq!(model.summary, selected.summary);
+        assert_eq!(model.auxiliary, selected.auxiliary);
         assert_eq!(
             managed.client().checkpoint().unwrap().snapshot.attempt.unwrap().model,
             admitted
@@ -446,7 +446,7 @@ async fn issue459_removed_selected_profile_is_reported_until_explicit_recovery()
             .await,
             ErrorData::ModelUnavailable { .. }
         ));
-        assert!(managed.client().checkpoint().unwrap().snapshot.inbound.pending.is_empty());
+        assert_eq!(managed.client().checkpoint().unwrap().snapshot.inbound.pending, [] as [crate::runtime_client::snapshot::InboundItemView; 0]);
         assert_eq!(f.provider.request_bodies().len(), 2);
         // Re-selecting the removed Profile is refused by the published catalog.
         assert!(matches!(
@@ -663,7 +663,7 @@ async fn issue459_removed_selected_model_is_replaced_explicitly_in_place() {
             .await,
             ErrorData::ModelUnavailable { .. }
         ));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
 
         // Explicit selection of the replacement, then the next Attempt.
         assert!(matches!(

@@ -19,6 +19,17 @@ async function inspect(page: Page, row: Locator, fields: { tab: string; contains
   for (const { tab, contains } of fields) {
     await details.getByRole('tab', { name: tab, exact: true }).click();
     const body = details.getByRole('tabpanel');
+    if (tab === 'Schema') {
+      const schema = body.getByRole('tree');
+      await expect(schema).toBeVisible();
+      const expand = schema.getByRole('button', { name: 'Expand', exact: true });
+      // Read the complete retained schema through its normal disclosure
+      // controls, independent of the compiler's resource graph layout.
+      for (let count = 0; count < 256 && await expand.count(); count++) {
+        await expand.first().click();
+      }
+      await expect(expand).toHaveCount(0);
+    }
     await expect(body).toContainText(contains);
     await expect(details.getByRole('alert')).toHaveCount(0);
     values[tab] = await body.innerText();
@@ -88,7 +99,7 @@ for (const width of [1440, 390]) {
         },
         edges: [{ from: 'start', to: 'render' }, { from: 'render', to: 'done' }],
       } }));
-      writeFileSync(source, '[agent]\nworkflows = ["history_flow"]\n[agent.tools]\nbuiltin = ["read"]\n');
+      writeFileSync(source, 'approval_mode = "full_access"\n[agent]\nworkflows = ["history_flow"]\n[agent.tools]\nbuiltin = ["read"]\n');
       await page.setViewportSize({ width, height: 1000 });
       await routeWorkspaceHost(page, fixture);
       await page.goto('/');
@@ -111,7 +122,7 @@ for (const width of [1440, 390]) {
 
       // Remove the actual enabled capabilities and physically delete the YAML.
       // Change the read source too, so an accidental re-execution cannot pass.
-      writeFileSync(source, '[agent]\nworkflows = []\n[agent.tools]\nbuiltin = []\n');
+      writeFileSync(source, 'approval_mode = "full_access"\n[agent]\nworkflows = []\n[agent.tools]\nbuiltin = []\n');
       unlinkSync(workflowFile);
       writeFileSync(join(fixture.workspaceA, 'history-evidence.txt'), 'CHANGED_AFTER_EXECUTION');
       expect(existsSync(workflowFile)).toBe(false);

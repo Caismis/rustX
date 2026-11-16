@@ -10,10 +10,10 @@ import css from './LoadingIndicator.module.css'
  * @returns a centered document loading status or an accessible inline spinner.
  */
 export function LoadingIndicator({ label, inline = false }: {
-  label: string
+  label: ReactNode
   inline?: boolean
 }): ReactNode {
-  return <span className={clsx(css.loading, inline && css.inline)} role="status" aria-label={label} data-document-loading>
+  return <span className={clsx(css.loading, inline && css.inline)} role="status" aria-label={typeof label === 'string' ? label : undefined} data-document-loading>
     <StateDot state="ongoing" size={inline ? 14 : 28} />
     {!inline && <span>{label}</span>}
   </span>

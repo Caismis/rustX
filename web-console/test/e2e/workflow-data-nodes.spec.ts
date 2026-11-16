@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parse } from 'yaml';
 import { viewId } from '../../src/app/workflows/ui/editor/selection';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -114,5 +114,5 @@ for (const width of [2000,390]) test(`data nodes edit, connect and persist with 
     await activate(card(page,'left'));await expect(panel(page).getByRole('textbox',{name:'Template code',exact:true}).locator('.cm-line')).toHaveText(['{{ question | upper }}!']);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally {await fixture.stop(false);}
+  } finally {await stopDogfoodPage(page, fixture, false);}
 });

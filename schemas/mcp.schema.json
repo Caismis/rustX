@@ -40,6 +40,13 @@
           "default": {},
           "type": "object"
         },
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            }
+          ]
+        },
         "sensitive_env": {
           "additionalProperties": {
             "$ref": "#/$defs/EnvironmentReference"
@@ -56,6 +63,12 @@
             "object"
           ]
         },
+        "tools": {
+          "additionalProperties": {
+            "$ref": "#/$defs/McpToolPermissionDocument"
+          },
+          "type": "object"
+        },
         "type": {
           "anyOf": [
             {
@@ -71,6 +84,21 @@
       },
       "type": "object"
     },
+    "McpToolPermissionDocument": {
+      "additionalProperties": false,
+      "description": "Exact-tool permission override authored under one MCP server.",
+      "properties": {
+        "permissions": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ResourcePermissionSet"
+            }
+          ],
+          "description": "Complete three-mode permission object for this exact tool."
+        }
+      },
+      "type": "object"
+    },
     "McpTransportType": {
       "description": "The transport an `mcpServers` entry selects explicitly.",
       "oneOf": [
@@ -82,6 +110,55 @@
         {
           "const": "stdio",
           "description": "A locally launched stdio server.",
+          "type": "string"
+        }
+      ]
+    },
+    "ResourcePermissionSet": {
+      "additionalProperties": false,
+      "description": "Complete three-mode permission object for one resource or exact tool.\n\nAn authored object must supply all three entries. Omission of the whole\nobject inherits the winning source default or product defaults.",
+      "properties": {
+        "automatic": {
+          "$ref": "#/$defs/ResourcePermissionValue",
+          "description": "Automatic-mode override."
+        },
+        "full_access": {
+          "$ref": "#/$defs/ResourcePermissionValue",
+          "description": "Full Access-mode override."
+        },
+        "plan": {
+          "$ref": "#/$defs/ResourcePermissionValue",
+          "description": "Plan-mode override."
+        }
+      },
+      "required": [
+        "plan",
+        "automatic",
+        "full_access"
+      ],
+      "type": "object"
+    },
+    "ResourcePermissionValue": {
+      "description": "One mode entry on a resource permission object.\n\nAutomatic model review is never a resource enum value: it is Automatic\nmode's built-in `default` behavior.",
+      "oneOf": [
+        {
+          "const": "default",
+          "description": "Delegate to the selected mode's built-in matrix behavior.",
+          "type": "string"
+        },
+        {
+          "const": "allow",
+          "description": "Allow the call without ordinary approval or Auxiliary review.",
+          "type": "string"
+        },
+        {
+          "const": "ask",
+          "description": "Require human approval for the exact frozen invocation.",
+          "type": "string"
+        },
+        {
+          "const": "deny",
+          "description": "Hard-deny this invocation; elevation cannot override it.",
           "type": "string"
         }
       ]

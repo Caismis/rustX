@@ -368,7 +368,7 @@
   cursor: default;
 }
 
-.primary[data-sending]:disabled { opacity: 1; cursor: progress; }
+.primary[data-sending]:disabled, .primary[data-preparing]:disabled { opacity: 1; cursor: progress; }
 .sendingSpinner { animation: input-sending 800ms linear infinite; }
 @keyframes input-sending { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .sendingSpinner { animation-duration: 2400ms; } }

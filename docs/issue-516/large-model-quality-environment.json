@@ -1,0 +1,110 @@
+{
+  "capturedAtUtc": "2026-11-04T16:15:20.447420+00:00",
+  "timezone": "Asia/Shanghai",
+  "sourceBase": "da0a00f95ea960dad441e8e2c3ba1ca3edccddb1",
+  "sourceSha256": {
+    "web-console/shared/file-preview.ts": "f1c49d72b1c22f3b7583e40c8c788d88e2007655721cc5311f9c784a96a52da4",
+    "web-console/source-inventory.json": "3fbfb745f7e745e5edc55b573f7a704f782e8db3b3f2382934ef6ae617f7b1f7",
+    "web-console/src/app/components/WorkbenchFiles.tsx": "bcf0a69ac42f1e550a87314db0698df85961206f4854195dfac43b02e04fb402",
+    "web-console/src/app/components/documents/geometry/display-quality.ts": "ae1567915b537adc9a1de12f626248727109cb77c404b479c83f40321159c7fc",
+    "web-console/src/app/components/documents/geometry/limits.ts": "e7f841c54a71af8853948f2b6ad70021ee08abf51bd567d9ecdc710cf3db2c73",
+    "web-console/src/app/components/documents/geometry/optimize.ts": "2ec9bd42d86c4095352d619f1615e80fa0d4ecb407666429ffa5c028f7f20a45",
+    "web-console/src/app/components/documents/geometry/viewport.ts": "461cb915778bd9a7e5c7d8503238b01d652e94cbe3ce5cfc0b98890ab79afdca",
+    "web-console/src/client/geometry-source.ts": "ce4d7960ad8a136463fdb841548a2bf8b793c9dda0b1b7721424386f4741df32",
+    "web-console/src/client/preview-content.ts": "9298a2bcef97b7b18d263bf3cfa28e516544cc521dae8a1be4e374190698008b",
+    "web-console/src/client/session-files.ts": "432a9257e12fab026f10265fa41ec48165f23a9733c012adb82b1a4274d4ba69",
+    "web-console/test/e2e/geometry-latency.spec.ts": "df0d105593dec4497a6da43f2c0b2e0c692b859bf2680c54d2fd76d577e8a63d",
+    "web-console/test/e2e/geometry-observation.ts": "aafa4c7d6785e023de9dd6623ce441bd1a6a22201d0d50b7a657580492f33ca7",
+    "web-console/test/e2e/geometry-performance.spec.ts": "83bb4475e9fc20a1123dd0cf2f4c6834c1b722a48de577b1fb13c12979e1b06e",
+    "web-console/test/e2e/geometry-roadmap.spec.ts": "79cfeb5957306bdab7ac379f11bd8c20cb6595b598a9bdf3baf4f25a3629d063",
+    "web-console/test/e2e/geometry.spec.ts": "373471215b57b460b4262028d8440474e0080784b60d1fa7873ed4a805ce98b9",
+    "web-console/test/fixtures/geometry.tsx": "2e8dbebb6a1baa7b1667ddf026faef4d72e2a76b39d80ff798a6f04a14307a14",
+    "web-console/test/geometry-display-quality.test.ts": "163c0ad20370a4e60d47921f690cbc26c72be6537ea87f7fa5a18b98d078ede6",
+    "web-console/test/geometry-large-source.test.ts": "82fed268e2c5edc93f52e1d6765babf6eb8833f88aab663f9ad9e315268e0aad",
+    "web-console/test/geometry-optimization.test.ts": "3bf19f26386cb05e2c7799c59d23903dba24a4bc071733de75a923917d4115ed",
+    "web-console/test/geometry-orbit-input.test.ts": "753606fe88d45356cf5787777a30193a144f91b93395ae67d3729119e30f28e4",
+    "web-console/test/geometry-viewport.test.ts": "e30f9727945e4e5c58f1f608d8dc850a5313067bd59688e564b4d10407c83543"
+  },
+  "node": "v24.21.0",
+  "hostCpu": "AMD Ryzen 7 9800X3D 8-Core Processor",
+  "playwright": "1.63.0",
+  "three": "0.187.0",
+  "browserImage": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "browser": {
+    "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+    "antialias": true,
+    "userAgent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/153.0.8010.12 Safari/537.36",
+    "dpr": 1
+  },
+  "viewport": {
+    "width": 1440,
+    "height": 1000,
+    "dpr": 1
+  },
+  "containerCpuQuota": "none",
+  "containerMemoryLimit": "no explicit limit; inherited Docker VM limit",
+  "browserCgroup": {
+    "peakBytes": 1476526080,
+    "postCaptureCurrentBytes": 196624384,
+    "oomEvents": 0,
+    "oomKills": 0
+  },
+  "sourceAdmissionBytes": 209715200,
+  "decodedAdmissionBytes": 536870912,
+  "webHostTests": {
+    "passed": 4159,
+    "skipped": 4
+  },
+  "browserFunctional": {
+    "startTime": "2026-11-04T16:06:39.933Z",
+    "duration": 114318.873,
+    "expected": 44,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "budgetGate": {
+    "startTime": "2026-11-04T16:11:09.725Z",
+    "duration": 101608.171,
+    "expected": 0,
+    "skipped": 0,
+    "unexpected": 9,
+    "flaky": 0
+  },
+  "runtime": {
+    "importer": "occt-import-js@0.0.23",
+    "renderer": "three@0.187.0",
+    "importerCommit": "c2148e54b456b571238d35cac037d304053d64b2",
+    "occtCommit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
+    "wasmMaximumBytes": 2147483648,
+    "assets": {
+      "occt-import-js.js": {
+        "bytes": 96871,
+        "gzipBytes": 26911,
+        "sha256": "3fb44ce11d00611f9b3f3c5775d520ebab48930c1f08279b7b1316f05f0d3379"
+      },
+      "occt-import-js.wasm": {
+        "bytes": 7604031,
+        "gzipBytes": 3114121,
+        "sha256": "33391fc9d94ea5c869a6718488bf0a9a464222bac9bdc764dfe1690cef281952"
+      },
+      "license.occt-import-js.txt": {
+        "bytes": 27030,
+        "gzipBytes": 9492,
+        "sha256": "7ffe1954587c77dfba1cf8eb9b2ea743671fa6e63f9e7a2f258119d42e14eefe"
+      },
+      "license.occt.txt": {
+        "bytes": 26936,
+        "gzipBytes": 9507,
+        "sha256": "090f8eb6ba63e72887c1f89b009fb1656cfda02d83b6e9805b20468520a5d77f"
+      }
+    }
+  },
+  "limitations": [
+    "Production fixture source readers are deterministic browser-host doubles. The large STL is generated before the clock; actual native filesystem and HTTP transfer latency is not certified.",
+    "Every context starts with cold source modules. Browser-process, OS and driver caches are not independently reset between contexts.",
+    "Trusted input to GPU fence completion and the next rAF opportunity is a proxy; physical/compositor presentation is not observed.",
+    "Memory peak covers this dedicated browser container, including fixture storage; it excludes Node/Vite/native hosts and is not per-Worker or GPU-driver attribution.",
+    "Maximum latency is required; P95 is diagnostic. All failed gate assertions remain failed."
+  ]
+}

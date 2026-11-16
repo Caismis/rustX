@@ -104,17 +104,20 @@ async fn unsent_ready_draft_has_no_session_or_deadline_and_transfers_one_live_ca
     let scope = fixture.manager.mcp_draft_scope();
     select(&fixture, &scope, 1, 0);
     let startup = scope.prepared_for_test().await;
-    assert!(
+    assert_eq!(
         fixture
             .manager
             .sessions
             .list_sessions(None, 0, 32)
             .await
             .unwrap()
-            .sessions
-            .is_empty()
+            .sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
     );
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     tokio::time::pause();
     tokio::time::advance(std::time::Duration::from_secs(60)).await;
     assert!(startup.deadline().deadline().is_none());
@@ -179,7 +182,10 @@ async fn create_ack_precedes_validated_transfer_without_releasing_the_reserved_g
         probe.before_compose.entered().await;
         assert!(!*transferred.borrow(), "the ACK does not imply transfer");
         assert_eq!(fixture.manager.diagnostics().loading, 1);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
         probe.before_compose.release();
@@ -228,7 +234,10 @@ async fn sixty_seconds_preparation_then_submission_has_the_full_budget_on_the_sa
     );
     tokio::time::advance(std::time::Duration::from_secs(10)).await;
     assert!(!startup.deadline().has_expired());
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     mcp.control.gate.release();
     tokio::time::resume();
     let created = fixture
@@ -469,20 +478,26 @@ async fn failed_session_creation_settles_reserved_preparation_without_a_durable_
             )
             .await;
         assert!(result.is_err());
-        assert!(fixture.manager.mcp_drafts.settle().await.is_empty());
+        assert_eq!(
+            fixture.manager.mcp_drafts.settle().await,
+            [] as [std::string::String; 0]
+        );
         assert!(fixture.manager.mcp_drafts.is_settled());
-        assert!(
+        assert_eq!(
             fixture
                 .manager
                 .sessions
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
         assert_eq!(mcp.control.discovers.load(Ordering::SeqCst), 1);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         mcp.close().await;
     })
     .await;
@@ -646,7 +661,10 @@ async fn submitted_failure_before_attach_is_terminal_until_an_explicit_new_submi
         }
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
         assert_eq!(startup.deadline().deadline(), deadline);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         let connection =
             crate::app_server::connection::AppServerConnection::new(fixture.host.clone());
         super::super::super::protocol::initialize(&connection).await;
@@ -1276,7 +1294,10 @@ async fn terminal_submission_failure_releases_residency_and_all_recovery_paths_r
                     );
                     assert_eq!(fixture.manager.diagnostics().loaded, 1);
                     assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
-                    assert!(fixture.provider.request_bodies().is_empty());
+                    assert_eq!(
+                        fixture.provider.request_bodies(),
+                        [] as [std::string::String; 0]
+                    );
                 }
             }
             fixture.close().await;

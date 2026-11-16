@@ -1,4 +1,4 @@
-//! Allocation-free YAML expansion preflight. `serde_yaml` owns syntax, alias
+//! Allocation-free YAML expansion preflight. `serde_yaml_ng` owns syntax, alias
 //! repetition and recursion. Count the expanded JSON footprint before typed
 //! aliases can allocate copies. The exact normalized-document policy is 16 MiB.
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -101,6 +101,6 @@ pub(super) fn within_bound(bytes: &[u8]) -> bool {
     };
     // Syntax/shape/repetition diagnostics remain the typed parser's authority.
     // Only this explicit flag can classify an expansion refusal.
-    let _ = Count(&budget).deserialize(serde_yaml::Deserializer::from_slice(bytes));
+    let _ = Count(&budget).deserialize(serde_yaml_ng::Deserializer::from_slice(bytes));
     !budget.exceeded.get()
 }

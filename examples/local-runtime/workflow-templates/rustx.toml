@@ -1,4 +1,4 @@
-schema_version = 11
+schema_version = 12
 # Runtime child capacity; Workflow static admission remains separate.
 [subagents]
 max_concurrent = 2

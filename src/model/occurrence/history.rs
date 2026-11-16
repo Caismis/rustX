@@ -95,7 +95,6 @@ impl ToolAssociationHistory {
     pub fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
-    #[must_use]
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = &HistoricalToolAssociation> {
         self.values.iter().map(|node| {
             #[cfg(test)]

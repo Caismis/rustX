@@ -81,9 +81,8 @@ use crate::tools::background::{
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutor, ToolRegistry};
 use crate::tools::types::{
-    ToolCall, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult,
-    ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy,
-    ToolResultContent,
+    ToolCall, ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus,
+    ToolInvocation, ToolInvocationMode, ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 
 fn test_resources(
@@ -262,8 +261,6 @@ impl ParkingBackgroundTool {
                     description: String::new(),
                     input_schema: serde_json::json!({"type": "object"}).into(),
                     execution_policy: ToolExecutionPolicy::ModelSelectable,
-                    concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                    approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
                     replay_policy: ToolReplayPolicy::Never,
                     origin: ToolOrigin::Builtin,
                 },
@@ -328,7 +325,7 @@ impl ToolExecutor for ParkingBackgroundTool {
 /// release and start orderings are established by watch state; this is
 /// fail-fast containment for a broken fixture or registry invariant, not
 /// a synchronization primitive.
-const BACKGROUND_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
+const BACKGROUND_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(45);
 
 async fn await_background_started(started: &mut watch::Receiver<bool>, description: &'static str) {
     tokio::time::timeout(
@@ -550,7 +547,7 @@ async fn host_fixture_before_activation(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter.clone()),
-        approval_mode: crate::runtime::ApprovalMode::Policy,
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -648,7 +645,7 @@ async fn host_fixture_with_runtime_probe(
             explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: scripted_session_model(adapter.clone()),
-            approval_mode: crate::runtime::ApprovalMode::Policy,
+            approval_mode: crate::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
@@ -817,7 +814,7 @@ fn durable_history_fixture() -> DurableHistoryFixture {
         id: ToolCallId::new("child-call-1"),
         tool_id: ToolId::new("tool-read"),
         name: "read".to_owned(),
-        arguments: serde_json::json!({"path": "README.md"}),
+        arguments: serde_json::json!({"arguments":{"path": "README.md"}}),
     };
     let assistant = MessageBlock::Assistant(AssistantMessageBlock {
         id: MessageId::new("child-assistant"),
@@ -953,7 +950,7 @@ fn append_durable_history(
 /// scheduling delay a loaded runner can produce, and it is a whole-call
 /// budget rather than a per-event bound — a single scheduling stall can
 /// never fail a correct run.
-const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_mins(2);
+const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(45);
 
 fn complete_transition(event: &RuntimeClientEvent) -> &RuntimeClientEvent {
     match event {
@@ -1151,7 +1148,10 @@ fn cold_empty_auxiliary_audit_has_no_pages_after_long_unrelated_history() {
         )
         .unwrap();
     assert_eq!(page.total, 0);
-    assert!(page.items.is_empty());
+    assert_eq!(
+        page.items,
+        [] as [crate::observation::cut::CheckpointPageItem; 0]
+    );
     assert_eq!(page.next_offset, None);
 }
 
@@ -2564,12 +2564,12 @@ async fn incremental_projection_independent_snapshot_capture() {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(3),
             call_id: call_id.clone(),
-            arguments_delta: "{".into(),
+            arguments_delta: "{\"arguments\":".into(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(3),
             call_id: call_id.clone(),
-            arguments_delta: "}".into(),
+            arguments_delta: "{}}".into(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(3),
@@ -2577,7 +2577,7 @@ async fn incremental_projection_independent_snapshot_capture() {
                 id: call_id,
                 tool_id: definition.id,
                 name: definition.name,
-                arguments: serde_json::json!({}),
+                arguments: serde_json::json!({"arguments": {}}),
             },
         }),
         GatedStep::Emit(ModelEvent::Completed {
@@ -3473,7 +3473,10 @@ async fn assert_native_pending_removal_wakes_worker(fixture: &HostFixture, attem
     await_pending_fixture_publication(&fixture.host).await;
     let after = fixture.host.checkpoint().unwrap();
     assert!(after.cursor > before.cursor);
-    assert!(after.snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        after.snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     assert_eq!(after.read_cut.source_cut.as_ref().unwrap().read, read_cut);
     assert_eq!(
         after.snapshot.attempt.as_ref().unwrap().attempt_id.as_ref(),
@@ -3626,7 +3629,10 @@ async fn pending_snapshot_and_reattach_repair_a_committed_unpublished_mutation()
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("explicit reconnect checkpoint");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     assert!(!format!("{:?}", snapshot.transcript).contains("pending-repair"));
     assert!(
         fixture.runtime.has_current_attempt()
@@ -3951,7 +3957,7 @@ async fn canonical_history_has_one_owner_at_a_time() {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(0),
             call_id: call_id.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: "{\"arguments\":{}}".to_owned(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(0),
@@ -3959,7 +3965,7 @@ async fn canonical_history_has_one_owner_at_a_time() {
                 id: call_id,
                 tool_id: definition.id.clone(),
                 name: definition.name.clone(),
-                arguments: serde_json::json!({}),
+                arguments: serde_json::json!({"arguments": {}}),
             },
         }),
         GatedStep::Emit(ModelEvent::Completed {
@@ -3988,15 +3994,15 @@ async fn canonical_history_has_one_owner_at_a_time() {
         Some(Vec::new()),
         "an idle runtime owns an empty conversation state"
     );
-    assert!(
+    assert_eq!(
         fixture
             .host
             .checkpoint()
             .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("snapshot")
             .0
-            .messages
-            .is_empty()
+            .messages,
+        [] as [crate::message::types::MessageBlock; 0]
     );
 
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
@@ -5406,7 +5412,10 @@ async fn dormant_dirty_subscription_hydrates_without_a_checkpoint() {
             .any(|fact| matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { .. }))
     })
     .await;
-    assert!(!events.is_empty());
+    assert_ne!(
+        events,
+        [] as [crate::runtime_client::types::RuntimeClientProtocolEvent; 0]
+    );
     assert!(inner.lock_state().projection.read_domain_cut().is_none());
     let checkpoint = attachment.checkpoint().unwrap();
     assert!(!checkpoint.snapshot.transcript.entries.is_empty());
@@ -6002,7 +6011,10 @@ async fn snapshot_cursor_race_snapshot_wins() {
         .await
         .expect("snapshot task")
         .expect("snapshot");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     submit_task.await.expect("submit task");
     admission_gate.wait_entered();
 
@@ -6070,7 +6082,10 @@ async fn snapshot_cursor_race_publish_wins() {
     await_fixture_activation(&fixture.host).await;
     // Baseline: an idle host at some cursor C.
     let (before, cursor) = checkpoint_state(&fixture.host);
-    assert!(before.inbound.pending.is_empty());
+    assert_eq!(
+        before.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
 
     // Submit; the admission parks at the runtime gate before committing.
     admission_gate.arm();
@@ -7163,14 +7178,12 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
         id: ToolId::new("tool-a"),
         name: "a".to_owned(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
         ..tool_a.definition.clone()
     };
     let definition_b = ToolDefinition {
         id: ToolId::new("tool-b"),
         name: "b".to_owned(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
         ..tool_b.definition.clone()
     };
     let mut tools = ToolRegistry::new();
@@ -7195,7 +7208,7 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(0),
             call_id: call_a.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: "{\"arguments\":{}}".to_owned(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(0),
@@ -7203,7 +7216,7 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
                 id: call_a.clone(),
                 tool_id: definition_a.id.clone(),
                 name: definition_a.name.clone(),
-                arguments: serde_json::json!({}),
+                arguments: serde_json::json!({"arguments": {}}),
             },
         }),
         GatedStep::Emit(ModelEvent::ToolCallStarted {
@@ -7217,7 +7230,7 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
         GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(1),
             call_id: call_b.clone(),
-            arguments_delta: "{}".to_owned(),
+            arguments_delta: "{\"arguments\":{}}".to_owned(),
         }),
         GatedStep::Emit(ModelEvent::ToolCallCompleted {
             block_index: ContentBlockIndex::new(1),
@@ -7225,7 +7238,7 @@ async fn safe_boundary_keeps_sibling_tool_results_together() {
                 id: call_b.clone(),
                 tool_id: definition_b.id.clone(),
                 name: definition_b.name.clone(),
-                arguments: serde_json::json!({}),
+                arguments: serde_json::json!({"arguments": {}}),
             },
         }),
         GatedStep::Emit(ModelEvent::Completed {
@@ -7492,7 +7505,7 @@ async fn host_fixture_probe_with_native_tools(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
-        approval_mode: crate::runtime::ApprovalMode::Policy,
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -7591,7 +7604,7 @@ async fn host_fixture_probe_with_runtime_gate(
             explicit_model: true,
             agent_id: AgentId::new("agent-a"),
             model: crate::scripted_suites::support::model::scripted_session_model(adapter.clone()),
-            approval_mode: crate::runtime::ApprovalMode::Policy,
+            approval_mode: crate::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
@@ -7712,7 +7725,7 @@ async fn runtime_only_fixture(
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter.clone()),
-        approval_mode: crate::runtime::ApprovalMode::Policy,
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
@@ -8129,7 +8142,7 @@ fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
         explicit_model: true,
         agent_id: AgentId::new("agent-claim"),
         model: scripted_session_model(fixture.adapter.clone()),
-        approval_mode: crate::runtime::ApprovalMode::Policy,
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {

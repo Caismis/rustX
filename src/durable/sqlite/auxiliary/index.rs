@@ -108,6 +108,7 @@ pub(in crate::durable::sqlite) fn load_request_owner_tx(
     Ok(None)
 }
 
+#[allow(clippy::too_many_lines)] // One exhaustive dispatch over the auxiliary Journal fact families.
 pub(in crate::durable::sqlite) fn index_event_tx(
     transaction: &Transaction<'_>,
     event: &RuntimeEventEnvelope,

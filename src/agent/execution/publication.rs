@@ -496,21 +496,49 @@ impl AgentExecution<'_> {
     }
 
     pub(super) fn emit_envelope(&mut self, envelope: RuntimeEventEnvelope) {
-        debug_assert!(
-            !self.terminal_emitted,
-            "no runtime events may follow the terminal event"
-        );
-        if self.durable_failure.is_some() {
-            return;
-        }
-        match self.store.append_event(envelope) {
-            Ok(envelope) => self.record_persisted_event(envelope),
-            Err(error) => self.record_event_failure(&error),
+        if let Err(error) = self.append_shared(envelope) {
+            self.record_event_failure(&error);
         }
     }
 
     pub(super) fn emit(&mut self, event: RuntimeEvent) {
         self.emit_envelope(self.event_envelope(event));
+    }
+
+    /// Persists and observes one runtime fact while outstanding `&self` tool
+    /// futures may already be borrowed (parallel authorize-and-start).
+    ///
+    /// On journal failure this returns the message and does not record
+    /// [`Self::durable_failure`]: the caller must surface
+    /// [`CanonicalCommitError`] so the attempt terminal records durability.
+    /// The envelope is built here, so permission events do not carry projection
+    /// observation facts; callers that already have those facts use
+    /// [`Self::emit_envelope`].
+    pub(super) fn emit_shared(&self, event: RuntimeEvent) -> Result<(), String> {
+        self.append_shared(self.event_envelope(event))
+            .map_err(|error| {
+                format!("runtime event could not be persisted before publication: {error}")
+            })
+    }
+
+    fn append_shared(
+        &self,
+        envelope: RuntimeEventEnvelope,
+    ) -> Result<(), crate::durable::ConversationStoreError> {
+        debug_assert!(
+            !self.terminal_emitted,
+            "no runtime events may follow the terminal event"
+        );
+        if self.durable_failure.is_some() {
+            return Ok(());
+        }
+        match self.store.append_event(envelope) {
+            Ok(envelope) => {
+                self.record_persisted_event(envelope);
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
     }
 }
 

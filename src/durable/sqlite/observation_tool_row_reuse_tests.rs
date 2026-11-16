@@ -42,7 +42,7 @@ fn checkpoint_tool_and_result_rows_reuse_current_native_proofs_across_cuts() {
     let first = store.observation_checkpoint_head(&cut, cut.read.journal, 32, &|| false).unwrap();
     assert_eq!(first, expected);
     assert_eq!(first.transcript_rows.len(), 3);
-    assert!(!first.transcript.entries[0].tool_calls.is_empty());
+    assert_ne!(first.transcript.entries[0].tool_calls, [] as [crate::observation::tool::ForegroundToolExecution; 0]);
     assert!(matches!(&first.transcript.entries[1].item,
         crate::observation::transcript::RuntimeClientTranscriptItem::Message { message: MessageBlock::Tool(_) }));
     assert_eq!(super::super::observation_response::row_work(), (3, 0));
@@ -262,7 +262,7 @@ fn checkpoint_tool_body_proof_preserves_native_admission_boundary_and_current_me
     set_padding(low + 1);
     let rejected = store.observation_checkpoint_head(&next, next.read.journal, 32, &|| false).unwrap();
     assert_eq!(rejected, checkpoint_head_oracle(&store, &next, next.read.journal, 32).unwrap());
-    assert!(rejected.transcript.entries[0].tool_calls.is_empty());
+    assert_eq!(rejected.transcript.entries[0].tool_calls, [] as [crate::observation::tool::ForegroundToolExecution; 0]);
     assert!(!first.transcript_rows[0].same_body(&rejected.transcript_rows[0]));
     assert_eq!(first.transcript.entries[0].tool_calls.len(), 1);
 }

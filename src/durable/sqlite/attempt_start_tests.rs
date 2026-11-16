@@ -81,7 +81,7 @@ fn attempt_first_turn_second_member_failure_rolls_back_all_admission_evidence() 
     let [attempt, turn] = candidates(&store);
     assert!(matches!(store.commit_attempt_first_turn(attempt, turn), Err(ConversationStoreError::Storage(_))));
     assert_eq!(admission_state(&store), before);
-    assert!(store.read_events(None, 8).unwrap().events.is_empty());
+    assert_eq!(store.read_events(None, 8).unwrap().events, [] as [crate::events::types::RuntimeEventEnvelope; 0]);
     store.lock().unwrap().execute_batch("DROP TRIGGER reject_first_turn;").unwrap();
     let [attempt, turn] = candidates(&store);
     assert_eq!(store.commit_attempt_first_turn(attempt, turn).unwrap()[1].sequence, 2);

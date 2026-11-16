@@ -1,0 +1,181 @@
+{
+  "implementation": "7044adafc40b6c75e421c6e486b50a7f703083d1",
+  "captureDateLocal": "2026-11-04",
+  "timezone": "Asia/Shanghai",
+  "hostCpu": "AMD Ryzen 7 9800X3D",
+  "node": "24.21.0 WSL / 24.19.0 Windows runner",
+  "playwright": "1.63.0",
+  "chromium": "153.0.8010.12",
+  "pinnedImage": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "viewport": {
+    "width": 1440,
+    "height": 1000,
+    "dpr": 1
+  },
+  "quality": {
+    "generatedMaterial": "MeshStandardMaterial, metalness0.05 roughness0.65",
+    "antialias": true,
+    "cadLinearDeflection": 0.001,
+    "cadAngularDeflection": 0.5,
+    "canvasPixelCap": 4194304
+  },
+  "lanes": {
+    "software": {
+      "renderer": "ANGLE (Google, Vulkan 1.3.0 (SwiftShader Device (Subzero) (0x0000C0DE)), SwiftShader driver)",
+      "cpuQuota": 2,
+      "memoryBytes": 2147483648,
+      "transport": "Playwright loopback forwarding",
+      "browserContainerPeakBytes": 1316315136,
+      "oomEvents": 0
+    },
+    "native": {
+      "renderer": "ANGLE (NVIDIA, NVIDIA GeForce RTX 5080 (0x00002C02) Direct3D11 vs_5_0 ps_5_0, D3D11)",
+      "gpuDriver": "32.0.16.2101",
+      "cpuQuota": "unrestricted",
+      "transport": "native loopback for fixture; Playwright forwarding for actual native-source sidebar",
+      "contextsPerWorkload": 5,
+      "inputSamplesPerActionPerContext": 100
+    },
+    "updatedEngineSmoke": {
+      "browser": "Microsoft Edge156.0.4314.58",
+      "tests": 14,
+      "references": "Separate functional/resource smoke; no Linux screenshot reference updates"
+    }
+  },
+  "limitations": [
+    "Contexts are fresh; OS/browser-process/driver caches were not independently flushed.",
+    "Production fixture sources are deterministic browser-host doubles; native App Server/Host source results are separate.",
+    "GPU-fence/rAF figures are proxies and do not independently observe compositor or physical presentation.",
+    "Whole-action timings include Playwright forwarding/actionability/readiness overhead and remain development-fixture measurements.",
+    "Compiler experiment timings are single fresh-process diagnostics, not a statistically controlled speedup claim.",
+    "Container peak is cumulative for this dedicated browser across acceptance and measurement work; excludes Node/native host/compilation."
+  ],
+  "sourceSha256": {
+    "web-console/geometry-runtime.json": "2d6c1bd422e1a13fbcec58f52066bd61960034031e41164aad9b3c558c688ec8",
+    "web-console/package.json": "e27c47114e56b9c4b47d8ddf60e679dcbed48f8c19776692b553fb910c78d7aa",
+    "web-console/pnpm-lock.yaml": "595a0c3864701c11f165f35e88d3115d26648edff93f89fbaf38ba272d293b55",
+    "web-console/scripts/geometry-runtime.ts": "8dc7a8c96ce860a9b230e792cf2c2ba1a8e15af12710ebc25febdc60dda6209c",
+    "web-console/source-inventory.json": "3b5d1087852a94cc3483d394c1dab3607d4257b1171844b14cdeaccac1405034",
+    "web-console/src/app/components/ArtifactPreview.tsx": "e44bdec413e819e1b7067f9bd3564ff645557e863a531a80b3ad8d12b967f9f5",
+    "web-console/src/app/components/WorkbenchFiles.tsx": "4c025e0dbcf2b6b379c1532f223a7eadbff6a638fad255ee6670e0ae19f54a36",
+    "web-console/src/app/components/documents/GeometryDocument.tsx": "936534fa71898115d14a310f38c7717581c25ecbbe0ee530cb2f996766223a5f",
+    "web-console/src/app/components/documents/geometry/cad.ts": "80d54680fbaf98d406c9b7f587d8d917d53742fc7313e73a6aa3894d143215c3",
+    "web-console/src/app/components/documents/geometry/glb.ts": "6beda75329d51af0db38e5aa8e577a67a70713f4eeb80323cd0fc80bc9350ec5",
+    "web-console/src/app/components/documents/geometry/optimize.ts": "954d7deffee21ceef285656b268a81c7cc76f24674824a81f5bbed6f46d20f84",
+    "web-console/src/app/components/documents/geometry/parse.ts": "ff10a574367fac124aa3f45ea261dc94fee25760d1345b0d1d4959526c785715",
+    "web-console/src/app/components/documents/geometry/planar.ts": "2c2f3d51f548dd5cc0d21f5bccff4e355027ffa6c7c49c5401d1ac8a0fdb538c",
+    "web-console/src/app/components/documents/geometry/scene-resources.ts": "d6ecef859dcedfca96c866d7a4e719605ff9000fde9a36eba968094c8901623f",
+    "web-console/src/app/components/documents/geometry/viewport.ts": "1898645db62625791919bb37fbb06da5fcba0fce0cce83ee73b63daed644cac0",
+    "web-console/src/app/components/documents/geometry/worker.ts": "5076d8a9e2e0f4f2c2e80cbc1f068c5a8864fd7cff7a71b8ef07a3b92238e0bf",
+    "web-console/src/app/preview-workspace.ts": "e3db4d63ef32415dbcad676b26a8d4d696d8c2a05f168811d16bbe169859e08f",
+    "web-console/test/e2e/geometry-latency.spec.ts": "66eae2ddb01f31147a0ea51e458c2109a00e0777998bf8d231008efc182eb6fc",
+    "web-console/test/e2e/geometry-observation.ts": "3513ca6f4fb21e7bf4d597f498736299d8f4d651541df9479ef3036c4807f308",
+    "web-console/test/e2e/geometry-sidebar.spec.ts": "1e00fffa18c7c7ffb4175baa993ca32c1ff8e79615b60e52aaaa49db4a615d81",
+    "web-console/test/e2e/geometry.spec.ts": "1f0c6fc82702ae38741c7e06bc41232297957ce8bf54aba1705bef727dbb7417",
+    "web-console/test/e2e/workbench-documents.spec.ts": "409409e75995514684fa82203a9a2471a1c2108d0f9c4ad322cf13d9fc6bac1f",
+    "web-console/test/geometry-document.test.tsx": "eb1f64f8f2445ac61fbc7803fd1a1c37f58f8bb0969fb21c639fd196caf4de0d",
+    "web-console/test/geometry-fixtures.ts": "5ce6538ee1a0cb7428467198a1ecb615de07b4bb962c3b2cfa2624bc21436cb6",
+    "web-console/test/geometry-optimization.test.ts": "695e7ccc302a21aac16328aea2f1230dfad37fa5df77ea930956fcb4b10a8de1",
+    "web-console/test/geometry-retirement.test.tsx": "a38af565a79622d3eb8bcd40c9b457e0ac8fb4b641e73c1c93a847019a256866",
+    "web-console/test/geometry-viewport.test.ts": "dc0b9210ac16d3e467d006c71c8998cf5bf318b4cb010c312d4e68be9fd84464",
+    "web-console/test/geometry-worker-budget.test.ts": "0a36b6ba2c39f0e04b088e91d931d259df36411eff7bbdd0c1f1627243208272",
+    "web-console/test/geometry.vite.config.ts": "af51ec09e001f9b3b5dcc60d2875dc909d23fe366262f3f5e536d43a442251e2",
+    "web-console/test/session-files.test.tsx": "f1eecfb09a51b0d99ebdcaab3da811f29156c08727d979e23ddcb3a9e7f00609",
+    "web-console/vite.config.ts": "c7ee1ab1437b89124ac5f8208bafd127f4fcea9f9b56376365a5a53a3f016d0c"
+  },
+  "fixtureSha256": {
+    "cube.glb": "4e9507aec871302de6c8d7e0e4b9c8ec4e2e8850ea834b67a9ab21662b79b96b",
+    "cube.stl": "afaa00309cfe945eec00f2ed87864c3d3268f3b0e7f4bdfe201da5eb7582795e",
+    "cube.step": "a4de49d2f2a2bf6eaeea0b4c9260b08e35465074994a308aab62ab4aed61b6fe",
+    "bracket-array.step": "36e1bcdf85073c8744fe6a5a6e006b14ba64689ebd3bbb739ea34cd4fffdff46",
+    "mounting-bracket.step": "a5c571259801d3377af64a122e04cfc9ea2d0d7d953e83d85a0364b2b345ba77",
+    "mounting-bracket.glb": "e9df0c58af6125427193c3a9884b45268e00354587c13714218c0cf546af466a"
+  },
+  "runtime": {
+    "importer": "occt-import-js@0.0.23",
+    "renderer": "three@0.187.0",
+    "importerCommit": "c2148e54b456b571238d35cac037d304053d64b2",
+    "occtCommit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
+    "wasmMaximumBytes": 2147483648,
+    "assets": {
+      "occt-import-js.js": {
+        "bytes": 96871,
+        "gzipBytes": 26911,
+        "sha256": "3fb44ce11d00611f9b3f3c5775d520ebab48930c1f08279b7b1316f05f0d3379"
+      },
+      "occt-import-js.wasm": {
+        "bytes": 7604031,
+        "gzipBytes": 3114121,
+        "sha256": "33391fc9d94ea5c869a6718488bf0a9a464222bac9bdc764dfe1690cef281952"
+      },
+      "license.occt-import-js.txt": {
+        "bytes": 27030,
+        "gzipBytes": 9492,
+        "sha256": "7ffe1954587c77dfba1cf8eb9b2ea743671fa6e63f9e7a2f258119d42e14eefe"
+      },
+      "license.occt.txt": {
+        "bytes": 26936,
+        "gzipBytes": 9507,
+        "sha256": "090f8eb6ba63e72887c1f89b009fb1656cfda02d83b6e9805b20468520a5d77f"
+      }
+    }
+  },
+  "productionFixtureArtifacts": {
+    "GLTFLoader-AQNu3NtT.js": {
+      "bytes": 46471,
+      "gzipBytes": 13552,
+      "sha256": "a4deb8540e1cd2a44c9a3162ccced2b349f10daa7f93719bc95f8ff630c16ed0"
+    },
+    "GeometryPreview-DNFY_fYT.css": {
+      "bytes": 4748,
+      "gzipBytes": 1485,
+      "sha256": "46010493151e939c2451bc61345f52c7b09a073cec66a496ed9dc2ecc75c6239"
+    },
+    "GeometryPreview-_xybdsXJ.js": {
+      "bytes": 387077,
+      "gzipBytes": 93197,
+      "sha256": "2f61506951891c24e9be5259cec5eae034fe570cdba8c72dd5267c1febf601e7"
+    },
+    "cad-worker-C_Ecf0Ta.js": {
+      "bytes": 71424,
+      "gzipBytes": 25052,
+      "sha256": "067f511e53a1b75456f150c896aaef380e149a533747bea5f3740471fc275fda"
+    },
+    "glb--6K5bUfV.js": {
+      "bytes": 11139,
+      "gzipBytes": 4518,
+      "sha256": "9501391df4eec43a69d04afa0b0861f2ddf41dc5e2a562e63fd6dec6278e18b3"
+    },
+    "glb-DJypLu9L.js": {
+      "bytes": 61,
+      "gzipBytes": 73,
+      "sha256": "9edbcc4bbccdbc94acefcb1c1b36336e43fbe42fbe063cb1fa2bbce496040da7"
+    },
+    "occt-import-js-BhHfLpto.wasm": {
+      "bytes": 7604031,
+      "gzipBytes": 3114121,
+      "sha256": "33391fc9d94ea5c869a6718488bf0a9a464222bac9bdc764dfe1690cef281952"
+    },
+    "parse-CEZzrGQk.js": {
+      "bytes": 67,
+      "gzipBytes": 79,
+      "sha256": "0a11a9ec152256890f20c39de4d82e31f6a0e86e8f23d881d68ba8ee43792ce3"
+    },
+    "parse-Cj5Ag1Ti.js": {
+      "bytes": 3147,
+      "gzipBytes": 1388,
+      "sha256": "0401728b05b17218da2b90254f75ae07af8868e7d9c793821c7cafa81a21dd81"
+    },
+    "stl-worker-BwheF5le.js": {
+      "bytes": 125596,
+      "gzipBytes": 36605,
+      "sha256": "aa30fa17485aec5c4b4ce7437fbfe50b906259006689df18081490e381e8458a"
+    },
+    "three.core-C_kRlG0g.js": {
+      "bytes": 222717,
+      "gzipBytes": 58472,
+      "sha256": "3b8c672ada7d8d0dd5020474c15299ead8a34694f0f2c575d84118bd49a76d25"
+    }
+  },
+  "offlineGzip": "Node zlib.gzipSync default level6; no claim about deployment Content-Encoding"
+}

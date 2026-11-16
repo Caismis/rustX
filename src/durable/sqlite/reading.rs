@@ -278,8 +278,7 @@ fn local_previews(
     cut: &ConversationReadCut,
 ) -> Result<(String, String), ConversationStoreError> {
     let prompt = local_prompt(connection, attempt, start, cut.journal)?
-        .map(|(_, preview)| preview)
-        .unwrap_or_default();
+        .map_or_default(|(_, preview)| preview);
     let settled: bool = connection
         .query_row(
             concat!("SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_key = ", crate::durable::sqlite::event_owner_key::attempt_parameter!("?1"), " AND sequence<=?2

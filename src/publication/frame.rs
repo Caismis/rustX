@@ -764,7 +764,10 @@ mod tests {
                 },
             },
         )]);
-        assert!(content.is_empty());
+        assert_eq!(
+            content,
+            [] as [crate::publication::frame::PublicationAuditBlock; 0]
+        );
     }
 
     /// The durable settlement form round-trips.

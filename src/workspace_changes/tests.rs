@@ -212,7 +212,10 @@ async fn binary_oversized_deleted_and_renamed_files_keep_honest_comparisons() {
         .await
         .unwrap()
         .unwrap();
-    assert!(renamed.hunks.is_empty());
+    assert_eq!(
+        renamed.hunks,
+        [] as [crate::workspace_changes::comparison::ComparisonHunk; 0]
+    );
     assert!(store.comparison(&AttemptId::new("a"), 3).await.is_err());
     let record = start(root, &store, "b");
     record.before_tools().await;
@@ -249,7 +252,10 @@ async fn no_tools_missing_attempt_and_bounded_file_lists_have_no_fabricated_stat
     record.finish().await;
     let summary = store.summary(&AttemptId::new("many")).unwrap();
     assert_eq!(summary.total, 503);
-    assert!(!summary.files.is_empty());
+    assert_ne!(
+        summary.files,
+        [] as [crate::workspace_changes::ChangedFile; 0]
+    );
     assert!(summary.files.len() <= MAX_FILES);
     assert!(serde_json::to_vec(&summary).unwrap().len() <= 96 * 1024);
     assert_eq!(summary.added, 503);
@@ -866,7 +872,10 @@ async fn missing_destination_capture_does_not_split_a_real_git_rename() {
         .await
         .unwrap()
         .unwrap();
-    assert!(comparison.hunks.is_empty());
+    assert_eq!(
+        comparison.hunks,
+        [] as [crate::workspace_changes::comparison::ComparisonHunk; 0]
+    );
 }
 
 #[tokio::test]
@@ -969,7 +978,10 @@ async fn long_paths_bound_summary_bytes_without_losing_total_change_counts() {
     let summary = store.summary(&AttemptId::new("long-paths")).unwrap();
     assert_eq!(summary.total, 256);
     assert_eq!((summary.added, summary.deleted), (256, 0));
-    assert!(!summary.files.is_empty());
+    assert_ne!(
+        summary.files,
+        [] as [crate::workspace_changes::ChangedFile; 0]
+    );
     assert!(
         summary.files.len() < summary.total,
         "the byte budget truncates before the 500-file limit"

@@ -199,7 +199,7 @@ fn t08_t12_t15_t19_trace_definition_uses_exact_original_retry_catalog_without_bo
         format!("trace.records.{first_start}.detail.request.tools")
     );
     assert_eq!(item_offset, 1);
-    assert!(path.is_empty());
+    assert_eq!(path, [] as [std::string::String; 0]);
     assert_eq!(
         store
             .observation_trace_tool_definition(&first_cut, &first_occurrence)
@@ -488,7 +488,10 @@ fn t10_t12_t19_trace_adoption_index_failure_never_refuses_native_adoption() {
     let batch = store.adopt_pending_batch(accepted.sequence, None).unwrap();
     let event = batch.adoption.as_ref().unwrap();
     let cut = store.observation_read_cut().unwrap();
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(
         store.load_canonical().unwrap(),
         [MessageBlock::User(accepted.message)]

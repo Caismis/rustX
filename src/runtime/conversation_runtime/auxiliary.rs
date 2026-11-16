@@ -270,14 +270,6 @@ impl AuxiliaryConsumer for Consumer {
             value,
         };
         let admitted = self.confirmation.borrow().is_some();
-        if !admitted {
-            let error = completed
-                .as_ref()
-                .err()
-                .cloned()
-                .unwrap_or_else(|| failure("auxiliary Call was not confirmed"));
-            self.confirmation.send_replace(Some(Err(error)));
-        }
         if !admitted || self.owner.delivery.complete(result).is_err() {
             self.owner.delivery.discard(&self.receipt.call_id);
         }
@@ -287,6 +279,21 @@ impl AuxiliaryConsumer for Consumer {
         self.owner
             .generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    fn retired(&self, completed: &Result<ConfirmedExecution, ContextError>) {
+        // A rejected preparation cannot publish its reply while its result,
+        // generation fence or physical admission still belongs to this Call.
+        // Successful receipts remain tied to confirmed CallStarted above.
+        let unconfirmed = self.confirmation.borrow().is_none();
+        if unconfirmed {
+            let error = completed
+                .as_ref()
+                .err()
+                .cloned()
+                .unwrap_or_else(|| failure("auxiliary Call was not confirmed"));
+            self.confirmation.send_replace(Some(Err(error)));
+        }
     }
 }
 fn failure(message: impl Into<String>) -> ContextError {

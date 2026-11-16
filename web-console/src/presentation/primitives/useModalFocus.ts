@@ -7,8 +7,9 @@ function exposeTopLayer() {
   if (root) root.inert = layers.length > 0 || rootWasInert;
   for (const layer of layers) layer.parentElement!.inert = layer !== layers.at(-1);
 }
-/** Focus/Escape and background isolation for the upstream portaled modal DOM. */
-export function useModalFocus(open: boolean, ref: RefObject<HTMLElement | null>, onClose: () => void) {
+/** Focus/Escape and background isolation for portaled modal DOM. A scoped owner
+ * may restore focus itself so retiring its dialog cannot focus an obsolete view. */
+export function useModalFocus(open: boolean, ref: RefObject<HTMLElement | null>, onClose: () => void, restoreFocus = true) {
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
@@ -36,7 +37,7 @@ export function useModalFocus(open: boolean, ref: RefObject<HTMLElement | null>,
       layers.splice(layers.indexOf(dialog), 1);
       if (dialog.parentElement) dialog.parentElement.inert = false;
       exposeTopLayer();
-      if (wasTop && previous?.isConnected) previous.focus();
+      if (restoreFocus && wasTop && previous?.isConnected) previous.focus();
     };
-  }, [open, ref]);
+  }, [open, ref, restoreFocus]);
 }

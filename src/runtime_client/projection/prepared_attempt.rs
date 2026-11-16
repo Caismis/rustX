@@ -270,10 +270,14 @@ fn same_model(left: Option<&AttemptModelView>, right: Option<&AttemptModelView>)
         (Some(left), Some(right)) => {
             same_invocation(&left.primary, &right.primary)
                 && match (&left.summary, &right.summary) {
-                    (AuxiliaryModelView::Session, AuxiliaryModelView::Session) => true,
-                    (AuxiliaryModelView::Explicit(left), AuxiliaryModelView::Explicit(right)) => {
-                        same_invocation(left, right)
-                    }
+                    (
+                        AuxiliaryModelView::Session { effective: left },
+                        AuxiliaryModelView::Session { effective: right },
+                    )
+                    | (
+                        AuxiliaryModelView::Explicit { effective: left },
+                        AuxiliaryModelView::Explicit { effective: right },
+                    ) => same_invocation(left, right),
                     _ => false,
                 }
         }

@@ -30,6 +30,7 @@ impl SqliteConversationStore {
         audit_total_at_connection(&connection, cut)
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(in crate::durable::sqlite) fn read_auxiliary_audit(
         &self,
         cut: AuxiliaryAuditCut,
@@ -372,6 +373,7 @@ impl SqliteConversationStore {
         Ok(audit)
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(in crate::durable::sqlite) fn read_auxiliary_call_requests(
         &self,
         call_id: &AuxiliaryCallId,

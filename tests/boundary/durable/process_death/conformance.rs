@@ -387,6 +387,22 @@ fn system_prompt(durable: &Durable, index: usize) -> String {
         .clone()
 }
 
+/// Resource-generation comparisons ignore the sparse permission reminder
+/// (Issue #544 §10): it is injected on first/change/compaction request starts
+/// and is not part of the frozen resource generation under test.
+fn system_prompt_without_permission_reminder(prompt: &str) -> &str {
+    const MARKER: &str = "Execution permission mode:";
+    if let Some(index) = prompt.find("\n\nExecution permission mode:") {
+        &prompt[..index]
+    } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
+        &prompt[..index]
+    } else if prompt.starts_with(MARKER) {
+        ""
+    } else {
+        prompt
+    }
+}
+
 /// The model-facing tool names of one persisted request.
 fn tool_names(durable: &Durable, index: usize) -> Vec<String> {
     durable
@@ -517,7 +533,10 @@ fn accepted_inbound_is_never_adopted_by_a_dead_process() {
 
     let durable = lab.durable();
     assert_eq!(durable.store().load_pending().expect("pending").len(), 1);
-    assert!(durable.canonical().is_empty());
+    assert_eq!(
+        durable.canonical(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(durable.recover().pending_inbound(), 1);
 }
 
@@ -532,7 +551,10 @@ fn pending_adoption_is_atomic() {
 
     let durable = lab.durable();
     assert_eq!(durable.store().load_pending().expect("pending").len(), 1);
-    assert!(durable.canonical().is_empty());
+    assert_eq!(
+        durable.canonical(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(durable.recover().pending_inbound(), 1);
 }
 
@@ -546,7 +568,10 @@ fn adopted_inbound_is_canonical_and_no_longer_pending() {
     process.sigkill();
 
     let durable = lab.durable();
-    assert!(durable.store().load_pending().expect("pending").is_empty());
+    assert_eq!(
+        durable.store().load_pending().expect("pending"),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(shapes(&durable.canonical()), vec!["user"]);
     let report = durable.recover();
     assert_eq!(report.pending_inbound(), 0);
@@ -573,7 +598,10 @@ fn first_turn_admission_is_all_or_nothing_across_process_death() {
         process.sigkill();
         let durable = lab.durable();
         assert_eq!(shapes(&durable.canonical()), vec!["user"]);
-        assert!(durable.store().load_pending().unwrap().is_empty());
+        assert_eq!(
+            durable.store().load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         assert_eq!(
             durable.count_events(|event| matches!(event, RuntimeEvent::AttemptStarted { .. })),
             usize::from(committed)
@@ -795,7 +823,10 @@ fn an_adopted_turn_survives_the_recovery_terminal_of_a_second_death() {
         vec!["user", "context", "assistant", "user"],
         "the adopted turn is canonical exactly once"
     );
-    assert!(durable.store().load_pending().expect("pending").is_empty());
+    assert_eq!(
+        durable.store().load_pending().expect("pending"),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(
         durable.count_events(|event| matches!(event, RuntimeEvent::InboundTurnAdopted { .. })),
         2,
@@ -874,7 +905,13 @@ fn tool_result_batch_commit_is_atomic() {
         shapes(&durable.canonical()),
         vec!["user", "context", "assistant-call"]
     );
-    assert!(tool_results(&durable.canonical()).is_empty());
+    assert_eq!(
+        tool_results(&durable.canonical()),
+        [] as [(
+            std::string::String,
+            crate::tools::types::ToolExecutionStatus
+        ); 0]
+    );
 
     let after = Lab::new();
     let mut process = after.spawn(child::TOOL_TURN, Some("after:append_canonical_batch"));
@@ -1077,7 +1114,10 @@ fn terminal_only_publication_settles_atomically() {
     process.sigkill();
     let durable = lab.durable();
     assert!(has_p(&durable) && has_c(&durable));
-    assert!(durable.unsettled_publications().is_empty());
+    assert_eq!(
+        durable.unsettled_publications(),
+        [] as [crate::publication::frame::PublicationStreamRecord; 0]
+    );
     assert_eq!(
         shapes(&durable.canonical()),
         vec!["user", "context", "assistant"]
@@ -1088,7 +1128,7 @@ fn terminal_only_publication_settles_atomically() {
         report.attempt_class(),
         &AttemptRecoveryClass::AlreadyTerminal
     );
-    assert!(report.publication_classes().is_empty());
+    assert_eq!(report.publication_classes(), []);
 }
 
 /// First-write admission is part of its payload transaction. Neither an
@@ -1132,8 +1172,17 @@ fn first_publication_write_killed_before_commit_leaves_no_empty_audit() {
                 report.publication_classes().is_empty(),
                 "no output to audit at {gate}"
             );
-            assert!(report.reconciliation().publication_audits.is_empty());
-            assert!(audit_kinds(&durable.transcript()).is_empty());
+            assert_eq!(
+                report.reconciliation().publication_audits,
+                [] as [(
+                    crate::runtime::identity::PublicationStreamId,
+                    crate::publication::frame::PublicationAuditKind
+                ); 0]
+            );
+            assert_eq!(
+                audit_kinds(&durable.transcript()),
+                [] as [crate::publication::frame::PublicationAuditKind; 0]
+            );
             assert!(!has_c(&durable) && !has_tool_start(&durable));
             assert_publication_implication(&durable);
         }
@@ -1592,7 +1641,13 @@ fn known_tool_outcome_is_preserved_into_the_canonical_slot() {
     process.sigkill();
 
     let durable = lab.durable();
-    assert!(tool_results(&durable.canonical()).is_empty());
+    assert_eq!(
+        tool_results(&durable.canonical()),
+        [] as [(
+            std::string::String,
+            crate::tools::types::ToolExecutionStatus
+        ); 0]
+    );
     let report = durable.recover();
     assert!(matches!(
         report.attempt_class(),
@@ -1622,7 +1677,7 @@ fn known_tool_outcome_is_preserved_into_the_canonical_slot() {
 #[test]
 fn a_pending_interaction_leaves_a_requested_audit_and_nothing_else() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(child::TOOL_APPROVAL_PENDING, None);
     process.wait_note("interaction-pending");
     process.sigkill();
@@ -1673,7 +1728,7 @@ fn a_pending_interaction_leaves_a_requested_audit_and_nothing_else() {
 #[test]
 fn a_settled_approval_never_authorizes_a_later_execution() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(
         child::TOOL_APPROVAL,
         Some("before:event:tool_execution_started"),
@@ -1927,7 +1982,7 @@ fn live_external_edits_never_expose_a_new_generation() {
     process.wait_note("first-attempt-settled");
     lab.write_project_instructions("R2 project instructions.");
     lab.write_skill("alpha", "R2 alpha summary", "R2 alpha body");
-    lab.write_runtime_config("always");
+    lab.write_divergent_full_access_config();
     process.resume();
     process.wait_note("settled");
     process.sigkill();
@@ -1938,10 +1993,17 @@ fn live_external_edits_never_expose_a_new_generation() {
     let first = system_prompt(&durable, 0);
     assert!(first.contains("R1 project instructions."));
     assert!(first.contains("R1 alpha summary"));
+    assert!(
+        first.contains("Execution permission mode:"),
+        "first request carries the sparse permission reminder"
+    );
+    let first_generation = system_prompt_without_permission_reminder(&first);
     for index in 1..snapshots.len() {
+        // Later requests may still carry a reminder when they open a new
+        // Attempt admission; compare only the resource-derived System body.
         assert_eq!(
-            system_prompt(&durable, index),
-            first,
+            system_prompt_without_permission_reminder(&system_prompt(&durable, index)),
+            first_generation,
             "request {index} still sends the R1 generation"
         );
         assert_eq!(
@@ -2677,7 +2739,10 @@ async fn death_before_projection_observation_leaves_none_and_repairs_exactly() {
 
     let (session, conversation) = lab.source_lineage();
     let durable = lab.lineage(&session, &conversation);
-    assert!(durable.store().load_pending().expect("pending").is_empty());
+    assert_eq!(
+        durable.store().load_pending().expect("pending"),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(shapes(&durable.canonical()), vec!["user"]);
     let report = durable.recover();
     assert_eq!(report.attempt_class(), &AttemptRecoveryClass::NotStarted);
@@ -2799,7 +2864,10 @@ fn committed_background_ownership_terminalizes_exactly_once() {
 
     // Recovery is absorbing: a second restart adds no second terminal.
     let repeated = durable.recover();
-    assert!(repeated.reconciliation().background_terminals.is_empty());
+    assert_eq!(
+        repeated.reconciliation().background_terminals,
+        [] as [crate::runtime::identity::ToolExecutionId; 0]
+    );
     assert_eq!(
         durable.count_events(|event| matches!(
             event,
@@ -3152,7 +3220,7 @@ fn the_transcript_pages_every_durable_owner_after_process_death() {
 
     // The interaction audit.
     let interaction = Lab::new();
-    interaction.write_runtime_config("always");
+    interaction.write_runtime_config(true);
     let mut process = interaction.spawn(child::TOOL_APPROVAL, None);
     process.wait_note("settled");
     process.sigkill();
@@ -3341,7 +3409,7 @@ fn settled_tool_result_and_new_inbound_compose_with_an_indeterminate_request() {
 #[test]
 fn approval_settlement_and_the_tool_start_boundary_compose() {
     let lab = Lab::new();
-    lab.write_runtime_config("always");
+    lab.write_runtime_config(true);
     let mut process = lab.spawn(
         child::TOOL_APPROVAL,
         Some("after:event:tool_execution_started"),
@@ -3410,7 +3478,10 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: 
     process.sigkill();
     let before = {
         let durable = lab.durable();
-        assert!(durable.store().load_pending().unwrap().is_empty());
+        assert_eq!(
+            durable.store().load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         let events = durable.store().read_events(None, 256).unwrap().events;
         assert!(
             events
@@ -3434,14 +3505,17 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: 
     if disable_on_reopen {
         // The ordinary configuration composes no Goal extension. Durable
         // history still proves that this already-adopted turn is Goal work.
-        lab.write_runtime_config("never");
+        lab.write_runtime_config(false);
     }
     let mut process = lab.spawn(resumed, None);
     process.wait_note("recovered-interrupt-proved");
     process.sigkill();
     let durable = lab.durable();
     let after = durable.store().load_goal().unwrap().unwrap();
-    assert!(durable.store().load_pending().unwrap().is_empty());
+    assert_eq!(
+        durable.store().load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     let events = durable.store().read_events(None, 256).unwrap().events;
     assert_eq!(
         events
@@ -3492,7 +3566,10 @@ fn recovered_adopted_interrupt(initial: &str, resumed: &str, disable_on_reopen: 
         process.sigkill();
         let durable = lab.durable();
         assert_eq!(durable.store().load_goal().unwrap(), Some(after));
-        assert!(durable.store().load_pending().unwrap().is_empty());
+        assert_eq!(
+            durable.store().load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         assert_eq!(
             durable.count_events(|event| matches!(
                 event,

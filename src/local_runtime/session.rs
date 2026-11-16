@@ -1,6 +1,6 @@
 //! Native local user-session state (Issue #88).
 //!
-//! A product [`Session`] is deliberately above the conversation runtime. Its
+//! A product `Session` is deliberately above the conversation runtime. Its
 //! graph contains nodes, and every node points at exactly one independent
 //! durable [`ConversationId`]. Conversation tables therefore remain linear;
 //! this module never adds branch columns or teaches `ConversationSurface`
@@ -124,7 +124,7 @@ pub(crate) mod create_profile;
 /// Version 7 co-locates live Sessions and pending-only frozen cleanup authority,
 /// with generation-checked publication. Older development schemas are rejected.
 /// Version 15 persists execution ownership generations at the active-node visibility commit.
-pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 19;
+pub const SESSION_CATALOG_SCHEMA_VERSION: u32 = 20;
 
 /// The largest display name a Session may carry.
 pub const SESSION_NAME_LIMIT: usize = 120;
@@ -371,7 +371,7 @@ pub struct SessionUserMessageBoundary {
 /// `messages` and `canonical` together fix what the copy *is*; neither
 /// records its append boundaries. `projections` independently preserves every
 /// eligible historical activation, including distinct activations at one Ledger
-/// frontier, so later fork/tree reads retain the source semantics — see [`lineage_cut`].
+/// frontier, so later fork/tree reads retain the source semantics — see `lineage_cut`.
 ///
 /// Native `read_lineage_cut(R)` freezes authority (R, C): R selects structural
 /// history/canonical closure, C selects temporal execution-derived meaning.

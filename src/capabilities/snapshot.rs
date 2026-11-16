@@ -7,7 +7,6 @@ use crate::capabilities::tools::AvailableToolCatalog;
 use crate::protocol::manifest::CapabilitiesManifest;
 use crate::runtime::identity::{CapabilityRevision, ConversationId};
 use crate::skills::SkillSnapshot;
-use crate::skills::environments::{NodeEnvironment, PythonEnvironment};
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::ToolRegistry;
 use crate::tools::mcp::{McpRuntimeLeaseAuthority, McpRuntimeLeaseSet, McpServerBindings};
@@ -20,8 +19,6 @@ use crate::tools::mcp::{McpRuntimeLeaseAuthority, McpRuntimeLeaseSet, McpServerB
 /// ├── immutable ToolRegistry handle
 /// ├── immutable Skill snapshot/catalog
 /// ├── SkillId + SkillVersionId bindings
-/// ├── Python environment identity/path when present
-/// ├── Node environment identity/path when present
 /// └── effective ToolEnvironment
 /// ```
 ///
@@ -39,8 +36,6 @@ pub struct CapabilitySnapshot {
     skills: Arc<SkillSnapshot>,
     resolved_profile: Option<Arc<crate::runtime::agent_profile::ResolvedAgentProfile>>,
     selected_skill_entries: Arc<[crate::skills::SkillCatalogEntry]>,
-    python_environment: Option<PythonEnvironment>,
-    node_environment: Option<NodeEnvironment>,
     effective_environment: ToolEnvironment,
     /// The physical MCP lease authority paired with this exact immutable
     /// capability generation. It is deliberately part of the snapshot
@@ -73,8 +68,6 @@ impl PartialEq for CapabilitySnapshot {
             && self.tool_registry.definitions() == other.tool_registry.definitions()
             && self.available_tools == other.available_tools
             && self.skills == other.skills
-            && self.python_environment == other.python_environment
-            && self.node_environment == other.node_environment
             && self.effective_environment == other.effective_environment
     }
 }
@@ -87,8 +80,6 @@ impl core::fmt::Debug for CapabilitySnapshot {
             .field("revision", &self.revision)
             .field("available_tools", &self.available_tools)
             .field("skills", &self.skills)
-            .field("python_environment", &self.python_environment)
-            .field("node_environment", &self.node_environment)
             .field("effective_environment", &self.effective_environment)
             .finish_non_exhaustive()
     }
@@ -139,8 +130,6 @@ impl CapabilitySnapshot {
         tool_registry: Arc<ToolRegistry>,
         available_tools: Arc<AvailableToolCatalog>,
         skills: Arc<SkillSnapshot>,
-        python_environment: Option<PythonEnvironment>,
-        node_environment: Option<NodeEnvironment>,
         effective_environment: ToolEnvironment,
         mcp_lease_authority: Arc<McpRuntimeLeaseAuthority>,
         mcp_servers: Arc<McpServerBindings>,
@@ -154,8 +143,6 @@ impl CapabilitySnapshot {
             selected_skill_entries: skills.catalog_entries().into(),
             skills,
             resolved_profile: None,
-            python_environment,
-            node_environment,
             effective_environment,
             mcp_lease_authority,
             mcp_servers,
@@ -222,23 +209,10 @@ impl CapabilitySnapshot {
         &self.skills
     }
 
-    /// The shared Python environment, when the merged Skill set declares
-    /// Python dependencies.
-    #[must_use]
-    pub fn python_environment(&self) -> Option<&PythonEnvironment> {
-        self.python_environment.as_ref()
-    }
-
-    /// The shared Node environment, when the merged Skill set declares
-    /// Node dependencies.
-    #[must_use]
-    pub fn node_environment(&self) -> Option<&NodeEnvironment> {
-        self.node_environment.as_ref()
-    }
-
-    /// The attempt's immutable effective `ToolEnvironment`: the base
-    /// authorized environment plus the deterministic Skill environment
-    /// overlay.
+    /// The attempt's immutable effective `ToolEnvironment`.
+    ///
+    /// Skills do not contribute entries. The value is the base authorized
+    /// environment captured for this capability generation.
     #[must_use]
     pub fn effective_environment(&self) -> &ToolEnvironment {
         &self.effective_environment

@@ -749,8 +749,7 @@ impl Execution {
             let reasoning = sealed
                 .output
                 .as_ref()
-                .map(|output| output.reasoning.clone())
-                .unwrap_or_default();
+                .map_or_default(|output| output.reasoning.clone());
             let prepared = self
                 .prepared
                 .as_ref()

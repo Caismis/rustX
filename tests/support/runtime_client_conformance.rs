@@ -67,8 +67,7 @@ use rustx::runtime_client::{
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{
-    ToolCancellationPhase, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus,
-    ToolOrigin,
+    ToolCancellationPhase, ToolExecutionPolicy, ToolExecutionStatus, ToolOrigin,
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
@@ -81,7 +80,9 @@ use crate::scripted_suites::common;
 /// model releases on an explicit signal). This bounds only total wall time
 /// so a scheduling stall on a loaded runner cannot hang the suite; no
 /// assertion depends on its value.
-const LIVENESS_GUARD: Duration = Duration::from_mins(2);
+// Scenario-level guard: long enough for slow CI hosts, short enough that a
+// Plan/Ask stall fails the job instead of burning the contracts timeout.
+const LIVENESS_GUARD: Duration = Duration::from_secs(45);
 
 // ---------------------------------------------------------------------------
 // The driver abstraction
@@ -393,7 +394,7 @@ pub async fn stdio_subscription_change_retires_buffered_notifications(detach: bo
         // No response is outstanding. These bytes are a real notification
         // already written before the next request; leave it unread so that
         // request's ordinary demultiplexer must buffer it before its response.
-        assert!(!driver.from_session.fill_buf().await.unwrap().is_empty());
+        assert_ne!(driver.from_session.fill_buf().await.unwrap(), [] as [u8; 0]);
         snapshot(&mut driver, 5).await;
         let buffered = driver
             .buffered_events
@@ -1413,6 +1414,7 @@ impl PreToolPolicy for BeforeStartPolicy {
     fn evaluate<'a>(
         &'a self,
         _view: &'a PreToolView<'a>,
+        _cancellation: &'a rustx::runtime::cancellation::ExecutionCancellation,
     ) -> BoxFuture<'a, Result<PreToolDecision, LifecycleError>> {
         let entered = self.entered.clone();
         let mut release = self.release.clone();
@@ -1613,12 +1615,7 @@ pub async fn foreground_tool_lifecycle(factory: &dyn DriverFactory) {
     }));
     let mut tools = ToolRegistry::new();
     FakeTool::new(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     )
     .register(&mut tools);
@@ -1741,21 +1738,11 @@ pub async fn parallel_tools_keep_independent_identities(factory: &dyn DriverFact
     }));
 
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -1878,12 +1865,7 @@ pub async fn background_execution_lifecycle(factory: &dyn DriverFactory) {
     }));
 
     let (tool, _release) = FakeTool::parking(
-        common::tool_policies(
-            "bg",
-            "tool-bg",
-            ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("bg", "tool-bg", ToolExecutionPolicy::ModelSelectable),
         success_result("bg"),
     );
     let mut tools = ToolRegistry::new();
@@ -2101,7 +2083,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
         !status.sections.is_empty(),
         "the structured sections are projected, not only the rendering"
     );
-    assert!(!status.rendered.is_empty());
+    assert_ne!(status.rendered, "");
 
     // Placement is a runtime fact, published once with the opportunity that
     // established it, not something a client derives from arrival order. This
@@ -2146,12 +2128,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
 pub async fn capability_projection_is_deterministic(factory: &dyn DriverFactory) {
     let mut base = ToolRegistry::new();
     FakeTool::new(
-        common::tool_policies(
-            "ls",
-            "tool-ls",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("ls", "tool-ls", ToolExecutionPolicy::ForegroundOnly),
         success_result("listed"),
     )
     .register(&mut base);
@@ -2412,6 +2389,8 @@ pub async fn capability_projection_covers_mcp_origins(
                 )]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     )]);
     let fixture = ConformanceFixture::builder(&conversation(factory, "mcp"))
@@ -2476,7 +2455,10 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
         .await;
     let mut driver = connect(&fixture, factory);
     let (initial, initial_cursor) = initialize(&mut *driver, 1).await;
-    assert!(initial.messages.is_empty());
+    assert_eq!(
+        initial.messages,
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 
     submit(&mut *driver, 2, "hello").await;
     await_model_parked(&fixture.model).await;
@@ -2499,7 +2481,10 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
             .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
-    assert!(!events.is_empty());
+    assert_ne!(
+        events,
+        [] as [crate::runtime_client::types::RuntimeClientProtocolEvent; 0]
+    );
 
     let (settled, settled_cursor) = snapshot_of(&mut *driver, 5).await;
     receive_read_domain_suffix(

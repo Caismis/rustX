@@ -144,13 +144,11 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         let mut original = selection("local/a");
         let summary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse("local/b").unwrap(),
-            profile: None,
+            profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
             request_params: serde_json::Map::default(),
             max_output_tokens: Some(128),
         };
-        original.summary_model = summary.clone();
-        let title = summary.clone();
-        original.title_model = title.clone();
+        original.auxiliary = summary.clone();
         f.manager.set_model(id, original).await.unwrap();
         let before =
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
@@ -206,12 +204,14 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
         // Summary view is genuinely larger than a transport record.
         let summary = AuxiliaryModelPolicy::Explicit {
             model: ModelRef::parse(&enormous_model).unwrap(),
-            profile: Some(ModelProfileId::parse(&enormous_profile).unwrap()),
+            profile: crate::model::AuxiliaryProfileSelection::Explicit {
+                id: ModelProfileId::parse(&enormous_profile).unwrap(),
+            },
             request_params: serde_json::Map::default(),
             max_output_tokens: Some(128),
         };
         let mut retained = runtime.model_view().configured;
-        retained.summary_model = summary.clone();
+        retained.auxiliary = summary.clone();
         f.manager.set_model(id, retained).await.unwrap();
         let binding =
             crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
@@ -260,8 +260,7 @@ async fn t13_t15_catalog_selection_resolves_original_large_identities_at_exact_g
             "native model body exceeds the complete transport record budget"
         );
         let configured = model_view.configured;
-        assert_eq!(configured.summary_model, summary);
-        assert_eq!(configured.title_model, title);
+        assert_eq!(configured.auxiliary, summary);
         assert_eq!(configured.model.as_str(), enormous_model);
         assert_eq!(configured.profile.unwrap().as_str(), enormous_profile);
         let (_, durable) = f.manager.sessions.read_settings(id).await.unwrap();
@@ -332,10 +331,9 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 )
                 .unwrap(),
                 max_output_tokens: Some(333),
-                title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-                summary_model: AuxiliaryModelPolicy::Explicit {
+                auxiliary: AuxiliaryModelPolicy::Explicit {
                     model: ModelRef::parse("local/a").unwrap(),
-                    profile: None,
+                    profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                     request_params: serde_json::from_value(serde_json::json!({"temperature": 0.2}))
                         .unwrap(),
                     max_output_tokens: Some(111),
@@ -349,10 +347,9 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 profile: Some(ModelProfileId::new("low")),
                 request_params: serde_json::from_value(serde_json::json!({"seed": 17})).unwrap(),
                 max_output_tokens: Some(888),
-                title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-                summary_model: AuxiliaryModelPolicy::Explicit {
+                auxiliary: AuxiliaryModelPolicy::Explicit {
                     model: ModelRef::parse("local/a").unwrap(),
-                    profile: None,
+                    profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
                     request_params: serde_json::from_value(serde_json::json!({"temperature": 0.6}))
                         .unwrap(),
                     max_output_tokens: Some(222),
@@ -416,7 +413,7 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 let checkpoint = host.checkpoint().unwrap();
                 let (admitted, cursor) = (checkpoint.snapshot, checkpoint.cursor);
                 assert_eq!(*admitted.attempt.unwrap().model.unwrap(), old_invocation);
-                assert!(f.provider.request_bodies().is_empty());
+                assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
                 admission_cursor = Some(cursor);
                 drop(prepared);
                 contention.notified().await;
@@ -561,7 +558,7 @@ async fn r05_concurrent_prepared_selection_cannot_overwrite_the_winning_commit()
                 .unwrap(),
             before
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -623,7 +620,7 @@ async fn r06_catalog_publication_rejects_prepared_selection_and_commits_unrelate
         let instructions = super::configuration::guidance(published.project_context_files());
         assert_ne!(instructions, original_instructions);
         assert_eq!(instructions, "pending unrelated instructions");
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -761,7 +758,7 @@ async fn r07_catalog_failure_before_and_after_visibility_preserves_coherent_auth
             if !after_visibility {
                 assert_eq!(host.checkpoint().unwrap().cursor, cursor);
             }
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             f.close().await;
         }
     })
@@ -816,7 +813,7 @@ async fn r08_retirement_and_selection_commit_have_both_valid_orders() {
                 }),
             )
             .await;
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             f.close().await;
         }
     })
@@ -897,7 +894,7 @@ async fn r10_native_selection_survives_request_waiter_abort_without_replay() {
             original_settings.0 + 1,
             "readback and reconnect never replay the lost mutation"
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -955,7 +952,7 @@ async fn f4_later_deliberate_selection_fences_a_prepared_request_after_old_readb
         };
         let snapshot = reconnected.checkpoint().unwrap().snapshot;
         assert_eq!(snapshot.model.unwrap().configured, deliberate);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;

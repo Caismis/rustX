@@ -131,7 +131,7 @@ impl SessionRuntimeManager {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mcp-fixture"))]
 async fn probe(
     owner: UserConfigManager,
     target: SourceTarget,
@@ -246,10 +246,10 @@ fn capture(
         .get(id)
         .and_then(|value| value.as_ref().ok())
         .ok_or(SettingsError::Invalid)?;
-    let mut bindings = super::config::resolve_mcp_bindings(
-        &BTreeMap::from([(id.clone(), definition.clone().resolve())]),
-        &BTreeMap::new(),
-    )
+    let mut bindings = super::config::resolve_mcp_bindings(&BTreeMap::from([(
+        id.clone(),
+        definition.clone().resolve(),
+    )]))
     .map_err(|_| SettingsError::Invalid)?;
     let mut binding = bindings.remove(id).ok_or(SettingsError::Invalid)?;
     binding
@@ -260,7 +260,7 @@ fn capture(
     Ok((binding, workspace))
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "mcp-fixture"))]
 async fn run(
     id: &McpServerId,
     binding: &crate::tools::mcp::McpServerBinding,
@@ -328,7 +328,7 @@ async fn run_query(
 static CLOSE_PROBES: std::sync::LazyLock<
     std::sync::Mutex<BTreeMap<std::path::PathBuf, Arc<crate::tools::mcp::test_sync::CloseProbe>>>,
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(BTreeMap::new()));
-#[cfg(test)]
+#[cfg(all(test, feature = "mcp-fixture"))]
 pub(crate) fn install_close_probe(
     path: std::path::PathBuf,
     close: Arc<crate::tools::mcp::test_sync::CloseProbe>,

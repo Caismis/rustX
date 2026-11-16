@@ -33,7 +33,10 @@ fn canonical_block_descriptors_share_one_ledger_lookup_per_block() {
     for value in [Some(serde_json::json!({"text":"first"})), None] {
         let (bytes, _) = block_bytes(&transaction, &message, 0, "text", value, &["text"]).unwrap();
         let header: MessageBlockHeader = serde_json::from_slice(&bytes).unwrap();
-        assert!(!header.content.is_empty());
+        assert_ne!(
+            header.content,
+            [] as [crate::observation::cut::ContentBinding; 0]
+        );
         assert_eq!(
             crate::durable::sqlite::content::take_source_work(),
             (1, 0),

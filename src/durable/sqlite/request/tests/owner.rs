@@ -86,14 +86,14 @@ fn request_owner_is_atomic_with_start_and_exact_replay_after_reopen() {
         store.load_request_owner(&snapshot.request_id).unwrap(),
         None
     );
-    assert!(
-        store
-            .read_request_snapshots(None, 2)
-            .unwrap()
-            .snapshots
-            .is_empty()
+    assert_eq!(
+        store.read_request_snapshots(None, 2).unwrap().snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
-    assert!(store.read_events(None, 2).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 2).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     assert_eq!(store.load_canonical().unwrap().len(), 1);
 
     let committed = store

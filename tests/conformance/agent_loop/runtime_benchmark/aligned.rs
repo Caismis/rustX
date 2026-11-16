@@ -536,7 +536,10 @@ impl NativeDriver {
                 assert_eq!(offset, page.total);
                 break;
             }
-            assert!(!page.items.is_empty());
+            assert_ne!(
+                page.items,
+                [] as [rustx::observation::cut::CheckpointPageItem; 0]
+            );
         }
         json!({"checkpoint":checkpoint,"replay":replay,"messages":messages})
     }
@@ -778,7 +781,7 @@ pub(super) async fn measure(mode: &str) {
                 "real consumer must receive the tool output"
             );
         } else {
-            assert!(display.tool_results.is_empty());
+            assert_eq!(display.tool_results, [] as [serde_json::Value; 0]);
         }
         for message in &history_messages {
             if let MessageBlock::Assistant(assistant) = message {
@@ -827,7 +830,14 @@ pub(super) async fn measure(mode: &str) {
             .collect(),
     };
     assert_eq!(text, expected);
-    let verified_requests = verify_requests(driver.store.clone(), &case, &workspace, &requests);
+    let verified_requests = verify_requests(
+        driver.store.clone(),
+        &case,
+        &workspace,
+        "emulator",
+        &emulator.openai_base_url(),
+        &requests,
+    );
     lifecycle_sample(&mut lifecycle, "after_verification", lifecycle_began);
     let observer_validation = if mode == "live-subscriber" {
         let display = driver.display.lock().unwrap();
@@ -868,7 +878,14 @@ pub(super) async fn measure(mode: &str) {
     let began = Instant::now();
     let reopened = Arc::new(SqliteConversationStore::open_existing(cid, &database).unwrap());
     assert_eq!(reopened.load_canonical().unwrap(), history_messages);
-    let reopened_requests = verify_requests(reopened.clone(), &case, &workspace, &requests);
+    let reopened_requests = verify_requests(
+        reopened.clone(),
+        &case,
+        &workspace,
+        "emulator",
+        &emulator.openai_base_url(),
+        &requests,
+    );
     assert_eq!(
         reopened_requests, verified_requests,
         "exact frozen identities and input survive reopen"

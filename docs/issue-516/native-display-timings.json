@@ -1,0 +1,20 @@
+[
+  {
+    "entry": "delivery",
+    "name": "mounting-bracket.step",
+    "phase": "first-open",
+    "displayMs": 1470.7
+  },
+  {
+    "entry": "delivery",
+    "name": "mounting-bracket.step",
+    "phase": "retained-reopen",
+    "displayMs": 955.3
+  },
+  {
+    "entry": "delivery",
+    "name": "mounting-bracket.glb",
+    "phase": "first-open",
+    "displayMs": 487.6
+  }
+]

@@ -411,10 +411,10 @@ fn paging_terminal_empty_and_running_attempts_keep_native_identity_order() {
     assert_eq!(all.turns[0].cursor.unwrap().get(), 1);
     assert_eq!(all.turns[1].cursor.unwrap().get(), 2);
     assert!(all.turns[2].cursor.is_none());
-    for offset in 0..3 {
+    for (offset, expected) in all.turns.iter().enumerate() {
         assert_eq!(
             store.conversation_turns(offset, 1).unwrap().turns[0],
-            all.turns[offset]
+            *expected
         );
     }
     assert!(matches!(
@@ -1175,7 +1175,7 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
     let id = ConversationId::generate();
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
-        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 113);
+        assert_eq!(crate::durable::sqlite::SQLITE_SCHEMA_VERSION, 114);
         store.lock().unwrap().execute_batch("ALTER TABLE bootstrap_identity DROP COLUMN inherited_transcript_through; UPDATE rustx_store SET schema_version=56 WHERE id=1").unwrap();
     }
     assert!(matches!(

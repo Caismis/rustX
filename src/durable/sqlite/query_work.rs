@@ -284,8 +284,7 @@ pub(crate) fn take_shared() -> BTreeMap<&'static str, ScopeWork> {
         .lock()
         .unwrap()
         .as_mut()
-        .map(|trace| std::mem::take(&mut trace.scopes))
-        .unwrap_or_default()
+        .map_or_default(|trace| std::mem::take(&mut trace.scopes))
 }
 
 pub(crate) fn finish_shared(connection: &Connection) {

@@ -289,17 +289,20 @@ it('keeps auxiliary model settings editable after the primary model is removed',
   const source = cfg3Source();
   const authored = source.user.authored!;
   authored.models = { main: cfg3Effective().document.models!.main };
-  authored.agent = { model: { model: 'removed', summary_model: { mode: 'explicit', model: 'main' } } };
+  authored.agent = { model: { model: 'removed', auxiliary: { mode: 'explicit', model: 'main' } } };
   const { writes } = await renderEditor(<ModelsPage client={cfg3Client().client} target={userSettingsTarget}
     source={source} scope="user" revision={source.user.revision} models={['main']} profiles={{}} onFocus={() => {}} />,
   { source, context: source });
   fireEvent.click(screen.getByRole('button', { name: 'Default model for new Sessions' }));
   const form = within(screen.getByRole('form', { name: 'Default model' }));
   fireEvent.click(form.getByRole('button', { name: 'Auxiliary models' }));
-  await chooseOption('Title model', 'main', form);
+  // Re-assert an explicit auxiliary after a Follow-session detour so Save has a
+  // real authored change while the missing primary model stays editable.
+  await chooseOption('Auxiliary model', 'Follow selected model', form);
+  await chooseOption('Auxiliary model', 'main', form);
   fireEvent.click(form.getByRole('button', { name: 'Save Default model' }));
   await waitFor(() => expect(writes).toHaveBeenCalledWith({ kind: 'config', mutation: { unit: 'root_model', authored: {
-      model: 'removed', summary_model: { mode: 'explicit', model: 'main' }, title_model: { mode: 'explicit', model: 'main' },
+      model: 'removed', auxiliary: { mode: 'explicit', model: 'main', profile: { mode: 'lowest' } },
   } } }, source.user.revision));
 });
 

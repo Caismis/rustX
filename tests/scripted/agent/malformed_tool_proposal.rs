@@ -46,7 +46,7 @@ use rustx::model::{
 use rustx::runtime::identity::{AgentId, AttemptId, ConversationId, MessageId};
 use rustx::runtime::types::CancellationReason;
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy, ToolExecutionStatus};
+use rustx::tools::types::{ToolExecutionPolicy, ToolExecutionStatus};
 use support::audit::{assert_outcome, assert_single_terminal};
 use support::context::{FakeContextSummarizer, FakeSummaryStep, ScriptedEstimator};
 use support::fake::{
@@ -284,7 +284,6 @@ fn write_tool_definition() -> rustx::tools::types::ToolDefinition {
         "write_file",
         "tool-write",
         ToolExecutionPolicy::ForegroundOnly,
-        ToolConcurrencyPolicy::Sequential,
     )
 }
 
@@ -806,7 +805,7 @@ async fn cancellation_before_the_regeneration_wins_over_the_budget() {
     );
     assert_single_terminal(&audit.event_history);
     assert_nothing_executed(&audit);
-    assert!(assistant_texts(&audit).is_empty());
+    assert_eq!(assistant_texts(&audit), [] as [std::string::String; 0]);
 }
 
 /// The corrective hint belongs to the corrective **generation**, not to one

@@ -1,0 +1,521 @@
+{
+  "capturedUtc": "2026-11-05T05:55:11.270Z",
+  "sourceFile": {
+    "kind": "one curved degree-3 tensor B-spline face",
+    "polesPerAxis": 1450,
+    "referencedControlPoles": 2102500,
+    "bytes": 200761968,
+    "sha256": "0bcf7e5313f6b770cd7028360ddb5a88312c3ee8a22c1892421d366bdcf6f81b",
+    "units": "millimeter",
+    "controlHull": {
+      "min": [
+        0,
+        0,
+        -5
+      ],
+      "max": [
+        1000,
+        1000,
+        5
+      ]
+    },
+    "generationSeconds": 8.765394799993373
+  },
+  "browser": {
+    "image": "mcr.microsoft.com/playwright:v1.63.0-noble@sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+    "renderer": "Chromium 153 / SwiftShader",
+    "host": "AMD Ryzen 7 9800X3D, 8 cores / 16 threads, Windows / WSL2",
+    "contexts": 3,
+    "viewport": {
+      "width": 1440,
+      "height": 1000,
+      "dpr": 1
+    },
+    "cpuQuota": null,
+    "memoryQuota": null,
+    "peakCgroupBytes": 2325893120,
+    "oom": 0,
+    "oomKill": 0,
+    "scope": "Dedicated completed three-context production-fixture browser-server container, including fixture source, network forwarding, browser/renderer/cache. Excludes Node/native Host. Not comparable to pre-runtime timeout peak as a completed-model memory reduction."
+  },
+  "native": {
+    "before": {
+      "label": "stock-isolated",
+      "ok": true,
+      "initializeMs": 9.935093000000052,
+      "readMs": 40877.410076,
+      "meshes": 1,
+      "triangles": 216,
+      "vertices": 118,
+      "faces": 1,
+      "digest": "8101630ecc9f59c3a50c4a4f38c1113af605857f7c329ff00fadc3d0355ced72",
+      "wasmBytes": 1053491200,
+      "elapsedMs": 41027.622272,
+      "maxRssKiB": 1412984
+    },
+    "after": {
+      "label": "bounded-transfer-progressive-sdk",
+      "ok": true,
+      "initializeMs": 10.686374,
+      "readMs": 21119.660652000002,
+      "meshes": 1,
+      "triangles": 216,
+      "vertices": 118,
+      "faces": 1,
+      "digest": "8101630ecc9f59c3a50c4a4f38c1113af605857f7c329ff00fadc3d0355ced72",
+      "wasmBytes": 1053491200,
+      "inputReleased": true,
+      "elapsedMs": 21272.278741,
+      "maxRssKiB": 1263040
+    },
+    "computedPrefixCallback": false,
+    "scope": "One isolated sequential full-completion Node worker per version, diagnostic deadline 60s, no display-prefix callback. maxRssKiB is process peak including Worker/input; not per-Worker attribution, physical display, or a confidence interval."
+  },
+  "deadlines": {
+    "stlImportMs": 15000,
+    "fullCadImportMs": 60000,
+    "immutableCodeFetchMs": 15000,
+    "firstModelBudgetMs": 200,
+    "interactionMaximumExclusiveMs": 50
+  },
+  "fidelity": {
+    "sourceBytesUnchanged": true,
+    "geometryDigest": "8101630ecc9f59c3a50c4a4f38c1113af605857f7c329ff00fadc3d0355ced72",
+    "vertices": 118,
+    "triangles": 216,
+    "cadParametersUnchanged": true
+  },
+  "sourceManifestSha256": "c8bd017d5aad8a196095f8c29ec04b22efdc356cfa5ec4e47a5ddb842f6535aa",
+  "sources": [
+    {
+      "path": "web-console/geometry-runtime.json",
+      "bytes": 1023,
+      "sha256": "32dae03d1a70fba483750fe7969572eb91bb06770e17b7186765090798bdeea8"
+    },
+    {
+      "path": "web-console/package.json",
+      "bytes": 3782,
+      "sha256": "6ccc2ba618f7ff3c368602d7f8c5620c205ff2b1c864e0ae97a342d2cee12b9c"
+    },
+    {
+      "path": "web-console/playwright.geometry-performance.config.ts",
+      "bytes": 1356,
+      "sha256": "e6130015c75c04ad27d452c6cc3cfe54fbad07a1d1fc2f15a1c66baf299a93a3"
+    },
+    {
+      "path": "web-console/pnpm-lock.yaml",
+      "bytes": 161745,
+      "sha256": "a8f3dabf8f1e299a12118f6fe13cfba39e20abe8e109b524e52c402348044e9c"
+    },
+    {
+      "path": "web-console/scripts/geometry-performance.sh",
+      "bytes": 734,
+      "sha256": "b3d58983087656f5fcbd552403f3512f035339ea2a086faadf8864a82c9aceac"
+    },
+    {
+      "path": "web-console/scripts/geometry-runtime.ts",
+      "bytes": 3825,
+      "sha256": "3fb0eed93b3d4f114b0ac692a74ae226fcb73d9a6ba46adbb54665b8ca67fa29"
+    },
+    {
+      "path": "web-console/scripts/notices.ts",
+      "bytes": 6444,
+      "sha256": "5bee29955a8479c14287a512159a56aaf9df95f12e5553984d8515f83a12d180"
+    },
+    {
+      "path": "web-console/src/app/components/ArtifactPreview.tsx",
+      "bytes": 7746,
+      "sha256": "6405d47b7218ae9727d1223189709c3899dcf8e808ad65975fa76aed851a3132"
+    },
+    {
+      "path": "web-console/src/app/components/WorkbenchFiles.tsx",
+      "bytes": 17050,
+      "sha256": "10bcc5d1b4ee823b14782e26e76a1d73c1414b7b0d76c4f06efbe97ed0deff36"
+    },
+    {
+      "path": "web-console/src/app/components/documents/GeometryDocument.module.css",
+      "bytes": 156,
+      "sha256": "e5d7312f6e87a6e2839ef6a1e586ca3ad28ecf61efb0a406d5ab171f61fc9591"
+    },
+    {
+      "path": "web-console/src/app/components/documents/GeometryDocument.tsx",
+      "bytes": 4199,
+      "sha256": "68d9047d5030b6e016bfcd9c47ecd7cce144749dd436c9f7b88d0ebcf88b517e"
+    },
+    {
+      "path": "web-console/src/app/components/documents/GeometryRoughPreview.module.css",
+      "bytes": 550,
+      "sha256": "1ef971a2c8bbc4640042478a95077a85835455d11e5d7bbd513ffdfa00e84575"
+    },
+    {
+      "path": "web-console/src/app/components/documents/GeometryRoughPreview.tsx",
+      "bytes": 6462,
+      "sha256": "0eabd5170d6ef63c78068169a6127d224013f514b22717caa84b77b527fe9a71"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/GeometryPreview.module.css",
+      "bytes": 4933,
+      "sha256": "ab095e3fbc9d6c4cbda5605b61f389c6b785b2ca0fcd36c60d4945fe7fbdf060"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/GeometryPreview.tsx",
+      "bytes": 17882,
+      "sha256": "0afc5990d2b0ec76f3cae0f99a78af60a6aa2a547661d521497a4b3b1e859821"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/GeometryViewGlyph.tsx",
+      "bytes": 1061,
+      "sha256": "3d0405736bda59c685482ea0e5b3fa5492f3e18718044adbf346c55a811dea42"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/PartsTree.module.css",
+      "bytes": 2025,
+      "sha256": "385799e5cdbd9cd270b04315e74b687e7a4cbedcf5eca14f58214f1fc881afae"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/PartsTree.tsx",
+      "bytes": 5809,
+      "sha256": "afaeec4cccb23720e060afdc3d6914ca401495bbdd7e166f2314fcfbb7a32f15"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/axes.ts",
+      "bytes": 4801,
+      "sha256": "c959c4fd59f3c5f16937a880f567bd9306f900b3232c4998da8e6848eedf4a59"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/cad-code.ts",
+      "bytes": 1027,
+      "sha256": "388cc02f7b76c803b19264723a9f4fb4fc421244f068c87ef5fde0e133c84156"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/cad-worker.ts",
+      "bytes": 437,
+      "sha256": "709155def61f95c2316643a3d7795b346ba1488b7c8c37b3c87f5edc2f4b3191"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/cad.ts",
+      "bytes": 7782,
+      "sha256": "314bc3f68206be4885df980b9722daad7f3d823de0e8c0332be79bb107d3e3dc"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/display-quality.ts",
+      "bytes": 4621,
+      "sha256": "3bc45e89a1c32f6e671cfbd3a9ae81c88fc1248e6bd40297b8b0ca83e8c976d7"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/draw-batches.ts",
+      "bytes": 3010,
+      "sha256": "4f002a030cb251d766411c49fd580d8b36636a08be115a49b91b72bcdd37fac2"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/format.ts",
+      "bytes": 453,
+      "sha256": "0ee56fd0ca25a1d69452eb336974baa591e53ef43b07ab390aad96641614e886"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/glb.ts",
+      "bytes": 12201,
+      "sha256": "6beda75329d51af0db38e5aa8e577a67a70713f4eeb80323cd0fc80bc9350ec5"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/limits.ts",
+      "bytes": 1827,
+      "sha256": "9834b0cda6fa2143782489d1b84021f03d3db5b29bafe2f7d2ec129436c79e10"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/model.ts",
+      "bytes": 4609,
+      "sha256": "f116549b2c1775c8184a9ac09c457e4b631fe6cb6bb246177229d704c987e976"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/occt.d.ts",
+      "bytes": 811,
+      "sha256": "c2774eb1b9b9f2a9924394e39ceb3f5475989d12145e4ac992f195d38f3150f2"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/optimize.ts",
+      "bytes": 4783,
+      "sha256": "2ec9bd42d86c4095352d619f1615e80fa0d4ecb407666429ffa5c028f7f20a45"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/outline-data.ts",
+      "bytes": 3570,
+      "sha256": "a3a992972e07b9a61b2cfa8d4084354bbf97cd42f1e31f52690683c101909568"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/outline-worker.ts",
+      "bytes": 752,
+      "sha256": "563759d3c959169fa3e2c02097e9511859d1ff2676a343beb2b8a8a3b91d9440"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/outlines.ts",
+      "bytes": 12529,
+      "sha256": "6f18ecbb41aa3b677d23549f2ecbd5db698feb2bf30a558a3a483f186f5b758d"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/parse.ts",
+      "bytes": 8278,
+      "sha256": "f5965550ba1ef4215a33fd09ab91bb9ac4ad4928c60348a8da49689d784ac74e"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/partial-data.ts",
+      "bytes": 2003,
+      "sha256": "b4b007047141649a10673b29f1f4bd729a446587ad7fb4fb94b19db6447ee3d9"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/planar.ts",
+      "bytes": 7052,
+      "sha256": "4286037a31235d0b7f1de84db93101ad3671d353ddf37c876970e654e21505a4"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/preview-data.ts",
+      "bytes": 9727,
+      "sha256": "65a6c85dc3ab40a1f6841f6a65a819d9b3c0f0edd2410f2f4134b60545f6c1f7"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/progressive.ts",
+      "bytes": 6166,
+      "sha256": "79a2ae65d500ca6fdaa9238dea46bd609afedc9ea58f6a0888374d5a1c92396a"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/scene-resources.ts",
+      "bytes": 15080,
+      "sha256": "ef9bcf656bfef40438f0dfa62bbae1dc44633b30510be1c74e66fc7b15cf69c0"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/stages.ts",
+      "bytes": 791,
+      "sha256": "df67bbffdebb905eadf217f55cb45e0aaf12383bfcc1c084743d3b18885ae75e"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/stl-worker.ts",
+      "bytes": 278,
+      "sha256": "bea67605280df1c31f61f2052808865725bbb93aab9dca2f85c89637f281f4a3"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/stl.ts",
+      "bytes": 3805,
+      "sha256": "d7aaca52fd634c7ae23440840cad10cd3585f7ccbd0e950ead159716044d73c4"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/structure.ts",
+      "bytes": 5022,
+      "sha256": "38a3c6e6b8861ce75cab987f97ce07f094f161c06ff6f0021fb0274accd7ab6d"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/viewport.ts",
+      "bytes": 27375,
+      "sha256": "a700fc6f09bae67289843c9c5ad0166e67560674e96e9002f028e90be98bc033"
+    },
+    {
+      "path": "web-console/src/app/components/documents/geometry/worker.ts",
+      "bytes": 3928,
+      "sha256": "9006d50cd3894a841b7cd657b615138964dbc7860ce0055515fc03afcd16c14b"
+    },
+    {
+      "path": "web-console/src/app/components/workbench-documents/DocumentBody.tsx",
+      "bytes": 6077,
+      "sha256": "c14221de032b59fc2a1e0f10826f9257bbb98f31bd1b18e3c4de29e03334006a"
+    },
+    {
+      "path": "web-console/src/client/geometry-rough.ts",
+      "bytes": 2533,
+      "sha256": "a3b08ab972507b8c91db89a58a1140e44f22a304a992dfca0fb3b7c8d9e71cd4"
+    },
+    {
+      "path": "web-console/src/client/geometry-source.ts",
+      "bytes": 5068,
+      "sha256": "9237d5b92531b8b8a4b3fd98521fea925aa93752b43f88c8a909f47be2bd4411"
+    },
+    {
+      "path": "web-console/src/client/preview-content.ts",
+      "bytes": 15496,
+      "sha256": "66cd1a542acd46983140d29b93d0431405a7d86d6d4eea2f6e1f2d5cc3bd634e"
+    },
+    {
+      "path": "web-console/src/client/session-files.ts",
+      "bytes": 20383,
+      "sha256": "dbc300295b0239f87ff39217c508185cfab92ba80e3c924afc143022262087d3"
+    },
+    {
+      "path": "web-console/src/locale/dictionaries/geometry.ts",
+      "bytes": 4701,
+      "sha256": "8135edd193b771d034810785192f08ed05ee0f0272b77993c055c278d12a2a20"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-code.spec.ts",
+      "bytes": 6800,
+      "sha256": "d53d9175c6f97d300edf2829aa058f33e165a81fa4daa5d4a9f6488c1a5b913b"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-latency.spec.ts",
+      "bytes": 8057,
+      "sha256": "86b693ff08de5be86a3aa8e1e7ab0808cc65263ccd6de418d744df676002fdc5"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-observation.ts",
+      "bytes": 11601,
+      "sha256": "cd382b34da8bf851158973a1111b3fceb84dd855a062b8688b2692c20dfd148a"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-performance.spec.ts",
+      "bytes": 7781,
+      "sha256": "0e081bdff1ef78aeecc448e90037931e5f41068ce4351d336b10ebe1d0f21a81"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-progressive.spec.ts",
+      "bytes": 7101,
+      "sha256": "d0293c393c3bce15a790fea27e2066fcb988d8e06b616af53abd6f56138439bf"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-review.spec.ts",
+      "bytes": 4562,
+      "sha256": "dd51b5387bd4c26890f950e7c78754ca1e53c1a9e2d7e6996a9c1c7813852b9a"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-roadmap.spec.ts",
+      "bytes": 32538,
+      "sha256": "afc300d495a56b630aa30277c881d4a327dfc6dfb47782386a4c77d9814844bf"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-sidebar.spec.ts",
+      "bytes": 16750,
+      "sha256": "c03353f51756786d79297d4f3fab5c2e038af63cd7d420ad6567176a0808d0b3"
+    },
+    {
+      "path": "web-console/test/e2e/geometry-step-latency.spec.ts",
+      "bytes": 6221,
+      "sha256": "bc7486814c0e2f6a959df3e2ff754c60cab12e070531800ca27c1cbf4029c91c"
+    },
+    {
+      "path": "web-console/test/e2e/geometry.spec.ts",
+      "bytes": 20943,
+      "sha256": "373471215b57b460b4262028d8440474e0080784b60d1fa7873ed4a805ce98b9"
+    },
+    {
+      "path": "web-console/test/fixtures/geometry.tsx",
+      "bytes": 10015,
+      "sha256": "2179e1e8f5e602a09e7a0327ae64e8e8077125732db5186bca4f0ee6dc7e825d"
+    },
+    {
+      "path": "web-console/test/fixtures/geometry/generate-large-step.py",
+      "bytes": 2859,
+      "sha256": "a02342e68bcbfc4ad2e4301f671f75c1cdb96aab5caa33a9d1a1c331f6a70be2"
+    },
+    {
+      "path": "web-console/test/geometry-adapters.test.ts",
+      "bytes": 17666,
+      "sha256": "289effc728208b93b05e1fc27cdd039e5bc0a476dda21a8243b3fe08006e10e8"
+    },
+    {
+      "path": "web-console/test/geometry-demand.test.ts",
+      "bytes": 1308,
+      "sha256": "bcd096d82f9f0a8bc6c0d1603c758bf8753b3de077619b18e2cedc75306f2457"
+    },
+    {
+      "path": "web-console/test/geometry-document.test.tsx",
+      "bytes": 4394,
+      "sha256": "150be99916d1d533a6df169bd5910203b95c16b88919c3e237a719bfd75ee4ce"
+    },
+    {
+      "path": "web-console/test/geometry-partial-data.test.ts",
+      "bytes": 1370,
+      "sha256": "2b2367fa4dc6dfa569c119d62230d0b52bbcf1602ec8b24bfae5e03748501d02"
+    },
+    {
+      "path": "web-console/test/geometry-partial-worker.test.ts",
+      "bytes": 3676,
+      "sha256": "90cd571c7fa5c7f1166cde0c538a28c59943115ec13a5f3a647047bbe4319f3b"
+    },
+    {
+      "path": "web-console/test/geometry-progressive-pose.test.ts",
+      "bytes": 1095,
+      "sha256": "55bcb27bc367307f2485a5aaaeabbd8bf34a3735bb00a681152606bb91fe72b2"
+    },
+    {
+      "path": "web-console/test/geometry-rough-owner.test.ts",
+      "bytes": 1922,
+      "sha256": "4b54678c0cc8ed2415569dac133903b2efadbf54ccfa92260d88106aa1b56545"
+    },
+    {
+      "path": "web-console/test/geometry-rough-source.test.ts",
+      "bytes": 3462,
+      "sha256": "95d03bf582383c4d357f5558eda7a098bacdd0cab568464693e78197516e3ee5"
+    },
+    {
+      "path": "web-console/test/geometry-rough-view.test.tsx",
+      "bytes": 1496,
+      "sha256": "7e3f486f766edea44810fcd7d28819fc9459d4d78c05c96fd8591268281b5b42"
+    },
+    {
+      "path": "web-console/test/geometry-rough-watch.test.ts",
+      "bytes": 1405,
+      "sha256": "257343bc41ff65be710671916b5ed63e712f2b63379263a291d36206636d78a9"
+    },
+    {
+      "path": "web-console/test/geometry-viewport.test.ts",
+      "bytes": 36950,
+      "sha256": "21235720d252cc2226a88f9cd4d89dd311f36cf9fc3a84a80f7c1b7a0b03ffaf"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/.gitattributes",
+      "bytes": 147,
+      "sha256": "15211ff6123a4531656faf45a5b7a518e16278c0f030577397cf89cd5ced2e13"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/LICENSE.md",
+      "bytes": 26526,
+      "sha256": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/README.md",
+      "bytes": 2843,
+      "sha256": "17104e6810e796ce259f169fb8fc9288fcc0d846cfcf187d197a59b9d77019e3"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/UPSTREAM.json",
+      "bytes": 620,
+      "sha256": "50f688aa945b5f6854c91dd15c55fd9bb3664dce43bab88847b8e8768d709ed5"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/dist/license.occt-import-js.txt",
+      "bytes": 26526,
+      "sha256": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/dist/license.occt.txt",
+      "bytes": 26434,
+      "sha256": "e237fa56668030e928551ddd60f05df5fe957f75eab874bbd017e085ed722e7c"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/dist/occt-import-js.js",
+      "bytes": 97149,
+      "sha256": "8daed673a72087a86ec30b91790ed3eb75ddbcbedd4d51f6a37cebae03aa335e"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/dist/occt-import-js.wasm",
+      "bytes": 7606314,
+      "sha256": "63dfd5c09b6a0fa26dd2e40dceb17092f73ab54d26467e7638b8435029c0231e"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/package.json",
+      "bytes": 367,
+      "sha256": "9dfff2ec11a71cf94c6727828404c2f2b1b1ab85f42d49a34eeb04acf5def6e5"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/rebuild.sh",
+      "bytes": 924,
+      "sha256": "822384c980089dced9d5b24280e9c25516f595e65d908436b8658bc9bd14ddc6"
+    },
+    {
+      "path": "web-console/vendor/occt-import-js/src/js-interface.cpp",
+      "bytes": 12605,
+      "sha256": "48b5b1696ca6363d336c427c1078876d47179faf7fc947c6da8c328df2e364b7"
+    },
+    {
+      "path": "web-console/vite.config.ts",
+      "bytes": 2608,
+      "sha256": "5d7ebb27000dafb385b5702b6306975c357d4d7de2c67330f9e900f678c13c43"
+    }
+  ]
+}

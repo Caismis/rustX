@@ -102,6 +102,7 @@ impl crate::agent::PreToolPolicy for AskPolicy {
     fn evaluate<'a>(
         &'a self,
         _: &'a crate::agent::PreToolView<'a>,
+        _: &'a crate::runtime::cancellation::ExecutionCancellation,
     ) -> futures_util::future::BoxFuture<
         'a,
         Result<crate::agent::PreToolDecision, crate::agent::LifecycleError>,
@@ -414,7 +415,7 @@ pub(super) async fn read_model_result(
         assert_eq!(chunk.cut, page.read_cut);
         assert_eq!(chunk.domain, page.domain);
         assert_eq!(chunk.item_offset, item_offset);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,
@@ -485,7 +486,7 @@ pub(super) async fn read_native_model_result(
         assert_eq!(chunk.cut, page.read_cut);
         assert_eq!(chunk.domain, page.domain);
         assert_eq!(chunk.item_offset, page.items[0].offset);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,
@@ -837,7 +838,7 @@ async fn refusal(connection: &AppServerConnection, id: i64, call: Method) -> Err
     data
 }
 
-fn wire_text(text: &str) -> Vec<UserInputBlock> {
+pub(super) fn wire_text(text: &str) -> Vec<UserInputBlock> {
     vec![UserInputBlock::Text(crate::message::content::TextBlock {
         text: text.into(),
     })]
@@ -849,7 +850,7 @@ fn wire_text(text: &str) -> Vec<UserInputBlock> {
 /// Captures execution ownership before admission and waits for both the native
 /// handoff and its correlated display publication. Replacement checkpoints are
 /// authoritative only for the same native attempt, never an earlier settlement.
-struct AttemptCompletion {
+pub(super) struct AttemptCompletion {
     runtime: crate::runtime::ConversationRuntime,
     after: u64,
     target: AttachmentTarget,
@@ -887,7 +888,7 @@ impl Drop for AttemptCompletionDiagnostic<'_> {
 }
 
 impl AttemptCompletion {
-    fn capture(fixture: &Fixture, target: &AttachmentTarget) -> Self {
+    pub(super) fn capture(fixture: &Fixture, target: &AttachmentTarget) -> Self {
         let runtime = fixture
             .manager
             .configuration_runtime(&target.session_id)
@@ -904,7 +905,11 @@ impl AttemptCompletion {
         }
     }
 
-    async fn observed(self, connection: &AppServerConnection, expected: &AttachmentTarget) {
+    pub(super) async fn observed(
+        self,
+        connection: &AppServerConnection,
+        expected: &AttachmentTarget,
+    ) {
         let mut diagnostic = AttemptCompletionDiagnostic {
             completion: &self,
             started: std::time::Instant::now(),
@@ -976,7 +981,7 @@ impl AttemptCompletion {
 }
 
 #[path = "child_delivery.rs"]
-mod child_delivery;
+pub(super) mod child_delivery;
 
 #[path = "live_model.rs"]
 mod live_model;

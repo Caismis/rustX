@@ -1,0 +1,271 @@
+{
+  "reviewed_head": "8bc11ff28e6ee1b0d6f09e85c4079c3d08be60b1",
+  "review_comment": "https://github.com/Caismis/rustX/pull/517#issuecomment-6758147163",
+  "ci_run": "https://github.com/Caismis/rustX/actions/runs/42743604185",
+  "image_digest": "sha256:bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7",
+  "browser": "Chrome for Testing 153.0.8010.12",
+  "playwright": "1.63.0",
+  "source_ci_artifact": {
+    "id": 13731644747,
+    "sha256": "ea552653563e1e9ad3f42cc01e015df767cf0ffbd088ad7c32b6b5a9f44202d0",
+    "matching_complete_stable_captures": 9
+  },
+  "comparison": "Opaque screenshot RGBA dimensions unchanged; differences confined to permission/model controls. No noise policy changed.",
+  "references": [
+    {
+      "file": "web-console/test/e2e/scheduler.spec.ts-snapshots/scheduler-en-header-picker-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 1057,
+      "bbox": [
+        500,
+        966,
+        1240,
+        980
+      ],
+      "sha256": "e6b0722c8c2ff3b59f88f65f93f60e031853cd22f68abfb7ebf0112c0f732af4"
+    },
+    {
+      "file": "web-console/test/e2e/scheduler.spec.ts-snapshots/scheduler-en-workbench-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 648,
+      "bbox": [
+        404,
+        966,
+        687,
+        980
+      ],
+      "sha256": "6eca3739edde771d5c99f0b4f3f7b5e297520ccdd28b024956ddc3833a40ca6f"
+    },
+    {
+      "file": "web-console/test/e2e/scheduler.spec.ts-snapshots/scheduler-zh-header-picker-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 1037,
+      "bbox": [
+        500,
+        966,
+        1240,
+        980
+      ],
+      "sha256": "c384ce08cce7e994d56400e45e2fc354c8fc07d063b3a74cc23d2ce20a8b2934"
+    },
+    {
+      "file": "web-console/test/e2e/scheduler.spec.ts-snapshots/scheduler-zh-workbench-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 766,
+      "bbox": [
+        404,
+        966,
+        687,
+        980
+      ],
+      "sha256": "dd0cd8bda83e10b7004c6a68c7614c33993ae394fbccf21facf8b30281b8d30e"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/desktop-collapsed-rail-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        365,
+        966,
+        470,
+        980
+      ],
+      "sha256": "50dab32705b87911213178ef40b24fc200bf71a4c9fd7531578d96d6ff420c49"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/desktop-expanded-dark-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 523,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "dd042c185a904f5719032c7fa451d071d5248b475803462d46ebbf7148abbc4f"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/desktop-expanded-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "9b3a6e8514a389c35f57803ad58c40743a0bd32f7e81c5dad0c3d379c5ac3c28"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/mobile-rail-dark-linux.png",
+      "size": [
+        390,
+        844
+      ],
+      "changed_pixels": 124,
+      "bbox": [
+        124,
+        810,
+        154,
+        824
+      ],
+      "sha256": "de7b6406f58833a41592e6b25d14b53f8dce3b4220031558910765a1bbe8df07"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/session-idle-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "9a21a09e0a768d0aa2cccad3d7242661413530f2843aa1f0571e88977670fa66"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/session-queued-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "3d5f65dca2ee5191766b8acaa0297873f7be64b21f570c2ab97ab4e49c33c8be"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/session-stopping-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "f2af8d4da549eb573c946a4dc4ddd9c500885c30b5ac8df3abd220b27ac93aba"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-delete-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 1789,
+      "bbox": [
+        501,
+        961,
+        613,
+        985
+      ],
+      "sha256": "7a0dc2bc70188a9cb86ec1722dde46352453a7b64e0ea0c04aefc49c4463d704"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-empty-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "a046dd74939c3c1ca12bba3e137c2f3aa694c48cdec4cc5a74d565726c32fa06"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-named-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "9a9afed026182cb57fb2577f4a816091177427833b42b7668de4fc257067e9f7"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-other-uncertain-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "8cc2972e108f6539c79a6be964ac0b84d88161390eb648d161f006ab3e472dc1"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/sidebar-preview-light-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "ed8ac866982b81ddfb2fc81a48b4f3e662eaed58cdc0f5576a3ed94d006b2005"
+    },
+    {
+      "file": "web-console/test/e2e/shell.spec.ts-snapshots/workspace-session-browser-linux.png",
+      "size": [
+        1440,
+        1000
+      ],
+      "changed_pixels": 533,
+      "bbox": [
+        505,
+        966,
+        610,
+        980
+      ],
+      "sha256": "a12e61464ba2afea662671baaba43920d12f6437663ebd5acdb50300589dcb2f"
+    }
+  ]
+}

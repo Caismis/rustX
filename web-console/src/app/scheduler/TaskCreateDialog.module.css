@@ -1,0 +1,24 @@
+.dialog { width: min(660px, 100%); gap: 20px; }
+.content { scrollbar-gutter: auto; }
+.form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.timing { min-width: 0; }
+.timing > section { margin-top: 0; }
+.timing > section > div { padding-inline: 16px; }
+.instructionLabel { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.instruction { width: 100%; min-height: 126px; padding: 16px; resize: vertical; border: 1px solid var(--dsw-alias-border-l3); border-radius: 16px; background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); font: inherit; line-height: 1.6; }
+.instruction::placeholder { color: var(--dsw-alias-label-tertiary); }
+.instruction:focus-visible { outline: 2px solid var(--dsw-alias-label-secondary); outline-offset: 2px; }
+.advancedToggle { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 3px 5px; margin-left: -5px; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; cursor: pointer; }
+.advancedToggle:hover { background: var(--dsw-alias-interactive-bg-hover); }
+.expanded { transform: rotate(180deg); }
+.advanced { display: flex; flex-direction: column; gap: 10px; }
+.row { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; padding: 8px 16px; border: 1px solid var(--dsw-alias-border-l3); border-radius: 14px; font-size: 14px; color: var(--dsw-alias-label-primary); }
+.row > span, .row > label { flex-shrink: 0; }
+.workspaceMenu { min-width: 0; max-width: 70%; }
+.workspace { max-width: 100%; min-width: 0; color: var(--dsw-alias-label-secondary); white-space: nowrap; }
+.workspace > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.workspace > svg { flex: none; }
+.name { max-width: 70%; min-width: 0; }
+.note { margin: 0; color: var(--dsw-alias-label-tertiary); font-size: 12px; line-height: 1.6; }
+.error { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 1.5; }
+@media (max-width: 480px) { .row { padding: 8px 16px; gap: 8px; } .instruction { min-height: 120px; } .name { max-width: 66%; } }

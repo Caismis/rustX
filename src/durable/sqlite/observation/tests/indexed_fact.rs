@@ -369,7 +369,10 @@ fn transcript_attempts_seek_only_selected_identities_at_the_finite_cut() {
         MessageId::new("other"),
     ];
     let cut = store.presentation_frontier().unwrap();
-    assert!(store.transcript_attempts(&selected, 0).unwrap().is_empty());
+    assert_eq!(
+        store.transcript_attempts(&selected, 0).unwrap(),
+        [] as [crate::runtime::identity::AttemptId; 0]
+    );
     unrelated_assistants(&store, 8, 1);
     let small = attempt_lookup_cost(&store.lock().unwrap(), "early", 1_000_000);
     unrelated_assistants(&store, 2048, 9);
@@ -389,12 +392,15 @@ fn transcript_attempts_seek_only_selected_identities_at_the_finite_cut() {
             .unwrap(),
         vec![AttemptId::new("selected-attempt")]
     );
-    assert!(store.transcript_attempts(&[], cut).unwrap().is_empty());
-    assert!(
+    assert_eq!(
+        store.transcript_attempts(&[], cut).unwrap(),
+        [] as [crate::runtime::identity::AttemptId; 0]
+    );
+    assert_eq!(
         store
             .transcript_attempts(&[MessageId::new("absent")], cut)
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [crate::runtime::identity::AttemptId; 0]
     );
     store
         .lock()
@@ -601,7 +607,10 @@ fn inherited_occupancy_corruption_missing_metadata_and_bootstrap_rollback_fail_c
     // SQLite aborts after earlier canonical and Surface writes have staged.
     store.lock().unwrap().execute_batch("CREATE TRIGGER reject_bootstrap BEFORE INSERT ON bootstrap_identity BEGIN SELECT RAISE(ABORT,'scripted bootstrap failure'); END;").unwrap();
     assert!(store.initialize_lineage(&seed).is_err());
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(store.load_inherited_occupancy().unwrap(), None);
     assert_eq!(
         store
@@ -680,7 +689,10 @@ fn inherited_occupancy_rejects_invalid_seed_and_missing_durable_shape() {
     store.lock().unwrap().execute_batch("CREATE TRIGGER reject_marker BEFORE UPDATE OF bootstrap_initialized ON rustx_store BEGIN SELECT RAISE(ABORT,'scripted marker failure'); END;").unwrap();
     assert!(store.initialize_lineage(&seed).is_err());
     assert_eq!(store.load_inherited_occupancy().unwrap(), None);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(
         store
             .lock()
@@ -985,12 +997,15 @@ fn inherited_provenance_identity_queries_and_real_window_cost_are_constant() {
             store.inherited_responses_for(&different).unwrap(),
             seed.completed_responses()[..2]
         );
-        assert!(store.inherited_turns_for(&[]).unwrap().is_empty());
-        assert!(
+        assert_eq!(
+            store.inherited_turns_for(&[]).unwrap(),
+            [] as [crate::durable::reading::TurnReadingProvenance; 0]
+        );
+        assert_eq!(
             store
                 .inherited_responses_for(&[MessageId::new("summary-0")])
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::durable::response::CompletedResponseProvenance; 0]
         );
 
         for sql in [provenance::TURN_LOOKUP, provenance::RESPONSE_LOOKUP] {
@@ -1052,7 +1067,10 @@ fn inherited_provenance_identity_queries_and_real_window_cost_are_constant() {
         } else {
             expected = Some(window);
         }
-        assert!(store.transcript_attempts(&wanted, 0).unwrap().is_empty());
+        assert_eq!(
+            store.transcript_attempts(&wanted, 0).unwrap(),
+            [] as [crate::runtime::identity::AttemptId; 0]
+        );
         assert_eq!(store.presentation_frontier().unwrap(), 0);
         println!(
             "{count} inherited Turns and Responses: actual Turn {turn_cost}, Response {response_cost}, entire window {window_cost} VM instructions"
@@ -1391,11 +1409,11 @@ fn inherited_window_membership_is_independent_of_local_finite_execution_cuts() {
         )
         .unwrap();
     assert_eq!(window(), before);
-    assert!(
+    assert_eq!(
         store
             .transcript_attempts(&[MessageId::new("local-answer")], cut.journal)
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [crate::runtime::identity::AttemptId; 0]
     );
     assert_eq!(
         store
@@ -1445,11 +1463,11 @@ fn inherited_window_membership_is_independent_of_local_finite_execution_cuts() {
         }
     }
 
-    assert!(
+    assert_eq!(
         store
             .inherited_turns_for(&[MessageId::new("local-answer")])
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [crate::durable::reading::TurnReadingProvenance; 0]
     );
 }
 
@@ -2396,7 +2414,7 @@ fn historical_fact_cuts_reuse_plans_without_changing_rows_or_scan_work() {
             assert_eq!(results, controls);
         } else {
             assert!(statement.get_status(StatementStatus::RePrepare) > 0);
-            assert!(results[0].is_empty());
+            assert_eq!(results[0], [] as [std::string::String; 0]);
             assert_eq!(results[1].len(), 1);
             assert_eq!(results[2].len(), 1);
             assert_ne!(results[1], results[2]);

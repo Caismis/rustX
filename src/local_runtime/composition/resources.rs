@@ -83,7 +83,7 @@ impl LocalRuntimeResourceLoader {
                     subagent_catalog: main_catalog,
                     ..self.native_resources.clone()
                 },
-                config.native_tools.to_policies(),
+                crate::tools::NativeToolPolicies::default(),
             )
             .map_err(|error| {
                 RuntimeResourceLoadError::new(format!(
@@ -291,8 +291,7 @@ pub(super) fn validate_subagent_catalog(
     let skills = crate::skills::SkillSnapshot::new(candidate.skill_packages().to_vec());
     let selected = candidate
         .resolved_profile()
-        .map(|profile| profile.agents.clone())
-        .unwrap_or_default();
+        .map_or_default(|profile| profile.agents.clone());
     let admitted = prepared.subagent_catalog().selected_definitions(&selected);
     SubagentResolver::validate_catalog(
         &admitted,
@@ -424,6 +423,7 @@ mod tests {
                     inherit_project_instructions: false,
                     extensions: crate::extensions::NativeAgentExtensions::none(),
                     workflows: std::collections::BTreeSet::default(),
+                    permissions: None,
                 },
                 PathBuf::from("instructions.md"),
             )

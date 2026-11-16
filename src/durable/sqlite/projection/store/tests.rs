@@ -64,10 +64,16 @@ fn compaction_resource_paging_never_observes_future_lifecycle_or_ledger_growth()
         events.rows[0].1.event,
         RuntimeEvent::AttemptStarted { .. }
     ));
-    assert!(resources.events(frozen.journal).unwrap().rows.is_empty());
+    assert_eq!(
+        resources.events(frozen.journal).unwrap().rows,
+        [] as [(u64, crate::events::types::RuntimeEventEnvelope); 0]
+    );
     let originals = resources.messages(LedgerFrontier(0)).unwrap();
     assert_eq!(originals.rows[0].1.id(), &MessageId::new("before"));
-    assert!(resources.messages(frozen.ledger).unwrap().rows.is_empty());
+    assert_eq!(
+        resources.messages(frozen.ledger).unwrap().rows,
+        [] as [(u64, crate::message::types::MessageBlock); 0]
+    );
     assert!(resources.originals(&[MessageId::new("after")]).is_err());
 }
 
@@ -103,7 +109,10 @@ fn compaction_byte_pages_resume_without_decoding_the_next_record() {
             "byte lookahead never hydrates the next page's record"
         );
     }
-    assert!(resources.messages(after).unwrap().rows.is_empty());
+    assert_eq!(
+        resources.messages(after).unwrap().rows,
+        [] as [(u64, crate::message::types::MessageBlock); 0]
+    );
 }
 
 #[test]
@@ -171,7 +180,10 @@ fn compaction_tool_lifecycle_at_cut_never_reads_later_completion() {
         page.rows[0].1.event,
         RuntimeEvent::ToolExecutionStarted { .. }
     ));
-    assert!(resources.events(frozen.journal).unwrap().rows.is_empty());
+    assert_eq!(
+        resources.events(frozen.journal).unwrap().rows,
+        [] as [(u64, crate::events::types::RuntimeEventEnvelope); 0]
+    );
     assert!(matches!(
         store.read_events(Some(frozen.journal.0), 1).unwrap().events[0].event,
         RuntimeEvent::ToolExecutionCompleted { .. }

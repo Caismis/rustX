@@ -29,6 +29,8 @@ impl<'de> Deserialize<'de> for WorkflowFileDocument {
             description: String,
             #[serde(default = "default_timeout")]
             timeout_ms: u64,
+            #[serde(default, skip_serializing_if = "Option::is_none")]
+            permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
             block: WorkflowBlock,
             #[serde(default)]
             editor: Option<WorkflowEditorMetadata>,
@@ -41,6 +43,7 @@ impl<'de> Deserialize<'de> for WorkflowFileDocument {
             definition: WorkflowDefinition {
                 description: file.description,
                 timeout_ms: file.timeout_ms,
+                permissions: file.permissions,
                 block: file.block,
             },
             editor: file.editor,
@@ -105,18 +108,18 @@ impl WorkflowFileDocument {
                 "Workflow file cannot be serialized within 16 MiB",
             )
         };
-        let mut value = serde_yaml::to_value(self).map_err(|_| failure())?;
+        let mut value = serde_yaml_ng::to_value(self).map_err(|_| failure())?;
         if let Some(block) = value.get_mut("block") {
             omit_ordinary_ports(block);
         }
         let mut encoded =
             crate::bounded_file::LimitedWriter::new(Vec::new(), MAX_WORKFLOW_FILE_BYTES);
-        serde_yaml::to_writer(&mut encoded, &value).map_err(|_| failure())?;
+        serde_yaml_ng::to_writer(&mut encoded, &value).map_err(|_| failure())?;
         let bytes = encoded.inner;
         if bytes.len() > MAX_WORKFLOW_FILE_BYTES {
             return Err(failure());
         }
-        let reread: Self = serde_yaml::from_slice(&bytes).map_err(|_| failure())?;
+        let reread: Self = serde_yaml_ng::from_slice(&bytes).map_err(|_| failure())?;
         if reread != *self {
             return Err(failure());
         }
@@ -135,8 +138,8 @@ impl WorkflowFileDocument {
     }
 }
 
-fn omit_ordinary_ports(block: &mut serde_yaml::Value) {
-    use serde_yaml::Value;
+fn omit_ordinary_ports(block: &mut serde_yaml_ng::Value) {
+    use serde_yaml_ng::Value;
     if let Some(Value::Sequence(edges)) = block.get_mut("edges") {
         for edge in edges {
             if let Value::Mapping(edge) = edge

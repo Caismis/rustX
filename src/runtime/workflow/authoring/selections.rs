@@ -3,7 +3,7 @@
 use crate::capabilities::selection::ExactToolSelector;
 use crate::model::catalog::{ModelProfileId, ModelRef};
 use crate::model::invocation::RequestParams;
-use crate::model::session::AuxiliaryModelPolicy;
+use crate::model::session::DirectModelPolicy;
 use crate::runtime::workflow::WorkflowCompileError;
 use serde::{Deserialize, Serialize};
 
@@ -26,9 +26,9 @@ pub enum WorkflowModelPolicy {
 impl WorkflowModelPolicy {
     pub(in crate::runtime::workflow) fn lower(
         &self,
-    ) -> Result<AuxiliaryModelPolicy, WorkflowCompileError> {
+    ) -> Result<DirectModelPolicy, WorkflowCompileError> {
         match self {
-            Self::Session => Ok(AuxiliaryModelPolicy::Session),
+            Self::Session => Ok(DirectModelPolicy::Session),
             Self::Explicit {
                 model,
                 profile,
@@ -51,7 +51,7 @@ impl WorkflowModelPolicy {
                         )
                         .at("profile")
                     })?;
-                Ok(AuxiliaryModelPolicy::Explicit {
+                Ok(DirectModelPolicy::Explicit {
                     model,
                     profile,
                     request_params: request_params.clone(),
@@ -62,11 +62,11 @@ impl WorkflowModelPolicy {
     }
 }
 
-impl From<AuxiliaryModelPolicy> for WorkflowModelPolicy {
-    fn from(policy: AuxiliaryModelPolicy) -> Self {
+impl From<DirectModelPolicy> for WorkflowModelPolicy {
+    fn from(policy: DirectModelPolicy) -> Self {
         match policy {
-            AuxiliaryModelPolicy::Session => Self::Session,
-            AuxiliaryModelPolicy::Explicit {
+            DirectModelPolicy::Session => Self::Session,
+            DirectModelPolicy::Explicit {
                 model,
                 profile,
                 request_params,

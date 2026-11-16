@@ -120,7 +120,7 @@ async fn registered_native_ordinals_not_wake_or_registration_order_choose_commit
     let beta = accepted(beta).await;
     assert_eq!(beta.subagent_id, beta_id);
     finish(&plane, beta_child, &beta_id).await;
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
 }
 
 #[tokio::test]
@@ -144,7 +144,7 @@ async fn cancelling_registered_head_removes_it_and_advances_successor() {
     finish(&plane, active_child, &active.subagent_id).await;
     let beta = accepted(beta).await;
     finish(&plane, beta_child, &beta.subagent_id).await;
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
 }
 
 #[tokio::test]
@@ -172,7 +172,7 @@ async fn cancelling_non_head_preserves_remaining_native_order() {
     finish(&plane, alpha_child, &alpha.subagent_id).await;
     let gamma = accepted(gamma).await;
     finish(&plane, gamma_child, &gamma.subagent_id).await;
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
 }
 
 #[tokio::test]
@@ -201,7 +201,7 @@ async fn release_after_registration_before_changed_await_cannot_lose_wakeup() {
     release.send(()).expect("enter changed await after release");
     let alpha = accepted(alpha).await;
     finish(&plane, alpha_child, &alpha.subagent_id).await;
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
     // Other side of the frontier: release preceded registration entirely.
     let (immediate, child) = prepared(&plane, "immediate").await;
     let SubagentStartOutcome::Accepted(immediate) = plane
@@ -212,7 +212,7 @@ async fn release_after_registration_before_changed_await_cannot_lose_wakeup() {
     else {
         panic!("not cancelled")
     };
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
     finish(&plane, child, &immediate.subagent_id).await;
 }
 
@@ -237,7 +237,7 @@ async fn abandoned_waiter_rolls_back_before_native_task_completion() {
         .await
         .expect("native task conclusively rolled back");
     assert_retired(&plane, &child, &id);
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
     finish(&plane, active_child, &active.subagent_id).await;
 }
 
@@ -253,7 +253,7 @@ async fn zero_capacity_rejects_without_registering_waiter() {
             .await,
         Err(SubagentStartError::CapacityExceeded { max: 0 })
     ));
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
     assert_retired(&plane, &child, &id);
 }
 
@@ -290,7 +290,7 @@ async fn cancelling_eligible_head_wakes_successor_without_another_capacity_relea
     // notify beta, which was already sleeping after its denied recheck.
     let beta = accepted(beta).await;
     finish(&plane, beta_child, &beta.subagent_id).await;
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
 }
 
 #[tokio::test]
@@ -313,7 +313,7 @@ async fn native_drain_cancels_registered_staging_and_owned_children() {
         SubagentStartOutcome::RolledBack
     ));
     assert_retired(&plane, &child, &id);
-    assert!(order(&plane).is_empty());
+    assert_eq!(order(&plane), [] as [u64; 0]);
     assert!(matches!(
         active_child.read_frame().await,
         ParentFrame::Cancel { .. }

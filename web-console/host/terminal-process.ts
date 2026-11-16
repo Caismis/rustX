@@ -2,7 +2,7 @@
  * Only ALL_CHILDREN_REAPED/NO_OWNERSHIP followed by outer exit settles a unit.
  * The PTY's direct exit alone is deliberately insufficient. */
 import { createServer, type Socket } from 'node:net';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn, type IPty } from 'node-pty';
@@ -63,14 +63,17 @@ export function terminalProcess(binary: string, shell: string, cwd: string, outp
   server.on('error', error => {
     ready.reject(error);
     // A listen failure precedes spawn and owns no process capacity.
-    if (pty) done.reject(error); else done.resolve();
-    rmSync(directory, { recursive: true, force: true });
+    if (pty) done.reject(error);
+    else { done.resolve(); rmSync(directory, { recursive: true, force: true }); }
   });
   server.listen(path, () => {
     try {
       const environment = { ...desktopEnvironment(process.env), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+      // The process owner retains this private snapshot until the outer exits.
+      const snapshot = join(directory, 'environment.json');
+      writeFileSync(snapshot, JSON.stringify(Object.entries(environment)), { flag: 'wx', mode: 0o600 });
       pty = spawn(binary, ['outer', shell, '-i'], { cwd, cols: 80, rows: 24, name: 'xterm-256color', env: {
-        RUSTX_INTERACTIVE_CONTROL: path, RUSTX_COMMAND_ENVIRONMENT: JSON.stringify(Object.entries(environment)),
+        RUSTX_INTERACTIVE_CONTROL: path, RUSTX_COMMAND_ENVIRONMENT_FILE: snapshot,
       } });
       const data = pty.onData(output);
       pty.onExit(({ exitCode, signal }) => {

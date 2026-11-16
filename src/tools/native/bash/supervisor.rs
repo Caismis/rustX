@@ -1405,13 +1405,17 @@ mod anchor_reaping_tests {
         command: &str,
         barrier_dir: &Path,
         anchor_pid_file: &Path,
-    ) -> (std::process::Child, UnixStream) {
+    ) -> (std::process::Child, UnixStream, tempfile::NamedTempFile) {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
+        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
+            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
+        )
+        .expect("environment snapshot");
         let child = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-                r#"[["PATH","/usr/bin:/bin"]]"#,
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                environment_snapshot.path(),
             )
             .env(COMMAND_ENV, command)
             .env(ANCHOR_PID_FILE_ENV, anchor_pid_file)
@@ -1426,7 +1430,7 @@ mod anchor_reaping_tests {
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn the outer supervisor");
-        (child, stream_a)
+        (child, stream_a, environment_snapshot)
     }
 
     /// Spawns the real supervisor for one ordinary invocation: no injected
@@ -1435,13 +1439,17 @@ mod anchor_reaping_tests {
     fn spawn_invocation(
         command: &str,
         anchor_pid_file: &Path,
-    ) -> (std::process::Child, UnixStream) {
+    ) -> (std::process::Child, UnixStream, tempfile::NamedTempFile) {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
+        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
+            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
+        )
+        .expect("environment snapshot");
         let child = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-                r#"[["PATH","/usr/bin:/bin"]]"#,
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                environment_snapshot.path(),
             )
             .env(COMMAND_ENV, command)
             .env(ANCHOR_PID_FILE_ENV, anchor_pid_file)
@@ -1450,7 +1458,7 @@ mod anchor_reaping_tests {
             .stderr(Stdio::null())
             .spawn()
             .expect("spawn the outer supervisor");
-        (child, stream_a)
+        (child, stream_a, environment_snapshot)
     }
 
     /// Contains the invocation and fails.
@@ -1659,7 +1667,8 @@ mod anchor_reaping_tests {
             "sleep 30 >/dev/null 2>&1 & echo $! > {0}.pending; mv {0}.pending {0}; exit 0",
             sleep_pid_file.display()
         );
-        let (mut outer, mut stream) = spawn_outer(&command, &barrier_dir, &anchor_pid_file);
+        let (mut outer, mut stream, _environment_snapshot) =
+            spawn_outer(&command, &barrier_dir, &anchor_pid_file);
         nix::fcntl::fcntl(
             &stream,
             nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
@@ -1768,11 +1777,15 @@ mod anchor_reaping_tests {
             sleep_pid_file.display()
         );
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
+        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
+            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
+        )
+        .expect("environment snapshot");
         let mut outer = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-                r#"[["PATH","/usr/bin:/bin"]]"#,
+                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                environment_snapshot.path(),
             )
             .env(COMMAND_ENV, &command)
             .env(ANCHOR_PID_FILE_ENV, &anchor_pid_file)
@@ -1931,7 +1944,8 @@ mod anchor_reaping_tests {
         // fixture can never settle by finishing on its own within any test
         // deadline, so only the invocation's own TERM sequence can settle
         // it.
-        let (mut outer, mut stream) = spawn_invocation("exec sleep 600", &anchor_pid_file);
+        let (mut outer, mut stream, _environment_snapshot) =
+            spawn_invocation("exec sleep 600", &anchor_pid_file);
         nix::fcntl::fcntl(
             &stream,
             nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),

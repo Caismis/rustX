@@ -26,7 +26,8 @@ use super::{
 use crate::durable::store::canonical::CanonicalToolResultOwner;
 use crate::events::types::{AttemptFailure, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{
-    AttemptId, ConversationId, EventId, MessageId, SubagentId, ToolCallId, ToolExecutionId, ToolId,
+    AttemptId, ConversationId, EventId, MessageId, RequestId, SubagentId, ToolCallId,
+    ToolExecutionId, ToolId,
 };
 use crate::runtime::types::RuntimeError;
 
@@ -69,6 +70,87 @@ pub struct RecoveryFrontier {
     pub(super) saw_any_attempt: bool,
     pub(super) unanswered_adopted_turn: Option<(MessageId, Option<crate::goal::GoalRef>)>,
     pub(super) unadopted_goal_round: Option<(MessageId, crate::goal::GoalRef)>,
+    /// Latest primary request and the Journal row that committed it.
+    /// Compact private keys keep settled frontiers in the store root page.
+    #[serde(rename = "primary", skip_serializing_if = "Option::is_none")]
+    pub(super) latest_primary_request: Option<PrimaryRequestPointer>,
+    /// Exact unresolved adoption task. Latest Human wins; the first delegated
+    /// input is kept only while no task has been selected. Notice-only batches
+    /// do not erase it. Cleared only when the obligation is consumed.
+    #[serde(rename = "task", skip_serializing_if = "Option::is_none")]
+    pub(super) continuation_task: Option<ContinuationTaskPointer>,
+}
+
+/// Exact request identity and the Journal row that committed its start.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct PrimaryRequestPointer {
+    #[serde(rename = "id")]
+    pub(super) request_id: RequestId,
+    #[serde(rename = "at")]
+    pub(super) source_sequence: u64,
+}
+
+/// Which canonical provenance established the current task winner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(super) enum TaskProvenanceKind {
+    Human,
+    Delegated,
+}
+
+/// Journal row and canonical identity of the unresolved adoption task.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct ContinuationTaskPointer {
+    #[serde(rename = "id")]
+    pub(super) message_id: MessageId,
+    pub(super) kind: TaskProvenanceKind,
+    /// Sequence of the `InboundTurnAdopted` fact that established this winner.
+    #[serde(rename = "at")]
+    pub(super) source_sequence: u64,
+}
+
+pub(super) fn message_task_kind(
+    message: &crate::message::types::MessageBlock,
+) -> Option<TaskProvenanceKind> {
+    use crate::message::types::{InboundKind, MessageBlock, UserSource};
+    match message {
+        MessageBlock::User(message) if message.kind == InboundKind::Message => match message.source
+        {
+            UserSource::Human => Some(TaskProvenanceKind::Human),
+            UserSource::Agent { .. } => Some(TaskProvenanceKind::Delegated),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Latest Human in one batch, otherwise its first delegated input.
+fn batch_task(
+    adopted: &[crate::message::types::MessageBlock],
+) -> Option<(MessageId, TaskProvenanceKind)> {
+    adopted
+        .iter()
+        .rev()
+        .find_map(|message| {
+            (message_task_kind(message) == Some(TaskProvenanceKind::Human)).then(|| {
+                (
+                    crate::conversation::message_id_of(message),
+                    TaskProvenanceKind::Human,
+                )
+            })
+        })
+        .or_else(|| {
+            adopted.iter().find_map(|message| {
+                (message_task_kind(message) == Some(TaskProvenanceKind::Delegated)).then(|| {
+                    (
+                        crate::conversation::message_id_of(message),
+                        TaskProvenanceKind::Delegated,
+                    )
+                })
+            })
+        })
 }
 
 impl RecoveryFrontier {
@@ -82,6 +164,29 @@ impl RecoveryFrontier {
     #[must_use]
     pub fn through_event(&self) -> Option<&EventId> {
         self.through_event.as_ref()
+    }
+
+    /// Folds one unresolved adoption batch into the constant-size task winner.
+    ///
+    /// A Human in this batch replaces any earlier winner. A delegated input is
+    /// recorded only while no task has been selected, and only the first such
+    /// input. A notice-only batch leaves the current winner unchanged.
+    pub fn reduce_adoption_task(
+        &mut self,
+        source_sequence: u64,
+        adopted: &[crate::message::types::MessageBlock],
+    ) {
+        let Some((message_id, kind)) = batch_task(adopted) else {
+            return;
+        };
+        if kind == TaskProvenanceKind::Delegated && self.continuation_task.is_some() {
+            return;
+        }
+        self.continuation_task = Some(ContinuationTaskPointer {
+            message_id,
+            kind,
+            source_sequence,
+        });
     }
 
     /// Encodes the frontier for its durable column.
@@ -302,6 +407,7 @@ impl RecoveryFrontier {
                 // request start would strand the turn forever.
                 if Self::decides_the_turn(&envelope.event) {
                     self.unanswered_adopted_turn = None;
+                    self.continuation_task = None;
                 }
                 // A durable terminal is absorbing: the attempt leaves the
                 // unresolved working set and never returns to it. Its tool
@@ -316,11 +422,17 @@ impl RecoveryFrontier {
                 request_id,
                 ..
             } => {
+                // Survives attempt settlement. Only a newer primary start replaces it.
+                self.latest_primary_request = Some(PrimaryRequestPointer {
+                    request_id: request_id.clone(),
+                    source_sequence: envelope.sequence,
+                });
                 // The adopted turn was carried to the provider. From here the
                 // external-outcome plane owns it: whether it is answered,
                 // indeterminate, or known-and-unsettled is the attempt
                 // classification's question, never the obligation's.
                 self.unanswered_adopted_turn = None;
+                self.continuation_task = None;
                 if let Some(attempt) = self.current_attempt_mut(conversation, envelope) {
                     // The newest start is the in-flight request. The
                     // transition is monotonic: a started request can never

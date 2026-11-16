@@ -4,6 +4,8 @@ Detailed performance captures are stored in this [Google Drive folder](https://d
 
 The [manifest](manifest.json) maps each original repository path to its Drive file, archive member, byte length, SHA-256 and original Git blob ID. It also records the SHA-256 and byte length of every downloadable bundle. Names and original paths inside bundles are preserved. Links in older reports now open the containing Drive bundle; they do not claim that the original capture was remeasured or regenerated.
 
+The relocation in this file is the 2026-11-12 forward deletion. A later, explicitly approved PR-only history rewrite of `codex/pi-durable-cost-model` has been published. Its chronology is under Git space accounting; measured scope, backups, migration, limits, and validation are in [history-cleanup.md](history-cleanup.md). `manifest.json` remains the original relocation record and must stay byte-for-byte unchanged.
+
 ## Scope
 
 The source is commit `c5617cd939bfaee2bdb777fd32c7ab7456df5908`, including the PR's later fixed-cost, protocol and workspace changes. The 2026-11-12 relocation covers:
@@ -36,13 +38,15 @@ The relocation was verified by packing and hashing every source member, uploadin
 
 These are ordinary files in the connected user's Drive. No public or organization-wide sharing was enabled by this task. Readers need the folder owner's Drive permission; the repository does not imply that a private Drive link is publicly accessible. Keep the folder and manifest together, and download any needed evidence before changing its retention or permissions.
 
-The repository retains conclusions, adverse results, workload/build identities and the original measurement caveats. A storage relocation is not a new performance result. Pi, pi-rust and DeepSeek were not rebuilt or benchmarked for this change.
+The repository retains conclusions, adverse results, workload/build identities and the original measurement caveats. A storage relocation is not a new performance result. Pi, pi-rust and DeepSeek were not rebuilt or benchmarked for this relocation or for the later history rewrite.
 
 ## Git space accounting
 
 This is a forward commit. It reduces the current tracked checkout by approximately 1.35 GiB, before the small manifest/documentation additions, and avoids growing subsequent revisions with new raw captures. The original tree contained 1,590,572,540 tracked bytes; the relocated compressed files account for approximately 91% of that total.
 
-Previously committed blobs remain reachable in Git history. A normal deletion commit does not shrink an existing object database or a full-history clone. No history rewrite, force-push, reflog expiration or garbage collection is performed here. Partial clones and new checkouts can benefit from the smaller current tree; shrinking historical clone/pack size requires a separately coordinated history operation.
+The 2026-11-12 relocation was that forward deletion only. After that deletion commit, previously committed blobs stayed reachable in history. The deletion did not shrink an existing object database or a full-history clone, and it did not rewrite history, force-push, expire reflogs, or garbage-collect. Partial clones and new checkouts can benefit from the smaller current tree. `manifest.json` still records those facts in its original `git_history` field. That field describes the relocation, not the later rewrite, and the manifest must stay byte-for-byte immutable.
+
+The coordinated history operation has since been published for this PR branch only. After explicit approval, `refs/heads/codex/pi-durable-cost-model` was updated with `--force-with-lease` from `c7b2338ae80f34a7e042da17cd0ca9031bc09b8d` to `bef6c1963fc8a6301c1c3a1bf789bc681e72df7f`. The full tree of that update remained `669763929f57155eb32ded4c379dda70e4602708`. The relocation source commit `c5617cd939bfaee2bdb777fd32c7ab7456df5908` remains the identity stored in `manifest.json`; the rewritten history maps it in [commit-map.txt](commit-map.txt). Later commits can advance the branch. Fetch the current PR head and confirm that published rewrite tip is its ancestor; do not merge old PR ancestry back. Measured scope, backups, migration, and validation are in [history-cleanup.md](history-cleanup.md). The publication does not instantly shrink GitHub server storage, and it does not prune other clones, forks, diagnostic branches, or worktrees. Those copies can still retain the old objects.
 
 Future detailed captures should be written outside the repository and uploaded with a verified manifest. Commit only the report and reviewable summary/identity material. `benchmarks/runtime/pack-evidence.py` can still prepare and verify raw archives; its output belongs in external storage.
 

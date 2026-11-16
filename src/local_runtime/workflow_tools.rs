@@ -264,10 +264,10 @@ fn capture(
     let mut plans = Vec::new();
     for (id, definition) in &mcp.definitions {
         let binding = definition.as_ref().ok().and_then(|definition| {
-            super::config::resolve_mcp_bindings(
-                &BTreeMap::from([(id.clone(), definition.clone().resolve())]),
-                &BTreeMap::new(),
-            )
+            super::config::resolve_mcp_bindings(&BTreeMap::from([(
+                id.clone(),
+                definition.clone().resolve(),
+            )]))
             .ok()?
             .remove(id)
         });
