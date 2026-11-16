@@ -252,6 +252,11 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await expect(page.getByLabel('Access token')).toBeHidden();
     await expect(goal).toContainText('Paused Goal'); await expect(goal).toContainText('1/3 rounds');
     expect(await revision()).toBe(settled);
+    // The authoritative list survives reconnection; an unmounted disclosure
+    // is presentation-local and may return collapsed, just as after reload.
+    const restoredTodo = todo.getByRole('button');
+    await expect(restoredTodo).toContainText(/1 in progress\s·\s1 pending/);
+    if (await restoredTodo.getAttribute('aria-expanded') === 'false') await restoredTodo.click();
     await expect(todo.locator('li')).toHaveCount(2);
 
     // Rebuild the same loaded anchors and disclosure state on the new transport.

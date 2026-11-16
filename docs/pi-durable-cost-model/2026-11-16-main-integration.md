@@ -137,3 +137,24 @@ test retains its immediate weak-owner assertion; no sleep or relaxed settlement
 condition substitutes for physical release.
 The complete manager suite passes 480 tests (two intentional ignores), with
 both Clippy configurations, formatting and strict rustdoc passing as well.
+
+Browser shard 3 exposed an obsolete full-transcript-only assertion in the child
+capabilities scenario. Its archived socket trace contains the completed original
+parent Attempt in a typed transcript patch: folding checkpoint 53 and all 17
+contiguous events through cursor 70 recovers the exact completed membership.
+The assertion now folds the current checkpoint's actual registration with cursor
+continuity checks before checking the original Attempt and visible disclosure.
+No rendering timeout, native outcome or production protocol behavior changes.
+
+The composer scenario also assumed an expanded Todo disclosure survived a
+transport replacement. Local reproduction matched remote shard 2. It now first
+checks the restored progress summary, opens the presentation-local disclosure
+if needed, and retains the exact two-item assertion. Both browser regressions
+pass together in the repository's pinned Chromium container.
+
+A concurrent local full-library run passed 6,233 tests but hit the existing
+10-second child-frontier watchdog in two managed-output process-death fixtures.
+The same complete retirement group passed all nine tests in 0.44 seconds when
+isolated. No production or watchdog changes were made on this evidence alone;
+the full-library follow-up runs without concurrent Rust compilation. The failed
+sample is retained separately from successful validation.
