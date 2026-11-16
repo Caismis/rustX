@@ -31,10 +31,13 @@ history; they do not change runtime/Auxiliary deadlines.
 
 ## Environment and verification
 
-The current local environment is WSL Linux x86_64 with Rust 1.98.1, Node
-24.21.0, pnpm 11.13.1 and the locked provider emulator. Real-browser checks use
-the immutable Playwright 1.63.0 image filesystem and the repository comparators.
-Build matching native executables before running client integration tests.
+Current local checks use a Linux x86_64 container with Rust 1.100.0 / MSRV
+1.100, Node 24.22.0, pnpm 11.13.1 and the locked provider emulator. Focused
+real-browser reference checks use the immutable Playwright 1.63.0 image
+filesystem and repository comparators. Build production client companions with
+`cargo build --bins --locked`. Rust process-test preparation uses
+`test-support/prepare_native_tests.py`, matching Cargo flags and emitted artifact
+identities for the exact checkout, target, profile and feature set.
 
 App Server v81 and Runtime Client v88 carry the read-only committed-checkpoint
 inspection addition. SQLite remains 90 and Child IPC remains v40. Rust owns
@@ -54,12 +57,13 @@ merge exactly, and all ten references passed the unchanged comparator in the
 composed rerun. `evidence/stack-visual-deltas.json` records bounds and hashes.
 No screenshot-update mode or comparison-policy changes were used.
 
-The complete TUI suite passes 1,370 cases with one platform skip, including the
+The integrated full TUI suite passes 1,372 cases with one platform skip, including the
 actual native multi-call/reconnect case. The large-history gate has a separate
 five-minute preparation budget; subsequent generation assertions and native
 execution deadlines retain their existing limits.
 
-Required checks are formatting, strict all-target/all-feature Clippy, native
+Required checks are formatting, strict workspace/all-target Clippy with both
+default and all features, strict rustdoc and doctests, native
 Trace and protocol contracts, real multi-call HTTP generation, complete Web/TUI
 suites, all TypeScript projects, i18n, source and artifact provenance, dependency
 notices, the production Web bundle and the full browser suite. The repository
@@ -69,14 +73,18 @@ local results and the final CI run; unfinished checks are not passes.
 
 No paid live-provider quality, latency or billed-cost evaluation is included.
 
-Current local checks also pass all four TypeScript projects, formatting, strict
-all-target/all-feature Clippy, 82 native Trace cases, all 31 contracts, generated
-schema/types, production Web build, i18n, source/artifact provenance, notices and
-62 provider-emulator cases. HTTP Conformance accounts for 45 distinct passing
-cases (four fixture/measurement ignores): one provider bootstrap raced the
-initial virtual-environment installation, then passed after `uv sync --frozen`.
+Rust 1.100 integration checks pass formatting, both strict Clippy feature
+selections, strict rustdoc, regenerated schema/types and the protocol, TUI and
+Web TypeScript projects. All 15 compaction presentation/receipt and large-document
+cases pass locally, plus the real multi-call/reconnect scenario. The parent
+layer verifies the unchanged generation/activation kernel and HTTP behavior.
+Exact suite results and final-head FULL CI are recorded in the PR description.
 
-The full local Web run passed 4,915 cases, with ten failures under concurrent
+The earlier focused-verification environment passed 82 native Trace cases, 31
+contracts, production Web build, i18n, provenance/notices, 62 provider-emulator
+cases and 45 HTTP Conformance cases (four fixture/measurement ignores). These
+measurements describe that environment rather than the current suite inventory.
+Its full local Web run passed 4,915 cases, with ten failures under concurrent
 compilation/client/browser load and four platform skips. All 333 cases in the
 eight affected files then passed with unchanged five-second test limits. This
 accounts for all 4,925 distinct applicable cases; the final FULL CI run remains
