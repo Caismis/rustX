@@ -26,6 +26,8 @@ pub enum TraceInspectionContent {
     Lifecycle,
     Compaction {
         page: TraceInspectionCompactionCalls,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        checkpoint: Option<Box<crate::observation::head::RuntimeClientProjectionHeadView>>,
     },
     Tool {
         definition: TraceToolDefinitionSelection,
@@ -191,6 +193,7 @@ impl super::TraceProjection<'_> {
                 native_id: Some(_), ..
             } => TraceInspectionContent::Compaction {
                 page: self.inspection_compaction_calls(anchor.sequence, 0, 4)?,
+                checkpoint: self.inspection_compaction_checkpoint(anchor.sequence)?,
             },
             TraceFactData::CompactionStart {
                 native_id: None, ..
@@ -232,6 +235,60 @@ impl super::TraceProjection<'_> {
                 "Trace anchor has no bounded Compaction identity".into(),
             )),
         }
+    }
+
+    /// Read one exact committed activation's finite immutable display header.
+    /// Ready/status facts cannot manufacture this relation or expose a future commit.
+    fn inspection_compaction_checkpoint(
+        &self,
+        sequence: u64,
+    ) -> Result<
+        Option<Box<crate::observation::head::RuntimeClientProjectionHeadView>>,
+        ConversationStoreError,
+    > {
+        use crate::durable::presentation::{FactQuery, FactScope};
+        use crate::events::types::RuntimeEvent;
+        let operation = self.compaction_operation(sequence)?;
+        let completion = self
+            .store
+            .read_presentation_events(&FactQuery {
+                scope: FactScope::Compaction(operation.clone()),
+                kinds: vec!["compaction_completed"],
+                before: None,
+                after: sequence,
+                ascending: true,
+                through: self.cut()?.read.journal,
+                limit: 1,
+            })?
+            .pop();
+        let Some(completion) = completion else {
+            return Ok(None);
+        };
+        let RuntimeEvent::CompactionCompleted {
+            operation_id,
+            checkpoint_id,
+            activation_id,
+            ..
+        } = completion.event
+        else {
+            return Err(ConversationStoreError::InvalidReference(
+                "Compaction completion kind changed".into(),
+            ));
+        };
+        if operation_id != operation {
+            return Err(ConversationStoreError::InvalidReference(
+                "foreign Compaction completion".into(),
+            ));
+        }
+        let checkpoint = self
+            .store
+            .observation_projection_activation(activation_id)?;
+        if checkpoint.checkpoint_id != checkpoint_id || checkpoint.activation_id != activation_id {
+            return Err(ConversationStoreError::InvalidReference(
+                "Compaction checkpoint identity changed".into(),
+            ));
+        }
+        Ok(Some(Box::new(checkpoint)))
     }
 
     pub(crate) fn inspection_compaction_calls(

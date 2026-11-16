@@ -1,4 +1,4 @@
-import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v80';
+import type { CheckpointReadCut,RuntimeClientAgent,TraceToolLocator } from '../../../protocol/app-server/v81';
 import type { AppServerClient } from './app-server';
 import type { Observation } from './session-lifecycle/port';
 import { standaloneTraceCut,inlineTraceDetail,retainedTraceDetailPage,bindTraceDetailReader,TRACE_PAGE_SIZE, beginTraceDetail, completeTraceDetail, fillTraceGap, prependTrace, refreshTrace, replaceTrace, selectTrace, traceInterestBatches, type TraceFieldReader,type TraceCache } from './trace';
@@ -25,6 +25,7 @@ export class AgentTraceReader {
     if(this.fieldReader)return this.fieldReader;
     const valid=(cut:CheckpointReadCut,owns:()=>boolean)=>{this.validateCut(cut);if(!owns())throw new Error('Child Trace view was replaced.');};
     return this.fieldReader={
+      scope:JSON.stringify([this.client.getSnapshot().authorityId,this.client.getSnapshot().generation,this.proof.target,this.agentId,this.scope.activation_id]),
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointValueRead',params:{target:this.proof.target,agent_id:this.agentId,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>this.current()&&owns());valid(cut,owns);return result.chunk;},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);const result=await this.client.request({method:'conversation/checkpointPage',params:{target:this.proof.target,agent_id:this.agentId,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>this.current()&&owns());valid(cut,owns);return result.page;},
       content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==cut.conversation_id)throw new Error('Child Trace content source changed.');return this.client.reads.readContent(this.proof.target,this.agentId,reference,offset,()=>this.current()&&owns());},

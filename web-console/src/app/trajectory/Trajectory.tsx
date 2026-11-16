@@ -192,7 +192,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
       sourceMode: 'history',
     }, trigger);
   }, [runCanvas, records, cache.readCuts, cache.fields, completeWorkflowNodes]);
-  const openRootCanvas = useCallback((root: import('../../../../protocol/app-server/v80').TraceRecord, trigger: HTMLElement | null) => {
+  const openRootCanvas = useCallback((root: import('../../../../protocol/app-server/v81').TraceRecord, trigger: HTMLElement | null) => {
     const loaded = workflowNodes.get(root.id);
     const cacheCut = cache.readCuts?.[root.id];
     const completeLoaded = completeWorkflowNodes(loaded, root.id);

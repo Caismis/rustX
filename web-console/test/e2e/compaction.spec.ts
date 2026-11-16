@@ -166,7 +166,7 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
       await page.getByRole('radio', { name: 'Continue', exact: true }).click();
       await page.getByRole('button', { name: copy('Submit', '提交'), exact: true }).click();
       await fixture.gate('automatic-summary');
-      await expect(page.getByText(copy('Compacting context…', '正在压缩…'), { exact: true })).toBeVisible();
+      await expect(page.locator('[data-context-seat]')).toContainText(copy('Context limit reached · compacting…', '已达到上下文上限 · 正在压缩…'));
       await fixture.release('automatic-summary');
       await expect(page.getByText('Question answered after compaction.', { exact: true })).toBeVisible();
       await expect(page.locator('[data-context-seat]')).toHaveCount(0);

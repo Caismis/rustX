@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v80';
+import type { RuntimeClientTranscriptEntry } from '../../protocol/app-server/v81';
 import { AgentTranscript } from '../src/app/agent/AgentTranscript';
 import { CompactionCheckpoint } from '../src/app/agent/CompactionCheckpoint';
 import { useCompactionHistory } from '../src/app/agent/useCompactionHistory';
@@ -61,22 +61,29 @@ it('splits process steps at an automatic checkpoint rather than collecting later
   before(checkpoint, ui.getByText('After compression'));
 });
 
-it('reads all native checkpoint pages and rejects late history from a replaced attachment', async () => {
+it('reads one bounded native checkpoint page, navigates explicitly, and rejects replaced attachment reads', async () => {
   const server = new Server(); await server.attached('A');
   try {
-    const first = marker('1', '10', server).head, latest = marker('2', '20', server).head;
-    server.snapshots.set('A', { ...snapshot(), context: { compaction_count: 2, compaction_in_progress: false, projection_head: latest } });
+    const heads = Array.from({ length: 32 }, (_, i) => marker(String(i + 1), String((i + 1) * 10), server).head);
+    const latest = heads.at(-1)!;
+    server.snapshots.set('A', { ...snapshot(), context: { compaction_count: 32, compaction_in_progress: false, projection_head: latest } });
     await server.client.refresh('A');
-    const read = vi.spyOn(server.client, 'projections').mockImplementation(async (_id, after) => after === '0' ? { records: [first], next_activation: '1' } : { records: [latest], next_activation: null });
+    const read = vi.spyOn(server.client, 'projections').mockImplementation(async (_id, after) => ({ records: heads.slice(Number(after), Number(after) + 16), next_activation: after === '0' ? '16' : null }));
     const ui = renderHook(() => useCompactionHistory(server.client, 'A', true));
-    await waitFor(() => expect(ui.result.current.map(item => item.head.activation_id)).toEqual(['1', '2']));
-    expect(read.mock.calls).toEqual([['A', '0'], ['A', '1']]);
-    const finishes: ((page: { records: typeof first[]; next_activation: null }) => void)[] = [];
+    await waitFor(() => expect(ui.result.current.markers.map(item => item.head.activation_id)).toEqual(heads.slice(16).map(head => head.activation_id)));
+    expect(read.mock.calls).toEqual([['A', '16']]);
+    await act(async () => { ui.result.current.earlier!(); });
+    await waitFor(() => expect(ui.result.current.markers.map(item => item.head.activation_id)).toEqual([...heads.slice(0, 16), latest].map(head => head.activation_id)));
+    expect(read.mock.calls).toEqual([['A', '16'], ['A', '0']]);
+    await act(async () => { ui.result.current.later!(); });
+    await waitFor(() => expect(ui.result.current.busy).toBe(false));
+    expect(read.mock.calls).toEqual([['A', '16'], ['A', '0'], ['A', '16']]);
+    const finishes: ((page: { records: typeof heads; next_activation: null }) => void)[] = [];
     read.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
     await act(async () => { await server.client.release('A'); await server.client.attach('A'); });
     await waitFor(() => expect(finishes.length).toBeGreaterThan(0));
     await act(async () => { await server.client.release('A'); });
-    await act(async () => { for (const finish of finishes) finish({ records: [first, latest], next_activation: null }); });
-    expect(ui.result.current).toEqual([]);
+    await act(async () => { for (const finish of finishes) finish({ records: heads.slice(16), next_activation: null }); });
+    expect(ui.result.current.markers).toEqual([]);
   } finally { server.client.disconnect(); }
 });

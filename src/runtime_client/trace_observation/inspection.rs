@@ -39,7 +39,7 @@ pub(super) fn page(
             loaded: page.items.len() as u64,
             next_offset: page.next_offset,
         }),
-        TraceInspectionContent::Compaction { page } => {
+        TraceInspectionContent::Compaction { page, .. } => {
             collections.push(CollectionFrontier {
                 domain: page.domain.clone(),
                 revision: cut.through,

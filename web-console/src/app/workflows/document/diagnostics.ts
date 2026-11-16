@@ -1,5 +1,5 @@
 import type { BlockPath, BlockStep } from './model';
-import type { WorkflowDiagnostic } from '../../../../../protocol/app-server/v80';
+import type { WorkflowDiagnostic } from '../../../../../protocol/app-server/v81';
 
 /** Retained orphan diagnostics do not invalidate an executable or block copy. */
 export function presentationWarning(diagnostic: WorkflowDiagnostic | null | undefined): boolean {

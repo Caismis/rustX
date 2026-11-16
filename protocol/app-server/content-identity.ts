@@ -1,4 +1,4 @@
-import type { CanonicalContentLocator, CheckpointReadCut, ContentRef, ContentSource, ObservationReadCut } from './v80.ts';
+import type { CanonicalContentLocator, CheckpointReadCut, ContentRef, ContentSource, ObservationReadCut } from './v81.ts';
 
 /** Closed native identities are independent of JSON object property order. */
 export function canonicalLocatorKey(locator: CanonicalContentLocator): string {

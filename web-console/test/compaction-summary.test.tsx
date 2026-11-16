@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from 'vitest';
 import { CompactionCheckpoint } from '../src/app/agent/CompactionCheckpoint';
 import { CompactionMessage } from '../src/presentation/agent/Message';
 import { projectionHead, Server, checkpoint, snapshot } from './fixture';
-import type { ProjectionDetail } from '../../protocol/app-server/v80';
+import type { ProjectionDetail } from '../../protocol/app-server/v81';
 afterEach(cleanup);
 
 it.each([false,true])('shows only the DSH marker until expanded, without model-projection metadata (inherited=%s)', inherited => {
@@ -27,11 +27,31 @@ it('a running command has the DSH compact title/shimmer and no empty disclosure'
   expect((trigger as HTMLButtonElement).disabled).toBe(true);
   expect(trigger.hasAttribute('aria-expanded')).toBe(false);
   expect(ui.container.querySelector('[data-shimmer]')).toBeTruthy();
+  expect(ui.container.querySelector('[data-compaction-marker]')).toBeNull();
   expect(ui.container.querySelector('[data-compaction-body]')).toBeNull();
 });
 it('missing summary is explicitly unavailable and never opens an empty body', () => {
   const ui = render(<CompactionCheckpoint head={{ ...projectionHead(), summary_preview: null }} client={new Server().client} sessionId="A"/>);
   expect((ui.getByRole('button', { name: 'Context compacted · Compaction summary unavailable' }) as HTMLButtonElement).disabled).toBe(true);
+});
+
+it('a replacement checkpoint cannot borrow the previous expanded summary cache', async () => {
+  const server = new Server(); await server.attached('A');
+  try {
+    const first = { ...projectionHead('first prefix'), summary_preview: { text: 'first prefix', truncated: true } };
+    const second = { ...first, checkpoint_id: 'replacement-checkpoint', activation_id: '2', summary_preview: { text: 'second prefix', truncated: true } };
+    vi.spyOn(server.client, 'projectionDetail').mockImplementation(async (_session, id) => ({
+      read_cut: checkpoint(snapshot()).read_cut,
+      checkpoint: { ...(id === first.checkpoint_id ? first : second), summary_preview: { text: id === first.checkpoint_id ? 'FIRST COMPLETE SUMMARY' : 'SECOND COMPLETE SUMMARY', truncated: false } },
+      items: [], next_item: null,
+    }));
+    const view = render(<CompactionCheckpoint head={first} client={server.client} sessionId="A"/>);
+    fireEvent.click(view.getByRole('button'));
+    expect(await view.findByText('FIRST COMPLETE SUMMARY')).toBeTruthy();
+    view.rerender(<CompactionCheckpoint head={second} client={server.client} sessionId="A"/>);
+    expect(view.queryByText('FIRST COMPLETE SUMMARY')).toBeNull();
+    expect(await view.findByText('SECOND COMPLETE SUMMARY')).toBeTruthy();
+  } finally { server.client.disconnect(); }
 });
 it('a bounded summary loads on expansion, retains complete Markdown and reopens without another read', async () => {
   const server = new Server(); await server.attached('A');

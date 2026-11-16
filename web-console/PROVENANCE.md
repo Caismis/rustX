@@ -12,7 +12,7 @@ The default Package glyph comes from the pinned Lucide/Iconify set (ISC).
 As in ZCode's ProviderLogo, an explicit provider field selects an asset; provider
 identity and protocol do not infer a logo. The optional native `icon` slug is
 carried through source read/write, redaction and TOML serialization, and omitted
-at the inference catalog boundary. App Server v80 is the mandatory contract;
+at the inference catalog boundary. App Server v81 is the mandatory contract;
 no old protocol path is retained. The picker uses existing Base UI modal and
 React Aria grid/search controls. Browser plugin is unavailable in this session;
 validation uses the repository's pinned Playwright/Chromium runner.
@@ -5501,7 +5501,7 @@ conditions, reuse exact numeric comparison, preserve prompt editor DOM during
 bounded expansion, correct inline variable spacing and narrow Loop/Assigner
 rows, and avoid automatic Output-name collisions. Dify's stores, component
 source and assets are not copied. No dependencies are added. Vision and AI
-generation controls are omitted. App Server v80 is the sole wire contract;
+generation controls are omitted. App Server v81 is the sole wire contract;
 v67 artifacts are removed. Runtime Client v81 is unchanged.
 
 Actual desktop and touch browser checks use the repository's exact pinned
@@ -5630,7 +5630,7 @@ configure/clear controls and keyboard-operable moves, inspired by ZCode's ordere
 reasoning control. No upstream mapping code or dependencies are imported. Profile
 identities remain stable keys, and the existing JSON editor and native whole-Model
 transaction retain parameter validation, scope and revision ownership. The mandatory
-App Server v80 imports are regenerated from Rust; Runtime Client is v83. Updated
+App Server v81 imports are regenerated from Rust; Runtime Client is v83. Updated
 local hashes and import inventories record these adaptations against the unchanged
 upstream baselines. Browser plugin is unavailable; validation uses the repository's
 pinned Playwright container and production native API path.
@@ -5699,3 +5699,22 @@ Current UI references are refreshed for the added primary navigation. The former
 Workflow reference is frozen byte-for-byte in the comparator fixtures so its
 historical CI observations remain independently verifiable. Existing comparison
 policies, regions and deltas are unchanged.
+
+## Compaction presentation
+
+The compaction-specific reference is Harness
+`fcc0ad462172522aaf5c93a7b2e01f6b9f0b0159`. The source inventory records the
+verified CompactionItem, command-card, stylesheet, ContextMeter, Trajectory and
+regular icon artwork references. Other inventory baselines remain unchanged.
+`CompactionIcon` adapts only three regular SVG glyphs. The marker preserves
+reference grouping, disclosure, spacing, sticky header and hover-capability
+rules while native operation, receipt, activation and read-cut facts retain
+all lifecycle and installation authority.
+
+The Inspector adds native bounded Call/physical-request metadata and its exact
+committed checkpoint header through App Server v81 / Runtime Client v88.
+No intermediate summary, trusted input or reasoning text becomes a Chat
+summary. [The reference map, hashes, visual evidence and validation](../docs/compaction-presentation/README.md)
+describe the adapters and necessary native differences, including separate
+primary occupancy and Auxiliary usage. Web notices retain the DeepSeek MIT
+notice; the terminal adaptation carries Pi's separate notice in `tui`.

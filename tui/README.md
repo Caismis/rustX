@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Every initialized trusted connection can use committed-delivery APIs (see `/files`).
 The same token file may contain an opaque capability or a host-issued HS256 JWT.
 
-Both modes use App Server protocol v80. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v81. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -237,7 +237,7 @@ or adopts it.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v80)
+  -> initialize (App Server protocol v81)
   -> thread/start or choose a durable Session
   -> resolve the exact Session/node; begin thread/resume and editable connecting
        -> first explicit Send records session/submissionIntent
@@ -468,13 +468,22 @@ does not implement a parallel Session system.
   inspect and synchronize with finite detached Tool executions. Status is a
   non-blocking snapshot; wait targets exact terminal physical settlement.
   Completion arrives proactively in native projections and canonical inbound.
-- `/compact` — ask the runtime to compact the canonical context while idle;
-  progress and completion remain authoritative App Server facts.
+- `/compact [instructions]` — ask the runtime to compact context while idle;
+  optional instructions use the native 4,096-byte UTF-8 limit. Busy admission
+  preserves the running response; progress and completion remain authoritative
+  App Server facts.
 - `/debug` — show bounded presentation and protocol diagnostics.
 - `/show-reasoning [on|off]` — change the display preference for model reasoning;
   it does not change runtime model configuration.
-- `/expand [latest|all|none|<tool-call-id>|job <job-id>|interaction <conversation-id>::<interaction-id>]` —
+- `/expand [latest|all|none|<tool-call-id>|job <job-id>|interaction <conversation-id>::<interaction-id>|compaction [checkpoint-id]]` —
   expand or collapse display detail without re-executing or re-fetching.
+
+Committed native checkpoints have one Pi-style `[compaction]` marker at their
+transcript anchor. `/expand compaction` toggles the active summary; an explicit
+checkpoint ID selects a loaded historical marker. `/context history
+[after-activation]` reads one bounded native metadata page, and `/context
+projection <checkpoint-id> [item-offset]` inspects its full checkpoint. A Ready
+background summary remains a status fact until the runtime installs it.
 
 ### Lifecycle and help
 

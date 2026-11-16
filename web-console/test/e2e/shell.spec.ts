@@ -496,7 +496,7 @@ for (const departure of ['drawer', 'User Settings', 'Workspace Settings'] as con
   await page.evaluate(() => window.sessionFixture.settleInput());
 });
 
-const nativeMutations = (requests: import('../../../protocol/app-server/v80').Request[]) => requests.filter(request => [
+const nativeMutations = (requests: import('../../../protocol/app-server/v81').Request[]) => requests.filter(request => [
   'thread/start', 'thread/resume', 'thread/fork', 'thread/archive', 'thread/unarchive', 'thread/name/set',
   'session/detach', 'session/switchNode', 'session/unload',
   'turn/start', 'turn/steer', 'turn/interrupt', 'inbound/queue', 'inbound/edit', 'inbound/remove',
