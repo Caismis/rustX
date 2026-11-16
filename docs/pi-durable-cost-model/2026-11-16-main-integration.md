@@ -82,3 +82,12 @@ uses exactly 85 returned rows and 1,672 SQLite VM steps (55 statements) at each
 size. Tool histories at 64 and 512 turns use exactly 222 rows and 4,959 steps
 (66 statements). These are deterministic structural measurements, not new
 end-to-end latency measurements. The unchanged growth bounds pass.
+
+The subsequent full library run passed 6,234 tests, with 28 ignored and one
+failure in the repository-removal fixture. That fixture accidentally depended
+on Git refreshing an unchanged seeded blob into the private object directory
+before its alternate disappeared. It now deliberately dirties the baseline,
+so the private snapshot owns that blob regardless of Git's racy-clean decision.
+The parent-rediscovery assertions remain unchanged. All eight discovery tests
+pass after this fixture correction. Both Clippy configurations, strict rustdoc,
+doctests, and the complete Linux test-lane coverage check also pass locally.

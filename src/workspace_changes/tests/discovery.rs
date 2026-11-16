@@ -195,6 +195,10 @@ async fn removing_the_original_repository_does_not_rediscover_its_parent() {
     git(&root, &["init", "-q"]);
     fs::write(root.join("tracked.txt"), "before\n").unwrap();
     git(&root, &["add", "tracked.txt"]);
+    // Own the baseline blob in the private object directory before removing
+    // the alternate. An unchanged seeded entry may reuse the alternate blob;
+    // whether Git refreshes it must not decide this discovery regression.
+    fs::write(root.join("tracked.txt"), "dirty baseline owned privately\n").unwrap();
     let store = Arc::default();
     let record = start(&root, &store, "enclosing");
     record.before_tools().await;
