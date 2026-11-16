@@ -182,7 +182,7 @@ fn expected_tools() -> Value {
 
 pub(super) fn expected_body(case: &str, index: usize) -> Value {
     let mut messages = vec![
-        json!({"role":"system","content":expected_system_prompt(index),"tool_calls":null}),
+        json!({"role":"system","content":expected_system_prompt(index)}),
         text("user", "benchmark turn 0000"),
         text("user", &format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}")),
     ];
@@ -316,7 +316,6 @@ pub(super) fn reconstructed_body(request: &Value, provider: &str, endpoint: &str
     let mut messages = vec![json!({
         "role": "system",
         "content": system_prompt,
-        "tool_calls": null,
     })];
     messages.extend(
         request["messages"]

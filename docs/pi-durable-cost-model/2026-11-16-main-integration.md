@@ -91,3 +91,29 @@ so the private snapshot owns that blob regardless of Git's racy-clean decision.
 The parent-rediscovery assertions remain unchanged. All eight discovery tests
 pass after this fixture correction. Both Clippy configurations, strict rustdoc,
 doctests, and the complete Linux test-lane coverage check also pass locally.
+
+
+Independent external targets found two further integration issues:
+
+- The ordinary benchmark-oracle smoke path omitted the fixed status clock, and
+  its system-message expectation retained an obsolete `tool_calls: null` field.
+  The smoke now uses the same fixed clock as the measurement driver; the exact
+  oracle matches the typed system wire shape without relaxing body comparison.
+  All 17 oracle contracts pass; the three offline measurements remain ignored.
+- Workspace Python stopped process-owned probes after the subagent IPC writer
+  had already drained. A cancelled probe could be physically reaped while its
+  parent still retained an anchor because the release channel was closed.
+  Probe shutdown now precedes dispatcher shutdown, with the physical lease
+  still held. All 45 subagent targets pass. The native-tool child fixture also
+  uses a FIFO handshake to hold a real supervised preparation through semantic
+  completion; successful settlement proves its release reaches the parent
+  before IPC closes. No missing-proof check is bypassed.
+
+The final combination passes all 53 composed conformance tests (three offline
+measurements ignored), all bin/example tests (37 passed, two intentional
+ignores), both workspace/all-target Clippy configurations, strict rustdoc,
+formatting, and native executable staging. The separately exercised external
+targets pass: cfg3 catalog 30, cfg3 managed output 2, contracts 31, durable 152,
+process 69, provider 195, subagent 45, and tools 130. Repeated targeted runs are
+not added to these totals. Full-library revalidation and exact-head remote FULL
+CI remain the final acceptance gates reported in the PR.

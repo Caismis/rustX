@@ -159,7 +159,13 @@ async fn runtime_benchmark_oracle_smoke_matches_composed_tool_contract() {
         return;
     };
     let endpoint = emulator.openai_base_url().clone();
-    let mut driver = Driver::start_in(root, &emulator, &Setup::new("emulator/chat-model")).await;
+    let mut driver = Driver::start_in_with_status_clock(
+        root,
+        &emulator,
+        &Setup::new("emulator/chat-model"),
+        Arc::new(request_oracle::FixedStatusClock::default()),
+    )
+    .await;
     driver.submit("benchmark turn 0000");
     let (events, outcome) = driver.settle().await;
     assert!(
