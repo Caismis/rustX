@@ -30,7 +30,7 @@
 //! remains a monotonic usage classifier; unused Sessions are still listed and
 //! are never implicitly reused. See docs/durable-sessions.md for ownership.
 
-use crate::durable::JournalStore;
+use catalog_file::PublishedCatalog;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self};
 
@@ -427,7 +427,7 @@ struct CatalogDocument {
     schema_version: u32,
     next_session_ordinal: u64,
     next_node_ordinal: u64,
-    sessions: BTreeMap<SessionId, PersistedSession>,
+    sessions: imbl::OrdMap<SessionId, PersistedSession>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -508,14 +508,14 @@ pub struct SessionCatalog {
     path: PathBuf,
     document: CatalogDocument,
     node_observation_index: Arc<BTreeMap<SessionId, Vec<SessionNodeId>>>,
-    /// Whether `document` has ever been written to `path`.
+    /// The validated bytes and generation last published at `path`.
     ///
     /// A first launch composes against a catalog that exists only in
     /// memory (see [`Self::create_unpublished`]), so an unpublished catalog
     /// has a pending first write even when nothing about the launch changed
     /// it: [`Self::plan_unchanged`] plans that write, and it lands in the
     /// same single startup transaction as every other catalog decision.
-    published: bool,
+    published: Option<Arc<PublishedCatalog>>,
     lifecycle: Option<std::sync::Arc<crate::runtime::local_storage::ProductController>>,
     #[cfg(test)]
     write_fault: Arc<Mutex<Option<CatalogWriteFault>>>,
@@ -534,7 +534,7 @@ pub struct SessionCatalog {
 
 impl SessionCatalog {
     pub(crate) fn is_published(&self) -> bool {
-        self.published
+        self.published.is_some()
     }
     pub(crate) fn empty(
         controller: &crate::runtime::local_storage::ProductController,
@@ -557,9 +557,9 @@ impl SessionCatalog {
                 schema_version: SESSION_CATALOG_SCHEMA_VERSION,
                 next_session_ordinal: 1,
                 next_node_ordinal: 1,
-                sessions: BTreeMap::new(),
+                sessions: imbl::OrdMap::new(),
             },
-            published: false,
+            published: None,
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
@@ -821,29 +821,24 @@ impl SessionCatalog {
             }
             let store = SqliteConversationStore::recover_existing(id, &path, guard)
                 .map_err(SessionError::Store)?;
-            let mut cursor = None;
-            loop {
-                let page = store
-                    .read_events(cursor, 256)
-                    .map_err(SessionError::Store)?;
-                if page.events.is_empty() {
-                    break;
-                }
-                cursor = page.next_sequence;
-                for event in page.events {
-                    if let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
-                        child_conversation_id,
-                        ..
-                    } = event.event
-                    {
-                        validate_id(child_conversation_id.as_str(), "child conversation")?;
-                        let path = crate::runtime::subagent::child_conversation_store_path(
-                            guard.root(),
-                            session_id,
-                            &child_conversation_id,
-                        );
-                        pending.push((child_conversation_id, path));
-                    }
+            // Child references are the ownership facts alone, read through
+            // the Journal kind index.
+            for event in
+                crate::durable::presentation::all_facts(&store, &["subagent_ownership_committed"])
+                    .map_err(SessionError::Store)?
+            {
+                if let crate::events::types::RuntimeEvent::SubagentOwnershipCommitted {
+                    child_conversation_id,
+                    ..
+                } = event.event
+                {
+                    validate_id(child_conversation_id.as_str(), "child conversation")?;
+                    let path = crate::runtime::subagent::child_conversation_store_path(
+                        guard.root(),
+                        session_id,
+                        &child_conversation_id,
+                    );
+                    pending.push((child_conversation_id, path));
                 }
             }
         }
@@ -904,30 +899,18 @@ impl SessionCatalog {
             path: path.clone(),
             detail: error.to_string(),
         })?;
-        let envelope: serde_json::Value =
-            serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
-                detail: error.to_string(),
-            })?;
-        if envelope
-            .get("schema_version")
-            .and_then(serde_json::Value::as_u64)
-            != Some(u64::from(SESSION_CATALOG_SCHEMA_VERSION))
-        {
-            return Err(SessionError::Catalog { detail: "unsupported session catalog schema; CFG3 requires UUIDv7 identities and Session-owned intent; old development schemas are refused".into() });
-        }
-        let document: CatalogDocument =
-            serde_json::from_slice(&bytes).map_err(|error| SessionError::Catalog {
-                detail: format!("cannot decode {}: {error}", path.display()),
-            })?;
-        validate_document(&document)?;
+        let document = catalog_file::decode(&bytes, &path)?;
         Ok(Some(Self {
             identities: Arc::new(crate::runtime::identity::SystemUuidV7Generator),
             product: guard.clone(),
             root,
             path,
             node_observation_index: Arc::new(observation::node_index(&document)),
+            published: Some(Arc::new(PublishedCatalog {
+                generation: document.generation,
+                bytes,
+            })),
             document,
-            published: true,
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),
@@ -1051,3 +1034,5 @@ impl SessionError {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+mod catalog_file;

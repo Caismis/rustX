@@ -40,7 +40,7 @@ impl SqliteConversationStore {
         let mode: String = store
             .lock()?
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-            .map_err(|error| super::storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if mode != "wal" {
             return Err(super::storage(
                 "archive capture requires writer-established WAL storage",
@@ -142,23 +142,45 @@ impl SqliteConversationStore {
         through: i64,
     ) -> io::Result<Option<(i64, String)>> {
         use rusqlite::OptionalExtension;
+        if matches!(authority, Authority::Surface) {
+            let connection = self.lock().map_err(error)?;
+            let selected: Option<(i64, String, Option<String>)> = connection.query_row(
+                "SELECT s.revision,s.message_id,m.message_id FROM surface_ops s LEFT JOIN message_ledger m ON m.position=s.ledger_position AND m.message_id=s.message_id WHERE s.revision>?1 AND s.revision<=?2 ORDER BY s.revision LIMIT 1",
+                params![after, through], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).optional().map_err(error)?;
+            return selected
+                .map(|(revision, message_id, ledger_message_id)| {
+                    let operation = super::canonical::ledger::surface_append_operation(
+                        message_id,
+                        ledger_message_id.as_deref(),
+                    )
+                    .map_err(error)?;
+                    Ok((revision, serde_json::to_string(&operation).map_err(error)?))
+                })
+                .transpose();
+        }
         if matches!(authority, Authority::Journal) {
             // Bounds apply before copying a corrupted auxiliary payload into Rust.
-            return self.lock().map_err(error)?.query_row(
-                "SELECT sequence,CASE WHEN
-                    (json_extract(event_json,'$.event.type') IN ('auxiliary_call_started','auxiliary_call_settled')
-                     OR json_extract(event_json,'$.event.owner.type')='auxiliary')
+            return self
+                .lock()
+                .map_err(error)?
+                .query_row(
+                    "SELECT sequence,CASE WHEN
+                    (event_kind IN ('auxiliary_call_started','auxiliary_call_settled')
+                     OR event_owner_kind='auxiliary')
                     AND octet_length(event_json)>16384 THEN NULL ELSE event_json END
                  FROM events WHERE sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT 1",
-                params![after, through],
-                |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
-            ).optional().map_err(error);
+                    params![after, through],
+                    |row| Ok((row.get(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()
+                .map_err(error);
         }
         if matches!(authority, Authority::Requests) {
             let connection = self.lock().map_err(error)?;
             let selected: Option<(i64, Option<String>)> = connection.query_row(
-                "SELECT rowid,CASE WHEN octet_length(request_id)<=67108864 THEN request_id END FROM request_snapshots
-                 WHERE rowid>?1 AND rowid<=?2 ORDER BY rowid LIMIT 1",
+                "SELECT s.started_sequence,CASE WHEN octet_length(o.request_id)<=67108864 THEN o.request_id END FROM request_snapshots s LEFT JOIN request_owners o ON o.start_sequence=s.started_sequence
+                 WHERE s.started_sequence>?1 AND s.started_sequence<=?2 ORDER BY s.started_sequence LIMIT 1",
                 params![after, through], |row| Ok((row.get(0)?, row.get(1)?)),
             ).optional().map_err(error)?;
             return selected
@@ -236,9 +258,9 @@ impl Authority {
         match self {
             Self::Journal => ("events", "sequence", "event_json"),
             Self::Messages => ("message_ledger", "position", "message_json"),
-            Self::Surface => ("surface_ops", "revision", "op_json"),
             Self::PublicationAudits => ("publication_audits", "rowid", "audit_json"),
-            Self::Requests
+            Self::Surface
+            | Self::Requests
             | Self::InheritedResponses
             | Self::InheritedTurns
             | Self::Projections => {

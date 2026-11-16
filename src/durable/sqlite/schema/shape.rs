@@ -8,6 +8,7 @@ use crate::durable::sqlite::{
     content, manifest, observation, observation_request, observation_trace, projection, provenance,
     storage,
 };
+use crate::durable::sqlite::{event_heads, event_holes};
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 
@@ -15,6 +16,34 @@ use std::collections::{BTreeMap, BTreeSet, btree_map::Entry};
 pub(in crate::durable::sqlite) fn verify_schema_shape(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
+    // The small model lookup uses its native identity as the storage key.
+    // Lifecycle rows retain rowid locality: clustering their terminal updates
+    // increases repeated dirty-page work in long-history conversations.
+    let clustered: bool = connection
+        .query_row(
+            "SELECT wr FROM pragma_table_list WHERE schema='main' AND name='observation_models' AND type='table'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !clustered {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "compact primary tree required for observation_models".into(),
+        ));
+    }
+    for (table, column) in [
+        ("request_snapshots", "started_sequence"),
+        ("request_snapshot_payloads", "started_sequence"),
+        ("lifecycle_state", "id"),
+    ] {
+        verify_integer_primary_key(connection, table, column)?;
+    }
+    for columns in [
+        &["owner_anchor", "ordinal"][..],
+        &["owner_anchor", "model_hash"][..],
+    ] {
+        verify_unique_columns(connection, "observation_models", columns)?;
+    }
     content::verify_binary_schema(connection)?;
     provenance::verify_turn_header_shape(connection)?;
     projection::verify_completion_index(connection)?;
@@ -23,9 +52,9 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     // Refuse obsolete inline arrays and require the native keyed representation.
     let bootstrap_columns = connection
         .prepare("PRAGMA table_info(bootstrap_identity)")
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .query_map([], |row| row.get::<_, String>(1))
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| storage(error.to_string()))?;
     if bootstrap_columns
@@ -52,6 +81,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     }
 
     verify_required_index_sql(connection)?;
+    super::events::verify_schema(connection)?;
     for table in ["inherited_turn_provenance", "inherited_response_provenance"] {
         let primary: (String, i64) = connection
             .query_row(
@@ -59,7 +89,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if primary != ("INTEGER".into(), 1) {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "invalid inherited ordinal primary key in {table}"
@@ -68,7 +98,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     }
     let foreign = connection
         .prepare("PRAGMA foreign_key_list(inherited_message_membership)")
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(2)?,
@@ -76,7 +106,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 row.get::<_, String>(4)?,
             ))
         })
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .collect::<Result<BTreeSet<_>, _>>()
         .map_err(|error| storage(error.to_string()))?;
     let expected = BTreeSet::from([
@@ -109,13 +139,22 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     let paired: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('inherited_message_membership') a JOIN pragma_foreign_key_list('inherited_message_membership') b ON a.id=b.id WHERE a.\"table\"='message_ledger' AND a.\"from\"='assistant_ledger_position' AND a.\"to\"='position' AND b.\"from\"='assistant_message_id' AND b.\"to\"='message_id' AND a.seq=0 AND b.seq=1)",
         [], |row| row.get(0),
-    ).map_err(|error| storage(error.to_string()))?;
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if !paired {
         return Err(ConversationStoreError::IncompatibleSchema(
             "inherited canonical identity is not paired".into(),
         ));
     }
     verify_unique_columns(connection, "message_ledger", &["position", "message_id"])?;
+    let paired: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_foreign_key_list('surface_ops') a JOIN pragma_foreign_key_list('surface_ops') b ON a.id=b.id WHERE a.\"table\"='message_ledger' AND a.\"from\"='ledger_position' AND a.\"to\"='position' AND b.\"from\"='message_id' AND b.\"to\"='message_id' AND a.seq=0 AND b.seq=1)",
+        [], |row| row.get(0),
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    if !paired {
+        return Err(ConversationStoreError::IncompatibleSchema(
+            "Surface canonical identity is not paired".into(),
+        ));
+    }
     verify_unique_column(
         connection,
         "inherited_message_membership",
@@ -173,6 +212,11 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "logical_step_sequence",
                 "pending_unresolved_output_stream_id",
                 "bootstrap_initialized",
+                "recovery_frontier",
+                "canonical_identity_through",
+                "canonical_identity_count",
+                "surface_revision",
+                "surface_compaction_generation",
             ] as &[&str],
         ),
         (
@@ -192,7 +236,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             &["correlation", "sequence", "message_id"],
         ),
         (
-            "observation_headers",
+            "transcript_entries",
             &[
                 "reference_kind",
                 "reference_id",
@@ -200,6 +244,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "header_json",
             ],
         ),
+        ("content_source_ids", &["id", "alias"]),
         (
             "content_segments",
             &[
@@ -220,6 +265,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "representation",
                 "revision",
                 "readable_end",
+                "bytes",
             ],
         ),
         (
@@ -232,19 +278,20 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "position",
                 "native_transcript",
                 "human_activity_at",
-                "human_activity_seconds",
-                "human_activity_nanos",
+                "human_activity_max_seconds",
+                "human_activity_max_nanos",
                 "opening_preview",
                 "ordinary_user",
                 "ordinary_human",
+                "todo_publication",
                 "title_source_text",
                 "message_id",
                 "message_json",
             ],
         ),
         (
-            "transcript_order",
-            &["position", "reference_kind", "reference_id"],
+            "transcript_entries",
+            &["position", "native_reference_kind", "native_reference_id"],
         ),
         (
             "canonical_tool_calls",
@@ -256,6 +303,7 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "observation_definition_commit",
                 "observation_definition_ordinal",
                 "assistant_message_id",
+                "assistant_ledger_position",
                 "block_index",
                 "call_id",
                 "tool_id",
@@ -309,9 +357,35 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ),
         (
             "surface_ops",
-            &["revision", "compaction_generation", "op_json"],
+            &[
+                "revision",
+                "compaction_generation",
+                "ledger_position",
+                "message_id",
+            ],
         ),
-        ("surface_head", &["revision", "compaction_generation"]),
+        ("request_configurations", &["digest", "configuration_json"]),
+        (
+            "request_snapshot_payloads",
+            &["started_sequence", "snapshot_json"],
+        ),
+        (
+            "tool_association_origin_sets",
+            &["id", "digest", "origins_json"],
+        ),
+        (
+            "tool_association_nodes",
+            &[
+                "id",
+                "parent_id",
+                "parent_digest",
+                "parent_private_bytes",
+                "digest",
+                "count",
+                "association_json",
+                "private_bytes",
+            ],
+        ),
         (
             "request_snapshots",
             &[
@@ -321,7 +395,6 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "observation_accepted_ledger",
                 "observation_summary",
                 "observation_source_id",
-                "request_id",
                 "canonical_frontier",
                 "manifest_digest",
                 "input_root",
@@ -329,7 +402,6 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "input_count",
                 "started_sequence",
                 "completed_sequence",
-                "snapshot_json",
             ],
         ),
         (
@@ -403,21 +475,26 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
                 "turn_id",
                 "event_json",
                 "observation_unavailable",
-                "observation_json",
+                "observation_source",
             ],
+        ),
+        (
+            "request_trace_catalog_versions",
+            &["id", "configuration_digest", "tool_count", "complete"],
         ),
         (
             "request_trace_catalogs",
-            &["source_sequence", "provisional_message_id", "tool_count"],
+            &[
+                "source_sequence",
+                "provisional_message_id",
+                "tool_count",
+                "catalog_id",
+                "catalog_witness",
+            ],
         ),
         (
             "request_trace_definitions",
-            &[
-                "source_sequence",
-                "ordinal",
-                "tool_identity_digest",
-                "tool_id",
-            ],
+            &["catalog_id", "ordinal", "tool_identity_digest", "tool_id"],
         ),
         (
             "trace_adoption_members",
@@ -433,25 +510,16 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             &["source_sequence", "ordinal", "header_json"],
         ),
         (
-            "request_observation_fields",
-            &[
-                "source_id",
-                "path_json",
-                "parent_path",
-                "ordinal",
-                "header_kind",
-                "shape_witness",
-                "header_json",
-            ],
-        ),
-        (
             "state_observation_fields",
             &[
                 "source_id",
                 "path_json",
                 "parent_path",
                 "ordinal",
-                "header_json",
+                "source_kind",
+                "preview_nodes",
+                "preview_kind",
+                "preview_key",
             ],
         ),
         (
@@ -465,22 +533,30 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
             ],
         ),
         ("agent_authorities", &["agent_id", "authority_json"]),
-        ("lifecycle_state", &["lifecycle_key", "terminal_event_id"]),
+        (
+            "lifecycle_state",
+            &["id", "lifecycle_key", "terminal_sequence"],
+        ),
     ];
     for (table, required_columns) in required {
         let mut statement = connection
             .prepare(&format!("PRAGMA table_info({table})"))
-            .map_err(|error| storage(format!("inspect schema table {table}: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inspect schema table {table}: {error}"),
+                )
+            })?;
         let columns = statement
             .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|error| storage(format!("inspect schema columns {table}: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inspect schema columns {table}: {error}"),
+                )
+            })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("read schema columns {table}: {error}")))?;
-        if table == "surface_head" && columns.iter().any(|column| column == "active_json") {
-            return Err(ConversationStoreError::IncompatibleSchema(
-                "surface_head retains retired active_json layout".into(),
-            ));
-        }
         for column in required_columns {
             if !columns.iter().any(|candidate| candidate == column) {
                 return Err(ConversationStoreError::IncompatibleSchema(format!(
@@ -490,6 +566,12 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         }
     }
     for (table, column, target, target_column) in [
+        (
+            "canonical_tool_calls",
+            "assistant_ledger_position",
+            "message_ledger",
+            "position",
+        ),
         (
             "projection_activations",
             "checkpoint_id",
@@ -533,8 +615,9 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
         ("canonical_tool_calls", "result_message_id"),
         ("inherited_message_membership", "assistant_message_id"),
         ("agent_authorities", "agent_id"),
-        ("events", "event_id"),
-        ("request_snapshots", "request_id"),
+        ("tool_association_nodes", "digest"),
+        ("tool_association_origin_sets", "digest"),
+        ("request_configurations", "digest"),
         ("projection_checkpoints", "checkpoint_id"),
         ("compaction_operations", "operation_id"),
         ("publication_streams", "stream_id"),
@@ -559,8 +642,8 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     )?;
     verify_unique_columns(
         connection,
-        "transcript_order",
-        &["reference_kind", "reference_id"],
+        "transcript_entries",
+        &["native_reference_kind", "native_reference_id"],
     )?;
     verify_unique_columns(
         connection,
@@ -571,12 +654,39 @@ pub(in crate::durable::sqlite) fn verify_schema_shape(
     content::verify_schema(connection)?;
     observation::verify_schema(connection)?;
     observation_trace::verify_schema(connection)?;
+    event_holes::verify_schema(connection)?;
+    event_heads::verify_schema(connection)?;
     observation_request::verify_schema(connection)?;
+    observation_request::state_preview::verify_schema(connection)?;
     auxiliary::verify_schema(connection)?;
     crate::durable::sqlite::schedule::verify_schema(connection)?;
     crate::durable::sqlite::scheduled_workflow::verify_schema(connection)?;
     projection::verify_auxiliary_lineage_schema(connection)?;
     request_owner_shape::verify(connection)?;
+    Ok(())
+}
+
+/// The integer key must be the physical rowid, without a shadow PK tree.
+pub(in crate::durable::sqlite) fn verify_integer_primary_key(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<(), ConversationStoreError> {
+    let valid: bool = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) c
+         WHERE c.name=?2 AND c.type='INTEGER' AND c.pk=1
+           AND (SELECT wr FROM pragma_table_list WHERE schema='main' AND name=?1)=0
+           AND NOT EXISTS(SELECT 1 FROM pragma_index_list(?1) WHERE origin='pk'))",
+            rusqlite::params![table, column],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    if !valid {
+        return Err(ConversationStoreError::IncompatibleSchema(format!(
+            "table {table} requires an INTEGER PRIMARY KEY on {column}"
+        )));
+    }
     Ok(())
 }
 
@@ -595,12 +705,22 @@ pub(in crate::durable::sqlite) fn verify_unique_columns(
 ) -> Result<(), ConversationStoreError> {
     let mut indexes = connection
         .prepare(&format!("PRAGMA index_list({table})"))
-        .map_err(|error| storage(format!("inspect schema indexes {table}: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inspect schema indexes {table}: {error}"),
+            )
+        })?;
     let index_rows = indexes
         .query_map([], |row| {
             Ok((row.get::<_, String>(1)?, row.get::<_, i64>(2)?))
         })
-        .map_err(|error| storage(format!("inspect schema indexes {table}: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("inspect schema indexes {table}: {error}"),
+            )
+        })?;
     for index_row in index_rows {
         let (index, unique) =
             index_row.map_err(|error| storage(format!("read schema index {table}: {error}")))?;
@@ -610,10 +730,20 @@ pub(in crate::durable::sqlite) fn verify_unique_columns(
         let quoted = index.replace('"', "\"\"");
         let mut info = connection
             .prepare(&format!("PRAGMA index_info(\"{quoted}\")"))
-            .map_err(|error| storage(format!("inspect schema index {index}: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inspect schema index {index}: {error}"),
+                )
+            })?;
         let columns = info
             .query_map([], |row| row.get::<_, Option<String>>(2))
-            .map_err(|error| storage(format!("inspect schema index {index}: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inspect schema index {index}: {error}"),
+                )
+            })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("read schema index {index}: {error}")))?;
         if columns
@@ -631,6 +761,7 @@ pub(in crate::durable::sqlite) fn verify_unique_columns(
     )))
 }
 
+#[allow(clippy::too_many_lines)] // One fixed development-schema table keeps all witness column contracts together.
 pub(in crate::durable::sqlite) fn verify_witness_field_order(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
@@ -649,7 +780,12 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
     let mut tables = BTreeMap::new();
     let mut column_positions = connection
         .prepare("SELECT name,cid FROM pragma_table_info(?1)")
-        .map_err(|error| storage(format!("prepare witness columns: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("prepare witness columns: {error}"),
+            )
+        })?;
     for (table, original, fields) in [
         (
             "request_snapshots",
@@ -662,13 +798,15 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
                 "completed_sequence",
             ] as &[&str],
         ),
-        ("request_snapshots", "previous_request_id", REQUEST_WITNESS),
-        ("request_snapshots", "request_id", REQUEST_WITNESS),
-        ("request_snapshots", "snapshot_json", REQUEST_WITNESS),
+        (
+            "request_snapshots",
+            "previous_started_sequence",
+            REQUEST_WITNESS,
+        ),
         (
             "request_trace_catalogs",
             "provisional_message_id",
-            &["tool_count"] as &[&str],
+            &["catalog_id", "tool_count", "catalog_witness"] as &[&str],
         ),
         (
             "canonical_tool_calls",
@@ -710,7 +848,12 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
                     .query_map([table], |row| {
                         Ok((row.get::<_, String>(0)?, row.get::<_, usize>(1)?))
                     })
-                    .map_err(|error| storage(format!("inspect witness columns {table}: {error}")))?
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(
+                            &error,
+                            format!("inspect witness columns {table}: {error}"),
+                        )
+                    })?
                     .collect::<Result<BTreeMap<_, _>, _>>()
                     .map_err(|error| storage(format!("read witness columns {table}: {error}")))?;
                 entry.insert(positions)
@@ -743,35 +886,44 @@ pub(in crate::durable::sqlite) fn verify_witness_field_order(
 #[allow(clippy::too_many_lines)] // One closed required-index contract and its verifier.
 fn verify_required_index_sql(connection: &Connection) -> Result<(), ConversationStoreError> {
     let mut expected = [
-        ("projection_ledger_idx", "CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)"),
-        ("projection_checkpoint_idx", "CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)"),
-        ("inherited_turn_identity_idx", "CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))"),
-        ("inherited_response_closing_idx", "CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))"),
-        ("message_ledger_identity_position_idx", "CREATE UNIQUE INDEX message_ledger_identity_position_idx ON message_ledger(position,message_id)"),
-        ("message_ledger_native_transcript_idx", "CREATE UNIQUE INDEX message_ledger_native_transcript_idx ON message_ledger(native_transcript) WHERE native_transcript IS NOT NULL"),
-        ("inherited_response_owner_idx", "CREATE INDEX inherited_response_owner_idx ON inherited_response_provenance(json_extract(payload,'$.origin.conversation_id'),json_extract(payload,'$.origin.attempt_id'),ordinal)"),
-        ("observation_models_owner_idx", "CREATE INDEX observation_models_owner_idx ON observation_models(owner_anchor,ordinal)"),
-        ("events_observation_turn_ordinal_idx", "CREATE UNIQUE INDEX events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL"),
-        ("events_observation_turn_anchor_idx", "CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL"),
-        ("events_observation_turn_holes_idx", "CREATE INDEX events_observation_turn_holes_idx ON events(sequence) WHERE observation_turn_required=1 AND observation_turn_header IS NULL"),
-        ("events_observation_turn_prompt_idx", "CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1"),
-        ("events_observation_turn_prompt_holes_idx", "CREATE INDEX events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL"),
-        ("observation_block_ledger_kind_idx", "CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index)"),
-        ("events_observation_transcript_idx", "CREATE UNIQUE INDEX events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL"),
-        ("inherited_membership_turn_idx", "CREATE INDEX inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id)"),
-    ].into_iter().map(|(name, sql)| (name, (sql.to_owned(), false)))
-        .collect::<BTreeMap<_, _>>();
+        ("content_frontiers_goal_idx", ("CREATE INDEX content_frontiers_goal_idx ON content_frontiers(source_kind) WHERE source_kind='observation_goal'".to_owned(), false)),
+        ("rustx_store_conversation_idx", ("CREATE UNIQUE INDEX rustx_store_conversation_idx ON rustx_store(conversation_id COLLATE BINARY)".to_owned(), false)),
+        ("events_alias_idx", ("CREATE UNIQUE INDEX events_alias_idx ON events(event_id) WHERE event_id != conversation_id || '-event-' || sequence".to_owned(), true)),
+        ("canonical_tool_calls_call_ledger_idx", ("CREATE INDEX canonical_tool_calls_call_ledger_idx ON canonical_tool_calls(call_id,assistant_ledger_position,block_index)".to_owned(), false)),
+        ("publication_streams_open_idx", ("CREATE INDEX publication_streams_open_idx ON publication_streams(stream_id) WHERE settlement IS NULL".to_owned(), false)),
+        ("publication_proposals_call_idx", ("CREATE INDEX publication_proposals_call_idx ON publication_proposals(call_id)".to_owned(), false)),
+        ("message_ledger_todo_publication_idx", ("CREATE INDEX message_ledger_todo_publication_idx ON message_ledger(position) WHERE todo_publication=1".to_owned(), false)),
+        ("message_ledger_human_activity_idx", ("CREATE INDEX message_ledger_human_activity_idx ON message_ledger(position) WHERE human_activity_at IS NOT NULL".to_owned(), false)),
+        ("message_ledger_transcript_position_idx", ("CREATE INDEX message_ledger_transcript_position_idx ON message_ledger(position) WHERE native_transcript IS NOT NULL".to_owned(), false)),
+        ("publication_streams_owner_idx", ("CREATE INDEX publication_streams_owner_idx ON publication_streams(attempt_id,turn_id,stream_id)".to_owned(), false)),
+        ("projection_ledger_idx", ("CREATE INDEX projection_ledger_idx ON projection_activations(ledger_frontier,activation)".to_owned(), false)),
+        ("projection_checkpoint_idx", ("CREATE UNIQUE INDEX projection_checkpoint_idx ON projection_activations(checkpoint_id)".to_owned(), false)),
+        ("events_observation_tool_idx", ("CREATE INDEX events_observation_tool_idx ON events(event_tool_call_id,attempt_key,event_kind) WHERE event_tool_call_id IS NOT NULL".to_owned(), true)),
+        ("inherited_turn_identity_idx", ("CREATE UNIQUE INDEX inherited_turn_identity_idx ON inherited_turn_provenance(json_extract(payload,'$.id.conversation_id'),json_extract(payload,'$.id.attempt_id'))".to_owned(), false)),
+        ("inherited_response_closing_idx", ("CREATE UNIQUE INDEX inherited_response_closing_idx ON inherited_response_provenance(json_extract(payload,'$.closing_message_id'))".to_owned(), false)),
+        ("message_ledger_identity_position_idx", ("CREATE UNIQUE INDEX message_ledger_identity_position_idx ON message_ledger(position,message_id)".to_owned(), false)),
+        ("message_ledger_native_transcript_idx", ("CREATE UNIQUE INDEX message_ledger_native_transcript_idx ON message_ledger(native_transcript) WHERE native_transcript IS NOT NULL".to_owned(), false)),
+        ("inherited_response_owner_idx", ("CREATE INDEX inherited_response_owner_idx ON inherited_response_provenance(json_extract(payload,'$.origin.conversation_id'),json_extract(payload,'$.origin.attempt_id'),ordinal)".to_owned(), false)),
+        ("events_observation_turn_ordinal_idx", ("CREATE UNIQUE INDEX events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL".to_owned(), true)),
+        ("events_observation_turn_anchor_idx", ("CREATE INDEX events_observation_turn_anchor_idx ON events(observation_turn_anchor) WHERE observation_turn_header IS NOT NULL".to_owned(), true)),
+        ("events_observation_turn_prompt_idx", ("CREATE INDEX events_observation_turn_prompt_idx ON events(attempt_key) WHERE observation_turn_prompt_positive=1".to_owned(), true)),
+        ("events_observation_turn_prompt_holes_idx", ("CREATE INDEX events_observation_turn_prompt_holes_idx ON events(attempt_key) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL".to_owned(), true)),
+        ("observation_block_ledger_kind_idx", ("CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index)".to_owned(), false)),
+        ("events_observation_transcript_idx", ("CREATE UNIQUE INDEX events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL".to_owned(), true)),
+        ("inherited_membership_turn_idx", ("CREATE INDEX inherited_membership_turn_idx ON inherited_message_membership(turn_ordinal,assistant_message_id)".to_owned(), false)),
+    ].into_iter().collect::<BTreeMap<_, _>>();
     for (name, expression) in PRESENTATION_INDEXES {
         expected.insert(
             *name,
-            (format!("CREATE INDEX {name} ON events({expression})"), true),
+            (format!("CREATE INDEX {name} ON events{expression}"), true),
         );
     }
     let max_sql_bytes = expected
         .values()
         .map(|(sql, _)| sql.len())
         .max()
-        .expect("native index contracts are nonempty");
+        .expect("native index contracts are nonempty")
+        * 2;
     let names = std::iter::repeat_n("?", expected.len())
         .collect::<Vec<_>>()
         .join(",");
@@ -784,7 +936,7 @@ fn verify_required_index_sql(connection: &Connection) -> Result<(), Conversation
     );
     let mut statement = connection
         .prepare(&query)
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let rows = statement
         .query_map(
             rusqlite::params_from_iter(expected.keys().copied()),
@@ -796,7 +948,7 @@ fn verify_required_index_sql(connection: &Connection) -> Result<(), Conversation
                 ))
             },
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut seen = BTreeSet::new();
     for row in rows {
         let (name, events_owner, sql) = row.map_err(|error| storage(error.to_string()))?;

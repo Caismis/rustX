@@ -27,7 +27,7 @@ import type {
   WorkflowRunId,
   WorkflowRunView,
   WorkflowTraceNode,
-} from '../../../protocol/app-server/v78';
+} from '../../../protocol/app-server/v80';
 import type { TraceCache } from '../../src/client/trace';
 import { applyTheme } from '../../src/app/appearance';
 import { WorkflowRunPanel } from '../../src/app/agent/WorkflowRunPanel';

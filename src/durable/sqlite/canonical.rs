@@ -1,5 +1,6 @@
 //! The canonical Message Ledger, Surface, and transcript domain.
 
+use crate::durable::sqlite::statements::FixedStatements;
 #[cfg(test)]
 mod tests;
 
@@ -55,7 +56,220 @@ use std::sync::atomic::Ordering;
 
 pub(super) mod first_human;
 
+/// Resolves the exact canonical result's committing Assistant/Attempt from
+/// primary canonical and Journal evidence, validating the native result.
+pub(super) fn tool_result_owner(
+    connection: &Connection,
+    message: &MessageId,
+    call: &crate::runtime::identity::ToolCallId,
+    through: u64,
+) -> Result<
+    Option<crate::durable::store::canonical::CanonicalToolResultOwner>,
+    ConversationStoreError,
+> {
+    type Row = (
+        String,
+        Option<String>,
+        String,
+        Option<u64>,
+        u32,
+        String,
+        bool,
+    );
+    // The occurrence index is derived from the primary ToolResult.
+    // Use the existing native decoder to retain its JSON, numeric and
+    // duplicate-field rules before trusting this row's Journal owner.
+    let (assistant, owner, stored_call, sequence, block, tool, valid_position): Row = connection
+        .query_row_cached(
+            "SELECT t.assistant_message_id,t.attempt_id,t.call_id,t.commit_sequence,
+                    t.block_index,t.tool_id,coalesce(m.position=t.result_ledger_position,0)
+                 FROM canonical_tool_calls t
+                 JOIN message_ledger m ON m.message_id=t.result_message_id
+                 WHERE t.result_message_id=?1",
+            [message.as_str()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+        .ok_or_else(|| {
+            ConversationStoreError::InvalidReference("missing native ToolResult ownership".into())
+        })?;
+    let body = load_message(connection, message)?;
+    if stored_call != call.as_str()
+        || !valid_position
+        || !matches!(body, MessageBlock::Tool(result)
+            if result.occurrence.assistant_message_id.as_str() == assistant.as_str()
+                && result.occurrence.block_index.get() == block
+                && result.tool_call_id.as_str() == stored_call.as_str()
+                && result.tool_id.as_str() == tool.as_str())
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "native ToolResult correlation or owner differs".into(),
+        ));
+    }
+    let Some(sequence) = sequence else {
+        if owner.is_some() {
+            return Err(ConversationStoreError::InvalidReference(
+                "native ToolResult has owner without commit".into(),
+            ));
+        }
+        return Ok(None);
+    };
+    if sequence > through {
+        return Err(ConversationStoreError::InvalidReference(
+            "native Assistant commit is after the recovery fact".into(),
+        ));
+    }
+    let assistant = MessageId::new(assistant);
+    let attempt = verified_assistant_commit(connection, &assistant, sequence, owner.as_deref())?;
+    Ok(attempt.map(
+        |attempt_id| crate::durable::store::canonical::CanonicalToolResultOwner {
+            assistant_message_id: assistant,
+            attempt_id,
+        },
+    ))
+}
+
+/// The attempt that committed a canonical Assistant with physical Tool calls,
+/// from the canonical Tool-call index verified against its exact Journal
+/// `AssistantMessageCommitted` fact.
+pub(super) fn assistant_owner(
+    connection: &Connection,
+    assistant: &MessageId,
+) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError> {
+    let row: Option<(Option<String>, Option<u64>)> = connection
+        .query_row_cached(
+            "SELECT attempt_id,commit_sequence FROM canonical_tool_calls
+             WHERE assistant_message_id=?1 ORDER BY block_index LIMIT 1",
+            [assistant.as_str()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    match row {
+        None | Some((None, None)) => Ok(None),
+        Some((Some(_), None)) => Err(ConversationStoreError::InvalidReference(
+            "native Assistant has owner without commit".into(),
+        )),
+        Some((owner, Some(sequence))) => {
+            verified_assistant_commit(connection, assistant, sequence, owner.as_deref())
+        }
+    }
+}
+
+fn verified_assistant_commit(
+    connection: &Connection,
+    assistant: &MessageId,
+    sequence: u64,
+    owner: Option<&str>,
+) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError> {
+    let json: Option<String> = connection
+        .query_row_cached(
+            "SELECT event_json FROM events WHERE sequence=?1",
+            [crate::durable::sqlite::seq_to_i64(sequence)?],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let Some(json) = json else {
+        return Err(ConversationStoreError::InvalidReference(
+            "missing native Assistant commit".into(),
+        ));
+    };
+    let event: RuntimeEventEnvelope = crate::durable::sqlite::decode(&json, "Assistant commit")?;
+    if event.sequence != sequence
+        || event
+            .attempt_id
+            .as_ref()
+            .map(crate::runtime::identity::AttemptId::as_str)
+            != owner
+        || !matches!(&event.event, crate::events::RuntimeEvent::AssistantMessageCommitted { message_id } if message_id == assistant)
+    {
+        return Err(ConversationStoreError::InvalidReference(
+            "native ToolResult owner disagrees with Journal".into(),
+        ));
+    }
+    Ok(event.attempt_id)
+}
+
 impl CanonicalStore for SqliteConversationStore {
+    fn recovery_tool_result_owner(
+        &self,
+        message: &MessageId,
+        call: &crate::runtime::identity::ToolCallId,
+        through: u64,
+    ) -> Result<
+        Option<crate::durable::store::canonical::CanonicalToolResultOwner>,
+        ConversationStoreError,
+    > {
+        let connection = self.lock()?;
+        tool_result_owner(&connection, message, call, through)
+    }
+
+    fn latest_human_activity(
+        &self,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let activity: Option<(i64, u32)> = connection
+            .query_row_cached(HUMAN_ACTIVITY_SQL, [i64::MAX], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .optional()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        activity
+            .map(|(seconds, nanos)| {
+                chrono::DateTime::from_timestamp(seconds, nanos)
+                    .ok_or_else(|| storage("native human activity timestamp unavailable"))
+            })
+            .transpose()
+    }
+
+    fn latest_todo_publication(&self) -> Result<Option<MessageBlock>, ConversationStoreError> {
+        let connection = self.lock()?;
+        let row: Option<(String, String)> = connection
+            .query_row_cached(
+                "SELECT message_id,message_json FROM message_ledger INDEXED BY message_ledger_todo_publication_idx WHERE todo_publication=1 ORDER BY position DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        row.map(|(stored_id, json)| {
+            let message: MessageBlock = crate::durable::sqlite::decode(&json, "Ledger message")?;
+            if crate::conversation::message_id_of(&message).as_str() != stored_id
+                || !crate::tools::todo::is_publication(&message)
+            {
+                return Err(ConversationStoreError::InvalidReference(format!(
+                    "Ledger row {stored_id} is not its indexed todo result"
+                )));
+            }
+            Ok(message)
+        })
+        .transpose()
+    }
+
+    fn canonical_assistant_owner(
+        &self,
+        assistant: &MessageId,
+    ) -> Result<Option<crate::runtime::identity::AttemptId>, ConversationStoreError> {
+        let connection = self.lock()?;
+        assistant_owner(&connection, assistant)
+    }
+
+    fn canonical_bodies(&self) -> Arc<crate::conversation::bodies::CanonicalBodies> {
+        Arc::clone(&self.conn.manifest.bodies)
+    }
+
     fn first_human_source(
         &self,
     ) -> Result<Option<crate::durable::store::canonical::FirstHumanSource>, ConversationStoreError>
@@ -72,23 +286,30 @@ impl CanonicalStore for SqliteConversationStore {
         limit: usize,
     ) -> Result<crate::durable::observation::NativeToolObservationPage, ConversationStoreError>
     {
-        let connection = self.lock()?;
-        observation_tools::page(
-            &connection,
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        let result = observation_tools::page(
+            &transaction,
             &self.conversation_id,
             cut,
             locator,
             offset,
             limit,
-        )
+        )?;
+        transaction
+            .commit()
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        Ok(result)
     }
     fn is_initialized(&self) -> Result<bool, ConversationStoreError> {
         let connection = self.lock()?;
         let (initialized, identity): (i64, Option<i64>) = connection
             .prepare_cached("SELECT s.bootstrap_initialized,b.id FROM rustx_store s LEFT JOIN bootstrap_identity b ON b.id=s.id WHERE s.id=1")
-            .map_err(|error| storage(format!("bootstrap state: {error}")))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("bootstrap state: {error}")))?
             .query_row([], |row| Ok((row.get(0)?, row.get(1)?)))
-            .map_err(|error| storage(format!("bootstrap state: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("bootstrap state: {error}")))?;
         match (initialized, identity) {
             (0, None) => Ok(false),
             (1, Some(1)) => Ok(true),
@@ -106,7 +327,9 @@ impl CanonicalStore for SqliteConversationStore {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()
-            .map_err(|error| storage(format!("bootstrap count: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("bootstrap count: {error}"))
+            })?;
         let seed = if let Some((count, digest)) = bootstrap {
             if count != messages.len() as u64 || digest != initial_history_digest(messages)? {
                 return Err(ConversationStoreError::InitialHistoryMismatch);
@@ -164,7 +387,12 @@ impl CanonicalStore for SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("initialize transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("initialize transaction: {error}"),
+                )
+            })?;
         // Fail closed if initialized metadata is missing or damaged. The marker
         // and identity are written in this same transaction, never independently.
         read_inherited_occupancy(&transaction)?;
@@ -175,7 +403,7 @@ impl CanonicalStore for SqliteConversationStore {
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
             )
             .optional()
-            .map_err(|error| storage(format!("bootstrap probe: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("bootstrap probe: {error}")))?;
         if let Some((
             count,
             digest,
@@ -214,7 +442,12 @@ impl CanonicalStore for SqliteConversationStore {
         } else {
             let existing: i64 = transaction
                 .query_row("SELECT COUNT(*) FROM message_ledger", [], |row| row.get(0))
-                .map_err(|error| storage(format!("bootstrap ledger probe: {error}")))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("bootstrap ledger probe: {error}"),
+                    )
+                })?;
             if existing != 0 {
                 return Err(storage(
                     "canonical Ledger exists without bootstrap identity",
@@ -254,12 +487,14 @@ impl CanonicalStore for SqliteConversationStore {
                     .find(|message| message.id() == &item.message_id)
                     .ok_or_else(|| storage("raw Tool canonical source missing"))?;
                 let position: u64 = transaction
-                    .query_row(
+                    .query_row_cached(
                         "SELECT position FROM message_ledger WHERE message_id=?1",
                         [item.message_id.as_str()],
                         |row| row.get(0),
                     )
-                    .map_err(|error| storage(error.to_string()))?;
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                    })?;
                 let _ = optional_display_layout(&transaction, || {
                     observation::index::index_message(&transaction, message, Some(position))?;
                     observation_trace::index_proposals(
@@ -307,7 +542,7 @@ impl CanonicalStore for SqliteConversationStore {
                         provenance::counts_digest(&history_digest,seq_to_i64(seed.turns().len() as u64)?,seq_to_i64(seed.completed_responses().len() as u64)?)
                     ],
                 )
-                .map_err(|error| storage(format!("insert bootstrap identity: {error}")))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("insert bootstrap identity: {error}")))?;
             let _ = optional_display_layout(&transaction, || {
                 observation_statistics::seed(&transaction, seed.turns())
             })?;
@@ -321,7 +556,7 @@ impl CanonicalStore for SqliteConversationStore {
             transaction.execute(
                 "UPDATE bootstrap_identity SET auxiliary_audit_count=?1,auxiliary_audit_digest=?2 WHERE id=1",
                 params![seq_to_i64(auxiliary_audit_count)?, auxiliary_audit_digest],
-            ).map_err(|error| storage(format!("install inherited auxiliary audit witness: {error}")))?;
+            ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("install inherited auxiliary audit witness: {error}")))?;
 
             // The original identity and provenance now exist together. Derived
             // readers validate this same transaction's complete bootstrap shape;
@@ -332,7 +567,12 @@ impl CanonicalStore for SqliteConversationStore {
                     "UPDATE rustx_store SET bootstrap_initialized=1 WHERE id=1",
                     [],
                 )
-                .map_err(|error| storage(format!("mark lineage bootstrap: {error}")))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("mark lineage bootstrap: {error}"),
+                    )
+                })?;
             let _ = optional_display_layout(&transaction, || {
                 observation_members::seed_members(&transaction, seed)
             })?;
@@ -365,9 +605,9 @@ impl CanonicalStore for SqliteConversationStore {
                 }
             }
         }
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("initialize commit: {error}")))
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("initialize commit: {error}"))
+        })
     }
     fn load_inherited_responses(
         &self,
@@ -391,7 +631,12 @@ impl CanonicalStore for SqliteConversationStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(format!("bootstrap history count: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("bootstrap history count: {error}"),
+                )
+            })?;
         let Some(count) = count else {
             // A low-level non-session composition may be opening a fresh
             // store. ConversationRuntime::initialize will establish the
@@ -403,10 +648,20 @@ impl CanonicalStore for SqliteConversationStore {
                 "SELECT message_json FROM message_ledger
                  ORDER BY position LIMIT ?1",
             )
-            .map_err(|error| storage(format!("bootstrap history query: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("bootstrap history query: {error}"),
+                )
+            })?;
         let rows = statement
             .query_map([count], |row| row.get::<_, String>(0))
-            .map_err(|error| storage(format!("bootstrap history rows: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("bootstrap history rows: {error}"),
+                )
+            })?;
         rows.map(|row| {
             let json = row.map_err(|error| storage(format!("bootstrap history row: {error}")))?;
             decode(&json, "bootstrap history")
@@ -426,7 +681,7 @@ impl CanonicalStore for SqliteConversationStore {
             ));
         }
         let connection = self.lock()?;
-        let mut query = connection.prepare("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
+        let mut query = connection.prepare_cached("SELECT CASE WHEN octet_length(assistant_message_id)<=4096 THEN assistant_message_id END, block_index, CASE WHEN octet_length(call_id)<=4096 THEN call_id END FROM canonical_tool_calls INDEXED BY canonical_tool_calls_pending WHERE result_message_id IS NULL ORDER BY assistant_message_id,block_index LIMIT ?1").map_err(|e| storage(e.to_string()))?;
         let rows = query
             .query_map([limit], |r| {
                 Ok((
@@ -464,11 +719,16 @@ impl CanonicalStore for SqliteConversationStore {
                         [],
                         |row| row.get::<_, i64>(0),
                     )
-                    .map_err(|error| storage(error.to_string()))?;
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                    })?;
                 probe();
             }
             load_head(transaction)
         })
+    }
+    fn validate_head(&self) -> Result<(), ConversationStoreError> {
+        self.read_transaction(|transaction| ledger::validate_head(transaction))
     }
     fn messages_are_human_inputs(&self, ids: &[MessageId]) -> Result<bool, ConversationStoreError> {
         let connection = self.lock()?;
@@ -480,12 +740,22 @@ impl CanonicalStore for SqliteConversationStore {
                     AND json_extract(message_json, '$.kind') = 'message'
              FROM message_ledger WHERE message_id = ?1",
             )
-            .map_err(|error| storage(format!("Ledger input authorship: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("Ledger input authorship: {error}"),
+                )
+            })?;
         for id in ids {
             let (stored_id, human): (String, bool) = query
                 .query_row([id.as_str()], |row| Ok((row.get(0)?, row.get(1)?)))
                 .optional()
-                .map_err(|error| storage(format!("Ledger input authorship: {error}")))?
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("Ledger input authorship: {error}"),
+                    )
+                })?
                 .ok_or_else(|| {
                     ConversationStoreError::InvalidReference(format!("message {id} is unavailable"))
                 })?;
@@ -513,10 +783,10 @@ impl CanonicalStore for SqliteConversationStore {
         &self,
         message_id: &MessageId,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-        let position: Option<i64> = self.lock()?.query_row(
-            "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+        let position: Option<i64> = self.lock()?.query_row_cached(
+            "SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",
             [message_id.as_str()], |row| row.get(0),
-        ).optional().map_err(|error| storage(format!("process control position: {error}")))?;
+        ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("process control position: {error}")))?;
         position
             .map(|value| nonnegative(value, "process control position").map(TranscriptCursor::new))
             .transpose()
@@ -526,9 +796,9 @@ impl CanonicalStore for SqliteConversationStore {
         event_id: &EventId,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
         let position: Option<i64> = self.lock()?.query_row(
-            "SELECT position FROM transcript_order WHERE reference_kind='attempt_terminal' AND reference_id=?1",
+            "SELECT position FROM transcript_entries WHERE native_reference_kind='attempt_terminal' AND native_reference_id=?1",
             [event_id.as_str()], |row| row.get(0),
-        ).optional().map_err(|error| storage(format!("terminal control position: {error}")))?;
+        ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("terminal control position: {error}")))?;
         position
             .map(|value| nonnegative(value, "terminal control position").map(TranscriptCursor::new))
             .transpose()
@@ -545,17 +815,28 @@ impl CanonicalStore for SqliteConversationStore {
                 [position],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(revision.map(SurfaceRevision::new))
     }
     fn message_append_revision(
         &self,
         message_id: &MessageId,
     ) -> Result<Option<SurfaceRevision>, ConversationStoreError> {
-        let revision: Option<i64> = self.lock()?.query_row(
-            "SELECT revision FROM surface_ops WHERE json_extract(op_json, '$.op') = 'append' AND json_extract(op_json, '$.message_id') = ?1 ORDER BY revision LIMIT 1",
-            [message_id.as_str()], |row| row.get(0),
-        ).optional().map_err(|error| storage(format!("message append revision: {error}")))?;
+        let revision: Option<i64> = self
+            .lock()?
+            .query_row(
+                "SELECT first_append_revision FROM message_ledger WHERE message_id=?1",
+                [message_id.as_str()],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("message append revision: {error}"),
+                )
+            })?
+            .flatten();
         revision
             .map(|value| nonnegative(value, "message append revision").map(SurfaceRevision::new))
             .transpose()
@@ -601,7 +882,7 @@ impl CanonicalStore for SqliteConversationStore {
     ) -> Result<MessageId, ConversationStoreError> {
         let connection = self.lock()?;
         let position = content::canonical_position(&connection, locator)?;
-        let id:Option<String>=connection.query_row("SELECT message_id FROM message_ledger WHERE ordinary_user=1 AND first_append_revision<=?1 AND position=?2",params![seq_to_i64(boundary_revision.get())?,position],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+        let id:Option<String>=connection.query_row("SELECT message_id FROM message_ledger WHERE ordinary_user=1 AND first_append_revision<=?1 AND position=?2",params![seq_to_i64(boundary_revision.get())?,position],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         id.map(MessageId::new).ok_or_else(|| {
             ConversationStoreError::InvalidReference(
                 "Surface boundary locator/revision mismatch".into(),
@@ -622,7 +903,7 @@ impl CanonicalStore for SqliteConversationStore {
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         id.map(MessageId::new).ok_or_else(|| {
             ConversationStoreError::InvalidReference(
                 "canonical boundary locator/revision mismatch".into(),
@@ -668,7 +949,12 @@ impl CanonicalStore for SqliteConversationStore {
         let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("canonical event transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("canonical event transaction: {error}"),
+                )
+            })?;
         ensure_surface_head(&transaction)?;
 
         let transcript_cursor = validation.append(&transaction, message, None)?;
@@ -677,7 +963,12 @@ impl CanonicalStore for SqliteConversationStore {
             return Err(storage("fault injected: canonical event journal commit"));
         }
         process_death::reach_event("before:canonical", &event.event);
-        let mut persisted = persist_event_tx(&transaction, &self.conversation_id, event)?;
+        let mut persisted = persist_event_tx(
+            &self.conn.event_guard,
+            &transaction,
+            &self.conversation_id,
+            event,
+        )?;
         let mut receipt = canonical_observation_receipt(
             &transaction,
             &self.conversation_id,
@@ -705,9 +996,9 @@ impl CanonicalStore for SqliteConversationStore {
                 Arc::clone(&receipt.observation),
             )
         };
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("canonical event commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("canonical event commit: {error}"))
+        })?;
         validation.committed(&connection);
         process_death::reach_event("after:canonical", &persisted.event.event);
         Ok((persisted.event, receipt))
@@ -728,7 +1019,12 @@ impl CanonicalStore for SqliteConversationStore {
         let mut validation = append_validation::Batch::begin(&self.conn.append_validation);
         let transaction = connection
             .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|error| storage(format!("canonical event batch transaction: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("canonical event batch transaction: {error}"),
+                )
+            })?;
         ensure_surface_head(&transaction)?;
 
         let mut receipts = Vec::with_capacity(messages.len());
@@ -744,8 +1040,13 @@ impl CanonicalStore for SqliteConversationStore {
                 ));
             }
             persisted.push(
-                persist_event_tx_deferred(&transaction, &self.conversation_id, event.clone())?
-                    .event,
+                persist_event_tx_deferred(
+                    &self.conn.event_guard,
+                    &transaction,
+                    &self.conversation_id,
+                    event.clone(),
+                )?
+                .event,
             );
         }
         let range = persisted
@@ -775,9 +1076,12 @@ impl CanonicalStore for SqliteConversationStore {
             event.observation.clone_from(&shared);
         }
         process_death::reach("before:append_canonical_batch");
-        transaction
-            .commit()
-            .map_err(|error| storage(format!("canonical event batch commit: {error}")))?;
+        transaction.commit().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("canonical event batch commit: {error}"),
+            )
+        })?;
         validation.committed(&connection);
         process_death::reach("after:append_canonical_batch");
         Ok((persisted, receipts))
@@ -797,16 +1101,15 @@ impl CanonicalStore for SqliteConversationStore {
         let limit = i64::try_from(limit).map_err(|_| storage("page limit is too large"))?;
         let mut statement = connection
             .prepare("SELECT position,message_json,message_id FROM message_ledger WHERE position > ?1 ORDER BY position LIMIT ?2")
-            .map_err(|error| storage(format!("canonical page: {error}")))?;
-        let mut rows = statement
-            .query(params![after, limit])
-            .map_err(|error| storage(format!("canonical page query: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("canonical page: {error}")))?;
+        let mut rows = statement.query(params![after, limit]).map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("canonical page query: {error}"))
+        })?;
         let mut messages = Vec::new();
         let mut next = None;
-        while let Some(row) = rows
-            .next()
-            .map_err(|error| storage(format!("canonical page row: {error}")))?
-        {
+        while let Some(row) = rows.next().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("canonical page row: {error}"))
+        })? {
             let position: i64 = row
                 .get(0)
                 .map_err(|error| storage(format!("canonical position: {error}")))?;
@@ -866,15 +1169,16 @@ impl CanonicalStore for SqliteConversationStore {
         // the current ledger head. Pending rows are supplied below from C.
         let mut statement = connection
             .prepare(
-                "SELECT t.position,t.reference_kind,t.reference_id FROM transcript_order t
-             WHERE (t.reference_kind='message' AND EXISTS
-               (SELECT 1 FROM message_ledger m WHERE m.message_id=t.reference_id)
-               AND (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?2))))
-             OR (t.reference_kind='publication_audit' AND
-               (t.position<=?1 OR t.reference_id IN (SELECT value FROM json_each(?3))))
-             OR (t.reference_kind='inherited_turn' AND t.position<=?1)
-             OR (t.reference_kind IN ('interaction_event','configuration_event','attempt_terminal') AND EXISTS
-               (SELECT 1 FROM events e WHERE e.event_id=t.reference_id AND e.sequence<=?4))
+                "SELECT t.position,t.native_reference_kind,t.native_reference_id FROM transcript_entries t
+             WHERE (t.native_reference_kind='message' AND EXISTS
+               (SELECT 1 FROM message_ledger m WHERE m.message_id=t.native_reference_id)
+               AND (t.position<=?1 OR t.native_reference_id IN (SELECT value FROM json_each(?2))))
+             OR (t.native_reference_kind='publication_audit' AND
+               (t.position<=?1 OR t.native_reference_id IN (SELECT value FROM json_each(?3))))
+             OR (t.native_reference_kind='inherited_turn' AND t.position<=?1)
+             OR (t.native_reference_kind IN ('interaction_event','configuration_event','attempt_terminal') AND EXISTS
+               (SELECT 1 FROM events e WHERE e.sequence=(SELECT CAST(substr(t.native_reference_id,length(conversation_id)+8) AS INTEGER) FROM rustx_store WHERE id=1) AND e.event_id=t.native_reference_id AND e.sequence<=?4
+                UNION ALL SELECT 1 FROM events e INDEXED BY events_alias_idx WHERE e.event_id=t.native_reference_id AND e.event_id != e.conversation_id || '-event-' || e.sequence AND e.sequence<=?4))
              ORDER BY t.position DESC LIMIT ?5",
             )
             .map_err(|e| storage(e.to_string()))?;
@@ -914,7 +1218,7 @@ impl CanonicalStore for SqliteConversationStore {
                 let result: Option<(String, i64)> = connection.query_row(
                     "SELECT m.message_id,t.position FROM canonical_tool_calls c
                      JOIN message_ledger m ON m.message_id=c.result_message_id
-                     JOIN transcript_order t ON t.reference_kind='message' AND t.reference_id=m.message_id
+                     JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=m.message_id
                      WHERE c.assistant_message_id=?1 AND c.block_index=?2",
                     params![tool.message_id.as_str(), tool.block_index.get()],
                     |row| Ok((row.get(0)?,row.get(1)?))).optional().map_err(|e| storage(e.to_string()))?;
@@ -1015,13 +1319,13 @@ pub(super) fn canonical_observation_batch(
     let mut positions = Vec::with_capacity(items.len());
     for (id, _) in items {
         let position: u64 = connection
-            .query_row(
+            .query_row_cached(
                 "SELECT position FROM message_ledger WHERE message_id=?1",
                 [id.as_str()],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
-        source_unavailable |= connection.execute("UPDATE observation_headers SET journal_position=?1,header_json=CAST(json_set(header_json,'$.transcript_cursor',transcript_position) AS BLOB) WHERE ledger_position=?2",params![through,position]).is_err();
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        source_unavailable |= connection.execute_cached("UPDATE transcript_entries SET journal_position=?1,header_json=CAST(json_set(header_json,'$.transcript_cursor',CASE WHEN position>0 THEN position END) AS BLOB) WHERE ledger_position=?2",params![through,position]).is_err();
         positions.push(position);
     }
     let first_position = *positions.first().expect("nonempty canonical batch");
@@ -1033,6 +1337,7 @@ pub(super) fn canonical_observation_batch(
         CanonicalSourceScalars::default()
     });
     let batch = Arc::new(crate::durable::CanonicalObservationBatch {
+        native_release_sequence: None,
         ready_through: observation_readiness::frontier(connection, 0, through).ok(),
         ready_t_through: observation_readiness::transcript_frontier(
             connection,
@@ -1080,19 +1385,26 @@ pub(super) struct CanonicalSourceScalars {
     pub(super) todos: Option<crate::durable::NativeTodoObservation>,
 }
 
+// Each timed human row carries the greatest timestamp through its position.
+// Seeking the last such row preserves max-time semantics at any historical cut,
+// including out-of-order timestamps, without scanning later history by time.
+pub(super) const HUMAN_ACTIVITY_SQL: &str = "SELECT human_activity_max_seconds,human_activity_max_nanos FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=?1 ORDER BY position DESC LIMIT 1";
+
 pub(super) fn complete_canonical_scalars(
     connection: &Connection,
     cut: &crate::durable::observation::ObservationReadCut,
 ) -> Result<CanonicalSourceScalars, ConversationStoreError> {
-    let activity: Option<(i64,u32)> = connection.query_row(
-        "SELECT human_activity_seconds,human_activity_nanos FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=?1 ORDER BY human_activity_seconds DESC,human_activity_nanos DESC LIMIT 1",
-        [cut.ledger_through], |row| Ok((row.get(0)?,row.get(1)?)),
-    ).optional().map_err(|error| storage(error.to_string()))?;
-    let opening: Option<Option<String>> = connection.query_row(
+    let activity: Option<(i64, u32)> = connection
+        .query_row_cached(HUMAN_ACTIVITY_SQL, [cut.ledger_through], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let opening: Option<Option<String>> = connection.query_row_cached(
         "SELECT opening_preview FROM message_ledger INDEXED BY message_ledger_opening_idx WHERE ordinary_user=1 AND position<=?1 ORDER BY position LIMIT 1",
         [cut.ledger_through], |row| row.get(0),
-    ).optional().map_err(|error| storage(error.to_string()))?;
-    let first_human_position = connection.query_row("SELECT position FROM message_ledger INDEXED BY message_ledger_first_human_idx WHERE ordinary_human=1 AND position<=?1 ORDER BY position LIMIT 1",[cut.ledger_through],|row|row.get::<_,u64>(0)).optional().map_err(|error|storage(error.to_string()))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let first_human_position = connection.query_row_cached("SELECT position FROM message_ledger INDEXED BY message_ledger_first_human_idx WHERE ordinary_human=1 AND position<=?1 ORDER BY position LIMIT 1",[cut.ledger_through],|row|row.get::<_,u64>(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     Ok(CanonicalSourceScalars {
         human_activity_at: activity
             .map(|(seconds, nanos)| {
@@ -1139,7 +1451,9 @@ pub(super) fn append_canonical_messages(
     let mut validation = append_validation::Batch::begin(&store.conn.append_validation);
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| storage(format!("canonical transaction: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("canonical transaction: {error}"))
+        })?;
     ensure_surface_head(&transaction)?;
 
     let mut receipts = Vec::with_capacity(messages.len());
@@ -1168,9 +1482,9 @@ pub(super) fn append_canonical_messages(
             .collect::<Vec<_>>(),
         None,
     )?;
-    transaction
-        .commit()
-        .map_err(|error| storage(format!("canonical commit: {error}")))?;
+    transaction.commit().map_err(|error| {
+        crate::durable::sqlite::sqlite_error(&error, format!("canonical commit: {error}"))
+    })?;
     validation.committed(&connection);
     Ok(receipts)
 }
@@ -1181,11 +1495,11 @@ pub(super) fn ordinary_user_by_id(
 ) -> Result<bool, ConversationStoreError> {
     connection
         .prepare_cached("SELECT ordinary_user FROM message_ledger WHERE message_id=?1")
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .query_row([id.as_str()], |row| row.get(0))
         .optional()
         .map(|value| value.unwrap_or(false))
-        .map_err(|error| storage(error.to_string()))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))
 }
 
 /// Seed irrelevant text-Assistant history for read-cost regressions without
@@ -1205,7 +1519,12 @@ pub(crate) fn append_assistant_history_fixture(
     let mut connection = store.lock()?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| storage(format!("Assistant history fixture: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("Assistant history fixture: {error}"),
+            )
+        })?;
     ensure_surface_head(&transaction)?;
     let mut head = load_head(&transaction)?;
     for (assistant, event) in history {
@@ -1229,14 +1548,22 @@ pub(crate) fn append_assistant_history_fixture(
                 message_id: assistant.id.clone(),
             },
         )?;
-        persist_event_tx(&transaction, store.conversation_id(), event.clone())?;
+        persist_event_tx(
+            &store.conn.event_guard,
+            &transaction,
+            store.conversation_id(),
+            event.clone(),
+        )?;
     }
     update_surface_head(&transaction, head.revision, head.compaction_generation)?;
     // Verify the same final durable invariants as ordinary appends, once.
     load_head(&transaction)?;
-    transaction
-        .commit()
-        .map_err(|error| storage(format!("Assistant history fixture commit: {error}")))
+    transaction.commit().map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("Assistant history fixture commit: {error}"),
+        )
+    })
 }
 
 pub(super) const INHERITED_OCCUPANCY_SQL: &str = "SELECT s.bootstrap_initialized,b.message_count,b.history_digest,b.occupancy_json,b.occupancy_digest FROM rustx_store s LEFT JOIN bootstrap_identity b ON b.id=s.id WHERE s.id=1";
@@ -1278,7 +1605,9 @@ pub(super) fn read_inherited_occupancy(
                 row.get(4)?,
             ))
         })
-        .map_err(|error| storage(format!("bootstrap occupancy: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("bootstrap occupancy: {error}"))
+        })?;
     let (count, history, json, digest) = match (initialized, count, history, json, digest) {
         (0, None, None, None, None) => return Ok(None),
         (1, Some(count), Some(history), Some(json), Some(digest)) if count >= 0 => (

@@ -2,11 +2,13 @@
 
 use super::{Connection, ConversationStoreError, OptionalExtension, params, storage};
 
-pub(super) const AUXILIARY_SCHEMA: &str = r"
-CREATE INDEX IF NOT EXISTS events_primary_trace_kind_idx
-    ON events(observation_kind,sequence) WHERE observation_trace_fact_required=1;
+pub(super) const AUXILIARY_SCHEMA: &str = concat!(
+    "CREATE INDEX IF NOT EXISTS events_primary_trace_kind_idx ON events",
+    crate::durable::sqlite::event_kind_key::sql!("observation_kind"),
+    " WHERE observation_trace_fact_required=1;",
+    r"
 CREATE TABLE IF NOT EXISTS request_owners (
-    request_id TEXT PRIMARY KEY
+    request_id TEXT NOT NULL UNIQUE
         CHECK(length(CAST(request_id AS BLOB)) >= 1),
     owner_kind TEXT NOT NULL CHECK(owner_kind IN ('agent','auxiliary')),
     attempt_id TEXT,
@@ -14,8 +16,8 @@ CREATE TABLE IF NOT EXISTS request_owners (
     retry_number INTEGER,
     call_id TEXT REFERENCES auxiliary_calls(call_id),
     auxiliary_ordinal INTEGER,
-    start_sequence INTEGER NOT NULL UNIQUE REFERENCES events(sequence),
-    terminal_sequence INTEGER UNIQUE REFERENCES events(sequence),
+    start_sequence INTEGER PRIMARY KEY REFERENCES events(sequence) DEFERRABLE INITIALLY DEFERRED,
+    terminal_sequence INTEGER REFERENCES events(sequence),
     terminal_kind TEXT CHECK(terminal_kind IN ('completed','failed')),
     CHECK(owner_kind='agent'
           OR length(CAST(request_id AS BLOB)) <= 512),
@@ -37,14 +39,14 @@ CREATE TABLE IF NOT EXISTS request_owners (
 
 CREATE UNIQUE INDEX IF NOT EXISTS events_auxiliary_submission_idx
     ON events(json_extract(event_json,'$.event.business_source.identity.correlation'))
-    WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started'
+    WHERE event_kind='auxiliary_call_started'
       AND json_extract(event_json,'$.event.business_source.kind')='submission';
 
 CREATE TABLE IF NOT EXISTS auxiliary_calls (
-    call_id TEXT PRIMARY KEY
+    call_id TEXT NOT NULL UNIQUE
         CHECK(length(CAST(call_id AS BLOB)) BETWEEN 1 AND 64),
-    started_sequence INTEGER NOT NULL UNIQUE REFERENCES events(sequence),
-    settled_sequence INTEGER UNIQUE REFERENCES events(sequence),
+    started_sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
+    settled_sequence INTEGER REFERENCES events(sequence),
     outcome TEXT CHECK(outcome IN ('completed','failed','cancelled')),
     CHECK((settled_sequence IS NULL) = (outcome IS NULL))
 );
@@ -55,35 +57,33 @@ CREATE TABLE IF NOT EXISTS auxiliary_requests (
     request_id TEXT NOT NULL UNIQUE
         CHECK(length(CAST(request_id AS BLOB)) BETWEEN 1 AND 512),
     model TEXT NOT NULL CHECK(length(CAST(model AS BLOB)) BETWEEN 1 AND 512),
-    started_sequence INTEGER NOT NULL UNIQUE REFERENCES events(sequence),
-    terminal_sequence INTEGER UNIQUE REFERENCES events(sequence),
+    started_sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
+    terminal_sequence INTEGER REFERENCES events(sequence),
     terminal_kind TEXT CHECK(terminal_kind IN ('completed','failed')),
-    PRIMARY KEY(call_id,ordinal),
+    UNIQUE(call_id,ordinal),
     CHECK((terminal_sequence IS NULL) = (terminal_kind IS NULL))
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS auxiliary_requests_open_idx
     ON auxiliary_requests(call_id) WHERE terminal_sequence IS NULL;
-CREATE INDEX IF NOT EXISTS auxiliary_requests_request_idx
-    ON auxiliary_requests(request_id,started_sequence);
 CREATE INDEX IF NOT EXISTS auxiliary_requests_terminal_idx
     ON auxiliary_requests(call_id,terminal_sequence);
 
 CREATE TABLE IF NOT EXISTS auxiliary_retries (
-    request_id TEXT PRIMARY KEY REFERENCES auxiliary_requests(request_id),
+    request_id TEXT NOT NULL UNIQUE REFERENCES auxiliary_requests(request_id),
     call_id TEXT NOT NULL REFERENCES auxiliary_calls(call_id),
     next_ordinal INTEGER NOT NULL CHECK(next_ordinal BETWEEN 1 AND 2),
-    sequence INTEGER NOT NULL UNIQUE REFERENCES events(sequence),
+    sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
     UNIQUE(call_id,next_ordinal)
 );
 CREATE TABLE IF NOT EXISTS auxiliary_title_calls (
-    call_id TEXT PRIMARY KEY REFERENCES auxiliary_calls(call_id),
-    message_id TEXT NOT NULL REFERENCES message_ledger(message_id)
+    call_sequence INTEGER PRIMARY KEY REFERENCES auxiliary_calls(started_sequence),
+    ledger_position INTEGER NOT NULL REFERENCES message_ledger(position)
 );
-CREATE INDEX IF NOT EXISTS auxiliary_title_calls_source_idx ON auxiliary_title_calls(message_id,call_id);
+CREATE INDEX IF NOT EXISTS auxiliary_title_calls_source_idx ON auxiliary_title_calls(ledger_position,call_sequence);
 CREATE TABLE IF NOT EXISTS auxiliary_title_sources (
-    message_id TEXT PRIMARY KEY REFERENCES message_ledger(message_id),
-    call_id TEXT UNIQUE REFERENCES auxiliary_calls(call_id),
+    ledger_position INTEGER PRIMARY KEY REFERENCES message_ledger(position),
+    call_sequence INTEGER UNIQUE REFERENCES auxiliary_calls(started_sequence),
     consumed INTEGER NOT NULL CHECK(consumed IN (0,1))
 );
 CREATE TABLE IF NOT EXISTS auxiliary_audit_facts (
@@ -111,32 +111,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS auxiliary_audit_offset_idx
     ON auxiliary_audit_facts(audit_offset);
 CREATE INDEX IF NOT EXISTS auxiliary_audit_call_idx
     ON auxiliary_audit_facts(call_id,sequence);
-CREATE INDEX IF NOT EXISTS auxiliary_audit_request_idx
-    ON auxiliary_audit_facts(request_id,sequence)
-    WHERE request_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS auxiliary_audit_sequence_idx
-    ON auxiliary_audit_facts(sequence,audit_offset);
-CREATE INDEX IF NOT EXISTS auxiliary_calls_started_idx
-    ON auxiliary_calls(started_sequence);
-CREATE INDEX IF NOT EXISTS auxiliary_calls_settled_idx
-    ON auxiliary_calls(settled_sequence)
-    WHERE settled_sequence IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS request_owners_terminal_idx
+    ON request_owners(terminal_sequence) WHERE terminal_sequence IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS auxiliary_calls_terminal_idx
+    ON auxiliary_calls(settled_sequence) WHERE settled_sequence IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS auxiliary_requests_outcome_idx
+    ON auxiliary_requests(terminal_sequence) WHERE terminal_sequence IS NOT NULL;
 CREATE INDEX IF NOT EXISTS request_owners_source_idx
     ON request_owners(owner_kind,call_id,auxiliary_ordinal)
     WHERE owner_kind='auxiliary';
 CREATE INDEX IF NOT EXISTS events_auxiliary_call_id_kind_idx
-    ON events(json_extract(event_json,'$.event.call_id'),
-              json_extract(event_json,'$.event.type'),sequence);
+    ON events(event_call_id,
+              event_kind)
+    WHERE event_call_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS events_auxiliary_fact_type_idx
-    ON events(json_extract(event_json,'$.event.type'),sequence)
+    ON events(event_kind)
     WHERE (
-        json_extract(event_json,'$.event.type') IN
+        event_kind IN
             ('model_request_started','model_request_completed','model_request_failed')
-        AND json_extract(event_json,'$.event.owner.type')='auxiliary'
+        AND event_owner_kind='auxiliary'
     )
-    OR json_extract(event_json,'$.event.type') IN
+    OR event_kind IN
         ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled');
-";
+"
+);
 
 pub(super) const AUXILIARY_SEQUENCE_ENCODING_DIGITS_MAX: usize = 20;
 
@@ -151,20 +149,44 @@ pub(super) struct AuxiliaryIndexShape {
 
 pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
     AuxiliaryIndexShape {
+        table: "request_owners",
+        name: "request_owners_terminal_idx",
+        unique: true,
+        partial: true,
+        columns: &[Some("terminal_sequence")],
+        definition: "CREATE UNIQUE INDEX request_owners_terminal_idx ON request_owners(terminal_sequence) WHERE terminal_sequence IS NOT NULL",
+    },
+    AuxiliaryIndexShape {
+        table: "auxiliary_calls",
+        name: "auxiliary_calls_terminal_idx",
+        unique: true,
+        partial: true,
+        columns: &[Some("settled_sequence")],
+        definition: "CREATE UNIQUE INDEX auxiliary_calls_terminal_idx ON auxiliary_calls(settled_sequence) WHERE settled_sequence IS NOT NULL",
+    },
+    AuxiliaryIndexShape {
+        table: "auxiliary_requests",
+        name: "auxiliary_requests_outcome_idx",
+        unique: true,
+        partial: true,
+        columns: &[Some("terminal_sequence")],
+        definition: "CREATE UNIQUE INDEX auxiliary_requests_outcome_idx ON auxiliary_requests(terminal_sequence) WHERE terminal_sequence IS NOT NULL",
+    },
+    AuxiliaryIndexShape {
         table: "events",
         name: "events_auxiliary_submission_idx",
         unique: true,
         partial: true,
         columns: &[None],
-        definition: "CREATE UNIQUE INDEX events_auxiliary_submission_idx ON events(json_extract(event_json,'$.event.business_source.identity.correlation')) WHERE json_extract(event_json,'$.event.type')='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission'",
+        definition: "CREATE UNIQUE INDEX events_auxiliary_submission_idx ON events(json_extract(event_json,'$.event.business_source.identity.correlation')) WHERE event_kind='auxiliary_call_started' AND json_extract(event_json,'$.event.business_source.kind')='submission'",
     },
     AuxiliaryIndexShape {
         table: "auxiliary_title_calls",
         name: "auxiliary_title_calls_source_idx",
         unique: false,
         partial: false,
-        columns: &[Some("message_id"), Some("call_id")],
-        definition: "CREATE INDEX auxiliary_title_calls_source_idx ON auxiliary_title_calls(message_id,call_id)",
+        columns: &[Some("ledger_position"), Some("call_sequence")],
+        definition: "CREATE INDEX auxiliary_title_calls_source_idx ON auxiliary_title_calls(ledger_position,call_sequence)",
     },
     AuxiliaryIndexShape {
         table: "message_ledger",
@@ -179,8 +201,12 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         name: "events_primary_trace_kind_idx",
         unique: false,
         partial: true,
-        columns: &[Some("observation_kind"), Some("sequence")],
-        definition: "CREATE INDEX events_primary_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_trace_fact_required=1",
+        columns: &[None],
+        definition: concat!(
+            "CREATE INDEX events_primary_trace_kind_idx ON events",
+            crate::durable::sqlite::event_kind_key::sql!("observation_kind"),
+            " WHERE observation_trace_fact_required=1"
+        ),
     },
     AuxiliaryIndexShape {
         table: "auxiliary_requests",
@@ -189,14 +215,6 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         partial: true,
         columns: &[Some("call_id")],
         definition: "CREATE UNIQUE INDEX auxiliary_requests_open_idx ON auxiliary_requests(call_id) WHERE terminal_sequence IS NULL",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_requests",
-        name: "auxiliary_requests_request_idx",
-        unique: false,
-        partial: false,
-        columns: &[Some("request_id"), Some("started_sequence")],
-        definition: "CREATE INDEX auxiliary_requests_request_idx ON auxiliary_requests(request_id,started_sequence)",
     },
     AuxiliaryIndexShape {
         table: "auxiliary_requests",
@@ -223,38 +241,6 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         definition: "CREATE INDEX auxiliary_audit_call_idx ON auxiliary_audit_facts(call_id,sequence)",
     },
     AuxiliaryIndexShape {
-        table: "auxiliary_audit_facts",
-        name: "auxiliary_audit_request_idx",
-        unique: false,
-        partial: true,
-        columns: &[Some("request_id"), Some("sequence")],
-        definition: "CREATE INDEX auxiliary_audit_request_idx ON auxiliary_audit_facts(request_id,sequence) WHERE request_id IS NOT NULL",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_audit_facts",
-        name: "auxiliary_audit_sequence_idx",
-        unique: false,
-        partial: false,
-        columns: &[Some("sequence"), Some("audit_offset")],
-        definition: "CREATE INDEX auxiliary_audit_sequence_idx ON auxiliary_audit_facts(sequence,audit_offset)",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_calls",
-        name: "auxiliary_calls_started_idx",
-        unique: false,
-        partial: false,
-        columns: &[Some("started_sequence")],
-        definition: "CREATE INDEX auxiliary_calls_started_idx ON auxiliary_calls(started_sequence)",
-    },
-    AuxiliaryIndexShape {
-        table: "auxiliary_calls",
-        name: "auxiliary_calls_settled_idx",
-        unique: false,
-        partial: true,
-        columns: &[Some("settled_sequence")],
-        definition: "CREATE INDEX auxiliary_calls_settled_idx ON auxiliary_calls(settled_sequence) WHERE settled_sequence IS NOT NULL",
-    },
-    AuxiliaryIndexShape {
         table: "request_owners",
         name: "request_owners_source_idx",
         unique: false,
@@ -270,26 +256,29 @@ pub(super) const AUXILIARY_INDEXES: &[AuxiliaryIndexShape] = &[
         table: "events",
         name: "events_auxiliary_call_id_kind_idx",
         unique: false,
-        partial: false,
-        columns: &[None, None, Some("sequence")],
-        definition: "CREATE INDEX events_auxiliary_call_id_kind_idx ON events(json_extract(event_json,'$.event.call_id'),json_extract(event_json,'$.event.type'),sequence)",
+        partial: true,
+        columns: &[Some("event_call_id"), Some("event_kind")],
+        definition: "CREATE INDEX events_auxiliary_call_id_kind_idx ON events(event_call_id,event_kind) WHERE event_call_id IS NOT NULL",
     },
     AuxiliaryIndexShape {
         table: "events",
         name: "events_auxiliary_fact_type_idx",
         unique: false,
         partial: true,
-        columns: &[None, Some("sequence")],
-        definition: "CREATE INDEX events_auxiliary_fact_type_idx ON events(json_extract(event_json,'$.event.type'),sequence) WHERE (json_extract(event_json,'$.event.type') IN ('model_request_started','model_request_completed','model_request_failed') AND json_extract(event_json,'$.event.owner.type')='auxiliary') OR json_extract(event_json,'$.event.type') IN ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')",
+        columns: &[Some("event_kind")],
+        definition: "CREATE INDEX events_auxiliary_fact_type_idx ON events(event_kind) WHERE (event_kind IN ('model_request_started','model_request_completed','model_request_failed') AND event_owner_kind='auxiliary') OR event_kind IN ('auxiliary_call_started','auxiliary_call_settled','auxiliary_retry_scheduled')",
     },
 ];
 
 pub(in crate::durable::sqlite) fn create_schema(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
-    connection
-        .execute_batch(AUXILIARY_SCHEMA)
-        .map_err(|error| storage(format!("create auxiliary owner schema: {error}")))
+    connection.execute_batch(AUXILIARY_SCHEMA).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("create auxiliary owner schema: {error}"),
+        )
+    })
 }
 
 pub(super) fn normalized_index_definition(value: &str) -> String {
@@ -320,7 +309,12 @@ pub(super) fn verify_required_indexes(
                     row.get::<_, i64>(4)?,
                 ))
             })
-            .map_err(|error| storage(format!("read auxiliary indexes: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read auxiliary indexes: {error}"),
+                )
+            })?
             .find_map(|row| match row {
                 Ok((name, unique, partial)) if name == expected.name => {
                     Some(Ok((unique == 1, partial == 1)))
@@ -345,9 +339,19 @@ pub(super) fn verify_required_indexes(
         let quoted = expected.name.replace('"', "\"\"");
         let columns = connection
             .prepare(&format!("PRAGMA index_info(\"{quoted}\")"))
-            .map_err(|error| storage(format!("inspect auxiliary index columns: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inspect auxiliary index columns: {error}"),
+                )
+            })?
             .query_map([], |row| row.get::<_, Option<String>>(2))
-            .map_err(|error| storage(format!("read auxiliary index columns: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read auxiliary index columns: {error}"),
+                )
+            })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("collect auxiliary index columns: {error}")))?;
         if columns.len() != expected.columns.len()
@@ -369,7 +373,12 @@ pub(super) fn verify_required_indexes(
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(format!("read auxiliary index definition: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read auxiliary index definition: {error}"),
+                )
+            })?;
         let expected_definition = normalized_index_definition(expected.definition);
         if definition
             .as_deref()
@@ -397,9 +406,12 @@ pub(in crate::durable::sqlite) fn verify_schema(
         ),
         (
             "auxiliary_title_sources",
-            &["message_id", "call_id", "consumed"][..],
+            &["ledger_position", "call_sequence", "consumed"][..],
         ),
-        ("auxiliary_title_calls", &["call_id", "message_id"][..]),
+        (
+            "auxiliary_title_calls",
+            &["call_sequence", "ledger_position"][..],
+        ),
         (
             "request_owners",
             &[
@@ -445,10 +457,20 @@ pub(in crate::durable::sqlite) fn verify_schema(
     ] {
         let mut statement = connection
             .prepare(&format!("PRAGMA table_info({table})"))
-            .map_err(|error| storage(format!("inspect auxiliary table {table}: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("inspect auxiliary table {table}: {error}"),
+                )
+            })?;
         let actual = statement
             .query_map([], |row| row.get::<_, String>(1))
-            .map_err(|error| storage(format!("read auxiliary table {table}: {error}")))?
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("read auxiliary table {table}: {error}"),
+                )
+            })?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(format!("collect auxiliary table {table}: {error}")))?;
         for column in columns {
@@ -480,14 +502,23 @@ pub(in crate::durable::sqlite) fn verify_schema(
     }
     verify_required_indexes(connection)?;
     for (table, column) in [
-        ("request_owners", "request_id"),
         ("request_owners", "start_sequence"),
+        ("auxiliary_calls", "started_sequence"),
+        ("auxiliary_requests", "started_sequence"),
+        ("auxiliary_retries", "sequence"),
+        ("auxiliary_title_calls", "call_sequence"),
+        ("auxiliary_title_sources", "ledger_position"),
+    ] {
+        crate::durable::sqlite::schema::shape::verify_integer_primary_key(
+            connection, table, column,
+        )?;
+    }
+    for (table, column) in [
+        ("request_owners", "request_id"),
         ("request_owners", "terminal_sequence"),
         ("auxiliary_calls", "call_id"),
-        ("auxiliary_calls", "started_sequence"),
         ("auxiliary_calls", "settled_sequence"),
         ("auxiliary_requests", "request_id"),
-        ("auxiliary_requests", "started_sequence"),
         ("auxiliary_requests", "terminal_sequence"),
         ("auxiliary_audit_facts", "audit_offset"),
     ] {

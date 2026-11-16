@@ -1,0 +1,7 @@
+{
+  "candidate": "91a3ffb422ba1096cb351e375139a75fd26310e2",
+  "candidate_rust_tree": "5a6e2558103b72cb67f54eb30b0f2a248bf3a620",
+  "reverted_by": "535ace304cd6f9cdb2009ae96649028af6839933",
+  "final_rust_tree": "ed64a1b1f99937f6bc45f1c923d98247cc366fbf",
+  "scope": "No retained Rust production change. Exact src/Cargo diff against measured schema105 baseline is empty. Retain idle endpoint and native metadata lane fixture corrections."
+}

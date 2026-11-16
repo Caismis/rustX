@@ -46,6 +46,7 @@ async fn session_create_publishes_while_another_session_provider_is_blocked() {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,

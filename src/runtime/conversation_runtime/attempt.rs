@@ -111,12 +111,12 @@ impl RuntimeInner {
         };
         let execution_policy = crate::agent::execution::AgentExecutionRuntimePolicy {
             workspace_changes: if record_changes && self.workflow_output.is_none() {
-                crate::workspace_changes::ChangeRecording::start(
+                Some(crate::workspace_changes::ChangeRecording::start(
                     attempt_id.clone(),
                     self.tool_runtime.workspace().root().to_owned(),
                     Arc::clone(&self.tool_runtime.workspace_changes),
                     cancellation.signal().child(),
-                )
+                ))
             } else {
                 None
             },
@@ -308,7 +308,7 @@ impl RuntimeInner {
             if let Some(fanout) = self.pending.get() {
                 fanout.child_settled();
             }
-            state.conversation = Some(result.conversation);
+            state.conversation.restore(result.conversation);
             state.permission_task_message = result.permission_task_message;
             state.last_permission_reminder_mode = result.permission_reminder_consumed;
             if let Some(diagnostic) = durable_failure {

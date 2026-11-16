@@ -57,7 +57,8 @@ pub(super) fn probe_sql_work(
         .unwrap()
         .join("\n");
     assert!(
-        plan.contains("SEARCH events USING INDEX events_request_id_kind_idx"),
+        plan.replace("USING COVERING INDEX", "USING INDEX")
+            .contains("SEARCH events USING INDEX events_request_id_kind_idx"),
         "{plan}"
     );
     assert!(!plan.contains("SCAN events"), "{plan}");
@@ -68,6 +69,7 @@ pub(super) fn probe_sql_work(
         .collect::<Result<Vec<_>, _>>()
         .unwrap()
         .len();
+    assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
     (
         count,
         statement.get_status(rusqlite::StatementStatus::VmStep),
@@ -190,7 +192,7 @@ fn t14_t19_native_request_probe_rejects_duplicate_original_starts_and_owner_mism
     let (metadata, actual_start, actual_completion) =
         require_started_request_tx(&transaction, store.conversation_id(), &snapshot.request_id)
             .unwrap();
-    assert_eq!(metadata.0, snapshot);
+    assert_eq!(*metadata.0, snapshot);
     assert_eq!(
         (actual_start, actual_completion),
         (started.sequence, Some(completed.sequence))

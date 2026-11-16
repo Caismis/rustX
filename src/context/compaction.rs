@@ -159,6 +159,9 @@ pub(crate) async fn execute_compaction_in_operation(
             "projection changed during compaction capture".into(),
         ));
     }
+    let historical_items = history
+        .checkpoint_items(previous.as_ref())
+        .map_err(resource_failure)?;
     let mut resources = crate::context::resources::CompactionResources::capture(
         store,
         crate::context::resources::ResourceLimits::default(),
@@ -200,7 +203,7 @@ pub(crate) async fn execute_compaction_in_operation(
         // the provider rather than generating a candidate we cannot commit.
         let mut refs = std::collections::BTreeSet::new();
         let mut retained_refs = 0usize;
-        for (index, item) in history.items.iter().enumerate() {
+        for (index, item) in historical_items.iter().enumerate() {
             if index < n {
                 match &item.message {
                     crate::context::checkpoint::CheckpointMessage::Original(r) => {
@@ -351,7 +354,7 @@ pub(crate) async fn execute_compaction_in_operation(
         call_sources: Vec::new(),
         result_call: None,
     }];
-    for mut item in history.items.into_iter().skip(retired_count) {
+    for mut item in historical_items.into_iter().skip(retired_count) {
         if let Some(call) = &mut item.result_call {
             call.message.checkpoint_id = checkpoint_id.clone();
             call.message.item_index = call
@@ -478,11 +481,14 @@ pub(crate) async fn execute_compaction_in_operation(
         let current = store.projected_history().map_err(|e| e.to_string())?;
         let messages: Vec<_> = current
             .messages
-            .into_iter()
-            .filter_map(|m| m.as_canonical().cloned())
+            .shared_iter()
+            .filter(|m| m.as_canonical().is_some())
             .collect();
-        let ids = messages.iter().map(|m| m.id().clone()).collect();
-        ConversationState::from_durable_head(
+        let ids = messages
+            .iter()
+            .map(|m| m.canonical_id().expect("canonical Ledger body").clone())
+            .collect();
+        ConversationState::from_shared_durable_head(
             messages,
             ids,
             crate::conversation::SurfaceRevision::new(current.cut.ledger.0),

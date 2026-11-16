@@ -4,6 +4,7 @@
 use super::ProjectionStage;
 use super::sources::native_actor_transition;
 use super::sources::observation_domain_sources;
+#[cfg(test)]
 use super::sources::observation_headers;
 #[cfg(test)]
 use super::sources::observation_terminal_positions;
@@ -202,8 +203,14 @@ pub(super) fn prepared_lock<'a>(
 ) -> MutexGuard<'a, ClientState> {
     let _preparation = preparation.lock().expect("projection preparation mutex");
     #[cfg(test)]
+    let _scope = crate::durable::sqlite::query_work::scope("prepared_lock");
+    #[cfg(test)]
     publication.preparation_stage("drain");
-    let observations = pending.drain();
+    let observations = {
+        #[cfg(test)]
+        let _scope = crate::durable::sqlite::query_work::scope("journal_drain");
+        pending.drain()
+    };
     #[cfg(test)]
     if !observations.is_empty() {
         let hook = publication.preparation_hook.lock().unwrap().take();
@@ -322,6 +329,7 @@ pub(super) fn apply_prepared_observations(
         let publication_content =
             super::super::checkpoint::publication_content_evidence(&observation);
         let references = super::super::checkpoint::observation_metadata(store, &observation);
+        #[cfg(test)]
         let headers = observation_headers(store, &observation);
         #[cfg(test)]
         let terminals = observation_terminal_positions(store, &observation, None);
@@ -334,6 +342,7 @@ pub(super) fn apply_prepared_observations(
             let sources = weighted_sources(sources);
             projection.prepare_publication_content(publication_content);
             projection.install_content_metadata(references);
+            #[cfg(test)]
             projection.prepare_message_headers(headers);
             #[cfg(test)]
             projection.prepare_terminal_positions(terminals);
@@ -498,7 +507,7 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
     }
     fn native_goal(
         &self,
-        receipt: &crate::durable::inbox::GoalObservationReceipt,
+        receipt: &crate::durable::GoalObservationReceipt,
     ) -> crate::runtime::observation::NativeReceiptInstallation {
         let Some(inner) = self.inner.upgrade() else {
             return crate::runtime::observation::NativeReceiptInstallation::Unavailable;
@@ -550,7 +559,7 @@ impl crate::runtime::observation::PublicationProjectionCommit for NativePublicat
     }
     fn native_pending(
         &self,
-        receipt: Option<&crate::durable::inbox::PendingObservationReceipt>,
+        receipt: Option<&crate::durable::PendingObservationReceipt>,
         _cut: &crate::durable::reading::ConversationReadCut,
     ) {
         let Some(inner) = self.inner.upgrade() else {

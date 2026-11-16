@@ -1,0 +1,75 @@
+{
+  "reason": "First 3-pair cohort had adverse no-live stream turn CPU and live cancel complete CPU in all pairs. Add 7 independent alternating pairs in both modes; preserve original and confirmation datasets, no replacement or selection.",
+  "cases": [
+    "stream",
+    "cancel"
+  ],
+  "pairs": 7,
+  "products": 56,
+  "source_head": "2800be25a650305d5daf9f543ffbf7d8f62ea79b",
+  "steps": [
+    {
+      "name": "direct-no-live",
+      "command": [
+        "/usr/bin/python3",
+        "benchmarks/runtime/compare-revisions.py",
+        "--before",
+        "/home/capi/.cache/rustx-pr485-next/candidate-d-build/conformance",
+        "--after",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/confirmation-cohorts/direct-no-live",
+        "--pairs",
+        "7",
+        "--observer-mode",
+        "no-live-subscriber",
+        "--case",
+        "stream",
+        "--case",
+        "cancel"
+      ],
+      "start_utc": "2026-10-27T01:36:24.392336+00:00",
+      "status": "complete",
+      "end_utc": "2026-10-27T01:36:55.281079+00:00",
+      "exit": 0
+    },
+    {
+      "name": "direct-live",
+      "command": [
+        "/usr/bin/python3",
+        "benchmarks/runtime/compare-revisions.py",
+        "--before",
+        "/home/capi/.cache/rustx-pr485-next/candidate-d-build/conformance",
+        "--after",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/candidate-f-build/conformance",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/confirmation-cohorts/direct-live",
+        "--pairs",
+        "7",
+        "--observer-mode",
+        "live-subscriber",
+        "--case",
+        "stream",
+        "--case",
+        "cancel"
+      ],
+      "start_utc": "2026-10-27T01:36:55.281308+00:00",
+      "status": "complete",
+      "end_utc": "2026-10-27T01:37:25.912504+00:00",
+      "exit": 0
+    },
+    {
+      "name": "recompute",
+      "command": [
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/recompute-confirmation.py",
+        "--root",
+        "/home/capi/.cache/rustx-pr485-cost-reduction/confirmation-cohorts"
+      ],
+      "start_utc": "2026-10-27T01:37:25.912739+00:00",
+      "status": "complete",
+      "end_utc": "2026-10-27T01:37:26.029403+00:00",
+      "exit": 0
+    }
+  ]
+}

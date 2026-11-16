@@ -18,7 +18,7 @@ import type {
   WorkflowRunId,
   WorkflowRunView,
   WorkflowTraceNode,
-} from '../../protocol/app-server/v78';
+} from '../../protocol/app-server/v80';
 import { METHOD_POLICY } from '../../protocol/app-server/method-policy';
 import type { WorkflowSource } from '../../protocol/app-server/workflow-documents';
 import type { Observation } from '../src/client/session-lifecycle/port';

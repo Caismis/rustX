@@ -8,7 +8,7 @@ use std::sync::atomic::Ordering;
 const LEGACY_PAGES: &str = "CREATE TABLE request_source_pages(hash BLOB PRIMARY KEY CHECK(typeof(hash)='blob' AND length(hash)=32),bytes BLOB NOT NULL CHECK(typeof(bytes)='blob' AND length(bytes)<=65536)) WITHOUT ROWID";
 
 #[test]
-fn t08_t12_t19_source_page_rowid_constraints_and_hash_dedup_remain_effective() {
+fn t08_t12_t19_source_page_numeric_locations_constraints_and_digest_remain_effective() {
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store.initialize(&[]).unwrap();
     let connection = store.lock().unwrap();
@@ -32,6 +32,14 @@ fn t08_t12_t19_source_page_rowid_constraints_and_hash_dedup_remain_effective() {
         )
         .unwrap();
     assert!(rowid > 0);
+    let indexes: u64 = connection
+        .query_row(
+            "SELECT count(*) FROM pragma_index_list('request_source_pages')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexes, 0, "numeric append pages have no global hash index");
     assert_eq!(
         connection
             .execute(
@@ -39,10 +47,17 @@ fn t08_t12_t19_source_page_rowid_constraints_and_hash_dedup_remain_effective() {
                 params![digest.as_slice(), b"different bytes".as_slice()],
             )
             .unwrap(),
-        0
+        1
     );
     assert_eq!(
-        index::load_blob(&connection, digest).unwrap(),
+        index::load_blob(
+            &connection,
+            index::BlobRef {
+                id: rowid.try_into().unwrap(),
+                hash: digest
+            }
+        )
+        .unwrap(),
         original.as_slice()
     );
     for (key, bytes, expected) in invalid_pages() {
@@ -65,7 +80,7 @@ fn t08_t12_t19_source_page_rowid_constraints_and_hash_dedup_remain_effective() {
             row.get(0)
         })
         .unwrap();
-    assert_eq!(count, 2);
+    assert_eq!(count, 3);
     assert_eq!(
         store.conn.manifest.epoch.load(Ordering::Acquire),
         epoch,
@@ -173,7 +188,6 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
         nodes: 1,
         object: false,
         container: false,
-        header: base64::engine::general_purpose::STANDARD.encode(b"0"),
         key: None,
         name: Some("legacy".into()),
     };
@@ -257,5 +271,44 @@ fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
                 .get::<_, i64>(0))
             .unwrap(),
         70
+    );
+}
+
+#[test]
+fn independent_source_witness_layout_is_rejected_without_migration() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.sqlite");
+    let id = ConversationId::generate();
+    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    {
+        let connection = store.lock().unwrap();
+        let old_seat: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='request_observation_fields')", [], |row|row.get(0)).unwrap();
+        assert!(
+            !old_seat,
+            "no duplicate independent witness seat or dual write"
+        );
+        for name in ["origin_source_id", "origin_rank"] {
+            let old_column: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('native_input_nodes') WHERE name=?1)",[name],|row|row.get(0)).unwrap();
+            assert!(!old_column);
+        }
+        connection
+            .execute("UPDATE rustx_store SET schema_version=73", [])
+            .unwrap();
+    }
+    drop(store);
+    assert!(matches!(
+        SqliteConversationStore::open_existing(id, &path),
+        Err(ConversationStoreError::SchemaVersionMismatch {
+            stored: 73,
+            expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION
+        })
+    ));
+    let connection = Connection::open(path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT schema_version FROM rustx_store", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        73
     );
 }

@@ -1,0 +1,2262 @@
+{
+  "clock_ticks": 100,
+  "scope": "CPU self user+system ticks; process-attributed writes (not device writes); runtime plus driver; verification phases explicit; evidence output after cleanup excluded; maximum sampled RSS/PSS, not peak; allocation count unavailable",
+  "groups": {
+    "cancel/pi": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-cancel-pi.json",
+        "mean_turn_ms": 121.991,
+        "turn_cpu_ms_per_turn": 150.0,
+        "turn_write_mib_per_turn": 0.26171875,
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_write_mib": 0.62109375,
+        "lifecycle_ms": 231.443,
+        "max_sampled_rss_mib": 124.25,
+        "max_sampled_pss_mib": 123.4462890625,
+        "max_sampled_anon_pss_mib": 89.109375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 74.998,
+            "cpu_ms": 10.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.503,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 126.981,
+            "cpu_ms": 160.0,
+            "write_bytes": 274432
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 4.668,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 4.436,
+            "cpu_ms": 10.0,
+            "write_bytes": 118784
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 3.611,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.246,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-cancel-pi.json",
+        "mean_turn_ms": 116.898,
+        "turn_cpu_ms_per_turn": 150.0,
+        "turn_write_mib_per_turn": 0.26171875,
+        "lifecycle_cpu_ms": 200.0,
+        "lifecycle_write_mib": 0.62109375,
+        "lifecycle_ms": 234.346,
+        "max_sampled_rss_mib": 124.27734375,
+        "max_sampled_pss_mib": 123.4736328125,
+        "max_sampled_anon_pss_mib": 89.1484375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 76.777,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.221,
+            "cpu_ms": 0.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 121.679,
+            "cpu_ms": 150.0,
+            "write_bytes": 274432
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.433,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.05,
+            "cpu_ms": 20.0,
+            "write_bytes": 118784
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.575,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 3.611,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-cancel-pi.json",
+        "mean_turn_ms": 116.166,
+        "turn_cpu_ms_per_turn": 140.0,
+        "turn_write_mib_per_turn": 0.26171875,
+        "lifecycle_cpu_ms": 190.0,
+        "lifecycle_write_mib": 0.62109375,
+        "lifecycle_ms": 226.098,
+        "max_sampled_rss_mib": 127.796875,
+        "max_sampled_pss_mib": 126.9931640625,
+        "max_sampled_anon_pss_mib": 92.69921875,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 73.721,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.118,
+            "cpu_ms": 20.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 123.926,
+            "cpu_ms": 140.0,
+            "write_bytes": 274432
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 4.492,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 4.053,
+            "cpu_ms": 10.0,
+            "write_bytes": 118784
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 3.663,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.125,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "cancel/rust": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-cancel-rust.json",
+        "mean_turn_ms": 43.452,
+        "turn_cpu_ms_per_turn": 50.0,
+        "turn_write_mib_per_turn": 1.45703125,
+        "lifecycle_cpu_ms": 200.0,
+        "lifecycle_write_mib": 3.83203125,
+        "lifecycle_ms": 262.236,
+        "max_sampled_rss_mib": 154.05859375,
+        "max_sampled_pss_mib": 153.3115234375,
+        "max_sampled_anon_pss_mib": 100.23046875,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 69.94,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 125.964,
+            "cpu_ms": 120.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 46.523,
+            "cpu_ms": 60.0,
+            "write_bytes": 1527808
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 3.234,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 1.84,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.031,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 7.847,
+            "cpu_ms": 0.0,
+            "write_bytes": 819200
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 5.025,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.832,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-cancel-rust.json",
+        "mean_turn_ms": 41.156,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.45703125,
+        "lifecycle_cpu_ms": 200.0,
+        "lifecycle_write_mib": 3.83984375,
+        "lifecycle_ms": 263.632,
+        "max_sampled_rss_mib": 157.2421875,
+        "max_sampled_pss_mib": 156.4951171875,
+        "max_sampled_anon_pss_mib": 100.1328125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 72.31,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 124.763,
+            "cpu_ms": 120.0,
+            "write_bytes": 1642496
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 44.384,
+            "cpu_ms": 60.0,
+            "write_bytes": 1527808
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.202,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 2.223,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.049,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 7.894,
+            "cpu_ms": 0.0,
+            "write_bytes": 819200
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.932,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.875,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-cancel-rust.json",
+        "mean_turn_ms": 43.237,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.45703125,
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_write_mib": 3.83203125,
+        "lifecycle_ms": 258.64,
+        "max_sampled_rss_mib": 157.1171875,
+        "max_sampled_pss_mib": 156.3701171875,
+        "max_sampled_anon_pss_mib": 99.94140625,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 69.115,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 122.452,
+            "cpu_ms": 120.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 46.823,
+            "cpu_ms": 60.0,
+            "write_bytes": 1527808
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 3.633,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 1.849,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.046,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.034,
+            "cpu_ms": 0.0,
+            "write_bytes": 819200
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.852,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.836,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "large/pi": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-large-pi.json",
+        "mean_turn_ms": 127.079,
+        "turn_cpu_ms_per_turn": 160.0,
+        "turn_write_mib_per_turn": 0.28125,
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_write_mib": 0.671875,
+        "lifecycle_ms": 253.288,
+        "max_sampled_rss_mib": 114.3203125,
+        "max_sampled_pss_mib": 113.5166015625,
+        "max_sampled_anon_pss_mib": 79.2890625,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 79.341,
+            "cpu_ms": 10.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 22.994,
+            "cpu_ms": 20.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 134.333,
+            "cpu_ms": 160.0,
+            "write_bytes": 294912
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.599,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 4.017,
+            "cpu_ms": 10.0,
+            "write_bytes": 151552
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 3.752,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 3.252,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-large-pi.json",
+        "mean_turn_ms": 114.487,
+        "turn_cpu_ms_per_turn": 130.0,
+        "turn_write_mib_per_turn": 0.28125,
+        "lifecycle_cpu_ms": 180.0,
+        "lifecycle_write_mib": 0.671875,
+        "lifecycle_ms": 227.774,
+        "max_sampled_rss_mib": 111.6484375,
+        "max_sampled_pss_mib": 110.8447265625,
+        "max_sampled_anon_pss_mib": 76.61328125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 77.152,
+            "cpu_ms": 10.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 15.011,
+            "cpu_ms": 20.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 120.856,
+            "cpu_ms": 140.0,
+            "write_bytes": 294912
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.372,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 3.471,
+            "cpu_ms": 10.0,
+            "write_bytes": 151552
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 3.885,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.027,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-large-pi.json",
+        "mean_turn_ms": 113.446,
+        "turn_cpu_ms_per_turn": 150.0,
+        "turn_write_mib_per_turn": 0.28125,
+        "lifecycle_cpu_ms": 180.0,
+        "lifecycle_write_mib": 0.671875,
+        "lifecycle_ms": 224.153,
+        "max_sampled_rss_mib": 112.86328125,
+        "max_sampled_pss_mib": 112.0595703125,
+        "max_sampled_anon_pss_mib": 77.81640625,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 75.098,
+            "cpu_ms": 10.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.058,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 119.774,
+            "cpu_ms": 150.0,
+            "write_bytes": 294912
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.023,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 3.559,
+            "cpu_ms": 0.0,
+            "write_bytes": 151552
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.329,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.312,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "large/rust": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-large-rust.json",
+        "mean_turn_ms": 49.236,
+        "turn_cpu_ms_per_turn": 60.0,
+        "turn_write_mib_per_turn": 1.60546875,
+        "lifecycle_cpu_ms": 220.0,
+        "lifecycle_write_mib": 4.12109375,
+        "lifecycle_ms": 269.414,
+        "max_sampled_rss_mib": 157.75,
+        "max_sampled_pss_mib": 157.0029296875,
+        "max_sampled_anon_pss_mib": 100.84375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 70.114,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 125.897,
+            "cpu_ms": 120.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 52.696,
+            "cpu_ms": 80.0,
+            "write_bytes": 1683456
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 3.944,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 1.778,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.146,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.076,
+            "cpu_ms": 10.0,
+            "write_bytes": 966656
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.91,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.853,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-large-rust.json",
+        "mean_turn_ms": 48.109,
+        "turn_cpu_ms_per_turn": 70.0,
+        "turn_write_mib_per_turn": 1.60546875,
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_write_mib": 4.125,
+        "lifecycle_ms": 272.032,
+        "max_sampled_rss_mib": 158.05078125,
+        "max_sampled_pss_mib": 157.3037109375,
+        "max_sampled_anon_pss_mib": 101.015625,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 73.2,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 125.548,
+            "cpu_ms": 120.0,
+            "write_bytes": 1638400
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 51.887,
+            "cpu_ms": 70.0,
+            "write_bytes": 1683456
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 4.377,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 1.983,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.067,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.096,
+            "cpu_ms": 0.0,
+            "write_bytes": 966656
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 5.009,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.865,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-large-rust.json",
+        "mean_turn_ms": 48.433,
+        "turn_cpu_ms_per_turn": 80.0,
+        "turn_write_mib_per_turn": 1.60546875,
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_write_mib": 4.12109375,
+        "lifecycle_ms": 265.292,
+        "max_sampled_rss_mib": 157.65625,
+        "max_sampled_pss_mib": 156.9091796875,
+        "max_sampled_anon_pss_mib": 100.734375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 70.414,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 121.613,
+            "cpu_ms": 110.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 51.846,
+            "cpu_ms": 80.0,
+            "write_bytes": 1683456
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 4.18,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 1.84,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.287,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.127,
+            "cpu_ms": 10.0,
+            "write_bytes": 966656
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 5.009,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.976,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "short-large/pi": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-short-large-pi.json",
+        "mean_turn_ms": 4.59340625,
+        "turn_cpu_ms_per_turn": 7.5,
+        "turn_write_mib_per_turn": 0.2139892578125,
+        "lifecycle_cpu_ms": 1190.0,
+        "lifecycle_write_mib": 20.77734375,
+        "lifecycle_ms": 1043.419,
+        "max_sampled_rss_mib": 193.19921875,
+        "max_sampled_pss_mib": 192.3955078125,
+        "max_sampled_anon_pss_mib": 157.75,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 75.268,
+            "cpu_ms": 10.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.684,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 780.784,
+            "cpu_ms": 960.0,
+            "write_bytes": 21458944
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 67.749,
+            "cpu_ms": 80.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 5.782,
+            "cpu_ms": 10.0,
+            "write_bytes": 69632
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 94.598,
+            "cpu_ms": 110.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 4.554,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-short-large-pi.json",
+        "mean_turn_ms": 4.73084375,
+        "turn_cpu_ms_per_turn": 8.125,
+        "turn_write_mib_per_turn": 0.2139892578125,
+        "lifecycle_cpu_ms": 1220.0,
+        "lifecycle_write_mib": 20.77734375,
+        "lifecycle_ms": 1060.274,
+        "max_sampled_rss_mib": 198.40625,
+        "max_sampled_pss_mib": 197.6025390625,
+        "max_sampled_anon_pss_mib": 162.953125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 75.155,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.817,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 800.479,
+            "cpu_ms": 1000.0,
+            "write_bytes": 21458944
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 67.319,
+            "cpu_ms": 80.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 5.938,
+            "cpu_ms": 10.0,
+            "write_bytes": 69632
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 91.599,
+            "cpu_ms": 110.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 4.967,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-short-large-pi.json",
+        "mean_turn_ms": 4.554875,
+        "turn_cpu_ms_per_turn": 7.8125,
+        "turn_write_mib_per_turn": 0.2139892578125,
+        "lifecycle_cpu_ms": 1160.0,
+        "lifecycle_write_mib": 20.77734375,
+        "lifecycle_ms": 1012.243,
+        "max_sampled_rss_mib": 199.58203125,
+        "max_sampled_pss_mib": 198.7783203125,
+        "max_sampled_anon_pss_mib": 164.140625,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 75.448,
+            "cpu_ms": 10.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.3,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 750.827,
+            "cpu_ms": 930.0,
+            "write_bytes": 21458944
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 69.176,
+            "cpu_ms": 90.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 5.87,
+            "cpu_ms": 10.0,
+            "write_bytes": 69632
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 92.12,
+            "cpu_ms": 110.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 4.502,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "short-large/rust": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-short-large-rust.json",
+        "mean_turn_ms": 60.36678125,
+        "turn_cpu_ms_per_turn": 91.25,
+        "turn_write_mib_per_turn": 2.28173828125,
+        "lifecycle_cpu_ms": 13110.0,
+        "lifecycle_write_mib": 205.15234375,
+        "lifecycle_ms": 10711.222,
+        "max_sampled_rss_mib": 292.45703125,
+        "max_sampled_pss_mib": 291.7099609375,
+        "max_sampled_anon_pss_mib": 235.55859375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 78.262,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 127.567,
+            "cpu_ms": 120.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 5891.994,
+            "cpu_ms": 8380.0,
+            "write_bytes": 212840448
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 2242.388,
+            "cpu_ms": 2240.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 23.242,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 3.127,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 9.812,
+            "cpu_ms": 20.0,
+            "write_bytes": 606208
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 2329.793,
+            "cpu_ms": 2320.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 5.037,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-short-large-rust.json",
+        "mean_turn_ms": 61.7570625,
+        "turn_cpu_ms_per_turn": 94.6875,
+        "turn_write_mib_per_turn": 2.2757568359375,
+        "lifecycle_cpu_ms": 13070.0,
+        "lifecycle_write_mib": 205.21484375,
+        "lifecycle_ms": 10566.019,
+        "max_sampled_rss_mib": 288.95703125,
+        "max_sampled_pss_mib": 288.2099609375,
+        "max_sampled_anon_pss_mib": 231.859375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 68.953,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 125.502,
+            "cpu_ms": 120.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 5834.679,
+            "cpu_ms": 8420.0,
+            "write_bytes": 212500480
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 2219.938,
+            "cpu_ms": 2210.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 22.428,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 2.803,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 10.424,
+            "cpu_ms": 10.0,
+            "write_bytes": 950272
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 2276.245,
+            "cpu_ms": 2280.0,
+            "write_bytes": 40960
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 5.047,
+            "cpu_ms": 10.0,
+            "write_bytes": 53248
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-short-large-rust.json",
+        "mean_turn_ms": 64.49525,
+        "turn_cpu_ms_per_turn": 97.5,
+        "turn_write_mib_per_turn": 2.2764892578125,
+        "lifecycle_cpu_ms": 13370.0,
+        "lifecycle_write_mib": 204.98046875,
+        "lifecycle_ms": 10805.907,
+        "max_sampled_rss_mib": 291.29296875,
+        "max_sampled_pss_mib": 290.5458984375,
+        "max_sampled_anon_pss_mib": 234.1796875,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 70.584,
+            "cpu_ms": 0.0,
+            "write_bytes": 16384
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 126.19,
+            "cpu_ms": 120.0,
+            "write_bytes": 1675264
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 6078.121,
+            "cpu_ms": 8720.0,
+            "write_bytes": 212606976
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 2220.121,
+            "cpu_ms": 2220.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 23.194,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 2.703,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 9.495,
+            "cpu_ms": 0.0,
+            "write_bytes": 606208
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 2270.818,
+            "cpu_ms": 2280.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 4.681,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "short-small/pi": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-short-small-pi.json",
+        "mean_turn_ms": 4.680375,
+        "turn_cpu_ms_per_turn": 9.375,
+        "turn_write_mib_per_turn": 0.214111328125,
+        "lifecycle_cpu_ms": 660.0,
+        "lifecycle_write_mib": 8.875,
+        "lifecycle_ms": 597.221,
+        "max_sampled_rss_mib": 145.3203125,
+        "max_sampled_pss_mib": 144.5166015625,
+        "max_sampled_anon_pss_mib": 110.08203125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 78.688,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.77,
+            "cpu_ms": 20.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 448.637,
+            "cpu_ms": 570.0,
+            "write_bytes": 8962048
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 18.88,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 5.917,
+            "cpu_ms": 10.0,
+            "write_bytes": 86016
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 25.844,
+            "cpu_ms": 40.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 4.485,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-short-small-pi.json",
+        "mean_turn_ms": 5.1717812499999996,
+        "turn_cpu_ms_per_turn": 10.3125,
+        "turn_write_mib_per_turn": 0.214111328125,
+        "lifecycle_cpu_ms": 660.0,
+        "lifecycle_write_mib": 8.875,
+        "lifecycle_ms": 569.98,
+        "max_sampled_rss_mib": 141.2578125,
+        "max_sampled_pss_mib": 140.4541015625,
+        "max_sampled_anon_pss_mib": 106.0234375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 73.287,
+            "cpu_ms": 10.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.493,
+            "cpu_ms": 0.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 427.792,
+            "cpu_ms": 580.0,
+            "write_bytes": 8962048
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 19.392,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 4.835,
+            "cpu_ms": 10.0,
+            "write_bytes": 86016
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 26.895,
+            "cpu_ms": 30.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 3.286,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-short-small-pi.json",
+        "mean_turn_ms": 4.56325,
+        "turn_cpu_ms_per_turn": 9.0625,
+        "turn_write_mib_per_turn": 0.214111328125,
+        "lifecycle_cpu_ms": 680.0,
+        "lifecycle_write_mib": 8.8828125,
+        "lifecycle_ms": 574.063,
+        "max_sampled_rss_mib": 148.59765625,
+        "max_sampled_pss_mib": 147.7939453125,
+        "max_sampled_anon_pss_mib": 113.36328125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 76.157,
+            "cpu_ms": 10.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 16.818,
+            "cpu_ms": 10.0,
+            "write_bytes": 229376
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 421.249,
+            "cpu_ms": 570.0,
+            "write_bytes": 8962048
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 22.354,
+            "cpu_ms": 40.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 4.95,
+            "cpu_ms": 0.0,
+            "write_bytes": 86016
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 28.72,
+            "cpu_ms": 40.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 3.815,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "short-small/rust": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-short-small-rust.json",
+        "mean_turn_ms": 62.230875,
+        "turn_cpu_ms_per_turn": 93.125,
+        "turn_write_mib_per_turn": 2.033935546875,
+        "lifecycle_cpu_ms": 4640.0,
+        "lifecycle_write_mib": 80.80078125,
+        "lifecycle_ms": 3615.919,
+        "max_sampled_rss_mib": 202.9453125,
+        "max_sampled_pss_mib": 202.1982421875,
+        "max_sampled_anon_pss_mib": 145.90234375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 70.998,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 129.415,
+            "cpu_ms": 130.0,
+            "write_bytes": 1638400
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 2524.681,
+            "cpu_ms": 3610.0,
+            "write_bytes": 82518016
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 424.604,
+            "cpu_ms": 440.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 13.741,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 2.674,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.501,
+            "cpu_ms": 10.0,
+            "write_bytes": 532480
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 438.209,
+            "cpu_ms": 430.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 3.096,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-short-small-rust.json",
+        "mean_turn_ms": 55.89959375,
+        "turn_cpu_ms_per_turn": 85.0,
+        "turn_write_mib_per_turn": 1.9989013671875,
+        "lifecycle_cpu_ms": 4320.0,
+        "lifecycle_write_mib": 80.34375,
+        "lifecycle_ms": 3397.243,
+        "max_sampled_rss_mib": 203.4765625,
+        "max_sampled_pss_mib": 202.7294921875,
+        "max_sampled_anon_pss_mib": 146.23828125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 70.453,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 124.109,
+            "cpu_ms": 120.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 2307.005,
+            "cpu_ms": 3300.0,
+            "write_bytes": 81342464
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 431.312,
+            "cpu_ms": 440.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 13.526,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 3.291,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 12.199,
+            "cpu_ms": 0.0,
+            "write_bytes": 1232896
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 432.372,
+            "cpu_ms": 440.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.976,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-short-small-rust.json",
+        "mean_turn_ms": 59.99846875,
+        "turn_cpu_ms_per_turn": 91.875,
+        "turn_write_mib_per_turn": 2.0347900390625,
+        "lifecycle_cpu_ms": 4540.0,
+        "lifecycle_write_mib": 80.83203125,
+        "lifecycle_ms": 3552.505,
+        "max_sampled_rss_mib": 203.5,
+        "max_sampled_pss_mib": 202.7529296875,
+        "max_sampled_anon_pss_mib": 146.44921875,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 74.255,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 132.236,
+            "cpu_ms": 130.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 2454.177,
+            "cpu_ms": 3530.0,
+            "write_bytes": 82554880
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 429.045,
+            "cpu_ms": 420.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 12.439,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 2.73,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.818,
+            "cpu_ms": 0.0,
+            "write_bytes": 532480
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 436.947,
+            "cpu_ms": 440.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 1.858,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "stream/pi": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-stream-pi.json",
+        "mean_turn_ms": 1643.066,
+        "turn_cpu_ms_per_turn": 450.0,
+        "turn_write_mib_per_turn": 0.4765625,
+        "lifecycle_cpu_ms": 470.0,
+        "lifecycle_write_mib": 0.84375,
+        "lifecycle_ms": 1754.855,
+        "max_sampled_rss_mib": 140.51171875,
+        "max_sampled_pss_mib": 139.7080078125,
+        "max_sampled_anon_pss_mib": 105.34375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 77.151,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.695,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 1649.707,
+            "cpu_ms": 450.0,
+            "write_bytes": 499712
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 3.858,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 3.97,
+            "cpu_ms": 0.0,
+            "write_bytes": 126976
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 3.294,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.18,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-stream-pi.json",
+        "mean_turn_ms": 1633.693,
+        "turn_cpu_ms_per_turn": 490.0,
+        "turn_write_mib_per_turn": 0.4765625,
+        "lifecycle_cpu_ms": 520.0,
+        "lifecycle_write_mib": 0.84375,
+        "lifecycle_ms": 1746.728,
+        "max_sampled_rss_mib": 140.33203125,
+        "max_sampled_pss_mib": 139.5283203125,
+        "max_sampled_anon_pss_mib": 105.13671875,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 77.579,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.521,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 1640.912,
+            "cpu_ms": 500.0,
+            "write_bytes": 499712
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 4.021,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 3.652,
+            "cpu_ms": 0.0,
+            "write_bytes": 126976
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 3.904,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.139,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-stream-pi.json",
+        "mean_turn_ms": 1672.734,
+        "turn_cpu_ms_per_turn": 530.0,
+        "turn_write_mib_per_turn": 0.4765625,
+        "lifecycle_cpu_ms": 570.0,
+        "lifecycle_write_mib": 0.84375,
+        "lifecycle_ms": 1789.212,
+        "max_sampled_rss_mib": 141.21484375,
+        "max_sampled_pss_mib": 140.4111328125,
+        "max_sampled_anon_pss_mib": 106.01953125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 83.193,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.884,
+            "cpu_ms": 30.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 1679.066,
+            "cpu_ms": 530.0,
+            "write_bytes": 499712
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 3.543,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 3.394,
+            "cpu_ms": 10.0,
+            "write_bytes": 126976
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 3.02,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.112,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "stream/rust": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-stream-rust.json",
+        "mean_turn_ms": 1560.529,
+        "turn_cpu_ms_per_turn": 160.0,
+        "turn_write_mib_per_turn": 2.00390625,
+        "lifecycle_cpu_ms": 320.0,
+        "lifecycle_write_mib": 4.41796875,
+        "lifecycle_ms": 1783.174,
+        "max_sampled_rss_mib": 158.4375,
+        "max_sampled_pss_mib": 157.6904296875,
+        "max_sampled_anon_pss_mib": 101.328125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 69.775,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 128.109,
+            "cpu_ms": 130.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 1564.219,
+            "cpu_ms": 160.0,
+            "write_bytes": 2101248
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 3.778,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 1.91,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.075,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.613,
+            "cpu_ms": 10.0,
+            "write_bytes": 860160
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.854,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.841,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-stream-rust.json",
+        "mean_turn_ms": 1563.265,
+        "turn_cpu_ms_per_turn": 170.0,
+        "turn_write_mib_per_turn": 2.00390625,
+        "lifecycle_cpu_ms": 320.0,
+        "lifecycle_write_mib": 4.44140625,
+        "lifecycle_ms": 1790.967,
+        "max_sampled_rss_mib": 157.25390625,
+        "max_sampled_pss_mib": 156.5068359375,
+        "max_sampled_anon_pss_mib": 100.3515625,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 70.068,
+            "cpu_ms": 0.0,
+            "write_bytes": 8192
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 127.294,
+            "cpu_ms": 120.0,
+            "write_bytes": 1654784
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 1567.729,
+            "cpu_ms": 170.0,
+            "write_bytes": 2101248
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.27,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 3.943,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.626,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.639,
+            "cpu_ms": 0.0,
+            "write_bytes": 860160
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 5.284,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 1.114,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-stream-rust.json",
+        "mean_turn_ms": 1562.973,
+        "turn_cpu_ms_per_turn": 170.0,
+        "turn_write_mib_per_turn": 2.00390625,
+        "lifecycle_cpu_ms": 310.0,
+        "lifecycle_write_mib": 4.41796875,
+        "lifecycle_ms": 1792.431,
+        "max_sampled_rss_mib": 157.97265625,
+        "max_sampled_pss_mib": 157.2255859375,
+        "max_sampled_anon_pss_mib": 101.0234375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 69.028,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 129.245,
+            "cpu_ms": 120.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 1567.515,
+            "cpu_ms": 170.0,
+            "write_bytes": 2101248
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.028,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 4.388,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.531,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 8.996,
+            "cpu_ms": 0.0,
+            "write_bytes": 860160
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 5.639,
+            "cpu_ms": 0.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 1.061,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "tool/pi": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-tool-pi.json",
+        "mean_turn_ms": 133.563,
+        "turn_cpu_ms_per_turn": 160.0,
+        "turn_write_mib_per_turn": 0.5703125,
+        "lifecycle_cpu_ms": 210.0,
+        "lifecycle_write_mib": 0.9375,
+        "lifecycle_ms": 249.735,
+        "max_sampled_rss_mib": 125.0234375,
+        "max_sampled_pss_mib": 124.2197265625,
+        "max_sampled_anon_pss_mib": 89.92578125,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 76.594,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 15.36,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 138.554,
+            "cpu_ms": 170.0,
+            "write_bytes": 598016
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 6.479,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 4.882,
+            "cpu_ms": 10.0,
+            "write_bytes": 126976
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.931,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.935,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-tool-pi.json",
+        "mean_turn_ms": 134.153,
+        "turn_cpu_ms_per_turn": 150.0,
+        "turn_write_mib_per_turn": 0.5703125,
+        "lifecycle_cpu_ms": 200.0,
+        "lifecycle_write_mib": 0.9375,
+        "lifecycle_ms": 243.323,
+        "max_sampled_rss_mib": 126.13671875,
+        "max_sampled_pss_mib": 125.3330078125,
+        "max_sampled_anon_pss_mib": 91.0625,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 72.658,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.251,
+            "cpu_ms": 20.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 139.278,
+            "cpu_ms": 160.0,
+            "write_bytes": 598016
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.749,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 4.391,
+            "cpu_ms": 0.0,
+            "write_bytes": 126976
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.474,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.522,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-tool-pi.json",
+        "mean_turn_ms": 128.888,
+        "turn_cpu_ms_per_turn": 160.0,
+        "turn_write_mib_per_turn": 0.5703125,
+        "lifecycle_cpu_ms": 200.0,
+        "lifecycle_write_mib": 0.9375,
+        "lifecycle_ms": 243.227,
+        "max_sampled_rss_mib": 129.75,
+        "max_sampled_pss_mib": 128.9462890625,
+        "max_sampled_anon_pss_mib": 94.6796875,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 75.73,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 14.521,
+            "cpu_ms": 10.0,
+            "write_bytes": 221184
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 133.672,
+            "cpu_ms": 160.0,
+            "write_bytes": 598016
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 5.755,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 6.174,
+            "cpu_ms": 10.0,
+            "write_bytes": 126976
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 4.702,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 2.673,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ],
+    "tool/rust": [
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/0-tool-rust.json",
+        "mean_turn_ms": 82.802,
+        "turn_cpu_ms_per_turn": 110.0,
+        "turn_write_mib_per_turn": 3.08203125,
+        "lifecycle_cpu_ms": 270.0,
+        "lifecycle_write_mib": 5.88671875,
+        "lifecycle_ms": 309.213,
+        "max_sampled_rss_mib": 159.015625,
+        "max_sampled_pss_mib": 158.2685546875,
+        "max_sampled_anon_pss_mib": 101.54296875,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 68.942,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 124.385,
+            "cpu_ms": 120.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 86.564,
+            "cpu_ms": 110.0,
+            "write_bytes": 3231744
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 7.182,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 2.848,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.312,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 9.7,
+            "cpu_ms": 10.0,
+            "write_bytes": 1269760
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 7.375,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.905,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/1-tool-rust.json",
+        "mean_turn_ms": 82.32,
+        "turn_cpu_ms_per_turn": 110.0,
+        "turn_write_mib_per_turn": 3.08203125,
+        "lifecycle_cpu_ms": 270.0,
+        "lifecycle_write_mib": 5.90234375,
+        "lifecycle_ms": 306.937,
+        "max_sampled_rss_mib": 158.4296875,
+        "max_sampled_pss_mib": 157.6826171875,
+        "max_sampled_anon_pss_mib": 100.8671875,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 69.72,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 122.967,
+            "cpu_ms": 120.0,
+            "write_bytes": 1650688
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 86.043,
+            "cpu_ms": 120.0,
+            "write_bytes": 3231744
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 6.787,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 2.859,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.294,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 9.308,
+            "cpu_ms": 10.0,
+            "write_bytes": 1269760
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 7.079,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 0.88,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      },
+      {
+        "file": "/workspace/issue-481-evidence/pi-final-pi-matrix/2-tool-rust.json",
+        "mean_turn_ms": 84.221,
+        "turn_cpu_ms_per_turn": 100.0,
+        "turn_write_mib_per_turn": 3.08203125,
+        "lifecycle_cpu_ms": 270.0,
+        "lifecycle_write_mib": 5.88671875,
+        "lifecycle_ms": 318.772,
+        "max_sampled_rss_mib": 158.63671875,
+        "max_sampled_pss_mib": 157.8896484375,
+        "max_sampled_anon_pss_mib": 101.09375,
+        "phases": [
+          {
+            "through": "after_provider_start",
+            "wall_ms": 68.905,
+            "cpu_ms": 0.0,
+            "write_bytes": 4096
+          },
+          {
+            "through": "after_initialization",
+            "wall_ms": 126.814,
+            "cpu_ms": 130.0,
+            "write_bytes": 1634304
+          },
+          {
+            "through": "after_turns",
+            "wall_ms": 88.543,
+            "cpu_ms": 100.0,
+            "write_bytes": 3231744
+          },
+          {
+            "through": "after_verification",
+            "wall_ms": 10.992,
+            "cpu_ms": 20.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_shutdown",
+            "wall_ms": 2.853,
+            "cpu_ms": 10.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_driver_drop",
+            "wall_ms": 1.763,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          },
+          {
+            "through": "after_final_writer_close",
+            "wall_ms": 9.767,
+            "cpu_ms": 0.0,
+            "write_bytes": 1269760
+          },
+          {
+            "through": "after_reopen_verification",
+            "wall_ms": 7.967,
+            "cpu_ms": 10.0,
+            "write_bytes": 32768
+          },
+          {
+            "through": "after_cleanup",
+            "wall_ms": 1.168,
+            "cpu_ms": 0.0,
+            "write_bytes": 0
+          }
+        ]
+      }
+    ]
+  }
+}

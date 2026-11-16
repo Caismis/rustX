@@ -286,7 +286,10 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
+/// Version 85 combines shared-control errors and bounded Trace refresh progress.
+/// Version 86 carries cursor-relative typed projection list edits.
+/// Version 87 combines that delivery with main's auxiliary and permission vocabulary.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 87;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -922,6 +925,8 @@ pub enum RuntimeClientResult {
     /// Bounded read-only Trace page of summary records.
     TracePage {
         page: crate::observation::trace::TracePage,
+        /// Complete input prefix examined, including missing and duplicate interests.
+        refreshed: usize,
     },
     TraceToolLocation {
         location: Option<super::trace::TraceToolLocation>,
@@ -982,11 +987,8 @@ pub enum RuntimeClientResult {
         after_cursor: RuntimeClientCursor,
     },
     /// `capability_get` succeeded: the active capability projection.
-
     /// `model_catalog_get` succeeded: the safe selectable-model view.
-
     /// `model_get` succeeded: the authoritative session model state.
-
     /// Standalone model selection committed; durable Sessions use their native Session owner.
     ///
     /// This finite receipt confirms commitment. Read the current model through
@@ -1263,11 +1265,11 @@ pub struct RuntimeClientProtocolEvent {
     /// The cursor this event was published at.
     pub cursor: RuntimeClientCursor,
     /// The typed external event payload.
-    pub event: RuntimeClientEvent,
+    pub event: std::sync::Arc<RuntimeClientEvent>,
 }
 
 // Re-exported for use by the public protocol docs.
-pub use super::snapshot::{RuntimeClientAgent, RuntimeClientJob};
+pub use crate::runtime_client::snapshot::{RuntimeClientAgent, RuntimeClientJob};
 
 #[cfg(test)]
 mod tests {
@@ -1408,7 +1410,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 85);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 87);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1569,7 +1571,8 @@ mod tests {
                 attempt_id: AttemptId::new("attempt-1"),
                 model: Some(Box::new(attempt_model_view("acme/model-a"))),
                 execution_settings: None,
-            },
+            }
+            .into(),
         };
         let value = serde_json::to_value(&notification).expect("serialize");
         assert!(value.get("id").is_none());

@@ -111,7 +111,8 @@ fn canonical_result(store: &dyn ConversationStore, attempt: &str, owner: &str, f
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             }),
             event(
                 store,
@@ -537,7 +538,7 @@ fn published_read_cut_does_not_observe_a_later_completion() {
     finish(&store, "a");
     let mut old = page(&store, None, 64);
     for entry in &mut old.entries {
-        entry.completed_response = None;
+        std::sync::Arc::make_mut(entry).completed_response = None;
     }
     native_oracle_decorate_through(&store, &mut old, through).unwrap();
     assert_eq!(
@@ -954,7 +955,7 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
                 .all(|member| member.cursor != entry.cursor)
         );
         assert_eq!(members.entries[0].cursor, turn.control_cursor);
-        expected = page(&store, None, 64).entries;
+        expected = page(&store, None, 64).entries.into_owned();
     }
     // A later successful Attempt and a new running Attempt cannot rewrite history.
     assistant(&store, "later", "later-response");
@@ -983,7 +984,7 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
             }
         }
         paged.reverse();
-        assert_eq!(paged, full.entries);
+        assert_eq!(paged, *full.entries);
     }
     // Repeated resubscription reads are identical, with no live Attempt involved.
     assert_eq!(full, page(&reopened, None, 64));
@@ -1043,7 +1044,8 @@ fn process_content(store: &dyn ConversationStore, attempt: &str) {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }))
         .unwrap();
     assistant(store, attempt, &format!("{attempt}-intermediate"));
@@ -1632,10 +1634,7 @@ fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() 
         .unwrap();
     let mut empty = crate::observation::transcript::transcript_header_view(read.page);
     super::decorate_window(&store, &mut empty, read.cut.read.journal).unwrap();
-    assert_eq!(
-        empty.entries,
-        [] as [crate::observation::transcript::RuntimeClientTranscriptEntry; 0]
-    );
+    assert!(empty.entries.is_empty());
     user(&store, "human-only");
     let read = store
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)

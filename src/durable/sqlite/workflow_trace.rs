@@ -11,14 +11,20 @@ mod query_work;
 // These queries seek the exact run or visit before applying the immutable
 // Journal cut. In particular, missing I/O and terminal facts do not scan
 // later visits or unrelated runs to prove absence.
-const RUN_END_SQL: &str = "SELECT min(sequence) FROM events INDEXED BY events_run_id_kind_idx WHERE json_extract(event_json,'$.event.run_id')=?1 AND json_extract(event_json,'$.event.type') IN ('workflow_completed','workflow_failed','workflow_cancelled') AND sequence>?2 AND sequence<=?3";
-const RUN_TOTAL_SQL: &str = "SELECT count(*) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2";
-const RUN_REVISION_SQL: &str = "SELECT max(sequence) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type') IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2";
-const RUN_NODES_SQL: &str = "SELECT sequence,event_timestamp,CASE WHEN octet_length(json_extract(event_json,'$.event.instance'))<=8192 THEN json_extract(event_json,'$.event.instance') END FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE json_extract(event_json,'$.event.instance.block.run')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT ?4 OFFSET ?5";
-const NODE_VISIT_SQL: &str = "SELECT sequence,event_timestamp FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE json_extract(event_json,'$.event.instance')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_started' AND sequence>?1 AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
-const NODE_TERMINAL_SQL: &str = "SELECT event_timestamp,json_extract(event_json,'$.event.outcome') FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE json_extract(event_json,'$.event.instance')=?3 AND json_extract(event_json,'$.event.type')='workflow_node_settled' AND sequence>?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1";
-const NODE_IO_SQL: &str = "SELECT sequence,json_extract(event_json,'$.event.kind'),substr(json_extract(event_json,'$.event.value'),1,192),CASE WHEN json_type(event_json,'$.event.value')='text' THEN octet_length(json_quote(json_extract(event_json,'$.event.value'))) END FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE json_extract(event_json,'$.event.instance')=?4 AND json_extract(event_json,'$.event.type')=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence LIMIT 1";
-pub(super) const RUN_START_SQL: &str = "SELECT sequence FROM events INDEXED BY events_run_id_kind_idx WHERE json_extract(event_json,'$.event.run_id')=?1 AND json_extract(event_json,'$.event.type')='workflow_started' AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
+pub(super) const TOOL_START_SQL: &str = concat!(
+    "SELECT sequence FROM events INDEXED BY events_observation_tool_idx WHERE event_tool_call_id=?1 AND attempt_key = ",
+    crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"),
+    " AND event_kind='tool_execution_started' AND sequence<=?3 LIMIT 2"
+);
+
+const RUN_END_SQL: &str = "SELECT min(sequence) FROM events INDEXED BY events_run_id_kind_idx WHERE event_run_id=?1 AND event_kind IN ('workflow_completed','workflow_failed','workflow_cancelled') AND sequence>?2 AND sequence<=?3";
+const RUN_TOTAL_SQL: &str = "SELECT count(*) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE event_instance_run=?3 AND event_kind='workflow_node_started' AND sequence>?1 AND sequence<=?2";
+const RUN_REVISION_SQL: &str = "SELECT max(sequence) FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE event_instance_run=?3 AND event_kind IN ('workflow_node_started','workflow_node_waiting','workflow_node_settled') AND sequence>?1 AND sequence<=?2";
+const RUN_NODES_SQL: &str = "SELECT sequence,event_timestamp,CASE WHEN octet_length(event_instance)<=8192 THEN event_instance END FROM events INDEXED BY events_workflow_node_run_kind_idx WHERE event_instance_run=?3 AND event_kind='workflow_node_started' AND sequence>?1 AND sequence<=?2 ORDER BY sequence LIMIT ?4 OFFSET ?5";
+const NODE_VISIT_SQL: &str = "SELECT sequence,event_timestamp FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE event_instance=?3 AND event_kind='workflow_node_started' AND sequence>?1 AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
+const NODE_TERMINAL_SQL: &str = "SELECT event_timestamp,json_extract(event_json,'$.event.outcome') FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE event_instance=?3 AND event_kind='workflow_node_settled' AND sequence>?1 AND sequence<=?2 ORDER BY sequence DESC LIMIT 1";
+const NODE_IO_SQL: &str = "SELECT sequence,json_extract(event_json,'$.event.kind'),substr(json_extract(event_json,'$.event.value'),1,192),CASE WHEN json_type(event_json,'$.event.value')='text' THEN octet_length(json_quote(json_extract(event_json,'$.event.value'))) END FROM events INDEXED BY events_workflow_node_instance_kind_idx WHERE event_instance=?4 AND event_kind=?1 AND sequence>?2 AND sequence<=?3 ORDER BY sequence LIMIT 1";
+pub(super) const RUN_START_SQL: &str = "SELECT sequence FROM events INDEXED BY events_run_id_kind_idx WHERE event_run_id=?1 AND event_kind='workflow_started' AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
 const INSTANCE_JSON_MAX: usize = 8192;
 
 fn run_through(
@@ -128,9 +134,9 @@ pub(super) fn visit(
     };
     node(connection, sequence, &timestamp, Some(encoded), through).map(Some)
 }
-const NODE_OWNERSHIP_SQL: &str = "SELECT json_extract(event_json,'$.event.subagent_id'),json_extract(event_json,'$.event.child_agent_id') FROM events INDEXED BY events_workflow_agent_node_idx WHERE COALESCE(json_extract(event_json,'$.event.origin.node_id'),json_extract(event_json,'$.event.node_id'))=?3 AND json_extract(event_json,'$.event.type')='subagent_ownership_committed' AND json_extract(event_json,'$.event.ownership')='workflow' AND json_extract(event_json,'$.event.origin.kind')='workflow' AND sequence>?1 AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
-const NODE_ADMITTED_SQL: &str = "SELECT json_extract(event_json,'$.event.subagent_id') FROM events INDEXED BY events_workflow_agent_node_idx WHERE COALESCE(json_extract(event_json,'$.event.origin.node_id'),json_extract(event_json,'$.event.node_id'))=?3 AND json_extract(event_json,'$.event.type')='workflow_agent_admitted' AND sequence>?1 AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
-const NODE_OWNERSHIP_BY_SUBAGENT_SQL: &str = "SELECT json_extract(event_json,'$.event.child_agent_id') FROM events INDEXED BY events_subagent_id_kind_idx WHERE json_extract(event_json,'$.event.subagent_id')=?1 AND json_extract(event_json,'$.event.type')='subagent_ownership_committed' AND json_extract(event_json,'$.event.ownership')='workflow' AND json_extract(event_json,'$.event.origin.kind')='workflow' AND json_extract(event_json,'$.event.origin.node_id')=?3 AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
+const NODE_OWNERSHIP_SQL: &str = "SELECT json_extract(event_json,'$.event.subagent_id'),json_extract(event_json,'$.event.child_agent_id') FROM events INDEXED BY events_workflow_agent_node_idx WHERE event_workflow_agent_node=?3 AND event_kind='subagent_ownership_committed' AND json_extract(event_json,'$.event.ownership')='workflow' AND json_extract(event_json,'$.event.origin.kind')='workflow' AND sequence>?1 AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
+const NODE_ADMITTED_SQL: &str = "SELECT json_extract(event_json,'$.event.subagent_id') FROM events INDEXED BY events_workflow_agent_node_idx WHERE event_workflow_agent_node=?3 AND event_kind='workflow_agent_admitted' AND sequence>?1 AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
+const NODE_OWNERSHIP_BY_SUBAGENT_SQL: &str = "SELECT json_extract(event_json,'$.event.child_agent_id') FROM events INDEXED BY events_subagent_id_kind_idx WHERE event_subagent_id=?1 AND event_kind='subagent_ownership_committed' AND json_extract(event_json,'$.event.ownership')='workflow' AND json_extract(event_json,'$.event.origin.kind')='workflow' AND json_extract(event_json,'$.event.origin.node_id')=?3 AND sequence<=?2 ORDER BY sequence ASC LIMIT 1";
 
 fn invalid() -> ConversationStoreError {
     ConversationStoreError::InvalidReference("invalid original Workflow node selection".into())
@@ -148,28 +154,30 @@ pub(super) fn page(
     }
     // Only bounded original identity fields are read; a generic J body is never hydrated.
     let run: Option<String> = connection.query_row(
-        "SELECT CASE WHEN octet_length(json_extract(event_json,'$.event.run_id'))<=8192 THEN json_extract(event_json,'$.event.run_id') END FROM events WHERE sequence=?1 AND json_extract(event_json,'$.event.type')='workflow_started'",
-        [start], |row| row.get(0)).optional().map_err(|error| storage(error.to_string()))?.flatten();
+        "SELECT CASE WHEN octet_length(event_run_id)<=8192 THEN event_run_id END FROM events WHERE sequence=?1 AND event_kind='workflow_started'",
+        [start], |row| row.get(0)).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?.flatten();
     let run = run.ok_or_else(invalid)?;
     let (workflow_id, call_id): (String, Option<String>) = connection
         .query_row(
-            "SELECT json_extract(event_json,'$.event.workflow_id'),json_extract(event_json,'$.event.tool_call_id') FROM events WHERE sequence=?1",
+            "SELECT json_extract(event_json,'$.event.workflow_id'),event_tool_call_id FROM events WHERE sequence=?1",
             [start],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let run_id: crate::runtime::workflow::WorkflowRunId =
         serde_json::from_str(&run).map_err(|error| storage(error.to_string()))?;
     let workflow_id = crate::runtime::workflow::WorkflowId::parse(&workflow_id)
         .map_err(|error| storage(error.to_string()))?;
     let mut parents = Vec::new();
     if let (Some(attempt), Some(call)) = (run_id.origin.attempt_id(), call_id) {
-        let mut query=connection.prepare_cached("SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND json_extract(event_json,'$.event.type')='tool_execution_started' AND sequence<=?3 LIMIT 2").map_err(|error|storage(error.to_string()))?;
+        let mut query = connection
+            .prepare_cached(TOOL_START_SQL)
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         parents = query
             .query_map(params![call, attempt.as_str(), start], |row| {
                 row.get::<_, u64>(0)
             })
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(error.to_string()))?;
     }
@@ -179,15 +187,15 @@ pub(super) fn page(
         .query_row(RUN_TOTAL_SQL, params![start, through, run], |row| {
             row.get(0)
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let revision: Option<u64> = connection
         .query_row(RUN_REVISION_SQL, params![start, through, run], |row| {
             row.get(0)
         })
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut statement = connection
         .prepare_cached(RUN_NODES_SQL)
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let starts = statement
         .query_map(params![start, through, run, limit as u64, offset], |row| {
             Ok((
@@ -196,7 +204,7 @@ pub(super) fn page(
                 row.get::<_, Option<String>>(2)?,
             ))
         })
-        .map_err(|error| storage(error.to_string()))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| storage(error.to_string()))?;
     let mut nodes = Vec::with_capacity(starts.len());
@@ -248,7 +256,7 @@ fn node(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let started_at = timestamp
         .parse::<chrono::DateTime<chrono::Utc>>()
         .map_err(|error| storage(error.to_string()))?;
@@ -373,7 +381,7 @@ fn io(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok(row.map(|(sequence, kind, preview, length)| Io {
         kind,
         preview,

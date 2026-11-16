@@ -172,7 +172,7 @@ fn composed_registry_rejects_global_name_collisions() {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: String::new(),
-        input_schema: schema.clone(),
+        input_schema: schema.clone().into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,

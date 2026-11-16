@@ -1,0 +1,120 @@
+{
+  "accepted": true,
+  "archive": "raw.tar.xz",
+  "started_utc": "2026-10-27T03:14:41.680897+00:00",
+  "errors": [],
+  "available_bytes_before": 980093411328,
+  "archive_sha256": "8f434d594bd269949cb13a819fad2419c5d0f717c6e35dc2e2a3432a7607c4c9",
+  "manifest_sha256": "db7ffe1efa3ba548fe9bacc6c190d2e80cde67c2a43e2d24a13f202b175d8732",
+  "verified_payload_files": 1445,
+  "verified_payload_bytes": 1471928779,
+  "all_payload_stream_and_extracted_hashes_match": true,
+  "no_extra_members": true,
+  "manifest_matches_external_summary": true,
+  "commands": [
+    {
+      "label": "formal",
+      "argv": [
+        "python3",
+        "audit-gh.py",
+        "--root",
+        ".",
+        "--raw-only",
+        "--stage",
+        "all",
+        "--baseline-identity",
+        "baseline-f-build/identity.json",
+        "--candidate-identity",
+        "candidate-gh-build/identity.json",
+        "--freeze",
+        "deepseek-setup/final-source-identity.json",
+        "--expected-harness-revision",
+        "063ef7a9b713e76efad6dc4e6b7122454023c67f",
+        "--expect-rust-sha256",
+        "cce30715eed4b1700c5b3c5fee2a93db1fb4ca49c8847cf36dfe995e4470e9b0",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-gh-portable-verification/archive-gh-audit.json"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-gh-portable-verification/extracted",
+      "exit": 0
+    },
+    {
+      "label": "diagnostic",
+      "argv": [
+        "python3",
+        "audit-diagnostics.py",
+        "--root",
+        ".",
+        "--raw-only",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-gh-portable-verification/archive-diagnostic-audit.json"
+      ],
+      "cwd": "/home/capi/.cache/rustx-pr485-gh-portable-verification/extracted",
+      "exit": 0
+    }
+  ],
+  "raw_only_audits_accepted": true,
+  "formal_numerics_and_admissions_identical": {
+    "direct": {
+      "equal_fields": [
+        "derived_products",
+        "valid_comparisons",
+        "groups",
+        "checked_requests",
+        "product_inventory"
+      ],
+      "products": 72,
+      "comparisons": 36,
+      "checked_requests": 846
+    },
+    "final": {
+      "equal_fields": [
+        "derived_products",
+        "valid_comparisons",
+        "groups",
+        "checked_requests",
+        "product_inventory"
+      ],
+      "products": 72,
+      "comparisons": 36,
+      "checked_requests": 846
+    },
+    "confirmation": {
+      "equal_fields": [
+        "derived_products",
+        "valid_comparisons",
+        "groups",
+        "checked_requests",
+        "product_inventory",
+        "products",
+        "comparisons"
+      ],
+      "products": 14,
+      "comparisons": 7,
+      "checked_requests": 280
+    },
+    "three-engine": {
+      "equal_fields": [
+        "derived_products",
+        "valid_comparisons",
+        "groups"
+      ],
+      "products": 36,
+      "comparisons": 12,
+      "checked_requests": null
+    }
+  },
+  "diagnostic_numerics_and_identity_records_identical": true,
+  "actual_host_binaries_reverified": false,
+  "identity_mode_difference": "Raw-only revalidates archived identities, fixtures, byte hashes, before/after snapshots, numeric counters and recorded oracles. It does not follow original host binary/library/Git paths or claim current-source/actual-binary verification; those strict status fields and descriptive source-binding strings intentionally differ.",
+  "strict_source_report_sha256": "024a5bd4f3a261c7c96b9d0b91bd23011b47d0a1cd076f889a787642f7c5da51",
+  "strict_diagnostic_report_sha256": "8ba33b8e2a48e43e75a27a3c07549aa982ad3ce48c4d17c9f1f99df5f90c5941",
+  "portable_report_sha256": {
+    "formal": "cfaf4fb8195408a34b9ddc37575398d2495bcd76b12b3d3c258d41e00e712891",
+    "diagnostic": "fe2e27202fdb4d96ddab4d82ec5d2d66dd0e19dadba6a1db1b840730856bdf46"
+  },
+  "finished_utc": "2026-10-27T03:14:53.247031+00:00",
+  "external_verification_directory": "/home/capi/.cache/rustx-pr485-gh-portable-verification",
+  "verification_script_sha256": "39647e8f9872c32639ce04b80f52d973a2630a9f9680488d08a854c4f7503a39",
+  "scope": "No products, tests, builds, profiler sampling or native SDK invoked; retained stdlib auditors only. Original HIGH and archive not modified. All194 formal products plus separate4CPU/control and4column products retained."
+}

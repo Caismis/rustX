@@ -1,0 +1,41 @@
+{
+  "accepted": true,
+  "archive_sha256": "7a037b5936beacdb88803cca061e9e2d4174476974fd65b6f2f302617d3010a2",
+  "verified_files": 141,
+  "verification_script_sha256": "3b8c3b84c5f6a78a1fd07550de4448b2cefa2b7f34485fcadeb4e9d9b7c26229",
+  "recomputed": {
+    "heap_header_only_window_deltas": {
+      "baseline": {
+        "allocated_count": 1220379,
+        "allocated_bytes": 317812315
+      },
+      "candidate": {
+        "allocated_count": 1226190,
+        "allocated_bytes": 320294436
+      }
+    },
+    "products": 6,
+    "cpu_products": 4,
+    "heap_products": 2,
+    "cpu_samples": [
+      {
+        "name": "2-cpu-baseline",
+        "samples": 94
+      },
+      {
+        "name": "3-cpu-candidate",
+        "samples": 101
+      },
+      {
+        "name": "4-cpu-candidate",
+        "samples": 96
+      },
+      {
+        "name": "5-cpu-baseline",
+        "samples": 98
+      }
+    ],
+    "heap_stack_attribution_complete": false,
+    "scope": "Hash integrity, retained controller acceptance and independently recomputed raw profile counts/completeness. No fresh execution, symbolization or causal explanation of formal latency."
+  }
+}

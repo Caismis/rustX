@@ -72,7 +72,7 @@ for pair in range(3):
                 return product
             subprocess.Popen=start
             env={k:v for k,v in os.environ.items() if not any(s in k.upper() for s in ('TOKEN','SECRET','CREDENTIAL','API_KEY'))}
-            env.update(UV_CACHE_DIR='/workspace/.uv-cache',RUSTX_BENCH_CASE='short-small',RUSTX_BENCH_OUTPUT=str(stem.with_suffix('.json')))
+            env.update(RUSTX_BENCH_CASE='short-small',RUSTX_BENCH_OUTPUT=str(stem.with_suffix('.json')))
             record=run([executables[name],TEST,'--exact','--ignored','--nocapture'],stem,'short-small',env,Path('test-support/fake-provider').resolve())
             for thread in samplers:thread.join()
             subprocess.Popen=original_popen

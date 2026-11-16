@@ -280,7 +280,8 @@ fn published_result(id: &str, snapshot: &TodoSnapshot) -> MessageBlock {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 

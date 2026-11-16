@@ -1457,6 +1457,7 @@ async fn assert_child_source_failure_and_repair(
     assert!(events[0].event.facts().iter().any(|fact| matches!(
         fact,
         crate::runtime_client::event::RuntimeClientEvent::ReadDomainsUpdated { .. }
+            | crate::runtime_client::event::RuntimeClientEvent::ReadDomainsPatched { .. }
     )));
     assert_eq!(child.store.observation_read_cut().unwrap(), native);
     assert_eq!(child.model.requests().len(), 1);
@@ -1689,8 +1690,8 @@ async fn frozen_child_message_continuation_survives_live_admission_and_binds_reg
         source_cut: Some(source.clone()),
         canonical_foreground: None,
         live_publication: None,
-        domain_revisions: std::collections::BTreeMap::new(),
-        collection_cuts: std::collections::BTreeMap::new(),
+        domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+        collection_cuts: crate::observation::metadata::MetadataFragment::default(),
     };
     let domain = "messages.message:frozen-instruction.blocks";
     let before = host

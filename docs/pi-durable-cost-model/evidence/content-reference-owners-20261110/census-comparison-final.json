@@ -1,0 +1,1361 @@
+{
+  "scope": "One diagnostic sample per side; identical frozen fixture. Reachable unique allocations, including every new Arc owner. Partial requested bytes, not a PSS partition or timing measurement. Repeated logical serialized bytes are not counted as duplicate heap bodies.",
+  "identities": {
+    "before": {
+      "binary": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/diagnostic-build/rustx",
+      "sha256": "fbaf0ff454ea3c82f4d8d22cf16643361681c2225a1af9eb5bd831b30a02e6d1",
+      "websockets": "10.4",
+      "affinity": [
+        2,
+        8
+      ],
+      "sessions": 128,
+      "history_turns": 32,
+      "widths": [
+        1,
+        4,
+        8
+      ],
+      "rounds": 16,
+      "cache_probes": false,
+      "protocol_version": 76,
+      "memory_only": true,
+      "rotate_active": false,
+      "idle_seconds": [],
+      "history_checkpoints": [
+        8,
+        16
+      ],
+      "session_names": "Explicit fixture names; automatic title generation is not part of this workload.",
+      "retirement": "Observe native idle after terminal delivery before starting another turn; CPU windows include these reads.",
+      "scope": "Actual native App Server over authenticated WebSocket. Single-process samples, not a production capacity/P99 guarantee. Driver and provider are siblings; only server PID resource counters are reported.",
+      "inputs": {
+        "/home/capi/.cache/rustx-pr485-cut-owners-20261110/profile-capacity.py": "f72eb77ce3ffa4652881162ade3e8c35a16b41d9f68934dd315987b6a83156bf",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/app-server-capacity-provider.py": "28dc6717e77ebd0dcfa822bbf946beeb40ac8b12160039b6ac14716f3f9d70fc",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/README.md": "0aa4065df4fe86005ee7e597c83bc8579a71db9b66611cf94455071c8b6ffb2f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/pyproject.toml": "28dd4c4052743e4768f56eebf10593c79a852a615cd63806409d246ebcd3bbfd",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/__init__.py": "617f9421bb7284c7bdd76ebd3ea2524560c1d31bd9fbd543e2f81c327a626491",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/__main__.py": "87f778f661598b62a8657162109317b68681a524d866166792002dc766246fd2",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/control.py": "9158550c555691bba1cce580ad793da12120ff2b4707644aa92cd8008d9ac978",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/measurement.py": "c91c8f0935e6c549b5a17e417e2234ef2873b30913a7d7f013223707f5d65807",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/__init__.py": "d720f8e42755b568c559304da1513a4b6a4646a536a3711fbd8c38ee70c4707a",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/anthropic_messages.py": "848a6dfd8fc89d70792486a62c88b05c93e5ae3bbd1a870f12ea75d1b2a9a080",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/base.py": "4c31d72916a399989746faed8f714461541aaacd1938568f37b136210097b693",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/openai_chat.py": "fe02dcaaf99c0b22969107c5f7682fdf6ea7961d31e3be1cce5f9895e4f93938",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/openai_responses.py": "f39e11c6047a69ab909727c6e6004b070236733186e76ef818811d2211e9f17f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenario.py": "91ff968f699bbdc5b223063abe86f7757be57645017f29b1ccec0de4a934bc0a",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/__init__.py": "f590153c6fd9e52ebb29c4f4993fadd3129c60bce206f79360acd35d9c60294f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/app_server.py": "1b4bbaf3fa18d4c41ee4868fa1273271b6c048f5e8c8447426ecd6fad558bdc1",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/conformance.py": "60a159b17db2a7ffae52106b9dddeebc038896dfb7e822755b1c63f16e4aec6e",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/observation.py": "21552ec3413629b9b56e7259af5d0cd25bd7fe7bc3fad0dd4ad1eff1775f476e",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/runtime_benchmark.py": "c2f61ade0eaf4411de2c183fb6ec63c96ceec9e64483332ea109e6929e6ecfaf",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/tui.py": "67839d0bbb6ecacd48ff1bfe54570281aecd3510c9a10c70dad09385ec72eb15",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/web_console.py": "028de9c74c60fe98d00f61d59badb6d2978ef6d2451a2f894a713bbe39a027c8",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/server.py": "2e56301a65a929b68a1cd0f7a6158091503d436b055142e1e4746ed5cae56281",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/conftest.py": "190a7dd7414f0f9b8767fef7391427f4f74830b227533d8672e90d70fd1eba75",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_process_lifetime.py": "ed0fb6384386cdd96ba6454e41d47b1c51f605bfb62b649d30dcd8b57efae036",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_protocols.py": "377615fb722007f996186c71e5fd8342e1521e731b1e292d776ef1fb03eeef40",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_scenario.py": "e0aee81ddd65759ec0abeb01efa66544c45d204cc9989a28b4bc628927f30d9f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_server.py": "0c6eef0e49d71b1122950e68cd8f8fe29a80dca5d670ad0940cfe6224eb34224",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/uv.lock": "a4c153561d658be83df98308c24a668434a2b90911b299a5c8a8d0c080b8cec4"
+      },
+      "tokio_workers": 4
+    },
+    "full_wrapper": {
+      "binary": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/candidate-diagnostic-build/rustx",
+      "sha256": "358e6d1b672b9e49f24155a9945eabb2563fd59794b281ec79d0cd57c1ca3d7e",
+      "websockets": "10.4",
+      "affinity": [
+        2,
+        8
+      ],
+      "sessions": 128,
+      "history_turns": 32,
+      "widths": [
+        1,
+        4,
+        8
+      ],
+      "rounds": 16,
+      "cache_probes": false,
+      "protocol_version": 76,
+      "memory_only": true,
+      "rotate_active": false,
+      "idle_seconds": [],
+      "history_checkpoints": [
+        8,
+        16
+      ],
+      "session_names": "Explicit fixture names; automatic title generation is not part of this workload.",
+      "retirement": "Observe native idle after terminal delivery before starting another turn; CPU windows include these reads.",
+      "scope": "Actual native App Server over authenticated WebSocket. Single-process samples, not a production capacity/P99 guarantee. Driver and provider are siblings; only server PID resource counters are reported.",
+      "inputs": {
+        "/home/capi/.cache/rustx-pr485-cut-owners-20261110/profile-capacity.py": "f72eb77ce3ffa4652881162ade3e8c35a16b41d9f68934dd315987b6a83156bf",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/app-server-capacity-provider.py": "28dc6717e77ebd0dcfa822bbf946beeb40ac8b12160039b6ac14716f3f9d70fc",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/README.md": "0aa4065df4fe86005ee7e597c83bc8579a71db9b66611cf94455071c8b6ffb2f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/pyproject.toml": "28dd4c4052743e4768f56eebf10593c79a852a615cd63806409d246ebcd3bbfd",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/__init__.py": "617f9421bb7284c7bdd76ebd3ea2524560c1d31bd9fbd543e2f81c327a626491",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/__main__.py": "87f778f661598b62a8657162109317b68681a524d866166792002dc766246fd2",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/control.py": "9158550c555691bba1cce580ad793da12120ff2b4707644aa92cd8008d9ac978",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/measurement.py": "c91c8f0935e6c549b5a17e417e2234ef2873b30913a7d7f013223707f5d65807",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/__init__.py": "d720f8e42755b568c559304da1513a4b6a4646a536a3711fbd8c38ee70c4707a",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/anthropic_messages.py": "848a6dfd8fc89d70792486a62c88b05c93e5ae3bbd1a870f12ea75d1b2a9a080",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/base.py": "4c31d72916a399989746faed8f714461541aaacd1938568f37b136210097b693",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/openai_chat.py": "fe02dcaaf99c0b22969107c5f7682fdf6ea7961d31e3be1cce5f9895e4f93938",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/openai_responses.py": "f39e11c6047a69ab909727c6e6004b070236733186e76ef818811d2211e9f17f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenario.py": "91ff968f699bbdc5b223063abe86f7757be57645017f29b1ccec0de4a934bc0a",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/__init__.py": "f590153c6fd9e52ebb29c4f4993fadd3129c60bce206f79360acd35d9c60294f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/app_server.py": "1b4bbaf3fa18d4c41ee4868fa1273271b6c048f5e8c8447426ecd6fad558bdc1",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/conformance.py": "60a159b17db2a7ffae52106b9dddeebc038896dfb7e822755b1c63f16e4aec6e",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/observation.py": "21552ec3413629b9b56e7259af5d0cd25bd7fe7bc3fad0dd4ad1eff1775f476e",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/runtime_benchmark.py": "c2f61ade0eaf4411de2c183fb6ec63c96ceec9e64483332ea109e6929e6ecfaf",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/tui.py": "67839d0bbb6ecacd48ff1bfe54570281aecd3510c9a10c70dad09385ec72eb15",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/web_console.py": "028de9c74c60fe98d00f61d59badb6d2978ef6d2451a2f894a713bbe39a027c8",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/server.py": "2e56301a65a929b68a1cd0f7a6158091503d436b055142e1e4746ed5cae56281",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/conftest.py": "190a7dd7414f0f9b8767fef7391427f4f74830b227533d8672e90d70fd1eba75",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_process_lifetime.py": "ed0fb6384386cdd96ba6454e41d47b1c51f605bfb62b649d30dcd8b57efae036",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_protocols.py": "377615fb722007f996186c71e5fd8342e1521e731b1e292d776ef1fb03eeef40",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_scenario.py": "e0aee81ddd65759ec0abeb01efa66544c45d204cc9989a28b4bc628927f30d9f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_server.py": "0c6eef0e49d71b1122950e68cd8f8fe29a80dca5d670ad0940cfe6224eb34224",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/uv.lock": "a4c153561d658be83df98308c24a668434a2b90911b299a5c8a8d0c080b8cec4"
+      },
+      "tokio_workers": 4
+    },
+    "reference_only": {
+      "binary": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/reference-diagnostic-build/rustx",
+      "sha256": "afcaa9bdd54139760e7a03248cb7c1e2752f3da8bdd6cb2bfa4ec3cd16b13198",
+      "websockets": "10.4",
+      "affinity": [
+        2,
+        8
+      ],
+      "sessions": 128,
+      "history_turns": 32,
+      "widths": [
+        1,
+        4,
+        8
+      ],
+      "rounds": 16,
+      "cache_probes": false,
+      "protocol_version": 76,
+      "memory_only": true,
+      "rotate_active": false,
+      "idle_seconds": [],
+      "history_checkpoints": [
+        8,
+        16
+      ],
+      "session_names": "Explicit fixture names; automatic title generation is not part of this workload.",
+      "retirement": "Observe native idle after terminal delivery before starting another turn; CPU windows include these reads.",
+      "scope": "Actual native App Server over authenticated WebSocket. Single-process samples, not a production capacity/P99 guarantee. Driver and provider are siblings; only server PID resource counters are reported.",
+      "inputs": {
+        "/home/capi/.cache/rustx-pr485-cut-owners-20261110/profile-capacity.py": "f72eb77ce3ffa4652881162ade3e8c35a16b41d9f68934dd315987b6a83156bf",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/app-server-capacity-provider.py": "28dc6717e77ebd0dcfa822bbf946beeb40ac8b12160039b6ac14716f3f9d70fc",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/README.md": "0aa4065df4fe86005ee7e597c83bc8579a71db9b66611cf94455071c8b6ffb2f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/pyproject.toml": "28dd4c4052743e4768f56eebf10593c79a852a615cd63806409d246ebcd3bbfd",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/__init__.py": "617f9421bb7284c7bdd76ebd3ea2524560c1d31bd9fbd543e2f81c327a626491",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/__main__.py": "87f778f661598b62a8657162109317b68681a524d866166792002dc766246fd2",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/control.py": "9158550c555691bba1cce580ad793da12120ff2b4707644aa92cd8008d9ac978",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/measurement.py": "c91c8f0935e6c549b5a17e417e2234ef2873b30913a7d7f013223707f5d65807",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/__init__.py": "d720f8e42755b568c559304da1513a4b6a4646a536a3711fbd8c38ee70c4707a",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/anthropic_messages.py": "848a6dfd8fc89d70792486a62c88b05c93e5ae3bbd1a870f12ea75d1b2a9a080",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/base.py": "4c31d72916a399989746faed8f714461541aaacd1938568f37b136210097b693",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/openai_chat.py": "fe02dcaaf99c0b22969107c5f7682fdf6ea7961d31e3be1cce5f9895e4f93938",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/protocols/openai_responses.py": "f39e11c6047a69ab909727c6e6004b070236733186e76ef818811d2211e9f17f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenario.py": "91ff968f699bbdc5b223063abe86f7757be57645017f29b1ccec0de4a934bc0a",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/__init__.py": "f590153c6fd9e52ebb29c4f4993fadd3129c60bce206f79360acd35d9c60294f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/app_server.py": "1b4bbaf3fa18d4c41ee4868fa1273271b6c048f5e8c8447426ecd6fad558bdc1",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/conformance.py": "60a159b17db2a7ffae52106b9dddeebc038896dfb7e822755b1c63f16e4aec6e",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/observation.py": "21552ec3413629b9b56e7259af5d0cd25bd7fe7bc3fad0dd4ad1eff1775f476e",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/runtime_benchmark.py": "c2f61ade0eaf4411de2c183fb6ec63c96ceec9e64483332ea109e6929e6ecfaf",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/tui.py": "67839d0bbb6ecacd48ff1bfe54570281aecd3510c9a10c70dad09385ec72eb15",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/scenarios/web_console.py": "028de9c74c60fe98d00f61d59badb6d2978ef6d2451a2f894a713bbe39a027c8",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/src/fake_provider/server.py": "2e56301a65a929b68a1cd0f7a6158091503d436b055142e1e4746ed5cae56281",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/conftest.py": "190a7dd7414f0f9b8767fef7391427f4f74830b227533d8672e90d70fd1eba75",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_process_lifetime.py": "ed0fb6384386cdd96ba6454e41d47b1c51f605bfb62b649d30dcd8b57efae036",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_protocols.py": "377615fb722007f996186c71e5fd8342e1521e731b1e292d776ef1fb03eeef40",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_scenario.py": "e0aee81ddd65759ec0abeb01efa66544c45d204cc9989a28b4bc628927f30d9f",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/tests/test_server.py": "0c6eef0e49d71b1122950e68cd8f8fe29a80dca5d670ad0940cfe6224eb34224",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/test-support/fake-provider/uv.lock": "a4c153561d658be83df98308c24a668434a2b90911b299a5c8a8d0c080b8cec4"
+      },
+      "tokio_workers": 4
+    }
+  },
+  "rows": [
+    {
+      "phase": "all_subscribed_empty",
+      "before": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32/retained-all_subscribed_empty.json",
+        "sha256": "83806e27a3d9050fe4cf5878854e875c37363e1d9d018d03203cecbfcd27b93c",
+        "hosts": 128,
+        "known_requested_bytes": 0,
+        "allocations": {},
+        "counts": {
+          "replay_encoded_charge": 100663296,
+          "replay_records": 0
+        },
+        "binding_parts_bytes": 0
+      },
+      "full_wrapper": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-candidate/retained-all_subscribed_empty.json",
+        "sha256": "ddeb7bc76f85c806cc08dccda3f3145250f424ad84a3c1f1f185b09d145c1c20",
+        "hosts": 128,
+        "known_requested_bytes": 0,
+        "allocations": {},
+        "counts": {
+          "replay_encoded_charge": 100663296,
+          "replay_records": 0
+        },
+        "binding_parts_bytes": 0
+      },
+      "reference_only": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-reference/retained-all_subscribed_empty.json",
+        "sha256": "46bff616601c1ec42b3f35b937cf0dc1c7167226e9d098506c4e7855d2820eb7",
+        "hosts": 128,
+        "known_requested_bytes": 0,
+        "allocations": {},
+        "counts": {
+          "replay_encoded_charge": 100663296,
+          "replay_records": 0
+        },
+        "binding_parts_bytes": 0
+      }
+    },
+    {
+      "phase": "seeded_history_8",
+      "before": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32/retained-seeded_history_8.json",
+        "sha256": "cc7b893e46b2bde6098609496b09b1f41ad51326f8492f63b672250bafa30e52",
+        "hosts": 128,
+        "known_requested_bytes": 62115056,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 22016,
+            "known_requested_bytes": 5812224
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 816994
+          },
+          "binding_path_vectors": {
+            "owners": 42326,
+            "known_requested_bytes": 4711488
+          },
+          "checkpoint_boxes": {
+            "owners": 1024,
+            "known_requested_bytes": 3383296
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 5246,
+            "known_requested_bytes": 209840
+          },
+          "content_pointer_vectors": {
+            "owners": 4094,
+            "known_requested_bytes": 401376
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 1024,
+            "known_requested_bytes": 49152
+          },
+          "descriptor_rows": {
+            "owners": 1920,
+            "known_requested_bytes": 2027520
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 27392
+          },
+          "domain_revision_roots": {
+            "owners": 7168,
+            "known_requested_bytes": 688128
+          },
+          "frontier_array_owners": {
+            "owners": 9213,
+            "known_requested_bytes": 368520
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 2065614
+          },
+          "frontier_fragments": {
+            "owners": 65277,
+            "known_requested_bytes": 8877672
+          },
+          "frontier_pointer_vectors": {
+            "owners": 8189,
+            "known_requested_bytes": 2164048
+          },
+          "nested_event_vectors": {
+            "owners": 10147,
+            "known_requested_bytes": 11818872
+          },
+          "raw_binding_vectors": {
+            "owners": 4899,
+            "known_requested_bytes": 4374528
+          },
+          "raw_frontier_vectors": {
+            "owners": 3107,
+            "known_requested_bytes": 1208832
+          },
+          "replay_event_arcs": {
+            "owners": 10147,
+            "known_requested_bytes": 5763496
+          },
+          "transcript_binding_heads": {
+            "owners": 3107,
+            "known_requested_bytes": 298272
+          },
+          "transcript_frontier_heads": {
+            "owners": 3107,
+            "known_requested_bytes": 298272
+          },
+          "transcript_head_owners": {
+            "owners": 4003,
+            "known_requested_bytes": 384288
+          },
+          "transcript_page_boxes": {
+            "owners": 2979,
+            "known_requested_bytes": 1358424
+          },
+          "transcript_pointer_vectors": {
+            "owners": 3875,
+            "known_requested_bytes": 192216
+          },
+          "transcript_rows": {
+            "owners": 3848,
+            "known_requested_bytes": 4802304
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 49920,
+          "event_values": 31558,
+          "other_event_values": 17408,
+          "read_domain_events": 2979,
+          "replacement_checkpoints": 1024,
+          "replay_encoded_charge": 283581141,
+          "replay_records": 10147
+        },
+        "binding_parts_bytes": 15715234
+      },
+      "full_wrapper": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-candidate/retained-seeded_history_8.json",
+        "sha256": "c65701f3b73fbd9c44f9c6040409768bab9a58affc612ad322d345bce1257247",
+        "hosts": 128,
+        "known_requested_bytes": 55986407,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 22001,
+            "known_requested_bytes": 2640120
+          },
+          "binding_path_arrays": {
+            "owners": 42257,
+            "known_requested_bytes": 4459016
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 815533
+          },
+          "checkpoint_boxes": {
+            "owners": 1024,
+            "known_requested_bytes": 3383296
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 5245,
+            "known_requested_bytes": 209800
+          },
+          "content_pointer_vectors": {
+            "owners": 4093,
+            "known_requested_bytes": 401152
+          },
+          "content_ref_owners": {
+            "owners": 4096,
+            "known_requested_bytes": 622592
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 1024,
+            "known_requested_bytes": 49152
+          },
+          "descriptor_rows": {
+            "owners": 1920,
+            "known_requested_bytes": 2027520
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 27392
+          },
+          "domain_revision_roots": {
+            "owners": 7168,
+            "known_requested_bytes": 688128
+          },
+          "frontier_array_owners": {
+            "owners": 9214,
+            "known_requested_bytes": 368560
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 2063490
+          },
+          "frontier_fragments": {
+            "owners": 65278,
+            "known_requested_bytes": 8877808
+          },
+          "frontier_pointer_vectors": {
+            "owners": 8190,
+            "known_requested_bytes": 2164312
+          },
+          "nested_event_vectors": {
+            "owners": 10133,
+            "known_requested_bytes": 11811144
+          },
+          "raw_binding_vectors": {
+            "owners": 4885,
+            "known_requested_bytes": 1088640
+          },
+          "raw_frontier_vectors": {
+            "owners": 3093,
+            "known_requested_bytes": 1205504
+          },
+          "replay_event_arcs": {
+            "owners": 10133,
+            "known_requested_bytes": 5755544
+          },
+          "transcript_binding_heads": {
+            "owners": 3093,
+            "known_requested_bytes": 296928
+          },
+          "transcript_frontier_heads": {
+            "owners": 3093,
+            "known_requested_bytes": 296928
+          },
+          "transcript_head_owners": {
+            "owners": 3989,
+            "known_requested_bytes": 382944
+          },
+          "transcript_page_boxes": {
+            "owners": 2965,
+            "known_requested_bytes": 1352040
+          },
+          "transcript_pointer_vectors": {
+            "owners": 3861,
+            "known_requested_bytes": 191760
+          },
+          "transcript_rows": {
+            "owners": 3842,
+            "known_requested_bytes": 4794816
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 49920,
+          "event_values": 31530,
+          "other_event_values": 17408,
+          "read_domain_events": 2965,
+          "replacement_checkpoints": 1024,
+          "replay_encoded_charge": 283392717,
+          "replay_records": 10133
+        },
+        "binding_parts_bytes": 9625901
+      },
+      "reference_only": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-reference/retained-seeded_history_8.json",
+        "sha256": "2cf7d4caaf563c8ec60fde74c55718eb333327e5f63a3228466a6b3a3a62b174",
+        "hosts": 128,
+        "known_requested_bytes": 56031554,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 21994,
+            "known_requested_bytes": 2991184
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 814912
+          },
+          "binding_path_vectors": {
+            "owners": 42228,
+            "known_requested_bytes": 3779952
+          },
+          "checkpoint_boxes": {
+            "owners": 1024,
+            "known_requested_bytes": 3383296
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 5245,
+            "known_requested_bytes": 209800
+          },
+          "content_pointer_vectors": {
+            "owners": 4093,
+            "known_requested_bytes": 401040
+          },
+          "content_ref_owners": {
+            "owners": 4096,
+            "known_requested_bytes": 622592
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 1024,
+            "known_requested_bytes": 49152
+          },
+          "descriptor_rows": {
+            "owners": 1920,
+            "known_requested_bytes": 2027520
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 27392
+          },
+          "domain_revision_roots": {
+            "owners": 7168,
+            "known_requested_bytes": 688128
+          },
+          "frontier_array_owners": {
+            "owners": 9214,
+            "known_requested_bytes": 368560
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 2062338
+          },
+          "frontier_fragments": {
+            "owners": 65278,
+            "known_requested_bytes": 8877808
+          },
+          "frontier_pointer_vectors": {
+            "owners": 8190,
+            "known_requested_bytes": 2164376
+          },
+          "nested_event_vectors": {
+            "owners": 10139,
+            "known_requested_bytes": 11814456
+          },
+          "raw_binding_vectors": {
+            "owners": 4891,
+            "known_requested_bytes": 1453312
+          },
+          "raw_frontier_vectors": {
+            "owners": 3099,
+            "known_requested_bytes": 1207296
+          },
+          "replay_event_arcs": {
+            "owners": 10139,
+            "known_requested_bytes": 5758952
+          },
+          "transcript_binding_heads": {
+            "owners": 3099,
+            "known_requested_bytes": 297504
+          },
+          "transcript_frontier_heads": {
+            "owners": 3099,
+            "known_requested_bytes": 297504
+          },
+          "transcript_head_owners": {
+            "owners": 3995,
+            "known_requested_bytes": 383520
+          },
+          "transcript_page_boxes": {
+            "owners": 2971,
+            "known_requested_bytes": 1354776
+          },
+          "transcript_pointer_vectors": {
+            "owners": 3867,
+            "known_requested_bytes": 191576
+          },
+          "transcript_rows": {
+            "owners": 3840,
+            "known_requested_bytes": 4792320
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 49920,
+          "event_values": 31542,
+          "other_event_values": 17408,
+          "read_domain_events": 2971,
+          "replacement_checkpoints": 1024,
+          "replay_encoded_charge": 283376391,
+          "replay_records": 10139
+        },
+        "binding_parts_bytes": 9661952
+      }
+    },
+    {
+      "phase": "seeded_history_16",
+      "before": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32/retained-seeded_history_16.json",
+        "sha256": "81f902a8f0ad198d9126294066204bac150882c3a8b85a7c4e3a3c42fc699588",
+        "hosts": 128,
+        "known_requested_bytes": 129707418,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 54711,
+            "known_requested_bytes": 14443704
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 1902466
+          },
+          "binding_path_vectors": {
+            "owners": 100788,
+            "known_requested_bytes": 10955808
+          },
+          "checkpoint_boxes": {
+            "owners": 2048,
+            "known_requested_bytes": 6766592
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 10357,
+            "known_requested_bytes": 414280
+          },
+          "content_pointer_vectors": {
+            "owners": 8181,
+            "known_requested_bytes": 924496
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 2048,
+            "known_requested_bytes": 114688
+          },
+          "descriptor_rows": {
+            "owners": 3968,
+            "known_requested_bytes": 4190208
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 57088
+          },
+          "domain_revision_roots": {
+            "owners": 14336,
+            "known_requested_bytes": 1376256
+          },
+          "frontier_array_owners": {
+            "owners": 17405,
+            "known_requested_bytes": 696200
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 4349648
+          },
+          "frontier_fragments": {
+            "owners": 126717,
+            "known_requested_bytes": 17233512
+          },
+          "frontier_pointer_vectors": {
+            "owners": 15357,
+            "known_requested_bytes": 4064592
+          },
+          "nested_event_vectors": {
+            "owners": 20280,
+            "known_requested_bytes": 23630016
+          },
+          "raw_binding_vectors": {
+            "owners": 9912,
+            "known_requested_bytes": 9321984
+          },
+          "raw_frontier_vectors": {
+            "owners": 6072,
+            "known_requested_bytes": 2726912
+          },
+          "replay_event_arcs": {
+            "owners": 20280,
+            "known_requested_bytes": 11519040
+          },
+          "transcript_binding_heads": {
+            "owners": 6072,
+            "known_requested_bytes": 582912
+          },
+          "transcript_frontier_heads": {
+            "owners": 6072,
+            "known_requested_bytes": 582912
+          },
+          "transcript_head_owners": {
+            "owners": 7992,
+            "known_requested_bytes": 767232
+          },
+          "transcript_page_boxes": {
+            "owners": 5944,
+            "known_requested_bytes": 2710464
+          },
+          "transcript_pointer_vectors": {
+            "owners": 7864,
+            "known_requested_bytes": 447512
+          },
+          "transcript_rows": {
+            "owners": 7946,
+            "known_requested_bytes": 9916608
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 100096,
+          "event_values": 63088,
+          "other_event_values": 34816,
+          "read_domain_events": 5944,
+          "replacement_checkpoints": 2048,
+          "replay_encoded_charge": 501280829,
+          "replay_records": 20280
+        },
+        "binding_parts_bytes": 36623962
+      },
+      "full_wrapper": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-candidate/retained-seeded_history_16.json",
+        "sha256": "465d05cb92ad50fa8edc90cc81b97347c574216319221ef9036f2b0131f16bef",
+        "hosts": 128,
+        "known_requested_bytes": 115519735,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 54735,
+            "known_requested_bytes": 6568200
+          },
+          "binding_path_arrays": {
+            "owners": 100685,
+            "known_requested_bytes": 10461464
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 1900749
+          },
+          "checkpoint_boxes": {
+            "owners": 2048,
+            "known_requested_bytes": 6766592
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 10361,
+            "known_requested_bytes": 414440
+          },
+          "content_pointer_vectors": {
+            "owners": 8185,
+            "known_requested_bytes": 924888
+          },
+          "content_ref_owners": {
+            "owners": 8192,
+            "known_requested_bytes": 1245184
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 2048,
+            "known_requested_bytes": 114688
+          },
+          "descriptor_rows": {
+            "owners": 3968,
+            "known_requested_bytes": 4190208
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 57088
+          },
+          "domain_revision_roots": {
+            "owners": 14336,
+            "known_requested_bytes": 1376256
+          },
+          "frontier_array_owners": {
+            "owners": 17406,
+            "known_requested_bytes": 696240
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 4344122
+          },
+          "frontier_fragments": {
+            "owners": 126718,
+            "known_requested_bytes": 17233648
+          },
+          "frontier_pointer_vectors": {
+            "owners": 15358,
+            "known_requested_bytes": 4064856
+          },
+          "nested_event_vectors": {
+            "owners": 20257,
+            "known_requested_bytes": 23617320
+          },
+          "raw_binding_vectors": {
+            "owners": 9889,
+            "known_requested_bytes": 2322048
+          },
+          "raw_frontier_vectors": {
+            "owners": 6049,
+            "known_requested_bytes": 2718976
+          },
+          "replay_event_arcs": {
+            "owners": 20257,
+            "known_requested_bytes": 11505976
+          },
+          "transcript_binding_heads": {
+            "owners": 6049,
+            "known_requested_bytes": 580704
+          },
+          "transcript_frontier_heads": {
+            "owners": 6049,
+            "known_requested_bytes": 580704
+          },
+          "transcript_head_owners": {
+            "owners": 7969,
+            "known_requested_bytes": 765024
+          },
+          "transcript_page_boxes": {
+            "owners": 5921,
+            "known_requested_bytes": 2699976
+          },
+          "transcript_pointer_vectors": {
+            "owners": 7841,
+            "known_requested_bytes": 446480
+          },
+          "transcript_rows": {
+            "owners": 7942,
+            "known_requested_bytes": 9911616
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 100096,
+          "event_values": 63042,
+          "other_event_values": 34816,
+          "read_domain_events": 5921,
+          "replacement_checkpoints": 2048,
+          "replay_encoded_charge": 500875486,
+          "replay_records": 20257
+        },
+        "binding_parts_bytes": 22497645
+      },
+      "reference_only": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-reference/retained-seeded_history_16.json",
+        "sha256": "09f7f228508f8dde1ef980197ceb19f139ad8d49d8838e9e1513eed51ccaea9f",
+        "hosts": 128,
+        "known_requested_bytes": 115592960,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 54738,
+            "known_requested_bytes": 7444368
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 1901520
+          },
+          "binding_path_vectors": {
+            "owners": 100724,
+            "known_requested_bytes": 8854320
+          },
+          "checkpoint_boxes": {
+            "owners": 2048,
+            "known_requested_bytes": 6766592
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 10362,
+            "known_requested_bytes": 414480
+          },
+          "content_pointer_vectors": {
+            "owners": 8186,
+            "known_requested_bytes": 924944
+          },
+          "content_ref_owners": {
+            "owners": 8192,
+            "known_requested_bytes": 1245184
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 2048,
+            "known_requested_bytes": 114688
+          },
+          "descriptor_rows": {
+            "owners": 3968,
+            "known_requested_bytes": 4190208
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 57088
+          },
+          "domain_revision_roots": {
+            "owners": 14336,
+            "known_requested_bytes": 1376256
+          },
+          "frontier_array_owners": {
+            "owners": 17406,
+            "known_requested_bytes": 696240
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 4345616
+          },
+          "frontier_fragments": {
+            "owners": 126718,
+            "known_requested_bytes": 17233648
+          },
+          "frontier_pointer_vectors": {
+            "owners": 15358,
+            "known_requested_bytes": 4064920
+          },
+          "nested_event_vectors": {
+            "owners": 20270,
+            "known_requested_bytes": 23624496
+          },
+          "raw_binding_vectors": {
+            "owners": 9902,
+            "known_requested_bytes": 3101440
+          },
+          "raw_frontier_vectors": {
+            "owners": 6062,
+            "known_requested_bytes": 2724352
+          },
+          "replay_event_arcs": {
+            "owners": 20270,
+            "known_requested_bytes": 11513360
+          },
+          "transcript_binding_heads": {
+            "owners": 6062,
+            "known_requested_bytes": 581952
+          },
+          "transcript_frontier_heads": {
+            "owners": 6062,
+            "known_requested_bytes": 581952
+          },
+          "transcript_head_owners": {
+            "owners": 7982,
+            "known_requested_bytes": 766272
+          },
+          "transcript_page_boxes": {
+            "owners": 5934,
+            "known_requested_bytes": 2705904
+          },
+          "transcript_pointer_vectors": {
+            "owners": 7854,
+            "known_requested_bytes": 446744
+          },
+          "transcript_rows": {
+            "owners": 7936,
+            "known_requested_bytes": 9904128
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 100096,
+          "event_values": 63068,
+          "other_event_values": 34816,
+          "read_domain_events": 5934,
+          "replacement_checkpoints": 2048,
+          "replay_encoded_charge": 501034465,
+          "replay_records": 20270
+        },
+        "binding_parts_bytes": 22546832
+      }
+    },
+    {
+      "phase": "seeded_history_32",
+      "before": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32/retained-seeded_history_32.json",
+        "sha256": "ae03ca54344a792326d89b03db2441410154e2a7dcad2a02bff6891c7c7461fe",
+        "hosts": 128,
+        "known_requested_bytes": 265063332,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 120246,
+            "known_requested_bytes": 31744944
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 4080522
+          },
+          "binding_path_vectors": {
+            "owners": 218010,
+            "known_requested_bytes": 23486976
+          },
+          "checkpoint_boxes": {
+            "owners": 4096,
+            "known_requested_bytes": 13533184
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 20597,
+            "known_requested_bytes": 823880
+          },
+          "content_pointer_vectors": {
+            "owners": 16373,
+            "known_requested_bytes": 1973056
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 4096,
+            "known_requested_bytes": 245760
+          },
+          "descriptor_rows": {
+            "owners": 8064,
+            "known_requested_bytes": 8515584
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 116480
+          },
+          "domain_revision_roots": {
+            "owners": 28672,
+            "known_requested_bytes": 2752512
+          },
+          "frontier_array_owners": {
+            "owners": 33789,
+            "known_requested_bytes": 1351560
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 8924898
+          },
+          "frontier_fragments": {
+            "owners": 249597,
+            "known_requested_bytes": 33945192
+          },
+          "frontier_pointer_vectors": {
+            "owners": 29693,
+            "known_requested_bytes": 7865680
+          },
+          "nested_event_vectors": {
+            "owners": 40565,
+            "known_requested_bytes": 47262792
+          },
+          "raw_binding_vectors": {
+            "owners": 19957,
+            "known_requested_bytes": 19246080
+          },
+          "raw_frontier_vectors": {
+            "owners": 12021,
+            "known_requested_bytes": 5772800
+          },
+          "replay_event_arcs": {
+            "owners": 40565,
+            "known_requested_bytes": 23040920
+          },
+          "transcript_binding_heads": {
+            "owners": 12021,
+            "known_requested_bytes": 1154016
+          },
+          "transcript_frontier_heads": {
+            "owners": 12021,
+            "known_requested_bytes": 1154016
+          },
+          "transcript_head_owners": {
+            "owners": 15989,
+            "known_requested_bytes": 1534944
+          },
+          "transcript_page_boxes": {
+            "owners": 11893,
+            "known_requested_bytes": 5423208
+          },
+          "transcript_pointer_vectors": {
+            "owners": 15861,
+            "known_requested_bytes": 959320
+          },
+          "transcript_rows": {
+            "owners": 16140,
+            "known_requested_bytes": 20142720
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 200448,
+          "event_values": 126186,
+          "other_event_values": 69632,
+          "read_domain_events": 11893,
+          "replacement_checkpoints": 4096,
+          "replay_encoded_charge": 937759445,
+          "replay_records": 40565
+        },
+        "binding_parts_bytes": 78558522
+      },
+      "full_wrapper": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-candidate/retained-seeded_history_32.json",
+        "sha256": "574100aa6eefe615e0914ee795834fd1575e5e626ca5c04291ad111e6b574899",
+        "hosts": 128,
+        "known_requested_bytes": 234830979,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 120260,
+            "known_requested_bytes": 14431200
+          },
+          "binding_path_arrays": {
+            "owners": 218031,
+            "known_requested_bytes": 22522608
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 4081061
+          },
+          "checkpoint_boxes": {
+            "owners": 4096,
+            "known_requested_bytes": 13533184
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 20600,
+            "known_requested_bytes": 824000
+          },
+          "content_pointer_vectors": {
+            "owners": 16376,
+            "known_requested_bytes": 1973288
+          },
+          "content_ref_owners": {
+            "owners": 16384,
+            "known_requested_bytes": 2490368
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 4096,
+            "known_requested_bytes": 245760
+          },
+          "descriptor_rows": {
+            "owners": 8064,
+            "known_requested_bytes": 8515584
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 116480
+          },
+          "domain_revision_roots": {
+            "owners": 28672,
+            "known_requested_bytes": 2752512
+          },
+          "frontier_array_owners": {
+            "owners": 33790,
+            "known_requested_bytes": 1351600
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 8925798
+          },
+          "frontier_fragments": {
+            "owners": 249598,
+            "known_requested_bytes": 33945328
+          },
+          "frontier_pointer_vectors": {
+            "owners": 29694,
+            "known_requested_bytes": 7865944
+          },
+          "nested_event_vectors": {
+            "owners": 40559,
+            "known_requested_bytes": 47259480
+          },
+          "raw_binding_vectors": {
+            "owners": 19951,
+            "known_requested_bytes": 4809600
+          },
+          "raw_frontier_vectors": {
+            "owners": 12015,
+            "known_requested_bytes": 5773568
+          },
+          "replay_event_arcs": {
+            "owners": 40559,
+            "known_requested_bytes": 23037512
+          },
+          "transcript_binding_heads": {
+            "owners": 12015,
+            "known_requested_bytes": 1153440
+          },
+          "transcript_frontier_heads": {
+            "owners": 12015,
+            "known_requested_bytes": 1153440
+          },
+          "transcript_head_owners": {
+            "owners": 15983,
+            "known_requested_bytes": 1534368
+          },
+          "transcript_page_boxes": {
+            "owners": 11887,
+            "known_requested_bytes": 5420472
+          },
+          "transcript_pointer_vectors": {
+            "owners": 15855,
+            "known_requested_bytes": 959376
+          },
+          "transcript_rows": {
+            "owners": 16140,
+            "known_requested_bytes": 20142720
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 200448,
+          "event_values": 126174,
+          "other_event_values": 69632,
+          "read_domain_events": 11887,
+          "replacement_checkpoints": 4096,
+          "replay_encoded_charge": 937744360,
+          "replay_records": 40559
+        },
+        "binding_parts_bytes": 48334837
+      },
+      "reference_only": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-reference/retained-seeded_history_32.json",
+        "sha256": "a1534b1c6ffc7d26b829c8224842f53034207c4203c6ab5d9005c4dfd58ed04c",
+        "hosts": 128,
+        "known_requested_bytes": 234937516,
+        "allocations": {
+          "binding_fragments": {
+            "owners": 120245,
+            "known_requested_bytes": 16353320
+          },
+          "binding_path_strings": {
+            "owners": 0,
+            "known_requested_bytes": 4082488
+          },
+          "binding_path_vectors": {
+            "owners": 218114,
+            "known_requested_bytes": 19041720
+          },
+          "checkpoint_boxes": {
+            "owners": 4096,
+            "known_requested_bytes": 13533184
+          },
+          "collection_cut_roots": {
+            "owners": 128,
+            "known_requested_bytes": 12288
+          },
+          "content_array_owners": {
+            "owners": 20599,
+            "known_requested_bytes": 823960
+          },
+          "content_pointer_vectors": {
+            "owners": 16375,
+            "known_requested_bytes": 1973056
+          },
+          "content_ref_owners": {
+            "owners": 16384,
+            "known_requested_bytes": 2490368
+          },
+          "descriptor_pointer_vectors": {
+            "owners": 4096,
+            "known_requested_bytes": 245760
+          },
+          "descriptor_rows": {
+            "owners": 8064,
+            "known_requested_bytes": 8515584
+          },
+          "descriptor_strings": {
+            "owners": 0,
+            "known_requested_bytes": 116480
+          },
+          "domain_revision_roots": {
+            "owners": 28672,
+            "known_requested_bytes": 2752512
+          },
+          "frontier_array_owners": {
+            "owners": 33790,
+            "known_requested_bytes": 1351600
+          },
+          "frontier_domain_strings": {
+            "owners": 0,
+            "known_requested_bytes": 8930316
+          },
+          "frontier_fragments": {
+            "owners": 249598,
+            "known_requested_bytes": 33945328
+          },
+          "frontier_pointer_vectors": {
+            "owners": 29694,
+            "known_requested_bytes": 7866008
+          },
+          "nested_event_vectors": {
+            "owners": 40580,
+            "known_requested_bytes": 47271072
+          },
+          "raw_binding_vectors": {
+            "owners": 19972,
+            "known_requested_bytes": 6422272
+          },
+          "raw_frontier_vectors": {
+            "owners": 12036,
+            "known_requested_bytes": 5783040
+          },
+          "replay_event_arcs": {
+            "owners": 40580,
+            "known_requested_bytes": 23049440
+          },
+          "transcript_binding_heads": {
+            "owners": 12036,
+            "known_requested_bytes": 1155456
+          },
+          "transcript_frontier_heads": {
+            "owners": 12036,
+            "known_requested_bytes": 1155456
+          },
+          "transcript_head_owners": {
+            "owners": 16004,
+            "known_requested_bytes": 1536384
+          },
+          "transcript_page_boxes": {
+            "owners": 11908,
+            "known_requested_bytes": 5430048
+          },
+          "transcript_pointer_vectors": {
+            "owners": 15876,
+            "known_requested_bytes": 960152
+          },
+          "transcript_rows": {
+            "owners": 16138,
+            "known_requested_bytes": 20140224
+          }
+        },
+        "counts": {
+          "collection_cut_logical_entries": 512,
+          "domain_revision_logical_entries": 200448,
+          "event_values": 126216,
+          "other_event_values": 69632,
+          "read_domain_events": 11908,
+          "replacement_checkpoints": 4096,
+          "replay_encoded_charge": 938090760,
+          "replay_records": 40580
+        },
+        "binding_parts_bytes": 48390168
+      }
+    },
+    {
+      "phase": "all_unloaded",
+      "before": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32/retained-all_unloaded.json",
+        "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+        "hosts": 0,
+        "known_requested_bytes": 0,
+        "allocations": {},
+        "counts": {},
+        "binding_parts_bytes": 0
+      },
+      "full_wrapper": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-candidate/retained-all_unloaded.json",
+        "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+        "hosts": 0,
+        "known_requested_bytes": 0,
+        "allocations": {},
+        "counts": {},
+        "binding_parts_bytes": 0
+      },
+      "reference_only": {
+        "input": "/home/capi/.cache/rustx-pr485-cut-owners-20261110/census-128x32-reference/retained-all_unloaded.json",
+        "sha256": "37517e5f3dc66819f61f5a7bb8ace1921282415f10551d2defa5c3eb0985b570",
+        "hosts": 0,
+        "known_requested_bytes": 0,
+        "allocations": {},
+        "counts": {},
+        "binding_parts_bytes": 0
+      }
+    }
+  ],
+  "path_wrapper_decision": "Reject the path Arc wrapper: unique path arrays did not fall and its whole-census extra saving at 128x32 was only about 0.10 MiB. Retain ContentRef sharing and direct bounded prefix construction."
+}

@@ -97,7 +97,8 @@ fn work(connection: &Connection, sql: &str, values: &[rusqlite::types::Value], i
         "{plan}"
     );
     assert!(
-        plan.contains("sequence>?") && plan.contains("sequence<?"),
+        (plan.contains("sequence>?") && plan.contains("sequence<?"))
+            || (plan.contains("rowid>?") && plan.contains("rowid<?")),
         "{plan}"
     );
     assert!(
@@ -260,7 +261,7 @@ fn absent_visit_facts_and_run_headers_ignore_unrelated_later_history() {
             instance: instance.clone(),
         },
     );
-    let mut baseline = None;
+    let mut populated_costs = None;
     for later in 0..=4096 {
         if [0, 128, 1024, 4096].contains(&later) {
             cut.read.journal = sequence;
@@ -278,14 +279,12 @@ fn absent_visit_facts_and_run_headers_ignore_unrelated_later_history() {
                 ));
             }
             assert!(costs.iter().all(|cost| *cost < 200), "{costs:?}");
-            // An empty tail can terminate at EOF; a populated tail adds one
-            // instruction to reject its first different index key. Growing
-            // that tail must add no further work.
-            for (initial, current) in baseline.get_or_insert(costs.clone()).iter().zip(&costs) {
-                assert!(
-                    (*current - *initial).abs() <= 1,
-                    "{later} later runs: {costs:?}"
-                );
+            // Empty indexes at the searched key can take a different seek
+            // path. The absolute cap applies in both cases. Once the tail is
+            // populated, growing it must execute exactly the same work.
+            if later > 0 {
+                let expected = populated_costs.get_or_insert_with(|| costs.clone());
+                assert_eq!(&costs, expected, "{later} later runs");
             }
             let page = page(&connection, &cut, 1, 0, 32).unwrap();
             assert_eq!(page.total, 1);
@@ -431,4 +430,100 @@ fn exact_visit_lookup_has_constant_index_work_across_unrelated_runs() {
         .expect("exact selected visit at later cut");
     assert_eq!(found.instance, target);
     assert!(found.input.is_some() && found.output.is_some());
+}
+
+#[test]
+fn workflow_agent_node_queries_seek_generated_indexes() {
+    let owner = store();
+    owner.initialize(&[]).unwrap();
+    let connection = owner.lock().unwrap();
+    let table_sql: String = connection
+        .query_row(
+            "SELECT sql FROM sqlite_schema WHERE type='table' AND name='events'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(
+        table_sql.contains(
+            "event_workflow_agent_node GENERATED ALWAYS AS (COALESCE(json_extract(event_json,'$.event.origin.node_id'), json_extract(event_json,'$.event.node_id')))"
+        ),
+        "{table_sql}"
+    );
+    let conversation = owner.conversation_id().as_str();
+    let insert = |sequence: i64, event_id: &str, event_json: &str| {
+        connection
+            .execute(
+                "INSERT INTO events(sequence,event_id,schema_version,conversation_id,event_timestamp,event_json) VALUES(?1,?2,1,?3,'2026-01-01T00:00:00Z',?4)",
+                params![sequence, event_id, conversation, event_json],
+            )
+            .unwrap();
+    };
+    insert(
+        1,
+        "ownership-exact",
+        r#"{"event":{"type":"subagent_ownership_committed","subagent_id":"sub-1","child_agent_id":"child-exact","ownership":"workflow","origin":{"kind":"workflow","node_id":"node-exact"}}}"#,
+    );
+    insert(
+        2,
+        "ownership-node-only",
+        r#"{"event":{"type":"subagent_ownership_committed","subagent_id":"sub-1","child_agent_id":"child-broad","ownership":"workflow","node_id":"node-exact","origin":{"kind":"workflow"}}}"#,
+    );
+    let matched: Vec<String> = connection
+        .prepare(NODE_OWNERSHIP_BY_SUBAGENT_SQL)
+        .unwrap()
+        .query_map(params!["sub-1", 9_i64, "node-exact"], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(
+        matched,
+        vec!["child-exact".to_owned()],
+        "node_id-only rows must not satisfy the exact origin.node_id lookup"
+    );
+    let cases = [
+        (
+            NODE_OWNERSHIP_SQL,
+            "events_workflow_agent_node_idx",
+            vec![
+                rusqlite::types::Value::from(1_i64),
+                rusqlite::types::Value::from(9_i64),
+                rusqlite::types::Value::Text("node".to_owned()),
+            ],
+        ),
+        (
+            NODE_ADMITTED_SQL,
+            "events_workflow_agent_node_idx",
+            vec![
+                rusqlite::types::Value::from(1_i64),
+                rusqlite::types::Value::from(9_i64),
+                rusqlite::types::Value::Text("node".to_owned()),
+            ],
+        ),
+        (
+            NODE_OWNERSHIP_BY_SUBAGENT_SQL,
+            "events_subagent_id_kind_idx",
+            vec![
+                rusqlite::types::Value::Text("subagent".to_owned()),
+                rusqlite::types::Value::from(9_i64),
+                rusqlite::types::Value::Text("node".to_owned()),
+            ],
+        ),
+    ];
+    for (sql, index, params) in cases {
+        let plan: String = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_row(rusqlite::params_from_iter(params), |row| row.get(3))
+            .unwrap();
+        assert!(
+            plan.replace("USING COVERING INDEX", "USING INDEX")
+                .contains(&format!("SEARCH events USING INDEX {index}")),
+            "{sql}: {plan}"
+        );
+        assert!(
+            !plan.contains("SCAN ") && !plan.contains("TEMP B-TREE"),
+            "{sql}: {plan}"
+        );
+    }
 }

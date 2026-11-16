@@ -133,24 +133,11 @@ impl SessionCatalog {
             let store = self
                 .inspect_store(node.conversation_id.clone(), &path)
                 .map_err(SessionError::Store)?;
-            let mut position = None;
-            loop {
-                let page = store
-                    .load_canonical_page(position, 128)
-                    .map_err(SessionError::Store)?;
-                for message in page.messages {
-                    if let crate::message::types::MessageBlock::User(user) = message
-                        && let Some(time) =
-                            super::super::session_activity::human_message_time(&user)
-                    {
-                        latest =
-                            Some(latest.map_or(time, |previous: DateTime<Utc>| previous.max(time)));
-                    }
-                }
-                match page.next_position {
-                    Some(next) => position = Some(next),
-                    None => break,
-                }
+            // Each timed Human message row carries the greatest timestamp
+            // through its position, so the newest such row answers the
+            // whole Ledger.
+            if let Some(time) = store.latest_human_activity().map_err(SessionError::Store)? {
+                latest = Some(latest.map_or(time, |previous: DateTime<Utc>| previous.max(time)));
             }
         }
         Ok(latest)

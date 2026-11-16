@@ -10,6 +10,14 @@ use chrono::{DateTime, Utc};
 
 use crate::durable::{ConversationStoreError, TranscriptCommitReceipt, TranscriptCursor};
 
+/// Authenticated frozen permission facts, without materializing selected history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestPermissionState {
+    pub projection_activation: crate::context::checkpoint::ProjectionActivationId,
+    pub permission_mode: crate::runtime::types::ApprovalMode,
+    pub task_message: Option<MessageId>,
+}
+
 /// The durable receipt of one model-turn-start transition.
 ///
 /// The receipt carries the complete start-owned Event Journal sequence in
@@ -240,6 +248,12 @@ pub trait RequestStore: Send + Sync + 'static {
     /// start transaction, never for request-scoped context or Agent Status
     /// appends.
     fn current_logical_step_progress(&self) -> Result<u64, ConversationStoreError>;
+    /// Reads the committed request's authenticated permission metadata only.
+    /// Selected input and historical tool associations remain deferred to full reads.
+    fn load_request_permission_state(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<RequestPermissionState, ConversationStoreError>;
     /// Loads one immutable Request Snapshot on demand.
     fn load_request_snapshot(
         &self,

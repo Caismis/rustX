@@ -773,10 +773,7 @@ async fn terminal_submission_failure_preserves_cold_history_and_trace_detail_wit
         else {
             panic!("committed cold history");
         };
-        assert_ne!(
-            before.page.entries,
-            [] as [crate::observation::transcript::RuntimeClientTranscriptEntry; 0]
-        );
+        assert!(!before.page.entries.is_empty());
         assert!(
             serde_json::to_string(&before)
                 .unwrap()

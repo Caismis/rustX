@@ -14,6 +14,22 @@ use sha2::{Digest, Sha256};
 
 const TIME_PREFIX: &str = "<system-reminder>\nTimezone: UTC\nCurrent time: ";
 const TIME_SUFFIX: &str = "\n</system-reminder>";
+pub(super) const MODEL_TIME: &str = "2026-10-19 00:00:00";
+pub(super) struct FixedStatusClock(chrono::DateTime<chrono::Utc>);
+impl Default for FixedStatusClock {
+    fn default() -> Self {
+        Self(
+            chrono::NaiveDateTime::parse_from_str(MODEL_TIME, "%Y-%m-%d %H:%M:%S")
+                .unwrap()
+                .and_utc(),
+        )
+    }
+}
+impl rustx::context::AgentStatusClock for FixedStatusClock {
+    fn now(&self) -> chrono::DateTime<chrono::Utc> {
+        self.0
+    }
+}
 const NOTE: &str = "deterministic-note-payload-6d41";
 const WORKSPACE_CWD_PREFIX: &str = "\n\nCurrent working directory: ";
 
@@ -166,9 +182,9 @@ fn expected_tools() -> Value {
 
 pub(super) fn expected_body(case: &str, index: usize) -> Value {
     let mut messages = vec![
-        json!({"role":"system","content":expected_system_prompt(index),"tool_calls":null}),
+        json!({"role":"system","content":expected_system_prompt(index)}),
         text("user", "benchmark turn 0000"),
-        text("user", &format!("{TIME_PREFIX}<TIME>{TIME_SUFFIX}")),
+        text("user", &format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}")),
     ];
     if case.starts_with("short-") {
         for turn in 0..index {
@@ -189,9 +205,9 @@ pub(super) fn expected_body(case: &str, index: usize) -> Value {
         "tools":expected_tools()})
 }
 
-/// JSON argument spelling is transport-only; workspace path and timestamp
-/// normalization are applied only for the independent expectation, never
-/// between wire and frozen equivalence.
+/// JSON argument spelling is transport-only. Workspace-path normalization is
+/// applied only for the independent expectation, never between wire and frozen
+/// equivalence. Model-facing timestamps stay the exact fixed fixture clock.
 fn normalize(body: &Value, workspace: &str, dynamic: bool) -> Value {
     let mut body = body.clone();
     let workspace_line = format!("{WORKSPACE_CWD_PREFIX}{workspace}");
@@ -227,7 +243,10 @@ fn normalize(body: &Value, workspace: &str, dynamic: bool) -> Value {
                 let parsed = chrono::NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%d %H:%M:%S")
                     .expect("valid generated UTC timestamp");
                 assert_eq!(parsed.format("%Y-%m-%d %H:%M:%S").to_string(), timestamp);
-                block["text"] = json!(format!("{TIME_PREFIX}<TIME>{TIME_SUFFIX}"));
+                assert_eq!(
+                    timestamp, MODEL_TIME,
+                    "model-facing time must be the fixed fixture clock"
+                );
             }
         }
         if let Some(calls) = message["tool_calls"].as_array_mut() {
@@ -297,7 +316,6 @@ pub(super) fn reconstructed_body(request: &Value, provider: &str, endpoint: &str
     let mut messages = vec![json!({
         "role": "system",
         "content": system_prompt,
-        "tool_calls": null,
     })];
     messages.extend(
         request["messages"]
@@ -406,7 +424,7 @@ mod tests {
         );
         body["messages"][0]["content"] = json!(prompt);
         body["messages"][2]["content"][0]["text"] =
-            json!(format!("{TIME_PREFIX}2026-10-17 00:00:00{TIME_SUFFIX}"));
+            json!(format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}"));
         if case == "tool" && index == 1 {
             body["messages"][3]["tool_calls"][0]["function"]["arguments"] = json!(
                 serde_json::to_string(&json!({
@@ -452,7 +470,7 @@ mod tests {
                 "input_kind": "canonical",
                 "id": "msg-time-0",
                 "role": "user",
-                "content": [{"type": "text", "text": format!("{TIME_PREFIX}2026-10-17 00:00:00{TIME_SUFFIX}")}],
+                "content": [{"type": "text", "text": format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}")}],
             }),
         ];
         if case.starts_with("short-") {
@@ -746,7 +764,7 @@ mod tests {
             .is_err()
         );
 
-        for index in [1, 2] {
+        for index in [1, 2, 3] {
             let mut bad = good.clone();
             bad["messages"][index]["content"][0]["text"] = json!("different frozen input");
             assert!(
@@ -785,6 +803,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn fixture_system_prompt_file_matches_documented_core() {
+        assert_eq!(
+            include_str!("expected_system_prompt.txt").trim_end(),
+            CORE_SYSTEM_PROMPT
+        );
+    }
+
+    #[test]
+    fn complete_oracle_rejects_changed_time_even_when_wire_and_frozen_agree() {
+        let mut bad = wire("short-small", 0);
+        bad["messages"][2]["content"][0]["text"] =
+            json!(format!("{TIME_PREFIX}2026-10-19 00:00:01{TIME_SUFFIX}"));
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_bodies("short-small", 0, FIXTURE_WORKSPACE, &bad, &bad)
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn complete_oracle_authenticates_system_text_and_fixture_path() {
+        let good = wire("short-small", 0);
+        assert_bodies("short-small", 0, FIXTURE_WORKSPACE, &good, &good);
+        let mut bad = good.clone();
+        let elsewhere = good["messages"][0]["content"]
+            .as_str()
+            .unwrap()
+            .replace(FIXTURE_WORKSPACE, "/elsewhere");
+        bad["messages"][0]["content"] = json!(elsewhere);
+        assert!(
+            std::panic::catch_unwind(|| {
+                assert_bodies("short-small", 0, FIXTURE_WORKSPACE, &bad, &bad)
+            })
+            .is_err()
+        );
+    }
     #[test]
     fn complete_oracle_rejects_frozen_identity_and_original_reference_mismatch() {
         let start = json!({"event":{"request_id":"request-1","model":"chat-model"},

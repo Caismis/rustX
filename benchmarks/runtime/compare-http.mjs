@@ -2,11 +2,13 @@ import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {readFile,writeFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
-import {normalized as normalizedPi} from './pi-oracle.mjs';
+import {MODEL_TIME, normalized as normalizedPi} from './pi-oracle.mjs';
 
 const TIME_PREFIX='<system-reminder>\nTimezone: UTC\nCurrent time: ';
 const TIME_SUFFIX='\n</system-reminder>';
+const FIXED_REMINDER=`${TIME_PREFIX}${MODEL_TIME}${TIME_SUFFIX}`;
 const CWD_MARKER='\n\nCurrent working directory: ';
+const OBSERVER_MODES=['native-workflow','no-live-subscriber','live-subscriber'];
 
 function isPlainObject(value) {
  return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -25,6 +27,28 @@ function requireKnownWorkspace(record, label) {
  return record.workspace;
 }
 
+function assertMeasurementIdentity(rust, pi) {
+ for (const sample of [rust, pi]) {
+  assert.equal(sample.workload_version, 3, 'workload_version');
+  assert.equal(sample.model_time, MODEL_TIME, 'model_time must be the fixed fixture clock');
+ }
+ const mode = rust.observer_mode ?? 'native-workflow';
+ assert(OBSERVER_MODES.includes(mode), `observer mode ${mode} is not allowed`);
+ if (mode !== 'native-workflow' || pi.observer_mode !== undefined) {
+  assert.equal(pi.observer_mode, mode, 'paired observer mode');
+ }
+ if (mode !== 'native-workflow') {
+  assert(rust.observer_mode && pi.observer_mode);
+  for (const sample of [rust, pi]) {
+   assert(Array.isArray(sample.samples), 'non-default observer mode requires per-turn samples');
+   assert(sample.samples.every(turn => turn.observer_mode === mode), 'per-turn observer mode');
+  }
+ }
+ return mode;
+}
+
+// `dynamic` rewrites only the declared workspace cwd and read path. The fixed
+// benchmark clock is never rewritten to <TIME>.
 export function normalizedRustBody(body,workspace,dynamic=true) {
  if(dynamic) {
   assert.equal(typeof workspace,'string','known fixture workspace string is required');
@@ -32,6 +56,7 @@ export function normalizedRustBody(body,workspace,dynamic=true) {
  }
  const cloned=structuredClone(body);
  let systemMessages=0;
+ let reminders=0;
  const expectedCwdLine=`${CWD_MARKER}${workspace}`;
  for(const message of cloned.messages??[]) {
   if(message.role==='system') {
@@ -51,11 +76,8 @@ export function normalizedRustBody(body,workspace,dynamic=true) {
   const content=Array.isArray(message.content)?message.content:[];
   for(const block of content) {
    if(dynamic && block.type==='text' && typeof block.text==='string' && block.text.startsWith(TIME_PREFIX)) {
-    const stamp=block.text.slice(TIME_PREFIX.length,-TIME_SUFFIX.length);
-    assert(block.text.endsWith(TIME_SUFFIX));
-    assert(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(stamp));
-    assert.equal(new Date(stamp.replace(' ','T')+'Z').toISOString().slice(0,19).replace('T',' '),stamp);
-    block.text=`${TIME_PREFIX}<TIME>${TIME_SUFFIX}`;
+    assert.equal(block.text, FIXED_REMINDER, 'model-facing time must be the fixed fixture clock');
+    reminders+=1;
    }
   }
   for(const call of message.tool_calls??[]) {
@@ -68,7 +90,10 @@ export function normalizedRustBody(body,workspace,dynamic=true) {
    call.function.arguments=args;
   }
  }
- if(dynamic) assert.equal(systemMessages,1,'rust request must contain exactly one system message');
+ if(dynamic) {
+  assert.equal(systemMessages,1,'rust request must contain exactly one system message');
+  assert.equal(reminders,1,'request must contain exactly one fixed-clock reminder');
+ }
  return cloned;
 }
 
@@ -81,6 +106,7 @@ function piWorkspaceOf(wire) {
 }
 
 export function comparePayloads(rust,pi) {
+ const observerMode=assertMeasurementIdentity(rust,pi);
  const sameEngine=pi.measurement_version !== undefined;
  const rightRequests=pi.wire_requests??pi.requests;
  assert.equal(rust.case,pi.scenario??pi.case);
@@ -101,7 +127,7 @@ export function comparePayloads(rust,pi) {
   const digest=x=>createHash('sha256').update(JSON.stringify(x)).digest('hex');
   checked.push({index:i,coreEqual:true,fullRequestEqual:sameEngine || JSON.stringify(a)===JSON.stringify(b),rustToolNames:rustTools.map(t=>t.function.name),piToolNames:piTools.map(t=>t.function.name),rustToolsSha256:digest(rustTools),piToolsSha256:digest(piTools)});
  }
- return {case:rust.case,checked};
+ return {workload_version:3,model_time:MODEL_TIME,observer_mode:observerMode,case:rust.case,checked};
 }
 
 if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href) {

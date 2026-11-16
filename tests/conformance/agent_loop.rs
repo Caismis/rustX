@@ -197,6 +197,21 @@ impl Driver {
     /// (a Skill package must exist before the capability candidate is
     /// prepared, which happens inside composition).
     async fn start_in(root: tempfile::TempDir, emulator: &ProviderEmulator, setup: &Setup) -> Self {
+        Self::start_in_with_status_clock(
+            root,
+            emulator,
+            setup,
+            Arc::new(rustx::context::SystemClock),
+        )
+        .await
+    }
+
+    async fn start_in_with_status_clock(
+        root: tempfile::TempDir,
+        emulator: &ProviderEmulator,
+        setup: &Setup,
+        status_clock: Arc<dyn rustx::context::AgentStatusClock>,
+    ) -> Self {
         let workspace = root.path().join("workspace");
         std::fs::create_dir_all(&workspace).expect("workspace");
         if setup.images {
@@ -240,6 +255,7 @@ impl Driver {
             runtime_root: root.path().join("private"),
         };
         let dependencies = LocalRuntimeDependencies {
+            status_clock,
             credentials: Some(Arc::new(MapCredentialEnvironment::new([(
                 CREDENTIAL_VARIABLE.to_owned(),
                 CREDENTIAL_VALUE.to_owned(),
@@ -712,8 +728,15 @@ impl Driver {
                 previous + 1,
                 "complete native records stay contiguous"
             );
-            if let RuntimeClientEvent::ProjectionTransition { metadata, .. } = event.as_ref() {
-                assert_eq!(metadata.read_cut.revision, cursor.get());
+            match event.as_ref() {
+                RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
+                    assert_eq!(metadata.read_cut.revision, cursor.get());
+                }
+                RuntimeClientEvent::ProjectionDelta { metadata, .. } => {
+                    assert_eq!(metadata.read_cut.revision, cursor.get());
+                    assert_eq!(metadata.base_cursor.get() + 1, cursor.get());
+                }
+                _ => {}
             }
             if owner.is_none() {
                 owner = self.submitted_attempt();
@@ -1132,23 +1155,58 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
             "Hello world",
             "{scenario}: the streamed deltas commit as one canonical message"
         );
-        // The scripted response leads with the protocol's full normal
-        // reasoning lifecycle, so this also proves the real stream parser
-        // accepts it rather than only the text subset.
+        // Short streamed responses can settle without any intermediate partial.
+        // Verify the actual canonical client notification and its original native
+        // body, rather than requiring a transient inline-delta representation.
+        let committed: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeClientEvent::MessageCommitted {
+                    message: MessageBlock::Assistant(assistant),
+                    ..
+                } => Some(assistant),
+                _ => None,
+            })
+            .collect();
         assert_eq!(
-            events
-                .iter()
-                .filter_map(|event| match event {
-                    RuntimeClientEvent::BlockContentAdvanced {
-                        kind,
-                        inline_delta: Some(delta),
-                        ..
-                    } if kind == "reasoning" => Some(delta.as_str()),
-                    _ => None,
-                })
-                .collect::<String>(),
-            "the conformance plan",
-            "{scenario}: the reasoning block reached the runtime"
+            committed.len(),
+            1,
+            "{scenario}: one canonical client answer"
+        );
+        let reasoning: String = committed[0]
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                rustx::message::types::AssistantContentBlock::Reasoning(reasoning) => {
+                    reasoning.text.as_deref()
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            reasoning, "the conformance plan",
+            "{scenario}: exact reasoning"
+        );
+        assert!(
+            driver
+                .canonical_history()
+                .contains(&MessageBlock::Assistant(committed[0].clone())),
+            "{scenario}: canonical client content equals the original native body"
+        );
+        let partial_reasoning: String = events
+            .iter()
+            .filter_map(|event| match event {
+                RuntimeClientEvent::BlockContentAdvanced {
+                    kind,
+                    inline_delta: Some(delta),
+                    ..
+                } if kind == "reasoning" => Some(delta.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            reasoning.starts_with(&partial_reasoning),
+            "{scenario}: any released partial is the exact reasoning prefix"
         );
         assert_eq!(
             events
@@ -2110,13 +2168,12 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
 /// provider boundary.
 ///
 /// The first runtime is composed inside its **own** Tokio runtime on a
-/// dedicated thread. Dropping that Tokio runtime drops every runtime-owned
-/// task at its current await point and closes the provider connection, which
-/// is the closest honest model of process death available without spawning a
-/// second binary — and, unlike a `kill`, it is exact: the driver knows the
-/// provider had already received request #1 because it waited on the
-/// provider-side gate, and it knows the client really vanished because it
-/// waits on the provider's disconnect observation. Nothing sleeps.
+/// dedicated thread, using a current-thread executor. Once its driver returns,
+/// no concurrent executor worker can process cancellation and commit a provider
+/// outcome before teardown drops the parked tasks. The provider-side gate
+/// proves request #1 arrived after its start commit; the disconnect observation
+/// proves the client vanished. Nothing sleeps. Real process-death tests remain
+/// separate coverage; this fixture verifies the exact stopped-task prefix.
 ///
 /// ```text
 /// runtime #1 -> request-start durable commit -> provider observes request #1
@@ -2161,7 +2218,7 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     let (crash_tx, crash_rx) = tokio::sync::oneshot::channel::<()>();
     let first_paths = paths.clone();
     let first = std::thread::spawn(move || {
-        let execution = tokio::runtime::Builder::new_multi_thread()
+        let execution = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("the first runtime's execution runtime");
@@ -2221,25 +2278,9 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
     .expect("the second runtime recovers the durable conversation");
     let report = recovered.runtime().recovery();
 
-    // The crash boundary is the drop of the first execution runtime. The
-    // durable journal decides the honest classification, and both landings
-    // preserve the invariant under test: recovery resends nothing.
-    //
-    //   Landing A (the intended crash): the drop aborted the attempt while
-    //   it was parked on the gated stream, so the journal holds
-    //   `ModelRequestStarted` with no outcome and no terminal — the attempt
-    //   classifies as an indeterminate external outcome, the started
-    //   request is named explicitly, and continuation is blocked.
-    //
-    //   Landing B (platform-dependent drop semantics, observed on macOS):
-    //   the runtime drop lets the woken attempt settle its terminal as the
-    //   connection closes, so the journal honestly records the terminal —
-    //   the classification is the absorbing `AlreadyTerminal`. The exact
-    //   indeterminate classification is covered deterministically by the
-    //   store-prefix test (`started_request_with_unknown_outcome_is_indeterminate_and_never_resent`)
-    //   and the runtime test (`class_c_restart_issues_no_provider_request_of_its_own`);
-    //   what this scenario adds is the real-provider no-resend proof, which
-    //   must hold under both landings.
+    // All request tasks stopped at the provider gate. No worker could run
+    // their graceful cancellation epilogue during executor teardown, so the
+    // durable prefix has a started request with no externally known outcome.
     match report.attempt_class() {
         AttemptRecoveryClass::IndeterminateExternalOutcome {
             attempt_id,
@@ -2293,36 +2334,13 @@ async fn a_crash_after_the_request_start_commit_never_resends_the_request() {
                 "the reconstruction is the exact historical request"
             );
         }
-        AttemptRecoveryClass::AlreadyTerminal => {
-            // The dropped runtime settled the attempt before the process
-            // died; the durable journal is honest and absorbing.
-            assert_eq!(
-                report.resume(),
-                ResumeDisposition::PendingInboundOnly,
-                "an already-terminal attempt authorizes no continuation"
-            );
-            assert!(
-                report.reconciliation().is_empty(),
-                "a terminal attempt needs no recovery fact"
-            );
-            let history = recovered.runtime().request_history();
-            let page = history.page(None, 8).expect("the retained snapshot page");
-            assert_eq!(
-                page.snapshots.len(),
-                1,
-                "the started request retained its immutable snapshot"
-            );
-        }
         other => {
-            panic!(
-                "a committed request start must classify as indeterminate (or, when the \
-                 dropped runtime settled it first, as already terminal): {other:?}"
-            );
+            panic!("the stopped request must have an indeterminate external outcome: {other:?}");
         }
     }
 
-    // The whole point: the provider saw the request exactly once, under
-    // either crash landing. The scenario declares exactly one step, so any
+    // The provider saw the request exactly once. The scenario declares
+    // exactly one step, so any
     // resend would have been an unexpected provider request and would have
     // failed the run rather than pass quietly.
     assert_eq!(

@@ -108,7 +108,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::message::types::MessageBlock;
-use crate::runtime::identity::{ConversationId, ToolId};
+use crate::runtime::identity::ConversationId;
 use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
 /// The durable identity of the native `todo` tool.
@@ -1094,7 +1094,10 @@ impl TodoBatch {
     /// `blocks` is the exact `ToolResult` batch that just became canonical.
     /// The newest `todo` result in it *is* the list now; a batch that
     /// committed no `todo` result moves nothing, whatever was staged.
-    pub fn settle(self, blocks: &[MessageBlock]) -> TodoSettlement {
+    pub fn settle<'a>(
+        self,
+        blocks: impl IntoIterator<Item = &'a MessageBlock, IntoIter: DoubleEndedIterator>,
+    ) -> TodoSettlement {
         let list = self.list.clone();
         let mut state = list.state();
         // Releasing what this token holds, not claiming something that might
@@ -1113,12 +1116,13 @@ impl TodoBatch {
         // Canonical history is the authority: the list becomes exactly what
         // these committed blocks published, never whatever this batch
         // happened to stage.
-        let moved = if let Some(Ok(published)) = blocks.iter().rev().find_map(published_snapshot) {
-            state.committed = published;
-            true
-        } else {
-            false
-        };
+        let moved =
+            if let Some(Ok(published)) = blocks.into_iter().rev().find_map(published_snapshot) {
+                state.committed = published;
+                true
+            } else {
+                false
+            };
         drop(state);
         if moved {
             TodoSettlement::Installed
@@ -1545,14 +1549,12 @@ fn stage(
 pub fn published_snapshot(
     message: &MessageBlock,
 ) -> Option<Result<TodoSnapshot, TodoRebuildError>> {
+    if !is_publication(message) {
+        return None;
+    }
     let MessageBlock::Tool(tool) = message else {
         return None;
     };
-    if tool.tool_id != ToolId::new(TODO_TOOL_ID)
-        || tool.result.status != ToolExecutionStatus::Success
-    {
-        return None;
-    }
     let Some(value) = tool
         .result
         .content
@@ -1565,6 +1567,15 @@ pub fn published_snapshot(
         return Some(Err(TodoRebuildError::Missing));
     };
     Some(decode_snapshot(value))
+}
+
+/// Whether `message` is a successful `todo` result: the messages whose
+/// newest instance is the list (see [`published_snapshot`]).
+#[must_use]
+pub fn is_publication(message: &MessageBlock) -> bool {
+    matches!(message, MessageBlock::Tool(tool)
+        if tool.tool_id.as_str() == TODO_TOOL_ID
+            && tool.result.status == ToolExecutionStatus::Success)
 }
 
 /// Decodes and validates one published list, strictly.
@@ -1961,7 +1972,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     }
 
@@ -2134,7 +2146,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             })]),
             TodoSettlement::Unchanged
         );
@@ -2484,7 +2497,7 @@ mod tests {
         let MessageBlock::Tool(tool) = &mut malformed else {
             panic!("a tool result");
         };
-        tool.result.content = vec![ToolResultContent::Json {
+        std::sync::Arc::make_mut(&mut tool.result).content = vec![ToolResultContent::Json {
             value: serde_json::json!({ "tasks": [{ "id": 1 }], "next_id": 2 }),
         }];
 
@@ -2506,9 +2519,10 @@ mod tests {
         let MessageBlock::Tool(tool) = &mut missing else {
             panic!("a tool result");
         };
-        tool.result.content = vec![ToolResultContent::Text(TextBlock {
-            text: "Created #1".to_owned(),
-        })];
+        std::sync::Arc::make_mut(&mut tool.result).content =
+            vec![ToolResultContent::Text(TextBlock {
+                text: "Created #1".to_owned(),
+            })];
         assert_eq!(
             ConversationTodoList::rebuilt(
                 ConversationId::new("conv_97f22362-c165-70d9-8ae7-6f04b44108e1"),
@@ -2543,7 +2557,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             })],
         )
         .expect("rebuild");

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use super::*;
 use crate::runtime::identity::ToolId;
 use crate::tools::types::{ToolOrigin, ToolReplayPolicy};
@@ -7,7 +9,7 @@ fn definition(policy: ToolExecutionPolicy, schema: Value) -> ToolDefinition {
         id: ToolId::new("example"),
         name: "example".into(),
         description: "Business operation".into(),
-        input_schema: schema,
+        input_schema: Arc::new(schema),
         execution_policy: policy,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
@@ -48,7 +50,7 @@ fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
         ] {
             let original = definition(policy, schema.clone());
             let compiled = compile_model_definition(&original).unwrap();
-            assert_eq!(original.input_schema, schema);
+            assert_eq!(original.input_schema.as_ref(), &schema);
             let model = build_validator(&compiled.input_schema).unwrap();
             for business in &values {
                 for reason in [None, Some(json!(null)), Some(json!("Request elevation"))] {

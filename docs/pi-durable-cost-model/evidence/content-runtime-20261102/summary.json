@@ -1,0 +1,115 @@
+{
+  "archive": "raw.tar.xz",
+  "archive_bytes": 11264364,
+  "archive_sha256": "0d5aa082ee331274948a0946cb31188e593e9b0d5a08850151861d036914f741",
+  "compression": "xz preset 0",
+  "created_utc": "2026-11-02T11:23:18.275601+00:00",
+  "excluded_entries": 5,
+  "excluded_reasons": {
+    "compiled conformance artifact": 3,
+    "compiled executable/object/library format": 1,
+    "dependency/build/cache/archive/extract directory": 1
+  },
+  "format": "rustx-content-runtime-raw-evidence-v1",
+  "manifest_bytes": 370925,
+  "manifest_sha256": "4e6df5315a3c13e1da254b77ba45b09423ca1a6001fb0e588123b0648cd327b3",
+  "phases": {
+    "baseline": {
+      "head": "a664c5a96546c3e49c5638c3c959b08df3c77fec",
+      "production_tree": "dd0b2c579159d532420979209157e94d32d80131",
+      "sha256": "62c2e96a5a611de0df64e35065ae9bfd04a794bafef882a2214244ff1cb4587e"
+    },
+    "baseline_schema": 87,
+    "candidate": {
+      "head": "274d5d47e6e791cd9093aa40b64965def6d178fc",
+      "production_tree": "4caff9545b0e8f1761509049e82edb8c97f1613e",
+      "sha256": "714f6df872d02e8a90fe97a2becd155a0810c1e7d10301810968031ca619c4af"
+    },
+    "candidate_schema": 88,
+    "checked_request_pairs": 1692,
+    "cpu_affinity": [
+      2,
+      8
+    ],
+    "diagnostic_products": 8,
+    "formal_products": 144,
+    "new_deepseek_products": 0,
+    "new_pi_products": 0,
+    "paired_comparisons": 72,
+    "profile_products": 0,
+    "scope": "144 fresh Rust formal products only. Eight isolated diagnostics and every failed/historical attempt remain separate. Fixed prior Pi/DeepSeek is a separately pinned dependency, not new paired products.",
+    "supplementary_products": 24
+  },
+  "raw_bytes": 1238231629,
+  "raw_files": 1254,
+  "reference_pins": {
+    "archive_manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+    "deepseek_products": 12,
+    "pi_products": 60,
+    "policy": "Fixed previously strict-audited products; no new Pi/DSH execution. Ratios use separate batch medians; no cross-batch pairing or randomized concurrency claim. Full raw references remain in the content-hash-pinned previous archive. Portable new reports consume this exact prior audit; re-auditing old raw is a separate archived command, not a fresh product.",
+    "prior_rust_sha256": "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+    "prior_source": "d22ce66c5a1cda895cac382ce2c350f345933876",
+    "reference_archive": "docs/pi-durable-cost-model/evidence/pi-flow-runtime-20261027/raw.tar.xz",
+    "reference_archive_bytes": 24024636,
+    "reference_archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+    "reference_audit": "previous-complete-all-audit.json",
+    "reference_audit_sha256": "902e748b08ff085dc4d1edcd7a38eea181bde0b5542a8972bbd3e459472eb98f",
+    "references": {
+      "deepseek_node": "v24.19.0",
+      "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+      "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c"
+    }
+  },
+  "replay_commands": {
+    "diagnostic": [
+      "python3",
+      "diagnostic-audit-corrected.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--formal-audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../diagnostic-raw-audit.json"
+    ],
+    "formal": [
+      "python3",
+      "direct-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--output",
+      "../direct-raw-audit.json"
+    ],
+    "replication": [
+      "python3",
+      "replication-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--output",
+      "../replication-raw-audit.json"
+    ],
+    "summary": [
+      "python3",
+      "summarize-results.py",
+      "--root",
+      ".",
+      "--audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../report-data.json",
+      "--markdown",
+      "../report-tables.md"
+    ]
+  },
+  "stream_verified_all_members": true,
+  "strict_report_sha256": {
+    "diagnostic-audit-final.json": "aeae10e4ca5439b16ba62690e39a8d4cee81be17387c71d8cb11f6f8d7ee3d55",
+    "direct-audit.json": "c64e62cc4532b7faa465eedeb1cda748f96342d90840b69f38f87009bcdbf7ac",
+    "replication-audit-final.json": "19210e7ea7a0864088de653a5373dae5978fce5e2c7b096a23038e101c784db9",
+    "report-data.json": "e67c7c39c18085e63d83e688a1f2e8cff597ac84256c934b62065aa247756fa2",
+    "report-tables.md": "7b7107764f087a22fdaef057fa008432a47ca4665c9408fd67fd20111f8bd9fc"
+  }
+}

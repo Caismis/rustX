@@ -113,3 +113,7 @@ pub use store::request::{
 pub use store::{ConversationStore, ConversationStoreError};
 
 pub mod response;
+
+pub use store::canonical::{
+    CommittedModelTurn, CommittedModelTurnBoundary, ModelTurnBoundary, ModelTurnSettlement,
+};

@@ -5,7 +5,6 @@ use super::{
 use crate::durable::observation::{
     ObservationValueChunk, RequestObservationField, RequestObservationPage,
 };
-use base64::Engine as _;
 struct Selected {
     fact: Fact,
     start: u64,
@@ -40,7 +39,6 @@ fn synthetic(path: &[String], start: u64, end: u64, children: u64, object: bool)
         nodes: 33,
         object,
         container: true,
-        header: String::new(),
         key: None,
         name: path
             .last()
@@ -66,7 +64,7 @@ fn selected(
 ) -> Result<Selected, ConversationStoreError> {
     if root.kind == super::RootKind::Request && path.first().is_some_and(|part| part == "messages")
     {
-        let messages_end = add(root.messages_start, root.length - (root.scalar.length - 2))?;
+        let messages_end = add(root.messages_start, root.length - (root.base_length()? - 2))?;
         if path.len() == 1 {
             return Ok(Selected {
                 fact: Fact {
@@ -139,31 +137,53 @@ fn selected(
         }
         return Err(invalid());
     }
-    let mut fact = fragments::fact(connection, &root.scalar, path)?.ok_or_else(invalid)?;
-    // The scalar prototype contains an empty array. A genuine selected message
-    // adds at least the eight typed descriptor fields, so the full Request root
-    // (24 direct fields already) necessarily exceeds the 32-node preview gate.
-    if path.is_empty() && root.kind == super::RootKind::Request && count(root) > 0 {
-        fact.nodes = 33;
+    scalar_selected(connection, root, path)
+}
+fn scalar_selected(
+    connection: &Connection,
+    root: &Root,
+    path: &[String],
+) -> Result<Selected, ConversationStoreError> {
+    if root.kind == super::RootKind::Request && path.is_empty() {
+        return Ok(Selected {
+            fact: Fact {
+                nodes: if count(root) > 0 { 33 } else { root.nodes },
+                ..synthetic(path, 0, root.length, root.children, true)
+            },
+            start: 0,
+            end: root.length,
+            override_header: None,
+        });
     }
-    let delta = root.length - root.scalar.length;
-    let start = if fact.start >= root.messages_end {
-        add(fact.start, delta)?
+    let (fragment, offset) = if let Some(prefix) = root
+        .prefix
+        .as_ref()
+        .filter(|_| super::scalar::prefix_path(path))
+    {
+        (prefix, 0)
     } else {
-        fact.start
+        (&root.scalar, root.prefix_length())
     };
-    let end = if fact.end >= root.messages_end {
-        add(fact.end, delta)?
-    } else {
-        fact.end
-    };
+    let fact = fragments::fact(connection, fragment, path)?.ok_or_else(invalid)?;
+    let delta = root.length - root.base_length()?;
+    let start = add(offset, fact.start)?;
+    let end = add(offset, fact.end)?;
     Ok(Selected {
         fact,
-        start,
-        end,
+        start: if start >= root.messages_end {
+            add(start, delta)?
+        } else {
+            start
+        },
+        end: if end >= root.messages_end {
+            add(end, delta)?
+        } else {
+            end
+        },
         override_header: None,
     })
 }
+
 fn hole_fact(bytes: &[u8], path: &[String]) -> Result<Fact, ConversationStoreError> {
     fn find(
         value: &serde_json::Value,
@@ -185,7 +205,6 @@ fn hole_fact(bytes: &[u8], path: &[String]) -> Result<Fact, ConversationStoreErr
                 nodes: super::super::original_node_count(&raw)?,
                 object: value.is_object(),
                 container: value.is_object() || value.is_array(),
-                header: base64::engine::general_purpose::STANDARD.encode(raw),
                 key: None,
                 name: None,
             });
@@ -304,7 +323,16 @@ fn child(
         path.extend(child);
         return Ok(path);
     }
-    fragments::child(connection, &root.scalar, path, ordinal)?
+    let fragment = if let Some(prefix) = root
+        .prefix
+        .as_ref()
+        .filter(|_| path.is_empty() && ordinal < 6 || super::scalar::prefix_path(path))
+    {
+        prefix
+    } else {
+        &root.scalar
+    };
+    fragments::child(connection, fragment, path, ordinal)?
         .ok_or_else(|| storage("original scalar child unavailable"))
 }
 fn preview(
@@ -318,7 +346,11 @@ fn preview(
     }
     *budget -= 1;
     let current = selected(connection, root, path)?;
-    if current.fact.nodes <= 32 && current.end - current.start <= 16384 {
+    let span = current
+        .end
+        .checked_sub(current.start)
+        .ok_or_else(|| storage("original composed preview span invalid"))?;
+    if current.fact.nodes <= 32 && span <= 16384 {
         *budget = budget.saturating_sub(
             usize::try_from(current.fact.nodes.saturating_sub(1))
                 .map_err(|_| storage("preview node count exceeds bound"))?,
@@ -327,7 +359,7 @@ fn preview(
             .map_err(|_| storage("original composed preview unavailable"));
     }
     if !current.fact.container {
-        return if current.end - current.start <= 1024 {
+        return if span <= 1024 {
             serde_json::from_slice(&read_exact(connection, root, current.start, current.end)?)
                 .map_err(|_| storage("original composed scalar preview unavailable"))
         } else {
@@ -387,14 +419,14 @@ fn field_in(
     });
     let header = if let Some((template, rank)) = field.override_header {
         header(&template, root.sequence, rank)?
-    } else if path.is_empty() || path == ["messages"] {
+    } else if path.last().is_some_and(|part| part == "$key") {
+        // The authenticated synthetic field owns the original key range; its
+        // display preview has always been empty, including oversized keys.
+        b"\"\"".to_vec()
+    } else {
         let value = preview(connection, root, path, &mut 32)?;
         crate::observation::bounded::bounded_bytes(&value, 16384)
             .unwrap_or_else(|| b"null".to_vec())
-    } else {
-        base64::engine::general_purpose::STANDARD
-            .decode(&field.fact.header)
-            .map_err(|_| storage("composed field header encoding unavailable"))?
     };
     if header.len() > 16384 {
         return Err(storage("composed field header exceeds bound"));
@@ -417,6 +449,30 @@ fn field_in(
         })
         .transpose()?;
     Ok((field.start, field.end, field.fact.children, header, key))
+}
+#[cfg(test)]
+pub(super) fn fragment_field(
+    connection: &Connection,
+    fragment: &super::Fragment,
+    path: &[String],
+) -> Result<super::super::FieldWithKey, ConversationStoreError> {
+    field_in(
+        connection,
+        &Root {
+            kind: super::RootKind::Scalar,
+            sequence: 1,
+            native: None,
+            source_hash: None,
+            scalar: fragment.clone(),
+            prefix: None,
+            children: 0,
+            nodes: 0,
+            messages_start: 0,
+            messages_end: 0,
+            length: fragment.length,
+        },
+        path,
+    )
 }
 pub(in crate::durable::sqlite::observation_request) fn page(
     connection: &Connection,
@@ -441,19 +497,11 @@ pub(in crate::durable::sqlite::observation_request) fn page(
         let value: serde_json::Value = serde_json::from_slice(&bytes)
             .map_err(|_| storage("composed field header JSON unavailable"))?;
         let content =
-            super::super::metadata_list("request_observation_fields", &path, &bytes, "content")?;
-        let collections = super::super::metadata_list(
-            "request_observation_fields",
-            &path,
-            &bytes,
-            "collections",
-        )?;
+            super::super::metadata_list("request_source_roots", &path, &bytes, "content")?;
+        let collections =
+            super::super::metadata_list("request_source_roots", &path, &bytes, "collections")?;
         let deferred = end - start > bytes.len() as u64
-            || super::super::message_descriptor_deferred(
-                "request_observation_fields",
-                &path,
-                &value,
-            );
+            || super::super::message_descriptor_deferred("request_source_roots", &path, &value);
         fields.push(RequestObservationField {
             path,
             value,
@@ -591,19 +639,29 @@ fn piece(
             (offset + max as u64).min(root.length),
         );
     }
+    let prefix_length = root.prefix_length();
+    if offset < prefix_length {
+        return fragments::bytes(
+            connection,
+            root.prefix.as_ref().ok_or_else(invalid)?,
+            offset,
+            (offset + max as u64).min(prefix_length),
+        );
+    }
     if offset < root.messages_start {
+        let at = offset - prefix_length;
         return fragments::bytes(
             connection,
             &root.scalar,
-            offset,
-            (offset + max as u64).min(root.messages_start),
+            at,
+            (at + max as u64).min(root.messages_start - prefix_length),
         );
     }
-    let messages_length = root.length - (root.scalar.length - 2);
+    let messages_length = root.length - (root.base_length()? - 2);
     if offset < root.messages_start + messages_length {
         return sequence_piece(connection, root, offset - root.messages_start, max);
     }
-    let at = offset - (root.length - root.scalar.length);
+    let at = offset - (root.length - root.base_length()?) - prefix_length;
     fragments::bytes(
         connection,
         &root.scalar,
@@ -689,3 +747,7 @@ pub(in crate::durable::sqlite::observation_request) fn range(
         next_offset: (end_offset < readable_end).then_some(end_offset),
     })
 }
+
+#[cfg(test)]
+#[path = "scalar_tests.rs"]
+mod scalar_tests;

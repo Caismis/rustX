@@ -3,6 +3,7 @@
 use crate::durable::sqlite::canonical::ledger::load_message_tx;
 use crate::durable::sqlite::journal::find_event_by_id;
 use crate::durable::sqlite::request::snapshot::read_request_snapshot_tx;
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::durable::sqlite::{decode, nonnegative, seq_to_i64, sequence_from_i64, storage};
 use crate::durable::{ContributionEmissionRecord, ConversationStoreError};
 use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope, contribution_emission_event_id};
@@ -237,12 +238,17 @@ pub(in crate::durable::sqlite) fn read_logical_step_progress_tx(
     transaction: &Transaction<'_>,
 ) -> Result<u64, ConversationStoreError> {
     let value: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT logical_step_sequence FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("Todo progress transaction lookup: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("Todo progress transaction lookup: {error}"),
+            )
+        })?;
     nonnegative(value, "Todo progress sequence")
 }
 
@@ -304,7 +310,7 @@ pub(in crate::durable::sqlite) fn read_contribution_head(
     key: &str,
 ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
     connection
-        .query_row(
+        .query_row_cached(
             "SELECT producer,semantic_key,fingerprint,emitted_at,request_id,message_id,logical_step_origin,event_sequence
              FROM contribution_emission_heads
              WHERE producer=?1 AND semantic_key=?2",
@@ -312,7 +318,7 @@ pub(in crate::durable::sqlite) fn read_contribution_head(
             read_contribution_head_row,
         )
         .optional()
-        .map_err(|error| storage(format!("Agent Status head lookup: {error}")))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("Agent Status head lookup: {error}")))?
         .map(head_record_from_row)
         .transpose()
 }
@@ -323,7 +329,7 @@ pub(in crate::durable::sqlite) fn read_contribution_head_tx(
     key: &str,
 ) -> Result<Option<ContributionEmissionRecord>, ConversationStoreError> {
     transaction
-        .query_row(
+        .query_row_cached(
             "SELECT producer,semantic_key,fingerprint,emitted_at,request_id,message_id,logical_step_origin,event_sequence
              FROM contribution_emission_heads
              WHERE producer=?1 AND semantic_key=?2",
@@ -331,7 +337,7 @@ pub(in crate::durable::sqlite) fn read_contribution_head_tx(
             read_contribution_head_row,
         )
         .optional()
-        .map_err(|error| storage(format!("Agent Status head lookup: {error}")))?
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("Agent Status head lookup: {error}")))?
         .map(head_record_from_row)
         .transpose()
 }
@@ -397,7 +403,7 @@ pub(in crate::durable::sqlite) fn upsert_contribution_head_tx(
                     emission.key,
                 ],
             )
-            .map_err(|error| storage(format!("update Agent Status head: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("update Agent Status head: {error}")))?;
     } else {
         transaction
             .execute(
@@ -415,7 +421,7 @@ pub(in crate::durable::sqlite) fn upsert_contribution_head_tx(
                     seq_to_i64(event.sequence)?,
                 ],
             )
-            .map_err(|error| storage(format!("insert Agent Status head: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("insert Agent Status head: {error}")))?;
     }
     Ok(())
 }
@@ -458,12 +464,17 @@ pub(in crate::durable::sqlite) fn consume_pending_carryover_tx(
         return Ok(());
     }
     let pending: Option<String> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT pending_unresolved_output_stream_id FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("pending carryover consume probe: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("pending carryover consume probe: {error}"),
+            )
+        })?;
     if pending.as_deref() != Some(source.as_str()) {
         return Err(ConversationStoreError::InvalidReference(format!(
             "request {} attempted to consume pending carryover {}, but the durable pending source is {:?}",
@@ -475,7 +486,12 @@ pub(in crate::durable::sqlite) fn consume_pending_carryover_tx(
             "UPDATE rustx_store SET pending_unresolved_output_stream_id=NULL WHERE id=1",
             [],
         )
-        .map_err(|error| storage(format!("consume pending carryover: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("consume pending carryover: {error}"),
+            )
+        })?;
     Ok(())
 }
 
@@ -499,7 +515,12 @@ pub(in crate::durable::sqlite) fn validate_pending_carryover_source_tx(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("pending carryover audit probe: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("pending carryover audit probe: {error}"),
+            )
+        })?
     else {
         return Err(ConversationStoreError::InvalidReference(format!(
             "pending carryover source {source} has no durable Publication Audit"

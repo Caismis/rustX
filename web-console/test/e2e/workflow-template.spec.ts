@@ -34,7 +34,14 @@ for(const width of [1440,390])test.describe(`Template panel ${width}`,()=>{
       await panel.getByRole('button',{name:'删除输入 arg1',exact:true}).click();
       await code.fill('Result: ');await code.press('End');await code.press('/');
       const picker=page.getByRole('dialog',{name:'选择变量',exact:true});await expect(picker).toBeVisible();
-      const popup=(await picker.boundingBox())!;expect(popup.x).toBeGreaterThanOrEqual(0);expect(popup.x+popup.width).toBeLessThanOrEqual(width);expect(popup.y+popup.height).toBeLessThanOrEqual(1000);
+      await expect(picker.getByRole('button',{name:/^args \/ query /})).toBeVisible();
+      // Native analysis grows the loading popup; autoUpdate positions the new
+      // dimensions asynchronously. Assert the resulting layout, not that frame.
+      await expect(async()=>{
+        const popup=(await picker.boundingBox())!;
+        expect(popup.x).toBeGreaterThanOrEqual(0);expect(popup.x+popup.width).toBeLessThanOrEqual(width);
+        expect(popup.y).toBeGreaterThanOrEqual(0);expect(popup.y+popup.height).toBeLessThanOrEqual(1000);
+      }).toPass({timeout:5000});
       await picker.getByRole('button',{name:/^args \/ query /}).click();await expect(code.locator('.cm-line')).toHaveText(['Result: {{ question }}']);await expect(names).toHaveCount(1);await expect(code).toBeFocused();
       await code.press('End');await code.press('{');await picker.getByRole('button',{name:/^args \/ priority /}).click();
       await expect(code.locator('.cm-line')).toHaveText(['Result: {{ question }}{{ priority }}']);await expect(names).toHaveCount(2);

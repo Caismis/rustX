@@ -1,0 +1,55 @@
+{
+  "scope": "One supplementary reverse-order 16x64 pair; ordinary GNU allocator, native server PID. Every backup hash, exact content/order, schema, integrity and FK checked. Not a four-pair capacity or timing estimate.",
+  "rows": [
+    {
+      "side": "after",
+      "command": [
+        "/usr/bin/python3",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/app-server-capacity.py",
+        "--binary",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/candidate-build/rustx",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/deep-16x64-after",
+        "--sessions",
+        "16",
+        "--history",
+        "64",
+        "--history-checkpoints",
+        "8",
+        "32",
+        "--memory-only"
+      ],
+      "binary_sha256": "3d7e0d94429d1cb5e60dc1f787d8f3195c5e23b7056d3daa784bd6fb22604c64",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "anon_pss_mib": 203.4921875,
+      "verified_backups": 16,
+      "requests": 1024,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "side": "before",
+      "command": [
+        "/usr/bin/python3",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/app-server-capacity.py",
+        "--binary",
+        "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/build/rustx",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/deep-16x64-before",
+        "--sessions",
+        "16",
+        "--history",
+        "64",
+        "--history-checkpoints",
+        "8",
+        "32",
+        "--memory-only"
+      ],
+      "binary_sha256": "5d0e525df819d7ab3663f886a4a2a7f8a4d9ecfd37d2c148a9c791018de1951b",
+      "fixture_sha256": "f6506d8c7fc8d5ce4967ea134c172d7f253cba8fb7b8154e424e4f36aa49a06c",
+      "anon_pss_mib": 204.98828125,
+      "verified_backups": 16,
+      "requests": 1024,
+      "compiler_overlap_samples": 0
+    }
+  ]
+}

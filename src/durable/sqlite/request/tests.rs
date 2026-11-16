@@ -37,6 +37,7 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
+mod associations;
 mod fragment;
 mod header_capture;
 mod manifest_store;
@@ -47,6 +48,7 @@ mod snapshot_validation;
 mod span;
 mod span_integrity;
 mod start_validation;
+mod storage_cost;
 mod structured_format;
 
 #[test]
@@ -333,7 +335,8 @@ fn all_four_projection_tool_pairings_start_exact_requests_without_recovery_execu
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     });
     for derived_call in [false, true] {
         for derived_result in [false, true] {
@@ -1838,7 +1841,7 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         let connection = request_store.conn.lock().unwrap();
         let json: String = connection
             .query_row(
-                "SELECT snapshot_json FROM request_snapshots WHERE request_id=?1",
+                "SELECT snapshot_json FROM request_snapshot_payloads WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )
@@ -1847,7 +1850,7 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         value["canonical_frontier"] = serde_json::json!(999_u64);
         connection
             .execute(
-                "UPDATE request_snapshots SET canonical_frontier=999,snapshot_json=?1 WHERE request_id=?2",
+                "UPDATE request_snapshot_payloads SET snapshot_json=?1 WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?2)",
                 params![value.to_string(), snapshot.request_id.as_str()],
             )
             .unwrap();
@@ -1879,7 +1882,7 @@ fn incomplete_historical_snapshot_does_not_block_independently_complete_current_
                         crate::runtime::continuation::OpenAiResponsesContinuation::Stateless {
                             items: vec![
                                 serde_json::json!({"type":"reasoning","id":"rs-old","encrypted_content":"retained-native-bytes"}),
-                            ],
+                            ].into(),
                         },
                     ),
                 ),
@@ -1939,7 +1942,7 @@ fn incomplete_historical_snapshot_does_not_block_independently_complete_current_
         connection.execute_batch("PRAGMA foreign_keys=OFF").unwrap();
         connection
             .execute(
-                "DELETE FROM request_snapshots WHERE request_id=?1",
+                "DELETE FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [first.request_id.as_str()],
             )
             .unwrap();
@@ -2181,7 +2184,7 @@ fn oversized_frozen_record_is_rejected_before_body_decode() {
         .lock()
         .unwrap()
         .execute(
-            "UPDATE request_snapshots SET snapshot_json=CAST(zeroblob(67108865) AS TEXT)",
+            "UPDATE request_snapshot_payloads SET snapshot_json=CAST(zeroblob(67108865) AS TEXT)",
             [],
         )
         .unwrap();
@@ -2263,15 +2266,16 @@ fn t19_t20_journal_readiness_is_exact_committed_and_recovered_on_reinstall() {
     assert_eq!(observer.ready.lock().unwrap().len(), wakes);
     assert_eq!(store.observation_ready_frontier(2, 3).unwrap(), 2);
     let connection = store.lock().unwrap();
-    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(sequence) FROM event_observation_readiness WHERE ready=0 AND sequence>0 AND sequence<=3", [], |row| row.get(3)).unwrap();
-    assert!(
-        plan.contains("event_observation_readiness_holes_idx"),
-        "{plan}"
-    );
+    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT MIN(sequence) FROM event_observation_readiness WHERE sequence>0 AND sequence<=3", [], |row| row.get(3)).unwrap();
+    assert!(plan.contains("USING INTEGER PRIMARY KEY"), "{plan}");
     drop(connection);
     drop(store);
     let reopened = Arc::new(SqliteConversationStore::open(id, &path).unwrap());
-    assert_eq!(reopened.observation_ready_frontier(0, 3).unwrap(), 2);
+    assert_eq!(
+        reopened.observation_ready_frontier(0, 3).unwrap(),
+        3,
+        "a new connection owns a committed-history baseline"
+    );
     let next = Arc::new(Observer {
         store: Arc::downgrade(&reopened),
         ready: Mutex::new(Vec::new()),

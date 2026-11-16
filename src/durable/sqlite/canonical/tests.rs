@@ -1,7 +1,6 @@
 //! Canonical ledger, surface, and transcript regressions of the SQLite store.
 
 use crate::conversation::ConversationState;
-use crate::conversation::SurfaceOp;
 use crate::durable::sqlite::canonical::transcript::*;
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::*;
@@ -19,6 +18,8 @@ use std::sync::Arc;
 
 mod append_head;
 mod initialization_state;
+mod layout;
+mod surface_identity;
 
 #[test]
 fn snapshot_transcript_excludes_later_tool_results() {
@@ -55,7 +56,8 @@ fn snapshot_transcript_excludes_later_tool_results() {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     };
     let cut = crate::durable::TranscriptSnapshotCut {
         bootstrap_through: store.load_transcript_page(None, 1).unwrap().entries[0]
@@ -112,7 +114,8 @@ fn canonical_tool_results_validate_exact_ownership_and_roll_back() {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     };
     let mut missing = valid.clone();
     missing.occurrence.assistant_message_id = MessageId::new("missing");
@@ -266,7 +269,8 @@ fn transcript_tool_lineage_seed_keeps_retired_reused_call_occurrences() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     };
     let canonical = vec![assistant("a"), result("ra", "a", "old-result")];
@@ -387,7 +391,8 @@ fn agent_transcript_tools_resolve_native_results_across_page_boundaries() {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             }))
             .unwrap();
     }
@@ -490,26 +495,14 @@ fn pending_message_identity_cannot_be_reused_by_a_canonical_append() {
 fn corrupt_surface_operation_reference_fails_closed() {
     let store = store();
     store.initialize(&[user_message("a", "A")]).unwrap();
-    let missing = MessageId::new("missing");
-    let operation = serde_json::to_string(&SurfaceOp::Append {
-        message_id: missing.clone(),
-    })
-    .unwrap();
     let connection = store.conn.lock().unwrap();
-    connection
-        .execute(
-            "INSERT INTO surface_ops(revision,compaction_generation,op_json) VALUES(2,0,?1)",
-            [operation],
-        )
-        .unwrap();
-    connection
-        .execute("UPDATE surface_head SET revision=2 WHERE id=1", [])
-        .unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; UPDATE surface_ops SET ledger_position=999 WHERE revision=1; PRAGMA foreign_keys=ON").unwrap();
     drop(connection);
+    assert_eq!(store.load_head().unwrap().revision, SurfaceRevision::new(1));
     assert!(matches!(
-        store.load_head(),
+        store.reconstruct_surface(SurfaceRevision::new(1)),
         Err(ConversationStoreError::InvalidReference(detail))
-            if detail.contains("canonical frontier metadata")
+            if detail.contains("Surface operation references")
     ));
 }
 
@@ -578,7 +571,7 @@ fn t14_canonical_after_boundary_uses_original_ledger_and_selected_revision() {
     {
         let connection = store.lock().unwrap();
         connection
-            .execute_batch("DELETE FROM observation_headers")
+            .execute_batch("DELETE FROM transcript_entries")
             .unwrap();
         connection
             .execute(

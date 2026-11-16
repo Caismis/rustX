@@ -39,7 +39,8 @@ pub(super) fn todo_result(id: &str, call: &str, subject: &str) -> MessageBlock {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 

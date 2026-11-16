@@ -1,0 +1,38 @@
+{
+  "pi-lazy-preview-clippy-doc-comment.log": {
+    "bytes": 843,
+    "sha256": "895c5bc9645eff9190f0488c5be2161c456bef0d0b53498a66bd3f1268a4dc5f"
+  },
+  "pi-lazy-preview-clippy.log": {
+    "bytes": 117,
+    "sha256": "10767fc22f0320ed7cb83e599c3966b5165104db9322b7c2b16596d82e6ff1be"
+  },
+  "pi-lazy-preview-durable.log": {
+    "bytes": 49107,
+    "sha256": "9b693dd64e5aa3f6485a74913ba4c4e4d46431f08cd4397605cbe5d77fbd5008"
+  },
+  "pi-lazy-preview-initial-clippy.log": {
+    "bytes": 543,
+    "sha256": "bc00a7ba36e395776d4f21a06dce51725a15dc3e24b9af48cd6f892d254115f8"
+  },
+  "pi-lazy-preview-initial-compile.log": {
+    "bytes": 795,
+    "sha256": "5071dc0bab1322fda2be05fc08dfa682d39b540bcb32ca502de86d1d74615316"
+  },
+  "pi-lazy-preview-initial-eager-assertion.log": {
+    "bytes": 49741,
+    "sha256": "7834f7c6a9edc0d77f887319a1cefb81082243eaeead8471603411982e579c10"
+  },
+  "pi-lazy-preview-initial-oracle.log": {
+    "bytes": 2718,
+    "sha256": "0045a1bf62f19e3d74580879e2939cf01aa7c419cb488d0cc87dd9ecdd7d1dd2"
+  },
+  "pi-lazy-preview-source.log": {
+    "bytes": 3375,
+    "sha256": "02ed75ed51cbffa48c0037e0e443757a1072807989c92a57ecd32f9beaa43204"
+  },
+  "pi-lazy-preview-targeted.log": {
+    "bytes": 893,
+    "sha256": "c1bd578748c274f20726d580315de4ed4316e189176670dc9f315377f11f07c6"
+  }
+}

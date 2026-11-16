@@ -1,0 +1,88 @@
+{
+  "question": "Separate CPU-placement effects from the new layout: one four-pair short-history follow-up on the same two performance cores, then one 1000-Hz diagnostic profile per side. Not a replacement matrix or pooled significance claim. All original adverse products remain.",
+  "cpu_affinity": "8,10",
+  "binary_sha256": {
+    "before": "7c6225bf0e11d537d522386bd34d315fb9ab3c650d792e9abffcf5ae53c5fd95",
+    "after": "1adb4bd2885829bcb5aa1d6ff400b88c90b07e835385d931960365bfd99f9689"
+  },
+  "commands": [
+    {
+      "name": "affinity",
+      "command": [
+        "taskset",
+        "-c",
+        "8,10",
+        "/usr/bin/python3",
+        "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/compare-revisions.py",
+        "--before",
+        "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/build/conformance",
+        "--after",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/candidate-build/conformance",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/affinity-short",
+        "--pairs",
+        "4",
+        "--observer-mode",
+        "live-subscriber",
+        "--case",
+        "short-small"
+      ],
+      "begin_utc": "2026-11-10T02:05:54.111789+00:00",
+      "end_utc": "2026-11-10T02:06:48.872306+00:00",
+      "exit": 0,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "name": "profile-after",
+      "command": [
+        "taskset",
+        "-c",
+        "8,10",
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/profile-cpu.py",
+        "--binary",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/candidate-build/conformance",
+        "--profiler-root",
+        "/home/capi/.cache/rustx-pr485-profilers",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/cpu-profile-after",
+        "--mode",
+        "cpu",
+        "--case",
+        "short-small",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "begin_utc": "2026-11-10T02:06:49.166983+00:00",
+      "end_utc": "2026-11-10T02:06:50.778737+00:00",
+      "exit": 0,
+      "compiler_overlap_samples": 0
+    },
+    {
+      "name": "profile-before",
+      "command": [
+        "taskset",
+        "-c",
+        "8,10",
+        "/usr/bin/python3",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/profile-cpu.py",
+        "--binary",
+        "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/build/conformance",
+        "--profiler-root",
+        "/home/capi/.cache/rustx-pr485-profilers",
+        "--output",
+        "/home/capi/.cache/rustx-pr485-replay-layout-20261110/cpu-profile-before",
+        "--mode",
+        "cpu",
+        "--case",
+        "short-small",
+        "--observer-mode",
+        "live-subscriber"
+      ],
+      "begin_utc": "2026-11-10T02:06:51.070408+00:00",
+      "end_utc": "2026-11-10T02:06:52.676027+00:00",
+      "exit": 0,
+      "compiler_overlap_samples": 0
+    }
+  ]
+}

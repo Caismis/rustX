@@ -1,6 +1,6 @@
 import { jobReceipt, compactReceipt, readingWindow } from './fixture';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { MethodResult, Request1 } from '../../protocol/app-server/v78';
+import type { MethodResult, Request1 } from '../../protocol/app-server/v80';
 import { OutcomeUncertain, RequestNotDispatched } from '../src/client/errors';
 import { Server, snapshot } from './fixture';
 import { firstSubmitPort } from '../src/app/new-conversation/port';
@@ -242,6 +242,38 @@ it('two metadata requests bypass full ordinary capacity and release only their o
   for (const { request } of s.requests.filter(row => row.request.method === 'agent/wait')) s.socket.success(request, result('agent/wait'));
   await Promise.all([first, second, third, ...waits]);
   expect(s.client.getSnapshot().connection).toBe('connected');
+});
+it.each(['acknowledged', 'disconnected'] as const)('source publication waits for native settlement, then is %s without replay', async outcome => {
+  const s = await connected(); s.held.add('configuration/sourceWrite'); vi.useFakeTimers();
+  const work = s.client.request({ method: 'configuration/sourceWrite', params: {
+    target: { kind: 'user' }, expected_revision: 'before', mutation: {
+      kind: 'workflow', id: 'large', edit: { operation: 'replace', document: {
+        id: 'uploaded', byte_length: 4 * 1024 * 1024, sha256: 'a'.repeat(64),
+      } },
+    },
+  } }, 'sources_written');
+  const settled = vi.fn(); void work.then(settled, settled);
+  const request = await s.waitFor('configuration/sourceWrite', 1);
+  await vi.advanceTimersByTimeAsync(60_001);
+  expect(s.client.getSnapshot().connection).toBe('connected');
+  expect(s.client.getSnapshot().uncertain).toEqual([]);
+  expect(settled).not.toHaveBeenCalled();
+  await expect(s.client.request(operation(s, 'turn/interrupt'), 'cancellation_accepted')).resolves.toEqual(result('turn/interrupt'));
+  if (outcome === 'acknowledged') {
+    const receipt = { type: 'sources_written' as const, revision: 'committed', configuration_revision: '1' };
+    s.socket.success(request, receipt);
+    await expect(work).resolves.toEqual(receipt);
+    s.socket.success(request, receipt);
+    await Promise.resolve();
+    expect(settled).toHaveBeenCalledExactlyOnceWith(receipt);
+    expect(s.client.getSnapshot().uncertain).toEqual([]);
+  } else {
+    s.socket.close();
+    await expect(work).rejects.toBeInstanceOf(OutcomeUncertain);
+    expect(s.client.getSnapshot().uncertain).toEqual([expect.objectContaining({ method: 'configuration/sourceWrite' })]);
+    expect(settled).toHaveBeenCalledTimes(1);
+  }
+  expect(s.requests.filter(row => row.request.method === 'configuration/sourceWrite')).toHaveLength(1);
 });
 it.each(['session/read', 'session/settings', 'thread/start'] as const)('%s retains its finite response deadline in the metadata lane', async method => {
   const s = await connected(); s.held.add(method); vi.useFakeTimers();

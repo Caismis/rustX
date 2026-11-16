@@ -1,0 +1,32 @@
+{
+  "frozen_after_independent_review": true,
+  "tests": 22,
+  "functional_cases": 4,
+  "final_constructor_smoke": "deepseek-sdk-smoke-04 large passed",
+  "files": {
+    "benchmarks/runtime/deepseek-compare.py": {
+      "sha256": "bd0ac0341d92f3d2db90be9f466179b987fa34f7f23ba6bf5342cb562ea594f8",
+      "bytes": 11910
+    },
+    "benchmarks/runtime/deepseek-read-log.mjs": {
+      "sha256": "3a2affc8149295e66d2e3327c0188badb0cb5e3964ba3ff8cfec7a526799e500",
+      "bytes": 720
+    },
+    "benchmarks/runtime/deepseek-reference.md": {
+      "sha256": "63a931adaf5187d58d1f51544aaaa7f21c5b86e60699ba8b86e7945b69af0745",
+      "bytes": 7974
+    },
+    "benchmarks/runtime/deepseek-reference.py": {
+      "sha256": "9883961acb3d1413058b415a49eac6cebc907d45647e8abdd940d15c626737f2",
+      "bytes": 28253
+    },
+    "benchmarks/runtime/deepseek-reference.test.py": {
+      "sha256": "883a4b6968c5b53c55f8abda62f4cf43093e110c78578053312ef4b7f1315fef",
+      "bytes": 10019
+    },
+    "benchmarks/runtime/deepseek-sdk-envelope.json": {
+      "sha256": "ec8cd8e5576484fee6b986f792f81e570e6f42b332ffe20f10d7c38674264d3a",
+      "bytes": 32768
+    }
+  }
+}

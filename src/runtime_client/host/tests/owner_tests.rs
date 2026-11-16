@@ -549,7 +549,7 @@ fn t08_t14_t19_standalone_trace_keeps_the_attached_constructor_cut_after_later_c
         .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
         .unwrap();
     let subscription = attachment.subscribe_events(checkpoint.cursor).unwrap();
-    let RuntimeClientResult::TracePage { page: before } =
+    let RuntimeClientResult::TracePage { page: before, .. } =
         host.inner.trace_page(None, 32, Vec::new()).unwrap()
     else {
         panic!("native Trace page")
@@ -581,7 +581,7 @@ fn t08_t14_t19_standalone_trace_keeps_the_attached_constructor_cut_after_later_c
             ),
         )
         .unwrap();
-    let RuntimeClientResult::TracePage { page: after } = host
+    let RuntimeClientResult::TracePage { page: after, .. } = host
         .inner
         .trace_page(None, 32, vec![before.records[0].position.clone()])
         .unwrap()
@@ -603,7 +603,7 @@ fn t08_t14_t19_standalone_trace_keeps_the_attached_constructor_cut_after_later_c
     assert_eq!(host.checkpoint().unwrap(), checkpoint);
     assert!(matches!(subscription.try_next(), EventDelivery::Pending));
     let fresh = RuntimeClientHost::new_durable(writer.clone(), None).unwrap();
-    let RuntimeClientResult::TracePage { page: current } =
+    let RuntimeClientResult::TracePage { page: current, .. } =
         fresh.inner.trace_page(None, 32, Vec::new()).unwrap()
     else {
         panic!("new native Trace owner")

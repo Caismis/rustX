@@ -22,7 +22,7 @@ async fn selected_tool_head(
     store: &dyn ConversationStore,
 ) -> TraceInspectionHead {
     let before = store.observation_read_cut().unwrap();
-    let RuntimeClientResult::TracePage { page } = host
+    let RuntimeClientResult::TracePage { page, .. } = host
         .inner
         .agent_trace_via_inspection(agent, None, 32, Vec::new())
         .await
@@ -116,7 +116,10 @@ async fn assert_child_definition(
     .unwrap();
     assert_eq!(definition["description"]["text"], expected.description);
     assert_eq!(definition["description"]["truncated"], false);
-    assert_eq!(definition["input_schema"]["value"], expected.input_schema);
+    assert_eq!(
+        &definition["input_schema"]["value"],
+        expected.input_schema.as_ref()
+    );
     assert_eq!(definition["input_schema"]["truncated"], false);
 }
 

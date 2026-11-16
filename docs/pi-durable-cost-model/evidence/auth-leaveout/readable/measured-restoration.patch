@@ -1,0 +1,861 @@
+diff --git a/docs/pi-durable-cost-model/diagnostic-auth-restored.md b/docs/pi-durable-cost-model/diagnostic-auth-restored.md
+new file mode 100644
+index 00000000..89ff1169
+--- /dev/null
++++ b/docs/pi-durable-cost-model/diagnostic-auth-restored.md
+@@ -0,0 +1,8 @@
++# Diagnostic: full candidate with independent Source authentication restored
++
++This comparison-only branch reverses integrity simplification from 5e37b924 on
++full candidate a3c116fe, while retaining its RawValue lexical repair and fixtures.
++Atomic final settlement and 100 ms cadence remain. Gate 76 rejects other layouts;
++no migration or dual writes. Candidate documentation describes the candidate, not
++this diagnostic variant. The source diff and standalone repair identify scope.
++The user has not selected a revert. No merge is requested for this branch.
+diff --git a/src/agent/execution/attribution.rs b/src/agent/execution/attribution.rs
+index bfcba42e..8c4185ec 100644
+--- a/src/agent/execution/attribution.rs
++++ b/src/agent/execution/attribution.rs
+@@ -17 +17 @@ pub(crate) enum Phase {
+-    SourceLookup,
++    SourceAuthenticate,
+@@ -33 +33 @@ pub(crate) struct PhaseProfile {
+-/// Inclusive actual Source I/O. Lookup and leaf work are subsets of request work.
++/// Inclusive actual Source I/O. Authenticate and leaf work are subsets of request work.
+@@ -66 +66 @@ pub(crate) enum SourceScope {
+-    Lookup,
++    Authenticate,
+@@ -131 +131 @@ pub(crate) struct AgentRequestProfile {
+-    pub(crate) source_lookup: PhaseProfile,
++    pub(crate) source_authenticate: PhaseProfile,
+@@ -140 +140 @@ pub(crate) struct AgentRequestProfile {
+-    pub(crate) source_lookup_work: SourceWork,
++    pub(crate) source_auth_work: SourceWork,
+@@ -159 +159 @@ pub(crate) fn record_source(scope: SourceScope, work: SourceWork) {
+-        SourceScope::Lookup => &mut profile.source_lookup_work,
++        SourceScope::Authenticate => &mut profile.source_auth_work,
+@@ -242 +242 @@ impl Drop for Timer {
+-            Phase::SourceLookup => &mut profile.source_lookup,
++            Phase::SourceAuthenticate => &mut profile.source_authenticate,
+diff --git a/src/durable/sqlite.rs b/src/durable/sqlite.rs
+index 421df6a1..d9585222 100644
+--- a/src/durable/sqlite.rs
++++ b/src/durable/sqlite.rs
+@@ -336 +336,2 @@ fn count_conversation_store_open() {
+-pub const SQLITE_SCHEMA_VERSION: i64 = 75;
++/// Diagnostic version 76 restores independent Source authentication with atomic final settlement.
++pub const SQLITE_SCHEMA_VERSION: i64 = 76;
+@@ -8520,0 +8522,12 @@ fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreErr
++            CREATE TABLE IF NOT EXISTS request_observation_fields (
++                source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),
++                path_json TEXT NOT NULL CHECK(path_json='[]'),
++                parent_path TEXT CHECK(parent_path IS NULL),ordinal INTEGER CHECK(ordinal IS NULL),
++                start INTEGER NOT NULL CHECK(start=0),
++                end INTEGER NOT NULL CHECK(end BETWEEN 0 AND 9007199254740991),
++                children INTEGER NOT NULL CHECK(children=0),
++                header_kind TEXT NOT NULL CHECK(header_kind='inline'),
++                header_json BLOB NOT NULL CHECK(header_json=x'6e756c6c'),
++                shape_witness BLOB NOT NULL CHECK(typeof(shape_witness)='blob' AND length(shape_witness)=32)
++            ) WITHOUT ROWID;
++
+@@ -9277,0 +9291,12 @@ fn verify_schema_shape(connection: &Connection) -> Result<(), ConversationStoreE
++        (
++            "request_observation_fields",
++            &[
++                "source_id",
++                "path_json",
++                "parent_path",
++                "ordinal",
++                "header_kind",
++                "shape_witness",
++                "header_json",
++            ],
++        ),
+@@ -19269 +19294 @@ mod tests {
+-        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
++        assert_eq!(SQLITE_SCHEMA_VERSION, 76);
+@@ -19338 +19363 @@ mod tests {
+-        assert_eq!(SQLITE_SCHEMA_VERSION, 75);
++        assert_eq!(SQLITE_SCHEMA_VERSION, 76);
+diff --git a/src/durable/sqlite/content_binary_tests.rs b/src/durable/sqlite/content_binary_tests.rs
+index 8de185da..022c4803 100644
+--- a/src/durable/sqlite/content_binary_tests.rs
++++ b/src/durable/sqlite/content_binary_tests.rs
+@@ -408 +408 @@ fn binary_integrity_schema_refuses_68_and_relaxed_digest_tables() {
+-            expected: 75
++            expected: 76
+@@ -415 +415 @@ fn binary_integrity_schema_refuses_68_and_relaxed_digest_tables() {
+-        .execute("UPDATE rustx_store SET schema_version=75", [])
++        .execute("UPDATE rustx_store SET schema_version=76", [])
+diff --git a/src/durable/sqlite/final_settlement_tests.rs b/src/durable/sqlite/final_settlement_tests.rs
+index 3adbb713..1d6dfa7a 100644
+--- a/src/durable/sqlite/final_settlement_tests.rs
++++ b/src/durable/sqlite/final_settlement_tests.rs
+@@ -303 +303 @@ fn independent_final_commit_schema_is_refused_without_rewriting() {
+-            expected: 75
++            expected: 76
+diff --git a/src/durable/sqlite/observation_inspection_tests.rs b/src/durable/sqlite/observation_inspection_tests.rs
+index db286119..918998cc 100644
+--- a/src/durable/sqlite/observation_inspection_tests.rs
++++ b/src/durable/sqlite/observation_inspection_tests.rs
+@@ -578 +578 @@ fn t10_t12_t19_missing_request_body_layout_never_hides_own_assistant_tool_facts(
+-    store.lock().unwrap().execute_batch("CREATE TRIGGER fail_entire_request_layout BEFORE INSERT ON request_source_roots BEGIN SELECT RAISE(FAIL,'optional entire request layout'); END;").unwrap();
++    store.lock().unwrap().execute_batch("CREATE TRIGGER fail_entire_request_layout BEFORE INSERT ON request_observation_fields BEGIN SELECT RAISE(FAIL,'optional entire request layout'); END;").unwrap();
+diff --git a/src/durable/sqlite/observation_request.rs b/src/durable/sqlite/observation_request.rs
+index 93b0062e..15630a8b 100644
+--- a/src/durable/sqlite/observation_request.rs
++++ b/src/durable/sqlite/observation_request.rs
+@@ -375 +375 @@ pub(super) fn field_coordinates(
+-    if table == "request_source_roots" {
++    if table == "request_observation_fields" {
+@@ -471 +471 @@ fn field_with_key(
+-    if table == "request_source_roots" {
++    if table == "request_observation_fields" {
+@@ -510 +510 @@ pub(super) fn header_at(
+-        field_from(connection, "request_source_roots", &key, &[])?;
++        field_from(connection, "request_observation_fields", &key, &[])?;
+@@ -514 +514 @@ pub(super) fn header_at(
+-        "request_source_roots",
++        "request_observation_fields",
+@@ -555 +555 @@ pub(super) fn page_at(
+-        "request_source_roots",
++        "request_observation_fields",
+@@ -603 +603 @@ pub(super) fn page_from(
+-    if table == "request_source_roots" {
++    if table == "request_observation_fields" {
+@@ -676 +676 @@ pub(super) fn read_at(
+-        "request_source_roots",
++        "request_observation_fields",
+@@ -709 +709 @@ pub(super) fn read_from(
+-    if table == "request_source_roots" {
++    if table == "request_observation_fields" {
+@@ -755 +755 @@ pub(super) fn field_header_at(
+-        field_with_key(connection, "request_source_roots", &key, path)?;
++        field_with_key(connection, "request_observation_fields", &key, path)?;
+@@ -759 +759 @@ pub(super) fn field_header_at(
+-        || message_descriptor_deferred("request_source_roots", path, &value);
++        || message_descriptor_deferred("request_observation_fields", path, &value);
+@@ -769,2 +769,2 @@ pub(super) fn field_header_at(
+-        content: metadata_list("request_source_roots", path, &bytes, "content")?,
+-        collections: metadata_list("request_source_roots", path, &bytes, "collections")?,
++        content: metadata_list("request_observation_fields", path, &bytes, "content")?,
++        collections: metadata_list("request_observation_fields", path, &bytes, "collections")?,
+@@ -988 +988 @@ fn message_descriptor_deferred(table: &str, path: &[String], value: &serde_json:
+-    table == "request_source_roots"
++    table == "request_observation_fields"
+@@ -1003 +1003 @@ fn metadata_list<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
+-    if table != "request_source_roots"
++    if table != "request_observation_fields"
+diff --git a/src/durable/sqlite/observation_request/composed.rs b/src/durable/sqlite/observation_request/composed.rs
+index a37f76c8..743dfca5 100644
+--- a/src/durable/sqlite/observation_request/composed.rs
++++ b/src/durable/sqlite/observation_request/composed.rs
+@@ -166 +166 @@ fn invalid() -> ConversationStoreError {
+-fn root_checksum(root: &[u8]) -> index::Hash {
++fn root_witness(root: &[u8]) -> index::Hash {
+@@ -192 +192 @@ pub(super) fn index_selection(
+-        nodes::capture(connection, scope, input, snapshot, selection)?
++        nodes::capture(connection, sequence, scope, input, snapshot, selection)?
+@@ -253 +253 @@ pub(super) fn index_selection(
+-    let checksum = root_checksum(&bytes);
++    let witness = root_witness(&bytes);
+@@ -256,2 +256,2 @@ pub(super) fn index_selection(
+-            "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
+-            params![sequence.to_string(), bytes, checksum.as_slice()],
++            "INSERT INTO request_source_roots(source_id,metadata,witness) VALUES(?1,?2,?3)",
++            params![sequence.to_string(), bytes, witness.as_slice()],
+@@ -265,0 +266,3 @@ pub(super) fn index_selection(
++    // A separate original-R scalar seat prevents rehashing a corrupt optional
++    // root from being accepted as the original capture on subsequent reads.
++    connection.execute("INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json,shape_witness) VALUES(?1,'[]',NULL,NULL,0,?2,0,'inline',x'6e756c6c',?3)",params![sequence.to_string(),length,witness.as_slice()]).map_err(|error|storage(error.to_string()))?;
+@@ -270,0 +274 @@ type RootRow = (
++    Option<Vec<u8>>,
+@@ -276 +279,0 @@ type RootRow = (
+-    u64,
+@@ -283 +286 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
+-    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.checksum)='blob' AND length(r.checksum)=32 THEN r.checksum END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count,f.readable_end FROM request_source_roots r JOIN request_snapshots s ON s.observation_source_id=r.source_id JOIN content_frontiers f ON f.source_kind='trace_request' AND f.source_id=r.source_id AND f.block_index=0 AND f.representation='canonical_json_v1' AND f.revision=1 WHERE r.source_id=?1").map_err(|error|storage(error.to_string()))?.query_row([id], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|storage(error.to_string()))?;
++    let row: RootRow = connection.prepare_cached("SELECT CASE WHEN typeof(r.metadata)='blob' AND length(r.metadata)<=16384 THEN r.metadata END,CASE WHEN typeof(r.witness)='blob' AND length(r.witness)=32 THEN r.witness END,CASE WHEN typeof(f.shape_witness)='blob' AND length(f.shape_witness)=32 THEN f.shape_witness END,s.input_root,CASE WHEN typeof(s.input_root_digest)='blob' AND length(s.input_root_digest)=32 THEN s.input_root_digest END,s.input_count FROM request_source_roots r JOIN request_observation_fields f ON f.source_id=r.source_id AND f.path_json='[]' JOIN request_snapshots s ON s.observation_source_id=r.source_id WHERE r.source_id=?1").map_err(|error|storage(error.to_string()))?.query_row([id], |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?,row.get(5)?))).map_err(|error|storage(error.to_string()))?;
+@@ -289,3 +292,3 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
+-    let digest = root_checksum(&bytes);
+-    if row.1.as_deref() != Some(digest.as_slice()) {
+-        return Err(storage("composed request root checksum differs"));
++    let digest = root_witness(&bytes);
++    if row.1.as_deref() != Some(digest.as_slice()) || row.2.as_deref() != Some(digest.as_slice()) {
++        return Err(storage("original composed request witness differs"));
+@@ -297,3 +299,0 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
+-        || root.length != row.5
+-        || root.scalar.length > root.length
+-        || root.kind != RootKind::Request && root.length != root.scalar.length
+@@ -310,3 +310,3 @@ fn load_root(connection: &Connection, id: &str) -> Result<Root, ConversationStor
+-        || root.native.map(|node| node.id) != row.2
+-        || root.native.map_or(0, |node| node.count) != row.4
+-        || root.native.as_ref().map(|node| node.digest.as_slice()) != row.3.as_deref()
++        || root.native.map(|node| node.id) != row.3
++        || root.native.map_or(0, |node| node.count) != row.5
++        || root.native.as_ref().map(|node| node.digest.as_slice()) != row.4.as_deref()
+@@ -353 +353 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
+-    let checksum = root_checksum(&bytes);
++    let witness = root_witness(&bytes);
+@@ -362,2 +362,2 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
+-            "INSERT INTO request_source_roots(source_id,metadata,checksum) VALUES(?1,?2,?3)",
+-            params![sequence.to_string(), bytes, checksum.as_slice()],
++            "INSERT INTO request_source_roots(source_id,metadata,witness) VALUES(?1,?2,?3)",
++            params![sequence.to_string(), bytes, witness.as_slice()],
+@@ -365,0 +366 @@ pub(super) fn index_scalar<T: serde::Serialize + schemars::JsonSchema>(
++    connection.execute("INSERT INTO request_observation_fields(source_id,path_json,parent_path,ordinal,start,end,children,header_kind,header_json,shape_witness) VALUES(?1,'[]',NULL,NULL,0,?2,0,'inline',x'6e756c6c',?3)",params![sequence.to_string(),root.length,witness.as_slice()]).map_err(|error|storage(error.to_string()))?;
+diff --git a/src/durable/sqlite/observation_request/composed/measurement.rs b/src/durable/sqlite/observation_request/composed/measurement.rs
+index 0f93fa45..6ac97e54 100644
+--- a/src/durable/sqlite/observation_request/composed/measurement.rs
++++ b/src/durable/sqlite/observation_request/composed/measurement.rs
+@@ -16 +16 @@ impl Measurement {
+-            SourceScope::Lookup => Phase::SourceLookup,
++            SourceScope::Authenticate => Phase::SourceAuthenticate,
+diff --git a/src/durable/sqlite/observation_request/composed/nodes.rs b/src/durable/sqlite/observation_request/composed/nodes.rs
+index c91a8d52..0d826135 100644
+--- a/src/durable/sqlite/observation_request/composed/nodes.rs
++++ b/src/durable/sqlite/observation_request/composed/nodes.rs
+@@ -10 +10 @@ pub(super) fn stored_hash(
+-    let _profile = super::profile::Timer::new(super::profile::Phase::Lookup);
++    let _profile = super::profile::Timer::new(super::profile::Phase::Authenticate);
+@@ -12 +12 @@ pub(super) fn stored_hash(
+-    super::profile::lookup_call();
++    super::profile::auth_call();
+@@ -15 +15 @@ pub(super) fn stored_hash(
+-        crate::agent::execution::attribution::SourceScope::Lookup,
++        crate::agent::execution::attribution::SourceScope::Authenticate,
+@@ -17,2 +17,2 @@ pub(super) fn stored_hash(
+-    let digest: Option<Vec<u8>> = connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice()], |row|row.get(0)).map_err(|error|storage(error.to_string()))?;
+-    digest
++    let (digest,origin,rank):(Option<Vec<u8>>,Option<String>,u64)=connection.prepare_cached("SELECT CASE WHEN typeof(hash)='blob' AND length(hash)=32 AND native_digest=?2 THEN hash END,CASE WHEN typeof(origin_source_id)='text' AND length(CAST(origin_source_id AS BLOB))<=20 THEN origin_source_id END,origin_rank FROM request_source_nodes WHERE native_id=?1").map_err(|error|storage(error.to_string()))?.query_row(params![native.id,native.digest.as_slice()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(|error|storage(error.to_string()))?;
++    let digest: index::Hash = digest
+@@ -21 +21,48 @@ pub(super) fn stored_hash(
+-        .map_err(|_| storage("selected Source hash unavailable"))
++        .map_err(|_| storage("selected Source hash unavailable"))?;
++    let origin = origin.ok_or_else(|| storage("original Source node seat unavailable"))?;
++    #[cfg(feature = "issue-387-profile")]
++    super::profile::origin_root_load();
++    let root = super::load_root(connection, &origin)?;
++    let mut at = root
++        .native
++        .ok_or_else(|| storage("original Source native root unavailable"))?;
++    let mut expected = root
++        .source_hash
++        .ok_or_else(|| storage("original Source root hash unavailable"))?;
++    let mut first = 0;
++    for depth in 0..manifest::MAX_HEIGHT {
++        if at == *native {
++            if expected != digest {
++                return Err(storage("original Source node capture differs"));
++            }
++            #[cfg(feature = "issue-387-profile")]
++            super::profile::proof_visit(connection, at, expected, &root, true);
++            return Ok(expected);
++        }
++        #[cfg(feature = "issue-387-profile")]
++        super::profile::path_hop(depth + 1);
++        #[cfg(not(feature = "issue-387-profile"))]
++        let _ = depth;
++        let node = load(connection, at, expected)?;
++        #[cfg(feature = "issue-387-profile")]
++        super::profile::proof_visit(connection, at, expected, &root, false);
++        match node.content {
++            Content::Branch {
++                left,
++                left_hash,
++                right,
++                right_hash,
++            } => {
++                if rank < first + left.count {
++                    at = left;
++                    expected = left_hash;
++                } else {
++                    first += left.count;
++                    at = right;
++                    expected = right_hash;
++                }
++            }
++            Content::Leaf { .. } => break,
++        }
++    }
++    Err(storage("Source node has no original capture path"))
+@@ -23 +69,0 @@ pub(super) fn stored_hash(
+-
+@@ -146,0 +193,2 @@ fn store(
++    sequence: u64,
++    rank: u64,
+@@ -156 +204 @@ fn store(
+-    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata) VALUES(?1,?2,?3,?4)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes]).map_err(|error|storage(error.to_string()))?;
++    connection.prepare_cached("INSERT INTO request_source_nodes(native_id,native_digest,hash,metadata,origin_source_id,origin_rank) VALUES(?1,?2,?3,?4,?5,?6)").map_err(|error|storage(error.to_string()))?.execute(params![node.native.id,node.native.digest.as_slice(),digest.as_slice(),bytes,sequence.to_string(),rank]).map_err(|error|storage(error.to_string()))?;
+@@ -160,0 +209 @@ struct Capture<'a> {
++    sequence: u64,
+@@ -246,0 +296,2 @@ impl Capture<'_> {
++            self.sequence,
++            rank,
+@@ -259,0 +311 @@ pub(super) fn capture(
++    sequence: u64,
+@@ -266,0 +319 @@ pub(super) fn capture(
++        sequence,
+diff --git a/src/durable/sqlite/observation_request/composed/profile.rs b/src/durable/sqlite/observation_request/composed/profile.rs
+index 9cf75b74..88145274 100644
+--- a/src/durable/sqlite/observation_request/composed/profile.rs
++++ b/src/durable/sqlite/observation_request/composed/profile.rs
+@@ -1 +1,3 @@
+-//! Local opt-in Source timings and operation counts; no capture authentication claim.
++//! Local opt-in measurements, never authentication evidence or a result cache.
++//! The fixed diagnostic set records potential reuse; every SQL check still runs.
++use super::{Connection, Root, index, manifest};
+@@ -3 +5 @@ use serde::Serialize;
+-use std::{cell::RefCell, time::Instant};
++use std::{cell::RefCell, collections::HashMap, time::Instant};
+@@ -4,0 +7,11 @@ use std::{cell::RefCell, time::Instant};
++const IDENTITY_LIMIT: usize = 512;
++#[derive(Clone, Copy, PartialEq, Eq, Hash)]
++struct Identity {
++    native_id: u64,
++    native_digest: [u8; 32],
++    native_count: u64,
++    native_height: u8,
++    source_hash: index::Hash,
++    origin_sequence: u64,
++    origin_hash: Option<index::Hash>,
++}
+@@ -14 +27 @@ struct Summary {
+-    lookup_us: u128,
++    authenticate_us: u128,
+@@ -17 +30,4 @@ struct Summary {
+-    lookup_calls: u64,
++    auth_calls: u64,
++    origin_root_loads: u64,
++    path_hops: u64,
++    max_path_hops: u8,
+@@ -18,0 +35,7 @@ struct Summary {
++    authenticated_targets: u64,
++    repeated_identities: u64,
++    same_write_token_repeats: u64,
++    write_invalidated_repeats: u64,
++    tracked_identities: usize,
++    identity_limit: usize,
++    overflow_visits: u64,
+@@ -22,0 +46,3 @@ struct Active {
++    // Capacity is reserved once. Entries contain only fixed identity scalars
++    // and the connection's total_changes token; no metadata/body is retained.
++    identities: HashMap<Identity, u64>,
+@@ -37 +63,3 @@ impl Request {
+-        if std::env::var_os("RUSTX_SOURCE_PROFILE").as_deref() != Some(std::ffi::OsStr::new("1")) {
++        if std::env::var_os("RUSTX_SOURCE_AUTH_PROFILE").as_deref()
++            != Some(std::ffi::OsStr::new("1"))
++        {
+@@ -47 +75 @@ impl Request {
+-                    kind: "source_profile",
++                    kind: "source_auth_profile",
+@@ -49,0 +78 @@ impl Request {
++                    identity_limit: IDENTITY_LIMIT,
+@@ -52,0 +82 @@ impl Request {
++                identities: HashMap::with_capacity(IDENTITY_LIMIT),
+@@ -71,0 +102 @@ impl Drop for Request {
++        active.summary.tracked_identities = active.identities.len();
+@@ -90 +121 @@ pub(super) enum Phase {
+-    Lookup,
++    Authenticate,
+@@ -116 +147 @@ impl Drop for Timer {
+-                Phase::Lookup => &mut active.summary.lookup_us,
++                Phase::Authenticate => &mut active.summary.authenticate_us,
+@@ -124,2 +155,11 @@ impl Drop for Timer {
+-pub(super) fn lookup_call() {
+-    record(|active| active.summary.lookup_calls += 1);
++pub(super) fn auth_call() {
++    record(|active| active.summary.auth_calls += 1);
++}
++pub(super) fn origin_root_load() {
++    record(|active| active.summary.origin_root_loads += 1);
++}
++pub(super) fn path_hop(depth: u8) {
++    record(|active| {
++        active.summary.path_hops += 1;
++        active.summary.max_path_hops = active.summary.max_path_hops.max(depth);
++    });
+@@ -129,0 +170,41 @@ pub(super) fn source_node_load() {
++pub(super) fn proof_visit(
++    connection: &Connection,
++    native: manifest::NodeRef,
++    expected: index::Hash,
++    origin: &Root,
++    target: bool,
++) {
++    record(|active| {
++        active.summary.authenticated_targets += u64::from(target);
++        let identity = Identity {
++            native_id: native.id,
++            native_digest: native.digest,
++            native_count: native.count,
++            native_height: native.height,
++            source_hash: expected,
++            origin_sequence: origin.sequence,
++            origin_hash: origin.source_hash,
++        };
++        active.visit(identity, connection.total_changes());
++    });
++}
++impl Active {
++    fn visit(&mut self, identity: Identity, write_token: u64) {
++        if let Some(previous) = self.identities.get_mut(&identity) {
++            self.summary.repeated_identities += 1;
++            if *previous == write_token {
++                self.summary.same_write_token_repeats += 1;
++            } else {
++                self.summary.write_invalidated_repeats += 1;
++            }
++            *previous = write_token;
++        } else if self.identities.len() < IDENTITY_LIMIT {
++            self.identities.insert(identity, write_token);
++        } else {
++            // This counts untracked visits, not distinct overflow identities.
++            // Repetition counters become lower bounds when this is nonzero.
++            self.summary.overflow_visits += 1;
++        }
++    }
++}
++
+@@ -132 +213,40 @@ mod tests {
+-    use super::Summary;
++    use super::{Active, IDENTITY_LIMIT, Identity, Summary};
++    use std::{collections::HashMap, time::Instant};
++
++    fn identity(id: u64) -> Identity {
++        Identity {
++            native_id: id,
++            native_digest: [1; 32],
++            native_count: 1,
++            native_height: 1,
++            source_hash: [2; 32],
++            origin_sequence: 7,
++            origin_hash: Some([3; 32]),
++        }
++    }
++
++    #[test]
++    fn diagnostic_repeats_distinguish_writes_and_stop_admitting_at_the_cap() {
++        let mut active = Active {
++            summary: Summary::default(),
++            started: Instant::now(),
++            identities: HashMap::with_capacity(IDENTITY_LIMIT),
++        };
++        active.visit(identity(0), 10);
++        active.visit(identity(0), 10);
++        active.visit(identity(0), 11);
++        assert_eq!(active.summary.repeated_identities, 2);
++        assert_eq!(active.summary.same_write_token_repeats, 1);
++        assert_eq!(active.summary.write_invalidated_repeats, 1);
++        for id in 1..=u64::try_from(IDENTITY_LIMIT).unwrap() {
++            active.visit(identity(id), 11);
++        }
++        let capacity = active.identities.capacity();
++        assert_eq!(active.identities.len(), IDENTITY_LIMIT);
++        assert_eq!(active.summary.overflow_visits, 1);
++        active.visit(identity(u64::MAX), 11);
++        active.visit(identity(u64::MAX), 11);
++        assert_eq!(active.identities.capacity(), capacity);
++        assert_eq!(active.summary.overflow_visits, 3);
++        assert_eq!(active.summary.repeated_identities, 2);
++    }
+@@ -137 +257 @@ mod tests {
+-            kind: "source_profile",
++            kind: "source_auth_profile",
+@@ -144 +264 @@ mod tests {
+-            lookup_us: u128::MAX,
++            authenticate_us: u128::MAX,
+@@ -147 +267,4 @@ mod tests {
+-            lookup_calls: u64::MAX,
++            auth_calls: u64::MAX,
++            origin_root_loads: u64::MAX,
++            path_hops: u64::MAX,
++            max_path_hops: u8::MAX,
+@@ -148,0 +272,7 @@ mod tests {
++            authenticated_targets: u64::MAX,
++            repeated_identities: u64::MAX,
++            same_write_token_repeats: u64::MAX,
++            write_invalidated_repeats: u64::MAX,
++            tracked_identities: usize::MAX,
++            identity_limit: IDENTITY_LIMIT,
++            overflow_visits: u64::MAX,
+diff --git a/src/durable/sqlite/observation_request/composed/read.rs b/src/durable/sqlite/observation_request/composed/read.rs
+index d4adc6d7..0b98889d 100644
+--- a/src/durable/sqlite/observation_request/composed/read.rs
++++ b/src/durable/sqlite/observation_request/composed/read.rs
+@@ -444,3 +444,7 @@ pub(in crate::durable::sqlite::observation_request) fn page(
+-            super::super::metadata_list("request_source_roots", &path, &bytes, "content")?;
+-        let collections =
+-            super::super::metadata_list("request_source_roots", &path, &bytes, "collections")?;
++            super::super::metadata_list("request_observation_fields", &path, &bytes, "content")?;
++        let collections = super::super::metadata_list(
++            "request_observation_fields",
++            &path,
++            &bytes,
++            "collections",
++        )?;
+@@ -448 +452,5 @@ pub(in crate::durable::sqlite::observation_request) fn page(
+-            || super::super::message_descriptor_deferred("request_source_roots", &path, &value);
++            || super::super::message_descriptor_deferred(
++                "request_observation_fields",
++                &path,
++                &value,
++            );
+diff --git a/src/durable/sqlite/observation_request/composed/schema.rs b/src/durable/sqlite/observation_request/composed/schema.rs
+index 4bd711aa..0318b4f1 100644
+--- a/src/durable/sqlite/observation_request/composed/schema.rs
++++ b/src/durable/sqlite/observation_request/composed/schema.rs
+@@ -9 +9 @@ const TABLES: [(&str, &str); 3] = [
+-        r"CREATE TABLE request_source_nodes(native_id INTEGER PRIMARY KEY REFERENCES native_input_nodes(id),native_digest BLOB NOT NULL CHECK(typeof(native_digest)='blob' AND length(native_digest)=32),hash BLOB NOT NULL CHECK(typeof(hash)='blob' AND length(hash)=32),metadata BLOB NOT NULL CHECK(typeof(metadata)='blob' AND length(metadata)<=65536))",
++        r"CREATE TABLE request_source_nodes(native_id INTEGER PRIMARY KEY REFERENCES native_input_nodes(id),origin_source_id TEXT NOT NULL REFERENCES request_snapshots(observation_source_id),origin_rank INTEGER NOT NULL CHECK(origin_rank BETWEEN 0 AND 8191),native_digest BLOB NOT NULL CHECK(typeof(native_digest)='blob' AND length(native_digest)=32),hash BLOB NOT NULL CHECK(typeof(hash)='blob' AND length(hash)=32),metadata BLOB NOT NULL CHECK(typeof(metadata)='blob' AND length(metadata)<=65536))",
+@@ -13 +13 @@ const TABLES: [(&str, &str); 3] = [
+-        r"CREATE TABLE request_source_roots(source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),metadata BLOB NOT NULL CHECK(typeof(metadata)='blob' AND length(metadata)<=16384),checksum BLOB NOT NULL CHECK(typeof(checksum)='blob' AND length(checksum)=32)) WITHOUT ROWID",
++        r"CREATE TABLE request_source_roots(source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),metadata BLOB NOT NULL CHECK(typeof(metadata)='blob' AND length(metadata)<=16384),witness BLOB NOT NULL CHECK(typeof(witness)='blob' AND length(witness)=32)) WITHOUT ROWID",
+@@ -36,0 +37,16 @@ pub(in crate::durable::sqlite) fn verify_schema(
++    verify_root_seat(connection)
++}
++
++pub(super) fn verify_root_seat(connection: &Connection) -> Result<(), ConversationStoreError> {
++    const EXPECTED: &str = "CREATE TABLE request_observation_fields (source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),path_json TEXT NOT NULL CHECK(path_json='[]'),parent_path TEXT CHECK(parent_path IS NULL),ordinal INTEGER CHECK(ordinal IS NULL),start INTEGER NOT NULL CHECK(start=0),end INTEGER NOT NULL CHECK(end BETWEEN 0 AND 9007199254740991),children INTEGER NOT NULL CHECK(children=0),header_kind TEXT NOT NULL CHECK(header_kind='inline'),header_json BLOB NOT NULL CHECK(header_json=x'6e756c6c'),shape_witness BLOB NOT NULL CHECK(typeof(shape_witness)='blob' AND length(shape_witness)=32)) WITHOUT ROWID";
++    let actual:Option<String>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name='request_observation_fields'",[],|row|row.get(0)).map_err(|error|storage(error.to_string()))?;
++    let compact = |sql: &str| {
++        sql.chars()
++            .filter(|ch| !ch.is_ascii_whitespace())
++            .collect::<String>()
++    };
++    if actual.as_deref().map(compact) != Some(compact(EXPECTED)) {
++        return Err(ConversationStoreError::IncompatibleSchema(
++            "original request witness schema differs".into(),
++        ));
++    }
+diff --git a/src/durable/sqlite/observation_request/composed/schema_tests.rs b/src/durable/sqlite/observation_request/composed/schema_tests.rs
+index 3a4bf95f..32c7841c 100644
+--- a/src/durable/sqlite/observation_request/composed/schema_tests.rs
++++ b/src/durable/sqlite/observation_request/composed/schema_tests.rs
+@@ -130 +130 @@ fn t10_t19_schema_65_source_pages_are_refused_without_conversion() {
+-            expected: 75
++            expected: 76
+@@ -202 +202 @@ fn t10_t19_schema_66_full_child_facts_are_refused_without_conversion() {
+-            expected: 75
++            expected: 76
+@@ -248 +248 @@ fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
+-                expected: 75
++                expected: 76
+@@ -261,39 +260,0 @@ fn binary_fragment_gate_rejects_schema_70_without_rewriting_it() {
+-
+-#[test]
+-fn independent_source_witness_layout_is_rejected_without_migration() {
+-    let directory = tempfile::tempdir().unwrap();
+-    let path = directory.path().join("source.sqlite");
+-    let id = ConversationId::generate();
+-    let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+-    {
+-        let connection = store.lock().unwrap();
+-        let old_seat: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='request_observation_fields')", [], |row|row.get(0)).unwrap();
+-        assert!(
+-            !old_seat,
+-            "no duplicate independent witness seat or dual write"
+-        );
+-        for name in ["origin_source_id", "origin_rank"] {
+-            let old_column: bool = connection.query_row("SELECT EXISTS(SELECT 1 FROM pragma_table_info('request_source_nodes') WHERE name=?1)",[name],|row|row.get(0)).unwrap();
+-            assert!(!old_column);
+-        }
+-        connection
+-            .execute("UPDATE rustx_store SET schema_version=73", [])
+-            .unwrap();
+-    }
+-    drop(store);
+-    assert!(matches!(
+-        SqliteConversationStore::open_existing(id, &path),
+-        Err(ConversationStoreError::SchemaVersionMismatch {
+-            stored: 73,
+-            expected: 75
+-        })
+-    ));
+-    let connection = Connection::open(path).unwrap();
+-    assert_eq!(
+-        connection
+-            .query_row("SELECT schema_version FROM rustx_store", [], |row| row
+-                .get::<_, i64>(0))
+-            .unwrap(),
+-        73
+-    );
+-}
+diff --git a/src/durable/sqlite/observation_request/state_preview_tests.rs b/src/durable/sqlite/observation_request/state_preview_tests.rs
+index d74ff995..41dbd1bf 100644
+--- a/src/durable/sqlite/observation_request/state_preview_tests.rs
++++ b/src/durable/sqlite/observation_request/state_preview_tests.rs
+@@ -29,5 +29,2 @@ fn state_preview_capture_skips_unused_previews_and_lazy_reads_match_eager_oracle
+-    assert_lazy_matches_eager(&fixture());
+-}
+-
+-fn assert_lazy_matches_eager<T: serde::Serialize + schemars::JsonSchema>(value: &T) {
+-    let original = SeekableObservationSource::new(value).unwrap();
++    let value = fixture();
++    let original = SeekableObservationSource::new(&value).unwrap();
+@@ -49 +46 @@ fn assert_lazy_matches_eager<T: serde::Serialize + schemars::JsonSchema>(value:
+-    index_state(&connection, "preview_test", "source", value).unwrap();
++    index_state(&connection, "preview_test", "source", &value).unwrap();
+@@ -53,8 +49,0 @@ fn assert_lazy_matches_eager<T: serde::Serialize + schemars::JsonSchema>(value:
+-    // A later immutable source cannot replace the selected historical source.
+-    index_state(
+-        &connection,
+-        "preview_test",
+-        "later",
+-        &serde_json::json!({"later":true}),
+-    )
+-    .unwrap();
+@@ -149 +138 @@ fn state_preview_rejects_malformed_bytes_and_invalid_geometry_without_repair() {
+-        connection.execute_batch(&format!("SAVEPOINT corrupt; UPDATE state_observation_fields SET {assignment} WHERE source_id='source';")).unwrap();
++        connection.execute_batch(&format!("SAVEPOINT corrupt; UPDATE state_observation_fields SET {assignment} WHERE source_id='source' AND path_json='[]';")).unwrap();
+@@ -276 +265 @@ fn previous_eager_state_layout_is_rejected_without_migration() {
+-            expected: 75
++            expected: 76
+diff --git a/src/durable/sqlite/observation_trace.rs b/src/durable/sqlite/observation_trace.rs
+index 1399e74f..94e92072 100644
+--- a/src/durable/sqlite/observation_trace.rs
++++ b/src/durable/sqlite/observation_trace.rs
+@@ -468 +468 @@ fn verify_header_layout(connection: &Connection) -> Result<(), ConversationStore
+-            "request_source_roots",
++            "request_observation_fields",
+diff --git a/src/durable/sqlite/observation_trace/inspection.rs b/src/durable/sqlite/observation_trace/inspection.rs
+index 3e9de848..12ebb7f9 100644
+--- a/src/durable/sqlite/observation_trace/inspection.rs
++++ b/src/durable/sqlite/observation_trace/inspection.rs
+@@ -198 +198 @@ pub(in crate::durable::sqlite) fn tool_definition(
+-        "request_source_roots",
++        "request_observation_fields",
+diff --git a/src/durable/sqlite/reading_tests.rs b/src/durable/sqlite/reading_tests.rs
+index 722e8c3b..7020eef6 100644
+--- a/src/durable/sqlite/reading_tests.rs
++++ b/src/durable/sqlite/reading_tests.rs
+@@ -1149 +1149 @@ fn schema_56_without_inherited_watermark_is_rejected_before_shape_validation() {
+-        assert_eq!(super::SQLITE_SCHEMA_VERSION, 75);
++        assert_eq!(super::SQLITE_SCHEMA_VERSION, 76);
+diff --git a/src/durable/sqlite/request_child_reference_tests.rs b/src/durable/sqlite/request_child_reference_tests.rs
+index a6d0219a..58a88fab 100644
+--- a/src/durable/sqlite/request_child_reference_tests.rs
++++ b/src/durable/sqlite/request_child_reference_tests.rs
+@@ -59 +59 @@ fn replace_captured_child(
+-fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
++fn t08_t12_t19_original_child_references_reject_page_tamper_and_recapture_without_the_original_seat()
+@@ -79 +79 @@ fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
+-                "SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",
++                "SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
+@@ -116 +116 @@ fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
+-                "UPDATE request_source_roots SET metadata=?2,checksum=?3 WHERE source_id=?1",
++                "UPDATE request_source_roots SET metadata=?2,witness=?3 WHERE source_id=?1",
+@@ -120,6 +120,15 @@ fn t08_t12_t19_page_integrity_is_not_independent_capture_authentication()
+-        // A coherently rewritten optional graph is no longer authenticated
+-        // against an independent original-capture seat. This is the explicit
+-        // revised contract; it cannot change the native request or history.
+-        let rewritten = observation_request::page_at(&connection, sequence, sequence, &[], 0, 1).unwrap();
+-        assert_eq!(rewritten.fields[0].path, ["request_id"]);
+-        assert_eq!(rewritten.fields[0].value, serde_json::json!(snapshot.request_id.as_str()));
++        let seat: Vec<u8> = connection
++            .query_row(
++                "SELECT shape_witness FROM request_observation_fields WHERE source_id=?1",
++                [sequence.to_string()],
++                |row| row.get(0),
++            )
++            .unwrap();
++        assert_eq!(
++            seat, original.1,
++            "the original capture seat is never retagged"
++        );
++        assert!(matches!(
++            observation_request::page_at(&connection, sequence, sequence, &[], 0, 1),
++            Err(ConversationStoreError::Storage(_))
++        ));
+diff --git a/src/durable/sqlite/request_fragment_tests.rs b/src/durable/sqlite/request_fragment_tests.rs
+index b31262c2..f7f1c003 100644
+--- a/src/durable/sqlite/request_fragment_tests.rs
++++ b/src/durable/sqlite/request_fragment_tests.rs
+@@ -114 +114 @@ fn assert_fragment_oracle(
+-            "request_source_roots",
++            "request_observation_fields",
+@@ -532 +532 @@ fn assert_reading_fragment_source(
+-                "request_source_roots",
++                "request_observation_fields",
+diff --git a/src/durable/sqlite/request_header_capture_tests.rs b/src/durable/sqlite/request_header_capture_tests.rs
+index 6f8dbacd..1bb6dff5 100644
+--- a/src/durable/sqlite/request_header_capture_tests.rs
++++ b/src/durable/sqlite/request_header_capture_tests.rs
+@@ -35 +35 @@ fn captured_header_rows(connection: &Connection, sequence: u64) -> Vec<Vec<u8>>
+-                "request_source_roots",
++                "request_observation_fields",
+@@ -169 +169 @@ fn assert_header_capture_fault(trigger: &str) {
+-            "SELECT count(*) FROM request_source_roots WHERE source_id=?1",
++            "SELECT count(*) FROM request_observation_fields WHERE source_id=?1",
+@@ -207 +207 @@ fn t10_t19_request_header_placeholder_failure_rolls_back_only_optional_layout()
+-        "CREATE TEMP TRIGGER remove_captured_header BEFORE INSERT ON request_source_roots BEGIN SELECT RAISE(FAIL,'optional original witness'); END;",
++        "CREATE TEMP TRIGGER remove_captured_header BEFORE INSERT ON request_observation_fields BEGIN SELECT RAISE(FAIL,'optional original witness'); END;",
+@@ -230 +230 @@ fn t08_t19_generic_json_message_lookalikes_never_claim_native_header_placeholder
+-                "SELECT count(*) FROM request_source_roots",
++                "SELECT count(*) FROM request_observation_fields",
+diff --git a/src/durable/sqlite/request_hole_tests.rs b/src/durable/sqlite/request_hole_tests.rs
+index c63e9552..c53c99e0 100644
+--- a/src/durable/sqlite/request_hole_tests.rs
++++ b/src/durable/sqlite/request_hole_tests.rs
+@@ -48,2 +48,2 @@ fn t08_t12_t19_parametric_request_holes_reject_root_corruption_before_allocation
+-        "checksum=zeroblob(32)",
+-        "checksum='invalid'",
++        "witness=zeroblob(32)",
++        "witness='invalid'",
+@@ -107 +107 @@ fn t08_t12_t19_parametric_request_holes_reject_root_corruption_before_allocation
+-fn t10_t12_t19_invalid_previous_root_does_not_poison_native_source_reuse() {
++fn t10_t12_t19_parametric_hole_identity_cannot_be_rehashed_or_laundered_into_new_requests() {
+@@ -122 +122 @@ fn t10_t12_t19_invalid_previous_root_does_not_poison_native_source_reuse() {
+-                "SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",
++                "SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
+@@ -136 +136 @@ fn t10_t12_t19_invalid_previous_root_does_not_poison_native_source_reuse() {
+-                "UPDATE request_source_roots SET metadata=?2,checksum=?3 WHERE source_id=?1",
++                "UPDATE request_source_roots SET metadata=?2,witness=?3 WHERE source_id=?1",
+@@ -148,4 +148 @@ fn t10_t12_t19_invalid_previous_root_does_not_poison_native_source_reuse() {
+-        // A new request owns a new root; it no longer walks the old root's
+-        // independent capture proof. Unmodified native nodes remain reusable.
+-        let next_oracle = shape_oracle(&store, &next, started.sequence);
+-        assert_shape_oracle(&store, &next, started.sequence, &next_oracle);
++        assert_shape_optional_source_hole(&store, &next, started.sequence);
+@@ -162 +159 @@ fn t10_t12_t19_invalid_previous_root_does_not_poison_native_source_reuse() {
+-                "UPDATE request_source_roots SET metadata=?2,checksum=?3 WHERE source_id=?1",
++                "UPDATE request_source_roots SET metadata=?2,witness=?3 WHERE source_id=?1",
+@@ -266 +263 @@ fn t08_t12_t19_decimal_request_and_rank_widths_match_the_original_full_producer(
+-fn t10_t14_t19_composed_source_schema_requires_exact_bounds_keys_and_root_checksums() {
++fn t10_t14_t19_composed_source_schema_requires_exact_bounds_keys_and_original_witness_seat() {
+@@ -296 +293,5 @@ fn t10_t14_t19_composed_source_schema_requires_exact_bounds_keys_and_root_checks
+-            "source_id TEXT,metadata BLOB,checksum BLOB",
++            "source_id TEXT,metadata BLOB,witness BLOB",
++        ),
++        (
++            "request_observation_fields",
++            "source_id TEXT,shape_witness BLOB",
+diff --git a/src/durable/sqlite/request_root_finalization_tests.rs b/src/durable/sqlite/request_root_finalization_tests.rs
+index e2bb1f61..a57724c0 100644
+--- a/src/durable/sqlite/request_root_finalization_tests.rs
++++ b/src/durable/sqlite/request_root_finalization_tests.rs
+@@ -1 +1 @@
+-// A composed Source is published once for its committed Request identity. Shared
++// A composed Source is published once under the original Request witness. Shared
+@@ -4 +4 @@
+-fn t08_t14_t19_request_roots_finalize_once_with_exact_legacy_geometry_and_checksum() {
++fn t08_t14_t19_certified_request_roots_finalize_once_with_exact_legacy_geometry_and_witness() {
+@@ -46,2 +46,2 @@ fn t08_t14_t19_request_roots_finalize_once_with_exact_legacy_geometry_and_checks
+-        let seats: u64 = connection.query_row("SELECT count(*) FROM request_source_roots WHERE source_id=?1 AND length(checksum)=32", [sequence.to_string()], |r| r.get(0)).unwrap();
+-        assert_eq!(seats, 1, "one committed Request Source root");
++        let seats: u64 = connection.query_row("SELECT count(*) FROM request_observation_fields WHERE source_id=?1 AND path_json='[]' AND length(shape_witness)=32", [sequence.to_string()], |r| r.get(0)).unwrap();
++        assert_eq!(seats, 1, "one original Request witness seat");
+@@ -110,0 +111 @@ fn t10_t14_t19_certified_root_finalization_failure_rolls_back_only_optional_sour
++            "request_observation_fields",
+diff --git a/src/durable/sqlite/request_shape_tests.rs b/src/durable/sqlite/request_shape_tests.rs
+index 4a138b21..6344a00c 100644
+--- a/src/durable/sqlite/request_shape_tests.rs
++++ b/src/durable/sqlite/request_shape_tests.rs
+@@ -51 +51 @@ fn assert_shape_oracle(
+-            "request_source_roots",
++            "request_observation_fields",
+@@ -390,0 +391 @@ fn t10_t14_t19_request_shape_optional_insert_failure_preserves_native_r_c_j() {
++            "request_observation_fields",
+@@ -560,2 +561,2 @@ fn corrupt_request_shape(
+-        "root_checksum" => {
+-            connection.execute("UPDATE request_source_roots SET checksum=zeroblob(32) WHERE source_id=?1", [source]).unwrap();
++        "root_witness" => {
++            connection.execute("UPDATE request_observation_fields SET shape_witness=zeroblob(32) WHERE source_id=?1 AND path_json='[]'", [source]).unwrap();
+@@ -630 +631 @@ fn t08_t12_t19_request_shape_anchor_and_metadata_corruption_never_rebases_origin
+-        "root_checksum",
++        "root_witness",
+@@ -750 +751 @@ fn t14_t19_t20_request_shape_rows_grow_with_new_immutable_items_and_request_anch
+-        let seats: (u64,u64) = connection.query_row("SELECT count(*),sum(length(checksum)=32) FROM request_source_roots WHERE source_id=?1", [sequence.to_string()], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
++        let seats: (u64,u64) = connection.query_row("SELECT count(*),sum(path_json='[]' AND length(shape_witness)=32) FROM request_observation_fields WHERE source_id=?1", [sequence.to_string()], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
+@@ -754 +755 @@ fn t14_t19_t20_request_shape_rows_grow_with_new_immutable_items_and_request_anch
+-            "one current-R root checksum, no separate capture witness row"
++            "one current-R witness, no repeated per-item anchors/field rows"
+@@ -842 +843 @@ fn t08_t12_t19_request_shape_root_header_hash_rejects_valid_json_replacement() {
+-fn t10_t14_t19_malformed_rehashed_shape_metadata_is_still_rejected() {
++fn t10_t14_t19_rehashed_shape_metadata_cannot_be_laundered_into_a_new_native_request() {
+@@ -907,0 +909,4 @@ fn t10_t14_t19_malformed_rehashed_shape_metadata_is_still_rejected() {
++    assert_eq!(
++        next_root["source_hash"], original_root["source_hash"],
++        "a new R retains the original authenticated subtree hash, never blesses rehashed corruption"
++    );
+diff --git a/src/durable/sqlite/request_span_integrity_tests.rs b/src/durable/sqlite/request_span_integrity_tests.rs
+index 93c1fa81..1377626f 100644
+--- a/src/durable/sqlite/request_span_integrity_tests.rs
++++ b/src/durable/sqlite/request_span_integrity_tests.rs
+@@ -44 +44 @@ fn t08_t19_composed_source_corruption_preserves_native_request_and_restored_exac
+-        "checksum=zeroblob(32)",
++        "witness=zeroblob(32)",
+@@ -150 +150 @@ fn t10_t19_original_span_insert_failure_rolls_back_optional_layout_and_preserves
+-        connection.execute_batch("CREATE TRIGGER reject_original_span BEFORE INSERT ON request_source_roots BEGIN SELECT test_original_span_attempt(); SELECT RAISE(FAIL,'optional span insert'); END;").unwrap();
++        connection.execute_batch("CREATE TRIGGER reject_original_span BEFORE INSERT ON request_observation_fields BEGIN SELECT test_original_span_attempt(); SELECT RAISE(FAIL,'optional span insert'); END;").unwrap();
+@@ -179 +179 @@ fn t10_t19_original_span_insert_failure_rolls_back_optional_layout_and_preserves
+-        "SELECT count(*) FROM request_source_roots WHERE source_id=?1",
++        "SELECT count(*) FROM request_observation_fields WHERE source_id=?1",
+@@ -203 +203 @@ fn t10_t19_original_span_insert_failure_rolls_back_optional_layout_and_preserves
+-fn t14_t19_source_root_schema_requires_bounded_metadata_and_checksum() {
++fn t14_t19_original_span_schema_requires_explicit_kind_and_consistent_native_bounds() {
+@@ -207,2 +207,10 @@ fn t14_t19_source_root_schema_requires_bounded_metadata_and_checksum() {
+-        "metadata=NULL", "metadata='not a blob'", "metadata=zeroblob(16385)",
+-        "checksum=NULL", "checksum='not a blob'", "checksum=zeroblob(31)",
++        "header_kind='unknown'",
++        "header_kind=NULL",
++        "header_json=x'30'",
++        "path_json='[1]'",
++        "parent_path='[]'",
++        "ordinal=0",
++        "start=1",
++        "end=9007199254740992",
++        "children=1",
++        "shape_witness=zeroblob(31)",
+@@ -210 +218 @@ fn t14_t19_source_root_schema_requires_bounded_metadata_and_checksum() {
+-        assert!(connection.execute(&format!("UPDATE request_source_roots SET {mutation} WHERE source_id=?1"), [sequence.to_string()]).is_err(), "{mutation}");
++        assert!(connection.execute(&format!("UPDATE request_observation_fields SET {mutation} WHERE source_id=?1 AND path_json='[]'"), [sequence.to_string()]).is_err(), "{mutation}");
+@@ -212 +220 @@ fn t14_t19_source_root_schema_requires_bounded_metadata_and_checksum() {
+-    assert!(connection.execute("INSERT INTO request_source_roots(source_id,metadata) VALUES('missing',x'30')", []).is_err());
++    assert!(connection.execute("INSERT INTO request_observation_fields(source_id,path_json,start,end,children,header_json) VALUES(?1,'[]',0,1,0,x'30')", [sequence.to_string()]).is_err());
+@@ -236 +244 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
+-            "DELETE FROM request_source_roots WHERE source_id=?1",
++            "DELETE FROM request_observation_fields WHERE source_id=?1",
+@@ -256 +264 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
+-        "request_source_roots",
++        "request_observation_fields",
+@@ -265 +273 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
+-        "request_source_roots",
++        "request_observation_fields",
+@@ -275 +283 @@ fn t08_t19_original_span_duplicate_ordinal_keys_preserve_legacy_last_wins_header
+-        "request_source_roots",
++        "request_observation_fields",
+diff --git a/src/durable/sqlite/request_span_tests.rs b/src/durable/sqlite/request_span_tests.rs
+index 5753dfdc..bdb8cfbd 100644
+--- a/src/durable/sqlite/request_span_tests.rs
++++ b/src/durable/sqlite/request_span_tests.rs
+@@ -234 +234 @@ fn t08_t14_t15_t19_original_span_headers_match_every_legacy_field_and_advancing_
+-                "request_source_roots",
++                "request_observation_fields",
+diff --git a/src/durable/sqlite/scoped_event_index_tests.rs b/src/durable/sqlite/scoped_event_index_tests.rs
+index 47772528..e3e5af60 100644
+--- a/src/durable/sqlite/scoped_event_index_tests.rs
++++ b/src/durable/sqlite/scoped_event_index_tests.rs
+@@ -121 +121 @@ fn scoped_indexes_require_partial_predicates_and_previous_schema_is_rejected() {
+-            expected: 75
++            expected: 76
+diff --git a/src/runtime_client/host.rs b/src/runtime_client/host.rs
+index 0cb412d6..de881a8f 100644
+--- a/src/runtime_client/host.rs
++++ b/src/runtime_client/host.rs
+@@ -8261,3 +8261,3 @@ mod tests {
+-                "source_lookup",
+-                &current.source_lookup,
+-                &previous.source_lookup,
++                "source_authenticate",
++                &current.source_authenticate,
++                &previous.source_authenticate,
+@@ -8313,3 +8313,3 @@ mod tests {
+-                "lookup",
+-                &current.source_lookup_work,
+-                &previous.source_lookup_work,
++                "authenticate",
++                &current.source_auth_work,
++                &previous.source_auth_work,
+@@ -8365 +8365 @@ mod tests {
+-            assert!(agent.source_lookup_work.samples > 0);
++            assert!(agent.source_auth_work.samples > 0);

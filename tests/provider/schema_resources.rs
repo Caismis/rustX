@@ -43,7 +43,7 @@ fn declaration(schema: &Value) -> ToolDefinition {
         id: ToolId::new("remote-schema"),
         name: canonical.name,
         description: canonical.description,
-        input_schema: canonical.input_schema,
+        input_schema: canonical.input_schema.into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {

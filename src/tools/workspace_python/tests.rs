@@ -2371,7 +2371,11 @@ async fn changed_pin_before_adopt_snapshot_is_never_validated_as_new_generation(
     let path = root.path().to_path_buf();
     let task = tokio::spawn(async move { preparing.prepare(path).await });
     entered.await.unwrap();
-    std::fs::write(root.path().join(".python-version"), "3.11").unwrap();
+    // Replace the inode so this controlled generation change does not depend
+    // on the filesystem assigning a new mtime to two same-length writes.
+    let replacement = root.path().join("next-python-version");
+    std::fs::write(&replacement, "3.11").unwrap();
+    std::fs::rename(replacement, root.path().join(".python-version")).unwrap();
     release.send(()).unwrap();
     task.await.unwrap();
     assert!(owner.records.lock().unwrap().get(root.path()).is_none());

@@ -1,8 +1,8 @@
 //! Historical display domains read only the supplied native immutable cut.
-use super::checkpoint::{CheckpointPage, CheckpointValueChunk};
 use super::{RuntimeClientCursor, RuntimeClientError};
 use crate::durable::ConversationStore;
 use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
+use crate::runtime_client::checkpoint::{CheckpointPage, CheckpointValueChunk};
 
 fn locator(
     value: &str,
@@ -57,8 +57,8 @@ pub(crate) fn page(
     if cut.conversation_id != native.read.conversation_id || cut.through != native.read.journal {
         return Err(RuntimeClientError::ReadCutExpired);
     }
-    if super::delivery::selection(domain).is_some() {
-        return super::delivery::page(store, cut, domain, offset, limit);
+    if crate::runtime_client::delivery::selection(domain).is_some() {
+        return crate::runtime_client::delivery::page(store, cut, domain, offset, limit);
     }
     if let Some(cursor) = super::response::identity_selection(domain) {
         return super::response::identity_page(store, cut, domain, cursor, offset, limit);
@@ -264,8 +264,8 @@ pub(crate) fn value_read(
     if super::projection_history::selection(domain).is_some() {
         return super::projection_history::value_read(store, cut, domain, item_offset, path, range);
     }
-    if super::delivery::selection(domain).is_some() {
-        return super::delivery::value_read(
+    if crate::runtime_client::delivery::selection(domain).is_some() {
+        return crate::runtime_client::delivery::value_read(
             store,
             cut,
             domain,

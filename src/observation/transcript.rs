@@ -15,17 +15,17 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeClientMessageDescriptor {
-    pub deliveries: Option<super::delivery::RuntimeClientDeliveryHead>,
+    pub deliveries: Option<crate::observation::delivery::RuntimeClientDeliveryHead>,
     pub identity: Option<MessageId>,
-    pub locator: super::content::CanonicalContentLocator,
+    pub locator: crate::observation::content::CanonicalContentLocator,
     pub role: String,
     pub kind: String,
     pub block_count: u64,
     pub tool_call_count: u64,
     /// Finite native Tool occurrences; remaining calls use the advertised frontier.
     pub tool_calls: Vec<ForegroundToolExecution>,
-    pub turn_process: Option<super::turn::TurnProcessView>,
-    pub completed_response: Option<super::turn::CompletedResponseView>,
+    pub turn_process: Option<crate::observation::turn::TurnProcessView>,
+    pub completed_response: Option<crate::observation::turn::CompletedResponseView>,
     pub content: Vec<super::cut::ContentBinding>,
     pub collections: Vec<super::cut::CollectionFrontier>,
 }
@@ -50,20 +50,22 @@ impl RuntimeClientMessageDescriptor {
 /// One bounded newest-or-older page of derived transcript history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
+#[derive(schemars :: JsonSchema)] // Loaded arrays share immutable owners across published cuts. Mutation detaches
+// the changed array; serialization remains the same bounded transcript page.
 pub struct RuntimeClientTranscriptPage {
     /// The exact native source cut from which bodies and evidence were read.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_cut: Option<crate::durable::observation::ObservationReadCut>,
     /// Deferred bytes remain explicitly recoverable on older historical pages.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub content: Vec<super::cut::ContentBinding>,
+    pub content: crate::observation::metadata::MetadataFragment<Vec<super::cut::ContentBinding>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub collections: Vec<super::cut::CollectionFrontier>,
+    pub collections:
+        crate::observation::metadata::MetadataFragment<Vec<super::cut::CollectionFrontier>>,
     /// Native items whose structural display requires bounded further reading.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub deferred_entries: Vec<super::cut::CheckpointPageItem>,
-
+    pub deferred_entries:
+        crate::observation::metadata::MetadataFragment<Vec<super::cut::CheckpointPageItem>>,
     /// Last native transcript position inherited by this lineage; zero for an empty prefix.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inherited_through: Option<RuntimeClientTranscriptCursor>,
@@ -72,7 +74,9 @@ pub struct RuntimeClientTranscriptPage {
     pub statistics: Option<super::statistics::ConversationStatistics>,
     /// Items in chronological order within this page.
     #[serde(default)]
-    pub entries: Vec<RuntimeClientTranscriptEntry>,
+    pub entries: crate::observation::metadata::MetadataFragment<
+        Vec<std::sync::Arc<RuntimeClientTranscriptEntry>>,
+    >,
     /// The exclusive cursor for the next older page.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<RuntimeClientTranscriptCursor>,
@@ -83,14 +87,14 @@ pub struct RuntimeClientTranscriptEntry {
     /// Exact native Attempt process membership, derived by native owners.
     /// Absence is not permission for a client to infer a process boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub turn_process: Option<super::turn::TurnProcessView>,
+    pub turn_process: Option<crate::observation::turn::TurnProcessView>,
     /// The native Attempt has not yet settled this accepted Assistant candidate.
     /// A client retaining this row outside a refresh must reread it, not freeze absence.
     #[serde(default)]
     pub response_pending: bool,
     /// Exact completed-response evidence, never inferred by clients.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub completed_response: Option<super::turn::CompletedResponseView>,
+    pub completed_response: Option<crate::observation::turn::CompletedResponseView>,
     /// Canonical calls in block order with their native committed results.
     /// A missing result means no committed result, never success or cancellation.
     #[serde(default)]
@@ -143,11 +147,11 @@ pub struct RuntimeClientTranscriptConfigurationApplied {
     pub change: crate::runtime::configuration_commit::ConfigurationChange,
     /// The exact effective instructions the commit installed, read in
     /// bounded ranges through `content_read`.
-    pub instructions: super::content::ContentRef,
+    pub instructions: crate::observation::content::ContentRef,
     /// The JSON catalog of the Tools and Skills the commit affected (before
     /// and after),
     /// read in bounded ranges through `content_read`.
-    pub catalog: super::content::ContentRef,
+    pub catalog: crate::observation::content::ContentRef,
 }
 /// The explicit Runtime Client transcript vocabulary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -155,7 +159,9 @@ pub struct RuntimeClientTranscriptConfigurationApplied {
 #[derive(schemars::JsonSchema)]
 pub enum RuntimeClientTranscriptItem {
     /// Journal-owned terminal execution history, including attempts without messages.
-    AttemptTerminal { turn: super::turn::TurnProcessView },
+    AttemptTerminal {
+        turn: crate::observation::turn::TurnProcessView,
+    },
     /// A user, Assistant, or Tool message body from Pending Inbound or Ledger.
     Message {
         /// The canonical or durably accepted message.
@@ -241,19 +247,18 @@ impl From<RuntimeClientTranscriptCursor> for crate::durable::TranscriptCursor {
 pub(crate) fn transcript_page_view(
     page: crate::durable::TranscriptPage,
 ) -> Result<RuntimeClientTranscriptPage, String> {
-    let entries = page
-        .entries
-        .into_iter()
-        .map(transcript_entry_view)
-        .collect::<Result<Vec<_>, String>>()?;
+    let mut entries = Vec::with_capacity(page.entries.len());
+    for entry in page.entries {
+        entries.push(std::sync::Arc::new(transcript_entry_view(entry)?));
+    }
     Ok(RuntimeClientTranscriptPage {
         source_cut: None,
-        content: Vec::new(),
-        collections: Vec::new(),
-        deferred_entries: Vec::new(),
+        content: Vec::new().into(),
+        collections: Vec::new().into(),
+        deferred_entries: Vec::new().into(),
         inherited_through: Some(page.inherited_through.into()),
         statistics: None,
-        entries,
+        entries: entries.into(),
         next_cursor: page.next_cursor.map(Into::into),
     })
 }
@@ -271,7 +276,7 @@ pub(crate) fn transcript_header_view(
         if let Some(mut display) = header.display {
             display.tool_calls = header.tool_calls;
             let index = result.entries.len();
-            result.entries.push(display);
+            result.entries.push(std::sync::Arc::new(display));
             for mut binding in header.content {
                 if binding
                     .path
@@ -336,7 +341,7 @@ fn transcript_entry_view(
         }
         crate::durable::TranscriptItem::AttemptTerminal { event } => {
             RuntimeClientTranscriptItem::AttemptTerminal {
-                turn: super::turn::terminal_turn(event, entry.cursor.into())?,
+                turn: crate::observation::turn::terminal_turn(event, entry.cursor.into())?,
             }
         }
 
@@ -408,12 +413,12 @@ pub(crate) fn configuration_applied_item(
         return Err("a configuration change belongs to no Attempt".into());
     }
     Ok(RuntimeClientTranscriptConfigurationApplied {
-        instructions: super::content::ContentRef::configuration_instructions(
+        instructions: crate::observation::content::ContentRef::configuration_instructions(
             event.conversation_id.clone(),
             event.sequence,
             change.instructions_bytes,
         ),
-        catalog: super::content::ContentRef::configuration_catalog(
+        catalog: crate::observation::content::ContentRef::configuration_catalog(
             event.conversation_id,
             event.sequence,
             change.catalog_bytes,
@@ -430,7 +435,7 @@ fn transcript_tool_view(tool: crate::durable::TranscriptTool) -> ForegroundToolE
         result_source: None,
         result_metadata_ref: None,
         occurrence: RuntimeClientToolOccurrence {
-            locator: super::content::CanonicalContentLocator::ByMessageId {
+            locator: crate::observation::content::CanonicalContentLocator::ByMessageId {
                 message_id: tool.message_id.clone(),
             },
             block_index: tool.block_index,
@@ -450,11 +455,11 @@ fn transcript_tool_view(tool: crate::durable::TranscriptTool) -> ForegroundToolE
 fn inherited_terminal(
     provenance: crate::durable::reading::TurnReadingProvenance,
     cursor: RuntimeClientTranscriptCursor,
-) -> Result<super::turn::TurnProcessView, String> {
+) -> Result<crate::observation::turn::TurnProcessView, String> {
     if provenance.id.attempt_id.as_str().len() > 512 {
         return Err("inherited turn requires its native owner field source".into());
     }
-    Ok(super::turn::TurnProcessView {
+    Ok(crate::observation::turn::TurnProcessView {
         conversation_id: provenance.id.conversation_id,
         attempt_id: Some(provenance.id.attempt_id),
         attempt_id_source: None,
@@ -593,3 +598,6 @@ impl From<crate::durable::PublicationAuditSummary> for RuntimeClientPublicationS
         }
     }
 }
+
+pub(crate) mod prepared;
+pub(crate) use prepared::{PreparedTranscriptHead, PreparedTranscriptRow};

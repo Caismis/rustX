@@ -1,12 +1,14 @@
 //! Disposable connection-local evidence for the existing canonical validator.
 //! Never an authority: reads, duplicate checks and head publication checks stay
 //! native. A batch owns provisional evidence; only successful COMMIT seats it.
+use super::statements::FixedStatements;
 use super::{
     Arc, AtomicU64, Connection, ConversationStoreError, MessageBlock, MessageId, Mutex, Ordering,
     SurfaceRevision, Transaction, TranscriptCursor, canonical::ledger::head_frontier,
     canonical::ledger::materialize_head, nonnegative, storage,
 };
 use rusqlite::hooks::PreUpdateCase;
+use std::sync::atomic::AtomicBool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Versions {
@@ -18,8 +20,13 @@ impl Versions {
     fn read(connection: &Connection) -> Result<Self, ConversationStoreError> {
         let read = |sql| {
             connection
-                .query_row(sql, [], |row| row.get(0))
-                .map_err(|error| storage(format!("append validation version: {error}")))
+                .query_row_cached(sql, [], |row| row.get(0))
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("append validation version: {error}"),
+                    )
+                })
         };
         Ok(Self {
             data: read("PRAGMA main.data_version")?,
@@ -38,26 +45,43 @@ struct Certificate {
 }
 pub(super) struct Owner {
     epoch: AtomicU64,
+    /// Set once this connection observed a Ledger identity rewrite: an
+    /// identity update, a deletion, or a nested (trigger) insert. The durable
+    /// identity frontier then no longer proves the rows behind it, so every
+    /// later validation on this connection starts from the first row.
+    identity_rewritten: AtomicBool,
     installed_schema: u64,
     identity_columns: Option<[i32; 2]>,
+    surface_columns: Option<[i32; 2]>,
     committed: Mutex<Option<Certificate>>,
 }
 impl Owner {
     pub(super) fn new(connection: &Connection) -> Result<Arc<Self>, ConversationStoreError> {
-        let mut statement = connection.prepare("SELECT cid,name FROM pragma_table_info('message_ledger') WHERE name IN ('position','message_id') ORDER BY name")
-            .map_err(|error| storage(error.to_string()))?;
+        let mut statement = connection.prepare("SELECT cid,name FROM pragma_table_xinfo('message_ledger') WHERE name IN ('position','message_id') ORDER BY name")
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         let columns = statement
             .query_map([], |row| row.get::<_, i32>(0))
-            .map_err(|error| storage(error.to_string()))?
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(error.to_string()))?;
         let identity_columns = columns
             .try_into()
             .map_err(|_| storage("append identity columns unavailable"))?;
+        let mut statement = connection.prepare("SELECT cid FROM pragma_table_xinfo('rustx_store') WHERE name IN ('surface_revision','surface_compaction_generation') ORDER BY name")
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        let surface_columns = statement
+            .query_map([], |row| row.get::<_, i32>(0))
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| storage(error.to_string()))?
+            .try_into()
+            .map_err(|_| storage("Surface head columns unavailable"))?;
         Ok(Arc::new(Self {
             epoch: AtomicU64::new(0),
+            identity_rewritten: AtomicBool::new(false),
             installed_schema: Versions::read(connection)?.main_schema,
             identity_columns: Some(identity_columns),
+            surface_columns: Some(surface_columns),
             committed: Mutex::new(None),
         }))
     }
@@ -65,8 +89,10 @@ impl Owner {
     pub(super) fn uninstalled() -> Arc<Self> {
         Arc::new(Self {
             epoch: AtomicU64::new(0),
+            identity_rewritten: AtomicBool::new(false),
             installed_schema: 0,
             identity_columns: None,
+            surface_columns: None,
             committed: Mutex::new(None),
         })
     }
@@ -108,10 +134,27 @@ impl Owner {
                     }
                 })
             }),
+            (
+                "rustx_store",
+                PreUpdateCase::Update {
+                    old_value_accessor: old,
+                    new_value_accessor: new,
+                },
+            ) => self.surface_columns.is_none_or(|columns| {
+                columns.iter().any(|column| {
+                    match (
+                        old.get_old_column_value(*column),
+                        new.get_new_column_value(*column),
+                    ) {
+                        (Ok(a), Ok(b)) => a != b,
+                        _ => true,
+                    }
+                })
+            }),
             (_, PreUpdateCase::Unknown)
             | (
                 "message_ledger"
-                | "surface_head"
+                | "rustx_store"
                 | "projection_head"
                 | "projection_checkpoints"
                 | "projection_activations",
@@ -119,6 +162,17 @@ impl Owner {
             ) => true,
             _ => false,
         };
+        if invalidates
+            && table == "message_ledger"
+            && match change {
+                PreUpdateCase::Insert(new) => new.get_query_depth() != 0,
+                PreUpdateCase::Update { .. }
+                | PreUpdateCase::Delete(_)
+                | PreUpdateCase::Unknown => true,
+            }
+        {
+            self.identity_rewritten.store(true, Ordering::Release);
+        }
         if invalidates {
             let direct = match change {
                 PreUpdateCase::Delete(old) => old.get_query_depth() == 0,
@@ -160,6 +214,7 @@ impl<'a> Batch<'a> {
             .as_ref()
             .map_or(0, |head| head.activation.activation.0);
         let reusable = self.owner.identity_columns.is_some()
+            && self.owner.surface_columns.is_some()
             && versions.main_schema == self.owner.installed_schema
             && epoch != u64::MAX;
         let count = if let Some(proof) = self.proof.filter(|proof| {
@@ -191,7 +246,13 @@ impl<'a> Batch<'a> {
                     .active_message_ids
                     .len()
             } else {
-                super::canonical::ledger::validate_append_identities(transaction, ledger)?
+                let count = super::canonical::ledger::validate_append_identities(
+                    transaction,
+                    ledger,
+                    self.owner.identity_rewritten.load(Ordering::Acquire),
+                )?;
+                super::canonical::ledger::record_identity_frontier(transaction, ledger, count)?;
+                count
             }
         };
         self.proof = reusable.then_some(Certificate {
@@ -209,12 +270,30 @@ impl<'a> Batch<'a> {
         message: &MessageBlock,
         allowed_pending: Option<&MessageId>,
     ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        self.append_with_capture(transaction, message, allowed_pending, None)
+    }
+    pub(super) fn append_publication(
+        &mut self,
+        transaction: &Transaction<'_>,
+        message: &MessageBlock,
+        header: &mut Option<super::observation::PublicationHeader>,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+        self.append_with_capture(transaction, message, None, Some(header))
+    }
+    fn append_with_capture(
+        &mut self,
+        transaction: &Transaction<'_>,
+        message: &MessageBlock,
+        allowed_pending: Option<&MessageId>,
+        publication_header: Option<&mut Option<super::observation::PublicationHeader>>,
+    ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
         let head = self.head(transaction)?;
         let cursor = super::canonical::ledger::append_message_with_head(
             transaction,
             message,
             allowed_pending,
             head,
+            publication_header,
         )?;
         let epoch = self.owner.epoch.load(Ordering::Acquire);
         // The shared native writer inserts exactly one Ledger identity and

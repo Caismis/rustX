@@ -362,7 +362,8 @@ fn resumed_agent_origin_survives_creation_call_compaction() {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             }),
         ])
         .unwrap();
@@ -1358,7 +1359,7 @@ fn subagent_terminal_provenance_revalidates_the_embedded_subagent_identity() {
             .expect("raw ownership row");
         transaction
             .execute(
-                "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,NULL)",
+                "INSERT INTO lifecycle_state(lifecycle_key,terminal_sequence) VALUES(?1,NULL)",
                 [format!("subagent:{s1}")],
             )
             .expect("raw lifecycle opening");
@@ -1638,7 +1639,7 @@ fn t10_t19_derived_journal_body_failure_preserves_native_terminal_witness() {
             },
         ))
         .unwrap();
-    store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_segments WHEN NEW.source_kind='observation_journal' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='oj' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
     let event = store
         .append_event(envelope(
             &id,
@@ -1788,7 +1789,8 @@ fn issue136_cancellation_phases_survive_durable_reload() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     };
     let before_start = cancelled(

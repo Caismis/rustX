@@ -491,7 +491,8 @@ async fn complete_tool_batch_and_core_owned_boundaries_constrain_every_probe() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     });
     for with_media in [false, true] {

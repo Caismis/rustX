@@ -1,9 +1,11 @@
 //! Read evidence for deferred execution diagnostics at a published native J cut.
 use super::RuntimeClientCursor;
-use super::checkpoint::{CheckpointPage, CheckpointValueChunk, CheckpointValueRepresentation};
 use super::types::RuntimeClientError;
 use crate::durable::ConversationStore;
 use crate::observation::cut::{CheckpointPageItem, CheckpointReadCut};
+use crate::runtime_client::checkpoint::{
+    CheckpointPage, CheckpointValueChunk, CheckpointValueRepresentation,
+};
 
 pub(crate) fn selection(domain: &str) -> Option<(u64, Vec<String>)> {
     let tail = domain.strip_prefix("journal.")?;

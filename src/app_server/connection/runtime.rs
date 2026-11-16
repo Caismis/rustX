@@ -672,7 +672,9 @@ pub(super) fn native_result(
         RuntimeClientResult::ProjectionDetail { detail } => {
             MethodResult::ProjectionDetail { detail }
         }
-        RuntimeClientResult::TracePage { page } => MethodResult::Trace { page },
+        RuntimeClientResult::TracePage { page, refreshed } => {
+            MethodResult::Trace { page, refreshed }
+        }
         RuntimeClientResult::TraceWorkflowLocation { location } => {
             MethodResult::TraceWorkflowLocation { location }
         }
@@ -827,7 +829,7 @@ mod tests {
             read_cut: crate::observation::cut::CheckpointReadCut {
                 canonical_foreground: None,
                 live_publication: None,
-                collection_cuts: std::collections::BTreeMap::new(),
+                collection_cuts: crate::observation::metadata::MetadataFragment::default(),
                 conversation_id: crate::runtime::identity::ConversationId::new(
                     "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                 ),
@@ -835,7 +837,7 @@ mod tests {
                 revision: 0,
                 through: 0,
                 source_cut: None,
-                domain_revisions: std::collections::BTreeMap::default(),
+                domain_revisions: crate::observation::metadata::MetadataFragment::default(),
             },
             domain: "jobs".into(),
             total: 67,

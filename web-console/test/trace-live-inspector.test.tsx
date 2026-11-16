@@ -1,3 +1,4 @@
+import {traceRefreshed} from './fixture';
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
@@ -51,7 +52,7 @@ it.each(['root', 'child'] as const)('%s inspector stays mounted across live upda
     load = id => server.client.loadTraceDetail('A', id);
     pulse = () => server.update('A', { ...snapshot(), trace: { records: [record], next_cursor: null } });
   } else {
-    server.handlers.set('agent/trace', () => ({ type: 'trace', page: { read_cut: { ...base, revision: String(revision) }, records: [record], next_cursor: null } }));
+    server.handlers.set('agent/trace', request => ({refreshed:traceRefreshed(request), type: 'trace', page: { read_cut: { ...base, revision: String(revision) }, records: [record], next_cursor: null } }));
     const reader = new AgentTraceReader(server.client, 'A', server.client.getSnapshot().views.A.attachmentObservation!, { agent_id: 'child', activation_id: 'child-activation', child_conversation_id: 'child', state: 'active' });
     await reader.refresh(); reader.select(record.id);
     read = reader.snapshot; subscribe = reader.subscribe; load = reader.detail; pulse = reader.refresh;

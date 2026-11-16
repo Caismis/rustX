@@ -1,0 +1,71 @@
+{
+  "origin": "#484 7d659c06 remaining-pi-gap.tar.xz; JSON whitespace compacted only, values checked equal",
+  "files": [
+    {
+      "path": "analyze.py",
+      "original_sha256": "c8eae73401cfe2a381f86536a809972712865a29d6901bb282647ff4d9e59e40",
+      "plain_sha256": "c8eae73401cfe2a381f86536a809972712865a29d6901bb282647ff4d9e59e40",
+      "bytes": 5135
+    },
+    {
+      "path": "identity.json",
+      "original_sha256": "1d9b67c181af2c45a02878bc0b02a50b2e3e5cfc50d32893a20c865ba61c93ac",
+      "plain_sha256": "d2ff276cb7917ccc8c34f35583718388383cba85a5795a46885ddc0b1fd6db13",
+      "bytes": 444
+    },
+    {
+      "path": "summary.json",
+      "original_sha256": "36efd2a9b56f31e1e5b994b994cbe8fec566978bd665d60bdacf08dee60d8954",
+      "plain_sha256": "317a6333e088a07db7f9b88164ecaf48aac9013331706039b912947dd1c780ec",
+      "bytes": 21561
+    },
+    {
+      "path": "complete-rust/before_measured_turns-database.json",
+      "original_sha256": "b5cb5bbc253d022c97f6c18a7347f94bf7f7ad91d4ee9d5461e38e9d7da1400c",
+      "plain_sha256": "9404f1ee4b7e3b852684e93a24f9988d06c27f507cf98346756b31ee3d2b066f",
+      "bytes": 114284
+    },
+    {
+      "path": "complete-rust/after_turns-database.json",
+      "original_sha256": "b2361849473b83f34b169b40ad7ac924b6ff4eb508684729253d2b92b436af7c",
+      "plain_sha256": "494966f7a6f0d946b1dc7953bb55c4091eb847a5052682d7f2a1528d421fc538",
+      "bytes": 529053
+    },
+    {
+      "path": "complete-rust/phases.json",
+      "original_sha256": "04e84718246d3194c295243c78a2c38b15e4a8d50de9132e21f96d9c94760cf7",
+      "plain_sha256": "381b9ddc7dc02695a4142d2c0be1aa9ce7492e239944c788a817155a78859080",
+      "bytes": 679
+    },
+    {
+      "path": "complete-pi/before_measured_turns-database.json",
+      "original_sha256": "ffc98f1dce55eb528fbed0041676deaa4b988926ef1bb15f1087f15059913d4a",
+      "plain_sha256": "d4879b914c5fce30d70226c3c0a05fde9ececc3ea8c0eccfe1a6fb06363b9645",
+      "bytes": 4065
+    },
+    {
+      "path": "complete-pi/after_turns-database.json",
+      "original_sha256": "6063a92d53924dee09c39951a5cbcf7d78b6e1927c04a5351bcc7d1cd509a2de",
+      "plain_sha256": "883da979ec46b522e8c6df0484b2568ad4ed6740e6e00dcedb52a568db613eff",
+      "bytes": 4348
+    },
+    {
+      "path": "complete-pi/phases.json",
+      "original_sha256": "5ba34fbc4f5aaf96a42f4c40281dff72f73fd8ebe7574318ee2ca84974354aeb",
+      "plain_sha256": "1235b5c320b020a2d1390e4428fe88a219c2891cbb8040bf3ed08b493ffeb92f",
+      "bytes": 562
+    },
+    {
+      "path": "complete-pi/pi-sql-before_measured_turns.json",
+      "original_sha256": "09421af3c1a0f6a38f732c50a577a5c08564962e0cab71dc134872288b03e9e1",
+      "plain_sha256": "3acc8dde13c7a7c5de2bce979c6abeece44da5782351a22a6f0260c60d619e02",
+      "bytes": 12753
+    },
+    {
+      "path": "complete-pi/pi-sql-after_turns.json",
+      "original_sha256": "1f95b9e7b7400357522adb9a48850ab5f633643d6e2be8640f283846b87b50f9",
+      "plain_sha256": "fce142afc1fc75c72e5dc98b645ac016f1aac2b93664584bd4d790a88c1b2ed8",
+      "bytes": 12783
+    }
+  ]
+}
