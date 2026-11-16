@@ -45,10 +45,7 @@ pub fn evaluate_bash_readonly_policy(command: &BashCommandInvocation) -> Option<
             return Some(false);
         }
     }
-    if !is_argv_allowed_by_policy(&argv, policy, &argv[0], 1) {
-        return Some(false);
-    }
-    Some(true)
+    Some(is_argv_allowed_by_policy(&argv, policy, &argv[0], 1))
 }
 
 #[must_use]

@@ -116,7 +116,7 @@ mod tests {
             let document = workflow(&node);
             assert!(validator.is_valid(&document));
             let parsed: WorkflowDefinition =
-                serde_yaml::from_str(&serde_yaml::to_string(&document).unwrap()).unwrap();
+                serde_yaml_ng::from_str(&serde_yaml_ng::to_string(&document).unwrap()).unwrap();
             let WorkflowNodeDefinition::Tool {
                 selector: exact, ..
             } = &parsed.block.nodes["work"]
@@ -136,8 +136,8 @@ mod tests {
                     json!({"origin":"all","source_id":"github"});
                 assert!(!validator.is_valid(&invalid), "{pointer}");
                 assert!(
-                    serde_yaml::from_str::<WorkflowDefinition>(
-                        &serde_yaml::to_string(&invalid).unwrap()
+                    serde_yaml_ng::from_str::<WorkflowDefinition>(
+                        &serde_yaml_ng::to_string(&invalid).unwrap()
                     )
                     .is_err(),
                     "{pointer}"

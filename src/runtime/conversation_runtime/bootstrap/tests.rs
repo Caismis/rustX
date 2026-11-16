@@ -1385,7 +1385,10 @@ async fn a_runtime_claim_winning_first_refuses_the_later_standalone_commit() {
         subagents.is_pristine(),
         "the refused start published no record"
     );
-    assert!(subagents.all_snapshots().is_empty());
+    assert_eq!(
+        subagents.all_snapshots(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
     assert!(
         store
             .read_events(None, 64)
@@ -1774,7 +1777,10 @@ async fn mcp_settlement_failure_wins_deterministic_activation_race() {
         runtime.submit_inbound(text_content("must be fenced")),
         Err(InboundAdmissionError::Shutdown)
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
 
     let shutdown = runtime.shutdown().await;
     let Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement { detail }) =
@@ -1861,7 +1867,10 @@ async fn mcp_settlement_failure_fences_after_activation_wins() {
         runtime.submit_inbound(text_content("must be fenced")),
         Err(InboundAdmissionError::Shutdown)
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
 
     let shutdown = runtime.shutdown().await;
     let Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement { detail }) =
@@ -1877,7 +1886,10 @@ async fn default_system_prompt_is_frozen_without_optional_instructions() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (runtime, model) =
         headless_runtime(&dir, vec![one_turn_script(), one_turn_script()], None, None).await;
-    assert!(runtime.coordinator_ledger().unwrap().is_empty());
+    assert_eq!(
+        runtime.coordinator_ledger().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     runtime.activate();
     for attempt in 0..2 {
         runtime.submit_inbound(text_content("hello")).unwrap();
@@ -3351,11 +3363,14 @@ async fn finite_workflow_committed_physical_proof_survives_runtime_reopen() {
     assert_eq!(snapshot.state, SubagentState::Succeeded);
     assert!(snapshot.is_settled());
     assert_eq!(registry.with_goal_idle(|| true), Some(true));
-    assert!(
+    assert_eq!(
         registry
             .list_agents(crate::runtime::subagent::MAX_AGENT_LIST_LIMIT)
-            .agents
-            .is_empty()
+            .agents,
+        [] as [(
+            crate::runtime::subagent::AgentSnapshot,
+            crate::runtime::subagent::SubagentSnapshot
+        ); 0]
     );
     assert!(matches!(
         registry.wait_agent(&accepted.child_agent_id).await,
@@ -3449,17 +3464,23 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
             registry.unproven_settlements(),
             std::slice::from_ref(&accepted.subagent_id)
         );
-        assert!(
+        assert_eq!(
             registry
                 .list_agents(crate::runtime::subagent::MAX_AGENT_LIST_LIMIT)
-                .agents
-                .is_empty()
+                .agents,
+            [] as [(
+                crate::runtime::subagent::AgentSnapshot,
+                crate::runtime::subagent::SubagentSnapshot
+            ); 0]
         );
         assert!(matches!(
             registry.wait_agent(&accepted.child_agent_id).await,
             Err(AgentControlError::Unknown(_))
         ));
-        assert!(model.requests().is_empty());
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
         let drained = Arc::new(tokio::sync::Notify::new());
         *reopened.inner.probe.lock().unwrap() = Some(CoordinatorProbe {
             drain_linearization: Some(drained.clone()),
@@ -3523,7 +3544,10 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
             1,
             "recovery never reattaches or replays the finite activation"
         );
-        assert!(model.requests().is_empty());
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
         drop(reopened);
         drop(registry);
         tokio::time::resume();

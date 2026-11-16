@@ -671,7 +671,10 @@ async fn a_created_task_does_not_settle_the_invocation() {
     }
     assert_eq!(barrier.arrivals(), vec![harness.task_id(TASK_SIMPLE_TOOL)]);
     assert_eq!(harness.observed_method("tools/call").len(), 1);
-    assert!(harness.observed_method(GET_TASK).is_empty());
+    assert_eq!(
+        harness.observed_method(GET_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
     barrier.release();
     let settled = call.await;
     assert!(
@@ -1018,7 +1021,10 @@ async fn a_contradictory_input_required_task_fails_deterministically() {
         "the diagnostic names the contradiction: {detail}"
     );
     assert_eq!(harness.coordinator.pending_count(), 0);
-    assert!(harness.audit.events().is_empty());
+    assert_eq!(
+        harness.audit.events(),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
     assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
     harness.shutdown().await;
 }
@@ -1046,8 +1052,14 @@ async fn task_sampling_is_refused_without_publishing_anything() {
         "the refusal names the unsupported kind: {detail}"
     );
     assert_eq!(harness.coordinator.pending_count(), 0);
-    assert!(harness.audit.events().is_empty());
-    assert!(harness.observed_method(UPDATE_TASK).is_empty());
+    assert_eq!(
+        harness.audit.events(),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
+    assert_eq!(
+        harness.observed_method(UPDATE_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
     assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
     assert!(detail.contains("does not prove the remote task stopped"));
     harness.shutdown().await;
@@ -1146,7 +1158,10 @@ async fn cancellation_before_the_update_frontier_dispatches_no_update() {
         result = &mut call => panic!("the call settled at the barrier: {result:?}"),
         () = barrier.wait_arrived(1) => {}
     }
-    assert!(harness.observed_method(UPDATE_TASK).is_empty());
+    assert_eq!(
+        harness.observed_method(UPDATE_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
     assert!(
         harness
             .owner
@@ -1179,7 +1194,10 @@ async fn cancellation_before_the_update_frontier_dispatches_no_update() {
             .is_err(),
         "a late answer finds no pending interaction"
     );
-    assert!(harness.observed_method(UPDATE_TASK).is_empty());
+    assert_eq!(
+        harness.observed_method(UPDATE_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
     harness.shutdown().await;
 }
 
@@ -1382,7 +1400,10 @@ async fn a_background_execution_drives_the_task_through_its_existing_owner() {
         );
     }
     assert_eq!(harness.coordinator.pending_count(), 0);
-    assert!(harness.audit.events().is_empty());
+    assert_eq!(
+        harness.audit.events(),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
     harness.shutdown().await;
 }
 
@@ -1408,8 +1429,14 @@ async fn a_task_asking_a_detached_execution_for_a_human_fails_honestly() {
         "the refusal is explicit about ownership: {detail}"
     );
     assert_eq!(harness.coordinator.pending_count(), 0);
-    assert!(harness.audit.events().is_empty());
-    assert!(harness.observed_method(UPDATE_TASK).is_empty());
+    assert_eq!(
+        harness.audit.events(),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
+    assert_eq!(
+        harness.observed_method(UPDATE_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
     // The remote task is still the server's, so rustX asks it to stop and
     // reports an unknown outcome rather than a proven failure of the effect.
     assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
@@ -1722,9 +1749,18 @@ async fn correlated_completion_after_frontier_outranks_cancellation() {
     assert_eq!(text(&settled), "task simple done after 3 polls");
     assert_eq!(harness.observed_method("tools/call").len(), 1);
     assert_eq!(harness.observed_method(GET_TASK).len(), 3);
-    assert!(harness.observed_method(UPDATE_TASK).is_empty());
-    assert!(harness.observed_method(CANCEL_TASK).is_empty());
-    assert!(progress.reported().is_empty());
+    assert_eq!(
+        harness.observed_method(UPDATE_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
+    assert_eq!(
+        harness.observed_method(CANCEL_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
+    assert_eq!(
+        progress.reported(),
+        [] as [crate::tools::types::ToolProgress; 0]
+    );
     harness.shutdown().await;
 }
 
@@ -1749,8 +1785,14 @@ async fn invalid_creation_metadata_still_cancels_the_trusted_task() {
     assert!(detail.contains("status message"));
     assert!(detail.contains("does not prove the remote task stopped"));
     assert_eq!(harness.observed_method(CANCEL_TASK).len(), 1);
-    assert!(harness.observed_method(GET_TASK).is_empty());
-    assert!(harness.observed_method(UPDATE_TASK).is_empty());
+    assert_eq!(
+        harness.observed_method(GET_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
+    assert_eq!(
+        harness.observed_method(UPDATE_TASK),
+        [] as [crate::tools::mcp::fixture::tasks::TaskObservation; 0]
+    );
     assert!(harness.runtime.unusable_reason().is_none());
     harness.shutdown().await;
 }

@@ -115,7 +115,7 @@ async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_siblin
         ]
     );
     assert_eq!(snapshot.tool_registry().model_definitions().len(), 3);
-    assert!(snapshot.available_tools().tools().is_empty());
+    assert_eq!(snapshot.available_tools().tools(), []);
     assert_eq!(
         snapshot.resource_sources(),
         &child.resolved.resource_sources
@@ -144,11 +144,9 @@ async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_siblin
     .await
     .expect("a sibling sharing the workspace still owns an independent profile");
     let sibling_snapshot = sibling_core.capability().current_snapshot();
-    assert!(
-        sibling_snapshot
-            .tool_registry()
-            .model_definitions()
-            .is_empty()
+    assert_eq!(
+        sibling_snapshot.tool_registry().model_definitions(),
+        [] as [crate::tools::types::ModelToolDefinition; 0]
     );
     assert!(sibling_snapshot.resource_sources().is_empty());
     assert!(sibling_snapshot.mcp_servers().is_empty());

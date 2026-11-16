@@ -1979,7 +1979,7 @@ mod tests {
         let PreflightOutcome::Rejected { error, .. } = outcome else {
             panic!("expected rejection");
         };
-        assert!(!error.is_empty());
+        assert_ne!(error, "");
         let missing = registry
             .preflight(&call("tool-read", "read", json!({})))
             .expect("preflight outcome");

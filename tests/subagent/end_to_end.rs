@@ -1041,7 +1041,7 @@ async fn subagent_process_stack(alias_root: bool) {
     assert_eq!(detail_page.read_cut.conversation_id, child_conversation_id);
     let messages =
         original_child_request_messages(&mut reopened, &agent_id, &detail_page, &request_id).await;
-    assert!(!messages.is_empty());
+    assert_ne!(messages, [] as [serde_json::Value; 0]);
     let mut task_in_original_messages = false;
     for message in &messages {
         let role: rustx::observation::trace::TraceMessageRole =
@@ -1076,7 +1076,10 @@ async fn subagent_process_stack(alias_root: bool) {
                 .iter()
                 .all(|binding| { binding.content_ref.conversation_id == child_conversation_id })
         );
-        assert!(!collections.is_empty());
+        assert_ne!(
+            collections,
+            [] as [rustx::observation::cut::CollectionFrontier; 0]
+        );
         assert!(
             collections
                 .iter()
@@ -1372,7 +1375,7 @@ async fn running_child_inspection_is_execution_independent() {
                 .iter()
                 .filter(|record| record.kind == rustx::observation::trace::TraceKind::Request)
                 .collect();
-            assert!(!requests.is_empty());
+            assert_ne!(requests, [] as [&rustx::observation::trace::TraceRecord; 0]);
             assert_eq!(
                 requests.last().unwrap().state,
                 rustx::observation::trace::TraceState::Running
@@ -1954,7 +1957,10 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
         agent.activation_state,
         rustx::runtime::subagent::SubagentState::Interrupted
     );
-    assert!(direct_subagent_pids(repeated.child.id().expect("repeated pid")).is_empty());
+    assert_eq!(
+        direct_subagent_pids(repeated.child.id().expect("repeated pid")),
+        [] as [u32; 0]
+    );
     assert_recovered_shutdown(repeated.shutdown().await, kill_child_without_drain);
 }
 

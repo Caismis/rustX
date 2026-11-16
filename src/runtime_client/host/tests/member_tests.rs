@@ -193,7 +193,10 @@ fn copied_member_host(
     {
         let destination = crate::durable::SqliteConversationStore::open(id.clone(), &path).unwrap();
         destination.initialize_lineage(&seed).unwrap();
-        assert!(destination.read_events(None, 32).unwrap().events.is_empty());
+        assert_eq!(
+            destination.read_events(None, 32).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
     }
     let destination = Arc::new(crate::durable::SqliteConversationStore::open(id, &path).unwrap());
     let host = RuntimeClientHost::new_durable(destination.clone(), None).unwrap();
@@ -259,7 +262,10 @@ async fn native_member_fixture() -> NativeMemberFixture {
                 .is_none()
         );
         assert!(row.completed_response.is_none());
-        assert!(!row.content.is_empty());
+        assert_ne!(
+            row.content,
+            [] as [crate::observation::cut::ContentBinding; 0]
+        );
     }
 
     NativeMemberFixture {
@@ -323,13 +329,19 @@ async fn t08_t12_t14_t19_host_giant_members_keep_exact_native_and_inherited_proc
         .read_events(Some(terminal.sequence - 1), 1)
         .unwrap();
     assert_eq!(original.events[0].event, terminal.event);
-    assert!(case.adapter.requests().is_empty());
+    assert_eq!(
+        case.adapter.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     let (_directory, inherited, destination) = copied_member_host(case.store.as_ref());
     assert_ne!(destination.conversation_id(), case.store.conversation_id());
     let copied = inherited.checkpoint().unwrap();
     assert_completed_member_head(&copied, case.store.conversation_id(), &case.attempt);
     assert_eq!(copied.read_cut.through, 0);
-    assert!(destination.read_events(None, 32).unwrap().events.is_empty());
+    assert_eq!(
+        destination.read_events(None, 32).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     assert_eq!(inherited.checkpoint().unwrap(), copied);
     case.fixture.runtime.shutdown().await.unwrap();
 }

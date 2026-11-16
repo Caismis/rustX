@@ -3,7 +3,7 @@
 //!
 //! [`RuntimeClientHost`] is the native projection/control owner reused by App Server. It
 //! observes and controls the
-//! [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime)
+//! [`ConversationRuntime`]
 //! of the same conversation; it does **not** own the conversation runtime:
 //!
 //! ```text
@@ -61,7 +61,7 @@
 //! Native owners deliver complete same-commit receipts and immutable actor
 //! sources through the installed CPU publication sink. The runtime-owned
 //! observation fan-out retains
-//! [`PendingObservations`](crate::runtime::observation::PendingObservations)
+//! `PendingObservations`
 //! for indexed journal readiness and finite disposable activity. Its bootstrap
 //! handshake runs over an inert runtime and captures every subsystem seam at
 //! one native cut. The initial seed publishes nothing and allocates no cursor.
@@ -112,7 +112,7 @@
 //!
 //! # Module structure
 //!
-//! [`ClientInner`] stays the one host state owner; its inherent implementation
+//! `ClientInner` stays the one host state owner; its inherent implementation
 //! is grouped by interface. Children own no lock, task or cancellation authority.
 //!
 //! - lifecycle: `construction` (host construction), `bootstrap` and
@@ -890,7 +890,6 @@ impl RuntimeClientHost {
     }
 
     #[cfg(test)]
-    #[allow(dead_code)] // used by the race regression tests
     pub(crate) fn has_current_attempt(&self) -> bool {
         self.inner
             .runtime

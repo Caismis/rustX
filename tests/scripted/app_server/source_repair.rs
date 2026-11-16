@@ -193,7 +193,7 @@ async fn sequenced_repair_notice(
             NotificationMethod::ConfigurationChanged { application } => {
                 // Application scopes are Session or source application keys,
                 // never repair facts.
-                assert!(!application.scope.is_empty());
+                assert_ne!(application.scope, "");
             }
             _ => {}
         }
@@ -1299,7 +1299,16 @@ async fn readmission_after_interest_eviction(ledger_forgets: bool) {
         assert_eq!(owed(&a), [(w0.clone(), None, current)], "{ledger_forgets}");
         assert!(current >= withdrawn);
         sources(&a, 101, &w0).await;
-        assert!(owed(&a).is_empty());
+        assert_eq!(
+            owed(&a),
+            [] as [(
+                crate::local_runtime::configuration::settings::SourceTarget,
+                std::option::Option<
+                    crate::local_runtime::configuration::repair::ConfigRepairReceipt,
+                >,
+                u64
+            ); 0]
+        );
         f.close().await;
     })
     .await;
@@ -1337,11 +1346,29 @@ async fn empty_levels_at_sequence_zero_are_delivered_once() {
         );
         for id in 2..4 {
             sources(&connection, id, &target).await;
-            assert!(owed(&connection).is_empty());
+            assert_eq!(
+                owed(&connection),
+                [] as [(
+                    crate::local_runtime::configuration::settings::SourceTarget,
+                    std::option::Option<
+                        crate::local_runtime::configuration::repair::ConfigRepairReceipt,
+                    >,
+                    u64
+                ); 0]
+            );
         }
         let receipt = commit_repair(&f, &target);
         assert_eq!(owed(&connection), [(target.clone(), Some(receipt), 1)]);
-        assert!(owed(&connection).is_empty());
+        assert_eq!(
+            owed(&connection),
+            [] as [(
+                crate::local_runtime::configuration::settings::SourceTarget,
+                std::option::Option<
+                    crate::local_runtime::configuration::repair::ConfigRepairReceipt,
+                >,
+                u64
+            ); 0]
+        );
         f.close().await;
     })
     .await;
@@ -1597,11 +1624,29 @@ async fn a_manual_repair_after_ledger_eviction_never_restores_the_forgotten_rece
         let view = read.workspace.unwrap();
         assert!(view.diagnostic.is_none() && view.authored.is_some());
         assert!(read.prospective_diagnostic.is_none(), "W0 is valid now");
-        assert!(owed(&a).is_empty());
+        assert_eq!(
+            owed(&a),
+            [] as [(
+                crate::local_runtime::configuration::settings::SourceTarget,
+                std::option::Option<
+                    crate::local_runtime::configuration::repair::ConfigRepairReceipt,
+                >,
+                u64
+            ); 0]
+        );
         // Re-addressing is access, not admission: nothing is owed.
         let reread = sources(&a, 2, &w0).await;
         assert!(a.observes_repairs_of(&w0));
-        assert!(owed(&a).is_empty());
+        assert_eq!(
+            owed(&a),
+            [] as [(
+                crate::local_runtime::configuration::settings::SourceTarget,
+                std::option::Option<
+                    crate::local_runtime::configuration::repair::ConfigRepairReceipt,
+                >,
+                u64
+            ); 0]
+        );
         assert!(reread.workspace_repair.is_none());
         assert_eq!(reread.repair_sequence, forgotten);
         assert!(
@@ -1631,7 +1676,16 @@ async fn a_receipt_recorded_after_eviction_supersedes_the_forgotten_one() {
         assert_ne!(r1.id, r0.id);
         assert!(delivered < forgotten && forgotten < recorded);
         assert_eq!(owed(&a), [(w0.clone(), Some(r1), recorded)]);
-        assert!(owed(&a).is_empty());
+        assert_eq!(
+            owed(&a),
+            [] as [(
+                crate::local_runtime::configuration::settings::SourceTarget,
+                std::option::Option<
+                    crate::local_runtime::configuration::repair::ConfigRepairReceipt,
+                >,
+                u64
+            ); 0]
+        );
         f.close().await;
     })
     .await;
@@ -1801,7 +1855,16 @@ async fn a_reader_parked_across_ledger_eviction_never_loses_the_latest_level() {
         });
         assert_eq!(r1.0, w0);
         assert!(r1.1.is_some() && r1.2 > forgotten);
-        assert!(owed(&a).is_empty());
+        assert_eq!(
+            owed(&a),
+            [] as [(
+                crate::local_runtime::configuration::settings::SourceTarget,
+                std::option::Option<
+                    crate::local_runtime::configuration::repair::ConfigRepairReceipt,
+                >,
+                u64
+            ); 0]
+        );
         // 2. The forgetting recording and R2 both before the reader runs.
         let more = more_workspaces(&f, "again", 64, "[agent\nlegacy = 1\n");
         let (last, first) = more.split_last().unwrap();

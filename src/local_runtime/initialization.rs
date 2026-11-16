@@ -302,7 +302,7 @@ mod tests {
                 file.write_all(bytes)
             },
         );
-        assert!(result.written.is_empty());
+        assert_eq!(result.written, [] as [std::path::PathBuf; 0]);
         assert_eq!(result.failed, Some(root.path().join("rustx.toml")));
         assert!(!root.path().join("rustx.toml").exists());
         assert_eq!(std::fs::read(existing).unwrap(), b"existing user content");
@@ -524,7 +524,7 @@ mod tests {
         assert!(!workspace.join("rustx.toml").exists());
         assert!(!host.state_directory.exists());
         let repeated = initialize(&host, &documents);
-        assert!(repeated.written.is_empty());
+        assert_eq!(repeated.written, [] as [std::path::PathBuf; 0]);
         assert_eq!(
             repeated.conflicts,
             [host.config_directory.join("rustx.toml")]
@@ -544,7 +544,7 @@ mod tests {
         let result = publish(root.path(), &[b"configuration".to_vec()], |_, _| {
             panic!("preflight must stop publication")
         });
-        assert!(result.written.is_empty());
+        assert_eq!(result.written, [] as [std::path::PathBuf; 0]);
         assert!(!root.path().join("models.toml").exists());
         assert_eq!(
             std::fs::read_to_string(root.path().join("rustx.toml")).unwrap(),
@@ -578,7 +578,7 @@ mod tests {
                 .unwrap();
             release.send(()).unwrap();
             let result = writer.join().unwrap();
-            assert!(result.written.is_empty());
+            assert_eq!(result.written, [] as [std::path::PathBuf; 0]);
             assert_eq!(result.failed, Some(target.clone()));
             assert_eq!(result.conflicts.as_slice(), std::slice::from_ref(&target));
             assert_eq!(std::fs::read(target).unwrap(), b"racing creator");
@@ -595,7 +595,7 @@ mod tests {
                 Ok(())
             }
         });
-        assert!(result.written.is_empty());
+        assert_eq!(result.written, [] as [std::path::PathBuf; 0]);
         assert!(!root.path().join("rustx.toml").exists());
         assert!(result.failed.is_some());
         assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 1);

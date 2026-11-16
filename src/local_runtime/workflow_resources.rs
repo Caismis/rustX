@@ -150,7 +150,7 @@ pub(super) fn parse_source(
         failure.inspection.category = Some("workflow_file");
         return Err(failure);
     }
-    let document: WorkflowFileDocument = serde_path_to_error::deserialize(serde_yaml::Deserializer::from_slice(bytes)).map_err(
+    let document: WorkflowFileDocument = serde_path_to_error::deserialize(serde_yaml_ng::Deserializer::from_slice(bytes)).map_err(
         |error| {
             let mut failure = RuntimeResourceLoadError::new(format!(
                 "cannot deserialize discovered workflow {id} at {}: {error}",
@@ -185,7 +185,6 @@ pub(super) fn parse_source(
 
 /// Compile one parsed definition under its filename identity, with the
 /// discovery diagnostic contract.
-#[allow(dead_code)] // retained for direct definition compilation callers
 pub(super) fn compile_definition(
     id: &WorkflowId,
     path: &Path,

@@ -556,7 +556,13 @@ async fn proactive_generation_and_ready_reconcile_after_real_process_death() {
                 .committed
         );
         let actual = auxiliary_state(&store, &before.operation_id);
-        assert!(!actual.is_empty());
+        assert_ne!(
+            actual,
+            [] as [(
+                rustx::model::AuxiliaryCallAudit,
+                Vec<rustx::model::AuxiliaryRequestAudit>
+            ); 0]
+        );
         if case == "ready" {
             assert!(actual.iter().all(|(call, requests)| call.outcome
                 == Some(AuxiliaryCallOutcome::Completed)

@@ -74,7 +74,7 @@
 //! `ConversationRuntime` only while its background plane is **pristine**,
 //! and the claim shares the one registry synchronization boundary with
 //! `commit_dispatch_owned` (see
-//! [`ConversationBackgroundRegistry::claim_conversation_runtime_inactive`]):
+//! `ConversationBackgroundRegistry::claim_conversation_runtime_inactive`):
 //!
 //! ```text
 //! standalone ConversationToolRuntime
@@ -2414,7 +2414,6 @@ impl ConversationBackgroundRegistry {
     /// channel cannot close while this registry owns its sender. The returned
     /// waiter retains only read state and its exact identity, not executor
     /// resources or the durable mailbox; sender loss reports abandoned publication.
-    #[must_use]
     pub fn wait_until_terminal(
         &self,
         execution_id: &ToolExecutionId,
@@ -3458,7 +3457,10 @@ mod tests {
 
         // A zero bound still reports the whole matching population.
         let none = plane.registry.listing(false, 0);
-        assert!(none.snapshots.is_empty());
+        assert_eq!(
+            none.snapshots,
+            [] as [crate::tools::background::BackgroundExecutionSnapshot; 0]
+        );
         assert_eq!(none.matched, 9);
     }
 
@@ -4026,7 +4028,10 @@ mod tests {
             }
         );
         lifecycle.wait_for_no_admissions().await;
-        assert!(fixture.registry.all_snapshots().is_empty());
+        assert_eq!(
+            fixture.registry.all_snapshots(),
+            [] as [crate::tools::background::BackgroundExecutionSnapshot; 0]
+        );
         assert!(
             !*started.borrow(),
             "the runner never crossed its start gate"
@@ -4962,7 +4967,10 @@ mod tests {
     async fn the_live_output_file_exists_from_prepare_and_rolls_back_cleanly() {
         let fixture = registry("conv_fbd950ff-9626-79cc-af4c-2c99c9542f16");
         let executor: Arc<dyn ToolExecutor> = Arc::new(InstantExecutor(success()));
-        assert!(fixture.registry.all_snapshots().is_empty());
+        assert_eq!(
+            fixture.registry.all_snapshots(),
+            [] as [crate::tools::background::BackgroundExecutionSnapshot; 0]
+        );
         let prepared = prepare(&fixture, &executor);
         let first_id = prepared.execution_id.clone();
         let output_path = fixture

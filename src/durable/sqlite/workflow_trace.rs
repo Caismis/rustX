@@ -906,7 +906,10 @@ mod workflow_tests {
             WorkflowId::parse("start_only_flow").unwrap()
         );
         assert_eq!(nodes.total, 0);
-        assert!(nodes.nodes.is_empty());
+        assert_eq!(
+            nodes.nodes,
+            [] as [crate::durable::observation::WorkflowTraceNode; 0]
+        );
         assert!(nodes.next_offset.is_none());
     }
 

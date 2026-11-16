@@ -534,13 +534,9 @@ async fn structured_preflight_rejects_oversized_prepared_context_and_modified_pr
             ContextErrorKind::AuxiliaryNotStarted
         );
         assert!(adapter.requests.lock().unwrap().is_empty());
-        assert!(
-            fixture
-                .store
-                .read_events(None, 32)
-                .unwrap()
-                .events
-                .is_empty()
+        assert_eq!(
+            fixture.store.read_events(None, 32).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
         );
     }
 }
@@ -627,5 +623,8 @@ fn assert_structured_completed(store: &SqliteConversationStore, call_id: &Auxili
     );
     assert_eq!(requests[0].usage, Some(usage(7)));
     assert_eq!(store.read_events(None, 32).unwrap().events.len(), 4);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 }

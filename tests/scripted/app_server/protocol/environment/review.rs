@@ -114,7 +114,7 @@ pub(crate) async fn terminal_signals() {
         let worker = connection.clone();
         let mut command =
             tokio::spawn(async move { call(&worker, 3, Method::CommandExec(params)).await });
-        connection.command_admitted_for_test(id).await;
+        admit_or_fail(&connection, id, &mut command).await;
         input(&connection, id, b"READY\n").await;
         signal_marker(&connection, id, b"1\tREADY", &mut command).await;
         input(&connection, id, &[signal]).await;
@@ -147,7 +147,10 @@ pub(crate) async fn terminal_signals() {
     assert_eq!(result.status, ExecStatus::ProcessControlFailed);
     assert_eq!(result.exit_code, None);
     connection.close();
-    assert!(bounded(fixture.host.drain()).await.is_empty());
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
 }
 
 pub(crate) async fn output_after_cap() {
@@ -191,7 +194,10 @@ pub(crate) async fn output_after_cap() {
         assert!(result.stdout_truncated);
     }
     connection.close();
-    assert!(bounded(fixture.host.drain()).await.is_empty());
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
 }
 
 pub(crate) async fn watch_recheck() {
@@ -305,7 +311,7 @@ pub(crate) async fn watch_recheck() {
         std::fs::write(&next, b"still observed").unwrap();
     })
     .await;
-    assert!(change.changed_paths.is_empty());
+    assert_eq!(change.changed_paths, [] as [std::path::PathBuf; 0]);
     release.send(()).unwrap();
     bounded(lock).await.unwrap().unwrap();
     let MethodResult::FileChunk { chunk } = call(
@@ -367,7 +373,10 @@ pub(crate) async fn watch_recheck() {
     )
     .await;
     connection.close();
-    assert!(bounded(fixture.host.drain()).await.is_empty());
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
     let mut settled = Box::pin(fixture.host.settle_file_observers());
     assert!(
         settled.as_mut().now_or_never().is_none(),
@@ -467,8 +476,7 @@ pub(crate) async fn catalog_credentials() {
                 };
                 let transport = if let Some(header) = header {
                     let extra = option
-                        .map(|value| format!(", \"X-Option\" = {value:?}"))
-                        .unwrap_or_default();
+                        .map_or_else(String::new, |value| format!(", \"X-Option\" = {value:?}"));
                     let mut transport = format!(
                         "url = {endpoint:?}\n{} = {{ {header:?} = {:?}{} }}\n",
                         if reference {
@@ -579,7 +587,10 @@ pub(crate) async fn catalog_credentials() {
                 }
                 assert_eq!(fixture.manager.diagnostics().loaded, 0);
                 connection.close();
-                assert!(bounded(fixture.host.drain()).await.is_empty());
+                assert_eq!(
+                    bounded(fixture.host.drain()).await,
+                    [] as [std::string::String; 0]
+                );
             }
         }
     }

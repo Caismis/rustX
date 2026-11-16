@@ -115,7 +115,10 @@ async fn unchanged_catalog_keeps_named_agent_controls_without_a_workflow() {
         assert_agent_controls(&current.resources);
         assert_eq!(*publications.borrow(), published);
         assert!(!publications.has_changed().unwrap());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
         assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 1);
 
@@ -124,7 +127,10 @@ async fn unchanged_catalog_keeps_named_agent_controls_without_a_workflow() {
         runtime.refresh_runtime_catalogs().await.unwrap();
         wait_runtime_catalog(&runtime, &mut publications, published).await;
         assert_agent_controls(&runtime.runtime_resources());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
         assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 1);
 

@@ -546,7 +546,7 @@ impl McpPreparation {
             complete,
         }
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn completion(&self) -> tokio::sync::watch::Receiver<McpPreparationState> {
         self.complete.clone()
     }

@@ -5,8 +5,7 @@ use serde::{Deserialize, Serialize};
 
 /// The normalized client-visible failure of one attempt.
 ///
-/// This is the external projection of the internal [`AttemptFailure`]
-/// ([`crate::events::types::AttemptFailure`]): provider-specific fields
+/// This is the external projection of the internal [`AttemptFailure`](crate::events::types::AttemptFailure): provider-specific fields
 /// (such as the raw provider error code) never appear here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]

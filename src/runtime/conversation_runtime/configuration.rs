@@ -694,7 +694,7 @@ impl ConversationRuntime {
         Ok(())
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn install_runtime_refresh_completed_gate(&self, gate: Arc<super::Gate>) {
         *self
             .inner
@@ -703,17 +703,17 @@ impl ConversationRuntime {
             .expect("refresh gate") = Some(gate);
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn runtime_catalog_blocked(&self) -> tokio::sync::futures::Notified<'_> {
         self.inner.runtime_catalog_blocked.notified()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn has_pending_runtime_catalog(&self) -> bool {
         self.inner.lock_state().pending_runtime_catalog.is_some()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn runtime_catalog_observations(&self) -> tokio::sync::watch::Receiver<u64> {
         self.inner.runtime_catalog_processed.subscribe()
     }

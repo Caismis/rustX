@@ -1151,7 +1151,10 @@ fn cold_empty_auxiliary_audit_has_no_pages_after_long_unrelated_history() {
         )
         .unwrap();
     assert_eq!(page.total, 0);
-    assert!(page.items.is_empty());
+    assert_eq!(
+        page.items,
+        [] as [crate::observation::cut::CheckpointPageItem; 0]
+    );
     assert_eq!(page.next_offset, None);
 }
 
@@ -3397,7 +3400,10 @@ async fn assert_native_pending_removal_wakes_worker(fixture: &HostFixture, attem
     await_pending_fixture_publication(&fixture.host).await;
     let after = fixture.host.checkpoint().unwrap();
     assert!(after.cursor > before.cursor);
-    assert!(after.snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        after.snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     assert_eq!(after.read_cut.source_cut.as_ref().unwrap().read, read_cut);
     assert_eq!(
         after.snapshot.attempt.as_ref().unwrap().attempt_id.as_ref(),
@@ -3551,7 +3557,10 @@ async fn pending_snapshot_and_reattach_repair_a_committed_unpublished_mutation()
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("explicit reconnect checkpoint");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     assert!(!format!("{:?}", snapshot.transcript).contains("pending-repair"));
     assert!(
         fixture.runtime.has_current_attempt()
@@ -3913,15 +3922,15 @@ async fn canonical_history_has_one_owner_at_a_time() {
         Some(Vec::new()),
         "an idle runtime owns an empty conversation state"
     );
-    assert!(
+    assert_eq!(
         fixture
             .host
             .checkpoint()
             .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("snapshot")
             .0
-            .messages
-            .is_empty()
+            .messages,
+        [] as [crate::message::types::MessageBlock; 0]
     );
 
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
@@ -5465,7 +5474,10 @@ async fn snapshot_cursor_race_snapshot_wins() {
         .await
         .expect("snapshot task")
         .expect("snapshot");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     submit_task.await.expect("submit task");
     admission_gate.wait_entered();
 
@@ -5533,7 +5545,10 @@ async fn snapshot_cursor_race_publish_wins() {
     await_fixture_activation(&fixture.host).await;
     // Baseline: an idle host at some cursor C.
     let (before, cursor) = checkpoint_state(&fixture.host);
-    assert!(before.inbound.pending.is_empty());
+    assert_eq!(
+        before.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
 
     // Submit; the admission parks at the runtime gate before committing.
     admission_gate.arm();

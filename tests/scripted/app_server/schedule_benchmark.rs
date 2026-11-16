@@ -266,7 +266,7 @@ async fn measure_native_scheduler_reconciliation() {
     let diagnostics = f.manager.schedule_driver_diagnostics();
     f.host.begin_drain();
     driver.await.unwrap().unwrap();
-    assert!(f.host.drain().await.is_empty());
+    assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
     assert!(f.manager.is_empty());
     let retained_probes = f.manager.registry.0.lock().unwrap().probes.len();
     let warm = &durations[1..];

@@ -79,12 +79,13 @@ fn proactive_admission_commits_start_and_status_together_or_neither() {
             .append_compaction_admission(started.clone(), status.clone())
             .is_err()
     );
-    assert!(store.read_events(None, 8).unwrap().events.is_empty());
-    assert!(
-        store
-            .latest_compaction_operations(i64::MAX as u64)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        store.read_events(None, 8).unwrap().events,
+        [] as [crate::events::RuntimeEventEnvelope; 0]
+    );
+    assert_eq!(
+        store.latest_compaction_operations(i64::MAX as u64).unwrap(),
+        [] as [crate::context::operation::CompactionOperationStatus; 0]
     );
 
     let (first, second) = store.append_compaction_admission(started, status).unwrap();
@@ -372,7 +373,10 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
         0,
         "failed public event commit rolls back the private authority row"
     );
-    assert!(store.read_events(None, 10).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 10).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     store
         .append_agent_admission(event.clone(), &authority)
         .unwrap();
@@ -1365,7 +1369,10 @@ fn subagent_ownership_rejects_a_relative_session_workspace_binding() {
         ))
         .expect_err("durable ownership must reject a relative workspace binding");
     assert!(matches!(error, ConversationStoreError::InvalidReference(_)));
-    assert!(store.read_events(None, 8).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 8).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
 }
 
 /// The durable identity of a `SubagentOwnershipCommitted` fact is
@@ -1881,7 +1888,10 @@ fn loop_lifecycle_facts_round_trip_without_executable_state() {
         .map(|e| e.event)
         .collect::<Vec<_>>();
     assert_eq!(read, facts);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 }
 
 /// Both typed cancellation phases are durable canonical facts. They must

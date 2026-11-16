@@ -218,7 +218,7 @@ impl Driver {
             });
             std::fs::write(
                 workspace.join(".agents/workflows/image_review.yaml"),
-                serde_yaml::to_string(&workflow).unwrap(),
+                serde_yaml_ng::to_string(&workflow).unwrap(),
             )
             .unwrap();
             std::fs::write(
@@ -1093,7 +1093,7 @@ async fn every_protocol_switch_keeps_native_owners_history_and_tools() {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert!(!owned.is_empty());
+            assert_ne!(owned, [] as [&rustx::model::replay::ReplayOrigin; 0]);
             assert!(
                 owned
                     .iter()
@@ -1544,7 +1544,7 @@ async fn a_provider_failure_settles_once_without_a_retry() {
             .count(),
         1
     );
-    assert!(driver.committed_assistant_text().is_empty());
+    assert_eq!(driver.committed_assistant_text(), "");
     assert_eq!(
         emulator.requests().await.len(),
         1,
@@ -2580,7 +2580,7 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
         assert_eq!(source_ranges, accepted_ranges);
         let generation = generation.as_ref().expect("accepted native generation");
         assert_eq!(&generation.call_id, *call_id);
-        assert!(!source_ranges.is_empty());
+        assert_ne!(source_ranges.as_slice(), []);
         for range in source_ranges {
             if let Some((prior_index, prior_end)) = last_range {
                 if range.projection_index == prior_index {

@@ -955,7 +955,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         .iter()
         .map(|(name, yaml)| {
             let definition: WorkflowFileDocument =
-                serde_yaml::from_str(yaml).expect("native example parses");
+                serde_yaml_ng::from_str(yaml).expect("native example parses");
             let revision = format!("sha256:{:x}", sha2::Sha256::digest(yaml.as_bytes()));
             (
                 WorkflowId::parse(name).expect("example identity"),

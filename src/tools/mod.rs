@@ -36,10 +36,6 @@ pub mod types;
 pub mod workspace;
 pub mod workspace_python;
 
-#[cfg(test)]
-#[path = "profile_dir.rs"]
-mod profile_dir;
-
 pub use native::{NativeToolPolicies, NativeToolResources, register_native_tools};
 
 pub use artifacts::{ArtifactError, ArtifactStore, ArtifactWriter};

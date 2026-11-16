@@ -1517,7 +1517,10 @@ fn empty_auxiliary_audit_reports_zero_not_the_journal_frontier() {
     assert_eq!(store.auxiliary_audit_total(cut).unwrap(), 0);
     let page = store.read_auxiliary_audit(cut, None, 32).unwrap();
     assert_eq!(page.total, 0);
-    assert!(page.records.is_empty());
+    assert_eq!(
+        page.records,
+        [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
+    );
     assert_eq!(page.next_offset, None);
 }
 
@@ -2001,11 +2004,11 @@ mod call_request_lookup {
             expected
         );
         for cut in [before_call, before_request] {
-            assert!(
+            assert_eq!(
                 store
                     .read_auxiliary_call_requests(&call_id, cut, None, 32)
-                    .unwrap()
-                    .is_empty()
+                    .unwrap(),
+                [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
             );
         }
 
@@ -2056,17 +2059,17 @@ mod call_request_lookup {
                 .unwrap(),
             expected
         );
-        assert!(
+        assert_eq!(
             store
                 .read_auxiliary_call_requests(&call_id, current, Some(receipt.event.sequence), 1)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
-        assert!(
+        assert_eq!(
             store
                 .read_auxiliary_call_requests(&AuxiliaryCallId::generate(), current, None, 1)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
         for cursor in [
             0,
@@ -2229,11 +2232,11 @@ mod call_request_lookup {
                 .unwrap(),
             vec![started.request]
         );
-        assert!(
+        assert_eq!(
             store
                 .read_auxiliary_call_requests(&call_id, cut, Some(started.event.sequence), 1)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
         let connection = store.lock().unwrap();
         let selected_steps = |sql: &str| {
@@ -2246,7 +2249,7 @@ mod call_request_lookup {
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
-            assert!(rows.is_empty());
+            assert_eq!(rows, [] as [i64; 0]);
             assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
             statement.get_status(rusqlite::StatementStatus::VmStep)
         };

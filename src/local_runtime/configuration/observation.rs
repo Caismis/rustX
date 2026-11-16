@@ -809,7 +809,7 @@ mod application_tests {
                 .decode(chunk.data_base64)
                 .unwrap();
             assert!(decoded.len() <= 65_536);
-            assert!(!decoded.is_empty());
+            assert_ne!(decoded, [] as [u8; 0]);
             bytes.extend(decoded);
             let Some(next) = chunk.next_offset else {
                 break;

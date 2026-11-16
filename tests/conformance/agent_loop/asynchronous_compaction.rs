@@ -102,7 +102,7 @@ fn assert_terminal_is_last_owned(
         .iter()
         .filter(|entry| entry.attempt_id.as_ref() == Some(id))
         .collect();
-    assert!(!owned.is_empty());
+    assert_ne!(owned, [] as [&rustx::events::RuntimeEventEnvelope; 0]);
     assert_eq!(
         owned
             .iter()

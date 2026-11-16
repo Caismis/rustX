@@ -162,8 +162,11 @@ async fn workflow_start_crash_before_snapshot_rolls_back_all_rows() {
     assert_eq!(requests_before_reopen, 1);
 
     let report = durable.recover();
-    assert!(report.subagent_classes().is_empty());
-    assert!(report.reconciliation().subagent_terminals.is_empty());
+    assert_eq!(report.subagent_classes(), []);
+    assert_eq!(
+        report.reconciliation().subagent_terminals,
+        [] as [crate::runtime::identity::SubagentId; 0]
+    );
 
     let journal_before_inspect = durable.journal().len();
     let canonical_before_inspect = durable.canonical().len();
@@ -225,7 +228,10 @@ async fn workflow_start_crash_after_commit_retains_complete_valid_binding() {
         .unwrap();
     assert_eq!(trace_nodes.run_id, run_id);
     assert_eq!(trace_nodes.total, 0);
-    assert!(trace_nodes.nodes.is_empty());
+    assert_eq!(
+        trace_nodes.nodes,
+        [] as [crate::durable::observation::WorkflowTraceNode; 0]
+    );
     let header = durable
         .store()
         .observation_workflow_run_snapshot_header(&cut, &run_id)

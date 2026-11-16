@@ -941,7 +941,10 @@ fn read_all_pages(
     let exhausted = store
         .read_auxiliary_audit(cut, Some(u64::try_from(expected_total).unwrap()), limit)
         .unwrap();
-    assert!(exhausted.records.is_empty());
+    assert_eq!(
+        exhausted.records,
+        [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
+    );
     assert_eq!(exhausted.total, u64::try_from(expected_total).unwrap());
     assert_eq!(exhausted.next_offset, None);
     records
@@ -1177,8 +1180,14 @@ fn old_final_and_empty_audit_pages_bound_sql_work_across_later_call_growth() {
     ];
     let expected = cases.map(|(_, cut, after)| store.read_auxiliary_audit(cut, after, 2).unwrap());
     assert_eq!(expected[0].records.len(), 1);
-    assert!(expected[1].records.is_empty());
-    assert!(expected[2].records.is_empty());
+    assert_eq!(
+        expected[1].records,
+        [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
+    );
+    assert_eq!(
+        expected[2].records,
+        [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
+    );
     assert!(expected.iter().all(|page| page.next_offset.is_none()));
     let mut baseline = Vec::new();
     let mut unbounded_baseline = Vec::new();

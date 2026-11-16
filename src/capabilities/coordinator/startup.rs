@@ -346,7 +346,7 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             0
         );
-        assert!(candidate.available_tools().tools().is_empty());
+        assert_eq!(candidate.available_tools().tools(), []);
         candidate.retire_uncommitted().await;
         drop(held);
         assert_eq!(
@@ -401,7 +401,7 @@ mod tests {
                 .available_permits(),
             0
         );
-        assert!(candidate.available_tools().tools().is_empty());
+        assert_eq!(candidate.available_tools().tools(), []);
         candidate.retire_uncommitted().await;
         drop(held);
         assert_eq!(
@@ -444,7 +444,7 @@ mod tests {
             candidate.availability().get(&ToolSourceId::Mcp(id)),
             Some(&CapabilitySourceState::Ready)
         );
-        assert!(!candidate.available_tools().tools().is_empty());
+        assert_ne!(candidate.available_tools().tools(), []);
         candidate.retire_uncommitted().await;
     }
 
@@ -491,7 +491,7 @@ mod tests {
             candidate.availability().get(&ToolSourceId::Mcp(id)),
             Some(CapabilitySourceState::Unavailable { .. })
         ));
-        assert!(candidate.available_tools().tools().is_empty());
+        assert_eq!(candidate.available_tools().tools(), []);
         assert_eq!(
             coordinator
                 .inner
@@ -567,7 +567,7 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(!candidate.available_tools().tools().is_empty());
+        assert_ne!(candidate.available_tools().tools(), []);
         let captured_epoch = candidate.mcp_epochs[&id];
         coordinator.inner.mcp_invalidation.lock().advance(&id);
         assert_eq!(candidate.mcp_epochs[&id], captured_epoch);
@@ -658,7 +658,7 @@ mod tests {
             candidate.availability().get(&ToolSourceId::Mcp(inert)),
             Some(&CapabilitySourceState::Unprepared)
         );
-        assert!(!candidate.available_tools().tools().is_empty());
+        assert_ne!(candidate.available_tools().tools(), []);
         assert_eq!(
             coordinator
                 .inner
@@ -730,7 +730,7 @@ mod tests {
             retry.availability().get(&ToolSourceId::Mcp(id)),
             Some(CapabilitySourceState::Unavailable { .. })
         ));
-        assert!(retry.available_tools().tools().is_empty());
+        assert_eq!(retry.available_tools().tools(), []);
         retry.retire_uncommitted().await;
     }
 }

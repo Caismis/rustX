@@ -394,7 +394,7 @@ mod tests {
         .unwrap()
         .read_to_end(&mut generations)
         .unwrap();
-        assert!(generations.is_empty());
+        assert_eq!(generations, [] as [u8; 0]);
 
         let current_cut = writer.auxiliary_audit_cut().unwrap();
         let request = writer

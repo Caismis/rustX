@@ -111,6 +111,7 @@ fn disk() -> (tempfile::TempDir, SqliteConversationStore) {
 }
 
 #[test]
+#[allow(clippy::too_many_lines)]
 fn retries_commit_atomically_preserve_each_request_evidence_and_confirm_exact_receipts() {
     let (_directory, store) = disk();
     let call = call();

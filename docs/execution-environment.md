@@ -118,10 +118,11 @@ ordinary meaning.
   not. If the Workspace state directory cannot be written, that directory is
   claimed in the temporary directory, `XDG_RUNTIME_DIR`, `/dev/shm`, or the
   directory containing the rustX executable. If every one of those is
-  unwritable, `PATH` still starts with the `python-guard` directory installed
-  beside that executable. `cargo build` places it next to `rustx` and the test
-  binaries using atomic file replacement, and a deployment copies that
-  directory with the executable.
+  unwritable, `PATH` still starts with a pre-provisioned `python-guard`
+  directory installed beside that executable (for example by copying
+  `assets/python-guard/` next to a deployed `rustx` executable; development
+  builds rely on embedded guard scripts and runtime fallback directories
+  unless a sidecar is explicitly deployed).
   Lookup does not use the build checkout. Both scripts must be executable and
   match the bytes embedded in the binary. Every cache hit is revalidated; a
   deleted or damaged temporary guard is replaced. If no writable resource and

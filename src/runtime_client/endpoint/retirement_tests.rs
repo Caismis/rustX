@@ -85,7 +85,10 @@ async fn retirement_wakes_only_its_registered_wait_and_preserves_original_cut() 
     assert_eq!(host.checkpoint().unwrap(), before);
     assert_eq!(store.observation_read_cut().unwrap(), source);
     assert_eq!(store.presentation_frontier().unwrap(), 0);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 }
 
 #[tokio::test]

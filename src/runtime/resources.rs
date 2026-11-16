@@ -1134,10 +1134,9 @@ mod tests {
             std::fs::write(root.join("AGENTS.override.md"), "override").unwrap();
             std::fs::write(root.join("CLAUDE.md"), "other guidance").unwrap();
         }
-        assert!(
-            load_project_context_files(&workspace, &global)
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            load_project_context_files(&workspace, &global).unwrap(),
+            [] as [crate::runtime::resources::ProjectContextFile; 0]
         );
         std::fs::write(global.join("AGENTS.md"), "global").unwrap();
         std::fs::write(workspace.join("AGENTS.md"), "workspace").unwrap();

@@ -68,7 +68,10 @@ fn committed_occurrence_and_inbound_survive_reopen_without_refiring() {
         ScheduleAdmission::AlreadyAdvanced { .. }
     ));
     assert_eq!(reopened.load_pending().unwrap()[0].message, inbound.message);
-    assert!(reopened.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        reopened.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(reopened.schedule_summary().unwrap().pending.len(), 1);
 }
 #[test]

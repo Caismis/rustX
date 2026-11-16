@@ -4,7 +4,7 @@
 //! This owner admits every request — decoding, association, host admission,
 //! attachment reservation and registration — and accepts its final reply.
 //! Admitted requests reach one handler per request family, chosen by the
-//! exhaustive [`family::Family`] classification; the handlers own no locks,
+//! exhaustive `family::Family` classification; the handlers own no locks,
 //! admission or reply acceptance of their own.
 mod auxiliary;
 mod catalog;

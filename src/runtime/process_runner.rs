@@ -348,11 +348,11 @@ pub(crate) struct RecordedSignal {
 #[cfg_attr(not(test), allow(dead_code))] // empty in non-test builds
 #[derive(Clone)]
 pub(crate) struct RunnerLifecycleHook {
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     shell_exit_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     proceed_tx: tokio::sync::watch::Sender<bool>,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     proceed_rx: tokio::sync::watch::Receiver<bool>,
     #[cfg(test)]
     ownership_tx: tokio::sync::watch::Sender<bool>,
@@ -371,14 +371,19 @@ pub(crate) struct RunnerLifecycleHook {
 #[cfg(test)]
 impl RunnerLifecycleHook {
     pub(crate) fn new() -> Self {
+        #[cfg(target_os = "linux")]
         let (shell_exit_tx, _) = tokio::sync::watch::channel(false);
+        #[cfg(target_os = "linux")]
         let (proceed_tx, proceed_rx) = tokio::sync::watch::channel(false);
         let (ownership_tx, ownership_rx) = tokio::sync::watch::channel(false);
         let (terminal_tx, terminal_rx) = tokio::sync::watch::channel(false);
         let (direct_child_reaped_tx, direct_child_reaped_rx) = tokio::sync::watch::channel(false);
         Self {
+            #[cfg(target_os = "linux")]
             shell_exit_tx,
+            #[cfg(target_os = "linux")]
             proceed_tx,
+            #[cfg(target_os = "linux")]
             proceed_rx,
             ownership_tx,
             ownership_rx,
@@ -391,6 +396,7 @@ impl RunnerLifecycleHook {
 
     /// Runner side: signals the exact shell-exit boundary and parks until
     /// the test releases the runner.
+    #[cfg(target_os = "linux")]
     async fn pause_after_shell_exit(&self) {
         let _ = self.shell_exit_tx.send(true);
         let mut proceed = self.proceed_rx.clone();
@@ -399,6 +405,7 @@ impl RunnerLifecycleHook {
 
     /// Test side: waits until the runner provably observed the shell's
     /// natural exit and parked at the boundary.
+    #[cfg(target_os = "linux")]
     pub(crate) async fn await_shell_exit(&self) {
         let mut rx = self.shell_exit_tx.subscribe();
         if !*rx.borrow() {
@@ -407,6 +414,7 @@ impl RunnerLifecycleHook {
     }
 
     /// Test side: releases the parked runner.
+    #[cfg(target_os = "linux")]
     pub(crate) fn release(&self) {
         let _ = self.proceed_tx.send(true);
     }
@@ -663,7 +671,7 @@ pub(crate) struct RunnerTestControl {
     #[cfg(test)]
     pub(crate) anchor_stop_socket: Option<std::path::PathBuf>,
     pub(crate) diagnostics: crate::tools::native::bash_supervisor::diagnostics::FixtureControl,
-    #[cfg(test)]
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) pause_at_shell_exit: bool,
     #[cfg(test)]
     pub(crate) lifecycle: RunnerLifecycleHook,
@@ -720,6 +728,7 @@ impl RunnerTestControl {
             anchor_stop_socket: None,
             diagnostics:
                 crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
+            #[cfg(target_os = "linux")]
             pause_at_shell_exit: false,
             lifecycle: RunnerLifecycleHook::new(),
             nested_authority: None,
@@ -1004,7 +1013,7 @@ impl SupervisedCommandRunner {
             Ok(child) => child,
             Err(error) => {
                 return Err(RunnerSpawnError::SupervisorSpawn(format!(
-                    "{} (executable: {}; working directory: {}). Build with `cargo build --bins` and keep the supervisor binaries beside rustx",
+                    "{} (executable: {}; working directory: {}). Keep companion binaries beside the executable (or stage test harnesses with `python3 test-support/prepare_native_tests.py -- cargo test ... --no-run`)",
                     error,
                     supervisor_path.display(),
                     spec.cwd.display(),
@@ -1154,7 +1163,7 @@ impl SupervisedCommandRunner {
                     }
                     Ok(Some(SupervisorEvent::ShellExited { status })) => {
                         self.exit_status = Some(status);
-                        #[cfg(test)]
+                        #[cfg(all(test, target_os = "linux"))]
                         if let Some(control) = self.control.as_ref()
                             && control.pause_at_shell_exit
                             && self.settled.is_none()
@@ -1454,51 +1463,27 @@ impl SupervisedCommandRunner {
 #[cfg(unix)]
 const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
-/// The dedicated supervisor binary: `CARGO_BIN_EXE` when cargo provides it
-/// (integration tests), otherwise the `bash-supervisor` sibling of the
-/// current executable (production), otherwise the binary-directory sibling
-/// of a test binary living under `target/debug/deps` (in-crate tests).
-#[cfg(unix)]
-pub(crate) fn supervisor_binary() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_bash-supervisor") {
-        return PathBuf::from(path);
-    }
-    let exe = std::env::current_exe().expect("current executable");
-    let sibling = exe
+/// Locates a companion binary built from the same package (`bash-supervisor`,
+/// `interactive-supervisor`, or `workflow-renderer`) beside the current
+/// executable.
+pub(crate) fn companion_binary(name: &str) -> PathBuf {
+    std::env::current_exe()
+        .expect("current executable")
         .parent()
         .expect("current executable directory")
-        .join("bash-supervisor");
-    if !sibling.exists() && exe.parent().is_some_and(|parent| parent.ends_with("deps")) {
-        return exe
-            .parent()
-            .expect("current executable directory")
-            .parent()
-            .expect("binary directory")
-            .join("bash-supervisor");
-    }
-    sibling
+        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
 }
 
-/// Locates the long-lived interactive supervisor beside the current binary.
+/// Locates the `bash-supervisor` companion binary.
+#[cfg(unix)]
+pub(crate) fn supervisor_binary() -> PathBuf {
+    companion_binary("bash-supervisor")
+}
+
+/// Locates the `interactive-supervisor` companion binary.
 #[cfg(unix)]
 pub(crate) fn interactive_supervisor_binary() -> PathBuf {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_interactive-supervisor") {
-        return PathBuf::from(path);
-    }
-    let exe = std::env::current_exe().expect("current executable");
-    let sibling = exe
-        .parent()
-        .expect("current executable directory")
-        .join("interactive-supervisor");
-    if !sibling.exists() && exe.parent().is_some_and(|parent| parent.ends_with("deps")) {
-        return exe
-            .parent()
-            .expect("current executable directory")
-            .parent()
-            .expect("binary directory")
-            .join("interactive-supervisor");
-    }
-    sibling
+    companion_binary("interactive-supervisor")
 }
 
 /// Sends the one termination request to the invocation supervisor.
@@ -2201,7 +2186,10 @@ mod tests {
                 !marker.exists(),
                 "cancellation before START never executes the command"
             );
-            assert!(harness.control.recorded_signals().is_empty());
+            assert_eq!(
+                harness.control.recorded_signals(),
+                [] as [crate::runtime::process_runner::RecordedSignal; 0]
+            );
             // A late parent acknowledgement cannot replay START after settlement.
             harness.gate.send_replace(true);
         }
@@ -2403,7 +2391,7 @@ mod tests {
         assert_eq!(result.exit_code, Some(0));
         assert_eq!(result.intent, ProcessOutcomeIntent::Completed);
         assert_eq!(result.stdout, b"runner-result");
-        assert!(result.stderr.is_empty());
+        assert_eq!(result.stderr, [] as [u8; 0]);
     }
 
     #[cfg(unix)]
@@ -2593,6 +2581,146 @@ mod tests {
                     "the non-positive reaped pid {pid} must be a protocol error: {parsed:?}"
                 );
             }
+        }
+    }
+
+    #[cfg(unix)]
+    mod sibling_contract {
+        use std::path::Path;
+
+        use crate::runtime::cancellation::CancellationSignal;
+        use crate::runtime::process_runner::{
+            CapturedProcessResult, ProcessOutcomeIntent, RunnerBackedProcessRunner,
+            SupervisedCommandSpec, SupervisedProcessRunner, supervisor_binary,
+        };
+
+        const MODE_ENV: &str = "RUSTX_TEST_COMPANION_MODE";
+        const WITNESS_ENV: &str = "RUSTX_TEST_COMPANION_WITNESS";
+
+        fn stage_executable(source: &Path, target: &Path) {
+            if std::fs::hard_link(source, target).is_err() {
+                std::fs::copy(source, target).expect("copy executable");
+            }
+        }
+
+        async fn run_probe(cwd: &Path) -> Result<CapturedProcessResult, String> {
+            let spec = SupervisedCommandSpec {
+                command: "printf sibling-ok".to_owned(),
+                cwd: cwd.to_path_buf(),
+                command_environment: Vec::new(),
+                timeout: None,
+                cancellation: CancellationSignal::default(),
+            };
+            RunnerBackedProcessRunner.run(spec, None).await
+        }
+
+        fn record_witness(value: &str) {
+            let path = std::env::var_os(WITNESS_ENV).expect("witness path");
+            std::fs::write(path, value).expect("write witness");
+        }
+
+        /// Proves `companion_binary` obeys one explicit executable-sibling
+        /// contract without walking ancestors or falling back to older layouts.
+        #[tokio::test]
+        async fn relocated_executable_uses_only_sibling_supervisor() {
+            match std::env::var(MODE_ENV).ok().as_deref() {
+                Some("missing") => {
+                    let current = std::env::current_exe().expect("relocated executable");
+                    let expected = current
+                        .parent()
+                        .expect("relocated dir")
+                        .join("bash-supervisor");
+                    assert_eq!(supervisor_binary(), expected);
+                    let work = tempfile::tempdir().expect("work");
+                    let error = run_probe(work.path())
+                        .await
+                        .expect_err("missing sibling supervisor must fail closed");
+                    let expected_text = expected.display().to_string();
+                    assert!(
+                        error.contains(&expected_text),
+                        "expected missing sibling path {expected_text} in error: {error}"
+                    );
+                    record_witness("missing-ok");
+                    return;
+                }
+                Some("staged") => {
+                    let work = tempfile::tempdir().expect("work");
+                    let result = run_probe(work.path())
+                        .await
+                        .expect("staged sibling supervisor must execute");
+                    assert_eq!(result.intent, ProcessOutcomeIntent::Completed);
+                    assert_eq!(result.exit_code, Some(0));
+                    assert_eq!(result.stdout, b"sibling-ok");
+                    record_witness("staged-ok");
+                    return;
+                }
+                Some(other) => panic!("unexpected {MODE_ENV}: {other}"),
+                None => {}
+            }
+
+            let prepared_supervisor = supervisor_binary();
+            assert!(
+                prepared_supervisor.is_file(),
+                "native test preparation must stage `bash-supervisor` beside {} (missing {})",
+                std::env::current_exe().expect("test executable").display(),
+                prepared_supervisor.display()
+            );
+
+            let module_suffix = module_path!()
+                .split_once("::")
+                .map_or(module_path!(), |(_, rest)| rest);
+            let test_filter =
+                format!("{module_suffix}::relocated_executable_uses_only_sibling_supervisor");
+            let current = std::env::current_exe().expect("test executable");
+            let root = tempfile::tempdir().expect("relocated root");
+            let witness_dir = tempfile::tempdir().expect("witness");
+
+            // Place a decoy supervisor at an ancestor `<profile>/bash-supervisor`
+            // while locating the relocated harness at `<profile>/build/rustx/hash/out/`.
+            stage_executable(&prepared_supervisor, &root.path().join("bash-supervisor"));
+            let out_dir = root.path().join("build/rustx/deadbeef/out");
+            std::fs::create_dir_all(&out_dir).expect("nested out dir");
+            let relocated_exe = out_dir.join("rustx-relocated");
+            stage_executable(&current, &relocated_exe);
+
+            let missing_witness = witness_dir.path().join("missing.witness");
+            let missing_out = std::process::Command::new(&relocated_exe)
+                .env(MODE_ENV, "missing")
+                .env(WITNESS_ENV, &missing_witness)
+                .args(["--exact", &test_filter, "--nocapture"])
+                .output()
+                .expect("spawn un-staged relocated runner");
+            assert!(missing_out.status.success(), "{missing_out:?}");
+            let missing_stdout = String::from_utf8_lossy(&missing_out.stdout);
+            assert!(
+                missing_stdout.contains("1 passed; 0 failed"),
+                "expected missing child to run 1 test: {missing_stdout}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&missing_witness).expect("missing witness"),
+                "missing-ok"
+            );
+
+            // Now physically stage `bash-supervisor` beside the relocated test
+            // harness and confirm execution succeeds under the same contract.
+            stage_executable(&prepared_supervisor, &out_dir.join("bash-supervisor"));
+            let staged_witness = witness_dir.path().join("staged.witness");
+            let staged_out = std::process::Command::new(&relocated_exe)
+                .env(MODE_ENV, "staged")
+                .env(WITNESS_ENV, &staged_witness)
+                .args(["--exact", &test_filter, "--nocapture"])
+                .output()
+                .expect("spawn staged relocated runner");
+            assert!(staged_out.status.success(), "{staged_out:?}");
+            let staged_stdout = String::from_utf8_lossy(&staged_out.stdout);
+            assert!(
+                staged_stdout.contains("1 passed; 0 failed"),
+                "expected staged child to run 1 test: {staged_stdout}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&staged_witness).expect("staged witness"),
+                "staged-ok"
+            );
         }
     }
 }

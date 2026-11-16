@@ -1206,7 +1206,7 @@ fn parent_pending_texts(plane: &ParentPlane) -> Vec<String> {
         .store
         .select_pending_batch()
         .expect("pending batch")
-        .map(|batch| {
+        .map_or_else(Vec::new, |batch| {
             batch
                 .items
                 .iter()
@@ -1218,7 +1218,6 @@ fn parent_pending_texts(plane: &ParentPlane) -> Vec<String> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// Asserts the parent received exactly one successful terminal publication
@@ -2611,7 +2610,10 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("root projection");
-    assert!(root_snapshot.pending_interactions.is_empty());
+    assert_eq!(
+        root_snapshot.pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 
     attachment.detach();
     child.runtime.shutdown().await.expect("child drains");
@@ -3350,7 +3352,10 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("root snapshot");
-    assert!(snapshot.pending_interactions.is_empty());
+    assert_eq!(
+        snapshot.pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 
     attachment.detach();
     child_one
@@ -3753,13 +3758,9 @@ async fn root_detach_preserves_headless_child_publication_and_routed_cancellatio
             .iter()
             .any(|event| matches!(event, RuntimeEvent::InteractionRequested { .. }))
     );
-    assert!(
-        parent
-            .plane
-            .registry
-            .pending_interaction_head()
-            .head
-            .is_empty()
+    assert_eq!(
+        parent.plane.registry.pending_interaction_head().head,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
     );
     reconnected.detach();
     child.runtime.shutdown().await.expect("child drains");
@@ -6453,7 +6454,10 @@ async fn goal350_subagent_terminal_publication_wakes_next_continuation() {
         })
         .unwrap();
     parent.runtime.admit_now_for_test();
-    assert!(parent.model.requests().is_empty());
+    assert_eq!(
+        parent.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_eq!(
         parent
             .plane

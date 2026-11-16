@@ -255,7 +255,10 @@ async fn many_provider_deltas_coalesce_into_few_publication_writes() {
         .map(|frame| frame.sequence)
         .collect();
     assert_eq!(sequences, vec![0, 1, 2, 3, 4]);
-    assert!(run.audit.publication_audits.is_empty());
+    assert_eq!(
+        run.audit.publication_audits,
+        [] as [crate::publication::frame::PublicationAudit; 0]
+    );
 }
 
 /// **Regression 2.** The latency flush is decided by the injected clock

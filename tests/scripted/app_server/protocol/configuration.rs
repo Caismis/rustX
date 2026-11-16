@@ -110,7 +110,7 @@ async fn web08_source_and_session_cas_cross_the_real_protocol_boundary() {
             .unwrap()
             .to_string();
         assert!(error.contains("duplicate"), "{error}");
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -581,7 +581,7 @@ async fn c12_mcp_source_commit_is_independent_of_session_revision() {
         let deleted = deleted.inline.expect("bounded fixture source");
         assert_eq!(deleted.user_mcp.revision, written_revision);
         assert!(deleted.user_mcp.authored.as_ref().unwrap().is_empty());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -717,7 +717,7 @@ async fn cfg332_workspace_mcp_definition_and_config_have_independent_authoring_o
         };
         let projection = projection.inline.expect("bounded fixture configuration");
         assert!(projection.root_agent.tools.sources.is_empty());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         connection.close();
         f.close().await;
     })

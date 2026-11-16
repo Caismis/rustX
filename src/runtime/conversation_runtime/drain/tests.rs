@@ -342,7 +342,10 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("post-shutdown snapshot");
-    assert!(snapshot.pending_interactions.is_empty());
+    assert_eq!(
+        snapshot.pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 
     let stale = attachment
         .handle_request_async(RuntimeClientRequest::InteractionRespond {
@@ -740,7 +743,10 @@ async fn mcp_failure_closes_attempt_admission_before_worker_boundary() {
     };
     assert!(detail.contains("attempt admission MCP failure"));
     assert!(!fixture.runtime.has_current_attempt());
-    assert!(fixture.model.requests().is_empty());
+    assert_eq!(
+        fixture.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
 }
 
 /// Lifecycle Draining remains the generic admission authority for manual
@@ -1913,7 +1919,10 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
         .expect("shutdown result")
         .expect("workflow child drain");
     assert!(runtime.is_quiescent());
-    assert!(subagents.unsettled_snapshot().is_empty());
+    assert_eq!(
+        subagents.unsettled_snapshot(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
     assert!(!child_root.exists());
     let snapshot = subagents
         .snapshot(&accepted.subagent_id)

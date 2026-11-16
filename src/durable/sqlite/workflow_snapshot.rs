@@ -1028,7 +1028,10 @@ mod tests {
         assert_eq!(table_count(&store, "workflow_definition_snapshots"), 0);
         assert_eq!(table_count(&store, "workflow_snapshot_chunks"), 0);
         assert_eq!(table_count(&store, "workflow_run_snapshots"), 0);
-        assert!(store.read_events(None, 16).unwrap().events.is_empty());
+        assert_eq!(
+            store.read_events(None, 16).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
         let cut = store.observation_read_cut().expect("cut");
         assert_eq!(cut, cut_before);
         assert_eq!(cut.read.journal, 0);

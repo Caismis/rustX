@@ -839,7 +839,10 @@ chat_reasoning_replay = "omit"
             plane.subagents.prepared_execution_policies(),
             vec![old, new]
         );
-        assert!(plane.subagents.listing(false, 16).snapshots.is_empty());
+        assert_eq!(
+            plane.subagents.listing(false, 16).snapshots,
+            [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+        );
     }
 
     #[test]
