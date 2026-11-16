@@ -1850,6 +1850,9 @@ async fn a_background_mcp_execution_advertises_nothing_and_settles_once() {
     );
     // No interaction of any kind was created for the detached work.
     assert_eq!(harness.coordinator.pending_count(), 0);
-    assert!(harness.audit.events().is_empty());
+    assert_eq!(
+        harness.audit.events(),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
     harness.shutdown().await;
 }

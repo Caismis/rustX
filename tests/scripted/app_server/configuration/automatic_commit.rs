@@ -618,7 +618,10 @@ async fn busy_capability_commit_defers_admission_until_the_boundary_releases() {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         assert!(!runtime.has_current_attempt());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         release.send(()).unwrap();
         fixture.gates[0].wait_entered().await;
         let committed = applied(&fixture, 0).await;
@@ -705,7 +708,10 @@ async fn a_runtime_closed_in_place_defers_its_application_and_others_still_commi
             preparations,
             "no further preparation"
         );
-        assert!(configuration_changes(&closed).is_empty());
+        assert_eq!(
+            configuration_changes(&closed),
+            [] as [crate::runtime::configuration_commit::ConfigurationChange; 0]
+        );
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;
@@ -1306,7 +1312,10 @@ async fn skill_resources_stay_inert_and_frontmatter_changes_are_recorded() {
             .await
             .unwrap();
         applied(&fixture, 0).await;
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         let store = runtime.tool_runtime().durable_store();
         std::fs::write(
             skill.join("SKILL.md"),
@@ -1553,7 +1562,7 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         let resources = runtime.runtime_resources();
-        assert!(resources.capability().model_skill_entries().is_empty());
+        assert_eq!(resources.capability().model_skill_entries(), []);
         let declarations = resources.capability().tool_registry().model_definitions();
         let prompt = system_prompt(&runtime);
         let reconcile = || async {
@@ -1592,7 +1601,7 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
         reconcile().await;
         assert_ne!(version(&runtime), before, "the child runs the new version");
         let resources = runtime.runtime_resources();
-        assert!(resources.capability().model_skill_entries().is_empty());
+        assert_eq!(resources.capability().model_skill_entries(), []);
         assert_eq!(
             resources.capability().tool_registry().model_definitions(),
             declarations
@@ -1601,7 +1610,10 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
         let changes = configuration_changes(&runtime);
         assert_eq!(changes.len(), facts + 1, "{changes:?}");
         assert_eq!(changes[facts].tools.changed.names, ["subagent"]);
-        assert!(changes[facts].skills.changed.names.is_empty());
+        assert_eq!(
+            changes[facts].skills.changed.names,
+            [] as [std::string::String; 0]
+        );
         let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
             .pop()
             .unwrap();
@@ -2199,7 +2211,10 @@ async fn a_removal_retains_every_removed_definition() {
         assert_eq!(changes.len(), 1, "{changes:?}");
         assert_eq!(changes[0].skills.removed.total, 17);
         assert_eq!(changes[0].skills.removed.names.len(), 16);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         let store = runtime.tool_runtime().durable_store();
         drop(runtime);
         let _ = fixture.manager.drain_all_runtimes().await;
@@ -2287,7 +2302,7 @@ async fn standalone_skill_file_notifications_publish_the_live_catalog() {
                 .map(|entry| entry.description.clone())
                 .collect::<Vec<_>>()
         };
-        assert!(descriptions().is_empty());
+        assert_eq!(descriptions(), [] as [std::string::String; 0]);
         let facts = configuration_changes(&runtime).len();
         injected_only(&fixture);
         let stop = tokio_util::sync::CancellationToken::new();
@@ -3788,7 +3803,7 @@ async fn a_late_unrecorded_settlement_is_never_reported_applied() {
         settlement.release();
         changed.changed().await.unwrap();
         assert!(uncertain(&fixture.manager.configuration_application(&id).unwrap()));
-        assert!(configuration_changes(&runtime).is_empty());
+        assert_eq!(configuration_changes(&runtime), [] as [crate::runtime::configuration_commit::ConfigurationChange; 0]);
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;
@@ -3886,7 +3901,10 @@ async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
             "{view:?}"
         );
         assert_eq!(instructions(&runtime), "published, not recorded");
-        assert!(configuration_changes(&runtime).is_empty());
+        assert_eq!(
+            configuration_changes(&runtime),
+            [] as [crate::runtime::configuration_commit::ConfigurationChange; 0]
+        );
         assert!(runtime.durability_failure().is_some());
         let desired = view.desired.clone();
         assert!(
@@ -3895,7 +3913,10 @@ async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
         );
         runtime.admit_now_for_test();
         assert!(!runtime.has_current_attempt());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             fixture
                 .manager
@@ -3935,7 +3956,10 @@ async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
             ),
             "{view:?}"
         );
-        assert!(configuration_changes(&runtime).is_empty());
+        assert_eq!(
+            configuration_changes(&runtime),
+            [] as [crate::runtime::configuration_commit::ConfigurationChange; 0]
+        );
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;

@@ -310,7 +310,10 @@ fn t08_t12_t19_request_headers_already_inline_complete_text_and_retain_deferred_
             &["messages".into(), "0".into()],
         )
         .unwrap();
-    assert!(first.content.is_empty());
+    assert_eq!(
+        first.content,
+        [] as [crate::observation::cut::ContentBinding; 0]
+    );
     assert_eq!(first.value["blocks"][0]["text"]["text"], unicode);
     assert_eq!(first.value["blocks"][0]["text"]["truncated"], false);
     assert_eq!(
@@ -332,7 +335,10 @@ fn t08_t12_t19_request_headers_already_inline_complete_text_and_retain_deferred_
             &["messages".into(), "2".into()],
         )
         .unwrap();
-    assert!(assistant.content.is_empty());
+    assert_eq!(
+        assistant.content,
+        [] as [crate::observation::cut::ContentBinding; 0]
+    );
     assert_eq!(
         assistant.value["blocks"][0]["text"]["text"],
         "original answer"

@@ -133,7 +133,6 @@ impl<'a> AgentExecution<'a> {
     ///
     /// Panics only when the loop violates its own state-machine invariants;
     /// a durable terminal write failure is an explicit result, not a panic.
-    #[must_use]
     pub fn run(self) -> futures_util::future::BoxFuture<'a, AgentExecutionResult> {
         // Keep the retained frozen working set off each caller's async stack.
         Box::pin(async move { self.run_to_settlement().await.publish() })

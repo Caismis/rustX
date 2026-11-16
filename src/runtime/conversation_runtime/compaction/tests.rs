@@ -291,7 +291,10 @@ async fn summary_only_manual_compaction_skips_and_publishes_receipt() {
     .expect("native client source owner");
     runtime.activate();
     let outcome = committed_view(runtime.compact_context(None, None).await.unwrap());
-    assert!(runtime.coordinator_active_ids().unwrap().is_empty());
+    assert_eq!(
+        runtime.coordinator_active_ids().unwrap(),
+        [] as [crate::runtime::identity::MessageId; 0]
+    );
     // The shortest Summary cannot make further historical progress.
     let skipped = runtime
         .compact_context(Some("summary-only".to_owned().try_into().unwrap()), None)
@@ -535,7 +538,7 @@ async fn empty_manual_compaction_skips_and_keeps_future_admission_available() {
         .expect("empty context is a successful no-op");
     assert_eq!(outcome, ManualCompactionOutcome::Skipped);
     assert!(runtime.inner.store.projection_head().unwrap().is_none());
-    assert!(model.requests().is_empty());
+    assert_eq!(model.requests(), [] as [crate::model::ModelRequest; 0]);
     assert!(runtime.coordinator_ledger().is_some());
     let events = runtime.inner.store.read_events(None, 32).unwrap().events;
     assert!(

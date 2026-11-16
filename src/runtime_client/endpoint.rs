@@ -37,7 +37,7 @@
 //! - attachment admission — a normal endpoint admits the one control
 //!   attachment, while an inspection endpoint admits a read-only attachment;
 //!   a second control `initialize` returns
-//!   [`RuntimeClientError::AttachmentInUse`] without evicting the first;
+//!   [`RuntimeClientError::InvalidRequest`] without evicting the first;
 //! - [`AttachmentId`](super::types::AttachmentId) creation — the runtime
 //!   allocates the identity and returns it in the `initialized` result;
 //!   the endpoint never invents one;

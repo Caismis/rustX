@@ -819,8 +819,7 @@ async fn exhausted_subagent_publication_degrades_the_owning_runtime() {
     let pending_items = store
         .select_pending_batch()
         .expect("pending")
-        .map(|batch| batch.items)
-        .unwrap_or_default();
+        .map_or_else(Vec::new, |batch| batch.items);
     assert!(
         !pending_items.iter().any(|item| {
             item.correlation.as_deref()
@@ -1984,7 +1983,7 @@ async fn every_reader_of_the_durability_failure_observes_the_single_authoritativ
         failure.operation,
         DurableOperation::SubagentTerminalPublication
     );
-    assert!(!failure.diagnostic.is_empty());
+    assert_ne!(failure.diagnostic, "");
     let observed = observations
         .iter()
         .find_map(|observation| match observation {

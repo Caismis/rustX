@@ -1310,15 +1310,14 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
                     .materialization
                     .sources
                     .get(source_id)
-                    .map(|binding| {
+                    .map_or_default(|binding| {
                         binding
                             .tool_permissions
                             .get(name)
                             .copied()
                             .or(binding.permissions)
                             .unwrap_or_default()
-                    })
-                    .unwrap_or_default();
+                    });
                 field(
                     &mut hasher,
                     "tool.permissions",
@@ -2032,7 +2031,10 @@ mod tests {
             let frozen =
                 super::FrozenAgentComposition::freeze(&definition, &profile, &skills, &configured)
                     .unwrap();
-            assert!(frozen.tools.is_empty());
+            assert_eq!(
+                frozen.tools,
+                [] as [crate::runtime::subagent::resolver::ResolvedSubagentTool; 0]
+            );
             assert_eq!(frozen.resource_sources, [source.clone()].into());
             assert_eq!(
                 frozen.materialization.sources,

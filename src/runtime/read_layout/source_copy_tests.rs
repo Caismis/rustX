@@ -30,7 +30,7 @@ struct WindowWriter {
 }
 impl std::io::Write for WindowWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        assert!(!bytes.is_empty());
+        assert_ne!(bytes, [] as [u8; 0]);
         assert!(
             bytes.len() <= 65_536,
             "each original read window is bounded"

@@ -319,7 +319,10 @@ async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_
         .await
         .unwrap();
     assert_eq!(result, json!({"passed":false}));
-    assert!(frozen.tool_registry().model_definitions().is_empty());
+    assert_eq!(
+        frozen.tool_registry().model_definitions(),
+        [] as [crate::tools::types::ModelToolDefinition; 0]
+    );
     assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
     let received = probe.received.lock().unwrap();
     assert!(matches!(received[0].id, ToolInvocationId::Workflow { .. }));
@@ -491,13 +494,9 @@ async fn native_observation_store_failure_has_no_permission_or_outcome_authority
     let (result, _) = run_outer(runtime, program(), context, cancellation).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
-    assert!(
-        plane
-            .store
-            .read_events(None, 128)
-            .unwrap()
-            .events
-            .is_empty()
+    assert_eq!(
+        plane.store.read_events(None, 128).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
 }
 
@@ -535,7 +534,10 @@ async fn durable_approval_preparation_failure_never_publishes_or_starts() {
     assert!(matches!(error, WorkflowRunError::InvocationAuthority(_)));
     assert_eq!(probe.starts.load(Ordering::SeqCst), 0);
     assert_eq!(coordinator.pending_count(), 0);
-    assert!(audit.events().is_empty());
+    assert_eq!(
+        audit.events(),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
 }
 async fn run_outer(
     runtime: WorkflowRuntime,
@@ -1002,7 +1004,7 @@ impl ToolExecutor for Flaky {
                 self.ids.lock().unwrap().push(invocation.id.clone());
                 let failing = self
                     .failures
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                         left.checked_sub(1)
                     })
                     .is_ok();

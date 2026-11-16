@@ -294,7 +294,7 @@ fn assert_bounded_event_history(
         cursor = page.next_sequence;
     }
     assert!(pages > 1, "the journal must be inspected in pages");
-    assert!(!sequences.is_empty());
+    assert_ne!(sequences, [] as [u64; 0]);
     assert!(
         sequences.len() > minimum_event_count,
         "the long attempt must commit more events than tool turns"

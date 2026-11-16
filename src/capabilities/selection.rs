@@ -651,7 +651,7 @@ mod tests {
             else {
                 panic!("ready source")
             };
-            assert!(missing_exact.is_empty());
+            assert_eq!(missing_exact, [] as [std::string::String; 0]);
             assert!(
                 selected
                     .iter()
@@ -903,7 +903,7 @@ github = "all"
                         panic!("ready source")
                     };
                     assert_eq!(selected, vec![&tool]);
-                    assert!(missing_exact.is_empty());
+                    assert_eq!(missing_exact, [] as [std::string::String; 0]);
                     assert_eq!(selected[0].origin.source(), Some(source.clone()));
                 }
             }
@@ -1008,7 +1008,7 @@ github = "all"
                         panic!("ready")
                     };
                     assert_eq!(selected, vec![&tool]);
-                    assert!(missing_exact.is_empty());
+                    assert_eq!(missing_exact, [] as [std::string::String; 0]);
                 }
             }
         }

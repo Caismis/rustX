@@ -386,6 +386,7 @@ pub(super) fn verify_required_indexes(
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 pub(in crate::durable::sqlite) fn verify_schema(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {

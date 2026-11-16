@@ -497,7 +497,7 @@ fn commit_interaction_audit_through(
 /// The narrow backend-independent audit capability of the native interaction
 /// plane (Issue #109).
 ///
-/// The [`InteractionCoordinator`](crate::runtime::interaction::InteractionCoordinator)
+/// The `InteractionCoordinator`
 /// owns a pending waiter, which is process-local workflow state, and a pair of
 /// durable semantic facts, which are audit evidence. This capability is the
 /// only durable authority it receives: no Ledger, no Surface, no Request
@@ -520,7 +520,7 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
     /// The commit happens strictly **before** the prompt is released to a
     /// user-facing client, so no user can be asked without durable evidence
     /// that the interaction existed. The payload must be a
-    /// [`RuntimeEvent::InteractionRequested`](crate::events::types::RuntimeEvent::InteractionRequested).
+    /// [`RuntimeEvent::InteractionRequested`].
     fn commit_interaction_requested(
         &self,
         event: RuntimeEventEnvelope,
@@ -531,7 +531,7 @@ pub trait ConversationInteractionAudit: Send + Sync + 'static {
     /// The commit happens strictly **before** the semantic waiter is
     /// released, so an approval can never reach the tool-start frontier ahead
     /// of durable evidence that the approval existed. The payload must be a
-    /// [`RuntimeEvent::InteractionSettled`](crate::events::types::RuntimeEvent::InteractionSettled).
+    /// [`RuntimeEvent::InteractionSettled`].
     fn commit_interaction_settled(
         &self,
         event: RuntimeEventEnvelope,
@@ -581,7 +581,7 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// Atomically accepts one inbound item and its dependent background fact.
     ///
     /// This transition owns exactly the detached background terminal domain
-    /// (Issue #192): a [`RuntimeEvent::SubagentTerminalPublished`](crate::events::types::RuntimeEvent::SubagentTerminalPublished)
+    /// (Issue #192): a [`RuntimeEvent::SubagentTerminalPublished`]
     /// payload is rejected — every normal subagent terminal fact commits
     /// through [`ConversationInboundCapability::accept_subagent_terminal`],
     /// the one semantic durable authority for that domain.
@@ -604,7 +604,7 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// child. The event references the report's accepted `MessageId`, so
     /// the terminal result remains the last item of the publication. The
     /// payload must be a
-    /// [`RuntimeEvent::SubagentTerminalPublished`](crate::events::types::RuntimeEvent::SubagentTerminalPublished);
+    /// [`RuntimeEvent::SubagentTerminalPublished`];
     /// every other event is rejected, and the store enforces the complete
     /// legal state — canonical identities and correlations, ownership-
     /// authorized provenance, and notice/workspace consistency — before
@@ -630,7 +630,7 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
     /// gate is released, so no external background side effect can begin
     /// without durable evidence of the owning `ToolExecutionId`. The payload
     /// must be a
-    /// [`RuntimeEvent::BackgroundExecutionCommitted`](crate::events::types::RuntimeEvent::BackgroundExecutionCommitted);
+    /// [`RuntimeEvent::BackgroundExecutionCommitted`];
     /// every other event is rejected.
     fn commit_background_ownership(
         &self,
@@ -655,7 +655,7 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
 
     /// Commits the durable terminal-settlement fact of a Workflow-owned
     /// child without creating a parent inbound notification. The payload
-    /// must be a [`RuntimeEvent::SubagentTerminalSettled`](crate::events::types::RuntimeEvent::SubagentTerminalSettled).
+    /// must be a [`RuntimeEvent::SubagentTerminalSettled`].
     fn commit_subagent_terminal(
         &self,
         event: RuntimeEventEnvelope,

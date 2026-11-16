@@ -602,8 +602,14 @@ mod tests {
             .collect();
         expected_patterns.sort();
         assert_eq!(schema_keyword_paths(&before, "pattern"), expected_patterns);
-        assert!(schema_keyword_paths(&after, "pattern").is_empty());
-        assert!(schema_keyword_paths(&after, "uniqueItems").is_empty());
+        assert_eq!(
+            schema_keyword_paths(&after, "pattern"),
+            [] as [std::string::String; 0]
+        );
+        assert_eq!(
+            schema_keyword_paths(&after, "uniqueItems"),
+            [] as [std::string::String; 0]
+        );
         for (path, max) in text_paths {
             assert_eq!(before.pointer(path).unwrap()["pattern"], r"\S");
             let field = after.pointer(path).unwrap();

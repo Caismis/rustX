@@ -27,10 +27,10 @@ fn annotated() -> WorkflowFileDocument {
 fn complete_file_round_trip_preserves_nested_metadata_markdown_order_and_numbers() {
     let document = annotated();
     let bytes = document.canonical_bytes().unwrap();
-    assert_eq!(document, serde_yaml::from_slice(&bytes).unwrap());
+    assert_eq!(document, serde_yaml_ng::from_slice(&bytes).unwrap());
     assert_eq!(
         bytes,
-        serde_yaml::from_slice::<WorkflowFileDocument>(&bytes)
+        serde_yaml_ng::from_slice::<WorkflowFileDocument>(&bytes)
             .unwrap()
             .canonical_bytes()
             .unwrap()
@@ -41,7 +41,7 @@ fn complete_file_round_trip_preserves_nested_metadata_markdown_order_and_numbers
     let numbers: WorkflowFileDocument = serde_json::from_value(value).unwrap();
     assert_eq!(
         numbers,
-        serde_yaml::from_slice(&numbers.canonical_bytes().unwrap()).unwrap()
+        serde_yaml_ng::from_slice(&numbers.canonical_bytes().unwrap()).unwrap()
     );
 }
 
@@ -95,7 +95,7 @@ fn missing_metadata_is_optional_and_unknown_or_duplicate_fields_are_rejected() {
     assert!(serde_json::from_value::<WorkflowFileDocument>(value).is_err());
     let mut text = String::from_utf8(document.canonical_bytes().unwrap()).unwrap();
     text.push_str("editor: {}\neditor: {}\n");
-    assert!(serde_yaml::from_str::<WorkflowFileDocument>(&text).is_err());
+    assert!(serde_yaml_ng::from_str::<WorkflowFileDocument>(&text).is_err());
     assert_eq!(document.timeout_ms, 600_000);
 }
 
@@ -195,7 +195,7 @@ fn issue527_expanded_document_exact_byte_bound_and_canonical_round_trip() {
         let bytes = document.canonical_bytes().unwrap();
         assert!(bytes.len() <= MAX_WORKFLOW_FILE_BYTES);
         assert_eq!(
-            serde_yaml::from_slice::<WorkflowFileDocument>(&bytes).unwrap(),
+            serde_yaml_ng::from_slice::<WorkflowFileDocument>(&bytes).unwrap(),
             document
         );
     }
@@ -213,7 +213,7 @@ fn issue527_unicode_and_json_escaping_measure_encoded_bytes_independently() {
     let mut document = file();
     document.description = "中文 🦀 \"\\\n\t".into();
     assert_eq!(
-        serde_yaml::from_slice::<WorkflowFileDocument>(&document.canonical_bytes().unwrap())
+        serde_yaml_ng::from_slice::<WorkflowFileDocument>(&document.canonical_bytes().unwrap())
             .unwrap(),
         document
     );
@@ -224,6 +224,6 @@ fn issue527_unicode_and_json_escaping_measure_encoded_bytes_independently() {
         unreachable!()
     };
     *code = "\u{1}".repeat(3 * 1024 * 1024);
-    assert!(serde_yaml::to_string(&document).unwrap().len() < MAX_WORKFLOW_FILE_BYTES);
+    assert!(serde_yaml_ng::to_string(&document).unwrap().len() < MAX_WORKFLOW_FILE_BYTES);
     assert!(document.validate().unwrap_err().reason.contains("expanded"));
 }

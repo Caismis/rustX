@@ -313,7 +313,10 @@ impl rustx::agent::PreStepPolicy for CountingPreStepPolicy {
 
 /// Absence of a durable projection activation proves no compaction committed.
 fn assert_no_compaction_committed(result: &AgentExecutionResult) {
-    assert!(result.projections.is_empty());
+    assert_eq!(
+        result.projections,
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+    );
     assert!(
         !result
             .event_history
@@ -1607,12 +1610,12 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
         ],
         "the abandoned stream settles before the retry stream opens"
     );
-    assert!(
+    assert_eq!(
         tool_runtime
             .durable_store()
             .load_unsettled_publication_streams()
-            .expect("unsettled publication streams")
-            .is_empty()
+            .expect("unsettled publication streams"),
+        [] as [crate::publication::frame::PublicationStreamRecord; 0]
     );
 
     let requests = model.requests();
@@ -2971,8 +2974,14 @@ async fn cancellation_observed_by_compaction_budget_preserves_the_attempt_reason
                 | RuntimeEvent::ModelRequestStarted { .. }
                 | RuntimeEvent::AuxiliaryCallStarted { .. }
         )));
-        assert!(model.requests().is_empty());
-        assert!(summarizer.requests().is_empty());
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
+        assert_eq!(
+            summarizer.requests(),
+            [] as [crate::context::summarizer::SummaryRequest; 0]
+        );
         assert_no_compaction_committed(&result);
     }
 }
@@ -3444,7 +3453,10 @@ async fn model_backed_summarizer_does_not_contaminate_the_execution() {
     assert_eq!(requests.len(), 3);
     // The summary request is the canonical one-off: no tools, no
     // continuation.
-    assert!(requests[1].tools.is_empty());
+    assert_eq!(
+        requests[1].tools,
+        [] as [crate::tools::types::ModelToolDefinition; 0]
+    );
     assert_eq!(requests[1].continuation, None);
     // The retry request carries the summary projection and no continuation.
     assert_eq!(requests[2].continuation, None);
@@ -3892,7 +3904,7 @@ async fn committed_checkpoint_hot_reconciliation_never_starts_from_stale_input()
             );
         } else {
             assert!(result.durable_failure.is_some());
-            assert!(result.snapshot_history().is_empty());
+            assert_eq!(result.snapshot_history(), []);
             assert!(
                 !result
                     .event_history
@@ -3959,7 +3971,10 @@ async fn n1_incomplete_search_settles_once_as_runtime_failure_even_after_real_ov
             tool_runtime.durable_store().as_ref(),
         );
         assert_eq!(model.requests().len(), usize::from(overflow));
-        assert!(summarizer.requests().is_empty());
+        assert_eq!(
+            summarizer.requests(),
+            [] as [crate::context::summarizer::SummaryRequest; 0]
+        );
         assert_eq!(result.messages(), history);
         assert_single_terminal(&result.event_history);
         let RuntimeEvent::AttemptFailed {
@@ -4134,8 +4149,14 @@ async fn n1_cancellation_during_exact_query_settles_without_summary_commit_or_re
         result.event_history.last(),
         Some(RuntimeEvent::AttemptCancelled { .. })
     ));
-    assert!(summarizer.requests().is_empty());
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        summarizer.requests(),
+        [] as [crate::context::summarizer::SummaryRequest; 0]
+    );
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_eq!(result.messages(), history);
     assert!(!result.event_history.iter().any(|event| matches!(
         event,
@@ -4559,8 +4580,14 @@ async fn production_media_failures_and_cancelled_resolution_start_no_request_or_
             tool_runtime.durable_store().as_ref(),
         );
         assert_single_terminal(&result.event_history);
-        assert!(summarizer.requests().is_empty());
-        assert!(model.requests().is_empty());
+        assert_eq!(
+            summarizer.requests(),
+            [] as [crate::context::summarizer::SummaryRequest; 0]
+        );
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
         assert_eq!(result.messages(), history);
         assert!(!result.event_history.iter().any(|e| matches!(
             e,
@@ -4570,11 +4597,11 @@ async fn production_media_failures_and_cancelled_resolution_start_no_request_or_
         )));
         let store = tool_runtime.durable_store();
         assert!(store.projection_head().unwrap().is_none());
-        assert!(
+        assert_eq!(
             store
                 .projection_timeline(rustx::context::checkpoint::ProjectionActivationId(0), 64)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::durable::projection::ProjectionCheckpoint; 0]
         );
         if case == "cancel" {
             assert!(matches!(
@@ -4677,7 +4704,7 @@ async fn mandatory_adapter_preflight_rejects_native_history_without_continuation
                 .iter()
                 .any(|e| matches!(e, RuntimeEvent::ModelRequestStarted { .. }))
         );
-        assert!(result.snapshot_history().is_empty());
+        assert_eq!(result.snapshot_history(), []);
         assert_eq!(result.messages(), history);
         assert!(matches!(
             result.event_history.last(),
@@ -4812,8 +4839,11 @@ async fn mandatory_preflight_rejects_retained_native_history_after_successful_co
     assert_single_terminal(&result.event_history);
     assert_eq!(summary.requests().len(), 1);
     assert_eq!(result.projections.len(), 1);
-    assert!(result.snapshot_history().is_empty());
-    assert!(model.requests().is_empty());
+    assert_eq!(result.snapshot_history(), []);
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_eq!(result.messages(), history);
     assert_eq!(
         result

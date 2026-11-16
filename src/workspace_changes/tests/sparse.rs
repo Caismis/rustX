@@ -31,7 +31,7 @@ async fn deleted_file(store: &ChangesStore, id: &str, before: &str) {
     assert!(!comparison.binary && !comparison.oversized && !comparison.truncated);
     assert_eq!(comparison.hunks.len(), 1);
     assert_eq!(comparison.hunks[0].old_text, before);
-    assert!(comparison.hunks[0].new_text.is_empty());
+    assert_eq!(comparison.hunks[0].new_text, "");
 }
 
 #[tokio::test]
@@ -120,7 +120,7 @@ async fn sparse_file_materialized_after_baseline_is_an_addition() {
     assert_eq!(summary.files[0].display, "tracked.txt");
     let comparison = store.comparison(&attempt, 0).await.unwrap().unwrap();
     assert_eq!(comparison.hunks.len(), 1);
-    assert!(comparison.hunks[0].old_text.is_empty());
+    assert_eq!(comparison.hunks[0].old_text, "");
     assert_eq!(comparison.hunks[0].new_text, after);
     unchanged_skipped_index(root, &index);
 }

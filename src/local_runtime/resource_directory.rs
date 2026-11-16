@@ -601,8 +601,6 @@ mod revision_tests {
 
 #[cfg(all(test, target_os = "macos"))]
 mod case_insensitive_tests {
-    use super::*;
-
     /// On a case-insensitive volume the loaders open `.agents/skills` and
     /// read the directory named `Skills`: editing a Skill there changes the
     /// revision exactly as it changes what they load.

@@ -116,7 +116,7 @@ async fn checkpoint_and_subscribe(
     };
     assert_eq!(following, *target);
     assert_eq!(after_cursor, checkpoint.cursor);
-    assert!(!registration_id.is_empty());
+    assert_ne!(registration_id, "");
     *checkpoint
 }
 

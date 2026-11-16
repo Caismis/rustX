@@ -1277,13 +1277,13 @@ chat_reasoning_replay = "omit"
         else {
             panic!("protocol corruption must make its own source unavailable");
         };
-        assert!(!reason.is_empty());
+        assert_ne!(reason, "");
         assert!(reason.len() < 4096, "protocol diagnostics stay bounded");
         assert!(Arc::ptr_eq(&before, &coordinator.current_snapshot()));
         let published = coordinator
             .commit(candidate)
             .expect("publish source outcome");
-        assert!(published.available_tools().tools().is_empty());
+        assert_eq!(published.available_tools().tools(), []);
         assert!(matches!(
             coordinator.availability()[&source],
             rustx::capabilities::CapabilitySourceState::Unavailable { .. }

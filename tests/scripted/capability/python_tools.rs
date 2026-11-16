@@ -133,7 +133,10 @@ async fn unreferenced_discovered_python_packages_perform_zero_preparation() {
     let candidate = fixture.coordinator.prepare_candidate().await.unwrap();
     fixture.coordinator.commit(candidate).unwrap();
     assert!(fixture.runner.commands.lock().unwrap().is_empty());
-    assert!(state_dirs(&fixture.store_root).is_empty());
+    assert_eq!(
+        state_dirs(&fixture.store_root),
+        [] as [std::path::PathBuf; 0]
+    );
     assert_eq!(
         fixture
             .coordinator

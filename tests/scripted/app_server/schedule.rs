@@ -436,7 +436,7 @@ async fn host_drain_fences_cold_commit_and_waits_for_physical_release() {
         assert!(!drain.is_finished());
         probe.storage_before_commit.release();
         assert!(command.await.unwrap().is_err());
-        assert!(drain.await.unwrap().is_empty());
+        assert_eq!(drain.await.unwrap(), [] as [std::string::String; 0]);
         assert!(f.manager.is_empty());
         assert_eq!(pending(&f, &f.sessions[0]).await, 0);
         assert_eq!(f.manager.diagnostics().schedule_commits, 0);
@@ -563,7 +563,7 @@ async fn driver_scans_empty_inventory_without_activating_ordinary_runtime_or_hum
         f.host.begin_drain();
         assert!(task.await.unwrap().is_ok());
         assert!(f.manager.run_schedule_driver().await.is_ok());
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         assert!(f.manager.is_empty());
         f.close().await;
     })
@@ -615,7 +615,7 @@ async fn lost_creation_hint_is_reconciled_from_an_empty_index_with_controlled_cl
         f.host.begin_drain();
         f.gates[0].release();
         assert!(task.await.unwrap().is_ok());
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         assert!(f.manager.is_empty());
         f.close().await;
     })
@@ -695,12 +695,12 @@ async fn fork_does_not_copy_schedules_command_receipts_or_temporal_identity() {
             .await
             .unwrap()
             .session;
-        assert!(
+        assert_eq!(
             f.manager
                 .schedule_list(&cloned.id, &cloned.active_node, 0, 100)
                 .await
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::scheduler::ScheduleSnapshot; 0]
         );
         let result = receipt(
             f.manager
@@ -756,8 +756,14 @@ async fn required_write_failure_fences_retries_until_explicit_native_recovery() 
             .recover_schedule_storage(&session.id, &session.active_node)
             .await
             .unwrap();
-        assert!(summary.pending.is_empty());
-        assert!(f.manager.diagnostics().schedule_write_fenced.is_empty());
+        assert_eq!(
+            summary.pending,
+            [] as [crate::scheduler::ScheduleTriggerId; 0]
+        );
+        assert_eq!(
+            f.manager.diagnostics().schedule_write_fenced,
+            [] as [crate::runtime::identity::ConversationId; 0]
+        );
         assert!(matches!(
             f.manager
                 .schedule_operation(&session.id, &session.active_node, operation)
@@ -892,7 +898,7 @@ async fn bounded_scan_skips_a_stalled_reader_and_drain_retains_its_physical_tail
         assert!(!f.manager.is_empty());
         probe.schedule_native_read.release();
         f.gates[0].release();
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         assert!(f.manager.is_empty());
         f.close().await;
     })
@@ -940,7 +946,7 @@ async fn unavailable_source_keeps_last_success_and_rejoins_after_repair() {
         assert_eq!(repaired.sources[&a].last_success_utc, Some(utc.now()));
         f.host.begin_drain();
         task.await.unwrap().unwrap();
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -995,7 +1001,7 @@ async fn abandoned_old_scan_cannot_overwrite_a_newer_dirty_observation() {
         assert!(health.sources[&a].next_due_utc.is_none());
         f.host.begin_drain();
         task.await.unwrap().unwrap();
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -1021,7 +1027,7 @@ async fn dirty_hint_refreshes_only_its_conversation_without_restarting_the_full_
         assert_eq!(after.stores_visited, before.stores_visited + 1);
         f.host.begin_drain();
         task.await.unwrap().unwrap();
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -1335,7 +1341,7 @@ async fn archived_cold_trigger_keeps_its_receipt_without_admitting_execution() {
                 .contains("archived")
         );
         assert_eq!(f.manager.probe(&id).compositions.load(Ordering::SeqCst), 0);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert!(f.manager.is_empty());
         // No retry, new submission or manager storage operation may clear a
         // failed flight between unarchive and this ordinary public load path.
@@ -1346,7 +1352,10 @@ async fn archived_cold_trigger_keeps_its_receipt_without_admitting_execution() {
         let store =
             crate::durable::SqliteConversationStore::open_existing(id.clone(), &database_path)
                 .unwrap();
-        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            store.load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         assert_eq!(
             store.lookup_inbound(&trigger.correlation()).unwrap(),
             Some(accepted)

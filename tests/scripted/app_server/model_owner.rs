@@ -151,7 +151,7 @@ async fn session_owned_model_selection_rejects_runtime_client_bypass_without_div
         .await;
         super::configuration::settled(&f, 0).await;
         assert_authority(&f, &selection("local/c")).await;
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         drop(connection);
         f.close().await;
     })

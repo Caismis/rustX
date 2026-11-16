@@ -1041,7 +1041,7 @@ async fn issue456_inexact_numbers_are_refused_before_any_write_and_exact_ones_ro
             .await;
         assert!(refused.is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), unsafe_text);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
     }))
     .await;
 }
@@ -1212,7 +1212,7 @@ async fn issue456_raw_request_param_literals_are_judged_before_any_rounding() {
         assert!(!path.parent().unwrap().join("agents/reviewer.toml").exists());
         assert_eq!(f.manager.configuration_application(&id), application);
         assert_eq!(runtime.model_view(), model);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
 
         // Exact literals, in any spelling, mean exactly what they spell at
         // every hop. A numeric-looking string stays a string.
@@ -1499,7 +1499,7 @@ async fn issue456_profile_key_collisions_are_refused_without_echoing_the_key() {
         sources_quiet(&connection).await;
         assert!(Arc::ptr_eq(&resources_after_default, &runtime.runtime_resources()));
         assert_eq!(runtime.model_view(), view);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     }))
     .await;

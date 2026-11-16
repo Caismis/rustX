@@ -417,12 +417,12 @@ fn settled_interaction(interaction_id: &InteractionId) -> RuntimeEventEnvelope {
 fn requirement_01_acceptance_is_the_transcript_visibility_frontier() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    assert!(
+    assert_eq!(
         store
             .load_transcript_page(None, 10)
             .expect("empty page")
-            .entries
-            .is_empty()
+            .entries,
+        [] as [rustx::durable::TranscriptEntry; 0]
     );
 
     let accepted = store
@@ -456,7 +456,10 @@ fn requirement_02_projection_compaction_preserves_every_canonical_transcript_ent
     let original = vec![user_message("user-a", "a"), user_message("user-b", "b")];
     store.initialize(&original).unwrap();
     let receipt = super::checkpoint(&store, "P1", 2, "summary");
-    assert!(store.load_head().unwrap().active_message_ids.is_empty());
+    assert_eq!(
+        store.load_head().unwrap().active_message_ids,
+        [] as [rustx::runtime::MessageId; 0]
+    );
     assert_eq!(
         store.projection_head().unwrap().unwrap(),
         receipt.checkpoint
@@ -754,12 +757,12 @@ fn requirement_07_agent_status_is_excluded_from_normal_transcript() {
             correlation: None,
         })
         .expect("status context acceptance");
-    assert!(
+    assert_eq!(
         store
             .load_transcript_page(None, 10)
             .expect("page before status adoption")
-            .entries
-            .is_empty()
+            .entries,
+        [] as [rustx::durable::TranscriptEntry; 0]
     );
     store
         .adopt_pending_batch(accepted_context.sequence, None)
@@ -887,7 +890,10 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
             PublicationAuditKind::Unaccepted,
         ]
     );
-    assert!(store.load_canonical().expect("canonical").is_empty());
+    assert_eq!(
+        store.load_canonical().expect("canonical"),
+        [] as [rustx::message::MessageBlock; 0]
+    );
 }
 
 /// Requirement 10: a publication-audit tool proposal is typed audit content
@@ -916,7 +922,10 @@ fn requirement_10_audited_tool_proposal_is_unaccepted_and_unexecuted() {
             .iter()
             .all(|event| !matches!(event.event, RuntimeEvent::ToolExecutionStarted { .. }))
     );
-    assert!(store.load_canonical().expect("canonical").is_empty());
+    assert_eq!(
+        store.load_canonical().expect("canonical"),
+        [] as [rustx::message::MessageBlock; 0]
+    );
 }
 
 /// Requirement 11: requested and settled interaction facts are historical
@@ -950,8 +959,14 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after audit recovery");
     let snapshot = initialized_snapshot(&result, runtime.host());
-    assert!(snapshot.pending_interactions.is_empty());
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.pending_interactions,
+        [] as [rustx::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [rustx::runtime_client::InboundItemView; 0]
+    );
     let page = runtime
         .host()
         .transcript_page(None, 10)
@@ -1002,19 +1017,19 @@ fn interaction_audit_transition_is_the_only_cursor_returning_interaction_path() 
         store.append_event(requested.clone()),
         Err(ConversationStoreError::InvalidReference(_))
     ));
-    assert!(
+    assert_eq!(
         store
             .read_events(None, 10)
             .expect("Journal after rejected request")
-            .events
-            .is_empty()
+            .events,
+        [] as [rustx::events::RuntimeEventEnvelope; 0]
     );
-    assert!(
+    assert_eq!(
         store
             .load_transcript_page(None, 10)
             .expect("transcript after rejected request")
-            .entries
-            .is_empty()
+            .entries,
+        [] as [rustx::durable::TranscriptEntry; 0]
     );
 
     let (persisted_requested, requested_cursor) = store

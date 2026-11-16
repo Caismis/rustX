@@ -6,9 +6,10 @@ tuning with a model-derived policy and one sequential Summary pipeline. The
 background operation lifecycle and final Web/TUI presentation are separate
 changes.
 
-## Integrated contract (2026-11-15)
+## Integrated contract
 
-PR #531 integrates `origin/main` at `33234e5b1`. The integrated contract is
+PR #531 integrates `origin/main` at `d82d7f9b8d9dd4f5064dba8d377103c8c6049d28`.
+Rust 1.100.0 / MSRV 1.100 is the single compiler baseline. The integrated contract is
 App Server v79, Runtime Client v86,
 Child IPC v40, SQLite schema 89, Runtime authoring schema 13 and Runtime
 Manifest v7. The model catalog remains schema 2 and Session catalog schema 21.
@@ -21,7 +22,19 @@ compaction honors the frozen Auxiliary output limit, removes authored context
 tuning, and keeps accepted chunk progress and distinct cancelled/skipped Trace
 terminals.
 
-### Current integration verification (2026-11-15)
+Native companions follow the executable-sibling deployment contract. Test
+preparation uses `test-support/prepare_native_tests.py` and Cargo's emitted
+artifact identities for the exact checkout, target, profile and feature set;
+no Cargo-directory inference is retained. Private test modules keep the same
+compaction and source-ownership proofs after the engineering reorganization.
+
+The browser convergence fixture waits for its exact native target's completed
+Attempt before applying the rendering deadline. Text-only distant-reading
+preparation omits unused Tool setup while retaining all 300 durable Attempts.
+The PR description records final-head FULL CI, compiler checks and native
+verification without another evidence-only source commit.
+
+### Previous integration verification (main `33234e5b1`)
 
 The integrated tree retains main's instruction-only Skills, Workspace Python
 execution environment and immutable Workflow Run Canvas snapshots. SQLite schema
@@ -49,7 +62,7 @@ tests. The two real TUI Agent-interruption carriers pass an initial run and ten
 additional repetitions each, without retries or skips. These focused and
 repeated results do not establish a completed remote FULL CI run.
 
-### Browser fixture lifecycle and preparation
+### Previous browser fixture evidence (main `33234e5b1`)
 
 Model-refresh scenarios retire and drain their browser Product Host routes before
 closing the Host or native process, using the shared `stopDogfoodPage` helper.

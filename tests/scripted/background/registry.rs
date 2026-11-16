@@ -1880,7 +1880,10 @@ async fn issue206_background_panic_keeps_registry_settlement_authority() {
     .expect("panic must not orphan the record")
     .expect("terminal");
     assert_eq!(terminal.state, BackgroundLifecycle::OutcomeUnknown);
-    assert!(fixture.registry.active_snapshot().is_empty());
+    assert_eq!(
+        fixture.registry.active_snapshot(),
+        [] as [crate::tools::background::BackgroundExecutionSnapshot; 0]
+    );
     fixture.registry.finish(&execution_id, &success());
     assert_eq!(fixture.registry.snapshot(&execution_id), Some(terminal));
     assert_eq!(

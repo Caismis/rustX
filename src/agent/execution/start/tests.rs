@@ -218,12 +218,12 @@ async fn provider_is_not_invoked_before_durable_request_start_commit() {
         "provider starts after durable commit"
     );
     assert!(result.durable_failure.is_some());
-    assert!(
+    assert_eq!(
         store
             .read_request_snapshots(None, 32)
             .expect("request snapshots")
-            .snapshots
-            .is_empty()
+            .snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
     assert!(
         !store
@@ -841,7 +841,10 @@ async fn issue383_noop_and_absent_extensions_share_the_cancellation_boundary() {
         controller.await.unwrap();
         assert!(matches!(result.outcome, AttemptOutcome::Cancelled { .. }));
         assert_eq!(adapter.request_count(), 0);
-        assert!(request_snapshot_history(store.as_ref()).is_empty());
+        assert_eq!(
+            request_snapshot_history(store.as_ref()),
+            [] as [crate::model::snapshot::RequestSnapshot; 0]
+        );
         let events = event_history(store.as_ref());
         assert!(!events.iter().any(|e| matches!(
             e,
@@ -935,7 +938,10 @@ async fn issue383_native_preparation_cancellation_commits_nothing() {
     controller.await.unwrap();
     assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert_eq!(adapter.request_count(), 0);
-    assert!(request_snapshot_history(store.as_ref()).is_empty());
+    assert_eq!(
+        request_snapshot_history(store.as_ref()),
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
+    );
     assert!(
         store
             .latest_contribution_emission(
@@ -1092,7 +1098,10 @@ async fn issue383_native_start_transaction_failure_rolls_back_receipts() {
         .await;
         assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
         assert_eq!(adapter.request_count(), 0);
-        assert!(request_snapshot_history(store.as_ref()).is_empty());
+        assert_eq!(
+            request_snapshot_history(store.as_ref()),
+            [] as [crate::model::snapshot::RequestSnapshot; 0]
+        );
         assert!(
             store
                 .latest_contribution_emission(

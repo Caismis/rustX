@@ -112,11 +112,11 @@ impl ToolExecutor for McpToolExecutor {
     /// cancellation path (local HTTP request termination, its release proof,
     /// and the best-effort `notifications/cancelled`), and post-frontier
     /// classification — lives inside the single operation future of
-    /// [`ToolExecutionHandle::settled_by_operation`], and the settlement
+    /// [`ToolExecutionHandle::settled_by_operation`](crate::tools::executor::ToolExecutionHandle::settled_by_operation), and the settlement
     /// plane takes exclusive ownership of that future and drives it to its
     /// terminal end.
     ///
-    /// [`ToolExecutionHandle::settled_by_operation`] is therefore still the
+    /// [`ToolExecutionHandle::settled_by_operation`](crate::tools::executor::ToolExecutionHandle::settled_by_operation) is therefore still the
     /// honest abstraction after the Streamable HTTP request lifecycle: it is
     /// correct exactly when "the operation future returned" implies "all
     /// rustX-owned local execution for this invocation is over", and it does

@@ -43,14 +43,17 @@ fn t10_t14_failed_workflow_append_does_not_release_uncommitted_source_revisions(
     plane.store.arm_fail_event_times(1);
     runtime.emit_workflow_start_observability(fact.clone(), program.run_snapshot());
     assert!(publication.lock().unwrap().is_empty());
-    assert!(
+    assert_eq!(
         runtime
             .read_model
-            .published_source_cuts_after(read_model::WorkflowRevision(0))
-            .is_empty()
+            .published_source_cuts_after(read_model::WorkflowRevision(0)),
+        [] as [std::sync::Arc<crate::runtime::workflow::read_model::WorkflowSnapshot>; 0]
     );
     assert_eq!(plane.store.observation_read_cut().unwrap(), original_cut);
-    assert!(plane.store.read_events(None, 2).unwrap().events.is_empty());
+    assert_eq!(
+        plane.store.read_events(None, 2).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     runtime.emit_workflow_start_observability(fact.clone(), program.run_snapshot());
     let delivered = publication.lock().unwrap();
     assert_eq!(delivered.len(), 1);

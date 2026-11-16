@@ -11,7 +11,7 @@
 //! `[environment]` overrides (including those four keys, via
 //! [`ToolEnvironment::from_configured`]), then select the Workspace default
 //! Python. The frozen result is stored on the invocation clone as
-//! [`PreparedCommand`] and is omitted from [`std::fmt::Debug`].
+//! `PreparedCommand` and is omitted from [`std::fmt::Debug`].
 //!
 //! `ToolEnvironment` configures only the executed tool process. It never configures
 //! supervisor ownership, cancellation, settlement, tracing, fault injection, or
@@ -101,7 +101,7 @@ impl std::error::Error for ToolEnvironmentError {}
 ///
 /// The environment is deterministic: entries are stored sorted by key.
 /// [`Self::child_environment`] is the excluded-executor baseline.
-/// Native Bash uses [`PreparedCommand`] instead. Skill discovery never adds entries.
+/// Native Bash uses `PreparedCommand` instead. Skill discovery never adds entries.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ToolEnvironment {
     authorized: Vec<(String, String)>,

@@ -232,7 +232,10 @@ async fn issue383_retry_and_corrective_requests_freeze_goal_and_native_receipts(
             snapshots[0].context_generation,
             snapshots[1].context_generation
         );
-        assert!(snapshots[1].request_context_ids.is_empty());
+        assert_eq!(
+            snapshots[1].request_context_ids,
+            [] as [crate::runtime::identity::MessageId; 0]
+        );
         let goal_revision = |snapshot: &crate::model::RequestSnapshot| {
             snapshot
                 .contributions
@@ -422,22 +425,25 @@ async fn issue383_duplicate_native_registration_rejects_attempt_before_start() {
         )
         .is_err()
     );
-    assert!(model.requests().is_empty());
-    assert!(
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
+    assert_eq!(
         runtime
             .durable_store()
             .read_request_snapshots(None, 10)
             .unwrap()
-            .snapshots
-            .is_empty()
+            .snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
-    assert!(
+    assert_eq!(
         runtime
             .durable_store()
             .read_events(None, 10)
             .unwrap()
-            .events
-            .is_empty()
+            .events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
 }
 
@@ -463,8 +469,14 @@ async fn issue383_production_composed_noop_and_optional_failure_preserve_runtime
         let store = runtime.durable_store();
         let snapshots = store.read_request_snapshots(None, 10).unwrap().snapshots;
         assert_eq!(snapshots.len(), 1);
-        assert!(snapshots[0].request_context_ids.is_empty());
-        assert!(snapshots[0].contributions.is_empty());
+        assert_eq!(
+            snapshots[0].request_context_ids,
+            [] as [crate::runtime::identity::MessageId; 0]
+        );
+        assert_eq!(
+            snapshots[0].contributions,
+            [] as [crate::context::contribution::ContributionStart; 0]
+        );
         assert!(
             snapshots[0]
                 .context_generation
@@ -576,14 +588,17 @@ async fn issue383_mandatory_and_integrity_failure_prevent_startup() {
             "{:?}",
             result.outcome
         );
-        assert!(model.requests().is_empty());
-        assert!(
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
+        assert_eq!(
             runtime
                 .durable_store()
                 .read_request_snapshots(None, 100)
                 .unwrap()
-                .snapshots
-                .is_empty()
+                .snapshots,
+            [] as [crate::model::snapshot::RequestSnapshot; 0]
         );
         let events = runtime
             .durable_store()

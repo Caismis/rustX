@@ -8,22 +8,6 @@
 //! unresolved behavior never count as proven read-only. Unproven is distinct
 //! from known-malicious: Plan elevates and Automatic reviews.
 
-// Dense ZCode table/callback ports trip pedantic Clippy; keep the port
-// structure close to upstream rather than reshaping for lint style.
-#![allow(
-    clippy::assigning_clones,
-    clippy::collapsible_if,
-    clippy::doc_markdown,
-    clippy::manual_let_else,
-    clippy::map_unwrap_or,
-    clippy::redundant_closure_for_method_calls,
-    clippy::similar_names,
-    clippy::single_match_else,
-    clippy::struct_excessive_bools,
-    clippy::too_many_lines,
-    clippy::wildcard_imports
-)]
-
 macro_rules! zcode_port_mod {
     ($($name:ident),+ $(,)?) => {
         $(

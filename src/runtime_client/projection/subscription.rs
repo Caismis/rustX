@@ -184,7 +184,6 @@ impl RuntimeClientProjection {
 
     /// The retained replay ring (tests).
     #[cfg(test)]
-    #[allow(dead_code)] // asserted by the bounded-replay regression tests
     pub(crate) fn replay_len(&self) -> usize {
         self.replay.len()
     }

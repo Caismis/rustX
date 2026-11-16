@@ -1870,11 +1870,11 @@ fn published_history_cut_excludes_future_bodies_before_hydration() {
             .len(),
         2
     );
-    assert!(
+    assert_eq!(
         crate::runtime_client::projection_history::page(&store, cut, ProjectionActivationId(2), 64)
             .unwrap()
-            .records
-            .is_empty()
+            .records,
+        [] as [crate::observation::head::RuntimeClientProjectionHeadView; 0]
     );
     store
         .lock()
@@ -2200,7 +2200,10 @@ fn n1_pagination_is_contiguous_exhausted_and_frozen_across_append() {
     let empty = store
         .projection_timeline_at_journal_cut(cut, ProjectionActivationId(2), 1)
         .unwrap();
-    assert!(empty.records.is_empty());
+    assert_eq!(
+        empty.records,
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+    );
     assert_eq!(empty.next_activation, None);
     let current = store
         .projection_timeline_at_journal_cut(
@@ -2446,10 +2449,9 @@ fn timeline_complete_record_budget_returns_a_partial_page_before_decoding_the_ne
         .len(),
         2
     );
-    assert!(
-        timeline_page(&connection, ProjectionActivationId(2), 2, None, 1)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        timeline_page(&connection, ProjectionActivationId(2), 2, None, 1).unwrap(),
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
     );
 }
 
@@ -2635,7 +2637,7 @@ fn bounded_record_pages_preserve_same_ledger_order_and_frozen_cut_across_append(
         .unwrap(),
         second
     );
-    assert!(
+    assert_eq!(
         timeline_page(
             &store.lock().unwrap(),
             ProjectionActivationId(2),
@@ -2643,8 +2645,8 @@ fn bounded_record_pages_preserve_same_ledger_order_and_frozen_cut_across_append(
             selection,
             budget
         )
-        .unwrap()
-        .is_empty()
+        .unwrap(),
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
     );
     assert_eq!(
         first

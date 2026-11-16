@@ -144,7 +144,10 @@ fn malformed_prefixes_are_diagnosed_and_large_definitions_are_loaded() {
     for header in ["not YAML", "---\nname: guide\n", "---\nname: [\n---\n"] {
         std::fs::write(root.join("guide/SKILL.md"), header).unwrap();
         let outcome = SkillDiscovery::user_root(root.clone()).discover();
-        assert!(outcome.packages.is_empty());
+        assert_eq!(
+            outcome.packages,
+            [] as [crate::skills::package::SkillPackage; 0]
+        );
         assert_eq!(outcome.diagnostics.len(), 1);
     }
     let note = "x".repeat(1024 * 1024 + 1);
@@ -158,7 +161,10 @@ fn malformed_prefixes_are_diagnosed_and_large_definitions_are_loaded() {
         outcome.packages[0].metadata()["note"].as_str(),
         Some(note.as_str())
     );
-    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(
+        outcome.diagnostics,
+        [] as [crate::skills::diagnostics::SkillDiagnostic; 0]
+    );
     let signal = CancellationSignal::new();
     signal.cancel();
     super::frontmatter::READ_BYTES.with(|v| v.set(0));

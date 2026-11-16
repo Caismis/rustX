@@ -100,7 +100,7 @@ pub struct McpDraftDiagnostics {
     pub cleanup_failures: Vec<String>,
 }
 impl McpDraftRegistry {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) async fn reserve_all_for_test(&self) -> tokio::sync::OwnedSemaphorePermit {
         self.capacity
             .clone()
@@ -326,7 +326,7 @@ impl Slot {
     }
 }
 impl McpDraftScope {
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn consume_wait_for_test(&self) -> watch::Receiver<bool> {
         self.0
             .0
@@ -339,7 +339,7 @@ impl McpDraftScope {
             .consume_waiting
             .subscribe()
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn capacity_wait_for_test(&self) -> watch::Receiver<bool> {
         self.0
             .0
@@ -352,7 +352,7 @@ impl McpDraftScope {
             .capacity_waiting
             .subscribe()
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn transfer_for_test(&self) -> watch::Receiver<bool> {
         self.0
             .0
@@ -365,7 +365,7 @@ impl McpDraftScope {
             .transferred
             .subscribe()
     }
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) async fn prepared_for_test(&self) -> McpInitialSubmission {
         let slot = self
             .0

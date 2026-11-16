@@ -1141,7 +1141,10 @@ fn cancelled_and_skipped_compactions_survive_cold_trace_reconstruction() {
             assert_eq!(record.timing.ended_at, Some(timestamp(end)));
             assert_eq!(record.timing.duration_ms, Some(duration));
             assert!(record.preview.is_none());
-            assert!(detail_of(store, &record.id).projected_messages.is_empty());
+            assert_eq!(
+                detail_of(store, &record.id).projected_messages,
+                [] as [crate::observation::trace::TraceRequestMessage; 0]
+            );
         }
     };
     check(&store);
@@ -1172,12 +1175,9 @@ fn compaction_uses_the_next_boundary_even_far_back_in_history() {
                 active.has_detail,
                 "detail remains available through lifecycle repair"
             );
-            assert!(
-                read.detail(&active.id)
-                    .unwrap()
-                    .unwrap()
-                    .messages
-                    .is_empty()
+            assert_eq!(
+                read.detail(&active.id).unwrap().unwrap().messages,
+                [] as [crate::observation::trace::types::TraceMessageDetail; 0]
             );
         }
         append(
@@ -1959,7 +1959,10 @@ fn record_bounds_account_for_escaping_and_omit_oversized_identities() {
     });
     bound_record(&mut record);
     assert!(record.truncated);
-    assert!(record.attachments.is_empty());
+    assert_eq!(
+        record.attachments,
+        [] as [crate::observation::trace::types::TraceArtifact; 0]
+    );
     assert!(record.location.attempt_id.is_none());
     assert!(serde_json::to_vec(&record).unwrap().len() <= TRACE_RECORD_BYTES);
 }
@@ -3033,7 +3036,10 @@ fn canonical_context_is_projected_from_the_frozen_request_identities() {
     );
     for addition in &additions {
         assert!(!addition.truncated);
-        assert!(addition.attachments.is_empty());
+        assert_eq!(
+            addition.attachments,
+            [] as [crate::observation::trace::types::TraceArtifact; 0]
+        );
     }
     assert_eq!(additions[0].preview.as_ref().unwrap().text, "Goal: active");
     // The internal ContextKind payload stays inside the runtime: a family
@@ -3065,8 +3071,14 @@ fn retry_and_recovery_requests_introduce_no_duplicate_context() {
 
     let projected = page(&store);
     assert_eq!(context_of(&projected, 0).len(), 1);
-    assert!(context_of(&projected, 1).is_empty());
-    assert!(context_of(&projected, 2).is_empty());
+    assert_eq!(
+        context_of(&projected, 1),
+        [] as [crate::observation::trace::types::TraceContextPresentation; 0]
+    );
+    assert_eq!(
+        context_of(&projected, 2),
+        [] as [crate::observation::trace::types::TraceContextPresentation; 0]
+    );
     assert_eq!(
         serde_json::to_string(&projected)
             .unwrap()
@@ -3193,7 +3205,10 @@ fn context_presentation_is_reproducible_and_bounded() {
     let record = record_of(&projected, TraceKind::Request);
     let summary = record.request.as_ref().unwrap();
     assert!(summary.context_truncated);
-    assert!(!summary.context_additions.is_empty());
+    assert_ne!(
+        summary.context_additions,
+        [] as [crate::observation::trace::types::TraceContextPresentation; 0]
+    );
     assert!(
         serde_json::to_vec(&summary.context_additions)
             .unwrap()
@@ -4079,12 +4094,9 @@ fn assert_context_pair_rejected(source: UserSource, kind: ContextKind) {
         store.commit_model_turn_start(&[message], &snapshot, timestamp(2)),
         Err(ConversationStoreError::InvalidReference(_))
     ));
-    assert!(
-        store
-            .read_request_snapshots(None, 10)
-            .unwrap()
-            .snapshots
-            .is_empty()
+    assert_eq!(
+        store.read_request_snapshots(None, 10).unwrap().snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
 }
 

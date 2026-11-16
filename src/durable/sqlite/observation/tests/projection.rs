@@ -591,7 +591,10 @@ fn t08_t12_t19_long_original_provenance_keeps_finite_request_headers_and_exact_r
             TraceInputProvenance::Derived {
                 sources, truncated, ..
             } => {
-                assert!(sources.is_empty());
+                assert_eq!(
+                    sources,
+                    [] as [crate::model::projected::CanonicalMessageRef; 0]
+                );
                 assert!(truncated);
             }
             TraceInputProvenance::Original {

@@ -30,7 +30,10 @@ fn measure_native_schema_open_cost() {
             SqliteConversationStore::open_schedule_reader(id.clone(), &path, &scope).unwrap();
         let summary = store.schedule_summary().unwrap();
         assert_eq!(summary.enabled, 0);
-        assert!(summary.pending.is_empty());
+        assert_eq!(
+            summary.pending,
+            [] as [crate::scheduler::ScheduleTriggerId; 0]
+        );
     }
     let native = started.elapsed();
     let mut initialization = Duration::ZERO;
@@ -77,7 +80,10 @@ fn measure_native_schema_open_cost() {
             .unwrap();
         let store =
             SqliteConversationStore::from_validated_connection(id.clone(), connection).unwrap();
-        assert!(store.schedule_summary().unwrap().pending.is_empty());
+        assert_eq!(
+            store.schedule_summary().unwrap().pending,
+            [] as [crate::scheduler::ScheduleTriggerId; 0]
+        );
         drop(store);
         finish += started.elapsed();
     }

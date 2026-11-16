@@ -372,7 +372,7 @@ async fn mandatory_provenance_ceiling_fails_without_starting_the_primary() {
             }
         } if message == PROVENANCE_CEILING_DIAGNOSTIC
     ));
-    assert!(run.requests.is_empty());
+    assert_eq!(run.requests, [] as [crate::model::ModelRequest; 0]);
     assert_eq!(run.summary_calls, 0);
     assert!(!run.has_projection);
     assert!(run.events.iter().any(|event| matches!(
@@ -401,7 +401,10 @@ async fn optional_summary_failure_reuses_the_once_accepted_staged_context() {
     );
     assert_eq!(summarizer.requests().len(), 1);
     assert_eq!(invocations.load(Ordering::SeqCst), 1);
-    assert!(result.projections.is_empty());
+    assert_eq!(
+        result.projections,
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+    );
     assert!(result.event_history.iter().any(|event| matches!(
         event,
         crate::events::types::RuntimeEvent::CompactionFailed { .. }
@@ -420,7 +423,10 @@ async fn summary_failure_cannot_bypass_mandatory_primary_admission() {
     assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
     assert_eq!(adapter.request_count(), 0);
     assert_eq!(invocations.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert!(result.projections.is_empty());
+    assert_eq!(
+        result.projections,
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+    );
     assert!(result.event_history.iter().any(|event| matches!(
         event,
         crate::events::types::RuntimeEvent::CompactionFailed { .. }
@@ -434,7 +440,10 @@ async fn complete_staged_pressure_is_mandatory_before_the_first_compaction() {
     assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
     assert_eq!(adapter.request_count(), 0);
     assert_eq!(invocations.load(Ordering::SeqCst), 1);
-    assert!(result.projections.is_empty());
+    assert_eq!(
+        result.projections,
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+    );
     assert_eq!(
         result
             .event_history
@@ -454,7 +463,10 @@ async fn a_failed_optional_summary_does_not_reject_exact_hard_limit_equality() {
     assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
     assert_eq!(adapter.request_count(), 1);
     assert_eq!(summarizer.requests().len(), 1);
-    assert!(result.projections.is_empty());
+    assert_eq!(
+        result.projections,
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+    );
 }
 
 #[tokio::test]
@@ -468,7 +480,10 @@ async fn optional_compaction_cannot_continue_after_cancellation_or_durable_failu
             failed_summary_attempt_with_kind(2, true, 160, kind).await;
         assert_eq!(summarizer.requests().len(), 1, "{kind:?}");
         assert_eq!(adapter.request_count(), 0, "{kind:?}");
-        assert!(result.projections.is_empty());
+        assert_eq!(
+            result.projections,
+            [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+        );
         if kind == ContextErrorKind::Cancelled {
             assert!(matches!(result.outcome, AttemptOutcome::Cancelled { .. }));
             assert!(!result.event_history.iter().any(|event| matches!(
@@ -513,7 +528,10 @@ async fn optional_planning_failure_and_exhausted_summary_can_preserve_a_fitting_
             "{kind:?}"
         );
         assert_eq!(adapter.request_count(), 1, "{kind:?}");
-        assert!(result.projections.is_empty());
+        assert_eq!(
+            result.projections,
+            [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+        );
     }
 }
 
@@ -522,9 +540,15 @@ async fn proactive_pressure_without_eligible_history_keeps_the_fitting_staged_re
     let (result, adapter, summarizer, invocations) = failed_summary_attempt(0, true, 50).await;
     assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
     assert_eq!(adapter.request_count(), 1);
-    assert!(summarizer.requests().is_empty());
+    assert_eq!(
+        summarizer.requests(),
+        [] as [crate::context::summarizer::SummaryRequest; 0]
+    );
     assert_eq!(invocations.load(std::sync::atomic::Ordering::SeqCst), 1);
-    assert!(result.projections.is_empty());
+    assert_eq!(
+        result.projections,
+        [] as [crate::durable::projection::ProjectionCheckpoint; 0]
+    );
     assert!(result.event_history.iter().any(|event| matches!(
         event,
         crate::events::types::RuntimeEvent::CompactionSkipped { .. }
@@ -571,7 +595,10 @@ async fn proactive_pressure_prices_frozen_request_only_feedback() {
         AttemptOutcome::Completed { .. }
     ));
     assert_eq!(baseline_adapter.request_count(), 1);
-    assert!(baseline_summarizer.requests().is_empty());
+    assert_eq!(
+        baseline_summarizer.requests(),
+        [] as [crate::context::summarizer::SummaryRequest; 0]
+    );
 }
 
 #[tokio::test]
@@ -587,7 +614,10 @@ async fn fixed_request_only_feedback_cannot_activate_an_inadmissible_checkpoint(
     .await;
     assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
     assert_eq!(adapter.request_count(), 0);
-    assert!(summarizer.requests().is_empty());
+    assert_eq!(
+        summarizer.requests(),
+        [] as [crate::context::summarizer::SummaryRequest; 0]
+    );
     assert_eq!(invocations.load(std::sync::atomic::Ordering::SeqCst), 1);
     assert!(
         result.projections.is_empty(),
@@ -663,7 +693,10 @@ async fn workflow_output_tool_is_priced_before_checkpoint_activation() {
     .await;
     assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
     assert_eq!(adapter.request_count(), 0);
-    assert!(summarizer.requests().is_empty());
+    assert_eq!(
+        summarizer.requests(),
+        [] as [crate::context::summarizer::SummaryRequest; 0]
+    );
     assert!(
         tool_runtime
             .durable_store()
@@ -1159,12 +1192,18 @@ async fn cancellation_during_awaited_context_assembly_commits_nothing() {
             reason: CancellationReason::UserRequested
         }
     ));
-    assert!(snapshots.is_empty());
+    assert_eq!(
+        snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
+    );
     assert_eq!(
         result.conversation.revision(),
         crate::conversation::SurfaceRevision::INITIAL
     );
-    assert!(result.messages().is_empty());
+    assert_eq!(
+        result.messages(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(adapter.request_count(), 0);
 }
 

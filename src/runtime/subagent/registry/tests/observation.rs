@@ -309,7 +309,10 @@ fn subagent_listing_counts_matches_before_its_materialization_bound() {
 
     // A zero bound still reports the whole matching population.
     let none = plane.registry.listing(false, 0);
-    assert!(none.snapshots.is_empty());
+    assert_eq!(
+        none.snapshots,
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
     assert_eq!(none.matched, 9);
 }
 

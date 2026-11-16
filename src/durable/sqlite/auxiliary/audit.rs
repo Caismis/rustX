@@ -97,6 +97,7 @@ pub(super) fn has_call_settlement_journal_tx(
         .map_err(|error| sqlite_error(&error, format!("auxiliary Call settlement probe: {error}")))
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn call_audit_at_tx(
     connection: &Connection,
     conversation_id: &ConversationId,
@@ -409,9 +410,11 @@ pub(super) fn request_evidence_at_tx(
 }
 
 #[cfg(test)]
+type AfterRequestRowReadHook = std::cell::RefCell<Option<(RequestId, Box<dyn FnOnce()>)>>;
+
+#[cfg(test)]
 thread_local! {
-    static AFTER_REQUEST_ROW_READ:
-        std::cell::RefCell<Option<(RequestId, Box<dyn FnOnce()>)>> =
+    static AFTER_REQUEST_ROW_READ: AfterRequestRowReadHook =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -447,6 +450,7 @@ pub(super) fn after_request_row_read(request_id: &RequestId) {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub(super) fn request_audit_at_tx(
     connection: &Connection,
     conversation_id: &ConversationId,

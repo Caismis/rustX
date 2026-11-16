@@ -13,7 +13,7 @@ static LIVE_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 fn reserve(bytes: usize) -> bool {
     LIVE_BYTES
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |live| {
             live.checked_add(bytes).filter(|next| *next <= HEAP_LIMIT)
         })
         .is_ok()

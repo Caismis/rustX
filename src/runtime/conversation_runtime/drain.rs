@@ -640,7 +640,7 @@ impl ConversationRuntime {
     /// The `Running -> Draining` transition is linearized under the same
     /// coordinator lock as inbound acceptance and attempt admission. Repeated
     /// callers join the same drain completion, and only the first transition
-    /// publishes [`ConversationObservation::Shutdown`].
+    /// publishes `ConversationObservation::Shutdown`.
     ///
     /// # Errors
     ///

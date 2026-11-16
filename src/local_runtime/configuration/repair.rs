@@ -537,8 +537,7 @@ impl<'s> Walker<'s> {
         let required: Vec<&str> = node
             .get("required")
             .and_then(Value::as_array)
-            .map(|names| names.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
+            .map_or_default(|names| names.iter().filter_map(Value::as_str).collect());
         node.get("properties")
             .and_then(Value::as_object)
             .into_iter()

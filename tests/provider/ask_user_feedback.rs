@@ -322,7 +322,7 @@ async fn assert_rejection_wire(protocol: ModelProtocol) {
         "all result identities, ordering, and complete projections survive without drops or duplicates"
     );
     for (_, text) in &wire_results {
-        assert!(!text.is_empty());
+        assert_ne!(text, "");
         assert!(text.len() <= MAX_MODEL_TOOL_RESULT_BYTES);
     }
 }

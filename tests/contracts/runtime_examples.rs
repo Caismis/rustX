@@ -199,7 +199,7 @@ fn committed_echo_package_is_discovered_by_production_python_discovery() {
     assert!(file_names.contains(&"server.py"));
     assert!(file_names.contains(&"requirements.txt"));
     // The example declares no dependencies; rustX pins FastMCP itself.
-    assert!(package.requirements().is_empty());
+    assert_eq!(package.requirements(), Vec::<String>::new());
 }
 
 #[test]
@@ -217,7 +217,7 @@ fn committed_example_skill_is_found_by_project_agents_discovery() {
             .collect::<Vec<_>>(),
         vec!["review-guidance"]
     );
-    assert!(outcome.diagnostics.is_empty());
+    assert_eq!(outcome.diagnostics, []);
     assert!(outcome.packages[0].description().contains("bounded"));
 }
 
@@ -238,7 +238,7 @@ fn every_shipped_workflow_is_discovered_and_compiles() {
         )
         .unwrap();
         let definition: WorkflowDefinition =
-            serde_yaml::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            serde_yaml_ng::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         WorkflowProgram::compile(id.clone(), definition)
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     }
@@ -248,7 +248,7 @@ fn every_shipped_workflow_is_discovered_and_compiles() {
 fn reference_authoring_errors_fail_before_execution() {
     use rustx::runtime::workflow::{WorkflowDefinition, WorkflowId, WorkflowProgram};
     let source: serde_json::Value =
-        serde_yaml::from_slice(&read_example(".agents/workflows/implement_and_review.yaml"))
+        serde_yaml_ng::from_slice(&read_example(".agents/workflows/implement_and_review.yaml"))
             .unwrap();
     let cases = [
         (

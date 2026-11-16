@@ -394,7 +394,7 @@ pub async fn stdio_subscription_change_retires_buffered_notifications(detach: bo
         // No response is outstanding. These bytes are a real notification
         // already written before the next request; leave it unread so that
         // request's ordinary demultiplexer must buffer it before its response.
-        assert!(!driver.from_session.fill_buf().await.unwrap().is_empty());
+        assert_ne!(driver.from_session.fill_buf().await.unwrap(), [] as [u8; 0]);
         snapshot(&mut driver, 5).await;
         let buffered = driver
             .buffered_events
@@ -2075,7 +2075,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
         !status.sections.is_empty(),
         "the structured sections are projected, not only the rendering"
     );
-    assert!(!status.rendered.is_empty());
+    assert_ne!(status.rendered, "");
 
     // Placement is a runtime fact, published once with the opportunity that
     // established it, not something a client derives from arrival order. This
@@ -2444,7 +2444,10 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
         .await;
     let mut driver = connect(&fixture, factory);
     let (initial, initial_cursor) = initialize(&mut *driver, 1).await;
-    assert!(initial.messages.is_empty());
+    assert_eq!(
+        initial.messages,
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 
     submit(&mut *driver, 2, "hello").await;
     await_model_parked(&fixture.model).await;
@@ -2467,7 +2470,10 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
             .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
-    assert!(!events.is_empty());
+    assert_ne!(
+        events,
+        [] as [crate::runtime_client::types::RuntimeClientProtocolEvent; 0]
+    );
 
     let (settled, settled_cursor) = snapshot_of(&mut *driver, 5).await;
     receive_read_domain_suffix(

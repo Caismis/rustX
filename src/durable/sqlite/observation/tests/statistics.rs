@@ -428,7 +428,7 @@ pub(super) fn statistics_read_attempt_identity(
             .decode(chunk.bytes_base64)
             .unwrap();
         assert!(original.len() <= 65_536);
-        assert!(!original.is_empty());
+        assert_ne!(original, [] as [u8; 0]);
         bytes.extend(original);
         let Some(next) = chunk.next_offset else {
             break;

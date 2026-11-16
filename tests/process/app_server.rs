@@ -378,7 +378,7 @@ async fn app_server_stdio_protocol_errors_are_records_but_framing_is_terminal() 
             detach_then_shutdown(&mut child).await;
             let output = child.wait_with_output().await.unwrap();
             assert!(!output.status.success());
-            assert!(output.stdout.is_empty());
+            assert_eq!(output.stdout, [] as [u8; 0]);
         }
     })
     .await;
@@ -415,7 +415,7 @@ async fn app_server_bootstrap_fails_before_readiness_and_owner_may_kill_stdio_ch
                 }
                 let output = command.output().await.unwrap();
                 assert!(!output.status.success());
-                assert!(output.stdout.is_empty());
+                assert_eq!(output.stdout, [] as [u8; 0]);
                 assert!(
                     !String::from_utf8(output.stderr)
                         .unwrap()
@@ -548,7 +548,7 @@ async fn app_server_explicit_user_config_fail_before_readiness() {
                 }
                 let output = command.output().await.unwrap();
                 assert!(!output.status.success());
-                assert!(output.stdout.is_empty());
+                assert_eq!(output.stdout, [] as [u8; 0]);
                 let error = String::from_utf8(output.stderr).unwrap();
                 assert!(!error.contains("listening"));
                 assert!(!error.contains("secret-sentinel"));
@@ -637,7 +637,7 @@ async fn attach(
     };
     assert_eq!(following, target);
     assert_eq!(after_cursor, checkpoint.cursor);
-    assert!(!registration_id.is_empty());
+    assert_ne!(registration_id, "");
     target
 }
 
@@ -981,7 +981,7 @@ async fn model_value(
         assert_eq!(chunk.cut, page.read_cut);
         assert_eq!(chunk.domain, page.domain);
         assert_eq!(chunk.item_offset, item_offset);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,
@@ -1227,11 +1227,9 @@ async fn app_server_concurrent_sessions_finish_across_external_disconnect() {
             1
         );
         assert!(!history.contains("B answered"));
-        assert!(
-            a_done["pending_interactions"]
-                .as_array()
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            a_done["pending_interactions"].as_array().unwrap(),
+            &Vec::<serde_json::Value>::new()
         );
         assert!(!a_done["transcript"].to_string().contains("cancelled"));
         assert_eq!(provider.requests().await.len(), 2, "no transport retry");
@@ -1442,7 +1440,7 @@ async fn app_server_reference_host_two_users_and_external_crash_recovery() {
             let other = 1 - index;
             let list = result(client, Method::SessionList { query: Some(format!("user-{}-private", users[other].0)), offset: 0, limit: 32 }).await;
             let MethodResult::Sessions { sessions, .. } = list else { panic!("list") };
-            assert!(sessions.is_empty());
+            assert_eq!(sessions, [] as [rustx::app_server::thread_status::SessionSummary; 0]);
             let Response::Failure(failure) = rpc(client, 100, Method::SessionRead { session_id: targets[other].session_id.clone() }).await else { panic!("foreign Session must be absent") };
             assert_eq!(failure.error.data, Some(ErrorData::UnknownSession { session_id: targets[other].session_id.clone() }));
         }
@@ -1612,7 +1610,7 @@ async fn app_server_archive_stdio_download_works_without_web_or_runtime_attachme
             .unwrap()
             .read_to_string(&mut auxiliary_audit)
             .unwrap();
-        assert!(auxiliary_audit.is_empty());
+        assert_eq!(auxiliary_audit, "");
         client.close().await;
         detach_then_shutdown(&mut child).await;
         assert!(child.wait().await.unwrap().success());
@@ -2297,7 +2295,7 @@ async fn app_server_refuses_an_explicit_config_named_like_writer_metadata() {
             .await
             .unwrap();
         assert!(!output.status.success());
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout, [] as [u8; 0]);
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("reserves for writer metadata"), "{stderr}");
         assert!(std::fs::symlink_metadata(&reserved).unwrap().is_file());
