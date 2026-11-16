@@ -1,3 +1,4 @@
+import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity.ts';
 import { ContentCache } from '../../../protocol/app-server/content-cache.ts';
 import {traceInspectionHead,traceInspectionMessage,validateCanonicalInspectionPage} from '../../../protocol/app-server/trace-inspection.ts';
 import {traceFields,traceFieldKey} from '../../../protocol/app-server/trace-identity.ts';
@@ -452,7 +453,7 @@ export class SessionReaders {
     if(!cut) throw new Error('Load the native checkpoint first.');
     const epoch=this.#port.epoch(), target=this.#port.target();
     const {chunk}=await this.#port.call('conversation/checkpointValueRead',{target,agent_id:null,cut,domain:'pending_interactions',item_offset:itemOffset,path,offset,max_bytes:65536},'checkpoint_value_chunk');
-    if(this.#port.released() || epoch!==this.#port.epoch() || !sameTarget(target,this.#port.target()) || JSON.stringify(chunk.cut)!==JSON.stringify(cut) || chunk.domain!=='pending_interactions' || chunk.item_offset!==itemOffset || chunk.offset!==offset || JSON.stringify(chunk.path)!==JSON.stringify(path)) throw new Error('Interaction body read authority changed.');
+    if(this.#port.released() || epoch!==this.#port.epoch() || !sameTarget(target,this.#port.target()) || checkpointReadCutKey(chunk.cut)!==checkpointReadCutKey(cut) || chunk.domain!=='pending_interactions' || chunk.item_offset!==itemOffset || chunk.offset!==offset || JSON.stringify(chunk.path)!==JSON.stringify(path)) throw new Error('Interaction body read authority changed.');
     return chunk;
   }
   /** One bounded capability page, preserving deferred fields and continuation. */

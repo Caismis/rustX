@@ -1,3 +1,4 @@
+import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
 export {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import {traceInspectionHead} from '../../../protocol/app-server/trace-inspection';
 import type {TraceValueSelector} from '../../../protocol/app-server/trace-field';
@@ -133,7 +134,7 @@ export function retainedTraceDetailPage(page:CheckpointPage,id:string):Checkpoin
 /** The selected page keeps its own owner and cut, independently of a later Trace head. */
 export function bindTraceDetailReader(reader:TraceFieldReader,page:CheckpointPage,current:()=>boolean):TraceFieldReader {
  const valid=(cut:CheckpointReadCut,owned:()=>boolean)=>{
-  if(!current()||!owned()||JSON.stringify(cut)!==JSON.stringify(page.read_cut))throw new Error('Original Trace detail view was replaced.');
+  if(!current()||!owned()||checkpointReadCutKey(cut)!==checkpointReadCutKey(page.read_cut))throw new Error('Original Trace detail view was replaced.');
  };
  return {
   value:async(cut,field,offset,owned)=>{valid(cut,owned);const chunk=await reader.value(cut,field,offset,()=>current()&&owned());valid(cut,owned);return chunk;},

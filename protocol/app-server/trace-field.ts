@@ -1,3 +1,4 @@
+import { checkpointReadCutKey } from './content-identity.ts';
 import type {CheckpointReadCut,CheckpointValueChunk,TraceFieldSource} from './v80.ts';
 
 export type TraceValueField=Extract<TraceFieldSource,{type:'value'}>;
@@ -26,7 +27,7 @@ export async function readTraceSelectedWindow(field:TraceValueSelector,cut:Check
  const value=chunk.bytes_base64;
  if(value.length>87_384||value.length%4!==0||value.length/4*3-(value.endsWith('==')?2:value.endsWith('=')?1:0)>65_536)throw new Error('Trace field chunk exceeds its decoded-byte bound.');
  const bytes=Uint8Array.from(atob(value),character=>character.charCodeAt(0)),next=offset+bytes.length;
- if(JSON.stringify(chunk.cut)!==JSON.stringify(cut)||chunk.domain!==field.domain||chunk.item_offset!==field.item_offset||JSON.stringify(chunk.path)!==JSON.stringify(field.path)||chunk.offset!==offset||chunk.readable_end!==end
+ if(checkpointReadCutKey(chunk.cut)!==checkpointReadCutKey(cut)||chunk.domain!==field.domain||chunk.item_offset!==field.item_offset||JSON.stringify(chunk.path)!==JSON.stringify(field.path)||chunk.offset!==offset||chunk.readable_end!==end
   ||!Number.isSafeInteger(next)||next>end||offset<end&&!bytes.length||(chunk.next_offset??null)!==(next<end?next:null)
   ||chunk.representation!=='canonical_json_v1'&&chunk.representation!=='utf8_text')throw new Error('Original Trace field range identity changed.');
  return {bytes,next:chunk.next_offset??undefined,representation:chunk.representation,readable_end:end};

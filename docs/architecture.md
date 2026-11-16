@@ -5692,6 +5692,11 @@ transcript or execution-history authority.
   frontiers and deferred content evidence. A subscription after C observes
   every subsequently published display transition or fails explicitly with
   `resync_required`. Loading deferred bytes does not advance Applied.   This holds
+  across typed delta reconstruction: clients compare read evidence by its exact
+  native fields and map entries, independent of JSON property ordering.
+  Scope, cursor, frontier, domain revisions and collection generations remain
+  part of that identity; equivalent wire ordering cannot invalidate a range.
+  The cursor invariant holds
   by construction (one boundary), not by luck. At bootstrap the same
   invariant holds at cursor 0: the seed is installed as snapshot state,
   never replayed through `apply`, so no pre-existing runtime fact

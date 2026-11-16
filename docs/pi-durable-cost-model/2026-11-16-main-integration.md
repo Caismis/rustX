@@ -158,3 +158,14 @@ The same complete retirement group passed all nine tests in 0.44 seconds when
 isolated. No production or watchdog changes were made on this evidence alone;
 the full-library follow-up runs without concurrent Rust compilation. The failed
 sample is retained separately from successful validation.
+The follow-up passed all 6,235 tests, zero failures, with the same 28 ignores.
+
+The remaining browser shard identified a production read-identity defect:
+deferred approval arguments compared JSON property order rather than the exact
+native cut. The archived request and response have equal cut fields but unequal
+serialized ordering. Approval, Goal, Trace, delivery and domain readers now use
+the existing typed `checkpointReadCutKey`, including the TUI approval reader.
+Regression cases accept reordered/null-equivalent evidence while rejecting
+changed ownership, frontiers, domain revisions and collection generations.
+The related reader suites pass 114 tests; the explicit cut/interaction cases
+pass 28, and all 1,367 TUI tests pass (one intentional skip).
