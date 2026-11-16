@@ -128,6 +128,21 @@ async fn launch_parent(
     resume: Option<&rustx::local_runtime::SessionId>,
     fail_live_inspection: bool,
 ) -> Parent {
+    let mut environment = vec![("RUSTX_SUBAGENT_TEST_KEY", key)];
+    if fail_live_inspection {
+        environment.push(("RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE", "1"));
+    }
+    launch_parent_with_environment(root, workspace, models, session, &environment, resume).await
+}
+
+async fn launch_parent_with_environment(
+    root: &std::path::Path,
+    workspace: &std::path::Path,
+    models: &str,
+    session: &str,
+    environment: &[(&str, &str)],
+    resume: Option<&rustx::local_runtime::SessionId>,
+) -> Parent {
     std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
     std::fs::write(
         workspace.join(".agents/agents/explore.toml"),
@@ -141,16 +156,7 @@ async fn launch_parent(
         format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
     )
     .expect("rustx.toml");
-    let mut environment = vec![("RUSTX_SUBAGENT_TEST_KEY", key)];
-    if fail_live_inspection {
-        environment.push(("RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE", "1"));
-    }
-    Parent::spawn(
-        &ParentBindings::under(root, workspace),
-        &environment,
-        resume,
-    )
-    .await
+    Parent::spawn(&ParentBindings::under(root, workspace), environment, resume).await
 }
 
 /// Launches a new parent Session over `<root>/workspace`.

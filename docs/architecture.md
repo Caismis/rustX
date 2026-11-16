@@ -1903,6 +1903,9 @@ tools/workspace_python.rs  One Workspace `.venv`: reuse a valid environment,
                            registration or model turns; process/host drain owns
                            cancellation and joins; original root identity and
                            input generation fence execution and Ready
+                           In child processes, this drain precedes control
+                           dispatcher shutdown so settled probe anchors can
+                           still release through the reliable parent channel.
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            background executions (lifecycle state machine,
                            dispatch ownership commit, cancel-vs-complete

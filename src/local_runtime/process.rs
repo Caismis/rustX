@@ -41,9 +41,7 @@ pub async fn run_process(arguments: impl IntoIterator<Item = impl Into<OsString>
             let _ = stderr.flush();
             return 2;
         }
-        let result = Box::pin(super::subagent_child::run_subagent_child()).await;
-        crate::tools::workspace_python::shutdown().await;
-        return result;
+        return Box::pin(super::subagent_child::run_subagent_child()).await;
     }
     let command = match super::cli::parse_command(arguments) {
         Ok(command) => command,
