@@ -238,3 +238,34 @@ The failed run is retained as evidence:
 https://github.com/Caismis/rustX/actions/runs/43836595861.
 The corrected workspace-change suite passes 75 tests locally, with one
 intentional ignore. Platform acceptance still requires the final macOS run.
+
+The follow-up FULL run `43847335005` passed Linux contracts (5,935 unit/in-crate
+tests), Linux boundaries, lint, protocol, TUI, Web/Host and macOS Desktop/Host.
+Browser shard 2 passed 222 cases; shard 3 passed 241 but failed Global large
+Workflow saving. Its trace shows a roughly 30-second save followed by a lost
+connection and an uncertain Global mutation, not merely a slow clean-state UI
+assertion. Local request metadata identifies `configuration/sourceWrite` as
+the long operation (13.722 seconds in one diagnostic run). It synchronously
+waits for native revision-fenced publication and configuration-consumer capture;
+the native owner continues even if the Web response timer abandons the socket.
+
+The shared method policy now classifies source-write settlement as having no
+generic response deadline. Its existing bounded ordinary slot, native CAS and
+durability, actual connection-loss uncertainty and no-replay behavior remain.
+Other ordinary RPC deadlines are unchanged. Fake-clock regressions fail on the
+old policy and pass after the change: a held source write remains pending after
+60 seconds, controls remain usable, one receipt settles once, and real socket
+loss still produces exactly one uncertain mutation without retransmission.
+This is an intentional response-lifetime correction, not a claim of faster
+publication or a relaxation of the browser's 120-second test budget. The
+large-document tests retain bounded method/id/timing diagnostics without
+capturing document bodies; byte limits and exact saved-content checks remain.
+The focused client, settings, Host-authority and document-admission suites pass
+172 tests, and Web typechecking passes.
+Both large Workflow scopes pass in the pinned browser container after the
+change, retaining the full code/schema/title reread and 1 MiB control-frame
+checks. The response policy does not shorten native computation; these local
+passes are correctness checks, not a latency comparison.
+The complete Web suite passes 4,932 tests (four intentional skips), and TUI
+passes 1,367 (one skip). The subsequent candidate supersedes the still-compiling
+macOS job of `43847335005`; that run is not recorded as macOS FULL acceptance.

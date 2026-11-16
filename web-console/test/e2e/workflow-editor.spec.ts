@@ -614,10 +614,18 @@ for (const [scope, id] of [['Workspace', 'large_workspace'], ['Global', 'large_g
   const fixture = await startDogfood('web_console_dogfood');
   const errors: string[] = [];
   const frames: number[] = [];
+  const wire: object[] = [];
+  const started = Date.now();
+  const observe = (direction: string, payload: string) => {
+    const frame = JSON.parse(payload);
+    wire.push({ elapsed: Date.now() - started, direction, id: frame.id, method: frame.method, result: frame.result?.type, error: frame.error?.code });
+    if (wire.length > 256) wire.shift();
+  };
   page.on('pageerror', error => errors.push(error.message));
   page.on('websocket', socket => {
-    socket.on('framesent', event => { if (typeof event.payload === 'string') frames.push(Buffer.byteLength(event.payload)); });
-    socket.on('framereceived', event => { if (typeof event.payload === 'string') frames.push(Buffer.byteLength(event.payload)); });
+    socket.on('framesent', event => { if (typeof event.payload === 'string') { frames.push(Buffer.byteLength(event.payload)); observe('sent', event.payload); } });
+    socket.on('framereceived', event => { if (typeof event.payload === 'string') { frames.push(Buffer.byteLength(event.payload)); observe('received', event.payload); } });
+    socket.on('close', () => wire.push({ elapsed: Date.now() - started, direction: 'closed' }));
   });
   try {
     await seed(fixture);
@@ -662,5 +670,11 @@ for (const [scope, id] of [['Workspace', 'large_workspace'], ['Global', 'large_g
     await expect(page.locator('vite-error-overlay')).toHaveCount(0);
     expect(errors).toEqual([]);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-  } finally { await stopDogfoodPage(page, fixture, false); }
+  } finally {
+    try {
+      const path = info.outputPath('rpc-lifecycle.json');
+      writeFileSync(path, JSON.stringify(wire, null, 2));
+      await info.attach('large-workflow-rpc-lifecycle', { path, contentType: 'application/json' });
+    } finally { await stopDogfoodPage(page, fixture, false); }
+  }
 });

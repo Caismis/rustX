@@ -623,11 +623,19 @@ A mutation whose response is lost has an **unknown outcome**: no transport retri
 Reconnect with initialize/attach/checkpoint/subscribe and inspect authoritative state.
 
 The Web typed request layer gives `thread/resume`, `agent/wait`, `job/wait`,
-`context/compact` and `mcp/probe` no generic response deadline. Their native
+`context/compact`, `mcp/probe` and `configuration/sourceWrite` no generic response deadline. Their native
 initialization, admission or settlement owners govern the wait. In particular,
 attachment preparation before submission remains unarmed even after 60 seconds;
 first submission arms the native absolute MCP readiness deadline. Web cannot
 retire that healthy attachment using its ordinary 30-second response clock.
+Source writes retain their ordinary bounded RPC slot while the native owner
+publishes the revision-fenced file and captures affected configuration consumers.
+Accepted source size and consumer count do not imply a 30-second completion
+bound. The client waits for that owner's receipt rather than abandoning a
+healthy connection during publication; this neither acknowledges early nor
+changes the file's durability. Real connection loss still reports an uncertain
+mutation, and no write is replayed. Source reads and other ordinary RPCs retain
+their response clocks.
 `agent/sendMessage`, ordinary RPCs and Session metadata operations retain that
 30-second deadline and existing response-loss disconnect behavior. A lost
 `thread/start` response remains an uncertain mutation. `agent/interrupt`,
