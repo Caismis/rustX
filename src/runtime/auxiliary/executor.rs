@@ -377,7 +377,7 @@ impl AuxiliaryExecutor {
         &self,
         scope: &Arc<AuxiliaryScope>,
     ) -> Result<AuxiliaryReservation, ContextError> {
-        self.reserve_class(scope, true)
+        self.reserve_class(scope, scope.authority.uses_protected_capacity())
     }
 
     pub(crate) fn reserve_general(

@@ -115,6 +115,7 @@ impl ManualCompactionCompletion {
 pub enum ManualCompactionOutcome {
     /// A checkpoint was committed and its exact receipt is available.
     Compacted {
+        operation_id: crate::runtime::identity::CompactionOperationId,
         generation: u64,
         checkpoint_id: crate::runtime::identity::CheckpointId,
         activation_id: crate::context::checkpoint::ProjectionActivationId,
@@ -278,6 +279,7 @@ impl RuntimeInner {
         let result = match executed {
             Ok(completed) => {
                 let RuntimeEvent::CompactionCompleted {
+                    operation_id,
                     generation,
                     checkpoint_id,
                     activation_id,
@@ -296,6 +298,7 @@ impl RuntimeInner {
                     };
                 };
                 let outcome = ManualCompactionOutcome::Compacted {
+                    operation_id: operation_id.clone(),
                     generation: *generation,
                     checkpoint_id: checkpoint_id.clone(),
                     activation_id: *activation_id,
@@ -328,6 +331,9 @@ impl RuntimeInner {
             Err(CompactionExecutionError::Durable(message)) => {
                 Err(ManualCompactionError::Durable { message })
             }
+            Err(CompactionExecutionError::HeadChanged) => Err(ManualCompactionError::Durable {
+                message: "manual compaction lost its projection head".into(),
+            }),
         };
         ManualCompactionTaskResult {
             committed_failure: None,
@@ -376,6 +382,7 @@ impl RuntimeInner {
     /// Restores the sole conversation state, records any durable failure,
     /// clears the maintenance slot, and hands pending inbound back to the one
     /// admission path.
+    #[allow(clippy::too_many_lines)] // Restore ownership and settle the full manual operation together.
     pub(super) fn finish_manual_compaction(
         self: &Arc<Self>,
         task: ManualCompactionTaskResult,
@@ -470,6 +477,17 @@ impl RuntimeInner {
             };
         }
         self.settlement.notify_waiters();
+        // A ready independent result may have arrived while manual
+        // maintenance owned the conversation.
+        self.wake.notify.notify_one();
+        if matches!(
+            &completion_result,
+            Ok(ManualCompactionOutcome::Compacted { .. })
+        ) {
+            let coordinator =
+                super::asynchronous_compaction::RuntimeCompactionCoordinator(Arc::downgrade(self));
+            crate::context::asynchronous::CompactionCoordinator::head_changed(&coordinator);
+        }
         // A closed launcher's stderr is not a maintenance failure.
         let _ = writeln!(
             std::io::stderr(),
@@ -641,6 +659,7 @@ impl ConversationRuntime {
                 request_id.as_ref(),
                 RuntimeEvent::CompactionStarted {
                     operation_id: operation_id.clone(),
+                    mode: crate::context::operation::CompactionMode::Manual,
                 },
             )?;
             let conversation = state

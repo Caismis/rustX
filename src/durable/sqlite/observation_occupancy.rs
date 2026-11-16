@@ -60,6 +60,7 @@ pub(super) fn compaction(
     event: &RuntimeEventEnvelope,
 ) -> Result<crate::observation::head::RuntimeClientCompactionView, ConversationStoreError> {
     let RuntimeEvent::CompactionCompleted {
+        operation_id,
         generation,
         checkpoint_id,
         activation_id,
@@ -78,6 +79,7 @@ pub(super) fn compaction(
     }
     let _ = connection;
     Ok(crate::observation::head::RuntimeClientCompactionView {
+        operation_id: operation_id.clone(),
         generation: *generation,
         checkpoint_id: checkpoint_id.clone(),
         activation_id: *activation_id,

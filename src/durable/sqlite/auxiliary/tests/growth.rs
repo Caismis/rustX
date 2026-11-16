@@ -135,6 +135,7 @@ fn commit_completed_one_request_call(
     }
 
     let request = AuxiliaryRequestStart {
+        invocation: crate::model::auxiliary::fixture_invocation_identity(),
         call_id: call_id.clone(),
         ordinal: 0,
         request_id: request_id.clone(),

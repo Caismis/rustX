@@ -7,6 +7,7 @@ fn committed_view(
     outcome: ManualCompactionOutcome,
 ) -> crate::observation::head::RuntimeClientCompactionView {
     let ManualCompactionOutcome::Compacted {
+        operation_id,
         generation,
         checkpoint_id,
         activation_id,
@@ -17,6 +18,7 @@ fn committed_view(
         panic!("expected committed compaction");
     };
     crate::observation::head::RuntimeClientCompactionView {
+        operation_id,
         generation,
         checkpoint_id,
         activation_id,
@@ -168,7 +170,7 @@ async fn manual_compaction_commits_and_restores_the_idle_conversation() {
         .events
         .into_iter()
         .find_map(|event| match event.event {
-            crate::events::types::RuntimeEvent::CompactionStarted { operation_id } => {
+            crate::events::types::RuntimeEvent::CompactionStarted { operation_id, .. } => {
                 Some(operation_id)
             }
             _ => None,

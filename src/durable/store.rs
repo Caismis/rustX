@@ -88,6 +88,8 @@ pub enum ConversationStoreError {
     IncompatibleSchema(String),
     /// A durable reference points at a fact that is not present.
     InvalidReference(String),
+    /// A valid competing activation replaced the expected Projection Head.
+    ProjectionHeadChanged,
     /// A byte range exceeds the protocol limit or retained readable prefix.
     InvalidContentRange,
     /// A finite source or snapshot exceeds an explicit logical materialization budget.
@@ -144,6 +146,7 @@ impl core::fmt::Display for ConversationStoreError {
                 write!(f, "incompatible durable schema shape: {detail}")
             }
             Self::InvalidReference(message) => write!(f, "invalid durable reference: {message}"),
+            Self::ProjectionHeadChanged => write!(f, "the expected projection head was replaced"),
             Self::InvalidContentRange => write!(f, "invalid content byte range"),
             Self::ResourceBoundExceeded(message) => {
                 write!(f, "resource materialization bound: {message}")

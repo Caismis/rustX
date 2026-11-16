@@ -8,10 +8,10 @@ changes.
 
 ## Integrated contract
 
-PR #531 integrates `origin/main` at `d82d7f9b8d9dd4f5064dba8d377103c8c6049d28`.
-Rust 1.100.0 / MSRV 1.100 is the single compiler baseline. The integrated contract is
-App Server v79, Runtime Client v86,
-Child IPC v40, SQLite schema 89, Runtime authoring schema 13 and Runtime
+This stack builds on PR #531's main integration at d82d7f9b8d9dd4f5064dba8d377103c8c6049d28.
+Rust 1.100.0 / MSRV 1.100 is the single compiler baseline.
+Its current contract is App Server v80, Runtime Client v87,
+Child IPC v40, SQLite schema 90, Runtime authoring schema 13 and Runtime
 Manifest v7. The model catalog remains schema 2 and Session catalog schema 21.
 The integration retains shared writable Thread clients, instance bearer/JWT
 authentication, Provider-owned protocol, Agent resources and Skills, automatic
@@ -38,8 +38,8 @@ verification without another evidence-only source commit.
 
 The integrated tree retains main's instruction-only Skills, Workspace Python
 execution environment and immutable Workflow Run Canvas snapshots. SQLite schema
-89 distinguishes this combined layout from both earlier schema-88 layouts. The
-current v79 protocol pair is regenerated from Rust, and all new Workflow readers
+90 includes authenticated asynchronous checkpoint coverage. The
+current v80 protocol pair is regenerated from Rust, and all new Workflow readers
 use that same pair. Configuration changes compare the complete execution-policy
 tuple after removal of authored Context settings.
 

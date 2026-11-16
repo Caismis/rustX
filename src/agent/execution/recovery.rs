@@ -335,11 +335,17 @@ impl AgentExecution<'_> {
                 failure: AttemptFailure::Runtime { error },
             });
         }
-        let (tools, estimated_input) = self
+        let (tools, estimated_input, request) = self
             .logical_step
             .current_input
             .as_ref()
-            .map(|input| (input.request.tools.clone(), input.estimated_input))
+            .map(|input| {
+                (
+                    input.request.tools.clone(),
+                    input.estimated_input,
+                    input.request.clone(),
+                )
+            })
             .ok_or_else(|| {
                 Self::context_failure_terminal(&ContextError::new(
                     ContextErrorKind::Internal,
@@ -377,29 +383,38 @@ impl AgentExecution<'_> {
                     .and_then(|observed| EstimateCorrection::new(estimated, observed))
             })
             .unwrap_or(EstimateCorrection::UNQUANTIFIED);
-        match self
-            .perform_compaction_with_need(
-                must_cover.as_ref(),
-                fresh.as_ref(),
-                &CompactionInput {
-                    tools: &tools,
-                    staged_request_context: &[],
-                    estimated_input,
-                },
-                Some(overflow_error),
-                Some(estimate_correction),
-                CompactionNeed::Mandatory,
-            )
-            .await
-        {
-            Ok(CompactionOutcome::Committed) => {}
-            Ok(CompactionOutcome::Deferred) => {
-                return Err(Self::context_failure_terminal(&ContextError::new(
-                    ContextErrorKind::Internal,
-                    "mandatory overflow compaction was unexpectedly deferred",
-                )));
+        let compaction_input = CompactionInput {
+            request: &request,
+
+            tools: &tools,
+            staged_request_context: &[],
+            estimated_input,
+        };
+        let joined = self
+            .wait_for_background_compaction(&compaction_input, Some(estimate_correction))
+            .await?;
+        if !joined {
+            match self
+                .perform_bounded_compaction(
+                    must_cover.as_ref(),
+                    fresh.as_ref(),
+                    &compaction_input,
+                    Some(overflow_error),
+                    Some(estimate_correction),
+                    CompactionNeed::Mandatory,
+                )
+                .await
+            {
+                Ok(CompactionOutcome::Committed) => {}
+                Ok(CompactionOutcome::Deferred) => {
+                    return Err(Self::context_failure_terminal(&ContextError::new(
+                        ContextErrorKind::Internal,
+                        "mandatory overflow compaction was unexpectedly deferred",
+                    )));
+                }
+                Ok(CompactionOutcome::Retry) => unreachable!("bounded compaction consumes retries"),
+                Err(terminal) => return Err(terminal),
             }
-            Err(terminal) => return Err(terminal),
         }
         // The cancellation check here is a cheap fast path only: it avoids
         // emitting `ModelRetryScheduled` once cancellation is already

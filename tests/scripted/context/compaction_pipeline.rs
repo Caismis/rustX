@@ -152,6 +152,7 @@ async fn carryover_degradation_reuses_accepted_chunks_before_one_commit() {
             timestamp: chrono::DateTime::UNIX_EPOCH,
             event: RuntimeEvent::CompactionStarted {
                 operation_id: attribution.operation_id.clone(),
+                mode: crate::context::operation::CompactionMode::Blocking,
             },
         })
         .unwrap();
@@ -1520,6 +1521,9 @@ async fn delayed_older_receipt_installs_current_projection_head() {
         .expect("first projection commit probe remains connected");
     let first = store.projection_head().unwrap().unwrap();
     let mut candidate = first.candidate.clone();
+    // This competing Store writer creates an opaque root. Copying O1's
+    // native coverage would falsely claim its private generation witness.
+    candidate.prefix_coverage = None;
     candidate.checkpoint_id = CheckpointId::new("newer-head");
     candidate.expected_head = Some(first.candidate.checkpoint_id.clone());
     candidate.read_cut = store.compaction_resource_cut().unwrap();
@@ -1527,6 +1531,7 @@ async fn delayed_older_receipt_installs_current_projection_head() {
     let signal = CancellationSignal::new();
     let second = store
         .commit_projection(rustx::durable::projection::ProjectionCommitInput {
+            prefix_proof: None,
             grant: signal
                 .authorize_compaction_commit(operation.clone())
                 .unwrap(),
@@ -1617,7 +1622,7 @@ async fn cancellation_observed_during_planning_starts_no_summary_and_commits_not
     let events = store.read_events(None, 64).unwrap().events;
     assert!(matches!(events.as_slice(), [started, cancelled]
         if matches!((&started.event, &cancelled.event),
-            (rustx::events::types::RuntimeEvent::CompactionStarted { operation_id: opened },
+            (rustx::events::types::RuntimeEvent::CompactionStarted { operation_id: opened, .. },
              rustx::events::types::RuntimeEvent::CompactionCancelled { operation_id: closed }) if opened == closed)
     ));
 }
@@ -1675,7 +1680,7 @@ async fn n1_incomplete_search_invokes_no_summary_and_leaves_no_durable_transitio
     assert_no_transition(&store, &history);
     let events = store.read_events(None, 64).unwrap().events;
     assert!(matches!(events.as_slice(), [started, failed]
-        if matches!(&started.event, rustx::events::types::RuntimeEvent::CompactionStarted { operation_id } if operation_id == &operation)
+        if matches!(&started.event, rustx::events::types::RuntimeEvent::CompactionStarted { operation_id, .. } if operation_id == &operation)
             && matches!(&failed.event, rustx::events::types::RuntimeEvent::CompactionFailed { operation_id, .. } if operation_id == &operation)
     ));
     assert!(

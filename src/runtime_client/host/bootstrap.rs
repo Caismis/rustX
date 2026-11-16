@@ -114,9 +114,13 @@ pub(super) fn bootstrap_live_projection(
         && let Some(cut) = seed.observation_cut.clone()
     {
         let initialized = durable_bootstrap::read_latest_compaction(store, &cut)
-            .map_err(RuntimeClientError::observation_store_error)
             .and_then(|compaction| {
-                projection.bootstrap_compaction(compaction);
+                let operations = store.latest_compaction_operations(cut.read.journal)?;
+                Ok((compaction, operations))
+            })
+            .map_err(RuntimeClientError::observation_store_error)
+            .and_then(|(compaction, operations)| {
+                projection.bootstrap_compaction(compaction, operations);
                 projection.initialize_descriptor_heads(store, cut)
             });
         if let Err(error) = initialized {

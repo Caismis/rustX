@@ -31,14 +31,33 @@ pub(super) fn page(
         .inspection_head(anchor)
         .map_err(RuntimeClientError::observation_store_error)?;
     let mut collections = head.record.collections.clone();
-    if let TraceInspectionContent::Messages { page } = &head.content {
-        collections.push(CollectionFrontier {
+    match &head.content {
+        TraceInspectionContent::Messages { page } => collections.push(CollectionFrontier {
             domain: page.domain.clone(),
             revision: cut.through,
             total: page.total,
             loaded: page.items.len() as u64,
             next_offset: page.next_offset,
-        });
+        }),
+        TraceInspectionContent::Compaction { page } => {
+            collections.push(CollectionFrontier {
+                domain: page.domain.clone(),
+                revision: cut.through,
+                total: page.total,
+                loaded: page.items.len() as u64,
+                next_offset: page.next_offset,
+            });
+            for call in &page.items {
+                collections.push(CollectionFrontier {
+                    domain: call.requests_domain.clone(),
+                    revision: cut.through,
+                    total: call.request_count,
+                    loaded: 0,
+                    next_offset: (call.request_count > 0).then_some(0),
+                });
+            }
+        }
+        _ => {}
     }
     let items = if offset == 0 {
         vec![CheckpointPageItem {
@@ -61,6 +80,125 @@ pub(super) fn page(
         total: 1,
         items,
         next_offset: None,
+    })
+}
+
+pub(crate) enum CompactionSelection {
+    Calls(u64),
+    Requests(u64, crate::runtime::identity::AuxiliaryCallId),
+}
+
+pub(crate) fn compaction_selection(domain: &str) -> Option<CompactionSelection> {
+    let tail = domain.strip_prefix("trace.records.")?;
+    let (sequence, tail) = tail.split_once(".detail.calls")?;
+    let sequence = sequence.parse::<u64>().ok().filter(|value| *value > 0)?;
+    if tail.is_empty() {
+        return Some(CompactionSelection::Calls(sequence));
+    }
+    let call = tail.strip_prefix('.')?.strip_suffix(".requests")?;
+    if call.is_empty() || call.len() > 64 {
+        return None;
+    }
+    Some(CompactionSelection::Requests(
+        sequence,
+        crate::runtime::identity::AuxiliaryCallId::new(call),
+    ))
+}
+
+pub(crate) fn compaction_page(
+    store: &dyn ConversationStore,
+    cut: &CheckpointReadCut,
+    domain: &str,
+    offset: u64,
+    limit: usize,
+) -> Result<CheckpointPage, RuntimeClientError> {
+    if limit == 0 || limit > 32 || offset > crate::observation::content::CONTENT_SAFE_INTEGER_MAX {
+        return Err(RuntimeClientError::InvalidRequest {
+            message: "invalid Compaction inspection page bounds".into(),
+        });
+    }
+    let selected =
+        compaction_selection(domain).ok_or_else(|| RuntimeClientError::InvalidRequest {
+            message: "invalid Compaction inspection collection".into(),
+        })?;
+    let projection = projection(store, cut)?;
+    let mut collections = Vec::new();
+    let (total, items, next_offset) = match selected {
+        CompactionSelection::Calls(sequence) => {
+            let page = projection
+                .inspection_compaction_calls(sequence, offset, limit)
+                .map_err(RuntimeClientError::observation_store_error)?;
+            let items = page
+                .items
+                .into_iter()
+                .map(|call| {
+                    collections.push(CollectionFrontier {
+                        domain: call.requests_domain.clone(),
+                        revision: cut.through,
+                        total: call.request_count,
+                        loaded: 0,
+                        next_offset: (call.request_count > 0).then_some(0),
+                    });
+                    Ok(CheckpointPageItem {
+                        offset: call.started_sequence,
+                        identity: call.call_id.to_string(),
+                        value: Some(value(&call)?),
+                        content: Vec::new(),
+                        deferred: false,
+                        body_complete: Some(true),
+                        key: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, RuntimeClientError>>()?;
+            (page.total, items, page.next_offset)
+        }
+        CompactionSelection::Requests(sequence, call_id) => {
+            let requests = projection
+                .inspection_compaction_requests(sequence, &call_id)
+                .map_err(RuntimeClientError::observation_store_error)?;
+            let total = requests.len() as u64;
+            if offset > total {
+                return Err(RuntimeClientError::InvalidRange);
+            }
+            let end = offset.saturating_add(limit as u64).min(total);
+            let start = usize::try_from(offset).map_err(|_| RuntimeClientError::InvalidRange)?;
+            let count =
+                usize::try_from(end - offset).map_err(|_| RuntimeClientError::InvalidRange)?;
+            let items = requests
+                .into_iter()
+                .enumerate()
+                .skip(start)
+                .take(count)
+                .map(|(index, request)| {
+                    Ok(CheckpointPageItem {
+                        offset: index as u64,
+                        identity: request.request_id.to_string(),
+                        value: Some(value(&request)?),
+                        content: Vec::new(),
+                        deferred: false,
+                        body_complete: Some(true),
+                        key: None,
+                    })
+                })
+                .collect::<Result<Vec<_>, RuntimeClientError>>()?;
+            (total, items, (end < total).then_some(end))
+        }
+    };
+    collections.push(CollectionFrontier {
+        domain: domain.into(),
+        revision: cut.through,
+        total,
+        loaded: items.len() as u64,
+        next_offset,
+    });
+    Ok(CheckpointPage {
+        collections,
+        cursor: RuntimeClientCursor::new(cut.revision),
+        read_cut: cut.clone(),
+        domain: domain.into(),
+        total,
+        items,
+        next_offset,
     })
 }
 

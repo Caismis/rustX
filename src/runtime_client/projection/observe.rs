@@ -86,6 +86,7 @@ pub(super) fn invalidates_event(event: &RuntimeEvent) -> bool {
         | RuntimeEvent::AssistantMessageCommitted { .. }
         | RuntimeEvent::ToolMessageCommitted { .. }
         | RuntimeEvent::CompactionStarted { .. }
+        | RuntimeEvent::CompactionOperationUpdated { .. }
         | RuntimeEvent::CompactionChunkAccepted { .. }
         | RuntimeEvent::CompactionSkipped { .. }
         | RuntimeEvent::CompactionCancelled { .. }

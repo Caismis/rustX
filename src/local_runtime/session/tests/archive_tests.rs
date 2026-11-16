@@ -99,6 +99,7 @@ pub(super) fn start_auxiliary(
     store
         .commit_auxiliary_request_start(
             &AuxiliaryRequestStart {
+                invocation: crate::model::auxiliary::fixture_invocation_identity(),
                 call_id: call_id.clone(),
                 ordinal: 0,
                 request_id: request_id.clone(),

@@ -166,6 +166,9 @@ pub(super) fn materialize(
         let messages: BTreeMap<_, _> = canonical.iter().map(|m| (m.id().clone(), m)).collect();
         let mut fingerprints = BTreeMap::new();
         for checkpoint in &mut projections {
+            // Artifact remapping changes the immutable source bodies. Never
+            // carry an old native coverage proof into the materialized seed.
+            checkpoint.candidate.prefix_coverage = None;
             let remap = |reference: &mut crate::model::projected::CanonicalMessageRef| -> Result<(),Box<dyn std::error::Error>> {
                 let message = messages.get(&reference.message_id).ok_or("missing destination-owned Original after artifact copy")?;
                 *reference = crate::model::projected::CanonicalMessageRef::of(conversation,message);

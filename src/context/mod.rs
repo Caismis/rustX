@@ -12,6 +12,7 @@
 //! contributor; execution owns timeout policy, cancellation and monotonic clocks.
 
 pub mod assembly;
+pub(crate) mod asynchronous;
 pub mod contribution;
 
 pub mod checkpoint;
@@ -19,10 +20,12 @@ pub mod chunks;
 pub(crate) mod compaction;
 pub mod compaction_budget;
 pub(crate) mod compaction_metadata;
+pub mod coverage;
 pub mod engine;
 pub mod error;
 mod images;
 pub mod occupancy;
+pub mod operation;
 pub(crate) mod policy;
 pub mod projection;
 pub mod resources;

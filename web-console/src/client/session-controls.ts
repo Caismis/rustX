@@ -1,7 +1,7 @@
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { replaceTranscript } from './transcript';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v79';
+import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v80';
 import type { ObservationPhase } from '../../../protocol/app-server/observation';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { CancellationTarget, ClientView, CompactionRequestEvidence, ConnectionRequest, GoalControlOutcome, InboundControlOutcome, SessionView } from './contracts';
@@ -201,8 +201,6 @@ export class SessionControls {
     if (request) {
       if (request.authorityId !== this.port.state().authorityId || (request.generation === this.port.state().generation && !sameTarget(request.target, target)) || request.target.conversation_id !== target?.conversation_id
         || request.target.runtime_incarnation !== target?.runtime_incarnation) {
-        this.port.setSession(id, { compactionRequest: undefined });
-      } else if (snapshot.context?.compaction_in_progress && ['succeeded', 'skipped', 'cancelled', 'failed'].includes(request.status)) {
         this.port.setSession(id, { compactionRequest: undefined });
       } else {
         const evidence = snapshot.context?.manual_compaction;

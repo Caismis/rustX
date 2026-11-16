@@ -565,6 +565,7 @@ fn t08_t14_trace_assistant_compaction_and_lifecycle_heads_use_their_own_kind() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "inspection-operation",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
         5,
     );
@@ -616,7 +617,9 @@ fn t08_t14_trace_assistant_compaction_and_lifecycle_heads_use_their_own_kind() {
                     .any(|frontier| frontier.domain.ends_with(".blocks"))
             );
         } else if record.kind == TraceKind::Compaction {
-            assert!(matches!(head.content, TraceInspectionContent::Lifecycle));
+            assert!(
+                matches!(head.content, TraceInspectionContent::Compaction { ref page } if page.total == 0)
+            );
             assert_eq!(
                 head.record.native_id.as_deref(),
                 Some("inspection-operation")

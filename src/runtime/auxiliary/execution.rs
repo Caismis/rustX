@@ -262,6 +262,9 @@ impl Execution {
                 ordinal: self.ordinal,
                 request_id: self.request_id.clone(),
                 model: self.invocation.invocation_config().model,
+                invocation: crate::model::auxiliary::AuxiliaryInvocationIdentity::from_resolved(
+                    &self.invocation,
+                ),
             };
             self.request_start_millis = self.resources.monotonic.now_millis();
             self.write(

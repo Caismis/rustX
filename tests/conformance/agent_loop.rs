@@ -26,6 +26,12 @@
 //! fails: the scenario rejects a request it did not expect, and this driver
 //! rejects a runtime state it did not expect.
 
+#[path = "agent_loop/asynchronous_compaction.rs"]
+mod asynchronous_compaction;
+#[cfg(unix)]
+#[path = "agent_loop/asynchronous_process_death.rs"]
+mod asynchronous_process_death;
+
 use crate::launch_fixture::LaunchFixture;
 use rustx::durable::{CanonicalStore, JournalStore, ObservationStore, ProjectionStore};
 use std::path::PathBuf;
@@ -159,6 +165,7 @@ struct Setup {
     /// The Summary model and profile arrangement exercised by this fixture.
     summary_scenario: SummaryScenario,
     anthropic_native_output: bool,
+    summary_window: Option<u64>,
     /// Explicit Skill resources for this isolated provider fixture.
     skill_paths: Vec<PathBuf>,
     responses_stateless: bool,
@@ -173,6 +180,7 @@ impl Setup {
             auxiliary: None,
             summary_scenario: SummaryScenario::Standard,
             anthropic_native_output: false,
+            summary_window: None,
             skill_paths: Vec::new(),
             responses_stateless: false,
         }
@@ -805,7 +813,7 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
         let mut model = chat_model(id, window);
         model["provider"] = "emulator".into();
         if setup.summary_scenario == SummaryScenario::Chunked && id == SUMMARY_MODEL {
-            model["context_window"] = 16_000.into();
+            model["context_window"] = setup.summary_window.unwrap_or(16_000).into();
             model["max_output_tokens"] = 4_096.into();
             model["capabilities"]["json_schema_output"] = true.into();
             model["default_profile"] = "thinking".into();
@@ -847,7 +855,14 @@ fn models_json(emulator: &ProviderEmulator, setup: &Setup) -> String {
                 "precise": {"request_params": "{\"temperature\":0.2}"}
             });
         }
-        models.insert(format!("{reference_provider}/{id}"), model);
+        let reference = if setup.summary_scenario == SummaryScenario::CrossProvider
+            && protocol == "anthropic_messages"
+        {
+            "logical-summary-alias".to_owned()
+        } else {
+            format!("{reference_provider}/{id}")
+        };
+        models.insert(reference, model);
     }
     if setup.responses_stateless {
         models
@@ -1777,6 +1792,7 @@ async fn compaction_invokes_the_real_provider_on_both_summary_policies() {
 /// summary for an `OpenAI` primary request through both real provider adapters.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn compaction_uses_an_explicit_cross_provider_summary_profile() {
+    use rustx::durable::AuxiliaryStore;
     use rustx::events::types::RuntimeEvent as E;
     use rustx::model::auxiliary::AuxiliaryInputEvidence;
     use rustx::model::session::AuxiliaryModelView;
@@ -1787,7 +1803,7 @@ async fn compaction_uses_an_explicit_cross_provider_summary_profile() {
     };
     let setup = Setup {
         context_window: COMPACTION_CONTEXT_WINDOW,
-        auxiliary: Some(format!("emulator-anthropic/{ANTHROPIC_MODEL}")),
+        auxiliary: Some("logical-summary-alias".to_owned()),
         summary_scenario: SummaryScenario::CrossProvider,
         ..Setup::new(&format!("emulator/{CHAT_MODEL}"))
     };
@@ -1815,10 +1831,7 @@ async fn compaction_uses_an_explicit_cross_provider_summary_profile() {
     let AuxiliaryModelView::Explicit { effective: summary } = &frozen.summary else {
         panic!("the attempt must retain its explicit Summary binding")
     };
-    assert_eq!(
-        summary.model.to_string(),
-        format!("emulator-anthropic/{ANTHROPIC_MODEL}")
-    );
+    assert_eq!(summary.model.to_string(), "logical-summary-alias");
     assert_eq!(
         summary.protocol,
         rustx::model::ModelProtocol::AnthropicMessages
@@ -1860,6 +1873,52 @@ async fn compaction_uses_an_explicit_cross_provider_summary_profile() {
         }
     )));
     assert!(snapshot.context.projection_head.is_some());
+    let summary_call = journal
+        .iter()
+        .find_map(|entry| match &entry.event {
+            E::AuxiliaryCallStarted {
+                call_id,
+                input: AuxiliaryInputEvidence::Compaction { .. },
+                ..
+            } => Some(call_id.clone()),
+            _ => None,
+        })
+        .expect("native Summary Call start");
+    let before_cut = driver.store.auxiliary_audit_cut().unwrap();
+    let before = driver
+        .store
+        .read_auxiliary_call_requests(&summary_call, before_cut, None, 2)
+        .unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0].invocation.provider.as_str(), "emulator-anthropic");
+    assert_eq!(
+        before[0].invocation.model_ref.to_string(),
+        "logical-summary-alias"
+    );
+    assert_eq!(
+        before[0].invocation.profile.as_ref().unwrap().as_str(),
+        "precise"
+    );
+    assert_eq!(before[0].model, ANTHROPIC_MODEL);
+    driver
+        .model_set(SessionModelConfig::of(
+            ModelRef::parse(&format!("emulator/{SECOND_MODEL}")).unwrap(),
+        ))
+        .await
+        .unwrap();
+    let after = driver
+        .store
+        .read_auxiliary_call_requests(
+            &summary_call,
+            driver.store.auxiliary_audit_cut().unwrap(),
+            None,
+            2,
+        )
+        .unwrap();
+    assert_eq!(
+        after, before,
+        "historical request identity is independent of current Session configuration"
+    );
     emulator.finish().await;
 }
 
@@ -2098,7 +2157,7 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
     // This barrier is reached on the Prompt retry after the Native failure.
     // A Session update now cannot alter any remaining call in this operation.
     tokio::select! {
-        _ = emulator.await_gate("first-prompt-summary") => {}
+        _ = emulator.await_gate_with_timeout("first-prompt-summary", std::time::Duration::from_secs(300)) => {}
         (_, early_outcome) = driver.settle_observing(|event| {
             if let RuntimeClientEvent::InteractionPending { interaction } = event {
                 panic!("unexpected interaction while waiting for Summary: {interaction:?}");
@@ -2578,7 +2637,33 @@ async fn chunked_compaction_falls_back_once_across_real_provider_requests() {
         after = rustx::context::resources::LedgerFrontier(page.rows.last().unwrap().0);
         at_cut.extend(page.rows.into_iter().map(|(_, message)| message));
     }
-    let retired_count = at_cut.len() - head.original_items as usize;
+    // The installed checkpoint also retains post-capture appends. Identify
+    // the retired prefix against original canonical identities, never by
+    // subtracting its current tail size from the older capture length.
+    let installed = driver.store.projection_head().unwrap().unwrap();
+    let retained: std::collections::BTreeSet<_> = installed
+        .candidate
+        .items
+        .iter()
+        .filter_map(|item| {
+            if let rustx::context::checkpoint::CheckpointMessage::Original(source) = &item.message {
+                Some(source.message_id.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let retired_count = at_cut
+        .iter()
+        .take_while(|message| !retained.contains(message.id()))
+        .count();
+    assert!(
+        at_cut
+            .iter()
+            .skip(retired_count)
+            .all(|message| retained.contains(message.id()))
+    );
+
     let expected_lengths: Vec<_> = at_cut
         .into_iter()
         .take(retired_count)
@@ -2875,7 +2960,10 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
 
     emulator.release_gate("session-model-updated").await;
     let (_, outcome) = driver.settle().await;
-    assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
 
     let (snapshot, _) = driver.snapshot().expect("snapshot");
     let attempt = snapshot.attempt.as_ref().expect("the settled attempt");
@@ -2902,7 +2990,10 @@ async fn a_running_attempt_keeps_its_frozen_model_while_the_session_moves_on() {
 
     driver.submit(SECOND_ATTEMPT);
     let (_, outcome) = driver.settle().await;
-    assert!(matches!(outcome, RuntimeClientOutcome::Completed { .. }));
+    assert!(
+        matches!(outcome, RuntimeClientOutcome::Completed { .. }),
+        "{outcome:?}"
+    );
 
     let requests = emulator.requests().await;
     assert_eq!(requests.len(), 2);
@@ -3337,9 +3428,10 @@ async fn image_tool_round_trip_and_text_model_switch() {
         loop {
             match driver.compact_context().await {
                 Err(error)
-                    if error
-                        .message
-                        .contains("requires an idle conversation runtime") =>
+                    if matches!(
+                        error.data,
+                        Some(rustx::app_server::protocol::ErrorData::InvalidState)
+                    ) =>
                 {
                     tokio::task::yield_now().await;
                 }

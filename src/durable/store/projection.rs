@@ -139,6 +139,12 @@ pub trait ProjectionStore: Send + Sync + 'static {
         operation: &crate::runtime::identity::CompactionOperationId,
         fingerprint: &str,
     ) -> Result<Option<crate::durable::projection::ProjectionCommitReceipt>, ConversationStoreError>;
+    /// Indexed, bounded restart evidence for one known Compaction operation.
+    /// A completion without an intact matching receipt is a durable error.
+    fn compaction_restart_evidence(
+        &self,
+        operation: &crate::runtime::identity::CompactionOperationId,
+    ) -> Result<crate::durable::projection::CompactionRestartEvidence, ConversationStoreError>;
     fn commit_projection(
         &self,
         input: crate::durable::projection::ProjectionCommitInput,

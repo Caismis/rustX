@@ -545,6 +545,7 @@ impl ClientInner {
         }
         Ok(match outcome {
             crate::runtime::conversation_runtime::ManualCompactionOutcome::Compacted {
+                operation_id,
                 generation,
                 checkpoint_id,
                 activation_id,
@@ -552,6 +553,7 @@ impl ClientInner {
                 estimated_tokens_after,
             } => RuntimeClientResult::ContextCompacted {
                 compaction: Some(crate::observation::head::RuntimeClientCompactionView {
+                    operation_id,
                     generation,
                     checkpoint_id,
                     activation_id,

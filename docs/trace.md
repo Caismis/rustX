@@ -1,5 +1,14 @@
 # Native Trace and Web Trajectory
 
+Compaction lifecycle ownership is keyed by exact OperationId. A concurrent
+operation cannot inherit another operation's terminal or status fact. Native
+mode, status and outcome are read at the captured Journal cut; Ready is separate
+from the actual atomic checkpoint completion. Inspection pages that operation's
+Calls and physical requests through bounded native indexes, retaining frozen
+Provider/model/Profile identity, format strategy, usage and uncertainty. A newer
+cut refreshes an open Compaction inspection even when its visible row is unchanged.
+See [asynchronous compaction](asynchronous-compaction.md).
+
 Request detail carries `contributions`: producer-bound typed metadata from the
 exact committed RequestSnapshot subset. Context additions also carry their
 stable producer identity. Agent Status presentation is historical; live Todo,

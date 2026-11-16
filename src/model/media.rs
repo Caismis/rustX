@@ -901,11 +901,13 @@ mod tests {
         let operation = crate::runtime::identity::CompactionOperationId::new("derived-media");
         store
             .commit_projection(crate::durable::projection::ProjectionCommitInput {
+                prefix_proof: None,
                 grant: CancellationSignal::new()
                     .authorize_compaction_commit(operation.clone())
                     .unwrap(),
                 operation_id: operation,
                 candidate: crate::context::checkpoint::CheckpointCandidate {
+                    prefix_coverage: None,
                     checkpoint_id: crate::runtime::identity::CheckpointId::new("derived-media"),
                     expected_head: None,
                     base_frontier: cut.ledger,

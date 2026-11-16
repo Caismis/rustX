@@ -775,6 +775,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
         let request_started = store
             .commit_auxiliary_request_start(
                 &AuxiliaryRequestStart {
+                    invocation: crate::model::auxiliary::fixture_invocation_identity(),
                     call_id: call_id.clone(),
                     ordinal: 0,
                     request_id: auxiliary_request_id.clone(),
@@ -3059,6 +3060,7 @@ fn request_payloads_stay_internal_and_trace_is_owned_by_journal_batch() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "fixture-compaction",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
         RuntimeEvent::CompactionCompleted {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
@@ -3129,6 +3131,7 @@ fn accepted_compaction_fragments_advance_only_matching_live_progress() {
         &mut projection,
         RuntimeEvent::CompactionStarted {
             operation_id: operation.clone(),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
     );
     apply_event(
@@ -3160,6 +3163,7 @@ fn accepted_compaction_fragments_advance_only_matching_live_progress() {
         &mut projection,
         RuntimeEvent::CompactionStarted {
             operation_id: operation.clone(),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
     );
     let (snapshot, _) = projection.snapshot().unwrap();
@@ -3201,6 +3205,7 @@ fn manual_compaction_cancellation_is_not_a_failure_or_completion() {
     for event in [
         RuntimeEvent::CompactionStarted {
             operation_id: operation_id.clone(),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
         RuntimeEvent::CompactionCancelled { operation_id },
     ] {
@@ -3246,6 +3251,7 @@ fn manual_compaction_projects_without_fabricating_an_attempt_identity() {
             operation_id: crate::runtime::identity::CompactionOperationId::new(
                 "fixture-compaction",
             ),
+            mode: crate::context::operation::CompactionMode::Blocking,
         },
     });
     let admitted = projection
@@ -6878,4 +6884,109 @@ fn t14_t20_status_background_never_clones_or_serializes_hidden_job_body() {
         crate::tools::background::BackgroundLifecycle::PublishingTerminal
     );
     assert!(view.rendered.contains("publishing_terminal"));
+}
+
+#[test]
+fn asynchronous_status_is_bounded_and_terminal_cannot_reopen() {
+    use crate::context::operation::{CompactionOperationPhase as Phase, CompactionOperationStatus};
+    use crate::runtime::identity::CompactionOperationId;
+    let mut projection = projection();
+    let status = |id: &str, generation, phase| CompactionOperationStatus {
+        operation_id: CompactionOperationId::new(id),
+        admission_generation: generation,
+        triggering_attempt_id: None,
+        waiting_attempt_id: None,
+        phase,
+        accepted_fragments: 0,
+        diagnostic: None,
+    };
+    let publish = |projection: &mut RuntimeClientProjection, value| {
+        projection.fold_compaction_event(
+            None,
+            &RuntimeEvent::CompactionOperationUpdated { status: value },
+        );
+    };
+    publish(&mut projection, status("a", 1, Phase::Generating));
+    publish(&mut projection, status("a", 1, Phase::Ready));
+    publish(&mut projection, status("a", 1, Phase::Superseded));
+    publish(&mut projection, status("a", 1, Phase::Generating));
+    publish(&mut projection, status("b", 2, Phase::Generating));
+    assert_eq!(
+        projection.snapshot.context.compaction_operations[0]
+            .status
+            .phase,
+        Phase::Superseded
+    );
+    publish(&mut projection, status("c", 3, Phase::Generating));
+    publish(&mut projection, status("old", 1, Phase::Ready));
+    let operations = &projection.snapshot.context.compaction_operations;
+    assert_eq!(operations.len(), 2);
+    assert_eq!(operations[0].status.operation_id.as_str(), "b");
+    assert_eq!(operations[1].status.operation_id.as_str(), "c");
+    assert!(!projection.snapshot.context.compaction_in_progress);
+}
+
+#[test]
+fn background_completion_preserves_unrelated_foreground_progress() {
+    use crate::context::operation::CompactionMode;
+    use crate::runtime::identity::CompactionOperationId;
+    let mut projection = projection();
+    let foreground = CompactionOperationId::new("foreground");
+    let background = CompactionOperationId::new("background");
+    projection.fold_compaction_event(
+        None,
+        &RuntimeEvent::CompactionStarted {
+            operation_id: foreground.clone(),
+            mode: CompactionMode::Overflow,
+        },
+    );
+    projection.fold_compaction_event(
+        None,
+        &RuntimeEvent::CompactionChunkAccepted {
+            operation_id: foreground.clone(),
+            accepted_fragments: 1,
+            source_ranges: vec![crate::model::auxiliary::AuxiliarySourceRange {
+                projection_index: 0,
+                role: crate::model::auxiliary::AuxiliarySourceRole::User,
+                byte_start: 0,
+                byte_end: 1,
+            }],
+            generation: None,
+        },
+    );
+    projection.fold_compaction_event(
+        None,
+        &RuntimeEvent::CompactionCompleted {
+            operation_id: background,
+            generation: 1,
+            checkpoint_id: crate::runtime::identity::CheckpointId::new("checkpoint"),
+            activation_id: crate::context::checkpoint::ProjectionActivationId(1),
+            tokens_before: TokenMeasurement {
+                input_tokens: 1,
+                source: TokenMeasurementSource::Estimated,
+            },
+            estimated_tokens_after: 1,
+            occupancy: None,
+        },
+    );
+    assert!(projection.snapshot.context.compaction_in_progress);
+    assert_eq!(
+        projection
+            .snapshot
+            .context
+            .compaction_progress
+            .as_ref()
+            .unwrap()
+            .operation_id,
+        foreground
+    );
+    let progress = projection
+        .snapshot
+        .context
+        .compaction_progress
+        .as_ref()
+        .unwrap();
+    assert_eq!(progress.mode, CompactionMode::Overflow);
+    assert_eq!(progress.accepted_fragments, 1);
+    assert_eq!(projection.snapshot.context.compaction_count, 1);
 }

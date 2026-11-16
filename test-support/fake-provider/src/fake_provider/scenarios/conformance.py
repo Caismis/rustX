@@ -733,9 +733,10 @@ def _chunked_write_content(index: int) -> str:
 def chunked_compaction() -> AdaptiveScenario:
     """Generate bounded tool history until the runtime selects compaction.
 
-    Request model selects the two legal phases; it does not inspect prompt
-    semantics. Each step validates its own wire request. The post-summary
-    primary request closes the scenario, and too few chunks is a failure.
+    Each Summary request and primary request has an independent strict
+    expectation. Primary writes continue while generation is in flight; only
+    a request carrying the committed Summary closes the scenario. Too few
+    accepted fragments or excessive requests are failures.
     """
     def select(requests):
         current = requests[-1]
@@ -744,7 +745,7 @@ def chunked_compaction() -> AdaptiveScenario:
         summary_count = sum(request.model == SUMMARY_MODEL for request in prior)
         if len(requests) > 320:
             raise ValueError("chunked compaction exceeded its finite request limit")
-        if current.model == CHAT_MODEL and summary_count == 0:
+        if current.model == CHAT_MODEL and CHUNKED_SUMMARY not in current.body_text:
             if primary_count >= 63:
                 raise ValueError("primary history never triggered automatic compaction")
             index = primary_count + 1
@@ -781,7 +782,7 @@ def chunked_compaction() -> AdaptiveScenario:
             gate = (Gate("first-prompt-summary"),) if summary_count == 1 else ()
             return Step(expect, Stream(*gate, Reasoning(SUMMARY_REASONING),
                                        Text(summary_json(CHUNKED_SUMMARY)), Finish("stop"), partial_usage)), False
-        if current.model == CHAT_MODEL and summary_count:
+        if current.model == CHAT_MODEL and CHUNKED_SUMMARY in current.body_text:
             if summary_count <= 13:  # one rejected Native plus at least 13 accepted fragments
                 raise ValueError("compaction did not accept more than twelve fragments")
             return Step(

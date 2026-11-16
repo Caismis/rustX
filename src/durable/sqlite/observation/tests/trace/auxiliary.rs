@@ -102,6 +102,7 @@ fn auxiliary_start(
     call: &AuxiliaryCallStart,
 ) -> (AuxiliaryRequestStart, RuntimeEventEnvelope) {
     let request = AuxiliaryRequestStart {
+        invocation: crate::model::auxiliary::fixture_invocation_identity(),
         call_id: call.call_id.clone(),
         ordinal: 0,
         request_id: RequestId::new(format!("aux-trace-request:{}", call.call_id)),

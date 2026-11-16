@@ -16,6 +16,17 @@ use rusqlite::{Connection, TransactionBehavior, params};
 use std::sync::Arc;
 
 impl ObservationStore for SqliteConversationStore {
+    fn observation_compaction_call_ids(
+        &self,
+        cut: &crate::durable::observation::ObservationReadCut,
+        operation: &crate::runtime::identity::CompactionOperationId,
+        after: Option<u64>,
+        limit: usize,
+    ) -> Result<crate::durable::observation::TraceCompactionCallIds, ConversationStoreError> {
+        self.read_at_cut(cut, |connection| {
+            observation_trace::compaction_call_ids(connection, cut, operation, after, limit)
+        })
+    }
     fn observation_workflow_nodes(
         &self,
         cut: &crate::durable::observation::ObservationReadCut,
@@ -978,6 +989,22 @@ impl ObservationStore for SqliteConversationStore {
     {
         let connection = self.lock()?;
         observation::latest_events(&connection, through, kinds, attempt, limit)
+    }
+    fn compaction_start_mode_before(
+        &self,
+        operation_id: &crate::runtime::identity::CompactionOperationId,
+        before: u64,
+    ) -> Result<crate::context::operation::CompactionMode, ConversationStoreError> {
+        let connection = self.lock()?;
+        super::super::observation_state::compaction_start_mode(&connection, operation_id, before)
+    }
+    fn latest_compaction_operations(
+        &self,
+        through: u64,
+    ) -> Result<Vec<crate::context::operation::CompactionOperationStatus>, ConversationStoreError>
+    {
+        let connection = self.lock()?;
+        super::super::observation_state::latest_compaction_operations(&connection, through)
     }
     fn tool_call_occurrence_at(
         &self,

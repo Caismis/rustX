@@ -1,7 +1,7 @@
 import { afterEach, expect, it } from 'vitest';
 import { createElement } from 'react';
 import { cleanup, render } from '@testing-library/react';
-import type { RuntimeClientCompactionView } from '../../protocol/app-server/v79';
+import type { RuntimeClientCompactionView } from '../../protocol/app-server/v80';
 import { RpcFailure } from '../src/client/errors';
 import { compactionPresentation, ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot, projectionHead } from './fixture';
@@ -9,6 +9,7 @@ import { Server, snapshot, projectionHead } from './fixture';
 let server: Server;
 afterEach(() => { cleanup(); server?.client.disconnect(); });
 const receipt = (generation: string): RuntimeClientCompactionView => ({
+  operation_id: `compaction-operation-${generation}`,
   generation, checkpoint_id:`conv_8498648a-66ba-716f-8243-8cf147533e5${generation}`, activation_id:generation,
   tokens_before:{input_tokens:'8400',source:'estimated'}, estimated_tokens_after:'1900',
 });

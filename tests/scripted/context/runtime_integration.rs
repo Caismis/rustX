@@ -369,7 +369,8 @@ fn compaction_event(result: &AgentExecutionResult, started: bool) -> RuntimeEven
         .clone()
 }
 fn operation(result: &AgentExecutionResult) -> rustx::runtime::identity::CompactionOperationId {
-    let RuntimeEvent::CompactionStarted { operation_id } = compaction_event(result, true) else {
+    let RuntimeEvent::CompactionStarted { operation_id, .. } = compaction_event(result, true)
+    else {
         unreachable!()
     };
     operation_id
@@ -2442,7 +2443,7 @@ async fn expired_proactive_compaction_budget_preserves_later_overflow() {
         .event_history
         .iter()
         .filter_map(|event| match event {
-            RuntimeEvent::CompactionStarted { operation_id } => Some(operation_id),
+            RuntimeEvent::CompactionStarted { operation_id, .. } => Some(operation_id),
             _ => None,
         })
         .collect();
@@ -4170,7 +4171,7 @@ async fn n1_cancellation_during_exact_query_settles_without_summary_commit_or_re
         .event_history
         .iter()
         .find_map(|event| match event {
-            RuntimeEvent::CompactionStarted { operation_id } => Some(operation_id),
+            RuntimeEvent::CompactionStarted { operation_id, .. } => Some(operation_id),
             _ => None,
         })
         .expect("planning operation allocated before its first exact query");

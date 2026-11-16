@@ -261,7 +261,7 @@ impl<'a> AgentExecution<'a> {
                     terminal = Some(Self::interaction_failure_terminal());
                     break;
                 }
-                terminal = self.run_turn().await;
+                terminal = Box::pin(self.run_turn()).await;
                 if terminal.is_none() && self.cancellation.interaction_failed() {
                     terminal = Some(Self::interaction_failure_terminal());
                 }
@@ -302,7 +302,7 @@ impl<'a> AgentExecution<'a> {
     /// terminalizes as an audit. Canonical acceptance and audit
     /// terminalization can therefore never both happen for one stream.
     async fn run_turn(&mut self) -> Option<Terminal> {
-        let terminal = self.run_turn_body().await;
+        let terminal = Box::pin(self.run_turn_body()).await;
         if !self.publication_settlement_failed
             && let Err(error) = self.settle_publication_audit()
         {

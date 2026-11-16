@@ -7,7 +7,7 @@ import { connectRemote, openWorkspaceSettings, openSettingsPage, returnHome } fr
 import { wireProbe } from './wire-probe';
 import { transitionFacts } from '../../../protocol/app-server/projection';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import type { Notification, RuntimeClientEvent } from '../../../protocol/app-server/v79';
+import type { Notification, RuntimeClientEvent } from '../../../protocol/app-server/v80';
 
 function gate() { let resolve!: () => void; const promise = new Promise<void>(done => { resolve = done; }); return { promise, resolve }; }
 

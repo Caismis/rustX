@@ -427,6 +427,7 @@ impl RuntimeInner {
                         break;
                     };
                     inner.reap_manual_tail(false).await;
+                    inner.reap_async_compaction(false).await;
                     {
                         let mut state = inner.lock_state();
                         inner.publish_runtime_catalogs_locked(&mut state);
@@ -437,6 +438,9 @@ impl RuntimeInner {
                             admit = true;
                         }
                     }
+                    // A staged configuration commits at this same boundary
+                    // before idle installation chooses its current model.
+                    inner.install_ready_async_when_idle().await;
                     if admit && !inner.admit_next_scheduled() {
                         inner.admit_next_attempt();
                     }

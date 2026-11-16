@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import type { RuntimeClientCompactionView } from '../../protocol/app-server/v79.ts';
+import type { RuntimeClientCompactionView } from '../../protocol/app-server/v80.ts';
 import { harness, nextRequest } from './support/app-server-harness.ts';
 import { paramsOf } from './support/app-server-peer.ts';
 import { snapshot } from './support/fixtures.ts';
 
 const receipt = (generation: string): RuntimeClientCompactionView => ({
+  operation_id: `compaction-operation-${generation}`,
   generation, checkpoint_id: `conv_8498648a-66ba-716f-8243-8cf147533e5${generation}`, activation_id: generation,
   tokens_before: {input_tokens:'8400',source:'estimated'}, estimated_tokens_after:'1900',
 });

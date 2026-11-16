@@ -23,7 +23,7 @@ import json
 from typing import Callable
 
 from fake_provider.scenario import AdaptiveScenario, Scenario, Step, Stream, ToolCall
-from fake_provider.scenarios import app_server, conformance, observation, tui, web_console, runtime_benchmark
+from fake_provider.scenarios import app_server, asynchronous_compaction, conformance, observation, tui, web_console, runtime_benchmark
 
 #: The placeholder of the concrete absolute workspace root of the runtime
 #: under test, substituted into scripted tool-call arguments.
@@ -34,6 +34,7 @@ WORKSPACE_PLACEHOLDER = "{workspace}"
 SCENARIOS: dict[str, Callable[[], Scenario | AdaptiveScenario]] = {
     **conformance.SCENARIOS,
     **app_server.SCENARIOS,
+    **asynchronous_compaction.SCENARIOS,
     **runtime_benchmark.SCENARIOS,
     **observation.SCENARIOS,
     **tui.SCENARIOS,

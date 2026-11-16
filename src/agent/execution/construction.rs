@@ -237,6 +237,7 @@ impl<'a> AgentExecution<'a> {
             schedule_authorization: std::sync::Mutex::new(None),
             pending_post_tool_batch: None,
             context_runtime,
+            asynchronous: runtime_policy.asynchronous,
             subagent_context: runtime_policy.subagent_context,
             workspace_changes: runtime_policy.workspace_changes,
             workflow_output: runtime_policy.workflow_output,

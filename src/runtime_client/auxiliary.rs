@@ -243,6 +243,7 @@ mod tests {
         store
             .commit_auxiliary_request_start(
                 &AuxiliaryRequestStart {
+                    invocation: crate::model::auxiliary::fixture_invocation_identity(),
                     call_id,
                     ordinal: 0,
                     request_id: request_id.clone(),
@@ -581,7 +582,7 @@ mod tests {
         store.initialize(&[]).unwrap();
         let call_id = start_call(&store);
         let request_id = RequestId::new("\u{0001}".repeat(512));
-        let model = "\u{0002}".repeat(512);
+        let model = "\\\"".repeat(256);
         assert_eq!(
             request_id.as_str().len(),
             crate::model::auxiliary::AUXILIARY_REQUEST_ID_BYTES_MAX
@@ -593,6 +594,7 @@ mod tests {
         store
             .commit_auxiliary_request_start(
                 &AuxiliaryRequestStart {
+                    invocation: crate::model::auxiliary::fixture_invocation_identity(),
                     call_id: call_id.clone(),
                     ordinal: 0,
                     request_id: request_id.clone(),
@@ -722,6 +724,7 @@ mod tests {
             journal_sequence: 1,
             fact: AuxiliaryAuditFact::RequestStarted(
                 crate::model::auxiliary::AuxiliaryRequestAudit {
+                    invocation: crate::model::auxiliary::fixture_invocation_identity(),
                     call_id: AuxiliaryCallId::generate(),
                     ordinal: 0,
                     request_id: crate::runtime::identity::RequestId::new("request"),
@@ -757,6 +760,7 @@ mod tests {
             journal_sequence: 1,
             fact: AuxiliaryAuditFact::RequestStarted(
                 crate::model::auxiliary::AuxiliaryRequestAudit {
+                    invocation: crate::model::auxiliary::fixture_invocation_identity(),
                     call_id: AuxiliaryCallId::generate(),
                     ordinal: 0,
                     request_id: crate::runtime::identity::RequestId::new("request"),

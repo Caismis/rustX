@@ -441,9 +441,15 @@ async fn host_fixture_with_native_tools(
     status_engine: AgentStatusEngine,
     include_native_tools: bool,
 ) -> (Arc<GatedAdapter>, HostFixture) {
-    let (adapter, fixture) =
-        host_fixture_before_activation(scripts, tools, status_engine, include_native_tools, None)
-            .await;
+    let (adapter, fixture) = host_fixture_before_activation(
+        scripts,
+        tools,
+        status_engine,
+        include_native_tools,
+        None,
+        None,
+    )
+    .await;
     fixture.runtime.activate();
     await_fixture_activation(&fixture.host).await;
     (adapter, fixture)
@@ -459,6 +465,7 @@ async fn host_fixture_before_activation(
     status_engine: AgentStatusEngine,
     include_native_tools: bool,
     monotonic_clock: Option<Arc<dyn crate::runtime::monotonic::MonotonicClock>>,
+    before_recovery: Option<fn(&SqliteConversationStore)>,
 ) -> (Arc<GatedAdapter>, HostFixture) {
     let adapter = Arc::new(GatedAdapter::new(scripts));
     let dir = tempfile::tempdir().expect("temp dir");
@@ -472,6 +479,10 @@ async fn host_fixture_before_activation(
         )
         .expect("store"),
     );
+    if let Some(seed) = before_recovery {
+        store.initialize(&[]).expect("initialize seeded store");
+        seed(&store);
+    }
     let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
         conversation_id.clone(),
         crate::tools::runtime::ConversationRuntimeConfig {
@@ -3418,6 +3429,7 @@ async fn gated_pending_fixture(
         status_engine(),
         false,
         Some(clock),
+        None,
     )
     .await;
     fixture.runtime.activate();

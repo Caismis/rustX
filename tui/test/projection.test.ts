@@ -491,6 +491,7 @@ describe("presentation projection", () => {
           compaction_in_progress: false,
           compaction_count: 2,
           latest_compaction: {
+            operation_id: "compaction-operation-2",
             generation: "2",
             checkpoint_id: "conv_be682c07-c8cf-7a0f-9f06-17a4288267dd",
             activation_id: "7",
@@ -1420,7 +1421,7 @@ it('T14 T19 canonical Tool result commitment is separate from execution-terminal
 it('T14 T17 native Trace read-domain head remains in the locally Applied checkpoint', () => {
   const initial = snapshot();
   const state = replaceFromSnapshot(checkpointSnapshot(checkpoint(initial)), '0');
-  const trace: import('../../protocol/app-server/v79.ts').TracePage = {records: [{
+  const trace: import('../../protocol/app-server/v80.ts').TracePage = {records: [{
     id: 'request:J1', position: 'native-trace-1', kind: 'request', state: 'running', fields: [], collections: [],
     location: {attempt_id: 'attempt-1', step_id: 'turn-1'}, timing: {started_at: '2026-01-01T00:00:00Z'},
     calls: [], attachments: [], has_detail: true, truncated: false,
@@ -1434,7 +1435,7 @@ it('T14 T17 native Trace read-domain head remains in the locally Applied checkpo
 it('T14 T19 deferred publication settlement retains source facts without settling execution', () => {
   const initial = snapshot({attempt: attemptView({attempt_id:'attempt-1'})});
   const state = replaceFromSnapshot(checkpointSnapshot(checkpoint(initial)), '0');
-  const sourceCut: import('../../protocol/app-server/v79.ts').ObservationReadCut = {
+  const sourceCut: import('../../protocol/app-server/v80.ts').ObservationReadCut = {
     read: {conversation_id: initial.conversation_id, journal:'0', transcript:'1', mutation_revision:'0', ledger_through:'0', surface_revision:'0', transcript_total:'1', pending_through:'0', pending_total:'0'},
     ledger_through:'0', transcript_total:'1', surface_revision:'0', inherited_through:'0',
   };

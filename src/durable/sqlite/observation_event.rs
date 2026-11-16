@@ -51,6 +51,7 @@ fn selected_paths(event: &crate::events::types::RuntimeEvent) -> Option<&'static
     use crate::events::types::RuntimeEvent as Event;
     match event {
         Event::CompactionChunkAccepted { .. }
+        | Event::CompactionOperationUpdated { .. }
         | Event::AttemptStarted { .. }
         | Event::AttemptTimedOut { .. }
         | Event::TurnStarted
@@ -304,9 +305,14 @@ fn terminal_fields(
             value["source_ranges"] = serde_json::json!(source_ranges);
             value["generation"] = serde_json::json!(generation);
         }
-        Event::CompactionStarted { operation_id }
-        | Event::CompactionSkipped { operation_id }
-        | Event::CompactionCancelled { operation_id } => {
+        Event::CompactionStarted { operation_id, mode } => {
+            value["operation_id"] = serde_json::json!(operation_id);
+            value["mode"] = serde_json::json!(mode);
+        }
+        Event::CompactionOperationUpdated { status } => {
+            value["status"] = serde_json::json!(status);
+        }
+        Event::CompactionSkipped { operation_id } | Event::CompactionCancelled { operation_id } => {
             value["operation_id"] = serde_json::json!(operation_id);
         }
         Event::CompactionCompleted {

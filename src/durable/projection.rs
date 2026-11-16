@@ -39,11 +39,23 @@ pub struct ProjectionCommitReceipt {
     pub completed: RuntimeEventEnvelope,
 }
 
+/// Bounded exact evidence used to reconcile one orphaned proactive operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CompactionRestartEvidence {
+    /// A validated local atomic checkpoint/completion receipt exists.
+    pub committed: bool,
+    /// Last durably accepted contiguous fragment count, not provider usage.
+    pub accepted_fragments: u32,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProjectionCommitInput {
     pub grant: crate::runtime::cancellation::CompactionCommitGrant,
     pub operation_id: CompactionOperationId,
     pub candidate: CheckpointCandidate,
+    /// Process-local completed-generation evidence for a native prefix.
+    /// Serialized checkpoint records cannot manufacture this authority.
+    pub prefix_proof: Option<crate::context::coverage::VerifiedPrefixCoverage>,
     pub owner: ProjectionOwner,
     pub tokens_before: TokenMeasurement,
     pub estimated_tokens_after: u64,

@@ -279,7 +279,13 @@ impl SubagentObservationProjector {
             | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => {
                 self.settle_tool_execution(tool_call_id)
             }
-            RuntimeEvent::CompactionStarted { .. } => {
+            RuntimeEvent::CompactionStarted {
+                mode:
+                    crate::context::operation::CompactionMode::Blocking
+                    | crate::context::operation::CompactionMode::Overflow
+                    | crate::context::operation::CompactionMode::Manual,
+                ..
+            } => {
                 self.visible_tool = None;
                 self.observation.activity = SubagentActivity::Compacting;
                 true
@@ -1101,6 +1107,7 @@ mod tests {
                 operation_id: crate::runtime::identity::CompactionOperationId::new(
                     "fixture-compaction",
                 ),
+                mode: crate::context::operation::CompactionMode::Blocking,
             }),
         );
         assert_eq!(projector.observation.activity, SubagentActivity::Compacting);
@@ -1117,6 +1124,24 @@ mod tests {
             projector.observation.activity,
             SubagentActivity::AwaitingActivity
         );
+    }
+
+    #[test]
+    fn independent_compaction_does_not_replace_foreground_activity() {
+        let mut projector = SubagentObservationProjector::default();
+        projector.observation.activity = SubagentActivity::Model {
+            request_id: RequestId::new("foreground"),
+            retry: 0,
+        };
+        let before = projector.observation.clone();
+        assert!(!projector.fold(
+            &event(RuntimeEvent::CompactionStarted {
+                operation_id: crate::runtime::identity::CompactionOperationId::new("background"),
+                mode: crate::context::operation::CompactionMode::Proactive,
+            }),
+            now()
+        ));
+        assert_eq!(projector.observation, before);
     }
 
     #[test]

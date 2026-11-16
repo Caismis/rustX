@@ -12,7 +12,7 @@ The default Package glyph comes from the pinned Lucide/Iconify set (ISC).
 As in ZCode's ProviderLogo, an explicit provider field selects an asset; provider
 identity and protocol do not infer a logo. The optional native `icon` slug is
 carried through source read/write, redaction and TOML serialization, and omitted
-at the inference catalog boundary. App Server v79 is the mandatory contract;
+at the inference catalog boundary. App Server v80 is the mandatory contract;
 no old protocol path is retained. The picker uses existing Base UI modal and
 React Aria grid/search controls. Browser plugin is unavailable in this session;
 validation uses the repository's pinned Playwright/Chromium runner.
@@ -5501,7 +5501,7 @@ conditions, reuse exact numeric comparison, preserve prompt editor DOM during
 bounded expansion, correct inline variable spacing and narrow Loop/Assigner
 rows, and avoid automatic Output-name collisions. Dify's stores, component
 source and assets are not copied. No dependencies are added. Vision and AI
-generation controls are omitted. App Server v79 is the sole wire contract;
+generation controls are omitted. App Server v80 is the sole wire contract;
 v67 artifacts are removed. Runtime Client v81 is unchanged.
 
 Actual desktop and touch browser checks use the repository's exact pinned
@@ -5630,7 +5630,7 @@ configure/clear controls and keyboard-operable moves, inspired by ZCode's ordere
 reasoning control. No upstream mapping code or dependencies are imported. Profile
 identities remain stable keys, and the existing JSON editor and native whole-Model
 transaction retain parameter validation, scope and revision ownership. The mandatory
-App Server v79 imports are regenerated from Rust; Runtime Client is v83. Updated
+App Server v80 imports are regenerated from Rust; Runtime Client is v83. Updated
 local hashes and import inventories record these adaptations against the unchanged
 upstream baselines. Browser plugin is unavailable; validation uses the repository's
 pinned Playwright container and production native API path.
