@@ -54,6 +54,8 @@ pub struct ActivationAdmission {
     pub context: Option<String>,
     pub origin: AgentActivationOrigin,
     pub terminal: SubagentTerminalMode,
+    /// Caller's frozen approval mode for this Activation only (Issue #544).
+    pub approval_mode: crate::runtime::types::ApprovalMode,
 }
 
 /// Truthful admission source. Client controls have no model `ToolCall` identity.
@@ -151,12 +153,12 @@ pub enum SubagentStartOutcome {
 pub enum SubagentStartError {
     /// The owning conversation is draining or draining-complete.
     ConversationInactive,
-    /// The task input is empty or its text exceeds [`MAX_TASK_BYTES`].
+    /// The task input is empty or its text exceeds `MAX_TASK_BYTES`.
     InvalidTask {
         /// The offending byte length.
         bytes: usize,
     },
-    /// The explicit context package exceeds [`MAX_CONTEXT_PACKAGE_BYTES`].
+    /// The explicit context package exceeds `MAX_CONTEXT_PACKAGE_BYTES`.
     ContextOversized {
         /// The offending byte length.
         bytes: usize,
@@ -558,7 +560,7 @@ impl SubagentRegistry {
             &child_agent_id,
             &self.config.agent_id,
             &spec.authority.resolved,
-            spec.authority.approval_mode,
+            spec.admission.approval_mode,
             spec.authority.execution_policy,
             &runtime_root,
             &workspace,

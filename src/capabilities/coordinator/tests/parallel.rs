@@ -203,6 +203,8 @@ impl Fixture {
                     headers: BTreeMap::new(),
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             cancellation,
             server,
@@ -301,13 +303,48 @@ fn selected_plan(fixtures: &[Fixture]) -> SelectedCapabilityPlan {
                         tool.description.as_deref().unwrap_or_default(),
                         &serde_json::Value::Object((*tool.input_schema).clone()),
                         policy.execution,
-                        policy.concurrency,
-                        policy.approval,
                     ),
                 }
             })
             .collect(),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn selected_mcp_catalog_retains_contract_for_workflow_fixed_calls() {
+    let dir = tempfile::tempdir().unwrap();
+    let handshakes = watch::channel(Handshakes::default()).0;
+    let fixtures = [Fixture::start("selected", &handshakes, false).await];
+    fixtures[0].release_handshake();
+    fixtures[0].release_listing();
+    let (coordinator, _) = coordinator(&dir, &fixtures, 1);
+    let candidate = coordinator
+        .prepare_selected_candidate(&selected_plan(&fixtures), &CancellationSignal::new())
+        .await
+        .unwrap();
+    let definition = &candidate.available_tools().tools()[0].definition;
+    let prepared = candidate
+        .available_tools()
+        .registration(definition)
+        .unwrap()
+        .prepare_fixed(
+            crate::tools::types::ToolInvocationId::Workflow {
+                node: Box::new(crate::runtime::workflow::test_instance(
+                    "review", "selected",
+                )),
+                retry: 0,
+            },
+            definition,
+            &serde_json::json!({}),
+        )
+        .unwrap();
+    assert!(matches!(
+        prepared,
+        crate::tools::executor::PreflightOutcome::Ready(_)
+    ));
+    assert_eq!(*fixtures[0].peer.list_calls.borrow(), 1);
+    candidate.retire_uncommitted().await;
+    coordinator.drain_conversation_owned().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -945,6 +982,8 @@ async fn cancelled_catalog_reconnect_retains_ownership_until_physical_settlement
             environment: [(FIXTURE_MODE_ENV.to_owned(), "1".to_owned())].into(),
         },
         policy: crate::tools::types::ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     };
     let generation = coordinator
         .inner

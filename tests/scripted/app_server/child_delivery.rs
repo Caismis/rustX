@@ -15,11 +15,11 @@ use crate::tools::session_files::{SessionFileReadFailure, SessionFileReference};
 use crate::tools::types::{ToolCall, ToolExecutionResult, ToolExecutionStatus};
 use futures_util::{SinkExt, StreamExt};
 
-struct ChildDelivery {
-    fixture: Fixture,
-    connection: AppServerConnection,
-    target: AttachmentTarget,
-    agent: AgentId,
+pub(crate) struct ChildDelivery {
+    pub(crate) fixture: Fixture,
+    pub(crate) connection: AppServerConnection,
+    pub(crate) target: AttachmentTarget,
+    pub(crate) agent: AgentId,
     workspace: std::path::PathBuf,
     store: crate::durable::SqliteConversationStore,
     message: MessageId,
@@ -30,7 +30,7 @@ impl ChildDelivery {
     async fn new() -> Self {
         Self::with_delivery(true).await
     }
-    async fn with_delivery(delivery: bool) -> Self {
+    pub(crate) async fn with_delivery(delivery: bool) -> Self {
         eprintln!("ChildDelivery setup: native Fixture start");
         let fixture = Fixture::with_tool(Some("delivery-child")).await;
         eprintln!("ChildDelivery setup: native Fixture ready");
@@ -169,7 +169,7 @@ impl ChildDelivery {
                 .subagent_id,
         )
     }
-    async fn close(self) {
+    pub(crate) async fn close(self) {
         self.fixture.gates[1].release();
         // A durable ordinary Agent can remain resident after its Turn ends.
         // Session unload owns process cancellation and physical settlement.
@@ -191,7 +191,9 @@ fn commit_delivery(
         id: ToolCallId::new(id),
         tool_id: ToolId::new("tool-present"),
         name: "present".into(),
-        arguments: serde_json::json!({"files":[{"path":file.path}]}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(
+            serde_json::json!({"files":[{"path":file.path}]}),
+        ),
     };
     let event = |suffix: &str, event| crate::events::types::RuntimeEventEnvelope {
         tool_occurrence: None,

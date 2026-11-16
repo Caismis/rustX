@@ -1711,6 +1711,7 @@ async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() 
     .await;
     let mut request = request_with_tools("List");
     request.tools = vec![crate::common::model_selectable_tool("bash", "tool-bash")];
+    let expected_schema = request.tools[0].input_schema.clone();
     let events = collect_events(
         &adapter(&server),
         with_storage(request, ResponsesStorageMode::Stored),
@@ -1727,6 +1728,10 @@ async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() 
             .expect("description")
             .contains("execution_mode"),
         "the compiled reminder is translated verbatim: {tool}"
+    );
+    assert_eq!(
+        tool["parameters"], expected_schema,
+        "the adapter preserves the entire compiled schema"
     );
     crate::common::assert_compiled_execution_mode_schema(&tool["parameters"], "command");
 }

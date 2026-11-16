@@ -161,8 +161,7 @@ async fn run(
     input: Value,
 ) -> Result<Value, WorkflowRunError> {
     // Parallel rounds may call the Tool at once.
-    let mut tool = definition();
-    tool.concurrency_policy = ToolConcurrencyPolicy::Parallel;
+    let tool = definition();
     let context = context_with_registration(
         plane,
         ToolRegistration::plain(tool, executor),
@@ -244,7 +243,10 @@ async fn a_loop_carries_its_variables_until_the_break_condition_holds() {
             })
             .collect::<Vec<_>>();
         assert_eq!(exits, [(u32::try_from(rounds).unwrap(), reason)]);
-        assert!(plane.registry.all_snapshots().is_empty());
+        assert_eq!(
+            plane.registry.all_snapshots(),
+            [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+        );
     }
 }
 

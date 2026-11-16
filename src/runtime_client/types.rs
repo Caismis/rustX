@@ -286,7 +286,7 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 84;
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -296,7 +296,7 @@ pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 84;
 ///
 /// - monotonic within the Runtime Client observation stream;
 /// - **not** an alias of `u64`;
-/// - **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);
+/// - **not** the mailbox [`InboundSequence`];
 /// - **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);
 /// - **not** any future Event Journal sequence;
 /// - owned by the runtime observation stream, so it survives attachment
@@ -504,6 +504,11 @@ pub enum RuntimeClientRequest {
         offset: u64,
         limit: usize,
     },
+    WorkflowTraceNode {
+        id: RequestId,
+        cut: crate::observation::cut::CheckpointReadCut,
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+    },
     CheckpointValueRead {
         id: RequestId,
         cut: crate::observation::cut::CheckpointReadCut,
@@ -626,6 +631,15 @@ pub enum RuntimeClientRequest {
         id: RequestId,
         locator: super::trace::TraceToolLocator,
     },
+    TraceLocateWorkflow {
+        id: RequestId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+    AgentTraceLocateWorkflow {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
     AgentTraceLocateTool {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
@@ -674,6 +688,7 @@ impl RuntimeClientRequest {
             | Self::ObserveEvents { id, .. }
             | Self::ContentRead { id, .. }
             | Self::CheckpointPageGet { id, .. }
+            | Self::WorkflowTraceNode { id, .. }
             | Self::CheckpointValueRead { id, .. }
             | Self::InteractionPageGet { id, .. }
             | Self::InteractionValueRead { id, .. }
@@ -698,6 +713,8 @@ impl RuntimeClientRequest {
             | Self::AgentTrace { id, .. }
             | Self::AgentTraceDetail { id, .. }
             | Self::TraceLocateTool { id, .. }
+            | Self::TraceLocateWorkflow { id, .. }
+            | Self::AgentTraceLocateWorkflow { id, .. }
             | Self::AgentTraceLocateTool { id, .. }
             | Self::AgentTranscript { id, .. }
             | Self::AgentTurns { id, .. }
@@ -720,6 +737,7 @@ impl RuntimeClientRequest {
             Self::ObserveEvents { .. } => "observe_events",
             Self::ContentRead { .. } => "content_read",
             Self::CheckpointPageGet { .. } => "checkpoint_page_get",
+            Self::WorkflowTraceNode { .. } => "workflow_trace_node",
             Self::CheckpointValueRead { .. } => "checkpoint_value_read",
             Self::InteractionPageGet { .. } => "interaction_page_get",
             Self::InteractionValueRead { .. } => "interaction_value_read",
@@ -744,6 +762,8 @@ impl RuntimeClientRequest {
             Self::AgentTrace { .. } => "agent_trace",
             Self::AgentTraceDetail { .. } => "agent_trace_detail",
             Self::TraceLocateTool { .. } => "trace_locate_tool",
+            Self::TraceLocateWorkflow { .. } => "trace_locate_workflow",
+            Self::AgentTraceLocateWorkflow { .. } => "agent_trace_locate_workflow",
             Self::AgentTraceLocateTool { .. } => "agent_trace_locate_tool",
             Self::AgentTranscript { .. } => "agent_transcript",
             Self::AgentTurns { .. } => "agent_turns",
@@ -759,8 +779,10 @@ impl RuntimeClientRequest {
             Self::CheckpointGet { .. }
                 | Self::TracePageGet { .. }
                 | Self::CheckpointPageGet { .. }
+                | Self::WorkflowTraceNode { .. }
                 | Self::CheckpointValueRead { .. }
                 | Self::TraceLocateTool { .. }
+                | Self::TraceLocateWorkflow { .. }
                 | Self::InteractionPageGet { .. }
                 | Self::InteractionValueRead { .. }
                 | Self::ContentRead { .. }
@@ -776,6 +798,8 @@ impl RuntimeClientRequest {
         matches!(
             self,
             Self::TraceLocateTool { .. }
+                | Self::TraceLocateWorkflow { .. }
+                | Self::AgentTraceLocateWorkflow { .. }
                 | Self::InteractionPageGet { .. }
                 | Self::InteractionValueRead { .. }
                 | Self::AgentStatistics { .. }
@@ -902,6 +926,9 @@ pub enum RuntimeClientResult {
     TraceToolLocation {
         location: Option<super::trace::TraceToolLocation>,
     },
+    TraceWorkflowLocation {
+        location: Option<super::trace::TraceWorkflowLocation>,
+    },
     TranscriptWindow {
         window: Box<super::snapshot::ConversationWindow>,
     },
@@ -917,6 +944,9 @@ pub enum RuntimeClientResult {
     },
     CheckpointPage {
         page: super::checkpoint::CheckpointPage,
+    },
+    WorkflowTraceNode {
+        node: Option<crate::durable::observation::WorkflowTraceNode>,
     },
     DomainPage {
         page: super::checkpoint::CheckpointPage,
@@ -1378,7 +1408,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 84);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 85);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1576,19 +1606,22 @@ mod tests {
         use crate::model::types::ModelProtocol;
 
         let capabilities = ModelCapabilities::text_only();
+        let primary = ModelInvocationView {
+            model: ModelRef::parse(reference).expect("a valid model reference"),
+            protocol: ModelProtocol::OpenAiChatCompletions,
+            context_window: 128_000,
+            model_max_output_tokens: 4096,
+            max_output_tokens: 4096,
+            profile: None,
+            request_params: RequestParams::new(),
+            capabilities: capabilities.clone(),
+            declared_capabilities: capabilities,
+        };
         AttemptModelView {
-            primary: ModelInvocationView {
-                model: ModelRef::parse(reference).expect("a valid model reference"),
-                protocol: ModelProtocol::OpenAiChatCompletions,
-                context_window: 128_000,
-                model_max_output_tokens: 4096,
-                max_output_tokens: 4096,
-                profile: None,
-                request_params: RequestParams::new(),
-                capabilities: capabilities.clone(),
-                declared_capabilities: capabilities,
+            summary: AuxiliaryModelView::Session {
+                effective: Box::new(primary.clone()),
             },
-            summary: AuxiliaryModelView::Session,
+            primary,
         }
     }
 

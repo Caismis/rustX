@@ -459,21 +459,36 @@ impl AgentExecution<'_> {
     }
 
     pub(super) fn emit(&mut self, event: RuntimeEvent) {
+        if let Err(error) = self.emit_shared(event)
+            && self.durable_failure.is_none()
+        {
+            self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
+            self.durable_failure = Some(error);
+        }
+    }
+
+    /// Persists and observes one runtime fact while outstanding `&self` tool
+    /// futures may already be borrowed (parallel authorize-and-start).
+    ///
+    /// On journal failure this returns the message and does not record
+    /// [`Self::durable_failure`]: the caller must surface
+    /// [`CanonicalCommitError`] so the attempt terminal records durability.
+    pub(super) fn emit_shared(&self, event: RuntimeEvent) -> Result<(), String> {
         debug_assert!(
             !self.terminal_emitted,
             "no runtime events may follow the terminal event"
         );
         if self.durable_failure.is_some() {
-            return;
+            return Ok(());
         }
         match self.store.append_event(self.event_envelope(event)) {
-            Ok(envelope) => self.record_persisted_event(envelope),
-            Err(error) => {
-                self.durable_failure_kind = Some(DurableFailureKind::EventJournal);
-                self.durable_failure = Some(format!(
-                    "runtime event could not be persisted before publication: {error}"
-                ));
+            Ok(envelope) => {
+                self.record_persisted_event(envelope);
+                Ok(())
             }
+            Err(error) => Err(format!(
+                "runtime event could not be persisted before publication: {error}"
+            )),
         }
     }
 }

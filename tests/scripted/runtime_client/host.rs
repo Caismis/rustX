@@ -20,9 +20,7 @@ use rustx::runtime_client::{
     RuntimeClientRequest, RuntimeClientResult,
 };
 use rustx::tools::executor::ToolRegistry;
-use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use rustx::tools::types::{ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, success_result, tool_call_events,
 };
@@ -307,7 +305,10 @@ async fn submit_while_busy_queues_for_the_next_drain() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
 }
 
 /// Protocol cancellation of the current attempt: acceptance is not
@@ -401,21 +402,11 @@ async fn foreground_tools_project_with_stable_identities() {
     }));
     let model = FakeModel::new(vec![first, one_turn_stop()]);
     let (tool_a, release_a) = FakeTool::parking(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let (tool_b, release_b) = FakeTool::parking(
-        common::tool_policies(
-            "beta",
-            "tool-beta",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Parallel,
-        ),
+        common::tool_policies("beta", "tool-beta", ToolExecutionPolicy::ForegroundOnly),
         success_result("b"),
     );
     let mut started_a = tool_a.started();
@@ -1152,7 +1143,10 @@ async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() 
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert!(snapshot.statuses.is_empty());
+    assert_eq!(
+        snapshot.statuses,
+        [] as [crate::observation::status::AgentStatusView; 0]
+    );
 }
 
 /// Agent Status is composed **exactly once** per model request that
@@ -1182,12 +1176,7 @@ async fn agent_status_is_composed_exactly_once_per_request() {
     }));
     let model = FakeModel::new(vec![first, one_turn_stop()]);
     let tool = FakeTool::new(
-        common::tool_policies(
-            "alpha",
-            "tool-alpha",
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-        ),
+        common::tool_policies("alpha", "tool-alpha", ToolExecutionPolicy::ForegroundOnly),
         success_result("a"),
     );
     let mut tools = ToolRegistry::new();
@@ -1318,8 +1307,6 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                 description: "list files".to_owned(),
                 input_schema: serde_json::json!({"type": "object"}),
                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
             },
@@ -1330,8 +1317,6 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                     description: "list files".to_owned(),
                     input_schema: serde_json::json!({"type": "object"}),
                     execution_policy: ToolExecutionPolicy::ForegroundOnly,
-                    concurrency_policy: ToolConcurrencyPolicy::Sequential,
-                    approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
                     replay_policy: ToolReplayPolicy::Never,
                     origin: ToolOrigin::Builtin,
                 },
@@ -1365,7 +1350,10 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
     assert_eq!(capabilities.tools[0].id, ToolId::new("tool-ls"));
     assert_eq!(capabilities.tools[0].name, "ls");
     assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
-    assert!(capabilities.skills.is_empty());
+    assert_eq!(
+        capabilities.skills,
+        [] as [crate::observation::capability_source::RuntimeClientSkill; 0]
+    );
 
     // The snapshot carries the same semantic projection (one
     // implementation, not two).

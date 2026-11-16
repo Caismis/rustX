@@ -335,7 +335,7 @@ fn cfg275_agent_inspection_and_removed_flags_are_offline() {
 fn lexical_failure(output: &Output) {
     assert_eq!(output.status.code(), Some(2));
     assert!(output.stdout.is_empty(), "{:?}", output.stdout);
-    assert!(!output.stderr.is_empty());
+    assert_ne!(output.stderr, [] as [u8; 0]);
     assert!(!output.stderr.contains(&0x1b));
 }
 
@@ -366,7 +366,7 @@ fn cli01_cli02_cli06_cli07_public_entry_stream_matrix() {
     }
     let human = run(root.path(), &["config", "check", "--workspace=--json"]);
     assert_eq!(human.status.code(), Some(2));
-    assert!(human.stderr.is_empty());
+    assert_eq!(human.stderr, [] as [u8; 0]);
     assert!(human.stdout.starts_with(b"config_check:"));
     report(
         &run(
@@ -420,7 +420,7 @@ fn cli07_cli08_help_precedes_host_capture_and_has_no_effects() {
             "{args:?}: {:?}",
             output.stderr
         );
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout, [] as [u8; 0]);
         let help = String::from_utf8(output.stderr).unwrap();
         assert!(
             help.contains("Usage:") && !help.contains("subagent-child") && !help.contains('\u{1b}')
@@ -445,7 +445,7 @@ fn cli09_internal_child_rejects_all_extra_arguments() {
     }
     let output = run(root.path(), &["--subagent-child"]);
     assert!(!output.status.success());
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
     assert!(!String::from_utf8_lossy(&output.stderr).contains("Usage:"));
     assert!(!root.path().join("home").exists());
 }
@@ -631,7 +631,7 @@ fn os_argv_private_child_discriminator_is_exact() {
     }
     let output = run(root.path(), &[OsString::from("--help")]);
     assert_eq!(output.status.code(), Some(0));
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, [] as [u8; 0]);
     assert!(
         !String::from_utf8(output.stderr)
             .unwrap()
@@ -787,7 +787,7 @@ fn app_server_non_unicode_bindings_fail_before_readiness() {
             ],
         );
         assert_eq!(output.status.code(), Some(2));
-        assert!(output.stdout.is_empty());
+        assert_eq!(output.stdout, [] as [u8; 0]);
         let error = std::str::from_utf8(&output.stderr).unwrap();
         assert!(
             error.contains("App Server")

@@ -365,6 +365,7 @@ fn direct_frozen_mutation_invalidates_producer_and_path_certificates_without_tou
 
 fn empty_snapshot(request: &crate::model::ModelRequest) -> crate::model::RequestSnapshot {
     crate::model::RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         crate::model::RequestIdentity {
             attempt_id: crate::runtime::identity::AttemptId::new("selected-budget"),
             turn: crate::runtime::identity::TurnId::new("1"),

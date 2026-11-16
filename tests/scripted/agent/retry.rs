@@ -729,8 +729,14 @@ async fn transient_retry_does_not_reset_overflow_budget() {
         snapshots[1].semantic_input_fingerprint,
         snapshots[2].semantic_input_fingerprint
     );
-    assert!(snapshots[1].request_context_ids.is_empty());
-    assert!(snapshots[2].request_context_ids.is_empty());
+    assert_eq!(
+        snapshots[1].request_context_ids,
+        [] as [crate::runtime::identity::MessageId; 0]
+    );
+    assert_eq!(
+        snapshots[2].request_context_ids,
+        [] as [crate::runtime::identity::MessageId; 0]
+    );
     for id in &snapshots[0].request_context_ids {
         for request in &requests {
             assert_eq!(

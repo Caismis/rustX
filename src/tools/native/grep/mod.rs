@@ -339,7 +339,7 @@ mod tests {
         let error = search_file(&mut searcher, &matcher, &missing, &mut collector)
             .expect_err("an unreadable enumerated file is an execution failure");
         assert!(error.contains("gone.txt"));
-        assert!(collector.lines.is_empty());
+        assert_eq!(collector.lines, [] as [std::string::String; 0]);
         assert!(!collector.is_truncated());
     }
 
@@ -357,6 +357,6 @@ mod tests {
         };
         search_file(&mut searcher, &matcher, &file, &mut collector)
             .expect("non-UTF-8 content is skipped");
-        assert!(collector.lines.is_empty());
+        assert_eq!(collector.lines, [] as [std::string::String; 0]);
     }
 }

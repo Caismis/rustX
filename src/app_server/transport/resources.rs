@@ -52,7 +52,7 @@ impl TransportResources {
             &self.stdio
         };
         if count
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 (n < limit).then_some(n + 1)
             })
             .is_err()

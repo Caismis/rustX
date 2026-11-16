@@ -24,5 +24,6 @@ mod model_switching;
 mod openai_chat;
 mod openai_responses;
 mod request_params;
+mod schema_resources;
 mod structured_output;
 mod transport;

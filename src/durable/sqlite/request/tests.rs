@@ -174,12 +174,9 @@ fn historical_context_alone_cannot_advance_contribution_receipts() {
     );
     store.append_canonical(&status).unwrap();
     assert_eq!(store.current_logical_step_progress().unwrap(), 0);
-    assert!(
-        store
-            .read_request_snapshots(None, 10)
-            .unwrap()
-            .snapshots
-            .is_empty()
+    assert_eq!(
+        store.read_request_snapshots(None, 10).unwrap().snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
     assert!(
         store
@@ -267,11 +264,11 @@ fn every_checkpoint_transaction_stage_fault_exposes_only_the_old_complete_state(
         assert!(store.commit_projection(input.clone()).is_err());
         assert_eq!(store.load_canonical().unwrap(), history);
         assert!(store.projection_head().unwrap().is_none());
-        assert!(
+        assert_eq!(
             store
                 .projection_timeline(crate::context::checkpoint::ProjectionActivationId(0), 64)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::durable::projection::ProjectionCheckpoint; 0]
         );
         assert!(
             store
@@ -279,7 +276,10 @@ fn every_checkpoint_transaction_stage_fault_exposes_only_the_old_complete_state(
                 .unwrap()
                 .is_none()
         );
-        assert!(store.read_events(None, 64).unwrap().events.is_empty());
+        assert_eq!(
+            store.read_events(None, 64).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
         let receipt = store.commit_projection(input).unwrap();
         assert_eq!(
             store.projection_head().unwrap().unwrap(),
@@ -410,7 +410,13 @@ fn all_four_projection_tool_pairings_start_exact_requests_without_recovery_execu
                 canonical,
                 "projection never fabricates recovery results"
             );
-            assert!(store.unsettled_canonical_tool_calls(1).unwrap().is_empty());
+            assert_eq!(
+                store.unsettled_canonical_tool_calls(1).unwrap(),
+                [] as [(
+                    crate::message::types::ToolCallOccurrenceRef,
+                    crate::runtime::identity::ToolCallId
+                ); 0]
+            );
             let history = store.projected_history().unwrap();
             let mut snapshot =
                 test_request_snapshot(store.load_head().unwrap().revision, invocation());
@@ -509,26 +515,23 @@ fn request_start_is_atomic_and_reconstructs_from_durable_history() {
             .commit_model_turn_start(&[], &snapshot, Utc::now())
             .is_err()
     );
-    assert!(
-        store
-            .read_request_snapshots(None, 32)
-            .unwrap()
-            .snapshots
-            .is_empty()
+    assert_eq!(
+        store.read_request_snapshots(None, 32).unwrap().snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
-    assert!(store.read_events(None, 20).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 20).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     store.arm_fail_event_times(1);
     assert!(
         store
             .commit_model_turn_start(&[], &snapshot, Utc::now())
             .is_err()
     );
-    assert!(
-        store
-            .read_request_snapshots(None, 32)
-            .unwrap()
-            .snapshots
-            .is_empty()
+    assert_eq!(
+        store.read_request_snapshots(None, 32).unwrap().snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
 
     let started = store
@@ -1089,14 +1092,14 @@ fn agent_status_start_faults_roll_back_message_emission_and_head_together() {
             crate::conversation::SurfaceRevision::new(1)
         );
         assert_eq!(store.load_canonical().unwrap(), vec![base]);
-        assert!(
-            store
-                .read_request_snapshots(None, 10)
-                .unwrap()
-                .snapshots
-                .is_empty()
+        assert_eq!(
+            store.read_request_snapshots(None, 10).unwrap().snapshots,
+            [] as [crate::model::snapshot::RequestSnapshot; 0]
         );
-        assert!(store.read_events(None, 10).unwrap().events.is_empty());
+        assert_eq!(
+            store.read_events(None, 10).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
         assert_eq!(
             store.current_logical_step_progress().unwrap(),
             0,
@@ -1144,7 +1147,10 @@ fn agent_status_start_binds_metadata_to_the_exact_status_message() {
         ),
         Err(ConversationStoreError::InvalidReference(_))
     ));
-    assert!(store.read_events(None, 10).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 10).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     assert_eq!(store.load_canonical().unwrap(), vec![base]);
 }
 
@@ -1575,6 +1581,7 @@ fn request_snapshot_history_is_bounded_and_cursor_paged() {
 
     for index in 0..7_u64 {
         let mut snapshot = RequestSnapshot::new(
+            crate::runtime::types::ApprovalMode::FullAccess,
             RequestIdentity {
                 attempt_id: AttemptId::new(format!("request-page-attempt-{index}")),
                 turn: TurnId::new("1"),
@@ -1603,7 +1610,10 @@ fn request_snapshot_history_is_bounded_and_cursor_paged() {
     }
 
     let empty = store.read_request_snapshots(None, 0).expect("empty page");
-    assert!(empty.snapshots.is_empty());
+    assert_eq!(
+        empty.snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
+    );
     assert_eq!(empty.next_sequence, None);
 
     let page_one = store.read_request_snapshots(None, 3).expect("first page");
@@ -1623,7 +1633,10 @@ fn request_snapshot_history_is_bounded_and_cursor_paged() {
     assert_eq!(page_one.next_sequence, Some(3));
     assert_eq!(page_two.next_sequence, Some(6));
     assert_eq!(page_three.next_sequence, Some(7));
-    assert!(page_four.snapshots.is_empty());
+    assert_eq!(
+        page_four.snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
+    );
     assert_eq!(page_four.next_sequence, None);
 
     let pages = [page_one, page_two, page_three];
@@ -1793,6 +1806,7 @@ fn corrupt_frozen_request_revision_metadata_fails_closed() {
         .initialize(std::slice::from_ref(&message))
         .unwrap();
     let mut snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new("request-corruption-attempt"),
             turn: TurnId::new("1"),
@@ -1970,6 +1984,7 @@ fn missing_frozen_original_ledger_dependency_fails_closed() {
         .initialize(std::slice::from_ref(&missing_message))
         .unwrap();
     let mut missing_snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new("missing-message-attempt"),
             turn: TurnId::new("1"),

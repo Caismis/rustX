@@ -240,6 +240,45 @@ impl Peer {
         }
         Ok(result)
     }
+    async fn trace_locate_workflow(
+        &mut self,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let id = self.next_id();
+        let result = self
+            .request(RuntimeClientRequest::TraceLocateWorkflow {
+                id,
+                run_id: run_id.clone(),
+            })
+            .await?;
+        let RuntimeClientResult::TraceWorkflowLocation { location } = &result else {
+            return Err(failed("unexpected native Workflow locator response"));
+        };
+        if let Some(location) = location {
+            self.validate_cut(
+                location
+                    .page
+                    .read_cut
+                    .as_ref()
+                    .ok_or_else(|| failed("native Workflow location omitted its read evidence"))?,
+            )?;
+        }
+        if location.as_ref().is_some_and(|location| {
+            location.record_id.len() > 256
+                || location.page.records.len() > 32
+                || location.page.updates.len() > 32
+        }) || crate::observation::bounded::bounded_bytes(
+            &result,
+            crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
+        )
+        .is_none()
+        {
+            return Err(failed(
+                "native Workflow locator result exceeded bounded source contract",
+            ));
+        }
+        Ok(result)
+    }
     fn validate_cut(
         &self,
         cut: &crate::observation::cut::CheckpointReadCut,
@@ -498,14 +537,18 @@ fn durable_host(
     super::host::RuntimeClientHost::new_durable(std::sync::Arc::new(store), None).map_err(failed)
 }
 
-// Historical inspection owns an immutable cut authenticated by the Registry
-// activation, independently of the live Host's publication/cache cut.
-fn historical_selection(cut: &crate::observation::cut::CheckpointReadCut, domain: &str) -> bool {
+fn historical_cut(cut: &crate::observation::cut::CheckpointReadCut) -> bool {
     cut.revision == 0
         && cut.canonical_foreground.is_none()
         && cut.live_publication.is_none()
         && cut.domain_revisions.is_empty()
         && cut.collection_cuts.is_empty()
+}
+
+// Historical inspection owns an immutable cut authenticated by the Registry
+// activation, independently of the live Host's publication/cache cut.
+fn historical_selection(cut: &crate::observation::cut::CheckpointReadCut, domain: &str) -> bool {
+    historical_cut(cut)
         && (domain == "trace.records"
             || super::trace_observation::selection(domain).is_some()
             || super::trace_observation::messages_selection(domain).is_some()
@@ -837,6 +880,61 @@ impl ClientInner {
         })
         .await
         .map_err(|_| failed("total Child Tool locator deadline exhausted"))?
+    }
+
+    pub(crate) async fn agent_trace_locate_workflow_via_inspection(
+        self: &std::sync::Arc<Self>,
+        id: &AgentId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<RuntimeClientResult, RuntimeClientError> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        tokio::time::timeout_at(deadline, async {
+            let permit = self.reserve_inspection()?;
+            let agent = self.child_view(id)?;
+            let result = if matches!(
+                agent.state,
+                crate::runtime::subagent::AgentState::Inactive
+                    | crate::runtime::subagent::AgentState::Unavailable
+            ) {
+                let registry = self.agent_registry()?.clone();
+                let activation = agent.activation_id.clone();
+                let reading_agent = agent.clone();
+                physical_read(permit, move || {
+                    let store = registry
+                        .transcript_store(&activation)
+                        .map_err(|error| failed(format!("{error:?}")))?;
+                    let projection = super::trace::TraceProjection::new(&store).map_err(failed)?;
+                    let mut location = projection.locate_workflow(&run_id).map_err(failed)?;
+                    if let Some(location) = &mut location {
+                        bind_cold_agent_trace(&mut location.page, &reading_agent)?;
+                    }
+                    Ok(RuntimeClientResult::TraceWorkflowLocation { location })
+                })
+                .await?
+            } else {
+                let path = self
+                    .agent_registry()?
+                    .agent_inspection_path(id)
+                    .ok_or(RuntimeClientError::ContentSourceUnavailable)?;
+                let mut peer = Peer::open(
+                    path,
+                    &agent.child_conversation_id,
+                    &agent.activation_id,
+                    permit,
+                )
+                .await?;
+                peer.trace_locate_workflow(&run_id).await?
+            };
+            let current = self.child_view(id)?;
+            if current.activation_id != agent.activation_id
+                || current.child_conversation_id != agent.child_conversation_id
+            {
+                return Err(RuntimeClientError::ReadCutExpired);
+            }
+            Ok(result)
+        })
+        .await
+        .map_err(|_| failed("total Child Workflow locator deadline exhausted"))?
     }
 
     pub(crate) async fn interaction_fields_async(
@@ -1359,6 +1457,102 @@ impl ClientInner {
         })
         .await
         .map_err(|_| failed("total page read deadline exhausted"))?
+    }
+
+    pub(crate) async fn agent_workflow_trace_node(
+        &self,
+        id: &AgentId,
+        cut: &crate::observation::cut::CheckpointReadCut,
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+    ) -> Result<Option<crate::durable::observation::WorkflowTraceNode>, RuntimeClientError> {
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+        tokio::time::timeout_at(deadline, async {
+            let permit = self.reserve_inspection()?;
+            let agent = self.child_view(id)?;
+            if cut.conversation_id != agent.child_conversation_id
+                || cut.activation_id.as_ref() != Some(&agent.activation_id)
+            {
+                return Err(RuntimeClientError::ReadCutExpired);
+            }
+            if instance.block.run.conversation_id != agent.child_conversation_id {
+                return Err(RuntimeClientError::InvalidRequest {
+                    message: "workflow node belongs to another conversation".into(),
+                });
+            }
+            let mut native_cut = cut.clone();
+            let historical = historical_cut(&native_cut);
+            if historical
+                || matches!(
+                    agent.state,
+                    crate::runtime::subagent::AgentState::Inactive
+                        | crate::runtime::subagent::AgentState::Unavailable
+                )
+            {
+                native_cut.activation_id = None;
+                let registry = self.agent_registry()?.clone();
+                let activation = agent.activation_id.clone();
+                let node = physical_read(permit, move || {
+                    if historical {
+                        let store = registry
+                            .transcript_store(&activation)
+                            .map_err(|_| RuntimeClientError::ContentSourceUnavailable)?;
+                        return super::trace_observation::history_workflow_node(
+                            &store,
+                            &native_cut,
+                            &instance,
+                        );
+                    }
+                    let host = durable_host(&registry, &activation)?;
+                    host.inner.workflow_trace_node(&native_cut, &instance)
+                })
+                .await?;
+                let current = self.child_view(id)?;
+                if current.activation_id != agent.activation_id
+                    || current.child_conversation_id != agent.child_conversation_id
+                {
+                    return Err(RuntimeClientError::ReadCutExpired);
+                }
+                return Ok(node);
+            }
+            let path = self
+                .agent_registry()?
+                .agent_inspection_path(id)
+                .ok_or_else(|| failed("live workflow node source unavailable"))?;
+            let mut peer = Peer::open(
+                path,
+                &agent.child_conversation_id,
+                &agent.activation_id,
+                permit,
+            )
+            .await?;
+            let request_id = peer.next_id();
+            let result = peer
+                .request(RuntimeClientRequest::WorkflowTraceNode {
+                    id: request_id,
+                    cut: native_cut,
+                    instance,
+                })
+                .await?;
+            let current = self.child_view(id)?;
+            if current.activation_id != agent.activation_id
+                || current.child_conversation_id != agent.child_conversation_id
+            {
+                return Err(RuntimeClientError::ReadCutExpired);
+            }
+            match result {
+                RuntimeClientResult::WorkflowTraceNode { node } => {
+                    if node.as_ref().is_some_and(|node| {
+                        node.instance.block.run.conversation_id != agent.child_conversation_id
+                    }) {
+                        return Err(failed("workflow node changed native conversation identity"));
+                    }
+                    Ok(node)
+                }
+                _ => Err(failed("unexpected workflow node response")),
+            }
+        })
+        .await
+        .map_err(|_| failed("total workflow node read deadline exhausted"))?
     }
 
     pub(crate) async fn agent_observe(

@@ -632,7 +632,6 @@ fn inherit_projections(
 ///
 /// The source read may discover snapshots for the complete eligible timeline;
 /// a Fork that excludes a checkpoint must not copy its unrelated Summary Call.
-#[allow(dead_code)] // Invoked by the LineageSeed attachment hook in `lineage_cut`.
 pub(crate) fn retain_summary_generation_audits(
     projections: &[crate::durable::projection::ProjectionCheckpoint],
     source_audits: &[crate::durable::reading::AuxiliaryAuditSnapshot],

@@ -23,7 +23,7 @@ fn commit_delivery_result(
                     id: call_id.clone(),
                     tool_id: tool_id.clone(),
                     name: "present".into(),
-                    arguments: serde_json::json!({"files":[{"path":file.path}]}),
+                    arguments: serde_json::json!({"arguments":{"files":[{"path":file.path}]}}),
                 })],
             },
         ))
@@ -149,7 +149,7 @@ fn assert_delivery_head(
         assert_eq!(chunk.cut, checkpoint.read_cut);
         assert_eq!(chunk.domain, item.metadata_domain);
         assert_eq!(chunk.item_offset, 0);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(chunk.readable_end, item.encoded_bytes);
         let part = base64::engine::general_purpose::STANDARD
@@ -306,7 +306,10 @@ async fn t08_t12_t14_t19_cold_host_selects_tiny_delivery_from_giant_original_too
     assert_eq!(host.checkpoint().unwrap(), checkpoint);
     assert_eq!(store.load_messages(&[message_id]).unwrap(), [original]);
     assert!(checkpoint.snapshot.attempt.is_none());
-    assert!(store.read_events(None, 32).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 32).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
 }
 
 #[tokio::test]
@@ -370,7 +373,10 @@ async fn t08_t14_t19_delivery_corruption_and_failed_tool_keep_native_authority()
             .unwrap(),
         originals
     );
-    assert!(store.read_events(None, 32).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 32).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
 }
 
 #[tokio::test]

@@ -134,6 +134,7 @@ async fn a_workflow_child_cannot_be_resumed_through_agent_controls() {
                 &accepted.child_agent_id,
                 "continue as an ordinary Agent",
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new(),
             )
             .await
@@ -173,7 +174,10 @@ async fn a_missing_workspace_binding_fails_without_fallback_or_creation() {
         "{error:?}"
     );
     assert!(!missing.exists(), "no replacement directory is created");
-    assert!(registry.all_snapshots().is_empty());
+    assert_eq!(
+        registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
     assert!(events(&plane).is_empty(), "nothing is committed");
 }
 
@@ -205,6 +209,7 @@ async fn resume_workspace_preflight_rejects_missing_and_file_bindings_without_al
     }
 }
 
+#[allow(clippy::too_many_lines)] // One preflight path covering both resume shapes.
 async fn assert_resume_workspace_preflight(
     regular_file: bool,
     attachments: Vec<crate::message::content::UploadedFileRef>,
@@ -243,6 +248,7 @@ async fn assert_resume_workspace_preflight(
             "rejected resume",
             &attachments,
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new(),
         )
         .await
@@ -260,7 +266,10 @@ async fn assert_resume_workspace_preflight(
         plane.registry.state.lock().unwrap().allocation_attempts,
         before_attempts
     );
-    assert!(plane.registry.unproven_settlements().is_empty());
+    assert_eq!(
+        plane.registry.unproven_settlements(),
+        [] as [crate::runtime::identity::SubagentId; 0]
+    );
     let agent = plane
         .registry
         .agent_snapshot(&first.child_agent_id)
@@ -279,6 +288,7 @@ async fn assert_resume_workspace_preflight(
             "restored resume",
             &attachments,
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new()
         ),
         child.accept_delegate(),
@@ -333,6 +343,7 @@ async fn resume_workspace_preflight_arbitrates_competitors_and_preallocation_int
         &first.child_agent_id,
         "cancelled winner",
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut sending).is_pending());
@@ -353,6 +364,7 @@ async fn resume_workspace_preflight_arbitrates_competitors_and_preallocation_int
                 &first.child_agent_id,
                 "competitor",
                 AgentActivationOrigin::ClientControl,
+                crate::runtime::types::ApprovalMode::FullAccess,
                 CancellationSignal::new()
             )
             .await,
@@ -371,7 +383,10 @@ async fn resume_workspace_preflight_arbitrates_competitors_and_preallocation_int
         plane.registry.state.lock().unwrap().allocation_attempts,
         before_attempts
     );
-    assert!(plane.registry.unproven_settlements().is_empty());
+    assert_eq!(
+        plane.registry.unproven_settlements(),
+        [] as [crate::runtime::identity::SubagentId; 0]
+    );
     // Hold the first interruption response until a later activation is live.
     let mut child = stage_exit0(&plane);
     let (resumed, _) = tokio::join!(
@@ -379,6 +394,7 @@ async fn resume_workspace_preflight_arbitrates_competitors_and_preallocation_int
             &first.child_agent_id,
             "next winner",
             AgentActivationOrigin::ClientControl,
+            crate::runtime::types::ApprovalMode::FullAccess,
             CancellationSignal::new()
         ),
         child.accept_delegate(),
@@ -429,6 +445,7 @@ async fn resume_workspace_preflight_does_not_replace_execution_time_validation()
         &first.child_agent_id,
         "workspace disappears after preflight",
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut sending).is_pending());
@@ -459,7 +476,10 @@ async fn resume_workspace_preflight_does_not_replace_execution_time_validation()
         before_attempts,
         "no child preparation allocation"
     );
-    assert!(plane.registry.unproven_settlements().is_empty());
+    assert_eq!(
+        plane.registry.unproven_settlements(),
+        [] as [crate::runtime::identity::SubagentId; 0]
+    );
     assert_eq!(
         plane
             .registry

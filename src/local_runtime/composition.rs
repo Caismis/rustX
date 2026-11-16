@@ -407,7 +407,7 @@ impl LocalConversationCore {
     ///
     /// The runtime is left **inactive**: the caller must finish through
     /// [`LocalConversationCore::into_interactive`],
-    /// [`LocalConversationCore::into_subagent_child_with_route`], or
+    /// `LocalConversationCore::into_subagent_child_with_route`, or
     /// [`LocalConversationCore::into_headless`] (or, for low-level
     /// composition callers, activate the runtime explicitly). Prefer the
     /// final composition paths of
@@ -748,7 +748,7 @@ impl LocalConversationCore {
             register_native_tools(
                 &mut base_registry,
                 native_resources.clone(),
-                runtime_config.native_tools.to_policies(),
+                crate::tools::NativeToolPolicies::default(),
             )
             .map_err(|error| LocalRuntimeError::NativeTools {
                 detail: format!("{error:?}"),

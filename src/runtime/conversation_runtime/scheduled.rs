@@ -304,7 +304,7 @@ impl RuntimeInner {
             .subagents
             .clone()
             .ok_or("native Workflow registry unavailable")?;
-        let (claim, _resources_lease) = {
+        let (claim, _resources_lease, auxiliary_invocation) = {
             let mut state = self.lock_state();
             if !self.lifecycle.is_running() || cancellation.signal.is_cancelled() {
                 return Ok(());
@@ -326,6 +326,15 @@ impl RuntimeInner {
                     .map_err(|e| e.to_string())?;
                 return Ok(());
             }
+            // Freeze the permission-reviewer invocation in the same critical
+            // section as Claim so a concurrent model-selection commit cannot
+            // swap M1→M2 between durable Claim and reviewer construction.
+            let auxiliary_invocation = state
+                .model
+                .snapshot()
+                .map_err(|error| error.to_string())?
+                .summary_invocation()
+                .clone();
             let lease = self
                 .capability
                 .acquire_attempt_lease_for(resources.capability().clone());
@@ -342,7 +351,7 @@ impl RuntimeInner {
                 .map_err(|e| format!("scheduled Claim lifecycle: {e:?}"))?
                 .map_err(|e| e.to_string())?;
             let Some(claim) = claim else { return Ok(()) };
-            (claim, lease)
+            (claim, lease, auxiliary_invocation)
         };
         let policy = claim
             .start
@@ -365,11 +374,26 @@ impl RuntimeInner {
             .execution_context(self.capability.clone(), id.clone())
             .with_workflow_models(self.auxiliary.clone())
             .with_workflow_deadline(self.monotonic_clock.clone(), deadline, trigger.clone());
+        let reviewer = Arc::new(
+            crate::runtime::permission::review::AuxiliaryPermissionReviewer::new(
+                self.auxiliary.clone(),
+                auxiliary_invocation,
+                policy.model_timeout,
+                resources.revision().get(),
+                execution_cancel.child_signal(),
+            ),
+        );
         context.native = Some(Arc::new(
             crate::tools::invocation::NativeInvocationServices {
+                task: Some(Arc::new(
+                    crate::runtime::permission::PermissionTaskEvidence::ScheduledClaim {
+                        claim: serde_json::to_value(&claim.start)
+                            .expect("native scheduled Claim serialization"),
+                    },
+                )),
                 lifecycle: crate::agent::AttemptLifecycle::inert()
                     .with_native_interaction(self.interaction.clone())
-                    .with_approval_mode(approval),
+                    .with_approval_mode_and_reviewer(approval, reviewer),
                 runtime: self.tool_runtime.clone(),
                 clock: self.monotonic_clock.clone(),
                 leaf_policy: policy.tool_deadline,

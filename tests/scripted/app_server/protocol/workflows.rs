@@ -37,7 +37,10 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
         else {
             panic!("library")
         };
-        assert!(library.files.is_empty());
+        assert_eq!(
+            library.files,
+            [] as [crate::local_runtime::workflow_authoring::WorkflowFileSummary; 0]
+        );
         assert_eq!(library.directory, workspace.join(".agents/workflows"));
 
         let MethodResult::SourcesWritten { revision, .. } = call(
@@ -217,7 +220,7 @@ async fn issue491_workflow_files_are_authored_over_the_protocol_without_executio
             ["review.yaml"]
         );
         // Authoring executed nothing and created no Session.
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert_eq!(
             f.manager
                 .sessions
@@ -302,7 +305,7 @@ async fn issue491_saved_workflow_files_change_only_future_adoption() {
         assert!(receipt.configuration_revision.is_some());
         super::super::configuration::applied(&f, 0).await;
         assert_eq!(description().as_deref(), Some("Second description"));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;

@@ -151,6 +151,13 @@ async fn t04_every_resident_session_commits_and_t09_policy_and_healthy_rescan_ar
             [crate::runtime::configuration_commit::ConfigurationDomain::Instructions]
         );
         assert!(changes[0].tools.is_empty());
+        assert_eq!(
+            crate::local_runtime::configuration::settings::EffectiveConfiguration::adopted(runtime)
+                .unwrap()
+                .approval_mode,
+            crate::runtime::ApprovalMode::Plan,
+            "configuration fixtures start on Plan so FullAccess is a real mode transition"
+        );
     }
     write(
         &fixture,
@@ -306,6 +313,11 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
             .unwrap()
             .admitted_attempt
             .unwrap();
+        assert_eq!(
+            captured.approval_mode,
+            crate::runtime::ApprovalMode::Plan,
+            "old attempt freezes Plan before the FullAccess transition"
+        );
         write(
             &fixture,
             0,
@@ -360,8 +372,10 @@ async fn t01_new_attempt_captures_automatic_policy_old_attempt_retains_capture()
         .unwrap();
         assert_eq!(
             later.approval_mode,
-            crate::runtime::ApprovalMode::FullAccess
+            crate::runtime::ApprovalMode::FullAccess,
+            "new attempt captures FullAccess after the mode transition"
         );
+        assert_ne!(later.approval_mode, captured.approval_mode);
         assert!(later.generation > captured.generation);
         assert_ne!(later.model_timeout, captured.model_timeout);
         fixture.gates[1].release();
@@ -604,7 +618,10 @@ async fn busy_capability_commit_defers_admission_until_the_boundary_releases() {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
         assert!(!runtime.has_current_attempt());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         release.send(()).unwrap();
         fixture.gates[0].wait_entered().await;
         let committed = applied(&fixture, 0).await;
@@ -691,7 +708,10 @@ async fn a_runtime_closed_in_place_defers_its_application_and_others_still_commi
             preparations,
             "no further preparation"
         );
-        assert!(configuration_changes(&closed).is_empty());
+        assert_eq!(
+            configuration_changes(&closed),
+            [] as [crate::runtime::configuration_commit::ConfigurationChange; 0]
+        );
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;
@@ -1292,7 +1312,10 @@ async fn skill_resources_stay_inert_and_frontmatter_changes_are_recorded() {
             .await
             .unwrap();
         applied(&fixture, 0).await;
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         let store = runtime.tool_runtime().durable_store();
         std::fs::write(
             skill.join("SKILL.md"),
@@ -1539,7 +1562,7 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
         fixture.manager.load(&id, None).await.unwrap();
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         let resources = runtime.runtime_resources();
-        assert!(resources.capability().model_skill_entries().is_empty());
+        assert_eq!(resources.capability().model_skill_entries(), []);
         let declarations = resources.capability().tool_registry().model_definitions();
         let prompt = system_prompt(&runtime);
         let reconcile = || async {
@@ -1578,7 +1601,7 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
         reconcile().await;
         assert_ne!(version(&runtime), before, "the child runs the new version");
         let resources = runtime.runtime_resources();
-        assert!(resources.capability().model_skill_entries().is_empty());
+        assert_eq!(resources.capability().model_skill_entries(), []);
         assert_eq!(
             resources.capability().tool_registry().model_definitions(),
             declarations
@@ -1587,7 +1610,10 @@ async fn a_child_only_skill_version_changes_the_tool_that_runs_it() {
         let changes = configuration_changes(&runtime);
         assert_eq!(changes.len(), facts + 1, "{changes:?}");
         assert_eq!(changes[facts].tools.changed.names, ["subagent"]);
-        assert!(changes[facts].skills.changed.names.is_empty());
+        assert_eq!(
+            changes[facts].skills.changed.names,
+            [] as [std::string::String; 0]
+        );
         let catalog = configuration_catalogs(&runtime.tool_runtime().durable_store())
             .pop()
             .unwrap();
@@ -1688,7 +1714,6 @@ async fn unselected_skill_catalog_updates_future_overrides_without_preparation_o
         let updated = runtime.runtime_resources();
         let idle = resolve(&updated, "idle").unwrap();
         assert_eq!(idle.skills[0].catalog_entry.description, "Latest");
-        assert_eq!(idle.skills[0].dependencies.python["rustx-review-must-not-install"], "3.0");
         assert_eq!(resolve(&updated, "new-skill").unwrap().skills[0].catalog_entry.description, "New");
         assert_eq!(resolve(&old, "idle").unwrap().skills[0].catalog_entry.description, "Original");
         assert!(matches!(resolve(&old, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
@@ -1704,7 +1729,10 @@ async fn unselected_skill_catalog_updates_future_overrides_without_preparation_o
         assert!(matches!(resolve(&removed, "new-skill"), Err(SubagentResolutionError::UnknownSkill { .. })));
         assert_eq!(removed.capability().revision(), capability_revision);
         assert_eq!(configuration_changes(&runtime).len(), facts);
-        assert!(removed.capability().python_environment().is_none());
+        assert_eq!(
+            removed.capability().effective_environment(),
+            old.capability().effective_environment()
+        );
         fixture.manager.unload(&fixture.sessions[0].active_conversation_id).await.unwrap();
         skill("cold-skill", "Added while cold", false, "1.0");
         let mut changes = fixture.manager.configuration_changes();
@@ -1724,7 +1752,10 @@ async fn unselected_skill_catalog_updates_future_overrides_without_preparation_o
         assert_eq!(resolve(&cold, "cold-skill").unwrap().skills[0].catalog_entry.description, "Added while cold");
         assert!(matches!(resolve(&cold, "idle"), Err(SubagentResolutionError::SkillNotModelVisible { .. })));
         assert_eq!(configuration_changes(&reloaded).len(), facts);
-        assert!(cold.capability().python_environment().is_none());
+        assert_eq!(
+            cold.capability().effective_environment(),
+            old.capability().effective_environment()
+        );
         fixture.close().await;
     }).await;
 }
@@ -2072,12 +2103,11 @@ async fn an_environment_value_change_is_recorded_without_its_value() {
     .await;
 }
 
-/// Root Tools run in the whole effective environment, so a new shared Skill
-/// Python environment — a new content-addressed root, as a dependency change
-/// prepares — is execution policy even with every authorized entry, Tool and
-/// selected Skill unchanged, and the fact carries no path.
+/// An authorized tool-environment change is execution policy. The fact names
+/// the changed variable and does not carry its value. Skill metadata is not
+/// an environment.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_new_skill_environment_is_execution_policy() {
+async fn an_authorized_environment_change_is_execution_policy() {
     bounded(async {
         use crate::runtime::configuration_commit::{
             ConfigurationChange, ConfigurationChangeReason, ConfigurationDomain,
@@ -2088,22 +2118,16 @@ async fn a_new_skill_environment_is_execution_policy() {
         let runtime = fixture.manager.configuration_runtime(&id).unwrap();
         let before = runtime.runtime_resources();
         let model = runtime.model_state_for_test();
-        let environment = before.capability().effective_environment();
-        let prepared = |root: &str| {
-            before.with_effective_environment(environment.with_overlay(
-                &crate::tools::environment::ToolEnvironmentOverlay::python(std::path::Path::new(
-                    root,
-                )),
-            ))
+        let prepared = |value: &str| {
+            before.with_effective_environment(
+                crate::tools::environment::ToolEnvironment::from_authorized([(
+                    "MODE".to_owned(),
+                    value.to_owned(),
+                )])
+                .expect("authorized environment"),
+            )
         };
-        let (first, second) = (prepared("/env/python-sha-a"), prepared("/env/python-sha-b"));
-        assert_eq!(
-            first
-                .capability()
-                .effective_environment()
-                .authorized_entries(),
-            environment.authorized_entries()
-        );
+        let (first, second) = (prepared("value-alpha"), prepared("value-bravo"));
         let change = |old: &crate::runtime::RuntimeResourceSnapshot,
                       new: &crate::runtime::RuntimeResourceSnapshot| {
             ConfigurationChange::between(
@@ -2117,11 +2141,11 @@ async fn a_new_skill_environment_is_execution_policy() {
             change(&first, &first).is_none(),
             "the same environment is no change"
         );
-        let (fact, content) = change(&first, &second).expect("a new environment root changes");
+        let (fact, content) = change(&first, &second).expect("a new authorized entry changes");
         assert_eq!(fact.domains, [ConfigurationDomain::ExecutionPolicy]);
         assert!(fact.tools.is_empty() && fact.skills.is_empty(), "{fact:?}");
         assert!(
-            !content.catalog.contains("python-sha"),
+            !content.catalog.contains("value-alpha") && !content.catalog.contains("value-bravo"),
             "{}",
             content.catalog
         );
@@ -2187,7 +2211,10 @@ async fn a_removal_retains_every_removed_definition() {
         assert_eq!(changes.len(), 1, "{changes:?}");
         assert_eq!(changes[0].skills.removed.total, 17);
         assert_eq!(changes[0].skills.removed.names.len(), 16);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         let store = runtime.tool_runtime().durable_store();
         drop(runtime);
         let _ = fixture.manager.drain_all_runtimes().await;
@@ -2275,7 +2302,7 @@ async fn standalone_skill_file_notifications_publish_the_live_catalog() {
                 .map(|entry| entry.description.clone())
                 .collect::<Vec<_>>()
         };
-        assert!(descriptions().is_empty());
+        assert_eq!(descriptions(), [] as [std::string::String; 0]);
         let facts = configuration_changes(&runtime).len();
         injected_only(&fixture);
         let stop = tokio_util::sync::CancellationToken::new();
@@ -3776,7 +3803,7 @@ async fn a_late_unrecorded_settlement_is_never_reported_applied() {
         settlement.release();
         changed.changed().await.unwrap();
         assert!(uncertain(&fixture.manager.configuration_application(&id).unwrap()));
-        assert!(configuration_changes(&runtime).is_empty());
+        assert_eq!(configuration_changes(&runtime), [] as [crate::runtime::configuration_commit::ConfigurationChange; 0]);
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;
@@ -3874,7 +3901,10 @@ async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
             "{view:?}"
         );
         assert_eq!(instructions(&runtime), "published, not recorded");
-        assert!(configuration_changes(&runtime).is_empty());
+        assert_eq!(
+            configuration_changes(&runtime),
+            [] as [crate::runtime::configuration_commit::ConfigurationChange; 0]
+        );
         assert!(runtime.durability_failure().is_some());
         let desired = view.desired.clone();
         assert!(
@@ -3883,7 +3913,10 @@ async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
         );
         runtime.admit_now_for_test();
         assert!(!runtime.has_current_attempt());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             fixture
                 .manager
@@ -3923,7 +3956,10 @@ async fn an_unrecorded_live_commit_is_uncertain_and_fences_admission() {
             ),
             "{view:?}"
         );
-        assert!(configuration_changes(&runtime).is_empty());
+        assert_eq!(
+            configuration_changes(&runtime),
+            [] as [crate::runtime::configuration_commit::ConfigurationChange; 0]
+        );
         let _ = fixture.manager.drain_all_runtimes().await;
     })
     .await;

@@ -51,7 +51,7 @@ pub(super) async fn body(
             panic!("original routed interaction read failed: {response:?}");
         };
         assert_eq!(interaction, header.interaction);
-        assert!(path.is_empty());
+        assert_eq!(path, [] as [std::string::String; 0]);
         assert_eq!(actual, offset);
         assert_eq!(*frontier.get_or_insert(readable_end), readable_end);
         assert!(readable_end <= 16 * 1024 * 1024);

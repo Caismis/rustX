@@ -886,7 +886,7 @@ Effective System Prompt plus tools — never as a scalar token reservation.
 
 ```text
 Assistant(ToolCall A, ToolCall B) committed
-    ↓ execute (scheduling per ToolConcurrencyPolicy)
+    ↓ authorize per call; concurrent start when Allow (Issue #544)
 every CallSlot settled (including cancellation fill)
     ↓
 commit ToolResult A, then ToolResult B          ← structural settlement point
@@ -1145,9 +1145,10 @@ The attempt always carries one required policy. A runtime-created attempt is
 bound to its one concrete, conversation-owned `InteractionCoordinator`; that
 native owner is not a replaceable production rendezvous strategy. Standalone
 inert execution has no interaction provider and fails `Ask` closed. The
-runtime-created policy is derived from the admitted effective `ApprovalMode`:
-`Policy` consults the resolved Tool's `ToolApprovalPolicy`, while `FullAccess`
-maps effective approval to `Never` only. The policy sees only the
+runtime-created policy is derived from the admitted effective `ApprovalMode`
+(`plan` / `automatic` / `full_access`; see `docs/permission-modes.md`). The
+built-in matrix plus resource overrides decide Allow / Elevate / Review; there
+is no per-tool `ToolApprovalPolicy`. The policy sees only the
 conversation/attempt/turn, call and resolved tool identities, safe name,
 origin, mode, and validated business arguments. It cannot resolve registry
 facts, mutate canonical state, dispatch a tool, receive cancellation
@@ -1271,9 +1272,9 @@ settlement. `UserRequested` therefore survives a later drain, while
 
 The interaction domain is provider-independent and bounded to Approval and
 Questionnaire in 0.1. Questionnaire is not a pre-tool Agent Loop branch: the
-native `ask_user` capability is an ordinary foreground/sequential/approval-never
-Tool whose executor requests one whole questionnaire through the bounded
-requester and the same coordinator, then returns an ordinary ToolResult. The
+native `ask_user` capability is an ordinary foreground-only Tool whose
+executor requests one whole questionnaire through the bounded requester and
+the same coordinator, then returns an ordinary ToolResult. The
 Registry normalizer and canonical schema reject malformed nesting, unknown
 fields, empty/duplicate/out-of-bounds values, reserved labels, and
 multi-select previews before an interaction provider is consulted. The
@@ -1281,9 +1282,9 @@ executor never revalidates model arguments after preflight. Generic
 forms/workflows, provider SDK payloads, argument rewriting, and a generalized
 permission language are not part of this seam.
 
-`FullAccess` is runtime control state, not Tool authorization. It cannot
-activate disabled or excluded Tools, bypass execution ownership or
-concurrency policy, grant authority, or auto-answer a pending Approval or
+`full_access` is one Issue #544 execution-permission mode, not Tool
+availability. It cannot activate disabled or excluded Tools, bypass
+execution ownership, grant authority, or auto-answer a pending Approval or
 Questionnaire. While an attempt is busy, `desired_approval_mode` changes and
 `effective_approval_mode` remains frozen; after terminal settlement the
 runtime reconciles the latest desired value before admitting the next attempt.
@@ -1569,21 +1570,20 @@ Every valid committed Assistant tool-call message is preflighted before commit
 (see section 3). Once committed, its entire tool-result batch is settled
 structurally exactly once:
 
-- The loop resolves the one `PreToolPolicy` decision for every preflight-ready
-  call before entering the scheduling groups. `Allow` preserves the original
-  `PreparedInvocation`; `Deny` or an unavailable/cancelled `Ask` settles that
-  call's result slot without creating an executor future. This decision phase
-  is in canonical model-call order, including for parallel groups.
+- The loop authorizes each preflight-ready call independently. `Allow`
+  preserves the original `PreparedInvocation` and that call may start without
+  waiting for unrelated Ask/Review siblings; `Deny` or an unavailable/cancelled
+  `Ask` settles that call's result slot without creating an executor future
+  (Issue #544 P15).
 - Result slots are preallocated in model call order, so completion timing
   can never influence message identities or canonical ordering.
-- Scheduling interprets `ToolConcurrencyPolicy` per registered tool: a
-  `Sequential` invocation is an exclusive barrier; adjacent `Parallel`
-  invocations execute concurrently as one group (`P P S` becomes a
-  parallel group followed by a sequential barrier).
+- Tool-level Sequential/Parallel authoring is removed. Independent authorized
+  calls may execute concurrently; domain owners (notably `todo`) keep their own
+  exclusive barriers. The complete ToolResult batch still commits atomically in
+  original call order.
 - A background call is settled for the originating attempt when its
   background dispatch is accepted (`exec_N` + `state: starting`), never
-  when the detached work terminates; a sequential background call blocks
-  later scheduling only through its dispatch-acceptance point.
+  when the detached work terminates.
 - Foreground executions receive an `ExecutionCancellation` view in their
   context and derive child signals for subordinate work. When attempt
   cancellation wins during a batch:

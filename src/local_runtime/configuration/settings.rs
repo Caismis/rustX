@@ -242,16 +242,6 @@ pub struct EffectiveConfiguration {
     pub admitted_attempt: Option<crate::runtime::configuration_commit::AdmittedConfiguration>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum NativeTool {
-    Read,
-    Write,
-    Edit,
-    Glob,
-    Grep,
-    Bash,
-}
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "unit", rename_all = "snake_case", deny_unknown_fields)]
 #[allow(clippy::large_enum_variant)] // A bounded authored model owns its policies together at this mutation boundary.
@@ -321,14 +311,6 @@ pub enum ConfigMutation {
     },
     Approval {
         authored: Option<crate::runtime::ApprovalMode>,
-    },
-    NativePolicy {
-        id: NativeTool,
-        authored: Option<super::super::config::NativePolicyOverrideDocument>,
-    },
-    McpPolicy {
-        id: crate::runtime::identity::McpServerId,
-        authored: Option<super::super::config::InvocationPolicyDocument>,
     },
     Environment {
         name: String,
@@ -739,20 +721,6 @@ fn apply(document: &mut RuntimeLayer, mutation: ConfigMutation) -> Result<(), Se
         M::ToolDeadline { authored } => document.tool_deadline_policy = authored,
         M::Capacity { authored } => document.subagents = authored,
         M::Approval { authored } => document.approval_mode = authored,
-        M::NativePolicy { id, authored } => {
-            let policies = document.native_tools.get_or_insert_default();
-            match id {
-                NativeTool::Read => policies.read = authored,
-                NativeTool::Write => policies.write = authored,
-                NativeTool::Edit => policies.edit = authored,
-                NativeTool::Glob => policies.glob = authored,
-                NativeTool::Grep => policies.grep = authored,
-                NativeTool::Bash => policies.bash = authored,
-            }
-        }
-        M::McpPolicy { id, authored } => {
-            identity_unit(&mut document.mcp_tool_policies, id, authored);
-        }
         M::Environment { name, authored } => {
             if !crate::credentials::valid_environment_name(&name) {
                 return Err(SettingsError::Invalid);

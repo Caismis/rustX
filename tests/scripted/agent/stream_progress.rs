@@ -189,10 +189,14 @@ async fn make_execution(setup: ExecutionSetup<'_>) -> AgentExecution<'_> {
             model_timeout_policy: policy,
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             monotonic_clock: Arc::clone(&clock) as Arc<dyn MonotonicClock>,
+            last_permission_reminder_mode: None,
+            permission_task_message: None,
+            recovered_permission_task_message: None,
+            approval_mode: rustx::runtime::ApprovalMode::FullAccess,
         },
         context_runtime(),
         tool_runtime,
-        rustx::agent::AttemptLifecycle::inert(),
+        support::full_access_lifecycle(),
     )
     .expect("conversation identity matches the tool runtime");
     execution.install_publication_policy(
@@ -607,14 +611,13 @@ async fn large_write_progress_crosses_idle_timeout_without_retry_or_duplicate_ex
 
     // This regression isolates provider progress and Write execution;
     // approval ordering is covered by the native policy boundary suite.
-    let mut policies = rustx::tools::NativeToolPolicies::default();
-    policies.write.approval = rustx::tools::ToolApprovalPolicy::Never;
+    let policies = rustx::tools::NativeToolPolicies::default();
     let fixture = common::native_fixture_with(Vec::new(), policies);
     let content = "0123456789abcdef".repeat(4096);
-    let arguments = serde_json::json!({
+    let arguments = common::tool_call_envelope(serde_json::json!({
         "path": "large.txt",
         "content": content,
-    });
+    }));
     let arguments_json = serde_json::to_string(&arguments).expect("serialize write arguments");
     let call = ToolCall {
         id: ToolCallId::new("call-write-168"),

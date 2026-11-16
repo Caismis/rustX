@@ -1,5 +1,5 @@
 import { parseAbsolute } from '@internationalized/date';
-import type { ScheduleCommand, ScheduleTiming, SessionModelConfig } from '../../../../protocol/app-server/v77';
+import type { ScheduleCommand, ScheduleTiming, SessionModelConfig } from '../../../../protocol/app-server/v78';
 import type { AppServerClient } from '../../client/app-server';
 import type { OperationAdmission } from '../../client/contracts';
 import { isOutcomeUncertain, RequestNotDispatched, RpcFailure } from '../../client/errors';

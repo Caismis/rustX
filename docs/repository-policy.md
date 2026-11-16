@@ -90,17 +90,25 @@ A pull request that changes a persistence-facing schema, runtime event contract,
 `.github/workflows/ci.yml` is the gate; `tests/README.md` documents its test
 architecture, lane selection and prerequisites. Every lane must pass:
 
-- **quality** — `cargo fmt --all -- --check`,
-  `cargo clippy --all-targets --all-features -- -D warnings` and
-  `git diff --check`;
-- **Rust test lanes** — deterministic contracts on Linux, real boundaries on
-  Linux, and the platform-sensitive boundaries natively on macOS, each
-  selected by Cargo target and libtest name prefix;
+- **quality** — `cargo fmt --all -- --check`, both default-feature and
+  `--all-features` workspace `--all-targets --locked` Clippy
+  (`-D warnings`), strict
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features --locked`,
+  Python controller/preparation tests (`benchmarks/runtime`, `test-support`),
+  and `git diff --check`;
+- **Rust test lanes** — deterministic contracts and explicit `--doc`
+  doctests (`cargo test --doc --all-features --locked`) on Linux, real
+  boundaries on Linux, and platform-sensitive boundaries natively on macOS,
+  each prepared through `test-support/prepare_native_tests.py` with `--locked`
+  and selected by Cargo target and libtest name prefix;
 - **lane coverage** — each Rust test lane runs
-  `cargo run --example check_test_lanes -- --job <job>`, which compares the
-  workflow's executing `cargo test` steps with native Cargo/libtest
-  discovery and fails on an unassigned target, an unexecuted Linux test, a
-  stale filter or `--skip`, or an unexecuted required macOS suite;
+  `cargo run --profile test --all-features --locked --example check_test_lanes -- --job <job>`,
+  which acquires metadata-bound Cargo `--no-run --message-format=json`
+  libtest harnesses and executes native `--doc` discovery across all rustdoc
+  blocks to compare the workflow's executing `cargo test` steps against real
+  compiler/libtest/rustdoc discovery, failing on an unassigned target
+  (including `doc`), an unexecuted Linux test or doctest, a stale filter or
+  `--skip`, or an unexecuted required macOS suite;
 - **provider emulator** — `uv sync --frozen` and `uv run --frozen pytest` in
   `test-support/fake-provider`;
 - **TUI, App Server protocol and Web** — their typecheck, deterministic

@@ -293,7 +293,9 @@ fn t08_t15_tool_result_headers_never_deserialize_historical_result_json() {
                 id: call_id.clone(),
                 tool_id: tool_id.clone(),
                 name: "native".into(),
-                arguments: serde_json::json!({"argument":"a".repeat(2_000_000)}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({"argument":"a".repeat(2_000_000)}),
+                ),
             })],
         }),
         MessageBlock::Tool(ToolMessageBlock {
@@ -677,7 +679,10 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     assert_eq!(before.transcript_total, 1);
     let pending = store.transcript_header_page(&before, None, 32).unwrap();
     assert!(pending.headers[0].deferred);
-    assert!(pending.headers[0].content.is_empty());
+    assert_eq!(
+        pending.headers[0].content,
+        [] as [crate::observation::cut::ContentBinding; 0]
+    );
     assert_eq!(before.read.pending_total, 1);
     let heads = store.pending_header_page(&before.read, None, 32).unwrap();
     assert_eq!(heads.headers.len(), 1);
@@ -750,12 +755,12 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     assert_eq!(remove_cut, store.observation_read_cut().unwrap().read);
     let removed = store.observation_read_cut().unwrap();
     assert_eq!(removed.transcript_total, 0);
-    assert!(
+    assert_eq!(
         store
             .transcript_header_page(&removed, None, 32)
             .unwrap()
-            .headers
-            .is_empty()
+            .headers,
+        [] as [crate::durable::observation::TranscriptHeader; 0]
     );
     assert!(
         store
@@ -780,7 +785,9 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
         id: ToolCallId::new("call"),
         tool_id: ToolId::new("native"),
         name: "name".repeat(600_000),
-        arguments: serde_json::json!({"argument":"payload".repeat(500_000)}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(
+            serde_json::json!({"argument":"payload".repeat(500_000)}),
+        ),
     };
     let provider = serde_json::json!({"opaque":"provider".repeat(300_000)});
     let result = MessageBlock::Tool(ToolMessageBlock {
@@ -1085,6 +1092,7 @@ fn timed_request_snapshot(
 ) -> crate::model::RequestSnapshot {
     use crate::model::{ModelInvocationConfig, ModelProtocol, RequestIdentity, RequestSnapshot};
     RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: attempt.clone(),
             turn: crate::runtime::identity::TurnId::new(format!("timing-{index}")),
@@ -1270,7 +1278,10 @@ fn t08_t15_t20_native_state_sources_survive_large_cache_eviction_and_reject_stal
     assert_eq!((todo_head.total, todo_head.loaded), (73, 0));
     assert_eq!(todo_head.next_offset, Some(0));
     assert_eq!(todo_head.snapshot.next_id, 74);
-    assert!(todo_head.snapshot.tasks.is_empty());
+    assert_eq!(
+        todo_head.snapshot.tasks,
+        [] as [crate::tools::todo::TodoTask; 0]
+    );
     assert!(serde_json::to_vec(&todo_head).unwrap().len() <= 16_384);
     let goal = store
         .write_goal(GoalWrite::Create {
@@ -1518,7 +1529,9 @@ fn todo_source_messages(description: &str) -> Vec<MessageBlock> {
                 id: call.clone(),
                 tool_id: tool_id.clone(),
                 name: "todo".into(),
-                arguments: serde_json::json!({}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({}),
+                ),
             })],
         }),
         MessageBlock::Tool(ToolMessageBlock {
@@ -2024,7 +2037,10 @@ fn t08_t14_t15_many_blocks_keep_original_metadata_and_advancing_frontiers() {
         let page = store
             .message_block_header_page_by_locator(&cut, &locator, offset, 32)
             .unwrap();
-        assert!(!page.headers.is_empty());
+        assert_ne!(
+            page.headers,
+            [] as [crate::durable::observation::MessageBlockHeader; 0]
+        );
         seen += page.headers.len();
         let Some(next) = page.next_offset else { break };
         assert!(next > offset);
@@ -2117,7 +2133,10 @@ fn t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit
     });
     let receipt = store.append_canonical(&message).unwrap();
     assert!(receipt.observation.source_unavailable);
-    assert!(receipt.observation.head.is_empty());
+    assert_eq!(
+        receipt.observation.head,
+        [] as [crate::durable::observation::MessageHeader; 0]
+    );
     assert_eq!(receipt.observation.human_activity_at, Some(timestamp));
     assert_eq!(
         receipt.observation.opening_preview.as_deref(),

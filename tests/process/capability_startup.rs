@@ -833,7 +833,7 @@ mod mcp {
         else {
             panic!("negotiation failure must be unavailable: {availability:?}");
         };
-        assert!(!reason.is_empty());
+        assert_ne!(reason, "");
         assert!(reason.len() < 4096, "external diagnostics stay bounded");
         prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
         runtime.shutdown().await.expect("physical settlement");
@@ -905,7 +905,7 @@ mod mcp {
         else {
             panic!("failed catalog must be unavailable: {availability:?}");
         };
-        assert!(!reason.is_empty());
+        assert_ne!(reason, "");
         assert!(reason.len() < 4096, "external diagnostics stay bounded");
         prove_native_tool_executes_with(runtime.capability(), runtime.tool_runtime()).await;
         runtime.shutdown().await.expect("physical settlement");

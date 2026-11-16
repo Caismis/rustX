@@ -2,7 +2,7 @@ import type { Translate } from '../../locale/translation';
 import type {
   ConfigurationApplication, McpView, McpWrite, Origin, ProcessPolicyImpact, ResourceFamily, RuntimeLayer,
   SourceMutation, SourceScope, SourceSettings, SourceTarget, SourceView, UnitApplication,
-} from '../../../../protocol/app-server/v77';
+} from '../../../../protocol/app-server/v78';
 import type { ConnectionState } from '../../client/contracts';
 
 /** Each Settings target names one exact configuration owner. The catalog scope
@@ -63,8 +63,6 @@ export function authoredUnit(document: RuntimeLayer | null | undefined, mutation
     case 'model_timeout': return document.model_timeout_policy;
     case 'tool_deadline': return document.tool_deadline_policy;
     case 'capacity': return document.subagents;
-    case 'native_policy': return document.native_tools?.[unit.id];
-    case 'mcp_policy': return document.mcp_tool_policies?.[unit.id];
     case 'environment': return document.environment?.includes(unit.name) ? REDACTED : undefined;
     case 'app_server': return document.app_server;
   }
@@ -109,8 +107,6 @@ export function unitProvenancePath(mutation: SourceMutation): string | undefined
     case 'model_timeout': return 'model_timeout_policy';
     case 'tool_deadline': return 'tool_deadline_policy';
     case 'capacity': return 'subagents';
-    case 'native_policy': return `native_tools.${unit.id}`;
-    case 'mcp_policy': return `mcp_tool_policies.${unit.id}`;
     case 'environment': return `environment.${unit.name}`;
     case 'app_server': return undefined;
   }

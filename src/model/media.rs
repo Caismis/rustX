@@ -953,7 +953,10 @@ mod tests {
         let ModelInputMessage::Derived(d) = &materialized[0] else {
             panic!("Derived provenance lost")
         };
-        assert!(!d.sources.is_empty());
+        assert_ne!(
+            d.sources,
+            [] as [crate::model::projected::CanonicalMessageRef; 0]
+        );
         assert!(
             d.transformations
                 .contains(&SemanticTransformation::UploadRendering)

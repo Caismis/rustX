@@ -13,8 +13,7 @@ use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExec
 use crate::tools::native::registration::NativeToolRegistration;
 use crate::tools::native::support::{failed_result, success_json};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
-    ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocation, ToolOrigin, ToolReplayPolicy,
 };
 
 /// Only enabled programs can contribute executable Workflow registrations.
@@ -51,14 +50,18 @@ fn registration(
     runtime: &WorkflowRuntime,
     program: &Arc<WorkflowProgram>,
 ) -> NativeToolRegistration {
-    NativeToolRegistration::new(
+    let mut registration = NativeToolRegistration::new(
         definition(program),
         Arc::new(WorkflowToolExecutor {
             runtime: runtime.clone(),
             program: program.clone(),
         }),
     )
-    .with_foreground_policy(foreground_policy(program))
+    .with_foreground_policy(foreground_policy(program));
+    if let Some(set) = program.permissions() {
+        registration = registration.with_resource_permissions(set);
+    }
+    registration
 }
 
 fn foreground_policy(program: &WorkflowProgram) -> crate::tools::deadline::ForegroundPolicy {
@@ -83,8 +86,6 @@ pub(crate) fn definition(program: &WorkflowProgram) -> ToolDefinition {
         description: program.description().to_owned(),
         input_schema: program.input_schema().clone(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }

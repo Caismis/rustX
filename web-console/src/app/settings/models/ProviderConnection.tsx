@@ -1,6 +1,6 @@
 import { SettingsNotice } from '../SettingsFeedback';
 import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
-import type { ProviderView, ProviderWrite, SourceScope } from '../../../../../protocol/app-server/v77';
+import type { ProviderView, ProviderWrite, SourceScope } from '../../../../../protocol/app-server/v78';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';
 import { Menu } from '../../../presentation/primitives/Menu';

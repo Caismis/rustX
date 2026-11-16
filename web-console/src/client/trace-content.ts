@@ -1,4 +1,5 @@
-import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, CanonicalContentLocator, ContentBinding, TraceContentBlock, TraceFieldSource, TraceInspectionMessage, TraceInspectionMessages, TraceToolSource, RuntimeClientToolOccurrence } from '../../../protocol/app-server/v77';
+import { modelToolCall } from '../../../protocol/app-server/model-tool-call';
+import type { CheckpointPage, CheckpointPageItem, CheckpointReadCut, CollectionFrontier, CanonicalContentLocator, ContentBinding, TraceContentBlock, TraceFieldSource, TraceInspectionMessage, TraceInspectionMessages, TraceToolSource, RuntimeClientToolOccurrence } from '../../../protocol/app-server/v78';
 import { checkpointReadCutKey, messageSource } from '../../../protocol/app-server/content-identity';
 import { ContentCache } from '../../../protocol/app-server/content-cache';
 import { readTraceFieldWindow, readTraceSelectedWindow, type TraceValueField, type TraceValueSelector } from '../../../protocol/app-server/trace-field';
@@ -38,6 +39,12 @@ export async function readTraceSource(reader: TraceFieldReader, cut: CheckpointR
   if (field.type === 'content') return readBinding(reader, cut, field.binding, current);
   const value = await readTraceValue(reader, cut, field, current);
   return value.representation === 'utf8_text' ? value.text : parseJson(value.text);
+}
+/** Workflow I/O is retained as JSON text in the original Journal value. */
+export async function readWorkflowNodeBody(reader: TraceFieldReader, cut: CheckpointReadCut, field: TraceFieldSource, current: () => boolean): Promise<unknown> {
+  const value = await readTraceSource(reader, cut, field, current);
+  if (typeof value !== 'string') throw Error('Original Workflow node body is unavailable.');
+  return parseJson(value);
 }
 export type TraceDisplayBlock = TraceContentBlock & { nativeOccurrence?: RuntimeClientToolOccurrence };
 const object = (value: unknown): Record<string, unknown> => value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -139,6 +146,6 @@ export async function readRequestField(reader: TraceFieldReader, cut: Checkpoint
 export function traceProgram(toolId: string | null | undefined, args: unknown): TraceToolSource | undefined {
   const field = toolId === 'tool-bash' ? 'command' : toolId === 'tool-write' ? 'content' : undefined;
   if (!field) return;
-  const body = object(args)[field];
+  const body = modelToolCall(args)?.arguments[field];
   return typeof body === 'string' ? { field, text: text(body), language: toolId === 'tool-bash' ? 'shell' : undefined } : undefined;
 }

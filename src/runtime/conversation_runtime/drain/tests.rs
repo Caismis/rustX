@@ -33,6 +33,8 @@ async fn sibling_mcp_settlement_failures_aggregate_through_one_runtime_drain() {
                 environment,
             },
             policy: crate::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         }
     };
     let alpha = crate::runtime::identity::McpServerId::new("sibling-alpha");
@@ -135,8 +137,6 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
             "required": ["text"]
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::default(),
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -168,7 +168,9 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
                 id: call_id,
                 tool_id: definition.id,
                 name: definition.name,
-                arguments: serde_json::json!({"text": "hi"}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({"text": "hi"}),
+                ),
             },
         }),
         FakeStep::Emit(ModelEvent::Completed {
@@ -340,7 +342,10 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("post-shutdown snapshot");
-    assert!(snapshot.pending_interactions.is_empty());
+    assert_eq!(
+        snapshot.pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 
     let stale = attachment
         .handle_request_async(RuntimeClientRequest::InteractionRespond {
@@ -738,7 +743,10 @@ async fn mcp_failure_closes_attempt_admission_before_worker_boundary() {
     };
     assert!(detail.contains("attempt admission MCP failure"));
     assert!(!fixture.runtime.has_current_attempt());
-    assert!(fixture.model.requests().is_empty());
+    assert_eq!(
+        fixture.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
 }
 
 /// Lifecycle Draining remains the generic admission authority for manual
@@ -1312,7 +1320,7 @@ async fn shutdown_drains_after_settlement_control_plane_failure() {
         explicit_model: true,
         agent_id: AgentId::new("agent-a"),
         model: scripted_session_model(adapter),
-        approval_mode: ApprovalMode::Policy,
+        approval_mode: ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::new(
             std::time::Duration::from_secs(10),
@@ -1828,7 +1836,6 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
                     title: "Explore task".into(),
                     execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
                     resolved: test_resolved_subagent("reviewer"),
-                    approval_mode: ApprovalMode::Policy,
                 },
                 admission: crate::runtime::subagent::ActivationAdmission {
                     attachments: Vec::new(),
@@ -1848,6 +1855,7 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
                         run_id,
                         node_id: Box::new(node_instance),
                     },
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &CancellationSignal::new(),
@@ -1916,7 +1924,10 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
         .expect("shutdown result")
         .expect("workflow child drain");
     assert!(runtime.is_quiescent());
-    assert!(subagents.unsettled_snapshot().is_empty());
+    assert_eq!(
+        subagents.unsettled_snapshot(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
     assert!(!child_root.exists());
     let snapshot = subagents
         .snapshot(&accepted.subagent_id)
@@ -1965,7 +1976,6 @@ async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement
                     title: "Explore task".into(),
                     resolved: test_resolved_subagent("reviewer"),
                     execution_policy: InheritedExecutionPolicy::default(),
-                    approval_mode: ApprovalMode::Policy,
                 },
                 admission: ActivationAdmission {
                     attachments: Vec::new(),
@@ -1975,6 +1985,7 @@ async fn abandoned_subagent_publication_cannot_hide_unproven_physical_settlement
                         tool_call_id: ToolCallId::new("unproven-abandoned-create"),
                     },
                     terminal: SubagentTerminalMode::Normal,
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &cancellation,
@@ -2070,7 +2081,6 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
                     title: "Explore task".into(),
                     resolved: test_resolved_subagent("reviewer"),
                     execution_policy: InheritedExecutionPolicy::default(),
-                    approval_mode: ApprovalMode::Policy,
                 },
                 admission: ActivationAdmission {
                     attachments: Vec::new(),
@@ -2080,6 +2090,7 @@ async fn runtime_shutdown_rejects_unproven_child_physical_settlement() {
                         tool_call_id: ToolCallId::new("unproven-create"),
                     },
                     terminal: SubagentTerminalMode::Normal,
+                    approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
                 },
             },
             &CancellationSignal::new(),
@@ -2205,9 +2216,7 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
     use crate::runtime::types::ConversationLifecycleState;
     use crate::tools::executor::ToolRegistry;
     use crate::tools::native::{BashTestControl, BashTool};
-    use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
     let control = BashTestControl::new().hold_terminal_event();
     let process_lifecycle: RunnerLifecycleHook = control.runner_control().lifecycle.clone();
@@ -2229,8 +2238,6 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
             "additionalProperties": false
         }),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -2263,7 +2270,9 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
                 id: call_id,
                 tool_id: definition.id,
                 name: definition.name,
-                arguments: serde_json::json!({"command": "sleep 30"}),
+                arguments: crate::scripted_suites::common::tool_call_envelope(
+                    serde_json::json!({"command": "sleep 30"}),
+                ),
             },
         }),
         FakeStep::Emit(crate::model::event::ModelEvent::Completed {
@@ -2348,9 +2357,7 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
 async fn runtime_shutdown_closes_parallel_foreground_start_frontier() {
     use crate::agent::execution::test_sync::ToolStartPause;
     use crate::tools::executor::ToolRegistry;
-    use crate::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-    };
+    use crate::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
     let definition = |id: &str, name: &str| ToolDefinition {
         id: crate::runtime::identity::ToolId::new(id),
@@ -2358,8 +2365,6 @@ async fn runtime_shutdown_closes_parallel_foreground_start_frontier() {
         description: String::new(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
-        approval_policy: crate::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     };
@@ -2835,7 +2840,6 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
             title: "Explore task".into(),
             execution_policy: InheritedExecutionPolicy::default(),
             resolved: test_resolved_subagent("explore"),
-            approval_mode: ApprovalMode::Policy,
         },
         admission: ActivationAdmission {
             attachments: Vec::new(),
@@ -2845,6 +2849,7 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
                 tool_call_id: ToolCallId::new("initial"),
             },
             terminal: SubagentTerminalMode::Normal,
+            approval_mode: crate::runtime::types::ApprovalMode::FullAccess,
         },
     };
     let (child, mut peer) = stage_runtime_test_child(&dir.path().join("first-child"));
@@ -2911,6 +2916,7 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
                     &agent,
                     "reserved input",
                     AgentActivationOrigin::ClientControl,
+                    crate::runtime::types::ApprovalMode::FullAccess,
                     CancellationSignal::new(),
                 )
                 .await
@@ -3000,6 +3006,7 @@ async fn shutdown_waits_for_reserved_resume_physical_and_durable_rollback() {
         &first.child_agent_id,
         "after reopen",
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     );
     let (accepted, ()) = tokio::join!(send, async {

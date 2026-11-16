@@ -132,3 +132,22 @@ it("nested concrete blocks render under their owner and truncated orphans stay v
   value.omitted_instances = 4;
   assert.match(workflowDetails(value).join("\n"), /fix ·[\s\S]*4 execution instances omitted/);
 });
+
+
+it("keeps native Workflow Tool instances out of model-call argument projection", () => {
+  const value = run(), instance = row("script", "body");
+  value.instances = [{ ...instance, kind: "tool", state: { type: "running" }, interaction: null,
+    tool_id: "tool-bash", invocation: { caller: "workflow", node: { block: instance.block, node: "script", visit: 0 } } }];
+  const workflows = { revision: "1", runs: [value], omitted_runs: 0 };
+  const standalone = replaceFromSnapshot(snapshot({ workflows }), runtimeCursor(0));
+  assert.equal(correlateTools(standalone).byCallId.size, 0);
+  assert.match(workflowDetails(value).join("\n"), /script.*Tool tool-bash/);
+  const messages = [assistantBlocks("owner", [toolCallBlock("outer", "tool-workflow-review", "review", { report: "source.md" })])];
+  const coupled = replaceFromSnapshot(snapshot({ messages, workflows }), runtimeCursor(0));
+  const correlation = correlateTools(coupled);
+  assert.equal(correlation.byCallId.size, 1);
+  assert.equal(correlation.byCallId.get("outer")?.argumentsText, '{"arguments":{"report":"source.md"}}');
+  const shown = plainText(renderToolCard(correlation.byCallId.get("outer")!, { expanded: true, budget: { maxLines: 30, maxChars: 4000 } }));
+  assert.match(shown, /script.*Tool tool-bash/);
+  assert.doesNotMatch(shown, /Bash \$/);
+});

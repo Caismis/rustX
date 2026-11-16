@@ -131,7 +131,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
         let store = rustx::tools::python::PythonToolStore::with_runner(
             fixture.dir().path().join("environments/python-tools"),
             Arc::new(PreparationRunner {
-                runner: RunnerBackedProcessRunner::default(),
+                runner: RunnerBackedProcessRunner,
                 staged: Mutex::new(Some(staged_tx)),
                 release: Mutex::new(Some(release_rx)),
             }),
@@ -234,7 +234,10 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
                 expected_names
             );
         } else {
-            assert!(expected.is_empty());
+            assert_eq!(
+                expected,
+                [] as [crate::tools::types::ModelToolDefinition; 0]
+            );
         }
 
         let call_id = rustx::tools::mcp::mcp_tool_id(&python_server_id("healthy"), "ping");
@@ -304,7 +307,7 @@ async fn fastmcp4_availability_selection_request_and_invocation_share_one_author
             support::default_execution_policy(),
             context,
             &fixture.runtime,
-            rustx::agent::AttemptLifecycle::inert(),
+            support::full_access_lifecycle(),
         )
         .unwrap();
         let result = tokio::time::timeout(std::time::Duration::from_secs(30), execution.run())

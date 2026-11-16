@@ -112,11 +112,11 @@ impl ToolExecutor for McpToolExecutor {
     /// cancellation path (local HTTP request termination, its release proof,
     /// and the best-effort `notifications/cancelled`), and post-frontier
     /// classification — lives inside the single operation future of
-    /// [`ToolExecutionHandle::settled_by_operation`], and the settlement
+    /// [`ToolExecutionHandle::settled_by_operation`](crate::tools::executor::ToolExecutionHandle::settled_by_operation), and the settlement
     /// plane takes exclusive ownership of that future and drives it to its
     /// terminal end.
     ///
-    /// [`ToolExecutionHandle::settled_by_operation`] is therefore still the
+    /// [`ToolExecutionHandle::settled_by_operation`](crate::tools::executor::ToolExecutionHandle::settled_by_operation) is therefore still the
     /// honest abstraction after the Streamable HTTP request lifecycle: it is
     /// correct exactly when "the operation future returned" implies "all
     /// rustX-owned local execution for this invocation is over", and it does
@@ -267,8 +267,6 @@ pub fn definitions(
                 description: tool.description,
                 input_schema: tool.input_schema,
                 execution_policy: policy.execution,
-                concurrency_policy: policy.concurrency,
-                approval_policy: policy.approval,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {
                     server_id: server_id.clone(),
@@ -308,8 +306,6 @@ pub(crate) fn definitions_owned(
                 description: tool.description,
                 input_schema: tool.input_schema,
                 execution_policy: policy.execution,
-                concurrency_policy: policy.concurrency,
-                approval_policy: policy.approval,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {
                     server_id: server_id.clone(),
@@ -318,6 +314,25 @@ pub(crate) fn definitions_owned(
             (definition, executor as Arc<dyn ToolExecutor>)
         })
         .collect()
+}
+
+/// Applies the binding's exact-tool or source permission object onto a plain registration.
+pub(crate) fn with_binding_permissions(
+    definition: crate::tools::types::ToolDefinition,
+    executor: std::sync::Arc<dyn crate::tools::executor::ToolExecutor>,
+    binding: &super::McpServerBinding,
+) -> crate::tools::executor::ToolRegistration {
+    let remote_name = definition.name.clone();
+    let mut registration = crate::tools::executor::ToolRegistration::plain(definition, executor);
+    if let Some(set) = binding
+        .tool_permissions
+        .get(&remote_name)
+        .copied()
+        .or(binding.permissions)
+    {
+        registration = registration.with_resource_permissions(set);
+    }
+    registration
 }
 
 /// Generates a stable, length-prefixed MCP logical tool identity.
@@ -370,8 +385,6 @@ pub fn source_tool_identity(
         &definition.description,
         &definition.input_schema,
         definition.execution_policy,
-        definition.concurrency_policy,
-        definition.approval_policy,
     )
 }
 

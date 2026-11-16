@@ -40,9 +40,9 @@ async fn fixture() -> Fixture {
     let mut selection = SessionModelConfig::of(ModelRef::parse("local/a").unwrap());
     selection.request_params.insert("seed".into(), 17.into());
     selection.max_output_tokens = Some(777);
-    selection.summary_model = AuxiliaryModelPolicy::Explicit {
+    selection.auxiliary = AuxiliaryModelPolicy::Explicit {
         model: ModelRef::parse("local/b").unwrap(),
-        profile: None,
+        profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
         request_params: serde_json::Map::default(),
         max_output_tokens: Some(333),
     };

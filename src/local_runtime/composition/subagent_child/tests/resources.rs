@@ -58,13 +58,13 @@ fn assert_resource_helpers_require_approval(snapshot: &crate::capabilities::Capa
                 id: crate::runtime::identity::ToolCallId::new("child-resource"),
                 tool_id: definition.id.clone(),
                 name: definition.name.clone(),
-                arguments,
+                arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
             })
             .unwrap()
         else {
             panic!("the frozen resource helper arguments are valid")
         };
-        assert_eq!(prepared.approval, ToolApprovalPolicy::Always);
+        assert!(prepared.elevation_reason.is_none());
     }
 }
 
@@ -78,7 +78,6 @@ async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_siblin
         "local_runtime::composition::subagent_child::tests::resources::resource_only_child_uses_frozen_binding_despite_new_settings_and_sibling",
         true,
     );
-    binding.policy.approval = ToolApprovalPolicy::Always;
     let observation = root.path().join("resource-requests.jsonl");
     let McpTransportConfig::Stdio { environment, .. } = &mut binding.transport else {
         unreachable!("the fixture always uses stdio")
@@ -116,7 +115,7 @@ async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_siblin
         ]
     );
     assert_eq!(snapshot.tool_registry().model_definitions().len(), 3);
-    assert!(snapshot.available_tools().tools().is_empty());
+    assert_eq!(snapshot.available_tools().tools(), []);
     assert_eq!(
         snapshot.resource_sources(),
         &child.resolved.resource_sources
@@ -145,11 +144,9 @@ async fn resource_only_child_uses_frozen_binding_despite_new_settings_and_siblin
     .await
     .expect("a sibling sharing the workspace still owns an independent profile");
     let sibling_snapshot = sibling_core.capability().current_snapshot();
-    assert!(
-        sibling_snapshot
-            .tool_registry()
-            .model_definitions()
-            .is_empty()
+    assert_eq!(
+        sibling_snapshot.tool_registry().model_definitions(),
+        [] as [crate::tools::types::ModelToolDefinition; 0]
     );
     assert!(sibling_snapshot.resource_sources().is_empty());
     assert!(sibling_snapshot.mcp_servers().is_empty());

@@ -1,7 +1,7 @@
 import { translator } from '../src/locale/translation';
 // @vitest-environment node
 import { expect, it } from 'vitest';
-import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v77';
+import type { Model, Origin, RuntimeLayer, SourceMutation, SourceSettings } from '../../protocol/app-server/v78';
 import {
   applicationOwners, applicationScope, authoredUnit, catalogEntries, catalogIdentities, changeBehavior, changeBehaviorLabel, configAuthoring, documentAuthoring,
   effectiveStateLabel, inheritedResources, observedResult, observedResultLabel, openOwnerLabel, provenanceLabel,
@@ -122,8 +122,6 @@ const identities: readonly { unit: string; mutation: SourceMutation; path: strin
   { unit: 'provider', mutation: { kind: 'config', mutation: { unit: 'provider', id: 'a', authored: null } }, path: 'providers.a', sibling: 'providers.some-long-workspace-provider' },
   { unit: 'model', mutation: { kind: 'config', mutation: { unit: 'model', id: 'a', authored: null } }, path: 'models.a', sibling: 'models.some-long-workspace-model' },
   { unit: 'source_tools', mutation: { kind: 'config', mutation: { unit: 'source_tools', id: 'a', authored: null } }, path: 'agent.tools.sources.a', sibling: 'agent.tools.sources.some-long-workspace-source' },
-  { unit: 'native_policy', mutation: { kind: 'config', mutation: { unit: 'native_policy', id: 'read', authored: null } }, path: 'native_tools.read', sibling: 'native_tools.write' },
-  { unit: 'mcp_policy', mutation: { kind: 'config', mutation: { unit: 'mcp_policy', id: 'a', authored: null } }, path: 'mcp_tool_policies.a', sibling: 'mcp_tool_policies.some-long-workspace-server' },
   { unit: 'environment', mutation: { kind: 'config', mutation: { unit: 'environment', name: 'A', authored: null } }, path: 'environment.A', sibling: 'environment.SOME_LONG_WORKSPACE_VARIABLE' },
   { unit: 'mcp', mutation: { kind: 'mcp', id: 'a', authored: null }, path: 'mcp_servers.a', sibling: 'mcp_servers.some-long-workspace-server' },
 ];
@@ -174,8 +172,8 @@ it('S1-14 a member omitted from a replaced object belongs to that winning object
   // container; `record_default_origins` then resolves members from it.
   const context: SourceMutation = { kind: 'config', mutation: { unit: 'context', authored: null } };
   expect(unitProvenance(resolvedSource({}, { context: workspace, 'context.reserve_tokens': workspace }), context)).toEqual({ state: 'known', origin: workspace });
-  const policy: SourceMutation = { kind: 'config', mutation: { unit: 'native_policy', id: 'read', authored: null } };
-  expect(unitProvenance(resolvedSource({}, { native_tools: user }), policy)).toEqual({ state: 'known', origin: user });
+  const capacity: SourceMutation = { kind: 'config', mutation: { unit: 'capacity', authored: null } };
+  expect(unitProvenance(resolvedSource({}, { subagents: user }), capacity)).toEqual({ state: 'known', origin: user });
 });
 
 it('S1-14 a container whose identities disagree reports mixed origins instead of electing a sibling', () => {

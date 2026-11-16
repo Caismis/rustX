@@ -292,6 +292,16 @@ impl ExecutionCancellation {
         }
     }
 
+    /// The live cancellation signal for this execution view.
+    ///
+    /// Callers that must cancel subordinate Auxiliary work (permission review)
+    /// observe this same signal so logical abort and physical settlement share
+    /// one boundary.
+    #[must_use]
+    pub fn signal(&self) -> &CancellationSignal {
+        &self.signal
+    }
+
     /// Derives a cancellation signal for subordinate work.
     ///
     /// Cancellation propagates from the owning operation into this child, but

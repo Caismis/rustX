@@ -226,7 +226,7 @@ async fn interleaving(source: UserSource, newer_human: bool) {
         );
         assert_eq!(applied["receipt"]["request_budget"]["mutations_used"], 1);
     } else {
-        assert!(rows.is_empty());
+        assert_eq!(rows, [] as [crate::scheduler::ScheduleSnapshot; 0]);
         assert!(result.messages().iter().any(|message|matches!(message,MessageBlock::Tool(tool) if matches!(&tool.result.status,rustx::tools::types::ToolExecutionStatus::Failed{error} if error.contains("live current Human request")))));
     }
 }
@@ -282,12 +282,9 @@ async fn scheduler85_historical_human_transcript_does_not_reopen_request_authori
     .run()
     .await;
     assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
-    assert!(
-        tools
-            .durable_store()
-            .schedule_list(0, 100)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        tools.durable_store().schedule_list(0, 100).unwrap(),
+        [] as [crate::scheduler::ScheduleSnapshot; 0]
     );
     assert!(result.messages().iter().any(|message|matches!(message,MessageBlock::Tool(tool) if matches!(&tool.result.status,rustx::tools::types::ToolExecutionStatus::Failed{error} if error.contains("live current Human request")))));
 }
@@ -308,12 +305,9 @@ async fn scheduler85_fresh_human_text_without_native_root_binding_cannot_create_
     )
     .await;
     assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
-    assert!(
-        tools
-            .durable_store()
-            .schedule_list(0, 100)
-            .unwrap()
-            .is_empty()
+    assert_eq!(
+        tools.durable_store().schedule_list(0, 100).unwrap(),
+        [] as [crate::scheduler::ScheduleSnapshot; 0]
     );
     assert!(result.messages().iter().any(|message|matches!(message,MessageBlock::Tool(tool) if matches!(&tool.result.status,rustx::tools::types::ToolExecutionStatus::Failed{error} if error.contains("native root Session binding")))));
 }

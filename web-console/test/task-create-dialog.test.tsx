@@ -5,7 +5,7 @@ import { WorkspaceAuthority } from '../src/workspaces/authority';
 import { localeController } from '../src/locale/controller';
 import { schedulerFixture } from './scheduler-fixture';
 import type { Server } from './fixture';
-import type { SessionModelConfig } from '../../protocol/app-server/v77';
+import type { SessionModelConfig } from '../../protocol/app-server/v78';
 
 const servers: Server[] = [];
 afterEach(() => { cleanup(); for (const server of servers.splice(0)) server.client.dispose(); localStorage.clear(); localeController.setLocale('en'); vi.restoreAllMocks(); });

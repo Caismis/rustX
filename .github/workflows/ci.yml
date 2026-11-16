@@ -86,7 +86,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
           components: rustfmt, clippy
 
       - name: Install SQLite binding build dependency
@@ -143,8 +143,27 @@ jobs:
       - name: Test current and historical benchmark controllers and summaries
         run: python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v
 
-      - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+      - name: Install pinned Node for benchmark contract tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Test benchmark request comparison and normalization contracts
+        run: node --test benchmarks/runtime/compare-http.test.mjs benchmarks/runtime/pi-oracle.test.mjs
+
+      - name: Test native test preparation and artifact staging
+        run: python3 -m unittest discover -s test-support -p 'test_*.py' -v
+
+      - name: Run Clippy (default features)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Run Clippy (all features)
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Check rustdoc warnings
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --workspace --no-deps --all-features --locked
 
   # FAST Rust feedback for a pull request push that touches Rust: one
   # compilation of the library test harness and the `process` target (which
@@ -168,7 +187,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
@@ -192,8 +211,8 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      - name: Compile the FAST harnesses and the real executables
-        run: cargo test --all-features --no-run --lib --test process
+      - name: Compile the FAST harnesses and stage the real executables
+        run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --test process
 
       # Every unit and deterministic contract module except the in-crate
       # boundary suites (rust-boundaries), the capacity suite, and four heavy
@@ -201,29 +220,29 @@ jobs:
       - name: Run the FAST unit and contract core
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features -- --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
+        run: 'cargo test --lib --all-features --locked -- --skip boundary_suites:: --skip ::scale:: --skip durable::sqlite:: --skip local_runtime::session_runtime_manager::tests:: --skip local_runtime::session:: --skip runtime_client::response::'
 
       - name: Run the SQLite store contracts (durable changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:durable']
-        run: 'cargo test --lib --all-features -- durable::sqlite:: --skip ::scale::'
+        run: 'cargo test --lib --all-features --locked -- durable::sqlite:: --skip ::scale::'
 
       - name: Run the App Server and Session contracts (App Server or local runtime changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:app-server']
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
+        run: 'cargo test --lib --all-features --locked -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
 
       - name: Run the runtime client response contracts (runtime client changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:runtime-client']
-        run: 'cargo test --lib --all-features -- runtime_client::response:: --skip ::scale::'
+        run: 'cargo test --lib --all-features --locked -- runtime_client::response:: --skip ::scale::'
 
       - name: Run the real-process App Server and CLI workflows
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: cargo test --all-features --test process
+        run: cargo test --all-features --locked --test process
 
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-fast
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
 
   # FAST documentation contracts: a low-risk documentation change merges on
   # FAST, but the `contracts` target reads the top-level, docs/, Web and TUI
@@ -245,7 +264,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
@@ -259,7 +278,7 @@ jobs:
           save-if: false
 
       - name: Run the documentation and runtime-example contracts
-        run: cargo test --test contracts --all-features
+        run: cargo test --test contracts --all-features --locked
 
   # Fast deterministic classes: source-module unit tests, the in-crate
   # scripted contract suites, and the pure contract targets. No cross-module
@@ -279,9 +298,10 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-contracts']
     runs-on: ubuntu-26.04
     # Preparation and the two native builds consumed about 11 minutes in
-    # run 38883956631. Budget compilation and complete test execution here;
-    # individual liveness guards and the other lanes retain their bounds.
-    timeout-minutes: 45
+    # run 38883956631. After Plan-default tool fixtures were moved to Full
+    # Access (and tool-start waits shortened to 15s), the contracts step is
+    # back in the 20–35m band on tip; restore the pre-hang 90m ceiling.
+    timeout-minutes: 90
 
     env:
       VERIFICATION_PROFILE: full
@@ -292,7 +312,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
@@ -303,11 +323,12 @@ jobs:
           shared-key: rust-contracts
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
-      # `cargo test --bins` builds the bin *test harnesses* but does not
-      # place the binaries at `target/debug/`, where the bash tool's unit
-      # tests look for `bash-supervisor` at runtime — so build them first.
-      - name: Build the binaries the boundary-owning unit tests exec
-        run: cargo build --bins
+      # Compile the contracts lane's targets once with `--all-features` and stage
+      # the emitted package binaries beside every emitted test harness executable.
+      # Including `--test contracts --test provider` builds those binaries against
+      # the same ordinary library unit without a second default-feature build.
+      - name: Compile the contracts harnesses and stage the real executables
+        run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 
       # Source-module unit tests + the scripted contract suites
       # (`scripted_suites::`) + the App Server scripted contracts compiled
@@ -323,7 +344,7 @@ jobs:
       # automatically — which is simpler than a second repository policy
       # saying those targets must stay test-free forever.
       - name: Run unit tests and the in-crate contract suites
-        run: 'cargo test --lib --bins --examples --all-features -- --skip boundary_suites::'
+        run: 'cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::'
 
       # contracts/: pure serialization/configuration fixture contracts.
       # provider/: adapter request serialization, stream parsing, error
@@ -331,7 +352,13 @@ jobs:
       # target also carries the #[ignore]d opt-in live smoke tests, which
       # never run here.
       - name: Run the pure contract targets
-        run: cargo test --test contracts --test provider --all-features
+        run: cargo test --test contracts --test provider --all-features --locked
+
+      # Doctests (both positive API counterparts and `compile_fail` encapsulation
+      # proofs) are not executed by `--all-targets`; execute them explicitly
+      # here against the compiled `--all-features` library.
+      - name: Run doctests
+        run: cargo test --doc --all-features --locked
 
       # Cargo/libtest discovery of this lane's targets against every Linux
       # step that selects them: an unassigned target, a stale filter or
@@ -339,7 +366,7 @@ jobs:
       # deterministic tests ran above as part of `--examples`.
       # Reuse the all-feature library already compiled by the tested targets.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-contracts
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts
 
   # Real boundaries: SQLite durability/recovery, the spawned rustx process
   # and stdio/IPC transport, the subagent child-process boundary, the tool
@@ -354,9 +381,9 @@ jobs:
     if: fromJSON(needs.plan.outputs.run)['rust-boundaries']
     runs-on: ubuntu-26.04
     # Cold libclang setup and both native builds exhausted 25 minutes in
-    # runs 39798438811 and 39811600857. Budget the complete test and coverage
-    # tail as well as preparation, with the same ceiling as rust-contracts.
-    timeout-minutes: 45
+    # runs 39798438811 and 39811600857. Match rust-contracts at the restored
+    # pre-hang 90m ceiling once Plan Ask stalls were removed from fixtures.
+    timeout-minutes: 90
 
     env:
       VERIFICATION_PROFILE: full
@@ -367,7 +394,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
@@ -396,13 +423,26 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv run --frozen pytest
 
-      # The integration targets place the real executables at target/debug/.
-      # Run them first so the in-crate boundary suites can use those binaries.
+      # Prepare and stage the emitted package binaries beside the `--test`
+      # and `--lib` test harnesses before executing either boundary step.
+      - name: Compile the boundary harnesses and stage the real executables
+        run: >-
+          python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run
+          --lib
+          --test durable
+          --test process
+          --test subagent
+          --test tools
+          --test conformance
+          --test cfg3_catalog
+          --test cfg3_managed_output
+
       - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
-          cargo test --all-features
+          cargo test --all-features --locked
           --test durable
           --test process
           --test subagent
@@ -414,7 +454,7 @@ jobs:
       - name: Run the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features -- boundary_suites::'
+        run: 'cargo test --lib --all-features --locked -- boundary_suites::'
 
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With
@@ -422,7 +462,7 @@ jobs:
       # targets already compiled (dev-dependency features included); without
       # it Cargo builds one more complete rustX library just for the checker.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-boundaries
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-boundaries
 
   # Rust platform coverage is intentional, not duplicated by habit. macOS
   # runs only platform-sensitive classes, natively; desktop-macos separately
@@ -479,7 +519,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
@@ -526,10 +566,12 @@ jobs:
         run: uv sync --frozen
 
       # Compiling the external targets also builds every real executable
-      # against the same all-feature library and places it at target/debug/.
-      - name: Compile the external boundary targets and the real executables
+      # against the same all-feature library; staging places them beside each
+      # emitted test harness executable.
+      - name: Compile the external boundary targets and stage the real executables
         run: >-
-          /usr/bin/time -l cargo test --all-features --no-run --timings
+          /usr/bin/time -l python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run --timings
           --test durable
           --test process
           --test subagent
@@ -542,7 +584,7 @@ jobs:
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
-          /usr/bin/time -l cargo test --all-features
+          /usr/bin/time -l cargo test --all-features --locked
           --test durable
           --test process
           --test subagent
@@ -554,7 +596,7 @@ jobs:
       # Native macOS discovery: every required external target (see
       # REQUIREMENTS in the checker) must execute here.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-platform-core
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-core
 
       - name: Native Cargo timing reports
         if: always()
@@ -570,10 +612,10 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-boundaries']
     runs-on: macos-latest
-    # Run 39068563822 spent 58m compiling before tests; 70m killed live tests.
+    # Run 43460497372 spent 80m building; 100m cut off the test/coverage tail.
     # Allow the full execution/coverage tail plus runner variance; see
     # docs/issue-480/ci-budget.md. Individual test deadlines stay unchanged.
-    timeout-minutes: 100
+    timeout-minutes: 150
     env:
       VERIFICATION_PROFILE: full
       # Job-local build metadata only: assertions, overflow checks, unwind,
@@ -593,7 +635,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
@@ -639,13 +681,13 @@ jobs:
         working-directory: test-support/fake-provider
         run: uv sync --frozen
 
-      # Compiling the external targets first also builds every real
-      # executable against the same all-feature library and places it at
-      # target/debug/, where the lib tests (bash/uv boundary-owning modules,
-      # in-crate boundary suites) exec `bash-supervisor`.
-      - name: Compile the external boundary targets and the real executables
+      # Compiling the external targets first also builds every real executable
+      # against the same all-feature library; staging places them beside each
+      # emitted integration test harness executable.
+      - name: Compile the external boundary targets and stage the real executables
         run: >-
-          /usr/bin/time -l cargo test --all-features --no-run --timings
+          /usr/bin/time -l python3 test-support/prepare_native_tests.py --
+          cargo test --all-features --locked --no-run --timings
           --test durable
           --test process
           --test subagent
@@ -660,21 +702,22 @@ jobs:
       #
       # `--bins` executes zero tests today and removing it was measured, but it
       # is retained so Cargo's normal target discovery picks up any future test
-      # added to a binary. Binary test harnesses are not the real executables
-      # the tests exec; those come from the external-target compilation.
-      - name: Compile unit and in-crate boundary test harnesses
-        run: /usr/bin/time -l cargo test --lib --bins --all-features --no-run --timings
+      # added to a binary. `--test durable` is already fresh from the step
+      # above and re-emits the package binary records without recompiling the
+      # ordinary library so they stage beside the lib/bin test harnesses too.
+      - name: Compile unit and in-crate boundary test harnesses and stage the real executables
+        run: /usr/bin/time -l python3 test-support/prepare_native_tests.py -- cargo test --lib --bins --test durable --all-features --locked --no-run --timings
 
       - name: Run unit tests and the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: '/usr/bin/time -l cargo test --lib --bins --all-features -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
+        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: >-
-          /usr/bin/time -l cargo test --all-features
+          /usr/bin/time -l cargo test --all-features --locked
           --test durable
           --test process
           --test subagent
@@ -687,7 +730,7 @@ jobs:
       # tests, and `boundary_suites::` and every external target (see
       # REQUIREMENTS in the checker) must execute here entirely.
       - name: Check test lane coverage
-        run: cargo run --profile test --all-features --example check_test_lanes -- --job rust-platform-boundaries
+        run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-boundaries
 
       - name: Native Cargo timing reports
         if: always()
@@ -714,7 +757,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
 
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
@@ -785,7 +828,7 @@ jobs:
       # Real stdio integration also launches MCP through the sibling
       # interactive-supervisor, so build the executable set before testing.
       - name: Build the real integration binaries
-        run: cargo build --bins
+        run: cargo build --bins --locked
 
       - name: Test
         working-directory: tui
@@ -805,7 +848,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
       # One lineage per lane; see the policy note in the `quality` job. This
@@ -842,7 +885,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
       - uses: Swatinem/rust-cache@v2
@@ -881,6 +924,7 @@ jobs:
           test/document-integration.test.ts
           test/workbench-host.test.ts
           test/terminal-lifecycle.test.ts
+          test/terminal-process.test.ts
           test/office-macos-lifecycle.test.ts
           test/office-macos.test.ts
       - name: macOS sandbox diagnostics on failure
@@ -934,7 +978,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.98.1"
+          toolchain: "1.100.0"
       - name: Install SQLite binding build dependency
         uses: ./.github/actions/libclang
       # One lineage per lane; see the policy note in the `quality` job.
@@ -1037,8 +1081,10 @@ jobs:
     needs: [plan, browser-prepare]
     if: fromJSON(needs.plan.outputs.run)['browser-shard']
     runs-on: ubuntu-26.04
-    # Per-test deadlines, fixture budgets and required assertions stay unchanged.
-    timeout-minutes: 45
+    # Tip 85eed5f80 shard 2 finished 384 tests in ~40m then cancelled at the
+    # prior 45m ceiling during report/artifact packing. Keep per-test
+    # deadlines unchanged; budget post-suite upload under FULL permission CI.
+    timeout-minutes: 60
     strategy:
       # All selected shards always finish, so one failure never hides the others.
       fail-fast: false
@@ -1192,11 +1238,13 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      # Depth 2 keeps the tested merge commit's parents, which the gate
-      # matches against the event's base and head.
+      # Full history so the gate can accept GitHub stacked-PR merge commits:
+      # second parent is still head, and the PR base is an ancestor of the
+      # first parent (an intermediate stack merge) rather than the parent
+      # itself. Ordinary PRs still match parents `[base, head]` exactly.
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Every selected job succeeded, at the right profile, for the current head
         env:
           GITHUB_TOKEN: ${{ github.token }}

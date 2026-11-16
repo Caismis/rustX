@@ -229,6 +229,7 @@ impl SessionRuntimeManager {
                 .map_err(|detail| super::super::session::SessionError::Catalog { detail })?;
         }
         settings.model = capture.input.model.clone();
+        let workspace = settings.cwd.clone();
         let flight = claim.map(|claim| super::Flight::with_startup(claim.into_startup()));
         let mut start = false;
         let result = self
@@ -261,6 +262,7 @@ impl SessionRuntimeManager {
         let mut application = self.applications.lock();
         application.register_session_scope(result.session.id.to_string(), &capture);
         self.applications.notify(&application);
+        crate::tools::workspace_python::schedule(&workspace);
         Ok(result)
     }
 

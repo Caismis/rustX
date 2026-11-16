@@ -3,9 +3,7 @@ use crate::observation::bounded::prepare_capture_item;
 use crate::observation::capability_source::{CapabilityReadSource, PreparedCapabilityHead};
 use crate::observation::capability_source::{CapabilityView, RuntimeClientTool};
 use crate::observation::capture::Capture;
-use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use crate::tools::types::{ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
 fn tool() -> RuntimeClientTool {
     RuntimeClientTool {
@@ -14,8 +12,6 @@ fn tool() -> RuntimeClientTool {
         description: "水🙂\\\"\n".into(),
         input_schema: serde_json::json!({"type":"object","properties":{"n":{"minimum":1}}}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Parallel,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -143,8 +139,6 @@ fn native_snapshot() -> std::sync::Arc<crate::capabilities::CapabilitySnapshot> 
             Vec::new(),
             Vec::new(),
         )),
-        None,
-        None,
         crate::tools::environment::ToolEnvironment::default(),
         std::sync::Arc::new(crate::tools::mcp::McpRuntimeLeaseAuthority::empty()),
         std::sync::Arc::default(),
@@ -189,7 +183,10 @@ fn prepared_capability_same_revision_model_and_availability_keep_exact_source_ow
     let changed_availability = CapabilityReadSource::new(snapshot, availability, None);
     changed_availability.prepare();
     assert!(!original.same_owner(&changed_availability.prepared_head()));
-    assert!(source.header().sources.is_empty());
+    assert_eq!(
+        source.header().sources,
+        [] as [crate::observation::capability_source::CapabilitySourceView; 0]
+    );
     assert_eq!(changed_availability.header().sources.len(), 1);
     for (head, header) in [
         (original, source.header()),

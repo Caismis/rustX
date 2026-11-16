@@ -34,14 +34,8 @@ impl PreparedModelSelection {
             ModelUpdateError::InvalidConfiguration("catalog model position is unavailable".into())
         })?;
         let mut config = SessionModelConfig::of(row.model.clone());
-        // Preserve the independently configured auxiliary selections that
-        // still exist, including when recovering a conversation after deletion.
-        config.summary_model = self.model.config().summary_model.clone();
-        config.title_model = self.model.config().title_model.clone();
-        config
-            .classification_model
-            .clone_from(&self.model.config().classification_model);
-        config.btw_model.clone_from(&self.model.config().btw_model);
+        // Preserve the shared auxiliary policy across primary catalog choices.
+        config.auxiliary = self.model.config().auxiliary.clone();
         if let Some(position) = choice.profile_position {
             config.profile = Some(
                 source

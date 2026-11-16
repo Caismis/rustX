@@ -3,8 +3,7 @@ use super::registration::{NativeToolRegistration, native_definition};
 use super::support::{cancelled_result, failed_result, success_text};
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolInvocation,
-    ToolInvocationPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocation, ToolInvocationPolicy,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -33,11 +32,7 @@ pub(super) fn definition() -> ToolDefinition {
         "tool-present",
         "present",
         "Declare existing files as deliverables for the user. Files may be created by Write, Edit, Bash or any process in the Session cwd. Use for separate file deliverables, not ordinary code edits. Accepts 1–8 files inside the native cwd, in input order; first normalized duplicate wins, including its description. Each successful call is a separate declaration. All entries must be regular files, with no symlink components or parent traversal. Does not copy or mutate bytes: reopening reads current accessible files. Files over 512 KiB may be declared but cannot be previewed/downloaded.",
-        ToolInvocationPolicy::new(
-            ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
-        ),
+        ToolInvocationPolicy::new(ToolExecutionPolicy::ForegroundOnly),
     )
 }
 pub(super) fn registration() -> NativeToolRegistration {
@@ -153,7 +148,7 @@ mod tests {
             id: crate::runtime::identity::ToolCallId::new("declaration"),
             tool_id: definition().id,
             name: "present".into(),
-            arguments,
+            arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
         };
         let crate::tools::executor::PreflightOutcome::Ready(prepared) =
             fixture.registry.preflight(&call).unwrap()
@@ -209,7 +204,10 @@ mod tests {
                 ["second.txt", "报告 file.md"]
             );
             assert_eq!(result.deliveries[0].description.as_deref(), Some("first"));
-            assert!(result.artifacts.is_empty());
+            assert_eq!(
+                result.artifacts,
+                [] as [crate::message::content::FileReference; 0]
+            );
             assert!(
                 result
                     .deliveries
@@ -229,7 +227,10 @@ mod tests {
         )
         .await;
         assert!(matches!(failed.status, ToolExecutionStatus::Failed { .. }));
-        assert!(failed.deliveries.is_empty());
+        assert_eq!(
+            failed.deliveries,
+            [] as [crate::tools::session_files::SessionFileReference; 0]
+        );
         let cancelled = run(
             &fixture,
             serde_json::json!({"files":[{"path":"ok.txt"}]}),
@@ -240,7 +241,10 @@ mod tests {
             cancelled.status,
             ToolExecutionStatus::Cancelled { .. }
         ));
-        assert!(cancelled.deliveries.is_empty());
+        assert_eq!(
+            cancelled.deliveries,
+            [] as [crate::tools::session_files::SessionFileReference; 0]
+        );
         for arguments in [
             serde_json::json!({"files":[]}),
             serde_json::json!({"files":[{"path":"ok.txt","extra":true}]}),
@@ -251,7 +255,7 @@ mod tests {
                 id: crate::runtime::identity::ToolCallId::new("bad"),
                 tool_id: definition().id,
                 name: "present".into(),
-                arguments,
+                arguments: crate::scripted_suites::common::tool_call_envelope(arguments),
             };
             assert!(matches!(
                 fixture.registry.preflight(&call),
@@ -272,7 +276,9 @@ mod tests {
             id: crate::runtime::identity::ToolCallId::new("gated-present"),
             tool_id: definition().id,
             name: "present".into(),
-            arguments: serde_json::json!({"files":[{"path":"ok.txt"}]}),
+            arguments: crate::scripted_suites::common::tool_call_envelope(
+                serde_json::json!({"files":[{"path":"ok.txt"}]}),
+            ),
         };
         let crate::tools::executor::PreflightOutcome::Ready(prepared) =
             fixture.registry.preflight(&call).unwrap()
@@ -314,8 +320,14 @@ mod tests {
             result.status,
             ToolExecutionStatus::Cancelled { .. }
         ));
-        assert!(result.deliveries.is_empty());
-        assert!(result.artifacts.is_empty());
+        assert_eq!(
+            result.deliveries,
+            [] as [crate::tools::session_files::SessionFileReference; 0]
+        );
+        assert_eq!(
+            result.artifacts,
+            [] as [crate::message::content::FileReference; 0]
+        );
         assert_eq!(
             std::fs::read(fixture.runtime.workspace().root().join("ok.txt")).unwrap(),
             b"ORIGINAL"

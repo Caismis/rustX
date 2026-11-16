@@ -36,7 +36,7 @@ pub(super) fn initial_client_snapshot(
         workflows: crate::runtime::workflow::read_model::WorkflowSnapshot::default(),
         conversation_id,
         shutting_down: false,
-        effective_approval_mode: ApprovalMode::Policy,
+        effective_approval_mode: ApprovalMode::Plan,
         durability_failure: None,
         messages: initial_messages,
         message_descriptors: Vec::new(),

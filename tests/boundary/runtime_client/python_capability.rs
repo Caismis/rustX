@@ -21,9 +21,7 @@ use std::sync::Arc;
 
 use rustx::runtime::identity::ToolId;
 use rustx::runtime_client::RuntimeClientRequest;
-use rustx::tools::types::{
-    ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-};
+use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
 
 /// A capability view covering native + Managed Python + Skill origins: the revision, deterministic ordering, origin
 /// metadata, and Skill identity/version/name/description/exact virtual
@@ -48,8 +46,6 @@ async fn capability_projection_covers_native_python_and_skills() {
             description: "list files".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
-            concurrency_policy: ToolConcurrencyPolicy::Sequential,
-            approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
         };

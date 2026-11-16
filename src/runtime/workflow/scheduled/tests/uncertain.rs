@@ -77,6 +77,7 @@ fn native_context(
     let mut context = current.execution_context(capability, start.id.clone());
     context.native = Some(Arc::new(
         crate::tools::invocation::NativeInvocationServices {
+            task: None,
             lifecycle: crate::agent::AttemptLifecycle::default(),
             runtime: crate::tools::runtime::ConversationToolRuntime::new(
                 current.binding.conversation_id.clone(),

@@ -6,9 +6,10 @@ import { OfficeDocuments } from './documents/operation.ts';
 import { observeTerminalOwnership } from './terminal-ownership.ts';
 import { WorkspaceTerminals, workspaceFile, withWorkspacePath } from './workbench.ts';
 import { OfficeSettlementError } from './documents/office-cgroup.ts';
-import { readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync, renameSync, realpathSync, statSync, fstatSync, existsSync, rmSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { sameEndpoint } from '../src/workspaces/endpoint.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import type { ProductHostWorkspaces, WorkspaceAuthorityScope, WorkspaceCatalog, SessionLocation, WorkspaceConfigurationOperation, WorkspaceConfigurationResult, WorkspaceConfigurationReread, WorkflowHostOperation, WorkflowHostResult, WorkflowReread } from '../src/workspaces/host.ts';
@@ -145,7 +146,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async readDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, signal?: AbortSignal): Promise<import('../src/workspaces/host.ts').DeliveryBytes> {
     return this.readFile(scope, read, FILE_PREVIEW_LIMITS.fileBytes, signal);
   }
-  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v77.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
+  async observeDelivery(scope: WorkspaceAuthorityScope, read: import('../src/workspaces/host.ts').DeliveryRead, file: import('../../protocol/app-server/v78.ts').SessionFileReference, changed: () => void, signal: AbortSignal) {
     this.mutationScope(scope); validateDeliveryObservation(read, file);
     if (this.config.nativeFilesystem !== 'shared') throw new Error('Native filesystem observation unavailable on this Product Host');
     const probe = async (signal: AbortSignal) => {
@@ -416,9 +417,10 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
   async adoptWorkspace(scope: WorkspaceAuthorityScope, location: string) {
     this.mutationScope(scope);
     if (!this.config.picker) throw new Error('Directory picker unavailable');
-    this.cwd(location);
+    const directory = this.cwd(location);
     if (this.registrations.some(row => row.location === location)) return;
     this.commit([...this.registrations, { id: randomUUID(), location, displayName: this.roots.find(root => root.id === location)!.displayName }]);
+    if (this.config.nativeFilesystem === 'shared') queueWorkspacePythonAdmission(directory);
   }
   async renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string) {
     this.mutationScope(scope);
@@ -598,7 +600,7 @@ export class LocalWorkspaceHost implements ProductHostWorkspaces {
         case 'write': {
           // The native write is the linearization point; its reread is a
           // separate fact that can fail without undoing the commit.
-          const commit = (edit: import('../../protocol/app-server/v77.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
+          const commit = (edit: import('../../protocol/app-server/v78.ts').WorkflowEdit) => client.call('configuration/sourceWrite', { target, expected_revision: operation.expected_revision, mutation: { kind: 'workflow', id: operation.id, edit } }, 'sources_written');
           const acknowledgement = operation.edit.operation === 'replace' ? await withWorkflowDocument(client, request, target, operation.edit.document, reference => commit({ operation: 'replace', document: reference })) : await commit(operation.edit);
           let reread: WorkflowReread;
           try {
@@ -668,4 +670,22 @@ function validateWorkflowOperation(operation: WorkflowHostOperation) {
         : value!.kind === 'check' ? fields(['kind', 'id', 'document']) && id() && object(value!.document)
           : value!.kind === 'write' && fields(['kind', 'id', 'expected_revision', 'edit']) && id() && typeof value!.expected_revision === 'string' && object(value!.edit));
   if (!valid) throw new Error('Invalid Workflow operation');
+}
+
+/** Best-effort handoff after a Workspace registration has already committed. */
+function queueWorkspacePythonAdmission(workspace: string) {
+  try {
+    const home = process.env.HOME && isAbsolute(process.env.HOME) ? process.env.HOME : homedir();
+    if (!home || !isAbsolute(workspace)) return;
+    const directory = join(home, 'rustx', 'runtime', 'workspace-python', 'admit');
+    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const id = randomUUID();
+    const pending = join(directory, `${id}.pending`);
+    try {
+      writeFileSync(pending, workspace, { encoding: 'utf8', mode: 0o600, flag: 'wx' });
+      renameSync(pending, join(directory, `${id}.txt`));
+    } finally { rmSync(pending, { force: true }); }
+  } catch {
+    // Registration remains successful when the native runtime is not ready to observe this file.
+  }
 }

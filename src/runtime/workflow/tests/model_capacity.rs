@@ -59,7 +59,7 @@ async fn another_conversation_dispatches_after_partial_rollback_without_a_call_r
 
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let plane_a = capacity_plane();
     let plane_b = capacity_plane();
@@ -116,7 +116,7 @@ async fn cancellation_while_other_conversations_hold_process_capacity_dispatches
     let plane = capacity_plane();
     let program = model_program(
         WorkflowModelOutput::Text {},
-        crate::model::AuxiliaryModelPolicy::Session,
+        crate::model::DirectModelPolicy::Session,
     );
     let (context, executor, mut entries) =
         setup_in_capacity(&plane, &program, process.conversation());

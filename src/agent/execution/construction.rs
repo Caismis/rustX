@@ -215,6 +215,9 @@ impl<'a> AgentExecution<'a> {
                 .for_model(request.model.primary().capabilities()),
         );
         Ok(Self {
+            permission_task: None,
+            committed_permission_task_message: runtime_policy.permission_task_message,
+            recovered_permission_task_message: runtime_policy.recovered_permission_task_message,
             admitted_tools,
             conversation,
             generation_policy: frozen_generation_policy(&request),
@@ -256,6 +259,10 @@ impl<'a> AgentExecution<'a> {
             pauses: test_sync::ExecutionPauses::default(),
             turn: 0,
             terminal_emitted: false,
+            permission_reminder: crate::runtime::permission::PermissionReminderState::for_admission(
+                runtime_policy.approval_mode,
+                runtime_policy.last_permission_reminder_mode,
+            ),
         })
     }
 

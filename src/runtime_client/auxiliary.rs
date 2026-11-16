@@ -373,7 +373,7 @@ mod tests {
         assert_eq!(last.next_offset, None);
 
         let later = start_call(&store);
-        assert!(!later.as_str().is_empty());
+        assert_ne!(later.as_str(), "");
         let replay = page(&store, &cut, 0, 32).unwrap();
         assert_eq!(replay.items, first.items);
         assert_eq!(replay.total, 33);
@@ -390,7 +390,10 @@ mod tests {
         assert!(cut.through >= 64);
         let page = page(&store, &cut, 0, 32).unwrap();
         assert_eq!(page.total, 0);
-        assert!(page.items.is_empty());
+        assert_eq!(
+            page.items,
+            [] as [crate::observation::cut::CheckpointPageItem; 0]
+        );
         assert_eq!(page.next_offset, None);
         assert_eq!(page.collections[0].loaded, 0);
         assert_eq!(page.collections[0].total, 0);

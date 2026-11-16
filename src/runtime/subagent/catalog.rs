@@ -335,6 +335,7 @@ impl NamedAgentDefinition {
             inherit_project_instructions,
             extensions,
             workflows,
+            permissions,
         } = profile;
         // AgentProfileDocument defaults omitted text to empty; bounds still apply.
         if description.len() > MAX_SUBAGENT_DESCRIPTION_BYTES {
@@ -371,6 +372,7 @@ impl NamedAgentDefinition {
             inherit_project_instructions,
             &extensions,
             &workflows,
+            permissions,
         );
         Ok(Self {
             name,
@@ -386,6 +388,7 @@ impl NamedAgentDefinition {
                 extensions,
                 workflows,
                 inherit_project_instructions,
+                permissions,
             },
         })
     }
@@ -702,6 +705,7 @@ fn compute_digest(
     inherit_project_instructions: bool,
     extensions: &crate::extensions::NativeAgentExtensions,
     workflows: &BTreeSet<crate::runtime::workflow::WorkflowId>,
+    permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 ) -> NamedAgentDefinitionDigest {
     let mut hasher = Sha256::new();
     hasher.update(SUBAGENT_DEFINITION_DIGEST_VERSION.as_bytes());
@@ -758,6 +762,14 @@ fn compute_digest(
             "false"
         },
     );
+    match permissions {
+        None => field(&mut hasher, "permissions", "\u{0}absent"),
+        Some(set) => field(
+            &mut hasher,
+            "permissions",
+            &serde_json::to_string(&set).expect("permission object serializes"),
+        ),
+    }
     // The role's native Agent Extension composition is part of its semantic
     // identity: two roles that differ only in Agent Status settings are
     // different definitions and must resolve to different frozen children.
@@ -805,6 +817,7 @@ mod tests {
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -828,6 +841,7 @@ mod tests {
                 tools: Vec::new(),
                 skills,
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -1018,6 +1032,7 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: false,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -1034,6 +1049,7 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -1062,6 +1078,7 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -1078,6 +1095,7 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -1122,6 +1140,7 @@ mod tests {
                 tools: Vec::new(),
                 skills: crate::runtime::agent_profile::AgentSkillSelection::default(),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
                 workflows: std::collections::BTreeSet::default(),
             },

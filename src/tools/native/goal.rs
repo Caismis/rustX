@@ -5,9 +5,8 @@ use crate::tools::executor::{
     ToolExecutionContext, ToolExecutionHandle, ToolExecutor, ToolRegistration,
 };
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-    ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolOrigin, ToolReplayPolicy,
-    ToolResultContent,
+    ToolDefinition, ToolExecutionPolicy, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
+    ToolOrigin, ToolReplayPolicy, ToolResultContent,
 };
 use serde::Deserialize;
 use std::sync::Arc;
@@ -51,8 +50,6 @@ pub(crate) fn registrations() -> Vec<ToolRegistration> {
         id: crate::runtime::identity::ToolId::new(format!("native.{name}")),
         name: name.to_owned(), description: description.to_owned(), input_schema,
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }, Arc::new(GoalExecutor(name)))).collect()

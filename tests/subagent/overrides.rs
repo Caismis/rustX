@@ -238,7 +238,7 @@ impl Lab {
             .collect::<Vec<_>>();
         let root_agents = serde_json::Value::Array(names);
         crate::launch_fixture::write_roles(&self.workspace(), &mut subagents);
-        let document = serde_json::json!({"schema_version": 11, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
+        let document = serde_json::json!({"schema_version": 12, "agent_id": "agent-issue258", "context": {"reserve_tokens": 0, "keep_recent_tokens": 0}, "subagents": subagents, "agent": {"model": {"model": "local/model-a"}, "tools": {"builtin": builtin_tools}, "agents": root_agents, "workflows": []}});
         std::fs::write(
             self.root().join("rustx.toml"),
             format!(
@@ -466,7 +466,10 @@ async fn sub258_concurrent_invocations_do_not_mutate_each_other_or_the_role() {
     );
 
     assert_eq!(tool_names(&first), vec!["builtin:grep".to_owned()]);
-    assert!(second.tools.is_empty());
+    assert_eq!(
+        second.tools,
+        [] as [rustx::runtime::subagent::ResolvedSubagentTool; 0]
+    );
     assert_ne!(first.profile_digest(), second.profile_digest());
     assert_eq!(
         first.definition_digest, second.definition_digest,
@@ -786,7 +789,10 @@ async fn sub258_extension_composition_is_not_an_ordinary_tool_selection() {
         Some(&parse_override(serde_json::json!({"tools": {}}))),
     )
     .expect("resolution");
-    assert!(no_direct_tools.tools.is_empty());
+    assert_eq!(
+        no_direct_tools.tools,
+        [] as [rustx::runtime::subagent::ResolvedSubagentTool; 0]
+    );
     assert!(
         no_direct_tools.extensions.agent_status().is_some(),
         "an enabled extension is never silently stripped by the tools allowlist"

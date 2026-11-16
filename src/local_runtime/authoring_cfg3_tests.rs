@@ -1,8 +1,8 @@
 //! Contract tests for atomic semantic overlay, independent of source I/O.
 use super::*;
 use crate::local_runtime::config::{
-    ConcurrencyPolicyDocument, McpStartupPolicyDocument, ModelTimeoutPolicyDocument,
-    SubagentsDocument, ToolDeadlinePolicyDocument,
+    McpStartupPolicyDocument, ModelTimeoutPolicyDocument, SubagentsDocument,
+    ToolDeadlinePolicyDocument,
 };
 
 fn parse(text: &str) -> RuntimeLayer {
@@ -44,8 +44,7 @@ model = "p/lower"
 request_params = '{"vendor":{"flag":true}}'
 max_output_tokens = { mode = "limit", tokens = 123 }
 profile = "lower"
-summary_model = { mode = "explicit", model = "p/summary" }
-title_model = { mode = "explicit", model = "p/title" }
+auxiliary = { mode = "explicit", model = "p/summary" }
 [context]
 reserve_tokens = 321
 keep_recent_tokens = 654
@@ -58,12 +57,6 @@ hard_deadline_ms = 4321
 idle_liveness_ms = { mode = "window", milliseconds = 8765 }
 [subagents]
 max_concurrent = 17
-[native_tools.bash]
-execution = "foreground_only"
-concurrency = "sequential"
-approval = "always"
-[native_tools.read]
-approval = "always"
 [environment]
 A = "lower"
 B = "retained"
@@ -74,15 +67,12 @@ fn absent_atomic_dimensions_inherit() {
     let (config, _) = effective(LOWER, "");
     assert_eq!(config.initial_model().model.to_string(), "p/lower");
     assert_eq!(config.initial_model().max_output_tokens, Some(123));
-    assert_eq!(
-        config
-            .initial_model()
-            .title_selection()
-            .unwrap()
-            .model
-            .as_str(),
-        "p/title"
-    );
+    let crate::model::session::AuxiliaryModelPolicy::Explicit { model, .. } =
+        &config.initial_model().auxiliary
+    else {
+        panic!("expected explicit auxiliary");
+    };
+    assert_eq!(model.as_str(), "p/summary");
     assert_eq!(config.context.keep_recent_tokens, 654);
     assert_eq!(config.model_timeout_policy.stream_idle_timeout_ms, 5678);
     assert_eq!(config.tool_deadline_policy.idle_liveness_ms, Some(8765));
@@ -101,8 +91,7 @@ fn model_selection_replacement_cannot_inherit_request_fields() {
         "request_params",
         "profile",
         "max_output_tokens",
-        "summary_model",
-        "title_model",
+        "auxiliary",
     ] {
         assert_eq!(origins[&format!("agent.model.{field}")], workspace());
     }
@@ -300,29 +289,26 @@ fn plugin_omission_empty_and_explicit_enable_are_distinct_without_splicing() {
 }
 
 #[test]
-fn native_policy_is_atomic_per_tool() {
-    let (config, origins) = effective(LOWER, "[native_tools.bash]\napproval = 'never'");
-    assert_eq!(config.native_tools.bash.execution, None);
-    assert_eq!(config.native_tools.bash.concurrency, None);
-    assert!(config.native_tools.read.approval.is_some());
-    assert_eq!(origins["native_tools.bash"], workspace());
-    let (config, _) = effective(LOWER, "[native_tools.bash]");
-    assert_eq!(
-        config.native_tools.bash,
-        NativePolicyOverrideDocument::default()
-    );
-    assert!(config.native_tools.read.approval.is_some());
+fn obsolete_native_and_mcp_execution_overlays_are_rejected() {
+    for text in [
+        "[native_tools.bash]\nexecution = 'background_only'",
+        "[native_tools]",
+        "native_tools = {}",
+        "[mcp_tool_policies.docs]\nexecution = 'foreground_only'",
+        "mcp_tool_policies = {}",
+    ] {
+        assert!(
+            crate::toml_authoring::parse::<RuntimeLayer>(text.as_bytes()).is_err(),
+            "obsolete execution authoring must fail: {text}"
+        );
+    }
 }
 
 #[test]
 fn empty_identity_maps_do_not_erase_unmentioned_identities() {
-    let (config, _) = effective(LOWER, "[environment]\n[native_tools]");
+    let (config, _) = effective(LOWER, "[environment]");
     assert_eq!(config.environment["A"], "lower");
     assert_eq!(config.environment["B"], "retained");
-    assert_eq!(
-        config.native_tools.bash.concurrency,
-        Some(ConcurrencyPolicyDocument::Sequential)
-    );
     let (config, _) = effective(LOWER, "[environment]\nA = ''");
     assert_eq!(config.environment["A"], "");
     assert_eq!(config.environment["B"], "retained");

@@ -51,7 +51,6 @@ pub(crate) fn admit_agent(
                 .and_todo(),
             },
             execution_policy: crate::runtime::subagent::InheritedExecutionPolicy::default(),
-            approval_mode: crate::runtime::ApprovalMode::Policy,
         };
         return (envelope, authority);
     }

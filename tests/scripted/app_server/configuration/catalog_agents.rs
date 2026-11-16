@@ -140,7 +140,10 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         );
         let binding_now = retained();
         assert_eq!(binding_now.binding_revision, binding + 1);
-        assert!(binding_now.config().agent.agents.is_empty());
+        assert_eq!(
+            binding_now.config().agent.agents,
+            [] as [crate::runtime::subagent::catalog::SubagentName; 0]
+        );
         assert_eq!(binding_now.source_revisions, old.authored.source_revisions);
         assert!(matches!(
             runtime.submit_inbound(issue459_text("refused")),
@@ -174,7 +177,10 @@ async fn issue459_new_inherited_agent_does_not_hold_back_catalog_publication() {
         );
         assert_eq!(runtime.model_view().configured, model("local/a"));
         assert!(runtime.model_view().unavailable.is_some());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
 
         // Explicit recovery through `session/setModel` reopens admission.
         assert!(matches!(
@@ -370,7 +376,10 @@ async fn issue459_explicit_agent_edit(edit: Issue459AgentEdit) {
     let view = runtime.model_view();
     assert_eq!(view.configured, model("local/a"));
     assert!(view.unavailable.as_deref().unwrap().contains("local/a"));
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
 
     fixture
         .manager
@@ -574,8 +583,9 @@ fn issue462_offered_controls(fixture: &Fixture, from: usize) -> Vec<(Vec<String>
             let routing = tools
                 .iter()
                 .find(|tool| tool["function"]["name"] == "subagent")
-                .map(|tool| tool["function"]["description"].as_str().unwrap().to_owned())
-                .unwrap_or_default();
+                .map_or_else(String::new, |tool| {
+                    tool["function"]["description"].as_str().unwrap().to_owned()
+                });
             (names, routing)
         })
         .collect()
@@ -688,7 +698,10 @@ async fn issue462_agent_control_group_follows_one_admitted_generation() {
         let from = fixture.provider.request_bodies().len();
         attempt("request-A explorer").await;
         let offered = issue462_offered_controls(&fixture, from);
-        assert!(!offered.is_empty());
+        assert_ne!(
+            offered,
+            [] as [(std::vec::Vec<std::string::String>, std::string::String); 0]
+        );
         for (names, routing) in offered {
             assert!(five(&names), "exactly once each: {names:?}");
             assert!(routing.contains("- explorer: Explore code"), "{routing}");
@@ -727,7 +740,10 @@ async fn issue462_agent_control_group_follows_one_admitted_generation() {
         let from = fixture.provider.request_bodies().len();
         attempt("request-A zero").await;
         let offered = issue462_offered_controls(&fixture, from);
-        assert!(!offered.is_empty());
+        assert_ne!(
+            offered,
+            [] as [(std::vec::Vec<std::string::String>, std::string::String); 0]
+        );
         assert!(
             offered.iter().all(|(names, _)| names.is_empty()),
             "{offered:?}"
@@ -739,7 +755,10 @@ async fn issue462_agent_control_group_follows_one_admitted_generation() {
         let from = fixture.provider.request_bodies().len();
         attempt("request-A reviewer").await;
         let offered = issue462_offered_controls(&fixture, from);
-        assert!(!offered.is_empty());
+        assert_ne!(
+            offered,
+            [] as [(std::vec::Vec<std::string::String>, std::string::String); 0]
+        );
         for (names, routing) in offered {
             assert!(five(&names), "exactly once each: {names:?}");
             assert!(routing.contains("- reviewer: Review code"), "{routing}");

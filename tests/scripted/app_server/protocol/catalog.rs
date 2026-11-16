@@ -63,7 +63,7 @@ async fn archive_preflight_failures_reach_the_protocol_without_private_diagnosti
             }
         }
         assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     }).await;
 }
@@ -234,7 +234,10 @@ async fn issue422_multi_client_deletion_membership_converges_at_commit() {
             else {
                 panic!()
             };
-            assert!(sessions.is_empty());
+            assert_eq!(
+                sessions,
+                [] as [crate::app_server::thread_status::SessionSummary; 0]
+            );
             f.close().await;
         }
     })
@@ -449,7 +452,7 @@ async fn explicit_node_switch_commits_aba_ownership_and_coalesces_exact_retireme
                 break;
             }
         }
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         connection.close();
         f.close().await;
     })
@@ -704,7 +707,7 @@ async fn switch_residency_settlement_survives_failure_and_lost_acknowledgement()
                 f.manager.residency(&branch.active_conversation_id),
                 ResidencyState::Loaded
             );
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             inspector.close();
             connection.close();
             f.close().await;
@@ -755,7 +758,7 @@ async fn exact_node_read_retains_origin_and_never_selects_or_composes() {
         let MethodResult::Node { node } = call(&connection, 8204, Method::SessionNode { session_id: source.id.clone(), node_id: branch.active_node.clone() }).await else { panic!("unattached read") };
         assert_eq!(node.conversation_id, branch.active_conversation_id);
         assert_eq!(connection.attachment_counts(), (0, 0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     }).await;
 }
@@ -767,7 +770,8 @@ async fn thread_identity_tools_names_archive_and_unarchive_remain_native_metadat
         let first = AppServerConnection::new(f.host.clone());
         let second = AppServerConnection::new(f.host.clone());
         initialize(&first).await; initialize(&second).await;
-        let tools = vec![crate::tools::host::HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Look up an application record".into(),input_schema:serde_json::json!({"type":"object","properties":{},"additionalProperties":false})}];
+        let tools = vec![crate::tools::host::HostToolDefinition {namespace:Some("business".into()),name:"lookup".into(),description:"Look up an application record".into(),permissions: None,
+            input_schema:serde_json::json!({"type":"object","properties":{},"additionalProperties":false})}];
         let MethodResult::SessionTransition {thread,session,..} = call(&first,100,Method::SessionCreate {dynamic_tools:tools.clone(),submission:None,settings:crate::local_runtime::session::SessionPersistentState {cwd:f.workspaces[0].clone(),model:None}}).await else {panic!("Thread creation")};
         assert_eq!(thread.id,session.active_conversation_id); assert_eq!(thread.node_id,session.active_node); assert_eq!(thread.dynamic_tools,tools);
         let MethodResult::Attached {target:a,..}=call(&first,101,Method::SessionAttach {thread_id:thread.id.clone()}).await else {panic!("resume")};

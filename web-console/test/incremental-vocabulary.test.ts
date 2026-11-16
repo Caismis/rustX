@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest';
 import { checkpointSnapshot, transitionFacts, foldRuntimeEvent as fold } from '../../protocol/app-server/projection';
-import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v77';
+import type { RuntimeClientEvent as Event, RuntimeClientCheckpoint } from '../../protocol/app-server/v78';
 import capture from './fixtures/incremental-native.json';
 import { checkpoint, interaction, snapshot } from './fixture';
 
@@ -56,8 +56,8 @@ it('every Session event variant has an explicit transition or documented domain 
   expect(state.transcript).toBe(transcript); expect(state.messages).toBe(messages);
   apply({ type: 'assistant_message_started', attempt_id, message_id: 'unaccepted' });
   apply({ type: 'tool_call_started', position:0, foreground_position:0, attempt_id, message_id: 'unaccepted', block_index: 0, call: { id: 'exact', tool_id: 'bash', name: 'bash' } });
-  apply({ type: 'tool_call_assembled', position:0, foreground_position:0, attempt_id, message_id: 'unaccepted', block_index: 0, call: { id: 'exact', tool_id: 'bash', name: 'bash', arguments: { n: 1 } }, arguments_json: '{"n":1.0}' });
-  expect(state.attempt?.in_flight?.blocks?.[0]).toMatchObject({ arguments: '{"n":1.0}' });
+  apply({ type: 'tool_call_assembled', position:0, foreground_position:0, attempt_id, message_id: 'unaccepted', block_index: 0, call: { id: 'exact', tool_id: 'bash', name: 'bash', arguments: { arguments: { n: 1 } } }, arguments_json: '{"arguments":{"n":1.0}}' });
+  expect(state.attempt?.in_flight?.blocks?.[0]).toMatchObject({ arguments: '{"arguments":{"n":1.0}}' });
   apply({ type: 'tool_execution_started', occurrence:{locator:{type:'by_message_id',message_id:'unaccepted'},block_index:0}, attempt_id, tool_call_id: 'exact', tool_id: 'bash' });
   apply({ type: 'tool_execution_progress', occurrence:{locator:{type:'by_message_id',message_id:'unaccepted'},block_index:0}, attempt_id, tool_call_id: 'exact', tool_id: 'bash', progress: { completed: 1, total: 2 } });
   expect(state.attempt?.foreground?.at(-1)?.state).toMatchObject({ type: 'running', progress: { completed: 1, total: 2 } });

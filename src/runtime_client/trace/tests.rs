@@ -113,6 +113,11 @@ fn append(store: &dyn ConversationStore, kind: E, seconds: i64) {
                 )
                 .unwrap();
         }
+        E::WorkflowStarted { workflow_id, .. } => {
+            let snapshot =
+                crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone());
+            store.publish_workflow_start(envelope, &snapshot).unwrap();
+        }
         _ => {
             store.append_event(envelope).unwrap();
         }
@@ -180,6 +185,7 @@ fn prepared_request(
     identity: RequestIdentity,
 ) -> RequestSnapshot {
     let mut snapshot = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         identity,
         crate::context::resources::LedgerFrontier((store.load_head().unwrap().revision).get()),
         SYSTEM_PROMPT.to_owned(),
@@ -213,7 +219,7 @@ fn prepared_request(
             description: TOOL_DESCRIPTION.to_owned(),
             input_schema: serde_json::json!({
                 "type": "object",
-                "properties": { "command": { "type": "string" } },
+                "properties": { "arguments": { "type": "object", "properties": { "command": { "type": "string" } } } },
             }),
         }],
         CapabilityRevision::new(1),
@@ -487,7 +493,7 @@ fn bash_call(call_id: &str) -> ToolCall {
         id: ToolCallId::new(call_id),
         tool_id: ToolId::new("tool-bash"),
         name: "bash".into(),
-        arguments: serde_json::json!({ "command": "ls -la\necho done", "timeout": 30 }),
+        arguments: serde_json::json!({ "arguments": { "command": "ls -la\necho done", "timeout": 30 }, "execution_mode": "foreground" }),
     }
 }
 
@@ -616,6 +622,7 @@ fn historical_request_detail_ignores_later_configuration_and_later_history() {
         .unwrap();
     append(&store, E::TurnStarted, 20);
     let mut later = RequestSnapshot::new(
+        crate::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new("attempt-a"),
             turn: TurnId::new("2"),
@@ -669,7 +676,7 @@ fn tool_detail_joins_arguments_schema_and_result_from_exact_authorities() {
     start(&store);
     let frozen = request(&store, 0);
     let mut call = bash_call("call-inspect");
-    call.arguments["description"] = serde_json::json!("List the workspace <safely>");
+    call.arguments["arguments"]["description"] = serde_json::json!("List the workspace <safely>");
     propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 4);
     completion(&store, &frozen, None, None, 4);
     append(
@@ -726,14 +733,14 @@ fn tool_detail_joins_arguments_schema_and_result_from_exact_authorities() {
     // Arguments come from the canonical proposal, exactly as recorded.
     assert_eq!(
         tool.arguments.as_ref().unwrap().value,
-        serde_json::json!({ "command": "ls -la\necho done", "timeout": 30, "description": "List the workspace <safely>" })
+        serde_json::json!({ "arguments": { "command": "ls -la\necho done", "timeout": 30, "description": "List the workspace <safely>" }, "execution_mode": "foreground" })
     );
     // The schema comes from the owning request's own frozen catalog.
     let definition = tool.definition.as_ref().expect("historical definition");
     assert_eq!(definition.name, "bash");
     assert_eq!(definition.description.text, TOOL_DESCRIPTION);
     assert_eq!(
-        definition.input_schema.value["properties"]["command"]["type"],
+        definition.input_schema.value["properties"]["arguments"]["properties"]["command"]["type"],
         serde_json::json!("string")
     );
     // The native Bash contract identifies `command` as shell source.
@@ -1098,12 +1105,9 @@ fn compaction_uses_the_next_boundary_even_far_back_in_history() {
                 active.has_detail,
                 "detail remains available through lifecycle repair"
             );
-            assert!(
-                read.detail(&active.id)
-                    .unwrap()
-                    .unwrap()
-                    .messages
-                    .is_empty()
+            assert_eq!(
+                read.detail(&active.id).unwrap().unwrap().messages,
+                [] as [crate::observation::trace::types::TraceMessageDetail; 0]
             );
         }
         append(
@@ -1133,7 +1137,7 @@ fn commit_parallel_tool_owner(store: &dyn ConversationStore) {
                     id: ToolCallId::new(call),
                     tool_id: ToolId::new(if call == "call-b" { "tool-b" } else { "tool-a" }),
                     name: "same-name".into(),
-                    arguments: serde_json::json!({ "index": call }),
+                    arguments: serde_json::json!({ "arguments": { "index": call } }),
                 })
             })
             .collect(),
@@ -1817,7 +1821,7 @@ fn oversized_values_are_explicitly_truncated() {
         id: ToolCallId::new("call-oversized"),
         tool_id: ToolId::new("tool-bash"),
         name: "bash".into(),
-        arguments: serde_json::json!({ "command": "x".repeat(200_000) }),
+        arguments: serde_json::json!({ "arguments": { "command": "x".repeat(200_000) }, "execution_mode": "foreground" }),
     };
     propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 4);
     completion(&store, &frozen, None, None, 4);
@@ -1885,7 +1889,10 @@ fn record_bounds_account_for_escaping_and_omit_oversized_identities() {
     });
     bound_record(&mut record);
     assert!(record.truncated);
-    assert!(record.attachments.is_empty());
+    assert_eq!(
+        record.attachments,
+        [] as [crate::observation::trace::types::TraceArtifact; 0]
+    );
     assert!(record.location.attempt_id.is_none());
     assert!(serde_json::to_vec(&record).unwrap().len() <= TRACE_RECORD_BYTES);
 }
@@ -2158,7 +2165,7 @@ fn canonical_tool_artifacts_merge_by_identity_with_first_occurrence_typing() {
             id: ToolCallId::new(format!("artifact-call-{index}")),
             tool_id: ToolId::new("artifact-tool"),
             name: "files".into(),
-            arguments: serde_json::json!({}),
+            arguments: serde_json::json!({ "arguments": {} }),
         };
         let owner = format!("artifact-owner-{index}");
         propose_tool_call(&store, &owner, &call, 1);
@@ -2959,7 +2966,10 @@ fn canonical_context_is_projected_from_the_frozen_request_identities() {
     );
     for addition in &additions {
         assert!(!addition.truncated);
-        assert!(addition.attachments.is_empty());
+        assert_eq!(
+            addition.attachments,
+            [] as [crate::observation::trace::types::TraceArtifact; 0]
+        );
     }
     assert_eq!(additions[0].preview.as_ref().unwrap().text, "Goal: active");
     // The internal ContextKind payload stays inside the runtime: a family
@@ -2991,8 +3001,14 @@ fn retry_and_recovery_requests_introduce_no_duplicate_context() {
 
     let projected = page(&store);
     assert_eq!(context_of(&projected, 0).len(), 1);
-    assert!(context_of(&projected, 1).is_empty());
-    assert!(context_of(&projected, 2).is_empty());
+    assert_eq!(
+        context_of(&projected, 1),
+        [] as [crate::observation::trace::types::TraceContextPresentation; 0]
+    );
+    assert_eq!(
+        context_of(&projected, 2),
+        [] as [crate::observation::trace::types::TraceContextPresentation; 0]
+    );
     assert_eq!(
         serde_json::to_string(&projected)
             .unwrap()
@@ -3119,7 +3135,10 @@ fn context_presentation_is_reproducible_and_bounded() {
     let record = record_of(&projected, TraceKind::Request);
     let summary = record.request.as_ref().unwrap();
     assert!(summary.context_truncated);
-    assert!(!summary.context_additions.is_empty());
+    assert_ne!(
+        summary.context_additions,
+        [] as [crate::observation::trace::types::TraceContextPresentation; 0]
+    );
     assert!(
         serde_json::to_vec(&summary.context_additions)
             .unwrap()
@@ -4005,12 +4024,9 @@ fn assert_context_pair_rejected(source: UserSource, kind: ContextKind) {
         store.commit_model_turn_start(&[message], &snapshot, timestamp(2)),
         Err(ConversationStoreError::InvalidReference(_))
     ));
-    assert!(
-        store
-            .read_request_snapshots(None, 10)
-            .unwrap()
-            .snapshots
-            .is_empty()
+    assert_eq!(
+        store.read_request_snapshots(None, 10).unwrap().snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
 }
 
@@ -4352,7 +4368,7 @@ fn tool_summary_one_exact_proposal_and_no_lifecycle_resolution() {
             append_in_step(&store, E::TurnStarted, 5, step);
         }
         let mut call = bash_call("reused-provider-call");
-        call.arguments = serde_json::json!({"command": format!("{prefix}{}", "界".repeat(1000))});
+        call.arguments = serde_json::json!({"arguments": {"command": format!("{prefix}{}", "界".repeat(1000))}, "execution_mode": "foreground"});
         let id = MessageId::new(format!("assistant-{step}"));
         let mut proposal = event(
             &store,
@@ -4703,8 +4719,8 @@ mod scale {
         assert_eq!(record.location.step_id, Some(TurnId::new("step-0")));
         let detail = projection.detail(&location.record_id).unwrap().unwrap();
         assert_eq!(
-            detail.tool.unwrap().arguments.unwrap().value["command"],
-            call.arguments["command"]
+            detail.tool.unwrap().arguments.unwrap().value["arguments"]["command"],
+            call.arguments["arguments"]["command"]
         );
         let wrong_block = TraceToolLocator {
             occurrence: crate::observation::tool::RuntimeClientToolOccurrence {

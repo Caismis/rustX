@@ -49,6 +49,19 @@ fn process_gone(pid: i32) {
         "descendant must be physically absent"
     );
 }
+pub(super) async fn admit_or_fail<T: std::fmt::Debug>(
+    connection: &AppServerConnection,
+    id: &str,
+    command: &mut tokio::task::JoinHandle<T>,
+) {
+    bounded(async {
+        tokio::select! {
+            () = connection.command_admitted_for_test(id) => {}
+            early = command => panic!("command {id} finished before admission check: {early:?}"),
+        }
+    })
+    .await;
+}
 
 pub(crate) async fn buffered_scenario() {
     let fixture = Fixture::new().await;
@@ -119,10 +132,14 @@ pub(crate) async fn buffered_scenario() {
     .unwrap();
     assert_eq!(
         environment.lines().count(),
-        4,
-        "only native basics, no provider or App Server credentials"
+        18,
+        "native basics plus Git child defaults; no provider or App Server credentials"
     );
     assert!(environment.contains("LANG=C.UTF-8"));
+    assert!(environment.contains("GIT_CONFIG_COUNT=5\n"));
+    assert!(environment.contains("GIT_CONFIG_PARAMETERS=\n"));
+    assert!(environment.contains("GIT_CONFIG_KEY_4=core.fsmonitor\n"));
+    assert!(environment.contains("GIT_CONFIG_VALUE_4=false\n"));
     assert_eq!(fixture.manager.diagnostics().loaded, 0);
     connection.close();
 }
@@ -166,9 +183,9 @@ pub(crate) async fn connection_process_scenario() {
     cat.stream_stdin = true;
     cat.stream_stdout_stderr = true;
     let second_call = second.clone();
-    let second_result =
+    let mut second_result =
         tokio::spawn(async move { call(&second_call, 3, Method::CommandExec(cat)).await });
-    second.command_admitted_for_test("same").await;
+    admit_or_fail(&second, "same", &mut second_result).await;
     let payload = base64::engine::general_purpose::STANDARD.encode([0, 255, 10]);
     call(
         &second,
@@ -185,7 +202,7 @@ pub(crate) async fn connection_process_scenario() {
         panic!("cat result")
     };
     assert_eq!(result.status, ExecStatus::Completed);
-    assert!(result.stdout_base64.is_empty());
+    assert_eq!(result.stdout_base64, "");
     call(
         &first,
         3,
@@ -297,7 +314,7 @@ pub(crate) async fn terminal_scenario() {
         panic!("terminal result")
     };
     assert_eq!(result.status, ExecStatus::Completed);
-    assert!(result.stdout_base64.is_empty());
+    assert_eq!(result.stdout_base64, "");
     connection.close();
 }
 
@@ -1161,7 +1178,7 @@ async fn skills_management_keeps_provenance_metadata_and_content_revisions() {
         .iter()
         .find(|skill| skill.catalog.name == "inspection")
         .unwrap();
-    assert!(!skill.metadata_revision.is_empty());
+    assert_ne!(skill.metadata_revision, "");
     assert_eq!(
         skill.provenance.source,
         crate::skills::SkillSource::Workspace
@@ -1273,9 +1290,9 @@ pub(crate) async fn output_capacity_and_timeout_scenario() {
     streamed.stream_stdin = true;
     streamed.output_bytes_cap = Some(262_144);
     let worker = connection.clone();
-    let slow =
+    let mut slow =
         tokio::spawn(async move { rejected(&worker, 3, Method::CommandExec(streamed)).await });
-    connection.command_admitted_for_test("slow").await;
+    admit_or_fail(&connection, "slow", &mut slow).await;
     call(
         &connection,
         4,
@@ -1339,11 +1356,11 @@ pub(crate) async fn host_drain_scenario() {
         .unwrap();
     // This shutdown guard is shorter than the command's 60-second deadline.
     // Drain must cancel the process before waiting for its request owner.
-    assert!(
+    assert_eq!(
         tokio::time::timeout(std::time::Duration::from_secs(10), fixture.host.drain())
             .await
-            .expect("host drain cancels independent work before its execution deadline")
-            .is_empty()
+            .expect("host drain cancels independent work before its execution deadline"),
+        [] as [std::string::String; 0]
     );
     process_gone(pid);
     match bounded(command).await.unwrap() {
@@ -1900,7 +1917,10 @@ pub(crate) async fn skill_catalog_page_scenario() {
             panic!("catalog page")
         };
         assert!(crate::bounded_file::json_fits(&page.data, 131_072));
-        assert!(!page.data.is_empty());
+        assert_ne!(
+            page.data,
+            [] as [crate::local_runtime::skill_management::SkillDescriptor; 0]
+        );
         total += page.data.len();
         pages += 1;
         revision = Some(page.revision);

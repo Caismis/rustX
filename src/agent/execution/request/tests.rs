@@ -137,12 +137,18 @@ async fn cancellation_during_awaited_context_assembly_commits_nothing() {
             reason: CancellationReason::UserRequested
         }
     ));
-    assert!(snapshots.is_empty());
+    assert_eq!(
+        snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
+    );
     assert_eq!(
         result.conversation.revision(),
         crate::conversation::SurfaceRevision::INITIAL
     );
-    assert!(result.messages().is_empty());
+    assert_eq!(
+        result.messages(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(adapter.request_count(), 0);
 }
 

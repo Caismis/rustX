@@ -86,7 +86,7 @@ fn config_json(
     builtin_tools: &[&str],
     _include_old_mcp: bool,
 ) -> String {
-    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 11, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
+    let profile = toml::to_string_pretty(&serde_json::json!({"schema_version": 12, "agent_id": "agent-issue96", "context": {"reserve_tokens": reserve_tokens, "keep_recent_tokens": 4096}, "environment": {"ISSUE96_CURRENT": environment_value}, "agent": {"skills": "all", "model": {"model": model}, "plugins": {
             "todo": {"enabled": true},
             "agent_status": {
                 "enabled": true,
@@ -311,7 +311,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         snapshot.skill_catalog().is_none(),
         "discovered Skills are advertised only when the model can read their instructions"
     );
-    assert!(!snapshot.available_tools().tools().is_empty());
+    assert_ne!(snapshot.available_tools().tools(), []);
 
     let resumed_endpoint = resumed.endpoint();
     let resumed_initialized = resumed_endpoint.handle_request(RuntimeClientRequest::Initialize {
@@ -371,7 +371,10 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
             .collect::<Vec<_>>(),
         vec!["todo"]
     );
-    assert!(!available_tools.is_empty());
+    assert_ne!(
+        available_tools,
+        [] as [rustx::observation::capability_source::RuntimeClientTool; 0]
+    );
     assert!(!available_tools.iter().any(|tool| tool.name == "todo"));
     // Accept durable user work before creating an independent Session.
     let submitted = resumed_endpoint
@@ -637,7 +640,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // that quietly substituted built-in defaults could not pass.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 11, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 12, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {
                 "enabled": true,
                 "time": {"enabled": true, "timezone": "Asia/Shanghai"},
                 "background": {"enabled": false}
@@ -691,7 +694,7 @@ async fn ext256_a_live_root_projects_its_frozen_effective_extension_composition(
     // The deliberate divergence with the prospective configuration surface.
     std::fs::write(
         &config_path,
-        toml::to_string_pretty(&serde_json::json!({"schema_version": 11, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
+        toml::to_string_pretty(&serde_json::json!({"schema_version": 12, "agent_id": "agent-ext256", "context": {"reserve_tokens": 11, "keep_recent_tokens": 4096}, "agent": {"model": {"model": "local/model-a"}, "plugins": {"todo": {"enabled": true}, "agent_status": {"enabled": false}}, "tools": {"builtin": ["read"]}}}))
         .unwrap(),
     )
     .expect("config v2");

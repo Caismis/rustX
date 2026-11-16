@@ -118,7 +118,7 @@ fn count_conversation_store_open() {
 /// Journal.
 ///
 /// Version 9 froze the Issue #111 durable **answer obligation**: the adoption
-/// transaction now commits a [`RuntimeEvent::InboundTurnAdopted`] fact naming
+/// transaction now commits a [`RuntimeEvent::InboundTurnAdopted`](crate::events::types::RuntimeEvent::InboundTurnAdopted) fact naming
 /// the exact adopted batch, and startup recovery decides continuation from
 /// that fact alone rather than from canonical shape.
 ///
@@ -313,7 +313,9 @@ fn count_conversation_store_open() {
 /// Version 84 requires exact Workflow run/instance indexes for bounded historical reads.
 /// Version 85 records Session configuration commits as Journal facts with
 /// their own transcript positions.
-pub const SQLITE_SCHEMA_VERSION: i64 = 86;
+/// Version 87 -> 88 adds admission-bound immutable Workflow run definition
+/// snapshots and chunked durable snapshot storage.
+pub const SQLITE_SCHEMA_VERSION: i64 = 88;
 
 /// One operation in a deterministic admission fault script.
 #[cfg(test)]
@@ -432,6 +434,8 @@ pub struct SqliteConversationStore {
     pub(crate) fail_publication_terminal_remaining: Arc<AtomicUsize>,
     #[cfg(test)]
     pub(crate) fail_publication_audit_remaining: Arc<AtomicUsize>,
+    #[cfg(test)]
+    pub(crate) fail_workflow_snapshot_remaining: Arc<AtomicUsize>,
 }
 
 impl std::fmt::Debug for SqliteConversationStore {
@@ -500,7 +504,7 @@ impl ConnectionOwner {
                 });
             }
             if let Some(connection) = slot.take() {
-                let Ok(previous) = self.lease_generation.fetch_update(
+                let Ok(previous) = self.lease_generation.try_update(
                     Ordering::AcqRel,
                     Ordering::Acquire,
                     |current| current.checked_add(1),
@@ -766,6 +770,8 @@ impl SqliteConversationStore {
             fail_publication_terminal_remaining: Arc::new(AtomicUsize::new(0)),
             #[cfg(test)]
             fail_publication_audit_remaining: Arc::new(AtomicUsize::new(0)),
+            #[cfg(test)]
+            fail_workflow_snapshot_remaining: Arc::new(AtomicUsize::new(0)),
         }
     }
     fn auxiliary_writer_scope(&self) -> Self {
@@ -904,6 +910,12 @@ impl SqliteConversationStore {
         self.fail_publication_audit_remaining
             .store(count, Ordering::SeqCst);
     }
+    /// Fails the next `count` atomic Workflow snapshot start commits.
+    #[cfg(test)]
+    pub(crate) fn arm_fail_workflow_snapshot_times(&self, count: usize) {
+        self.fail_workflow_snapshot_remaining
+            .store(count, Ordering::SeqCst);
+    }
     #[cfg(test)]
     pub(crate) fn arm_fail_next_accept_commit(&self) {
         self.arm_fail_accept_times(1);
@@ -1032,7 +1044,7 @@ impl SqliteConversationStore {
     #[cfg(test)]
     fn consume(counter: &AtomicUsize) -> bool {
         counter
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()
@@ -1221,6 +1233,7 @@ mod observation_request_summary;
 mod observation_state;
 mod observation_tools;
 mod observation_trace;
+mod workflow_snapshot;
 mod workflow_trace;
 
 /// Optional immutable read layout belongs to the native source transaction.

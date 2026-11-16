@@ -107,13 +107,9 @@ async fn classification_is_strict_ephemeral_and_duplicate_semantics_exclude_curr
             .iter()
             .all(|request| request.tools.is_empty() && request.continuation.is_none())
     );
-    assert!(
-        host.checkpoint()
-            .unwrap()
-            .snapshot
-            .transcript
-            .entries
-            .is_empty()
+    assert_eq!(
+        host.checkpoint().unwrap().snapshot.transcript.entries,
+        [] as [crate::observation::transcript::RuntimeClientTranscriptEntry; 0]
     );
     host.shutdown().await.unwrap();
 }
@@ -357,8 +353,19 @@ async fn previous_call_retirement_can_refuse_a_prepared_submission_before_provid
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_preparation_publishes_no_receipt_or_provider_request_and_releases_slots() {
-    let (provider, host) = super::model::runtime(vec![answer(r#"{"label":"yes"}"#)]).await;
-    let (attachment, _) = host.attach(RUNTIME_CLIENT_PROTOCOL_VERSION).unwrap();
+    let fixture = super::super::support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_75b1a03d-ab33-7d8c-98d3-934561e7386b",
+    )
+    .scripts(vec![answer(r#"{"label":"yes"}"#)])
+    .build()
+    .await;
+    let admission = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release_admission = admission.arm_scoped();
+    park_primary_admission(&fixture.runtime, admission).await;
+    let (attachment, _) = fixture
+        .host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
     for index in 0..17 {
         let submission = ClassificationSubmission {
             correlation: correlation(&format!("missing-history-{index}")),
@@ -367,7 +374,12 @@ async fn failed_preparation_publishes_no_receipt_or_provider_request_and_release
             },
             labels: vec!["yes".into()],
         };
-        assert!(attachment.classify(submission.clone()).await.is_err());
+        assert!(matches!(
+            attachment.classify(submission.clone()).await,
+            Err(crate::runtime_client::RuntimeClientError::Auxiliary {
+                reason: crate::runtime::auxiliary::submission::AuxiliaryFailure::Unavailable
+            })
+        ));
         assert!(!matches!(
             attachment
                 .auxiliary_lookup(&submission.correlation, None)
@@ -375,7 +387,10 @@ async fn failed_preparation_publishes_no_receipt_or_provider_request_and_release
             crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::Known { .. }
         ));
     }
-    assert!(provider.requests().is_empty());
+    assert_eq!(
+        fixture.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     let receipt = attachment
         .classify(ClassificationSubmission {
             correlation: correlation("valid-after-rejection"),
@@ -392,7 +407,91 @@ async fn failed_preparation_publishes_no_receipt_or_provider_request_and_release
             label: "yes".into()
         }
     );
-    host.shutdown().await.unwrap();
+    assert_eq!(fixture.model.requests().len(), 1);
+    drop(release_admission);
+    fixture.host.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_preparation_confirmation_waits_for_native_resource_release() {
+    let fixture = super::super::support::runtime_client_fixture::RuntimeClientFixture::builder(
+        "conv_85b1a03d-ab33-7d8c-98d3-934561e7386b",
+    )
+    .build()
+    .await;
+    let admission = std::sync::Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release_admission = admission.arm_scoped();
+    park_primary_admission(&fixture.runtime, admission).await;
+    let (attachment, _) = fixture
+        .host
+        .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let submission = ClassificationSubmission {
+        correlation: correlation("failed-preparation-release"),
+        input: ClassificationInput::History {
+            message_id: crate::runtime::identity::MessageId::new("absent"),
+        },
+        labels: vec!["yes".into()],
+    };
+    let permit = crate::runtime::auxiliary::submission::SubmissionPermit::new_for(
+        fixture.runtime.conversation_id().clone(),
+        submission.correlation.clone(),
+    )
+    .unwrap();
+    let (entered, observing) = tokio::sync::oneshot::channel();
+    let (release, paused) = std::sync::mpsc::channel();
+    crate::runtime::auxiliary::submission::install_transfer_hook(
+        submission.correlation.as_str().into(),
+        Box::new(move || {
+            let _ = entered.send(());
+            paused
+                .recv_timeout(std::time::Duration::from_secs(10))
+                .map_err(|error| error.to_string())
+        }),
+    );
+    let worker_permit = permit.clone();
+    let worker_submission = submission.clone();
+    let submitting = tokio::task::spawn_blocking(move || {
+        attachment.classify_admitted(worker_submission, &worker_permit)
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), observing)
+        .await
+        .unwrap()
+        .unwrap();
+    let (releasing, release_resources) = fixture.runtime.hold_auxiliary_resource_release_for_test();
+    release.send(()).unwrap();
+    // Obtain the same native confirmation awaited by the public classify
+    // method, with the physical owner parked after consumer cleanup.
+    let admission = submitting.await.unwrap().unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(10), releasing)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut confirmation = Box::pin(admission.confirmed());
+    let before_release = futures_util::poll!(&mut confirmation);
+    // Release even when the negative control observes an early public error.
+    release_resources.send(()).unwrap();
+    assert!(
+        before_release.is_pending(),
+        "preparation rejection must wait for its counted native ownership"
+    );
+    let error = confirmation.await.unwrap_err();
+    assert_eq!(
+        error.kind,
+        crate::context::ContextErrorKind::AuxiliaryNotStarted
+    );
+    assert_eq!(error.message, "classification history is unavailable");
+    assert!(matches!(
+        fixture.runtime.auxiliary_lookup(&submission.correlation, Some(&permit.id())),
+        crate::runtime::conversation_runtime::auxiliary::AuxiliarySubmissionLookup::ConfirmedNotAdmitted { .. }
+    ));
+    assert_eq!(
+        fixture.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
+    fixture.runtime.wait_for_configuration_admissions().await;
+    drop(release_admission);
+    fixture.host.shutdown().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -512,7 +611,7 @@ async fn classification_history_is_bounded_data_and_never_a_tool_continuation() 
         );
         let request = fixture.model.requests().last().unwrap().clone();
         assert_eq!(request.messages.len(), 1);
-        assert!(request.messages.tool_indices().is_empty());
+        assert_eq!(request.messages.tool_indices(), [] as [usize; 0]);
         assert!(request.tools.is_empty() && request.continuation.is_none());
         let crate::model::ModelInputMessage::RequestOnly(question) = &request.messages[0] else {
             panic!("classification data")
@@ -530,7 +629,7 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
         common,
         support::fake::{FakeTool, ScriptedCall, await_started, success_result, tool_call_events},
     };
-    use crate::tools::types::{ToolConcurrencyPolicy, ToolExecutionPolicy};
+    use crate::tools::types::ToolExecutionPolicy;
     let call = ScriptedCall {
         id: "primary-call",
         tool_id: "primary-tool",
@@ -548,7 +647,6 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
             "primary_tool",
             "primary-tool",
             ToolExecutionPolicy::ForegroundOnly,
-            ToolConcurrencyPolicy::Sequential,
         ),
         success_result("Primary Tool complete"),
     );
@@ -595,7 +693,7 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
     );
     let requests = fixture.model.requests();
     assert_eq!(requests.len(), 2);
-    assert!(requests[1].messages.tool_indices().is_empty());
+    assert_eq!(requests[1].messages.tool_indices(), [] as [usize; 0]);
     assert!(requests[1].continuation.is_none() && requests[1].tools.is_empty());
     fixture.host.projection_settled().await;
     assert_eq!(
@@ -615,7 +713,7 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
     ));
     assert_eq!(fixture.model.requests().len(), 3);
     let continued = fixture.model.requests().last().unwrap().clone();
-    assert!(!continued.messages.tool_indices().is_empty());
+    assert_ne!(continued.messages.tool_indices(), [] as [usize; 0]);
     assert!(
         !serde_json::to_string(&continued.messages)
             .unwrap()
@@ -793,7 +891,10 @@ async fn host_detach_before_final_transfer_prevents_call_started_and_provider_di
             .unwrap();
         release.send(()).unwrap();
         assert!(submitting.await.unwrap().is_err());
-        assert!(fixture.model.requests().is_empty());
+        assert_eq!(
+            fixture.model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
         assert_eq!(store.auxiliary_audit_cut().unwrap(), before);
         assert!(store.load_auxiliary_submission(name).unwrap().is_none());
         assert!(!matches!(

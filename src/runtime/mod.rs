@@ -28,11 +28,6 @@ pub mod capability_inspection;
 /// eligibility/refusal, admitted Attempt configuration, and cache impact.
 pub mod configuration_commit;
 pub mod continuation;
-/// The conversation runtime coordinator (Issue #61): the semantic owner of
-/// conversation coordination — session model state, attempt admission, the
-/// current-attempt slot, between-attempt current Surface state, durable
-/// request-history reads, the shared lifecycle/drain authority, and
-/// settlement handoff through quiescence.
 pub mod conversation_runtime;
 pub mod identity;
 pub mod inbound;
@@ -54,6 +49,9 @@ pub mod interactive_supervisor;
 /// Runtime-owned monotonic elapsed time for deterministic policy deadlines.
 /// This is separate from the UTC [`RuntimeClock`] timestamp boundary.
 pub mod monotonic;
+/// Fixed execution-permission modes, resource overrides, and the built-in
+/// permission matrix (Issue #544).
+pub mod permission;
 pub(crate) mod read_layout;
 
 /// Generic containment of nested supervised process units created inside a
@@ -93,10 +91,10 @@ pub(crate) mod observation;
 /// its two entry points are empty `const fn`s.
 pub(crate) mod process_death;
 /// The internal owned supervised command runner shared by native Bash and
-/// Skill environment materialization: the M5 Bash process-group lifecycle
-/// extracted so package-manager work reuses the same rustX-owned
-/// supervisor/process-group domain instead of a second independent
-/// subprocess hierarchy. Internal coordination only — it is not part of
+/// Managed Python: the M5 Bash process-group lifecycle extracted so
+/// package-manager work reuses the same rustX-owned supervisor/process-group
+/// domain instead of a second independent subprocess hierarchy. Internal
+/// coordination only — it is not part of
 /// the public runtime API.
 pub(crate) mod process_runner;
 /// The runtime-level Linux/macOS process-supervision prerequisite used by
@@ -146,9 +144,8 @@ pub use conversation_runtime::{
 };
 pub use identity::{
     AgentId, AgentVersionId, ArtifactId, AttemptId, CapabilityRevision, ConversationId, EventId,
-    InteractionId, McpServerId, MessageId, NodeEnvironmentDigest, PythonEnvironmentDigest,
-    RequestId, RuntimeResourceRevision, SkillId, SkillVersionId, ToolCallId, ToolExecutionId,
-    ToolId, TurnId,
+    InteractionId, McpServerId, MessageId, RequestId, RuntimeResourceRevision, SkillId,
+    SkillVersionId, ToolCallId, ToolExecutionId, ToolId, TurnId,
 };
 pub use inbound::{
     ConversationInboundMailbox, InboundBatch, InboundItem, InboundSequence, MailboxError,

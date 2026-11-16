@@ -15,13 +15,16 @@ use std::sync::{Arc, OnceLock};
 
 /// Immutable declarations owned by native Session-node metadata. Omitted
 /// namespaces are unqualified; explicit namespaces are nonempty.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema, Default)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HostToolDefinition {
     pub namespace: Option<String>,
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+    /// Source-default three-mode permission object (Issue #544).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<crate::runtime::permission::ResourcePermissionSet>,
 }
 
 pub trait HostToolDispatcher: Send + Sync {
@@ -139,35 +142,36 @@ pub(crate) fn register(
             return Err("Host Tool shadows an effective tool identity".into());
         }
         let name = definition.canonical_name();
+        let tool_definition = ToolDefinition {
+            id: crate::runtime::identity::ToolId::new(format!("tool-{name}")),
+            name,
+            description: format!(
+                "Application tool {}{}: {}",
+                definition
+                    .namespace
+                    .as_deref()
+                    .map_or(String::new(), |n| format!("{n}.")),
+                definition.name,
+                definition.description
+            ),
+            input_schema: definition.input_schema.clone(),
+            execution_policy: super::ToolExecutionPolicy::ForegroundOnly,
+            replay_policy: super::ToolReplayPolicy::Never,
+            origin: ToolOrigin::Host {
+                namespace: definition.namespace.clone(),
+                name: definition.name.clone(),
+            },
+        };
+        let executor = Arc::new(Executor {
+            definition: definition.clone(),
+            service: service.clone(),
+        });
+        let mut registration = super::executor::ToolRegistration::plain(tool_definition, executor);
+        if let Some(set) = definition.permissions {
+            registration = registration.with_resource_permissions(set);
+        }
         registry
-            .register(
-                ToolDefinition {
-                    id: crate::runtime::identity::ToolId::new(format!("tool-{name}")),
-                    name,
-                    description: format!(
-                        "Application tool {}{}: {}",
-                        definition
-                            .namespace
-                            .as_deref()
-                            .map_or(String::new(), |n| format!("{n}.")),
-                        definition.name,
-                        definition.description
-                    ),
-                    input_schema: definition.input_schema.clone(),
-                    execution_policy: super::ToolExecutionPolicy::ForegroundOnly,
-                    concurrency_policy: super::ToolConcurrencyPolicy::Parallel,
-                    approval_policy: super::ToolApprovalPolicy::Never,
-                    replay_policy: super::ToolReplayPolicy::Never,
-                    origin: ToolOrigin::Host {
-                        namespace: definition.namespace.clone(),
-                        name: definition.name.clone(),
-                    },
-                },
-                Arc::new(Executor {
-                    definition: definition.clone(),
-                    service: service.clone(),
-                }),
-            )
+            .register_registration(registration)
             .map_err(|e| format!("invalid Host Tool registration: {e:?}"))?;
     }
     Ok(())
@@ -249,7 +253,22 @@ mod tests {
             name: "lookup".into(),
             description: "lookup".into(),
             input_schema: serde_json::json!({"type":"object","properties":{},"additionalProperties":false}),
+            permissions: None,
         }
+    }
+
+    #[test]
+    fn registration_carries_authored_resource_permissions() {
+        let mut registry = ToolRegistry::new();
+        let set = crate::runtime::permission::ResourcePermissionSet {
+            plan: crate::runtime::permission::ResourcePermissionValue::Deny,
+            automatic: crate::runtime::permission::ResourcePermissionValue::Default,
+            full_access: crate::runtime::permission::ResourcePermissionValue::Allow,
+        };
+        let mut host = definition(Some("erp"));
+        host.permissions = Some(set);
+        register(&mut registry, &[host], &Arc::default()).unwrap();
+        assert_eq!(registry.registrations()[0].resource_permissions, Some(set));
     }
     #[test]
     fn distinct_namespaces_are_distinct_and_duplicates_are_rejected() {
@@ -272,6 +291,7 @@ mod tests {
             name: name.into(),
             description: "Application lookup".into(),
             input_schema: serde_json::json!({"type":"object","properties":{"key":{"type":"string"}},"required":["key"],"additionalProperties":false}),
+            permissions: None,
         }
     }
     #[test]

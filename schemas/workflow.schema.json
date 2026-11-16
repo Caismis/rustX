@@ -1,5 +1,54 @@
 {
   "$defs": {
+    "ResourcePermissionSet": {
+      "additionalProperties": false,
+      "description": "Complete three-mode permission object for one resource or exact tool.\n\nAn authored object must supply all three entries. Omission of the whole\nobject inherits the winning source default or product defaults.",
+      "properties": {
+        "automatic": {
+          "$ref": "#/$defs/ResourcePermissionValue",
+          "description": "Automatic-mode override."
+        },
+        "full_access": {
+          "$ref": "#/$defs/ResourcePermissionValue",
+          "description": "Full Access-mode override."
+        },
+        "plan": {
+          "$ref": "#/$defs/ResourcePermissionValue",
+          "description": "Plan-mode override."
+        }
+      },
+      "required": [
+        "plan",
+        "automatic",
+        "full_access"
+      ],
+      "type": "object"
+    },
+    "ResourcePermissionValue": {
+      "description": "One mode entry on a resource permission object.\n\nAutomatic model review is never a resource enum value: it is Automatic\nmode's built-in `default` behavior.",
+      "oneOf": [
+        {
+          "const": "default",
+          "description": "Delegate to the selected mode's built-in matrix behavior.",
+          "type": "string"
+        },
+        {
+          "const": "allow",
+          "description": "Allow the call without ordinary approval or Auxiliary review.",
+          "type": "string"
+        },
+        {
+          "const": "ask",
+          "description": "Require human approval for the exact frozen invocation.",
+          "type": "string"
+        },
+        {
+          "const": "deny",
+          "description": "Hard-deny this invocation; elevation cannot override it.",
+          "type": "string"
+        }
+      ]
+    },
     "WorkflowAgentOutput": {
       "description": "The authored output contract of a Workflow Agent node, as Dify's Agent:\nthe final reply is the `text` variable, or a declared schema adds the\nreserved `workflow_output` terminal and its fields are the variables.",
       "oneOf": [
@@ -1104,6 +1153,17 @@
               "$ref": "#/$defs/WorkflowAgentOutput",
               "description": "What the `AgentRun` returns: its final reply text, or a\nstructured value committed through `workflow_output`."
             },
+            "permissions": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/ResourcePermissionSet"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Effective resource permission for this Agent entry only."
+            },
             "profile": {
               "description": "The native named profile to resolve at `AgentRun` admission.",
               "type": "string"
@@ -2073,6 +2133,17 @@
           "type": "null"
         }
       ]
+    },
+    "permissions": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ResourcePermissionSet"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Source-default three-mode permission object for this workflow Tool."
     },
     "timeout_ms": {
       "default": 600000,

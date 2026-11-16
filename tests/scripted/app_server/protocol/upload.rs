@@ -14,9 +14,9 @@ async fn workspace_upload_receipt_admission_and_model_projection_use_one_owner()
         let other = attach(&connection, &f, 1).await;
         let files = binary_upload(&connection, target.clone(), "picture.png", b"NOT_EAGERLY_INJECTED").await;
         let native = f.load(0).await.unwrap().unwrap().inspect_runtime().unwrap();
-        assert!(native.tool_runtime().durable_store().load_canonical().unwrap().is_empty());
+        assert_eq!(native.tool_runtime().durable_store().load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
         rejected(&connection, Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(), target: other, content: vec![UserInputBlock::Upload(files[0].receipt.clone())] }).await;
-        assert!(native.tool_runtime().durable_store().load_canonical().unwrap().is_empty());
+        assert_eq!(native.tool_runtime().durable_store().load_canonical().unwrap(), [] as [crate::message::types::MessageBlock; 0]);
         assert_eq!(std::fs::read(&files[0].path).unwrap(), b"NOT_EAGERLY_INJECTED");
         let body = "request-A\n  exact body  \n";
         call(&connection, 1002, Method::TurnStart { input_id: uuid::Uuid::new_v4().to_string(), target: target.clone(), content: vec![UserInputBlock::Upload(files[0].receipt.clone()), UserInputBlock::Text(crate::message::content::TextBlock { text: body.into() })] }).await;
@@ -135,7 +135,7 @@ async fn lost_upload_waiter_does_not_cancel_or_replay_the_owned_commit() {
                 .count(),
             1
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -356,7 +356,7 @@ async fn binary_upload_one_mib_document_repairs_original_receipts_without_model_
                 .len(),
             1
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         connection.close();
         f.close().await;
     })
@@ -426,7 +426,7 @@ async fn saturated_binary_admission_does_not_hold_control_and_refuses_excess() {
             call(&connection, 9602, Method::SessionDetach { target }).await,
             MethodResult::Detached { .. }
         ));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         for (mut socket, port) in sockets {
             socket.close(None).await.unwrap();
             f.host.uploads().settled.notified().await;
@@ -811,7 +811,7 @@ async fn binary_ready_commit_precedes_lost_reply_and_exact_read_repair() {
                 .unwrap(),
             registry
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         connection.close();
         f.close().await;
     })
@@ -872,9 +872,9 @@ async fn stdio_prepared_upload_is_revoked_when_drain_wins_admission() {
                 .is_empty()
         );
         connection.close();
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         f.host.finish_drain().unwrap();
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
     })
     .await;
 }
@@ -907,7 +907,7 @@ async fn stdio_active_upload_is_owned_until_native_settlement_during_drain() {
         assert!(f.host.finish_drain().is_err());
         assert!(f.host.forced_resources(false).contains("active_uploads=1"));
         drop(release);
-        assert!(draining.await.is_empty());
+        assert_eq!(draining.await, [] as [std::string::String; 0]);
         assert!(f.host.uploads().is_empty());
         f.host.finish_drain().unwrap();
         let registry = controller
@@ -918,7 +918,7 @@ async fn stdio_active_upload_is_owned_until_native_settlement_during_drain() {
             .unwrap();
         assert_eq!(registry.allocations.len(), 1);
         assert!(registry.allocations.values().all(|a| a.ready));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
     })
     .await;
 }
@@ -1032,13 +1032,13 @@ async fn native_user_input_receipts_allow_large_collections_and_preserve_authori
                     .await;
                 }
             }
-            assert!(
+            assert_eq!(
                 native
                     .tool_runtime()
                     .durable_store()
                     .load_canonical()
-                    .unwrap()
-                    .is_empty()
+                    .unwrap(),
+                [] as [crate::message::types::MessageBlock; 0]
             );
             let MethodResult::Checkpoint {
                 checkpoint: checkpoint_19,
@@ -1055,8 +1055,11 @@ async fn native_user_input_receipts_allow_large_collections_and_preserve_authori
                 panic!("snapshot")
             };
             let snapshot = Box::new(checkpoint_19.snapshot);
-            assert!(snapshot.inbound.pending.is_empty());
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(
+                snapshot.inbound.pending,
+                [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+            );
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             assert_eq!(
                 controller
                     .catalog
@@ -1112,7 +1115,7 @@ async fn upload_supervisors_settle_after_success_without_accumulating_expiry_act
             assert!(f.host.uploads().is_empty());
         }
         connection.close();
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         f.host.finish_drain().unwrap();
     })
     .await;
@@ -1149,7 +1152,10 @@ async fn upload_drain_waits_for_revoked_loopback_supervisor_physical_exit() {
             .await
             .unwrap();
         connection.close();
-        assert!(f.manager.drain_all_runtimes().await.is_empty());
+        assert_eq!(
+            f.manager.drain_all_runtimes().await,
+            [] as [std::string::String; 0]
+        );
         assert!(f.host.uploads().is_empty());
         assert_eq!(f.host.uploads().actor_count(), 1);
         assert!(
@@ -1165,7 +1171,7 @@ async fn upload_drain_waits_for_revoked_loopback_supervisor_physical_exit() {
         assert!(futures_util::poll!(&mut drain).is_pending());
         assert!(f.host.finish_drain().is_err());
         drop(release);
-        assert!(drain.await.is_empty());
+        assert_eq!(drain.await, [] as [std::string::String; 0]);
         assert_eq!(f.host.uploads().actor_count(), 0);
         f.host.finish_drain().unwrap();
     })
@@ -1243,7 +1249,7 @@ async fn detached_unconsumed_upload_is_absent_and_releases_supervisor_capacity()
         binary_upload(&replacement, target, "fresh.md", b"new").await;
         f.host.uploads().settle_actors().await;
         replacement.close();
-        assert!(f.host.drain().await.is_empty());
+        assert_eq!(f.host.drain().await, [] as [std::string::String; 0]);
         f.host.finish_drain().unwrap();
     })
     .await;

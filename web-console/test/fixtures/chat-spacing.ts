@@ -1,4 +1,4 @@
-import type { ContentRef, RuntimeClientMessageDescriptor, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v77';
+import type { ContentRef, RuntimeClientMessageDescriptor, RuntimeClientSnapshot, TurnProcessView } from '../../../protocol/app-server/v78';
 import type { Server } from '../fixture';
 import { workflowRunsFixture } from './workflow-runs';
 import { chatFlowFixture } from './chat-flow';
@@ -15,10 +15,10 @@ export function chatSpacingFixture(server: Server, current: RuntimeClientSnapsho
     current.transcript.entries = current.transcript.entries!.slice(0, 2);
     const work = current.transcript.entries[1], message = current.messages[1];
     if (message.role !== 'assistant') throw Error('Expected native calls');
-    message.content.push({ type: 'tool_call', id: 'spacing-bash', tool_id: 'tool-bash', name: 'bash', arguments: { command: 'pwd' } });
+    message.content.push({ type: 'tool_call', id: 'spacing-bash', tool_id: 'tool-bash', name: 'bash', arguments: { arguments: { command: 'pwd' } } });
     work.tool_calls!.push({ assembly_complete: true, committed_result_deferred: false, message_id: message.id, block_index: 2,
       call_id: 'spacing-bash', tool_id: 'tool-bash', name: 'bash', occurrence: { locator: { type: 'by_message_id', message_id: message.id }, block_index: 2 },
-      state: { type: 'settled', arguments: '{"command":"pwd"}', result: { status: { type: 'success' }, duration_ms: '1', content: [{ type: 'text', text: '/workspace/A' }] } } });
+      state: { type: 'settled', arguments: "{\"arguments\":{\"command\":\"pwd\"}}", result: { status: { type: 'success' }, duration_ms: '1', content: [{ type: 'text', text: '/workspace/A' }] } } });
     work.turn_process = { ...work.turn_process!, outcome: 'running', tool_call_count: 3, message_count: 1, final_message_id: null, final_message_locator: null };
     current.attempt = { attempt_id: work.turn_process.attempt_id, phase: { type: 'running' }, turn: 1 };
     return;
@@ -56,7 +56,7 @@ export function chatSpacingFixture(server: Server, current: RuntimeClientSnapsho
     current.message_descriptors.unshift({ identity: message_id, locator, role: 'assistant', kind: 'message', block_count: '1', tool_call_count: '1',
       content: [], collections: [], turn_process: owner, tool_calls: [{ assembly_complete: true, committed_result_deferred: false, message_id, block_index: 0,
         call_id: 'spacing-deferred-bash', tool_id: 'tool-bash', name: 'bash', occurrence: { locator, block_index: 0 },
-        state: { type: 'settled', arguments: '{"command":"pwd"}', result: { status: { type: 'success' }, duration_ms: '1', content: [{ type: 'text', text: '/workspace/A' }] } } }] });
+        state: { type: 'settled', arguments: "{\"arguments\":{\"command\":\"pwd\"}}", result: { status: { type: 'success' }, duration_ms: '1', content: [{ type: 'text', text: '/workspace/A' }] } } }] });
   }
   server.handlers.set('conversation/contentRead', request => {
     if (request.method !== 'conversation/contentRead') throw Error('Expected content read');

@@ -137,7 +137,7 @@ pnpm --dir tui start --connect ws://127.0.0.1:8080 --token-file /private/user/so
 Every initialized trusted connection can use committed-delivery APIs (see `/files`).
 The same token file may contain an opaque capability or a host-issued HS256 JWT.
 
-Both modes use App Server protocol v77. `--config` and `--runtime-root` bind the owned
+Both modes use App Server protocol v78. `--config` and `--runtime-root` bind the owned
 local child process; they do not become Session settings. `--workspace` supplies
 the Session cwd and `--model` supplies explicit Session intent. Remote Workspace
 paths are absolute server paths. The TUI never parses authored configuration or
@@ -237,7 +237,7 @@ or adopts it.
 
 ```text
 bind stdio child or external WebSocket
-  -> initialize (App Server protocol v77)
+  -> initialize (App Server protocol v78)
   -> thread/start or choose a durable Session
   -> resolve the exact Session/node; begin thread/resume and editable connecting
        -> first explicit Send records session/submissionIntent
@@ -750,16 +750,16 @@ Review/Submit remain reachable, and long Markdown previews can be inspected
 with PageUp/PageDown without allowing preview content to displace the option
 list.
 
-The footer displays the authoritative effective mode as `approval POLICY` or
-`approval FULL ACCESS`, and appends `· next attempt …` when the runtime has
-accepted a busy-time mode request that reconciles onto the next attempt —
-changing the desired mode never mutates a running attempt. Full Access is not
-a local prompt suppression switch: it changes
-only effective approval for eligible Tool calls. It cannot activate disabled
-Tools, restore excluded Tools, bypass execution/concurrency restrictions, or
-answer a pending interaction. `/tools` displays each Tool's independent
-execution, concurrency, and approval policy; availability and activation are
-shown separately.
+The footer displays the authoritative effective mode as `approval PLAN`,
+`approval AUTOMATIC`, or `approval FULL ACCESS`, and appends
+`· next attempt …` when the runtime has accepted a busy-time mode request that
+reconciles onto the next attempt — changing the desired mode never mutates a
+running attempt. Full Access is not a local prompt suppression switch: it
+changes only effective approval for eligible Tool calls. It cannot activate
+disabled Tools, restore excluded Tools, bypass execution/concurrency
+restrictions, or answer a pending interaction. `/tools` displays each Tool's
+independent execution ownership; availability, activation, and the three-mode
+permission matrix are shown separately.
 
 ## The model selector
 
@@ -813,12 +813,12 @@ the native coordinator applies independent policy automatically. Tool approval p
 remain runtime-owned interactions; answering one does not change global policy.
 
 The picker, confirmation and footer read native effective/pending facts. During a
-frozen Policy attempt, requesting Full access shows `Current attempt: Policy` and
+frozen Plan attempt, requesting Full access shows `Current attempt: Plan` and
 `Next attempt: Full access`; it does not change the admitted attempt. No optimistic
 mode is stored. Snapshot replacement closes stale overlays and reconstructs
 semantic display; it never replays a control request. With no admitted/running
 attempt (including a settled historical attempt), the picker says `Effective:
-Policy`. A published pending mode still appears separately as `Next attempt`; it
+Plan`. A published pending mode still appears separately as `Next attempt`; it
 does not itself prove a current attempt exists.
 
 ## The model invariant

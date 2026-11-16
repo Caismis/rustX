@@ -229,7 +229,11 @@ test('file tree and source tabs preserve their own view state and use Harness to
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.reload(); await page.locator('[data-preview-toggle]').click();
   await expect(panel.getByRole('tab', { name: 'test.py', exact: false })).toHaveAttribute('aria-selected', 'true');
-  await panel.getByRole('tab', { name: '文件', exact: false }).click();
+  const filesTab = panel.getByRole('tab', { name: '文件', exact: false });
+  // Restored sidebar geometry can still move after the viewport change.
+  // Activate the tab with its keyboard contract, clear of its nested Close.
+  await filesTab.focus(); await filesTab.press('Enter');
+  await expect(filesTab).toHaveAttribute('aria-selected', 'true');
   await panel.getByRole('button', { name: 'src', exact: true }).click();
   await expect(panel.getByRole('button', { name: 'test.py', exact: true })).toBeVisible();
   await panel.screenshot({ path: info.outputPath('files-tree-zh.png') });

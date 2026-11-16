@@ -273,8 +273,7 @@ async fn open_stream(
             let body = response
                 .bytes()
                 .await
-                .map(|bytes| bytes.to_vec())
-                .unwrap_or_default();
+                .map_or_default(|bytes| bytes.to_vec());
             OpeningOutcome::Failed(normalize_http_error(status, &headers, &body))
         }
         Ok(response) => {
@@ -577,15 +576,14 @@ impl AnthropicStreamNormalizer {
                         .latest_usage
                         .as_ref()
                         .filter(|usage| usage_has_evidence(usage))
-                        .map(|usage| {
+                        .map_or_default(|usage| {
                             vec![ModelEvent::UsageUpdate {
                                 usage: normalize_usage(
                                     self.message_start_usage.as_ref(),
                                     Some(usage),
                                 ),
                             }]
-                        })
-                        .unwrap_or_default())
+                        }))
                 }
             }
             WireEvent::MessageStop => self.terminal(),
@@ -611,8 +609,7 @@ impl AnthropicStreamNormalizer {
                         "Anthropic stream error{}: {}",
                         provider_code
                             .as_deref()
-                            .map(|t| format!(" ({t})"))
-                            .unwrap_or_default(),
+                            .map_or_default(|t| format!(" ({t})")),
                         error.message.as_deref().unwrap_or("unknown")
                     ),
                     retry_disposition: stream_retry_disposition(

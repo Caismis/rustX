@@ -169,6 +169,7 @@ impl SqliteConversationStore {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(in crate::durable::sqlite) fn commit_auxiliary_request_start(
         &self,
         start: &AuxiliaryRequestStart,
@@ -313,6 +314,7 @@ impl SqliteConversationStore {
         })
     }
 
+    #[allow(clippy::too_many_lines)]
     pub(in crate::durable::sqlite) fn commit_auxiliary_request_settlement(
         &self,
         request_terminal: RuntimeEventEnvelope,

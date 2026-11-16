@@ -231,7 +231,7 @@ fn request_snapshot_reconstructs_exactly_after_live_state_changes() {
         }))
         .expect("commit historical message");
     let historical_revision = conversation.revision();
-    let mut snapshot = RequestSnapshot::new(
+    let mut snapshot = RequestSnapshot::new(rustx::runtime::types::ApprovalMode::FullAccess,
         RequestIdentity {
             attempt_id: AttemptId::new("attempt-snapshot"),
             turn: TurnId::new("turn-1"),

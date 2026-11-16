@@ -89,7 +89,7 @@ const INCARNATION_ALLOCATION_ATTEMPTS: usize = 8;
 /// The composition inputs one child process is spawned with.
 ///
 /// Everything the child needs that is not process-inheritable travels in
-/// the typed [`SubagentChildSpec`] over the control channel; this plan
+/// the typed `SubagentChildSpec` over the control channel; this plan
 /// carries the spawn-time locations only.
 #[derive(Debug, Clone)]
 pub struct SubagentSpawnPlan {
@@ -819,6 +819,8 @@ fn spawn_process(
         .map_err(|error| SpawnError::WorkspaceSetup {
             detail: error.to_string(),
         })?;
+    crate::tools::execution_environment::publish_child_snapshot(runtime_root.path())
+        .map_err(|detail| SpawnError::Spawn { detail })?;
     let mut command = tokio::process::Command::new(&plan.program);
     command.envs(credentials.iter().map(|(key, value)| (key, value)));
     command
@@ -873,8 +875,8 @@ pub(crate) struct StagedChild {
     /// The nested supervised process units this child has anchored in this
     /// process (Issue #145).
     ///
-    /// External capability preparation — MCP stdio startup, a uv
-    /// environment build, a Skill environment subprocess — happens while
+    /// External capability preparation — MCP stdio startup and a uv
+    /// environment build — happens while
     /// the child is still *staged*, so anchors can exist long before any
     /// durable ownership commit. The staged owner therefore owns them, and
     /// the one ownership commit moves the whole set into the driver task.
@@ -2334,7 +2336,10 @@ mod tests {
                 ..
             })
         ));
-        assert!(settled.nested.unproven.is_empty());
+        assert_eq!(
+            settled.nested.unproven,
+            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+        );
         assert!(
             matches!(
                 nix::sys::signal::kill(
@@ -2842,7 +2847,10 @@ mod tests {
             .unwrap();
         assert!(matches!(settled.outcome, PhysicalOutcome::Lost { .. }));
         assert_eq!(settled.nested.contained, vec![unit]);
-        assert!(settled.nested.unproven.is_empty());
+        assert_eq!(
+            settled.nested.unproven,
+            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+        );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
             Err(nix::errno::Errno::ESRCH)
@@ -2913,7 +2921,10 @@ mod tests {
             matches!(&settled.outcome, PhysicalOutcome::Lost { diagnostic, .. } if diagnostic.contains("unexpected frame after Result"))
         );
         assert_eq!(settled.nested.contained, vec![unit]);
-        assert!(settled.nested.unproven.is_empty());
+        assert_eq!(
+            settled.nested.unproven,
+            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+        );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(group), None),
             Err(nix::errno::Errno::ESRCH)
@@ -3080,7 +3091,10 @@ mod tests {
         assert!(path.exists());
         drop(harness.child); // reliable control EOF releases the physical settlement frontier
         let settlement = tokio::time::timeout(DEADLINE, task).await.unwrap().unwrap();
-        assert!(settlement.nested.unproven.is_empty());
+        assert_eq!(
+            settlement.nested.unproven,
+            [] as [(crate::runtime::identity::ProcessUnitId, std::string::String); 0]
+        );
         assert!(matches!(
             nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), None),
             Err(nix::errno::Errno::ESRCH)
@@ -3239,7 +3253,7 @@ mod tests {
                     crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
                 extensions: crate::extensions::NativeAgentExtensionsDocument::default().resolve(),
             },
-            approval_mode: crate::runtime::ApprovalMode::Policy,
+            approval_mode: crate::runtime::ApprovalMode::FullAccess,
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: crate::context::SessionContextPolicy {

@@ -71,7 +71,7 @@
 //! # Ownership
 //!
 //! Recovery **policy** belongs to the [`ConversationRuntime`] and consumes
-//! [`ConversationStore`] evidence. The store exposes semantic durable facts
+//! [`ConversationStore`](crate::durable::ConversationStore) evidence. The store exposes semantic durable facts
 //! and semantic transactions; it never decides whether an ambiguous request is
 //! safe to replay. Nothing here reads a Runtime Client snapshot, a TUI cache,
 //! an attachment state, current Skill discovery, current `rustx.toml`, or a
@@ -85,7 +85,7 @@
 //! # Bounded working set
 //!
 //! The evidence fold pages the Event Journal
-//! ([`JournalStore::read_events`]) and retains only the *unresolved*
+//! ([`JournalStore::read_events`](crate::durable::store::journal::JournalStore::read_events)) and retains only the *unresolved*
 //! state. Reads are O(history); hot memory is O(unresolved work):
 //!
 //! ```text
@@ -96,7 +96,7 @@
 //!   + O(active Surface attribution)         (bounded by the active working set)
 //! ```
 //!
-//! The tool plane is split across two owners on purpose. [`AttemptEvidence`]
+//! The tool plane is split across two owners on purpose. `AttemptEvidence`
 //! owns a **bounded summary** of the attempt's foreground-tool external
 //! history (did execution happen; is any outcome unknown) that survives the
 //! release of every detailed entry — a fully canonicalized tool call never
@@ -439,6 +439,10 @@ pub struct RecoveryEvidence {
     /// The highest subagent ordinal that entered durable authority,
     /// published or not.
     highest_subagent_ordinal: u64,
+    /// Latest committed primary request, retained even after its Attempt settles.
+    latest_primary_request: Option<RequestId>,
+    /// Canonical task selected only from the exact unresolved adoption.
+    continuation_task_message: Option<MessageId>,
     /// Whether the Event Journal contains any attempt fact at all.
     saw_any_attempt: bool,
     /// The one adopted turn this conversation still owes a model answer for,
@@ -476,6 +480,33 @@ pub struct RecoveryEvidence {
     /// resources, nor the workspace: a stream's settlement follows from its
     /// own frozen historical request and nothing else.
     unsettled_publications: Vec<PublicationStreamRecord>,
+}
+
+/// Choose task provenance only inside the exact outstanding native adoption.
+fn adopted_task_message(adopted: &[MessageBlock]) -> Option<MessageId> {
+    adopted
+        .iter()
+        .rev()
+        .find_map(|message| match message {
+            MessageBlock::User(message)
+                if message.kind == crate::message::InboundKind::Message
+                    && message.source == crate::message::UserSource::Human =>
+            {
+                Some(message.id.clone())
+            }
+            _ => None,
+        })
+        .or_else(|| {
+            adopted.iter().find_map(|message| match message {
+                MessageBlock::User(message)
+                    if message.kind == crate::message::InboundKind::Message
+                        && matches!(message.source, crate::message::UserSource::Agent { .. }) =>
+                {
+                    Some(message.id.clone())
+                }
+                _ => None,
+            })
+        })
 }
 
 impl RecoveryEvidence {
@@ -528,6 +559,8 @@ impl RecoveryEvidence {
             highest_attempt_ordinal: None,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
+            latest_primary_request: None,
+            continuation_task_message: None,
             unanswered_adopted_turn: None,
             unadopted_goal_round: None,
             unsettled_publications: store.load_unsettled_publication_streams()?,
@@ -543,19 +576,31 @@ impl RecoveryEvidence {
         let mut cursor = None;
         let mut background: BTreeMap<ToolExecutionId, BackgroundEvidence> = BTreeMap::new();
         let mut subagents: BTreeMap<SubagentId, SubagentEvidence> = BTreeMap::new();
+        let mut unresolved_adoptions = Vec::new();
         loop {
             let page = store.read_events(cursor, RECOVERY_PAGE)?;
             if page.events.is_empty() {
                 break;
             }
             for envelope in &page.events {
+                if let RuntimeEvent::InboundTurnAdopted { message_ids } = &envelope.event {
+                    unresolved_adoptions.extend_from_slice(message_ids);
+                }
                 evidence.fold(envelope, &mut background, &mut subagents);
+                if evidence.unanswered_adopted_turn.is_none() {
+                    unresolved_adoptions.clear();
+                }
             }
             cursor = page.next_sequence;
             if cursor.is_none() {
                 break;
             }
         }
+        // Only outstanding native adoptions may replace the task from
+        // the latest request. Runtime notices do not erase that task, and a
+        // trailing notice cannot hide a newer Human in the same adopted batch.
+        let adopted = store.load_messages(&unresolved_adoptions)?;
+        evidence.continuation_task_message = adopted_task_message(&adopted);
         evidence.unsettled_background = background.into_values().collect();
         evidence
             .unsettled_background
@@ -652,6 +697,7 @@ impl RecoveryEvidence {
                 request_id,
                 ..
             } => {
+                self.latest_primary_request = Some(request_id.clone());
                 // The adopted turn was carried to the provider. From here the
                 // external-outcome plane owns it: whether it is answered,
                 // indeterminate, or known-and-unsettled is the attempt
@@ -1210,7 +1256,7 @@ pub enum ResumeDisposition {
     /// re-adopted.
     ///
     /// The permission is the durable **answer obligation** of
-    /// [`RuntimeEvent::InboundTurnAdopted`](crate::events::types::RuntimeEvent::InboundTurnAdopted):
+    /// [`RuntimeEvent::InboundTurnAdopted`]:
     /// an adoption transaction committed the turn and neither a
     /// `ModelRequestStarted` nor a *decided* attempt terminal has consumed it
     /// since — a recovery's own `RestartInterrupted` terminal transfers the
@@ -1252,6 +1298,10 @@ pub struct RecoveryPlan {
     resume: ResumeDisposition,
     next_attempt_ordinal: u64,
     highest_subagent_ordinal: u64,
+    /// Latest committed primary request, retained even after its Attempt settles.
+    latest_primary_request: Option<RequestId>,
+    /// Exact adopted input whose unanswered turn is resumed after restart.
+    continuation_task_message: Option<MessageId>,
     pending_inbound: usize,
     /// Every durably non-terminal attempt the fold observed.
     ///
@@ -1361,6 +1411,12 @@ impl RecoveryPlan {
         } else {
             ResumeDisposition::PendingInboundOnly
         };
+        let continuation_task_message = match &resume {
+            ResumeDisposition::ContinueAdoptedTurn { .. } => {
+                evidence.continuation_task_message.clone()
+            }
+            _ => None,
+        };
         Self {
             conversation_id: evidence.conversation_id.clone(),
             attempt,
@@ -1382,6 +1438,8 @@ impl RecoveryPlan {
             resume,
             next_attempt_ordinal: evidence.next_attempt_ordinal(),
             highest_subagent_ordinal: evidence.highest_subagent_ordinal,
+            latest_primary_request: evidence.latest_primary_request.clone(),
+            continuation_task_message,
             pending_inbound: evidence.pending.len(),
             unsettled_attempts: evidence.unsettled_attempts.keys().cloned().collect(),
             tool_summary: evidence.unsettled_attempts.values().next().map(|a| a.tools),
@@ -1709,6 +1767,8 @@ impl RecoveryPlan {
             reconciliation: committed,
             next_attempt_ordinal: self.next_attempt_ordinal,
             highest_subagent_ordinal: self.highest_subagent_ordinal,
+            latest_primary_request: self.latest_primary_request.clone(),
+            continuation_task_message: self.continuation_task_message,
             pending_inbound: self.pending_inbound,
         })
     }
@@ -2158,10 +2218,26 @@ pub struct RecoveryReport {
     reconciliation: RecoveryReconciliation,
     next_attempt_ordinal: u64,
     highest_subagent_ordinal: u64,
+    /// Latest committed primary request, retained even after its Attempt settles.
+    latest_primary_request: Option<RequestId>,
+    /// Adopted input identity of the native recovered continuation, if any.
+    continuation_task_message: Option<MessageId>,
     pending_inbound: usize,
 }
 
 impl RecoveryReport {
+    /// Exact unanswered adoption that recovery permits a new Attempt to resume.
+    #[must_use]
+    pub fn continuation_task_message(&self) -> Option<&MessageId> {
+        self.continuation_task_message.as_ref()
+    }
+
+    /// Exact latest Agent request-start authority, excluding Auxiliary calls.
+    #[must_use]
+    pub fn latest_primary_request(&self) -> Option<&RequestId> {
+        self.latest_primary_request.as_ref()
+    }
+
     /// The deterministic attempt-plane classification.
     #[must_use]
     pub fn attempt_class(&self) -> &AttemptRecoveryClass {
@@ -2324,6 +2400,8 @@ mod tests {
             highest_attempt_ordinal: None,
             highest_subagent_ordinal: 0,
             saw_any_attempt: false,
+            latest_primary_request: None,
+            continuation_task_message: None,
             unanswered_adopted_turn: None,
             unadopted_goal_round: None,
             unsettled_publications: Vec::new(),
@@ -2380,7 +2458,10 @@ mod tests {
         );
 
         fold_all(&mut evidence, &[ownership, terminal]);
-        assert!(evidence.unsettled_subagents.is_empty());
+        assert_eq!(
+            evidence.unsettled_subagents,
+            [] as [crate::runtime::recovery::SubagentEvidence; 0]
+        );
     }
 
     fn trailing_human(id: &str) -> MessageBlock {

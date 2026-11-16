@@ -524,17 +524,13 @@ pub fn bind_accepted_continuation_source(
 /// One canonical tool definition used by adapter tests.
 pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
-    use rustx::tools::types::{
-        ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy,
-    };
+    use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Idempotent,
         origin: ToolOrigin::Builtin,
     }
@@ -961,14 +957,12 @@ pub fn tool_runtime(conversation_id: &str) -> ToolRuntimeFixture {
     tool_runtime_with_store(conversation_id, None)
 }
 
-/// A canonical tool definition with explicit execution/concurrency
-/// policies.
+/// A canonical tool definition with an explicit execution-ownership policy.
 #[must_use]
 pub fn tool_policies(
     name: &str,
     id: &str,
     execution: rustx::tools::types::ToolExecutionPolicy,
-    concurrency: rustx::tools::types::ToolConcurrencyPolicy,
 ) -> rustx::tools::types::ToolDefinition {
     use rustx::runtime::identity::ToolId;
     use rustx::tools::types::{ToolDefinition, ToolOrigin, ToolReplayPolicy};
@@ -978,8 +972,6 @@ pub fn tool_policies(
         description: format!("Tool {name}"),
         input_schema: serde_json::json!({"type": "object", "properties": {}}),
         execution_policy: execution,
-        concurrency_policy: concurrency,
-        approval_policy: rustx::tools::types::ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     }
@@ -1045,15 +1037,11 @@ pub fn native_fixture_with_environment(environment: Vec<(String, String)>) -> Na
 /// preflight into the native executor.
 #[must_use]
 pub fn model_selectable_native_fixture() -> NativeFixture {
-    use rustx::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolExecutionPolicy, ToolInvocationPolicy,
-    };
+    use rustx::tools::types::{ToolExecutionPolicy, ToolInvocationPolicy};
     native_fixture_with(
         Vec::new(),
         rustx::tools::native::NativeToolPolicies::uniform(ToolInvocationPolicy::new(
             ToolExecutionPolicy::ModelSelectable,
-            ToolConcurrencyPolicy::Sequential,
-            ToolApprovalPolicy::Never,
         )),
     )
 }
@@ -1231,7 +1219,7 @@ pub async fn run_tool_with_cancellation(
         id: ToolCallId::new("call-m5"),
         tool_id: definition.id,
         name: name.to_owned(),
-        arguments,
+        arguments: tool_call_envelope(arguments),
     };
     let outcome = fixture.registry.preflight(&call).expect("preflight");
     let PreflightOutcome::Ready(prepared) = outcome else {
@@ -1252,6 +1240,22 @@ pub async fn run_tool_with_cancellation(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
+    let context = match context.bind_mutation_target(&prepared) {
+        Ok(context) => context,
+        Err(error) => {
+            return rustx::tools::types::ToolExecutionResult {
+                deliveries: Vec::new(),
+                status: rustx::tools::types::ToolExecutionStatus::Failed { error },
+                content: Vec::new(),
+                duration_ms: 0,
+                exit_code: None,
+                artifacts: Vec::new(),
+                truncation: None,
+                workflow: None,
+                managed_output: None,
+            };
+        }
+    };
     executor
         .start(prepared.invocation, context)
         .completion
@@ -1262,49 +1266,15 @@ pub async fn run_tool_with_cancellation(
 pub async fn run_tool(
     fixture: &NativeFixture,
     name: &str,
-    mut arguments: serde_json::Value,
+    arguments: serde_json::Value,
 ) -> rustx::tools::types::ToolExecutionResult {
-    use rustx::runtime::identity::ToolCallId;
-    use rustx::tools::executor::{PreflightOutcome, ToolExecutionContext};
-    use rustx::tools::types::ToolCall;
-    let definition = fixture
-        .registry
-        .definitions()
-        .into_iter()
-        .find(|definition| definition.name == name)
-        .expect("tool registered");
-    if definition.execution_policy == rustx::tools::types::ToolExecutionPolicy::ModelSelectable {
-        arguments["execution_mode"] = serde_json::json!("foreground");
-    }
-    let call = ToolCall {
-        id: ToolCallId::new("call-m5"),
-        tool_id: definition.id,
-        name: name.to_owned(),
+    run_tool_with_cancellation(
+        fixture,
+        name,
         arguments,
-    };
-    let outcome = fixture.registry.preflight(&call).expect("preflight");
-    let PreflightOutcome::Ready(prepared) = outcome else {
-        panic!("direct native tool calls preflight as ready");
-    };
-    let executor = fixture.registry.executor(&prepared.invocation.tool_id);
-    let reporter = NoopProgress;
-    let context = ToolExecutionContext::new(
-        fixture.runtime.conversation_id(),
-        None,
-        rustx::runtime::ExecutionCancellation::detached(
-            rustx::runtime::CancellationSignal::new(),
-            rustx::runtime::types::CancellationReason::UserRequested,
-        ),
-        fixture.runtime.workspace(),
-        &reporter,
-        fixture.runtime.artifacts(),
-        fixture.runtime.tool_output(),
-        fixture.runtime.environment(),
-    );
-    executor
-        .start(prepared.invocation, context)
-        .completion
-        .await
+        rustx::runtime::CancellationSignal::new(),
+    )
+    .await
 }
 
 /// One canonical compiled model-facing tool definition used by adapter
@@ -1327,10 +1297,7 @@ pub fn model_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinit
 pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinition {
     use rustx::runtime::identity::ToolId;
     use rustx::tools::compile_model_definition;
-    use rustx::tools::types::{
-        ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy, ToolOrigin,
-        ToolReplayPolicy,
-    };
+    use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
     compile_model_definition(&ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
@@ -1341,8 +1308,6 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
             "required": ["command"],
         }),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
     })
@@ -1350,7 +1315,7 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
 }
 
 /// Asserts one provider tool-parameter payload carries the compiled
-/// `execution_mode` selector verbatim next to the untouched business schema.
+/// `execution_mode` selector outside the required business `arguments`.
 ///
 /// Provider adapters are policy-unaware: they translate the already-compiled
 /// [`rustx::tools::types::ModelToolDefinition`] and never inject, rename, or
@@ -1377,13 +1342,29 @@ pub fn assert_compiled_execution_mode_schema(
         "the selector is required: {parameters}"
     );
     assert!(
-        required.contains(&serde_json::json!(business_property)),
-        "the tool's own required arguments survive decoration: {parameters}"
+        required.contains(&serde_json::json!("arguments")),
+        "the business object is required: {parameters}"
     );
-    assert_eq!(
-        parameters["properties"][business_property]["type"],
-        serde_json::json!("string"),
-        "the business schema reaches the provider untouched: {parameters}"
+    let validator = jsonschema::Validator::new(parameters).expect("compiled provider schema");
+    let mut business = serde_json::json!({});
+    business[business_property] = serde_json::json!("printf actual");
+    for mode in ["foreground", "background"] {
+        assert!(validator.is_valid(&serde_json::json!({
+            "arguments": business, "execution_mode": mode,
+        })));
+    }
+    assert!(
+        !validator.is_valid(&serde_json::json!({
+            "arguments": {}, "execution_mode": "foreground",
+        })),
+        "the original business property remains required"
+    );
+    business[business_property] = serde_json::json!(7);
+    assert!(
+        !validator.is_valid(&serde_json::json!({
+            "arguments": business, "execution_mode": "foreground",
+        })),
+        "the original business property remains a string"
     );
     assert!(
         !parameters.to_string().contains("__rustx_execution"),
@@ -1574,267 +1555,6 @@ pub async fn capability_lease_with(
     }
 }
 
-// ---------------------------------------------------------------------------
-// M6: fake Skill environment backend
-// ---------------------------------------------------------------------------
-
-/// One recorded backend call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendCall {
-    /// A runtime version resolution.
-    ResolvePython,
-    /// A runtime version resolution.
-    ResolveNode,
-    /// A Python environment materialization directly into its final digest directory.
-    MaterializePython,
-    /// A Node environment materialization into a staging directory.
-    MaterializeNode,
-}
-
-/// The deterministic fake Skill environment backend: scripted runtime
-/// versions, scripted materialization failures, a deterministic
-/// materialization gate (for atomic-publication tests), and a complete
-/// call record. No test ever touches a public package registry.
-#[derive(Clone)]
-pub struct FakeSkillEnvironmentBackend {
-    inner: std::sync::Arc<FakeBackendInner>,
-}
-
-struct FakeBackendInner {
-    python_runtime: std::sync::Mutex<String>,
-    python_package_manager: std::sync::Mutex<String>,
-    node_runtime: std::sync::Mutex<String>,
-    node_package_manager: std::sync::Mutex<String>,
-    python_failure: std::sync::Mutex<Option<String>>,
-    node_failure: std::sync::Mutex<Option<String>>,
-    calls: std::sync::Mutex<Vec<BackendCall>>,
-    materialize_gate: std::sync::Mutex<Option<MaterializeGate>>,
-}
-
-/// The deterministic materialization gate: the fake signals `entered` when
-/// materialization begins and blocks until `release` is sent, so a test can
-/// observe the store state between materialization and publication.
-pub struct MaterializeGate {
-    entered_tx: tokio::sync::watch::Sender<bool>,
-    entered_rx: tokio::sync::watch::Receiver<bool>,
-    release_tx: tokio::sync::watch::Sender<bool>,
-    release_rx: tokio::sync::watch::Receiver<bool>,
-}
-
-impl MaterializeGate {
-    /// Test side: waits until the fake's materialization provably began.
-    pub async fn await_entered(&self) {
-        let mut rx = self.entered_rx.clone();
-        if !*rx.borrow() {
-            let _ = rx.changed().await;
-        }
-    }
-
-    /// Test side: releases the blocked materialization.
-    pub fn release(&self) {
-        let _ = self.release_tx.send(true);
-    }
-}
-
-impl FakeSkillEnvironmentBackend {
-    /// A deterministic fake backend with fixed scripted runtime versions.
-    #[must_use]
-    pub fn new() -> Self {
-        Self {
-            inner: std::sync::Arc::new(FakeBackendInner {
-                python_runtime: std::sync::Mutex::new("Python 3.12.3".to_owned()),
-                python_package_manager: std::sync::Mutex::new(
-                    "pip 24.0 from /usr/lib/python3/dist-packages/pip (python 3.12)".to_owned(),
-                ),
-                node_runtime: std::sync::Mutex::new("v22.1.0".to_owned()),
-                node_package_manager: std::sync::Mutex::new("10.2.3".to_owned()),
-                python_failure: std::sync::Mutex::new(None),
-                node_failure: std::sync::Mutex::new(None),
-                calls: std::sync::Mutex::new(Vec::new()),
-                materialize_gate: std::sync::Mutex::new(None),
-            }),
-        }
-    }
-
-    /// Scripts the Python runtime identity (a runtime-version change
-    /// changes the environment digest).
-    pub fn set_python_runtime(&self, version: &str) {
-        version.clone_into(&mut *self.inner.python_runtime.lock().expect("fake lock"));
-    }
-
-    /// Scripts the Node runtime identity.
-    pub fn set_node_runtime(&self, version: &str) {
-        version.clone_into(&mut *self.inner.node_runtime.lock().expect("fake lock"));
-    }
-
-    /// Scripts a Python materialization failure (the next Python
-    /// materialization fails with this message).
-    pub fn fail_python_materialization(&self, message: &str) {
-        *self.inner.python_failure.lock().expect("fake lock") = Some(message.to_owned());
-    }
-
-    /// Scripts a Node materialization failure.
-    pub fn fail_node_materialization(&self, message: &str) {
-        *self.inner.node_failure.lock().expect("fake lock") = Some(message.to_owned());
-    }
-
-    /// Installs the deterministic materialization gate.
-    pub fn install_materialize_gate(&self) -> MaterializeGate {
-        let (entered_tx, entered_rx) = tokio::sync::watch::channel(false);
-        let (release_tx, release_rx) = tokio::sync::watch::channel(false);
-        let gate = MaterializeGate {
-            entered_tx,
-            entered_rx,
-            release_tx,
-            release_rx,
-        };
-        *self.inner.materialize_gate.lock().expect("fake lock") = Some(gate.clone_for_test());
-        gate
-    }
-
-    /// The recorded backend calls in order.
-    pub fn calls(&self) -> Vec<BackendCall> {
-        self.inner.calls.lock().expect("fake lock").clone()
-    }
-
-    /// The number of materialization calls of one ecosystem.
-    pub fn materialization_count(&self, ecosystem: rustx::skills::Ecosystem) -> usize {
-        let call = match ecosystem {
-            rustx::skills::Ecosystem::Python => BackendCall::MaterializePython,
-            rustx::skills::Ecosystem::Node => BackendCall::MaterializeNode,
-        };
-        self.calls().into_iter().filter(|c| *c == call).count()
-    }
-
-    fn record(&self, call: BackendCall) {
-        self.inner.calls.lock().expect("fake lock").push(call);
-    }
-
-    async fn gate(&self) {
-        let gate = self
-            .inner
-            .materialize_gate
-            .lock()
-            .expect("fake lock")
-            .clone();
-        if let Some(gate) = gate {
-            let _ = gate.entered_tx.send(true);
-            let mut release = gate.release_rx.clone();
-            if !*release.borrow() {
-                let _ = release.changed().await;
-            }
-        }
-    }
-}
-
-impl Clone for MaterializeGate {
-    fn clone(&self) -> Self {
-        Self {
-            entered_tx: self.entered_tx.clone(),
-            entered_rx: self.entered_rx.clone(),
-            release_tx: self.release_tx.clone(),
-            release_rx: self.release_rx.clone(),
-        }
-    }
-}
-
-impl MaterializeGate {
-    fn clone_for_test(&self) -> Self {
-        self.clone()
-    }
-}
-
-impl Default for FakeSkillEnvironmentBackend {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl rustx::skills::SkillEnvironmentBackend for FakeSkillEnvironmentBackend {
-    fn resolve_runtime_versions(
-        &self,
-        ecosystem: rustx::skills::Ecosystem,
-    ) -> futures_util::future::BoxFuture<'_, Result<rustx::skills::RuntimeVersions, String>> {
-        Box::pin(async move {
-            self.record(match ecosystem {
-                rustx::skills::Ecosystem::Python => BackendCall::ResolvePython,
-                rustx::skills::Ecosystem::Node => BackendCall::ResolveNode,
-            });
-            match ecosystem {
-                rustx::skills::Ecosystem::Python => Ok(rustx::skills::RuntimeVersions {
-                    runtime: self.inner.python_runtime.lock().expect("fake lock").clone(),
-                    package_manager: self
-                        .inner
-                        .python_package_manager
-                        .lock()
-                        .expect("fake lock")
-                        .clone(),
-                }),
-                rustx::skills::Ecosystem::Node => Ok(rustx::skills::RuntimeVersions {
-                    runtime: self.inner.node_runtime.lock().expect("fake lock").clone(),
-                    package_manager: self
-                        .inner
-                        .node_package_manager
-                        .lock()
-                        .expect("fake lock")
-                        .clone(),
-                }),
-            }
-        })
-    }
-
-    fn materialize_python<'a>(
-        &'a self,
-        environment_dir: &'a std::path::Path,
-        _dependencies: &'a std::collections::BTreeMap<String, String>,
-    ) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
-        Box::pin(async move {
-            self.record(BackendCall::MaterializePython);
-            self.gate().await;
-            if let Some(message) = self.inner.python_failure.lock().expect("fake lock").take() {
-                return Err(message);
-            }
-            std::fs::create_dir_all(environment_dir.join("bin"))
-                .map_err(|error| error.to_string())?;
-            std::fs::write(
-                environment_dir.join("bin").join("python"),
-                b"#!fake python\n",
-            )
-            .map_err(|error| error.to_string())?;
-            std::fs::write(
-                environment_dir.join("bin").join("fake-tool"),
-                format!("#!{}\n", environment_dir.join("bin/python").display()),
-            )
-            .map_err(|error| error.to_string())?;
-            std::fs::create_dir_all(environment_dir.join("lib/python3.12/site-packages"))
-                .map_err(|error| error.to_string())?;
-            Ok(())
-        })
-    }
-
-    fn materialize_node<'a>(
-        &'a self,
-        staging: &'a std::path::Path,
-        _dependencies: &'a std::collections::BTreeMap<String, String>,
-    ) -> futures_util::future::BoxFuture<'a, Result<(), String>> {
-        Box::pin(async move {
-            self.record(BackendCall::MaterializeNode);
-            self.gate().await;
-            if let Some(message) = self.inner.node_failure.lock().expect("fake lock").take() {
-                return Err(message);
-            }
-            std::fs::create_dir_all(staging.join("node_modules/.bin"))
-                .map_err(|error| error.to_string())?;
-            std::fs::write(
-                staging.join("node_modules").join(".bin").join("tool"),
-                b"#!fake tool\n",
-            )
-            .map_err(|error| error.to_string())?;
-            Ok(())
-        })
-    }
-}
-
 /// Explicit source demand for fixture composition, with an inert package catalog.
 pub fn source_demand(
     workspace: &std::path::Path,
@@ -1999,4 +1719,23 @@ pub fn native_domain_catalog(
         panic!("bounded native catalog page");
     };
     native_catalog_page(page)
+}
+
+/// Compile this suite's business-call DSL to the current invocation envelope.
+pub fn tool_call_envelope(arguments: serde_json::Value) -> serde_json::Value {
+    let mut business = arguments;
+    let mode = business
+        .as_object_mut()
+        .and_then(|fields| fields.remove("execution_mode"));
+    let reason = business
+        .as_object_mut()
+        .and_then(|fields| fields.remove("elevation_reason"));
+    let mut envelope = serde_json::json!({"arguments":business});
+    if let Some(mode) = mode {
+        envelope["execution_mode"] = mode;
+    }
+    if let Some(reason) = reason {
+        envelope["elevation_reason"] = reason;
+    }
+    envelope
 }

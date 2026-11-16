@@ -2,7 +2,7 @@ import { presentationWarning } from '../../document/diagnostics';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useSelector } from '@xstate/react';
 import clsx from 'clsx';
-import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v77';
+import type { WorkflowFileSummary } from '../../../../../../protocol/app-server/v78';
 import { useTranslation } from '../../../../locale/react';
 import { CatalogSearch, CatalogViewSwitch } from '../../../../presentation/catalog/CatalogControls';
 import css from '../../../../presentation/catalog/Catalog.module.css';

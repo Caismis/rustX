@@ -279,7 +279,7 @@ async fn initialize_alone_establishes_the_attachment() {
         .as_str()
         .expect("the runtime returns the attachment identity")
         .to_owned();
-    assert!(!attachment_id.is_empty());
+    assert_ne!(attachment_id, "");
     assert_eq!(
         response["result"]["conversation_id"],
         "conv_bec42b36-775e-75ba-95e2-701564095b4a"

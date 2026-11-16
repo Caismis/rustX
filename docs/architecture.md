@@ -1,5 +1,15 @@
 # Architecture
 
+## Rust engineering ownership (#560)
+
+Rust 1.100 is the sole compiler baseline. Native companions follow one
+executable-sibling deployment contract; Cargo test preparation binds and stages
+actual emitted artifacts instead of inferring intermediate directory layouts.
+Workspace Python keeps guard, interpreter and preparation ownership in private
+modules. Session Controller operations and Workflow compilation/catalog modules
+retain their original native authorities and public paths. See the
+[engineering report](evidence/issue-560-final-report.md) and its disposition maps.
+
 ## App Server environment services (#533)
 
 The v77 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).
@@ -240,7 +250,7 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 84, defined by `SQLITE_SCHEMA_VERSION`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests and an explicit owner on every model-request start. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Older schemas are refused without migration.
+The current SQLite development schema is 88, defined by `SQLITE_SCHEMA_VERSION`. Version 88 adds `workflow_definition_snapshots`, `workflow_snapshot_chunks`, and `workflow_run_snapshots`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests, an explicit owner on every model-request start, and atomic run-start immutable definition snapshots. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Older schemas are refused without migration.
 
 Version 78 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -759,7 +769,7 @@ ordinary capability preparation: cancellation root, inactive lifecycle admission
 source slots, immutable transport bindings, invalidation epochs and retirement
 supervision travel together. Draft preparation resolves only selected configured
 MCP demand from Root and enabled Workflows. It creates no durable Session, Python
-or Skill environment, provider request, upload receipt or executable capability.
+build, provider request, upload receipt or executable capability.
 
 An actual Web Send carries its draft target in `thread/start`. Synchronous
 native connection admission records the monotonic receipt and seals one exact
@@ -959,9 +969,10 @@ Foreground tool results retain one slot per model call and canonical model
 call order. A committed background execution survives attempt cancellation
 but not conversation drain. The process runner's existing physical proof is
 composed transitively; no global process registry is introduced. Capability
-preparation is counted until its owner returns, so shared `EnvironmentStore`
-materialization is not cancelled globally by one conversation but cannot
-create a late runtime callback or revision. Retained conversation-owned MCP
+preparation is counted until its owner returns and cannot create a late
+runtime callback or revision. Managed Python uv builds stay under the
+environment-store `python-tools` root and are not cancelled globally by one
+conversation. Retained conversation-owned MCP
 stdio runtimes are explicitly closed and physically settled before
 quiescence; an unproven process or notification-task settlement is reported
 as a runtime failure, not as successful shutdown. All runtime capability
@@ -981,14 +992,13 @@ conversation-owned rendezvous, not a second execution engine:
 ```text
 ToolRegistry preflight
   -> canonical Assistant ToolCall commit
-  -> effective ToolApprovalPolicy / ApprovalMode
-       Never ------------------------------┐
-       Always -> AttemptLifecycle::pre_tool│
+  -> ExecutionPermissionMode via PreToolPolicy (Issue #544)
        Allow ------------------------------┐
        Deny -> one typed denied result      │
-       Ask -> InteractionCoordinator       │
+       Elevate/Ask -> InteractionCoordinator│
                    -> Runtime Client       │
                    <- typed response       │
+       Automatic Review -> Auxiliary       │
        -> existing cancellation/start frontier
        -> exact original PreparedInvocation, or one result slot
 ```
@@ -1026,12 +1036,11 @@ crate-private `QuestionnaireRequester` containing the attempt identity, the
 owner-observing `ExecutionCancellation` capability, and that coordinator. A standalone
 inert execution has no interaction provider and therefore fails an `Ask`
 closed. The configured
-`ToolApprovalPolicy` is resolved only after exact registry preflight. The
-runtime-wide `ApprovalMode` then computes effective approval: `Policy` keeps
-the Tool's `Never`/`Always` value, while `FullAccess` maps eligible calls to
-`Never` without changing any Tool definition. This issue does not add a
-permission language, risk-classification engine, allowlist, routing layer, or
-form framework.
+Execution permission uses the Issue #544 closed modes (`plan` / `automatic` /
+`full_access`) after exact registry preflight. `ConfiguredApprovalPolicy`
+applies the built-in matrix, resource three-mode overrides, elevation, and
+Automatic Auxiliary review — see `docs/permission-modes.md`. There is no
+per-tool `ToolApprovalPolicy`, custom permission language, or routing layer.
 `PreToolPolicy` runs only after registry identity resolution, reserved metadata
 stripping, tool-owned semantic normalization, and business-argument
 validation, and after the Assistant `ToolCall` is canonical. For `ask_user`,
@@ -1043,9 +1052,10 @@ cannot rediscover model-argument validity. The policy cannot resolve a tool,
 dispatch it, or alter the prepared invocation.
 
 Questionnaire is a separate bounded interaction kind, not an approval
-variant. The native `ask_user` Tool uses the ordinary Tool Plane path and
-fixed foreground/sequential/approval-never policy. One invocation is one
-coordinator interaction, even when it contains several related questions:
+variant. The native `ask_user` Tool uses the ordinary Tool Plane path with
+fixed foreground-only ownership; permission follows the Issue #544 matrix
+(Allow in every mode). One invocation is one coordinator interaction, even
+when it contains several related questions:
 
 ```text
 Assistant ToolCall(ask_user)
@@ -1869,8 +1879,17 @@ tools/managed_output.rs    ManagedToolOutput: the conversation-owned managed
 tools/artifacts.rs         ArtifactStore: conversation-owned opaque monotonic
                            artifact ids with streaming spooling (genuine
                            semantic artifacts only — never textual overflow)
-tools/environment.rs       ToolEnvironment: the explicit authorized child
-                           environment (no wholesale parent inheritance)
+tools/environment.rs       ToolEnvironment: excluded executors use a fixed
+                           PATH and workspace HOME; native Bash carries a
+                           frozen host-derived command environment
+tools/execution_environment.rs
+                           Captures the launched host once and composes native
+                           Agent, Workflow, and Subagent Bash
+tools/workspace_python.rs  One Workspace `.venv`: reuse a valid environment,
+                           or create it with uv >= 0.10.0 without blocking
+                           registration or model turns; process/host drain owns
+                           cancellation and joins; original root identity and
+                           input generation fence execution and Ready
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            background executions (lifecycle state machine,
                            dispatch ownership commit, cancel-vs-complete
@@ -2607,132 +2626,87 @@ The three policy axes are independent:
   `ModelSelectable`) decides ownership and settlement: foreground work is
   attempt-owned and physically cancellable, background work is
   conversation-owned and detached after accepted dispatch.
-- [`ToolConcurrencyPolicy`] (`Sequential` / `Parallel`) decides scheduling
-  within one tool-call batch: a `Sequential` invocation is an exclusive
-  barrier, adjacent `Parallel` invocations run as one group.
-- [`ToolApprovalPolicy`] (`Never` / `Always`) decides whether an eligible
-  invocation publishes a native Approval before the executor starts. The
-  runtime `ApprovalMode` is a separate control-plane override: `Policy`
-  consults this axis and `FullAccess` makes effective approval `Never` only.
+- Tool-level Sequential/Parallel authoring is removed (Issue #544). Independent
+  authorized calls may start concurrently; ToolResults still commit in original
+  call order. Domain owners (Todo, Goal, …) retain their own barriers.
+- [`ApprovalMode`] (`plan` / `automatic` / `full_access`) is the closed
+  execution-permission control plane. Per-tool Never/Always approval axes are
+  gone; see `docs/permission-modes.md`.
 
-The canonical input schema is tool-owned and never mutated. For
-`ModelSelectable` tools the model-facing compiler decorates a clone with the
-required top-level `execution_mode` field
-(`{"type": "string", "enum": ["foreground", "background"]}`, carrying a
-model-facing description of the ownership decision) and appends a
-runtime-owned reminder to the compiled description. The contract is:
+The canonical input schema is tool-owned and never mutated. Every ordinary
+model Tool call uses one strict invocation envelope:
 
-```text
-ModelSelectable
-    ⇒ the model must explicitly choose execution_mode per invocation
-    ⇒ preflight resolves ownership once
-    ⇒ the runtime strips execution_mode
-    ⇒ the executor never sees model-facing runtime metadata
+```json
+{
+  "arguments": {"command": "status"},
+  "execution_mode": "foreground",
+  "elevation_reason": null
+}
 ```
 
-The runtime extracts the field, resolves the canonical mode, strips it, and
-validates the remaining business arguments against the original schema
-before dispatch. A missing or invalid `execution_mode` is a deterministic
-preflight rejection carrying the exact retry the model needs; it is never
-defaulted to foreground. `ForegroundOnly`/`BackgroundOnly` definitions are
-compiled verbatim — no synthetic field is injected and ownership resolves
-from the fixed policy alone.
+`arguments` contains only business input. `execution_mode` is declared and
+required only for `ModelSelectable`; fixed policies resolve ownership without
+that outer field. `elevation_reason` is optional permission metadata, never
+approval evidence. Preflight rejects flat calls and unknown envelope fields,
+resolves ownership once, normalizes business input, and validates it against
+the captured canonical validator before dispatch. Executors receive only the
+business object. Its properties may be named `execution_mode`,
+`elevation_reason`, `arguments`, or `__rustx_*` without becoming runtime
+metadata. Only the envelope owns the runtime namespace.
 
-`ModelSelectable` is the one policy under which rustX must *write into* a
-tool's root schema, so it is the one policy that constrains the root's shape.
-Under it a canonical schema must match the **decoratable root profile**: the
-root object's instance semantics are owned entirely by
-
-```text
-type   properties   required   additionalProperties
-```
-
-alongside any purely descriptive root keyword (`$schema`, `$id`, `$comment`,
-`$defs`/`definitions`, `title`, `description`, `default`, `examples`,
-`deprecated`, `readOnly`, `writeOnly`). Every other root keyword is refused,
-whatever draft introduced it.
-
-One further rule reaches past the root. Decoration is an *in-place* edit, so
-it is only sound while the root schema is the sole description of the root
-instance — and a reference can re-enter the decorated root from any depth. A
-schema whose `child` property is `{"$ref": "#"}` would make the injected
-selector propagate into nested business objects, so `$ref`, `$dynamicRef`,
-and `$recursiveRef` are refused throughout a `ModelSelectable` canonical
-schema. rustX refuses them outright instead of resolving URIs to decide which ones
-reach the root: that decision is a JSON Schema reference resolver, and this
-contract is meant to be checkable by inspection. The scan descends only
-through positions JSON Schema defines as carrying subschemas, so a `$ref` key
-that is really a property name (under `dependentRequired`, or the Draft-7
-`dependencies` list shape) or annotation data under an unrecognized keyword
-is left alone rather than misread as an applicator. Apart from references,
-nested subschemas stay unrestricted — a business property may hold
-composition, cardinality assertions, and an `execution_mode` of its own.
-
-This is an allowlist on purpose. Injecting a required `execution_mode`
-property changes what the root instance must look like, so *any* root
-assertion rustX does not understand can silently contradict the injection —
-`maxProperties` capping the object below the new required count, a root
-`const`/`enum` pinning the whole object, a Draft-7 `dependencies` demanding
-the stripped selector, a composition branch that never learned about it.
-Every one of them produces the same fatal outcome: the tool registers, the
-schema compiles, and no correct model call can ever exist. Enumerating
-hazards could never be proven complete, so the profile enumerates what is
-*safe* instead.
-
-On top of the profile, rustX rejects a **claim on the reserved name**:
-`execution_mode` declared in root `properties`, demanded in root `required`,
-or both. This check is separate because `properties` and `required` are
-inside the profile. The bare `required` entry matters as much as the declared
-property — the runtime strips the selector *before* the canonical schema
-validates anything, so such a tool would register successfully, receive a
-perfectly correct model call, and reject it forever.
-
-Every error tells the human to rename the business field, flatten the root to
-the profile, inline the reference, or choose a non-`ModelSelectable` policy.
-rustX never renames, shadows, merges, or reinterprets a collision.
-
-Together the three rules give compilation a provable contract rather than a
-safe-looking root syntax — the **projection equivalence** that "clone and
-decorate the root" actually claims:
+The compiler closes the business schema over its original resource identities
+using the validator's reference resolver. Each resource retains its dialect
+and dynamic scope; legacy reference siblings, recursive references, finite
+root values, property-name assertions, compositions and literal business data
+retain their original meaning. Runtime metadata is never inserted into those
+business schemas. For valid metadata, the compilation contract is:
 
 ```text
-canonical(B) ⇔ compiled(B + top-level execution_mode)
+canonical(B) ⇔ compiled({arguments: B, ...runtime_metadata})
 ```
 
-For any business arguments `B` and either mode the canonical and compiled
-schemas must agree, and any invocation the compiled schema accepts must
-satisfy the canonical schema once the top-level selector is stripped. Each
-rejection class closes one way of breaking it: a root assertion decoration
-contradicts, a claim stripping can never satisfy, and a reference that
-carries the injected property into nested objects — which breaks the
-equivalence in both directions at once.
+Schema compilation never reads host files or network resources. The native
+resource owner supplies the complete document, including any captured resource
+bytes bundled under `definitions` or `$defs` with their original resource IDs.
+A `file:`, HTTP or HTTPS URI is only an identity, never permission to retrieve
+or disclose its target. References to resources absent from that document fail
+before host access; the engine's built-in metaschemas remain available.
+Registration atomically freezes those supplied resources, the canonical
+validator and the compiled model definition. Catalog observation, active
+selection, cloning and individual calls reuse those artifacts without schema
+I/O. Catalog declaration checks validate structure without resolving references;
+executable admission performs full compilation. Duplicate identities, invalid
+schemas, invalid policies and background-capable controls fail registration.
+The `workflow_output` terminal protocol is separate from ordinary capabilities
+and retains its explicitly declared completion schema.
 
-None of the three rules applies under `ForegroundOnly`/`BackgroundOnly`,
-which receive no injected field: an arbitrary composed, reference-heavy root
-stays valid there, `execution_mode` included. That scoping is load-bearing —
-the native `ask_user` questionnaire is a normal closed root object and MCP
-servers may ship arbitrary JSON Schema — so the policy-unaware
-`validate_canonical_schema` must stay permissive. The contract therefore lives
-in the bounded layer that owns both the effective policy and the compiled
-model-facing schema.
+Provider adapters translate compiled `ModelToolDefinition` values verbatim;
+they never decode runtime metadata. Trace keeps the original proposal envelope,
+while client tool displays read its business object. Approval and Workflow
+native invocation facts already carry business arguments and do not cross this
+model-call decoding boundary.
 
-Separately, the `__rustx_` top-level property namespace remains reserved for
-other runtime concerns under every policy: no canonical schema may claim one
-and no invocation may carry one. Tool-owned argument normalization, where
-present, runs between stripping and canonical validation. Native Edit's known
-malformed argument spellings are handled there; provider adapters and the
-Agent Loop remain unaware of them. `ModelRequest.tools` carries the compiled
-[`ModelToolDefinition`] values only — provider adapters translate them
-verbatim and never decide execution semantics, and no tool (Bash included)
-implements `execution_mode` handling of its own.
+Permission admission also owns execution evidence. Git argv alone cannot
+exclude repository-configured clean, diff, textconv, signing or other helpers,
+so Git calls are `Unproven` and follow the permission matrix. Child environment
+defaults preserve ordinary patch output and reject attempts to overwrite
+runtime-owned Git environment keys. Native Write/Edit hold the authorized
+directory handle through reads, temporary-file creation and rename; changing
+an ancestor's pathname after the last check cannot redirect the commit.
 
-The registry is a correctness boundary: duplicate `ToolId`s, duplicate
-model-facing names, empty identities, invalid or non-root JSON Schema,
-reserved `__rustx_*` collisions, invalid policy combinations, and
-background-capable control Tool registrations are rejected; a
-canonical call whose id and name disagree is a contract violation. Tool
-definitions reach the model in deterministic registration order, and the
-context engine accounts the exact compiled definitions.
+Automatic review receives bounded native facts: canonical task provenance or
+an admitted scheduled Claim, prepared invocation details, the effective matrix
+reason and structured Bash analysis. Model arguments and escalation reasons
+cannot establish Human intent. The successful primary request-start transaction
+commits the canonical task identity in its request snapshot. New Human inputs
+and recovered unanswered adoptions are candidates until that transaction
+succeeds; a cancelled pre-start attempt retains the prior committed task in
+both live settlement and reconstruction. Agent input can establish an initial
+task, while Runtime input cannot. Scheduled execution derives its task evidence
+from its own admitted Claim rather than this conversation task pointer. Reminder
+consumption is reconstructed from the latest primary request's frozen mode
+and context activation; unchanged context resumes stay quiet, while a
+compaction without a subsequent request start leaves the reminder pending.
 
 One conversation owns one `ConversationToolRuntime`, constructed exactly
 once from a bounded `ConversationRuntimeConfig` that binds one
@@ -2839,10 +2813,10 @@ the result in `RuntimeClientSnapshot.todos`, so a reference client
 reconstructs the list from the runtime's own projection plus the
 committed results it observes live — never by scanning the bounded
 transcript page it happens to hold, and without any client-side task
-state. The tool is fixed foreground-only, sequential,
-approval-never: one list cannot be mutated by a detached execution, two
-concurrent mutations would publish racing snapshots, and there is nothing
-in a task list for a human to approve. A subagent child composes its own list
+state. The tool is fixed foreground-only and stays an exclusive batch barrier
+(Issue #544): one list cannot be mutated by a detached execution, and two
+concurrent mutations would publish racing snapshots. Permission allows Todo
+mutations in every mode. A subagent child composes its own list
 over its own conversation and its own Ledger, when its frozen extension set
 includes Todo — so parent/child and child/child isolation is structural rather
 than a check, and a child that composes no Todo extension has neither a list
@@ -4795,10 +4769,8 @@ generic runtime supervisor:
 - **Immutable attempt capability snapshot.** One `CapabilitySnapshot`
   holds the monotonic `CapabilityRevision`, the immutable `ToolRegistry`
   handle, the immutable Skill snapshot/catalog with its
-  `SkillId` + `SkillVersionId` bindings, the Python/Node environment
-  identity and path when present, and the effective `ToolEnvironment`
-  (base authorized environment plus the deterministic Skill environment
-  overlay).
+  `SkillId` + `SkillVersionId` bindings, and the effective `ToolEnvironment`
+  (the base authorized environment; Skills add nothing).
 - **Capability owner identity.** A `CapabilityCoordinator` is explicitly
   conversation-owned and records the canonical Workspace root with its
   `ConversationId`. An attempt lease can only be passed to a
@@ -4827,8 +4799,8 @@ generic runtime supervisor:
   acquisition that reconnects after physical stdio spawn, settle before
   retirement completes. See [the deterministic regressions and controlled
   timing fixture](issue-498/README.md).
-- **Quiescent commit.** Candidate preparation (discovery, dependency
-  merge, environment materialization) runs independently; activation is a
+- **Quiescent commit.** Candidate preparation (Skill discovery and optional
+  source preparation) runs independently; activation is a
   quiescent atomic commit legal only when zero attempt leases are active
   for the conversation. Acquisition and commit serialize through one
   synchronization boundary; an identical candidate is a no-op that never
@@ -6216,9 +6188,9 @@ pre-crash nonterminal run is not silently rerun, because Agent and Tool work
 may be non-idempotent.
 
 Workflow child composition uses the existing capability projection,
-`ApprovalMode`, `ToolApprovalPolicy`, and `InteractionCoordinator`. FullAccess
-can affect approval only for already-authorized capabilities; it cannot widen
-the selected profile. `ask_user` remains an ordinary admitted capability and
+`ExecutionPermissionMode` / `ApprovalMode`, and `InteractionCoordinator`.
+Full Access can affect permission only for already-authorized capabilities; it
+cannot widen the selected profile. `ask_user` remains an ordinary admitted capability and
 WorkflowRuntime never manufactures it or calls the TUI. Workflow Agents run in
 the invoking Session's workspace binding; a Workflow owns no workspace resource.
 The native `WorkflowFileDocument` composes `WorkflowDefinition` with bounded
@@ -7669,3 +7641,47 @@ weak owners; addressed reads capture bounded native facts outside the residency
 registry lock, then validate the exact resident allocation before publication.
 A per-process revision orders snapshots and lightweight notifications without
 transcript attachment. See [status derivation and publication](app-server/shared-control.md#thread-runtime-status-v74-amendment).
+
+## Admission-bound Workflow run definition snapshots (Issue #552)
+
+Every admitted `WorkflowProgram` captures an immutable `WorkflowRunDefinitionSnapshot`
+from the exact parsed YAML source bytes (`workflow_id`, executable `program_digest`,
+distinct `source_revision`, `has_source_presentation` flag, and `WorkflowFileDocument`
+including optional `editor` presentation). Layout-only edits change `source_revision`
+and `snapshot_digest` without altering executable `program_digest` or `tool_identity`.
+
+When a native Workflow run starts, `JournalStore::publish_workflow_start` commits
+`RuntimeEvent::WorkflowStarted`, deduplicated `workflow_definition_snapshots` /
+`workflow_snapshot_chunks` (<= 65,536 bytes per chunk, `MAX_WORKFLOW_DOCUMENT_BYTES`
+16 MiB ceiling), and the `workflow_run_snapshots` binding (foreign-keyed `ON DELETE
+CASCADE` to `events(sequence)`) in one SQLite transaction with no staging rows or
+mutable disk fallback. Best-effort start observability failures never change execution
+outcomes. Reads flow through authorized v78 `conversation/workflowRunSnapshotHeader|Chunk`
+(`Family::Runtime`) and cold `session/workflowRunSnapshotHeader|Chunk`
+(`Family::History`, enforcing `ObservationReadCut` and conversation binding).
+
+The shared readonly Web canvas consumes this immutable document and existing
+native trace headers, field references and child inspection routes. Indexed
+`session/traceLocateWorkflow` / `agent/traceLocateWorkflow` reads locate a run at
+one authorized native cut without scanning all displayed history or parsing a
+bounded display identity, and `TraceInspectionContent::Workflow` in
+`trace.records.<seq>.detail` (plus `WorkflowTraceNodes.run_id|workflow_id`)
+carries typed native run and workflow identity directly from `WorkflowStarted`
+facts so even a root with zero started nodes or an omitted display `native_id`
+opens its frozen graph. When a selected visit lies beyond the initial two-page
+node prefix or survives a cut advancement without appearing in the fresh prefix,
+`conversation/workflowTraceNode` and cold `session/workflowTraceNode` perform a
+bounded indexed lookup (`events_run_id_kind_idx` +
+`events_workflow_node_instance_kind_idx`) without scanning the run, reading I/O
+bodies, or reusing prior-cut headers. Same-cut historical child references come from the
+existing Workflow admission and ownership indexes. The browser neither executes
+nodes nor appends status facts. See [run projection](workflow-run-projection.md)
+and [validation boundaries](issue-552-validation.md).
+
+Selected visits outside the initial trace prefix use exact indexed
+`conversation/workflowTraceNode` / cold `session/workflowTraceNode` reads under
+the same conversation, activation and cut checks. Their result is one bounded
+existing node header; original values stay in the existing field/content paths.
+Typed Workflow detail retains run and workflow identity even before the first
+node starts, so graph resolution does not depend on display labels or a first
+loaded visit.

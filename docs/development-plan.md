@@ -359,33 +359,23 @@ Implemented:
   compact model-visible catalog projection
 - Normalized frontmatter-only `SkillVersionId`, non-recursive definition watches
   and live local child resource bindings; see [Skill discovery](skill-discovery.md)
-- rustX dependency declarations (`rustx.python-dependencies`,
-  `rustx.node-dependencies`) with deterministic normalization and
-  merge/conflict detection before any package-manager subprocess
-- One shared Python environment and one shared Node environment per
-  capability set, with distinct `PythonEnvironmentDigest` /
-  `NodeEnvironmentDigest` identities. Python is built directly at its final
-  digest path and becomes reusable only after an exact deterministic ready
-  manifest is atomically committed; Node uses private staging followed by
-  atomic rename. Both are immutable after publication in a canonical,
-  symlink-safe runtime-private store, and same-process preparations of one
-  ecosystem/digest coalesce behind one `EnvironmentStore`-owned in-flight
-  build task; candidate callers only wait on the shared result and caller
-  cancellation does not release the entry before physical settlement.
+- Generic metadata, including `rustx.python-dependencies` and
+  `rustx.node-dependencies`, is uninterpreted. Skills do not probe
+  interpreters, solve dependencies, or inject `PATH`, `VIRTUAL_ENV`, or
+  `NODE_PATH`
 - Scripts, references, and assets layout, executed through native
   Read/Bash against the Workspace (no `skill_search`/`activate_skill`/
   `skill_view`/`run_skill`/`run_skill_script`)
 - The capability coordination layer (`src/capabilities`): immutable
   attempt capability snapshot, RAII attempt lease, quiescent atomic
-  commit, `CapabilityRevision` swap, and background environment capture
-- The shared supervised process runner (`src/runtime/process_runner`)
-  reusing the M5 Bash process-group lifecycle for Skill environment
-  materialization
+  commit, and `CapabilityRevision` swap
+- Managed Python keeps its own uv lock, private environment, and supervised
+  process lifecycle in `src/tools/python.rs`
 
 Exit criteria:
 
-- A skill can instruct the model to read its instructions and execute Python, Node, or shell scripts against the local workspace.
-- Multiple skills can coexist in one shared environment with deterministic environment identity.
+- A skill can instruct the model to read its instructions and execute Python, Node, or shell scripts against the local workspace through ordinary tools.
+- Changing only the Skill set leaves the effective tool environment unchanged.
 - An attempt observes one immutable Skill snapshot for its complete lifetime;
   each primary request renders its compact catalog into the Effective System
   Prompt, never into canonical User history.
@@ -1064,9 +1054,10 @@ new shutdown-time attempt.
 The existing Bash/process contract is composed transitively:
 `TERM -> grace -> KILL -> process-group terminality -> reap or explicit
 containment proof -> execution settlement`. No global process registry or
-generic task manager was added. Shared `EnvironmentStore` work remains
-store-owned and is not globally cancelled by one conversation, while counted
-preparation prevents a late completion from escaping the runtime boundary.
+generic task manager was added. Managed Python uv builds remain store-owned
+under `python-tools` and are not globally cancelled by one conversation, while
+counted preparation prevents a late completion from escaping the runtime
+boundary.
 Retained conversation-owned MCP stdio runtimes close through their existing
 physical settlement contract before quiescence; a late runtime capability
 commit is refused at its lifecycle boundary.

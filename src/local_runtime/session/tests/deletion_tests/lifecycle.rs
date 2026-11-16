@@ -129,7 +129,10 @@ fn deletion_uncertain_visibility_never_cleans_and_recovery_confirms_same_record(
         catalog.recover_deletions().as_slice(),
         [SessionDeleteResult::Deleted { .. }]
     ));
-    assert!(catalog.recover_deletions().is_empty());
+    assert_eq!(
+        catalog.recover_deletions(),
+        [] as [crate::local_runtime::session::deletion::SessionDeleteResult; 0]
+    );
     assert_completed_absent(dir.path(), &preview.session_id);
 }
 
@@ -195,7 +198,10 @@ fn session_deletion_reclaims_committed_image_without_a_published_reference() {
         !path.exists(),
         "the session owner reclaims both bytes and reservations"
     );
-    assert!(catalog.recover_deletions().is_empty());
+    assert_eq!(
+        catalog.recover_deletions(),
+        [] as [crate::local_runtime::session::deletion::SessionDeleteResult; 0]
+    );
 }
 
 #[test]
@@ -247,7 +253,10 @@ fn deletion_cleanup_owns_frozen_plan_without_root_guard_and_identity_is_absorbin
         }
     }
     assert!(work.run().is_ok());
-    assert!(catalog.recover_deletions().is_empty());
+    assert_eq!(
+        catalog.recover_deletions(),
+        [] as [crate::local_runtime::session::deletion::SessionDeleteResult; 0]
+    );
     let DeletionScope::Node {
         node_id,
         conversation_id,
@@ -421,8 +430,14 @@ fn deletion_process_death_after_commit_and_mid_cleanup_converges_without_discove
             [SessionDeleteResult::Deleted { .. }]
         ));
         assert!(paths.iter().all(|p| !p.exists()));
-        assert!(catalog.recover_deletions().is_empty());
-        assert!(reopen_catalog(dir.path()).recover_deletions().is_empty());
+        assert_eq!(
+            catalog.recover_deletions(),
+            [] as [crate::local_runtime::session::deletion::SessionDeleteResult; 0]
+        );
+        assert_eq!(
+            reopen_catalog(dir.path()).recover_deletions(),
+            [] as [crate::local_runtime::session::deletion::SessionDeleteResult; 0]
+        );
         assert_completed_absent(dir.path(), &preview.session_id);
     }
 }
@@ -844,7 +859,10 @@ fn assert_completed_absent(root: &Path, id: &SessionId) {
     assert!(disk["deletions"].as_object().unwrap().is_empty());
     assert!(disk["sessions"].get(id.as_str()).is_none());
     let mut reopened = reopen_catalog(root);
-    assert!(reopened.recover_deletions().is_empty());
+    assert_eq!(
+        reopened.recover_deletions(),
+        [] as [crate::local_runtime::session::deletion::SessionDeleteResult; 0]
+    );
     assert!(matches!(
         reopened.delete_preview(id),
         SessionDeleteResult::NotFound { .. }

@@ -34,6 +34,7 @@ async fn reject_without_effects(plane: &TestPlane, agent: &AgentId) {
         &oversized,
         &[],
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     ));
     assert!(matches!(
@@ -64,6 +65,7 @@ async fn active_guidance_preserves_text_budget_and_accepts_many_files() {
         "",
         &files,
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());
@@ -73,7 +75,7 @@ async fn active_guidance_preserves_text_budget_and_accepts_many_files() {
     // The first and only envelope after rejection is the valid input; no
     // rejected input can reach the child inbox or cause a model request.
     assert_eq!(guidance.attachments, files);
-    assert!(guidance.message.is_empty());
+    assert_eq!(guidance.message, "");
     super::super::super::ipc::write_child_frame(
         &mut child.peer,
         &ChildFrame::GuidanceResult(super::super::super::ipc::GuidanceResultFrame {
@@ -124,6 +126,7 @@ async fn inactive_activation_preserves_text_budget_and_accepts_many_files() {
         "",
         &files,
         AgentActivationOrigin::ClientControl,
+        crate::runtime::types::ApprovalMode::FullAccess,
         CancellationSignal::new(),
     ));
     assert!(futures_util::poll!(&mut send).is_pending());

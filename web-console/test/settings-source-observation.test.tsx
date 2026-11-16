@@ -8,7 +8,7 @@ import { boundedSettings } from "./fixture";
 // @vitest-environment jsdom
 import { afterEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v77';
+import type { ConfigurationApplication, Request, SourceSettings, SourceTarget } from '../../protocol/app-server/v78';
 import { waitForSettingsRevision, openSettingsPage, observedRevision, settingsReady, SettingsSurface } from './settings-harness';
 import { RpcFailure } from '../src/client/errors';
 import { userSettingsTarget, workspaceSettingsTarget } from '../src/app/settings/projection';

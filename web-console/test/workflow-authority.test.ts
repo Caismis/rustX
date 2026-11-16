@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AppServerTransport } from '../../tui/src/app-server/transport.ts';
-import type { SourceTarget, WorkflowFileDocument } from '../../protocol/app-server/v77';
+import type { SourceTarget, WorkflowFileDocument } from '../../protocol/app-server/v78';
 import type { WorkflowSource } from '../../protocol/app-server/workflow-documents.ts';
 import { boundedSettings, capabilities as nativeCapabilities } from './fixture';
 import { cfg3Source } from './cfg3-data';
@@ -32,7 +32,7 @@ const native = vi.hoisted(() => {
       const request = message as ObservedRequest;
       state.requests.push(request);
       const reply = (result: unknown) => queueMicrotask(() => this.deliver({ jsonrpc: '2.0', id: request.id, result }));
-      if (request.method === 'initialize') void (state.gate ?? Promise.resolve()).then(() => reply({ type: 'initialized', authority_id: state.native, protocol_version: 77, capabilities: nativeCapabilities }));
+      if (request.method === 'initialize') void (state.gate ?? Promise.resolve()).then(() => reply({ type: 'initialized', authority_id: state.native, protocol_version: 78, capabilities: nativeCapabilities }));
       else if (request.method === 'configuration/sourceWrite') reply({ type: 'sources_written', revision: 'sha256:created', configuration_revision: null });
       else if (request.method === 'configuration/sourcesRead') reply({ type: 'source_settings', projection: boundedSettings({ ...cfg3Source(), target: request.params.target as SourceTarget }) });
       else if (request.method === 'workflow/read') reply({ type: 'workflow_source', source: { id: 'flow', revision: 'sha256:created' } });

@@ -217,20 +217,24 @@ fn the_issue_example_converges_to_its_documented_result() {
     let plan = plan(before.as_bytes()).unwrap();
     assert_eq!(
         String::from_utf8(plan.candidate.clone()).unwrap(),
-        "schema_version = 11\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
+        "schema_version = 12\n\n[agent.tools]\nbuiltin = [\"read\", \"grep\"]\n\n[agent.plugins.todo]\nenabled = true\n"
     );
     assert_eq!(
         plan.changes,
         vec![
-            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 11 },
+            ConfigRepairChange::UpdatedSchemaVersion { from: 8, to: 12 },
+            // Issue #544: the whole obsolete native_tools overlay is unknown.
+            removed(""),
             removed("agent.plugins.todo"),
-            removed("native_tools"),
             unknown_tool(1),
             tool(3, "read", NativeToolRemoval::Duplicate),
         ]
     );
     // One finite pass reaches the fixed point.
-    assert!(changes(std::str::from_utf8(&plan.candidate).unwrap()).is_empty());
+    assert_eq!(
+        changes(std::str::from_utf8(&plan.candidate).unwrap()),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
 }
 
 #[test]
@@ -245,6 +249,23 @@ fn the_rule_anchors_are_typed_source_schema_fields() {
 }
 
 #[test]
+fn obsolete_auxiliary_model_fields_are_rejected_not_silently_removed() {
+    let text = r#"schema_version = 8
+[agent.model]
+model = "local/a"
+summary_model = "local/b"
+title_model = "local/c"
+"#;
+    let err = plan(text.as_bytes()).expect_err("obsolete fields must not repair");
+    assert_eq!(err, Uneditable::ObsoleteAuxiliaryModelFields);
+    assert!(
+        err.diagnostic().contains("agent.model.auxiliary"),
+        "{}",
+        err.diagnostic()
+    );
+}
+
+#[test]
 fn nested_unknown_fields_and_tables_go_in_one_pass_without_security_exemptions() {
     let text = r#"unknown_root = 1
 [security]
@@ -253,7 +274,6 @@ sandbox = "off"
 allow = ["*"]
 
 [native_tools.bash]
-approval = "always"
 allow_unsandboxed = true
 
 [agent.plugins.goal]
@@ -272,7 +292,6 @@ max_concurrent = 2
 isolation = "none"
 
 [mcp_tool_policies.docs]
-approval = "never"
 trust_all = true
 "#;
     let repaired = candidate(text);
@@ -281,35 +300,33 @@ trust_all = true
         vec![
             removed(""),
             removed(""),
-            removed("native_tools.bash"),
+            // Issue #544: obsolete execution overlays are unknown top-level tables.
+            removed(""),
+            removed(""),
             removed("agent.plugins.goal"),
             removed("agent.model.max_output_tokens"),
             removed("subagents"),
-            removed("mcp_tool_policies.*"),
         ]
     );
     for gone in [
         "unknown_root",
         "security",
+        "native_tools",
         "allow_unsandboxed",
         "permissions",
         "bypass",
         "isolation",
+        "mcp_tool_policies",
         "trust_all",
     ] {
         assert!(!repaired.contains(gone), "{gone} survived:\n{repaired}");
     }
     // Known policy values stay exactly as authored.
-    for kept in [
-        "approval = \"always\"",
-        "approval = \"never\"",
-        "max_concurrent = 2",
-        "tokens = 512",
-    ] {
+    for kept in ["max_concurrent = 2", "tokens = 512"] {
         assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
     }
     let layer: RuntimeLayer = crate::toml_authoring::parse(repaired.as_bytes()).unwrap();
-    assert!(layer.native_tools.unwrap().bash.is_some());
+    assert!(layer.agent.is_some());
 }
 
 #[test]
@@ -325,9 +342,6 @@ request_params = '{{"unknown_vendor_key":{{"nested":[1,2]}},"x-api-key":"SECRET_
 [environment]
 CUSTOM_TOKEN = "SECRET_ENV"
 "weird.name" = "v"
-
-[mcp_tool_policies."docs"]
-approval = "always"
 "#
     );
     assert!(changes(&text).is_empty(), "{:?}", changes(&text));
@@ -345,15 +359,19 @@ approval = "always"
     ] {
         assert!(repaired.contains(exact), "{exact}");
     }
+    // Issue #544: obsolete mcp_tool_policies is unknown, never a retained open map.
+    let with_obsolete =
+        format!("{text}\n[mcp_tool_policies.\"docs\"]\nexecution = \"foreground_only\"\n");
+    assert_eq!(changes(&with_obsolete), vec![removed("")]);
 }
 
 #[test]
 fn comments_and_unrelated_bytes_survive_deletions() {
-    let text = "# head comment\nschema_version = 11 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
+    let text = "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\nstale = 'x'\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"nope\",\n  \"grep\",\n]\n";
     let repaired = candidate(text);
     assert_eq!(
         repaired,
-        "# head comment\nschema_version = 11 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
+        "# head comment\nschema_version = 12 # trailing\n\n# before agent\n[agent]\ndescription = 'kept'   # spaced comment\n\n[agent.tools]\n# list comment\nbuiltin = [\n  \"read\", # first\n  \"grep\",\n]\n"
     );
 }
 
@@ -416,40 +434,59 @@ fn native_tool_entries_are_classified_by_the_native_domain() {
         ordinary
     );
     // A non-string element is a known-field type error, never a selection edit.
-    assert!(changes("[agent.tools]\nbuiltin = [\"read\", 3, \"read\"]\n").is_empty());
+    assert_eq!(
+        changes("[agent.tools]\nbuiltin = [\"read\", 3, \"read\"]\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
 }
 
 #[test]
 fn explicit_schema_versions_are_normalized_and_omission_is_preserved() {
-    for from in [0_i64, 8, 9, 10, 12, 99, -1] {
+    for from in [0_i64, 8, 9, 10, 99, -1] {
         let text = format!("schema_version = {from} # authored\n");
         assert_eq!(
             changes(&text),
-            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 11 }]
+            vec![ConfigRepairChange::UpdatedSchemaVersion { from, to: 12 }]
         );
-        assert_eq!(candidate(&text), "schema_version = 11 # authored\n");
+        assert_eq!(candidate(&text), "schema_version = 12 # authored\n");
     }
-    assert!(changes("schema_version = 11\n").is_empty());
-    assert!(changes("[agent]\ndescription = 'x'\n").is_empty());
+    assert_eq!(
+        changes("schema_version = 12\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
+    assert_eq!(
+        changes("schema_version = 12 # authored\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
+    assert_eq!(
+        changes("[agent]\ndescription = 'x'\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
     assert!(!candidate("[agent]\nstale = 1\n").contains("schema_version"));
     // A non-integer version is a type error, not version metadata.
     for wrong in ["'10'", "10.0", "true"] {
-        assert!(changes(&format!("schema_version = {wrong}\n")).is_empty());
+        assert_eq!(
+            changes(&format!("schema_version = {wrong}\n")),
+            [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+        );
     }
 }
 
 #[test]
 fn tagged_unions_close_only_their_selected_variant() {
-    let text = "[agent.model]\nmodel = 'local/a'\n[agent.model.summary_model]\nmode = 'explicit'\nmodel = 'local/a'\nlegacy = true\n[tool_deadline_policy.idle_liveness_ms]\nmode = 'window'\nmilliseconds = 5\nextra = 1\n";
+    let text = "[agent.model]\nmodel = 'local/a'\n[agent.model.auxiliary]\nmode = 'explicit'\nmodel = 'local/a'\nlegacy = true\n[tool_deadline_policy.idle_liveness_ms]\nmode = 'window'\nmilliseconds = 5\nextra = 1\n";
     assert_eq!(
         changes(text),
         vec![
-            removed("agent.model.summary_model"),
+            removed("agent.model.auxiliary"),
             removed("tool_deadline_policy.idle_liveness_ms"),
         ]
     );
     // An unknown tag selects no variant: nothing under it is guessed.
-    assert!(changes("[context.summary_output_cap]\nmode = 'future'\nextra = 1\n").is_empty());
+    assert_eq!(
+        changes("[context.summary_output_cap]\nmode = 'future'\nextra = 1\n"),
+        [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+    );
 }
 
 #[test]
@@ -558,7 +595,7 @@ fn healthy_and_repaired_sources_are_disk_and_ledger_no_ops() {
             .unwrap(),
         modified
     );
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     assert!(fixture.receipt(&SourceTarget::User).is_none());
     // A healthy check takes no writer lock, so it creates no lock file.
     assert!(!lock_of(&fixture.path(&SourceTarget::User)).exists());
@@ -621,7 +658,7 @@ fn nonrepairable_sources_stay_unchanged_with_a_safe_unresolved_receipt() {
         assert!(!wire.contains("SECRET"), "{wire}");
         assert!(receipt.diagnostic.is_some());
     }
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     // Workspace process policy is a source restriction, not an unknown field.
     fixture.write(
         &fixture.workspace,
@@ -731,7 +768,7 @@ fn an_external_edit_before_the_writer_lock_supersedes_the_candidate() {
         RepairOutcome::Superseded
     );
     assert_eq!(fixture.read(&SourceTarget::User), external);
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     assert!(fixture.receipt(&SourceTarget::User).is_none());
 }
 
@@ -780,7 +817,7 @@ fn failures_before_publication_leave_the_source_unchanged() {
         assert_eq!(receipt.backup_available, point != "backup", "{point}");
         assert!(receipt.after_revision.is_none());
         if point == "backup" {
-            assert!(fixture.backups().is_empty());
+            assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
         }
     }
 }
@@ -1034,7 +1071,7 @@ fn semantic_diagnostics_never_echo_authored_values_or_identities() {
         for sentinel in ["SECRET", "sentinelagent", "example.com", "MODEL_API_KEY"] {
             assert!(!wire.contains(sentinel), "{wire}");
         }
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     }
 }
 
@@ -1118,7 +1155,7 @@ fn an_available_composition_is_checked_like_session_resolution() {
         diagnostic.contains("context budgets cannot fit the selected models at context"),
         "{diagnostic}"
     );
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     // Session resolution rejects the same composition for the same reason.
     std::fs::write(
         fixture.path(&SourceTarget::User),
@@ -1163,7 +1200,7 @@ fn independent_constraints_hold_without_a_default_model() {
                 diagnostic.contains("automatic repair never corrects an invalid value"),
                 "{diagnostic}"
             );
-            assert!(fixture.backups().is_empty());
+            assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
             assert_eq!(fixture.sequence(), applications + 1);
         }
     }
@@ -1521,7 +1558,7 @@ fn a_workspace_moved_into_the_runtime_root_after_admission_receives_no_backup() 
                 .unwrap()
                 .contains("outside the Workspace")
         );
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
         let moved = fixture.manager.runtime_root().join("moved-workspace");
         let source = match case.target {
             SourceTarget::User => fixture.path(&SourceTarget::User),
@@ -1590,7 +1627,7 @@ fn an_overlapping_runtime_root_is_refused_before_anything_is_created() {
         assert_eq!(root.exists(), existed, "nothing is created");
         assert_eq!(fixture.read(&SourceTarget::User), user);
         assert_eq!(fixture.read(&fixture.workspace), workspace);
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
         assert_eq!(fixture.sequence(), 0);
         // Startup's User-only scope selects no Workspace, so it proves
         // nothing about directories a later boundary may select, and still
@@ -2090,7 +2127,7 @@ fn a_workspace_replaced_before_the_writer_lock_is_never_written() {
     assert_eq!(swap.moved(), REPAIRABLE);
     assert_eq!(Swap::entries(&swap.other), ["rustx.toml"]);
     assert!(fixture.receipt(&fixture.workspace).is_none());
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     assert_eq!(fixture.sequence(), 0);
 }
 
@@ -2321,7 +2358,10 @@ fn nothing_eligible_is_not_proof_of_health() {
         assert_eq!(fixture.read(&target), INTRINSICALLY_INVALID);
         let receipt = fixture.receipt(&target).unwrap();
         assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
-        assert!(receipt.changes.is_empty());
+        assert_eq!(
+            receipt.changes,
+            [] as [crate::local_runtime::configuration::repair::ConfigRepairChange; 0]
+        );
         assert!(!receipt.backup_available);
         let diagnostic = receipt.diagnostic.unwrap();
         assert!(
@@ -2335,7 +2375,7 @@ fn nothing_eligible_is_not_proof_of_health() {
         assert_eq!(fixture.repair(&target, &target), RepairOutcome::Unchanged);
         assert_eq!(fixture.sequence(), sequence);
     }
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
 }
 
 #[test]
@@ -2657,7 +2697,7 @@ fn a_failed_confirmation_fails_the_backup_and_the_leftover_entry_is_confirmed_ag
     expected.extend(confirmed(&root));
     assert_eq!(steps, expected);
     assert_backup_failed(&fixture, &original, &steps);
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     // Nothing is cleaned up; the unconfirmed entry is simply never trusted:
     // the next transaction confirms it before using it.
     assert!(storage.exists());
@@ -2692,7 +2732,7 @@ fn an_unconfirmed_runtime_root_ancestor_fails_the_backup() {
     expected.extend(confirmed(a.parent().unwrap()));
     assert_eq!(steps, expected);
     assert_backup_failed(&fixture, &original, &steps);
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
 }
 
 #[test]
@@ -3212,7 +3252,7 @@ fn a_repair_candidate_exactly_at_the_bound_is_published_and_readable() {
     );
     let published = std::fs::read(fixture.path(&SourceTarget::User)).unwrap();
     assert_eq!(published.len(), bound());
-    assert!(published.starts_with(b"schema_version = 11\n"));
+    assert!(published.starts_with(b"schema_version = 12\n"));
     // The normal native reader accepts exactly what was published.
     let read = fixture
         .manager
@@ -3244,13 +3284,13 @@ fn a_repair_growing_past_the_bound_is_unresolved_without_a_backup() {
     assert_eq!(steps, []);
     assert_eq!(fixture.read(&SourceTarget::User), original);
     assert!(!fixture.manager.runtime_root().exists());
-    assert!(fixture.backups().is_empty());
+    assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     let receipt = fixture.receipt(&SourceTarget::User).unwrap();
     assert_eq!(fixture.sequence(), sequence + 1);
     assert_eq!(receipt.status, ConfigRepairStatus::Unresolved);
     assert_eq!(
         receipt.changes,
-        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 11 }]
+        [ConfigRepairChange::UpdatedSchemaVersion { from: 9, to: 12 }]
     );
     assert!(!receipt.backup_available);
     assert!(receipt.after_revision.is_none());
@@ -3416,8 +3456,7 @@ request_params = '{"zsecretz_param":"zsecretz-value"}'
 zsecretz_profile_key = true
 
 [mcp_tool_policies."zsecretz-mcp"]
-approval = "always"
-trust_all = true
+execution = "foreground_only"
 
 [environment]
 ZSECRETZ_ENV = "zsecretz-value"
@@ -3466,10 +3505,11 @@ fn receipts_never_carry_authored_identities_keys_or_tool_names() {
         vec![
             removed(""),
             removed(""),
+            // Issue #544: obsolete mcp_tool_policies is an unknown top-level table.
+            removed(""),
             removed("providers.*"),
             removed("models.*"),
             removed("models.*.profiles.*"),
-            removed("mcp_tool_policies.*"),
             unknown_tool(1),
             tool(2, "read", NativeToolRemoval::Duplicate),
             unknown_tool(3),
@@ -3486,13 +3526,16 @@ fn receipts_never_carry_authored_identities_keys_or_tool_names() {
         "api_key = \"zsecretz-credential\"",
         "[models.\"zsecretz-provider/zsecretz-model\".profiles.\"zsecretz-profile\"]",
         "request_params = '{\"zsecretz_param\":\"zsecretz-value\"}'",
-        "[mcp_tool_policies.\"zsecretz-mcp\"]",
         "ZSECRETZ_ENV = \"zsecretz-value\"",
         "\"mcp:zsecretz-source\" = [\"zsecretz_search\"]",
         "builtin = [\"read\"]",
     ] {
         assert!(repaired.contains(kept), "{kept} was lost:\n{repaired}");
     }
+    assert!(
+        !repaired.contains("mcp_tool_policies"),
+        "obsolete overlay survived:\n{repaired}"
+    );
     for gone in [
         "zsecretz_root_key",
         "zsecretz_provider_key",
@@ -3573,7 +3616,7 @@ fn schema_paths_are_native_and_bounded() {
     for index in 0..(MAX_RECEIPT_CHANGES * 2) {
         writeln!(
             text,
-            "[mcp_tool_policies.\"zsecretz-{index}\"]\nzsecretz_{index} = 1"
+            "[providers.\"zsecretz-{index}\"]\nprotocol = \"openai_chat_completions\"\nbase_url = \"http://127.0.0.1:9/v1\"\napi_key = \"k\"\nzsecretz_{index} = 1"
         )
         .unwrap();
     }
@@ -3583,7 +3626,7 @@ fn schema_paths_are_native_and_bounded() {
         let ConfigRepairChange::RemovedField { object_path } = change else {
             panic!("a removed field");
         };
-        assert_eq!(object_path, "mcp_tool_policies.*");
+        assert_eq!(object_path, "providers.*");
         assert!(object_path.chars().count() <= MAX_PATH_CHARS);
     }
 }
@@ -3888,7 +3931,7 @@ fn reading_present_sources_writes_nothing_and_repairs_nothing() {
         assert_eq!(namespace(&root), before, "{user}");
         assert_eq!(fixture.sequence(), 0);
         assert!(fixture.receipt(&SourceTarget::User).is_none());
-        assert!(fixture.backups().is_empty());
+        assert_eq!(fixture.backups(), [] as [std::path::PathBuf; 0]);
     }
     assert!(!lock_of(&fixture.path(&SourceTarget::User)).exists());
     assert!(!lock_of(&fixture.path(&fixture.workspace)).exists());
@@ -4562,6 +4605,54 @@ fn a_missing_directory_created_during_a_read_is_compared_like_any_change() {
 
 fn session_input(fixture: &Fixture) -> super::super::SessionConfigInput {
     super::super::SessionConfigInput::new(fixture.workspace.workspace().unwrap().to_path_buf())
+}
+
+#[test]
+fn python_permission_edit_during_large_candidate_construction_discards_candidate() {
+    let fixture = Fixture::new();
+    fixture.write(&SourceTarget::User, USER);
+    let package = fixture
+        .workspace
+        .workspace()
+        .unwrap()
+        .join(".agents/tools/large");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("server.py"),
+        "from fastmcp import FastMCP\nmcp = FastMCP('large')\n",
+    )
+    .unwrap();
+    std::fs::write(package.join("requirements.txt"), "").unwrap();
+    std::fs::File::create(package.join("asset.bin"))
+        .unwrap()
+        .set_len(65 * 1024 * 1024)
+        .unwrap();
+    let permissions = package.join("permissions.toml");
+    std::fs::write(
+        &permissions,
+        "[permissions]\nplan = 'allow'\nautomatic = 'default'\nfull_access = 'allow'\n",
+    )
+    .unwrap();
+    assert!(resolved(&fixture).is_ok());
+    fixture
+        .manager
+        .test_hooks
+        .insert("before_resource_verification", move || {
+            std::fs::write(
+                &permissions,
+                "[permissions]\nplan = 'deny'\nautomatic = 'default'\nfull_access = 'allow'\n",
+            )
+            .unwrap();
+        });
+    let failure = fixture
+        .manager
+        .resolve_session(&session_input(&fixture))
+        .unwrap_err();
+    assert_eq!(
+        failure.diagnostic.reason,
+        "authored resources changed during candidate construction"
+    );
+    assert!(resolved(&fixture).is_ok());
 }
 
 /// Session resolution's source revisions, or its failure detail.

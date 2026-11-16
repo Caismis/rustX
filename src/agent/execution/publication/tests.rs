@@ -204,7 +204,7 @@ async fn long_attempt_history_is_durable_and_boundedly_inspectable() {
             id: ToolCallId::new(format!("call-{turn}")),
             tool_id: ToolId::new("tool-alpha"),
             name: "alpha".to_owned(),
-            arguments: serde_json::json!({}),
+            arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({})),
         };
         scripts.push(tool_call_script(&call));
     }
@@ -294,7 +294,7 @@ fn assert_bounded_event_history(
         cursor = page.next_sequence;
     }
     assert!(pages > 1, "the journal must be inspected in pages");
-    assert!(!sequences.is_empty());
+    assert_ne!(sequences, [] as [u64; 0]);
     assert!(
         sequences.len() > minimum_event_count,
         "the long attempt must commit more events than tool turns"

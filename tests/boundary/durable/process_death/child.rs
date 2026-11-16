@@ -122,6 +122,9 @@ pub(crate) const LIVE_RESOURCE_EDIT: &str = "live_resource_edit";
 /// A reload attempted while an attempt owns the session.
 /// A reload attempted while a **compaction** owns the session.
 /// A reload attempted while a pending **interaction** owns the session.
+pub(crate) const WORKFLOW_RUN_START: &str = "workflow_run_start";
+/// Recompose after a workflow crash without admitting any new work or model calls.
+pub(crate) const WORKFLOW_RUN_REOPEN: &str = "workflow_run_reopen";
 /// A reopened conversation that admits one new request.
 pub(crate) const COLD_RESUME: &str = "cold_resume";
 /// One unresolved publication whose terminal attempt transition can be
@@ -538,15 +541,8 @@ impl Child {
                 | REOPEN_SUBAGENT_RESUME
         );
         let dependencies = LocalRuntimeDependencies {
-            child_program: real_child.then(|| {
-                std::env::current_exe()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("rustx")
-            }),
+            child_program: real_child
+                .then(|| crate::runtime::process_runner::companion_binary("rustx")),
             ..LocalRuntimeDependencies::default()
         };
         let registry = if real_child {
@@ -998,7 +994,7 @@ fn structurally_incomplete_turn() -> Vec<FakeStep> {
         FakeStep::Emit(ModelEvent::ToolCallArgumentsDelta {
             block_index: ContentBlockIndex::new(1),
             call_id: ToolCallId::new("call-partial"),
-            arguments_delta: "{\"file_p".to_owned(),
+            arguments_delta: "{\"arguments\":{\"file_p".to_owned(),
         }),
         done(ModelFinishReason::Stop),
     ]
@@ -1089,10 +1085,16 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 runtime.admit_now_for_test();
             }
             assert!(!runtime.has_current_attempt());
-            assert!(child.model.requests().is_empty());
+            assert_eq!(
+                child.model.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
             runtime.shutdown().await.unwrap();
             assert_eq!(runtime.goal_view().unwrap().unwrap().current, Some(before));
-            assert!(child.model.requests().is_empty());
+            assert_eq!(
+                child.model.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
             note("reenabled-paused-proved");
             park_owning(child).await;
         }
@@ -1141,10 +1143,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 // runtime alive here makes the process own the exact in-flight
                 // transition until SIGKILL.
                 park_owning(child).await;
-            } else {
-                child.log.wait_settled(1).await;
-                note("settled");
             }
+            child.log.wait_settled(1).await;
+            note("settled");
         }
         INTERNAL_RETRY_SUCCESS => {
             let child = Child::require(
@@ -1165,13 +1166,44 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 // kills the attempt-terminal transaction so recovery must
                 // derive that fact from durable request/snapshot evidence.
                 park_owning(child).await;
-            } else {
-                child.log.wait_settled(1).await;
-                note("settled");
             }
+            child.log.wait_settled(1).await;
+            note("settled");
         }
-        TOOL_TURN | TOOL_APPROVAL | TOOL_APPROVAL_PENDING => {
+        TOOL_TURN => {
             let call = read_call("call-read-1", "note.txt");
+            let child = Child::require(
+                root,
+                vec![
+                    calling_turn(&call),
+                    vec![started(), text("continued"), done(ModelFinishReason::Stop)],
+                ],
+                false,
+                true,
+            )
+            .await;
+            child.submit("read the note");
+            child.log.wait_settled(1).await;
+            note("settled");
+        }
+        TOOL_APPROVAL | TOOL_APPROVAL_PENDING => {
+            // Native Read is always Allow under the built-in matrix; Ask for
+            // these approval-interaction proofs comes from Plan + elevation
+            // on an elevating tool (Bash other).
+            let call = ScriptedCall {
+                id: "call-bash-approval-1",
+                tool_id: "tool-bash",
+                name: "bash",
+                arguments: serde_json::json!({
+                    // `true` is proven read-only and would Allow under Plan;
+                    // a mutating command stays Unproven so elevation Asks.
+                    // Bash is ModelSelectable: execution_mode is required metadata.
+                    "command": "touch approval-probe.flag",
+                    "description": "Process-death approval probe",
+                    "execution_mode": "foreground",
+                    "elevation_reason": "process-death approval interaction fixture"
+                }),
+            };
             let child = Child::require(
                 root,
                 vec![
@@ -1182,7 +1214,10 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 true,
             )
             .await;
-            child.submit("read the note");
+            // Connect control before the Ask wait so a missing InteractionPending
+            // surfaces as a note timeout rather than a silent accept hang.
+            note("approval-composed");
+            child.submit("probe approval");
             if scenario == TOOL_APPROVAL_PENDING {
                 // The waiter is process-owned state that never settles here:
                 // the parent kills this child while the request is pending.
@@ -1842,8 +1877,93 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.submit("the projection subject");
             park_owning((child, supervisor)).await;
         }
+        WORKFLOW_RUN_START => {
+            let composed = compose_workflow_emulator_child(root, true).await;
+            composed
+                .0
+                .runtime()
+                .submit_inbound(user_text("workflow conformance request"))
+                .expect("accept workflow inbound message");
+            park_owning(composed).await;
+        }
+        WORKFLOW_RUN_REOPEN => {
+            let composed = compose_workflow_emulator_child(root, false).await;
+            if let Some(registry) = composed.0.runtime().subagent_registry() {
+                registry.wait_recovery_reconciliation().await;
+            }
+            let live = composed.0.runtime().tool_runtime().workflows().snapshot();
+            assert!(
+                live.runs.is_empty(),
+                "reopened runtime must never invent a phantom live workflow run: {live:?}"
+            );
+            let _recovery = composed.0.runtime().recovery();
+            note(&format!("workflow-reopen:live_runs={}", live.runs.len()));
+            park_owning(composed).await;
+        }
         other => panic!("unknown FND-06 scenario {other}"),
     }
+}
+
+/// Composes one workflow-capable child runtime over the external `ProviderEmulator`
+/// HTTP/SSE binding (`ModelBindingRegistry::new`) and real `rustx` child executable.
+async fn compose_workflow_emulator_child(
+    root: &Path,
+    client: bool,
+) -> (
+    HeadlessConversationRuntime,
+    Option<event_recorder::ObserverTask>,
+    Arc<Log>,
+) {
+    let paths = lab_paths(root);
+    let launch = paths.try_resolve().expect("resolve workflow lab launch");
+    let runtime_config = launch.config().clone();
+    let child_program = crate::runtime::process_runner::companion_binary("rustx");
+    assert!(
+        child_program.is_file(),
+        "workflow crash child requires built `rustx` binary at {}",
+        child_program.display()
+    );
+    let dependencies = LocalRuntimeDependencies {
+        child_program: Some(child_program),
+        ..LocalRuntimeDependencies::default()
+    };
+    let registry = crate::model::invocation::ModelBindingRegistry::new(
+        launch
+            .models
+            .resolve(&launch.credentials)
+            .expect("resolve emulator model catalog"),
+    )
+    .expect("construct emulator model bindings");
+    let state = SessionPersistentState {
+        model: Some(runtime_config.initial_model().clone()),
+        ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
+            root.join("workspace"),
+        ))
+    };
+    let controller = Arc::new(
+        crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+            .expect("acquire lab controller"),
+    );
+    let artifacts_root = controller.root().join(
+        "sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001",
+    );
+    let core = LocalConversationCore::compose_from_config(
+        &launch,
+        &dependencies,
+        registry,
+        runtime_config,
+        state,
+        ConversationId::new(CONVERSATION),
+        artifacts_root,
+        controller,
+    )
+    .await
+    .expect("compose emulator workflow child runtime");
+    let log = Log::new();
+    *log.runtime.lock().expect("fixture runtime") = Some(core.runtime().clone());
+    let observer = client
+        .then(|| event_recorder::bind(&core, Arc::clone(&log), false).expect("bind observer"));
+    (core.into_headless(), observer, log)
 }
 
 /// The model watch proves recovery admitted an attempt. The exit gate proves
@@ -2084,7 +2204,8 @@ async fn real_subagent_scenario(root: &Path, scenario: &str) {
                 &agent_id,
                 "follow up after physical settlement",
                 crate::runtime::subagent::AgentActivationOrigin::ClientControl,
-                crate::runtime::CancellationSignal::new(),
+                crate::runtime::types::ApprovalMode::FullAccess,
+                crate::runtime::cancellation::CancellationSignal::new(),
             )
             .await
             .expect("resumed canonical Delegate acceptance");

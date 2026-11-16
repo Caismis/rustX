@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import type { SourceScope } from '../../../../../protocol/app-server/v77';
+import type { SourceScope } from '../../../../../protocol/app-server/v78';
 import { useTranslation } from '../../../locale/react';
 import { IconSearchOutline16 } from '../../../presentation/primitives/icons';
 import css from './Subagents.module.css';

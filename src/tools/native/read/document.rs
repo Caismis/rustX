@@ -546,7 +546,7 @@ mod tests {
         assert_eq!(read.expect("at the limit is accepted"), bytes);
         // An empty source is trivially within the bound.
         let read = super::read_bounded(std::io::Cursor::new(Vec::new()), 8);
-        assert!(read.expect("empty is accepted").is_empty());
+        assert_eq!(read.expect("empty is accepted"), [] as [u8; 0]);
     }
 
     /// The bounded acquisition primitive rejects a source one byte over the

@@ -1,7 +1,7 @@
 import {threadStatusText} from '../../../protocol/app-server/thread-status.ts';
-import type {ThreadStatusEntry} from '../../../protocol/app-server/v77.ts';
+import type {ThreadStatusEntry} from '../../../protocol/app-server/v78.ts';
 import { Container, Loader, Spacer, Text, type TUI } from "@earendil-works/pi-tui";
-import type { CollectionFrontier } from "../../../protocol/app-server/v77.ts";
+import type { CollectionFrontier } from "../../../protocol/app-server/v78.ts";
 import type { PresentationState } from "../presentation/state.ts";
 import { correlateTools } from "../presentation/tools.ts";
 import { selectTodos } from "../presentation/todos.ts";

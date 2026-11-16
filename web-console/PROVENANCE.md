@@ -12,7 +12,7 @@ The default Package glyph comes from the pinned Lucide/Iconify set (ISC).
 As in ZCode's ProviderLogo, an explicit provider field selects an asset; provider
 identity and protocol do not infer a logo. The optional native `icon` slug is
 carried through source read/write, redaction and TOML serialization, and omitted
-at the inference catalog boundary. App Server v77 is the mandatory contract;
+at the inference catalog boundary. App Server v78 is the mandatory contract;
 no old protocol path is retained. The picker uses existing Base UI modal and
 React Aria grid/search controls. Browser plugin is unavailable in this session;
 validation uses the repository's pinned Playwright/Chromium runner.
@@ -876,7 +876,7 @@ sidebar still predated main's Workflows entry; dialog geometry is unchanged.
 The branch also merges main at `d730966ce54ba330529bffb0279d6e0c4a44fd17`
 (PR #494). Native temporary questions and classification retain their execution,
 publication and cancellation owners. The combined vocabulary is App Server v54,
-Runtime Client v75, SQLite v77 and archive v10; request inspection retains schema 5
+Runtime Client v75, SQLite v78 and archive v10; request inspection retains schema 5
 without declared reasoning metadata. Generated artifacts contain both workspace
 change inspection and auxiliary delivery. The existing simplified header, Fork
 presentation, model editor and right-sidebar interactions are preserved.
@@ -2224,7 +2224,8 @@ Existing pinned source adaptations reused/extended:
 - `ui-permission-presets/.../PermissionSelect.tsx` and
   `ui-primitives/src/RiskConfirmation.tsx`: visual controls only. The upstream
   read-only/workspace-write presets and automatic permission controller are
-  excluded; rustX exposes only policy/full_access and reuses its source actor.
+  excluded; rustX exposes Issue #544 modes (`plan` / `automatic` / `full_access`)
+  and reuses its source actor.
 - `ui-chat/.../ReasoningRow.tsx` and the existing Markdown stack: compact
   Markdown typography, one parser/security/streaming implementation.
 - `ui-tool/.../components/ToolRow.tsx`: native-ID dispatch into the body primitives

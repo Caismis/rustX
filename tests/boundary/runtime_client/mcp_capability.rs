@@ -75,6 +75,8 @@ async fn capability_projection_carries_mcp_origin_metadata() {
                 )]),
             },
             policy: rustx::tools::types::ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     )]);
     let fixture = support::runtime_client_fixture::RuntimeClientFixture::builder(

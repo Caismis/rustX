@@ -88,7 +88,7 @@ impl SessionRuntimeManager {
         };
         let (mut selection, recover) = match input {
             ModelSelectionInput::Configuration(selection, recover) => (*selection, recover),
-            ModelSelectionInput::Catalog(choice) => (candidate.catalog_selection(&choice)?, true),
+            ModelSelectionInput::Catalog(choice) => (candidate.catalog_selection(&choice)?, false),
         };
         if recover {
             candidate.recover_auxiliary_models(&mut selection);

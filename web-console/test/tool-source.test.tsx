@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { ContentChunk, ContentRef, ForegroundToolExecution } from '../../protocol/app-server/v77';
+import type { ContentChunk, ContentRef, ForegroundToolExecution } from '../../protocol/app-server/v78';
 import { Content } from '../src/app/agent/Message';
 import { Tool } from '../src/app/agent/Tool';
 import { JournalSourceProvider } from '../src/app/agent/ObservationSource';
@@ -44,7 +44,7 @@ it('reads deferred write arguments only on expansion, preserves exact content an
   } finally { server.client.disconnect(); }
 });
 it('a streamed proposal reserves no assembly-text row before its native Tool header arrives', () => {
-  const blocks = [{ type: 'tool_call' as const, id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: {} }];
+  const blocks = [{ type: 'tool_call' as const, id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: { arguments: {} } }];
   const ui = render(<Content messageId={original.message_id!} blocks={blocks} streaming/>);
   expect(ui.container.childElementCount).toBe(0);
   expect(ui.container.textContent).toBe('');
@@ -55,7 +55,7 @@ it('a streamed proposal reserves no assembly-text row before its native Tool hea
 it('an accepted canonical call reads its omitted native descriptor instead of claiming it is assembling', async () => {
   const { server, source } = await fixture();
   try {
-    const ui = render(<JournalSourceProvider source={source}><Content messageId={original.message_id!} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: {} }]}/></JournalSourceProvider>);
+    const ui = render(<JournalSourceProvider source={source}><Content messageId={original.message_id!} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: { arguments: {} } }]}/></JournalSourceProvider>);
     expect(ui.queryByText(/Assembling/)).toBeNull();
     const trigger = await ui.findByRole('button', { expanded: false });
     fireEvent.click(trigger);
@@ -64,7 +64,7 @@ it('an accepted canonical call reads its omitted native descriptor instead of cl
   } finally { server.client.disconnect(); }
 });
 it('optional inline ids never hide an exact canonical block occurrence', () => {
-  const ui = render(<Content messageId={original.message_id!} tools={[{ ...original, call_id: null, tool_id: null }]} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: {} }]}/>);
+  const ui = render(<Content messageId={original.message_id!} tools={[{ ...original, call_id: null, tool_id: null }]} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: { arguments: {} } }]}/>);
   expect(ui.queryByText(/Assembling/)).toBeNull();
   expect(ui.getByRole('button', { expanded: false })).toBeTruthy();
 });
@@ -104,7 +104,7 @@ it.each(['root','child'] as const)('a frozen %s descriptor stays at C0 after liv
       result.page.items[0].value = frozen as never;
       return result;
     });
-    const ui = render(<JournalSourceProvider historical source={current} history={{ source_cut: cut.source_cut, entries: [] }}><Content messageId={original.message_id!} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: {} }]}/></JournalSourceProvider>);
+    const ui = render(<JournalSourceProvider historical source={current} history={{ source_cut: cut.source_cut, entries: [] }}><Content messageId={original.message_id!} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: { arguments: {} } }]}/></JournalSourceProvider>);
     fireEvent.click(await ui.findByRole('button', { expanded: false }));
     expect(await ui.findByText('# Native write report')).toBeTruthy();
     expect(ui.container.querySelector('[data-tool-renderer="write"] [data-state]')?.getAttribute('data-state')).toBe('running');
@@ -125,7 +125,7 @@ it('a deferred live descriptor refreshes J state at the new native cut without c
       result.page.items[0].value = { ...original, state: latest.revision === cut.revision ? { type: 'running', arguments: original.state.arguments } : original.state } as never;
       return result;
     });
-    const subject = () => <JournalSourceProvider source={live}><Content messageId={original.message_id!} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: {} }]}/></JournalSourceProvider>;
+    const subject = () => <JournalSourceProvider source={live}><Content messageId={original.message_id!} blocks={[{ type: 'tool_call', id: original.call_id!, tool_id: 'tool-write', name: 'write', arguments: { arguments: {} } }]}/></JournalSourceProvider>;
     const ui = render(subject());
     fireEvent.click(await ui.findByRole('button', { expanded: false }));
     expect(ui.getByText('# Native write report')).toBeTruthy();

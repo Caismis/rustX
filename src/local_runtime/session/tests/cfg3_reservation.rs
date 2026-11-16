@@ -295,13 +295,19 @@ fn r06_prepared_unpublished_is_inert_across_reopen() {
     let prepared = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     assert!(prepared.database_path.is_file());
     assert!(marker(directory.path(), &prepared.conversation_id).is_file());
-    assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        catalog.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     assert!(catalog.snapshot(&prepared.session_id).is_err());
     drop(catalog);
     let reopened = SessionCatalog::open_existing(directory.path())
         .unwrap()
         .unwrap();
-    assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        reopened.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     // Existence never claims membership; the consumed identity stays consumed.
     assert!(
         controller
@@ -333,7 +339,10 @@ fn r09_marker_and_bytes_alone_never_claim_ownership() {
     // authority names them: no Session membership, no resumable target and no
     // execution. Only a Catalog commit can claim the orphan.
     assert!(catalog.acquire_session(&session, None).is_err());
-    assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        catalog.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     assert!(catalog.snapshot(&session).is_err());
     assert!(allocation.join("conversation.sqlite").is_file());
 }
@@ -575,7 +584,10 @@ fn r06_kill_after_preparation_before_publication_leaves_inert_orphan() {
     let reopened = SessionCatalog::open_existing(directory.path())
         .unwrap()
         .unwrap();
-    assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        reopened.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     assert!(reopened.snapshot(&session).is_err());
     let database = reopened.database_path(&session, &conversation);
     assert!(
@@ -607,7 +619,10 @@ fn r07_kill_after_publication_leaves_complete_valid_conversation() {
         &reopened.database_path(&session, &conversation),
     )
     .unwrap();
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 }
 
 /// Instrumented exclusive stage profile of the **real**
@@ -684,11 +699,17 @@ fn r12_pre_visibility_fault_never_reports_success() {
     let result = catalog.publish_session(&prepared, SessionNodeOrigin::New);
     assert!(result.is_err());
     assert!(!result.unwrap_err().committed());
-    assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        catalog.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     let reopened = SessionCatalog::open_existing(directory.path())
         .unwrap()
         .unwrap();
-    assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        reopened.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
 }
 
 /// R12: reservation succeeds, then Conversation initialization fails. No
@@ -707,7 +728,10 @@ fn r12_initialization_failure_after_reservation_is_inert() {
         .prepare_session(&workspace_state(), &[])
         .unwrap_err();
     assert!(matches!(error, SessionError::Io { .. }), "{error:?}");
-    assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        catalog.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     // `allocate_ids` consumed session=70, node=71, conversation=72; the
     // marker for 72 is the retained consumption proof.
     let consumed = ConversationId::from_uuid(uuid(72)).unwrap();
@@ -721,7 +745,10 @@ fn r12_initialization_failure_after_reservation_is_inert() {
     let reopened = SessionCatalog::open_existing(directory.path())
         .unwrap()
         .unwrap();
-    assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        reopened.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     drop(reopened);
     // Retry resumes from a fresh identity and publishes a complete Session.
     let prepared = catalog.prepare_session(&workspace_state(), &[]).unwrap();
@@ -750,7 +777,10 @@ fn r12_destination_validation_failure_after_initialization_is_inert() {
         .publish_session(&prepared, SessionNodeOrigin::New)
         .unwrap_err();
     assert!(!error.committed());
-    assert!(catalog.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        catalog.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     assert_eq!(
         controller
             .reserve_conversation(&prepared.conversation_id)
@@ -761,7 +791,10 @@ fn r12_destination_validation_failure_after_initialization_is_inert() {
     let reopened = SessionCatalog::open_existing(directory.path())
         .unwrap()
         .unwrap();
-    assert!(reopened.list_page(None, 0, 32).unwrap().sessions.is_empty());
+    assert_eq!(
+        reopened.list_page(None, 0, 32).unwrap().sessions,
+        [] as [crate::local_runtime::session::SessionSummary; 0]
+    );
     drop(reopened);
     let next = catalog.prepare_session(&workspace_state(), &[]).unwrap();
     assert_ne!(next.conversation_id, prepared.conversation_id);

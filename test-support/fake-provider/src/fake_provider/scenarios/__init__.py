@@ -19,6 +19,7 @@ substitutes the concrete root at build time. A placeholder without a
 from __future__ import annotations
 
 import dataclasses
+import json
 from typing import Callable
 
 from fake_provider.scenario import Scenario, Step, Stream, ToolCall
@@ -58,7 +59,34 @@ def build(name: str, workspace: str | None = None) -> Scenario:
             f"unknown scenario {name!r}; registered: {', '.join(sorted(SCENARIOS))}"
         )
     scenario = factory()
-    return _substitute_workspace(scenario, workspace)
+    return _compile_calls(_substitute_workspace(scenario, workspace))
+
+
+def _compile_calls(scenario: Scenario) -> Scenario:
+    """Compile the scenario business-call DSL into the runtime envelope.
+
+    Codec/Raw framing fixtures keep their literal bytes. The workflow_output
+    terminal protocol has its own contract and is not an ordinary tool.
+    """
+    steps = []
+    for step in scenario.steps:
+        if not isinstance(step.respond, Stream):
+            steps.append(step)
+            continue
+        chunks = []
+        for chunk in step.respond.script:
+            if isinstance(chunk, ToolCall) and chunk.name != "workflow_output":
+                try:
+                    business = json.loads(chunk.arguments)
+                except json.JSONDecodeError:
+                    chunks.append(chunk)  # Deliberately malformed argument fixture.
+                    continue
+                if isinstance(business, dict):
+                    metadata = {key: business.pop(key) for key in ("execution_mode", "elevation_reason") if key in business}
+                    chunk = dataclasses.replace(chunk, arguments=json.dumps({"arguments": business, **metadata}, separators=(",", ":")))
+            chunks.append(chunk)
+        steps.append(dataclasses.replace(step, respond=Stream(*chunks)))
+    return Scenario(scenario.name, *steps)
 
 
 def _substitute_workspace(scenario: Scenario, workspace: str | None) -> Scenario:

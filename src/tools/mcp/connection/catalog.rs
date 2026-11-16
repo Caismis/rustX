@@ -169,7 +169,7 @@ impl McpConnection {
         let result = self.fetch_catalog(&transport, context).await;
         let unavailable = transport.runtime().reject_unusable_transport().await;
         let result = result.and_then(|tools| {
-            self.validate_catalog(&tools.tools)?;
+            Self::validate_catalog(&tools.tools)?;
             if let Some(reason) = unavailable {
                 return Err(McpError::Discovery(format!(
                     "MCP transport became unavailable during catalog discovery: {reason}"
@@ -230,18 +230,8 @@ impl McpConnection {
         })
     }
 
-    fn validate_catalog(&self, tools: &[CanonicalMcpTool]) -> Result<(), McpError> {
-        if !valid_catalog(tools)
-            || self.reconnect.as_ref().is_some_and(|authority| {
-                tools.iter().any(|tool| {
-                    crate::tools::schema::validate_execution_metadata_contract(
-                        authority.binding.policy.execution,
-                        &tool.input_schema,
-                    )
-                    .is_err()
-                })
-            })
-        {
+    fn validate_catalog(tools: &[CanonicalMcpTool]) -> Result<(), McpError> {
+        if !valid_catalog(tools) {
             return Err(McpError::Discovery(
                 "invalid or duplicate MCP catalog declarations".into(),
             ));

@@ -159,7 +159,7 @@ pub(crate) async fn cached_python_catalog_disconnect_scenario() {
         release.send(()).unwrap();
         operations.wait_for(|count| *count == 0).await.unwrap();
         assert_eq!(listings.available_permits(), 1);
-        assert!(draining.await.is_empty());
+        assert_eq!(draining.await, [] as [std::string::String; 0]);
         fixture.close().await;
     })).await;
 }
@@ -259,7 +259,7 @@ async fn t12_workflow_scratch_disconnect_retains_physical_request_until_settleme
         assert!(draining.as_mut().now_or_never().is_none(), "host drain must await the scratch worker");
         release.send(()).unwrap();
         operations.wait_for(|count| *count == 0).await.unwrap();
-        assert!(draining.await.is_empty());
+        assert_eq!(draining.await, [] as [std::string::String; 0]);
         fixture.close().await;
     }).await;
 }
@@ -360,7 +360,7 @@ async fn t08_t12_content_range_error_is_typed_correlated_and_keeps_connection_fo
             else {
                 panic!("authorized range EOF");
             };
-            assert!(chunk.data_base64.is_empty());
+            assert_eq!(chunk.data_base64, "");
             assert!(chunk.complete);
             assert_eq!(chunk.next_offset, None);
             assert_eq!(fixture.provider.request_bodies().len(), 1);
@@ -614,7 +614,7 @@ async fn blocked_websocket_overflows_with_controlled_duplex_capacity() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v77, {}",
+                "rustx.app-server.v78, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()
@@ -1027,7 +1027,7 @@ async fn authenticated_websocket_capacity_is_released_after_client_reaping() {
         request.headers_mut().insert(
             "sec-websocket-protocol",
             format!(
-                "rustx.app-server.v77, {}",
+                "rustx.app-server.v78, {}",
                 driver::credential_offer(driver::TOKEN)
             )
             .parse()
@@ -2773,7 +2773,10 @@ async fn t17_t20_stdio_saturation_deadline_finishes_the_physically_accepted_reco
         };
         assert_eq!(response.id, None);
         assert_eq!(response.error.code, -32700);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         fixture.close().await;
         eprintln!("T17 saturation deadline: cleanup complete");
     })
@@ -2874,7 +2877,10 @@ async fn t17_stdio_teardown_retires_unaccepted_record_without_write_readiness() 
                 "teardown cannot accept a new terminal record"
             );
             assert_eq!(valve.written(), accepted_before);
-            assert!(fixture.provider.request_bodies().is_empty());
+            assert_eq!(
+                fixture.provider.request_bodies(),
+                [] as [std::string::String; 0]
+            );
             fixture.close().await;
             eprintln!("T17 teardown eof={eof}: fixture closed");
         }
@@ -3354,7 +3360,7 @@ async fn read_effective_configuration_bytes(
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(&chunk.data_base64)
             .unwrap();
-        assert!(!decoded.is_empty());
+        assert_ne!(decoded, [] as [u8; 0]);
         assert!(decoded.len() <= 65_536);
         bytes.extend(decoded);
         let Some(next) = chunk.next_offset else { break };

@@ -7,7 +7,7 @@ import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { captureEvidence } from './screenshot';
 import { rootBlock } from '../workflow-root';
-import type { WorkflowCheckReport } from '../../../protocol/app-server/v77';
+import type { WorkflowCheckReport } from '../../../protocol/app-server/v78';
 import { setNodePresentation } from '../../src/app/workflows/document/geometry';
 import type { WorkflowDocument } from '../../src/app/workflows/document/model';
 

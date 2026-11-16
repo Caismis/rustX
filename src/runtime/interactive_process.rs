@@ -353,6 +353,55 @@ pub(crate) struct SupervisedInteractiveProcess {
 }
 
 #[cfg(unix)]
+/// Drains child stderr until EOF while retaining a bounded preview buffer.
+fn spawn_stderr_drain(
+    stderr: Option<tokio::process::ChildStderr>,
+) -> (
+    Arc<Mutex<Vec<u8>>>,
+    tokio::sync::watch::Receiver<Option<bool>>,
+) {
+    let stderr_capture = Arc::new(Mutex::new(Vec::new()));
+    let (stderr_done, stderr_complete) = tokio::sync::watch::channel(None);
+    if let Some(mut stderr_pipe) = stderr {
+        let capture = stderr_capture.clone();
+        // The stderr drain reads until EOF — the preview bound only
+        // limits what is retained, never how long the pipe is drained,
+        // so a server that keeps writing stderr can never die on a full
+        // pipe while it continues operating. The bounded preview is
+        // published incrementally so it is observable before EOF.
+        tokio::spawn(async move {
+            let mut bytes = Vec::new();
+            let mut buffer = [0u8; 8192];
+            let mut complete = false;
+            let mut truncated = false;
+            loop {
+                match stderr_pipe.read(&mut buffer).await {
+                    Ok(0) => {
+                        complete = true;
+                        break;
+                    }
+                    Err(_) => break,
+                    Ok(count) => {
+                        let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(bytes.len());
+                        truncated |= count > remaining;
+                        bytes.extend_from_slice(&buffer[..count.min(remaining)]);
+                        capture
+                            .lock()
+                            .expect("interactive stderr lock")
+                            .clone_from(&bytes);
+                    }
+                }
+            }
+            *capture.lock().expect("interactive stderr lock") = bytes;
+            let _ = stderr_done.send(Some(complete && !truncated));
+        });
+    } else {
+        let _ = stderr_done.send(Some(true));
+    }
+    (stderr_capture, stderr_complete)
+}
+
+#[cfg(unix)]
 impl SupervisedInteractiveProcess {
     /// Starts one interactive process under the dedicated long-lived owner.
     pub(crate) fn spawn(spec: InteractiveProcessSpec) -> Result<Self, String> {
@@ -386,9 +435,8 @@ impl SupervisedInteractiveProcess {
         ));
         let listener = tokio::net::UnixListener::bind(&socket_path)
             .map_err(|error| format!("cannot bind interactive control socket: {error}"))?;
-        let mut supervisor = tokio::process::Command::new(
-            crate::runtime::process_runner::interactive_supervisor_binary(),
-        );
+        let supervisor_path = crate::runtime::process_runner::interactive_supervisor_binary();
+        let mut supervisor = tokio::process::Command::new(&supervisor_path);
         supervisor.arg("outer").arg(&program).args(&args);
         supervisor
             .current_dir(&cwd)
@@ -396,74 +444,43 @@ impl SupervisedInteractiveProcess {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+        let environment_snapshot =
+            crate::runtime::supervised_unit::snapshot_command_environment(&environment)?;
         supervisor.env(
-            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_ENV,
-            serde_json::to_string(&environment).map_err(|error| error.to_string())?,
+            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            environment_snapshot.path(),
         );
         #[cfg(test)]
         test_control.configure_supervisor(&mut supervisor);
         supervisor.env(RUSTX_CONTROL_ENV, &socket_path);
-        let mut child = supervisor
-            .spawn()
-            .map_err(|error| format!("cannot spawn interactive supervisor: {error}"))?;
+        let mut child = supervisor.spawn().map_err(|error| {
+            format!(
+                "cannot spawn interactive supervisor at {}: {error}",
+                supervisor_path.display()
+            )
+        })?;
         drop(supervisor);
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let stderr_capture = Arc::new(Mutex::new(Vec::new()));
-        let (stderr_done, stderr_complete) = tokio::sync::watch::channel(None);
-        if let Some(mut stderr_pipe) = stderr {
-            let capture = stderr_capture.clone();
-            // The stderr drain reads until EOF — the preview bound only
-            // limits what is retained, never how long the pipe is drained,
-            // so a server that keeps writing stderr can never die on a full
-            // pipe while it continues operating. The bounded preview is
-            // published incrementally so it is observable before EOF.
-            tokio::spawn(async move {
-                let mut bytes = Vec::new();
-                let mut buffer = [0u8; 8192];
-                let mut complete = false;
-                let mut truncated = false;
-                loop {
-                    match stderr_pipe.read(&mut buffer).await {
-                        Ok(0) => {
-                            complete = true;
-                            break;
-                        }
-                        Err(_) => break,
-                        Ok(count) => {
-                            let remaining = MAX_PROCESS_OUTPUT_BYTES.saturating_sub(bytes.len());
-                            truncated |= count > remaining;
-                            bytes.extend_from_slice(&buffer[..count.min(remaining)]);
-                            capture
-                                .lock()
-                                .expect("interactive stderr lock")
-                                .clone_from(&bytes);
-                        }
-                    }
-                }
-                *capture.lock().expect("interactive stderr lock") = bytes;
-                let _ = stderr_done.send(Some(complete && !truncated));
-            });
-        } else {
-            let _ = stderr_done.send(Some(true));
-        }
+        let (stderr_capture, stderr_complete) = spawn_stderr_drain(child.stderr.take());
         let (shutdown_tx, shutdown_rx) = tokio::sync::mpsc::channel(1);
         let settlement = Arc::new(SettlementCell::new());
-        let settlement_for_driver = settlement.clone();
         #[cfg(test)]
         let supervisor_child_pid = child.id().expect("the spawned supervisor child has a pid");
         // The runtime-owned driver is the physical settlement owner from
         // the moment the spawn succeeded. Dropping the JoinHandle detaches
         // it; the driver completes the terminal exchange and reaps the
         // direct supervisor child regardless of the business handles.
-        std::mem::drop(tokio::spawn(drive_interactive_unit(
-            child,
-            listener,
-            socket_path,
-            shutdown_rx,
-            settlement_for_driver,
-            test_control,
+        std::mem::drop(tokio::spawn(futures_util::FutureExt::map(
+            drive_interactive_unit(
+                child,
+                listener,
+                socket_path,
+                shutdown_rx,
+                settlement.clone(),
+                test_control,
+            ),
+            move |()| drop(environment_snapshot),
         )));
         Ok(Self {
             stdin,
@@ -703,7 +720,7 @@ async fn run_interactive_unit(
     // top-level runtime it resolves immediately; inside a subagent child it
     // holds START closed until the top-level parent has acknowledged
     // retention of this exact anchor. MCP stdio therefore uses exactly the
-    // same generic mechanism as Bash, Python, and Skill environments.
+    // same generic mechanism as Bash and Managed Python.
     let mut anchor_gate = crate::runtime::nested_containment::AnchorGate::Idle;
     loop {
         tokio::select! {
@@ -1303,7 +1320,7 @@ mod interactive_tests {
             "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR",
             "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP",
             "RUSTX_TEST_INTERACTIVE_TRACE",
-            "RUSTX_COMMAND_ENVIRONMENT",
+            "RUSTX_COMMAND_ENVIRONMENT_FILE",
             "RUSTX_PHYSICAL_CONTINUATION",
         ];
         let environment = ToolEnvironment::from_authorized(

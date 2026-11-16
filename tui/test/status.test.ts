@@ -94,7 +94,7 @@ describe("working status", () => {
             foreground: [
               foreground("call-1", "tool-bash", "bash", {
                 type: "running",
-                arguments: "{}",
+                arguments: "{\"arguments\":{}}",
               }),
             ],
           }),
@@ -112,7 +112,7 @@ describe("working status", () => {
             foreground: [
               foreground("call-1", "tool-bash", "bash", {
                 type: "assembled",
-                arguments: "{}",
+                arguments: "{\"arguments\":{}}",
               }),
             ],
           }),
@@ -320,9 +320,9 @@ describe("footer", () => {
   it("defers whole model detail when essential facts cannot fit, never inventing a shorter identity", () => {
     const rendered = footer(stateOf({
       model: sessionModel("provider/" + "long-model-identity".repeat(5)),
-      effective_approval_mode: "policy",
+      effective_approval_mode: "plan",
     }), "connected", 24);
-    assert.equal(rendered, "POLICY\nmodel: /settings");
+    assert.equal(rendered, "PLAN · model: /settings");
   });
 
   it("omits settled outcomes from stable context", () => {
@@ -393,8 +393,8 @@ describe("footer", () => {
 
   it("names the generation-owned effective approval mode", () => {
     assert.match(
-      footer(stateOf({ effective_approval_mode: "policy" }), "connected"),
-      /approval POLICY/,
+      footer(stateOf({ effective_approval_mode: "plan" }), "connected"),
+      /approval PLAN/,
     );
     assert.match(
       footer(stateOf({ effective_approval_mode: "full_access" }), "connected"),
@@ -634,7 +634,7 @@ describe("activity area", () => {
         foreground: [
           foreground("call-1", "tool-bash", "bash", {
             type: "settled",
-            arguments: '{"command":"sleep 999"}',
+            arguments: "{\"arguments\":{\"command\":\"sleep 999\"}}",
             result: toolResult({ status: { type: "timed_out" } }),
           }),
         ],
@@ -660,7 +660,7 @@ describe("activity area", () => {
               id: "call-1",
               tool_id: "tool-bash",
               name: "bash",
-              arguments: { command: "ls" },
+              arguments: { arguments: { command: "ls" } },
             },
           ],
         },
@@ -669,7 +669,7 @@ describe("activity area", () => {
         foreground: [
           {...foreground("call-1", "tool-bash", "bash", {
             type: "running",
-            arguments: '{"command":"ls"}',
+            arguments: "{\"arguments\":{\"command\":\"ls\"}}",
           }),message_id:"m1",occurrence:{locator:{type:"by_message_id",message_id:"m1"},block_index:0}},
         ],
       }),
@@ -874,7 +874,7 @@ it("absent metadata is omitted and footer never reads transcript history", () =>
 it("an unavailable selection is named as configured, never shown through a fallback", () => {
   // Issue #459: the published catalog no longer admits the configured Model.
   const retained = stateOf({ model: { ...sessionModel("gone/model"), unavailable: "unknown model gone/model" } });
-  const loaded = stateOf({ model: { ...sessionModel("gone/model"), effective: undefined, summary: undefined, unavailable: "unknown model gone/model" } });
+  const loaded = stateOf({ model: { ...sessionModel("gone/model"), effective: undefined, auxiliary: undefined, unavailable: "unknown model gone/model" } });
   for (const state of [retained, loaded]) {
     const rendered = plainText(footer(state, "connected"));
     assert.match(rendered, /gone\/model unavailable/);
@@ -889,9 +889,9 @@ it("an unavailable selection is named as configured, never shown through a fallb
 });
 
 it("unknown context window is omitted and snapshot replacement rebuilds approval/model truth", () => {
-  const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "policy" });
+  const before = stateOf({ model: sessionModel("old/model"), effective_approval_mode: "plan" });
   const after = stateOf({ model: sessionModel("new/model"), effective_approval_mode: "full_access" });
-  assert.match(footer(before, "connected"), /approval POLICY/);
+  assert.match(footer(before, "connected"), /approval PLAN/);
   assert.match(footer(after, "connected"), /new\/model.*approval FULL ACCESS/);
   assert.doesNotMatch(footer(after, "connected"), /old\/model|next attempt/);
   const noWindow = stateOf({ model: { ...sessionModel("new/model"), effective: { ...sessionModel("new/model").effective!, contextWindow: 0 } } });
@@ -911,7 +911,7 @@ it("drops tokens then Session then context before essential facts require two ro
   assert.match(withoutSession, /context/); assert.doesNotMatch(withoutSession, /session/);
   const essentials = footer(state, "connected", 30, session);
   assert.doesNotMatch(essentials, /context|session|↑/);
-  assert.match(essentials, /alpha\/model-a.*approval POLICY/s);
+  assert.match(essentials, /alpha\/model-a.*approval PLAN/s);
   assert.ok(essentials.split("\n").length <= 2);
 });
 

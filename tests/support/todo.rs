@@ -81,7 +81,7 @@ impl TodoPlane {
             id: ToolCallId::new("call-todo"),
             tool_id: definition.id,
             name: "todo".to_owned(),
-            arguments,
+            arguments: common::tool_call_envelope(arguments),
         };
         let PreflightOutcome::Ready(prepared) =
             self.fixture.registry.preflight(&call).expect("preflight")

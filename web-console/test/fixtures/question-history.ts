@@ -1,4 +1,4 @@
-import type { ForegroundToolExecution, RuntimeClientSnapshot } from '../../../protocol/app-server/v77';
+import type { ForegroundToolExecution, RuntimeClientSnapshot } from '../../../protocol/app-server/v78';
 import { interaction, type Server } from '../fixture';
 import { workflowReviewHistoryFixture } from './workflow-review-history';
 
@@ -12,10 +12,10 @@ export function questionHistoryFixture(server: Server, current: RuntimeClientSna
     { header: 'Scope', question: 'Which scope?', options: [{ label: 'Desktop', description: 'Desktop views.' }, { label: 'Mobile', description: 'Mobile views.' }] },
   ];
   const id = 'ask-history', block_index = entry.item.message.content.length;
-  entry.item.message.content.push({ type: 'tool_call', id, tool_id: 'tool-ask-user', name: 'ask_user', arguments: { questions } });
+  entry.item.message.content.push({ type: 'tool_call', id, tool_id: 'tool-ask-user', name: 'ask_user', arguments: { arguments: { questions } } });
   const tool: ForegroundToolExecution = { message_id: entry.item.message.id, block_index, call_id: id, tool_id: 'tool-ask-user', name: 'ask_user', assembly_complete: true,
     committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: entry.item.message.id! }, block_index },
-    state: { type: 'settled', arguments: JSON.stringify({ questions }), result: { status: { type: 'success' }, duration_ms: '1000', content: [{ type: 'json', value: { cancelled: false, answers: [
+    state: { type: 'settled', arguments: JSON.stringify({ arguments: { questions } }), result: { status: { type: 'success' }, duration_ms: '1000', content: [{ type: 'json', value: { cancelled: false, answers: [
       { question_index: 0, kind: 'option', answer: 'Simplify' }, { question_index: 1, kind: 'multiple', selected: ['Browser', 'Unit'] },
     ] } }] } } };
   entry.tool_calls!.push(tool);
@@ -31,9 +31,9 @@ export function questionHistoryFixture(server: Server, current: RuntimeClientSna
   const prompt = { role: 'user' as const, source: 'human' as const, id: 'pending-user', content: [{ type: 'text' as const, text: 'Ask another question.' }] };
   const message = { role: 'assistant' as const, id: 'pending-ask-message', content: [{ type: 'tool_call' as const, id: 'call-ask', tool_id: 'tool-ask-user', name: 'ask_user', arguments: args }] };
   const live: ForegroundToolExecution = { ...tool, message_id: message.id, block_index: 0, call_id: 'call-ask',
-    occurrence: { locator: { type: 'by_message_id', message_id: message.id }, block_index: 0 }, state: { type: 'running', arguments: JSON.stringify(args) } };
+    occurrence: { locator: { type: 'by_message_id', message_id: message.id }, block_index: 0 }, state: { type: 'running', arguments: JSON.stringify({ arguments: args }) } };
   current.pending_interactions = [pending];
-  current.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 2, foreground: [live], execution_settings: { resource_revision: '1', approval_mode: 'policy' } };
+  current.attempt = { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 2, foreground: [live], execution_settings: { resource_revision: '1', approval_mode: 'plan' } };
   current.messages.push(prompt, message);
   current.transcript.entries!.push({ cursor: '8', item: { type: 'message', message: prompt } }, { cursor: '9', item: { type: 'message', message }, tool_calls: [live] });
   server.handlers.set('session/turns', () => ({ type: 'conversation_turns', page: {

@@ -40,7 +40,7 @@ fn cfg237_templates_use_native_loader_compiler_and_editor_schema() {
             "examples/local-runtime/workflow-templates/.agents/workflows/{id}.yaml"
         ));
         let definition: WorkflowDefinition =
-            serde_yaml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+            serde_yaml_ng::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
         let mut shape = serde_json::to_value(definition).unwrap();
         assert!(validator.is_valid(&shape));
         shape["block"]["unknown"] = json!(true);
@@ -72,7 +72,7 @@ fn cfg237_loop_and_control_failures_keep_authored_paths() {
             .join("examples/local-runtime/workflow-templates/.agents/workflows/human_plan.yaml"),
     )
     .unwrap();
-    let body: WorkflowDefinition = serde_yaml::from_str(&text).unwrap();
+    let body: WorkflowDefinition = serde_yaml_ng::from_str(&text).unwrap();
     let original = json!({"description":"Bounded review loop", "block":{
         "input":body.block.input, "nodes": {"workflow_start":{"type":"start"},
             "revise":{"type":"loop", "loop_count":2, "body":test_body(&serde_json::to_value(&body.block).unwrap()),
@@ -129,7 +129,7 @@ fn cfg237_compiled_explanation_ignores_yaml_map_insertion_order() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/local-runtime/workflow-templates/.agents/workflows/parallel_checks.yaml");
     let text = std::fs::read_to_string(path).unwrap();
-    let mut reordered: serde_yaml::Value = serde_yaml::from_str(&text).unwrap();
+    let mut reordered: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).unwrap();
     let nodes = reordered["block"]["nodes"].as_mapping_mut().unwrap();
     *nodes = nodes
         .clone()
@@ -138,12 +138,12 @@ fn cfg237_compiled_explanation_ignores_yaml_map_insertion_order() {
         .into_iter()
         .rev()
         .collect();
-    let reordered = serde_yaml::to_string(&reordered).unwrap();
+    let reordered = serde_yaml_ng::to_string(&reordered).unwrap();
     assert_ne!(text, reordered);
     let compile = |text: &str| {
         WorkflowProgram::compile(
             WorkflowId::parse("parallel_checks").unwrap(),
-            serde_yaml::from_str(text).unwrap(),
+            serde_yaml_ng::from_str(text).unwrap(),
         )
         .unwrap()
     };

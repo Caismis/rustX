@@ -42,7 +42,7 @@ describe("correlation identity", () => {
         foreground: [
           foreground("call-1", "tool-bash", "bash", {
             type: "settled",
-            arguments: '{"command":"ls"}',
+            arguments: "{\"arguments\":{\"command\":\"ls\"}}",
             result: toolResult(),
           }),
         ],
@@ -70,7 +70,7 @@ describe("correlation identity", () => {
         foreground: [
           foreground("call-1", "tool-bash", "bash", {
             type: "settled",
-            arguments: '{"command":"ls"}',
+            arguments: "{\"arguments\":{\"command\":\"ls\"}}",
             result: toolResult(),
           }),
         ],
@@ -101,11 +101,11 @@ describe("correlation identity", () => {
         foreground: [
           foreground("call-a", "tool-bash", "bash", {
             type: "running",
-            arguments: '{"command":"ls"}',
+            arguments: "{\"arguments\":{\"command\":\"ls\"}}",
           }),
           foreground("call-b", "tool-bash", "bash", {
             type: "settled",
-            arguments: '{"command":"ls"}',
+            arguments: "{\"arguments\":{\"command\":\"ls\"}}",
             result: toolResult({ status: { type: "failed", error: "boom" } }),
           }),
         ],
@@ -136,14 +136,14 @@ describe("correlation identity", () => {
         foreground: [
           foreground("call-1", "tool-read", "read", {
             type: "running",
-            arguments: '{"path":"/workspace/a.rs"}',
+            arguments: "{\"arguments\":{\"path\":\"/workspace/a.rs\"}}",
           }),
         ],
       }),
     });
     const committed=state.transcript.find(row=>row.kind==='committed' && row.message.id==='m1');
     assert.ok(committed?.kind==='committed');
-    committed.toolCalls=[{...foreground('call-1','tool-read','read',{type:'settled',arguments:'{"path":"/workspace/a.rs"}',result:toolResult()}),message_id:'m1',occurrence:{locator:{type:'by_message_id',message_id:'m1'},block_index:0}}];
+    committed.toolCalls=[{...foreground('call-1','tool-read','read',{type:'settled',arguments:"{\"arguments\":{\"path\":\"/workspace/a.rs\"}}",result:toolResult()}),message_id:'m1',occurrence:{locator:{type:'by_message_id',message_id:'m1'},block_index:0}}];
     assert.equal(
       correlateTools(state).byCallId.get("call-1")?.lifecycle.type,
       "settled",
@@ -159,7 +159,7 @@ describe("correlation identity", () => {
         foreground: [
           foreground("call-1", "tool-bash", "bash", {
             type: "settled",
-            arguments: '{"command":"ls"}',
+            arguments: "{\"arguments\":{\"command\":\"ls\"}}",
             result: toolResult(),
           }),
         ],
@@ -482,7 +482,7 @@ describe("tool-result chronology", () => {
         foreground: [
           foreground("call-1", "tool-bash", "bash", {
             type: "settled",
-            arguments: '{"command":"ls"}',
+            arguments: "{\"arguments\":{\"command\":\"ls\"}}",
             result: toolResult(),
           }),
         ],
@@ -523,11 +523,11 @@ describe("lifecycle progression", () => {
         block_index: 0,
         call: { id: "call-1", tool_id: "tool-bash", name: "bash" },
       },
-      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'tool_call_arguments',delta:'{"command":'}, 0, 1),
-      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'tool_call_arguments',delta:'"cargo test"}'}, utf8Length(['{"command":'].join('')), 2),
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'tool_call_arguments',delta:'{"arguments":{"command":'}, 0, 1),
+      contentAdvance({attempt_id:"a1",message_id:"m1",block_index:0,kind:'tool_call_arguments',delta:'"cargo test"}}'}, utf8Length(['{"arguments":{"command":'].join('')), 2),
       {
         type: "tool_call_assembled" as const, position:0,foreground_position:0,
-        arguments_json: '{"command":"cargo test"}',
+        arguments_json: '{"arguments":{"command":"cargo test"}}',
         attempt_id: "a1",
         message_id: "m1",
         block_index: 0,
@@ -535,7 +535,7 @@ describe("lifecycle progression", () => {
           id: "call-1",
           tool_id: "tool-bash",
           name: "bash",
-          arguments: { command: "cargo test" },
+          arguments: { arguments: { command: "cargo test" } },
         },
       },
       {
@@ -631,7 +631,7 @@ describe("lifecycle progression", () => {
     const slot = state.attempt?.foreground[0];
 
     assert.equal(slot?.name, "bash");
-    assert.equal(slot?.state.arguments, '{"command":"cargo test"}');
+    assert.equal(slot?.state.arguments, '{"arguments":{"command":"cargo test"}}');
   });
 
   it("folds incrementally to the same state a fresh snapshot rebuilds", () => {
@@ -649,14 +649,14 @@ describe("lifecycle progression", () => {
                 call_id: "call-1",
                 tool_id: "tool-bash",
                 name: "bash",
-                arguments: '{"command":"cargo test"}',
+                arguments: "{\"arguments\":{\"command\":\"cargo test\"}}",
               },
             ],
           },
           foreground: [
             foreground("call-1", "tool-bash", "bash", {
               type: "running",
-              arguments: '{"command":"cargo test"}',
+              arguments: "{\"arguments\":{\"command\":\"cargo test\"}}",
             }),
           ],
         }),
@@ -690,7 +690,7 @@ it("every native lifecycle uses the same neutral transcript surface, including s
           ...(split ? [userMessage("between", "canonical separator")] : []),
           toolMessage("m2", "call-1", toolId, result),
         ], attempt: attemptView({ foreground: [foreground("call-1", toolId, toolId, {
-          type: "settled", arguments: "{}", result,
+          type: "settled", arguments: "{\"arguments\":{}}", result,
         })] }) });
         const blocks = renderTranscript(state, prefs()).filter((block) => block.background === "tool");
         assert.equal(blocks.length, split ? 2 : 1);
@@ -720,7 +720,7 @@ it('T14 canonical Tool content never fabricates execution settlement',()=>{
 
 
 it('T14 deferred native C metadata proves commitment without J settlement', () => {
-  const execution = foreground('call', 'tool-present', 'present', {type:'assembled',arguments:'{}'});
+  const execution = foreground('call', 'tool-present', 'present', {type:'assembled',arguments:"{\"arguments\":{}}"});
   execution.result_metadata_ref = {
     conversation_id: snapshot().conversation_id,
     source: {type:'canonical_message_block',component:'message_metadata',locator:{type:'by_ledger_position',position:2},block_index:0},
@@ -740,7 +740,7 @@ it('T14 deferred native C metadata proves commitment without J settlement', () =
 
 
 it('T14 canonical descriptor Tool receipts survive an unrefreshed transcript cache', () => {
-  const execution = foreground('call', 'tool-present', 'present', {type:'settled',arguments:'{}',result:toolResult()});
+  const execution = foreground('call', 'tool-present', 'present', {type:'settled',arguments:"{\"arguments\":{}}",result:toolResult()});
   execution.committed_result = toolResult();
   const state = stateOf({messages:[assistantBlocks('m1',[toolCallBlock('call','tool-present','present',{})])],
     message_descriptors:[{identity:'m1',locator:{type:'by_message_id',message_id:'m1'},role:'assistant',kind:'assistant',

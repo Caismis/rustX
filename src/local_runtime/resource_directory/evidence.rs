@@ -53,7 +53,13 @@ pub(super) fn capture(
                 id,
                 package
                     .as_ref()
-                    .map(crate::tools::python::PythonToolPackage::source_digest)
+                    .map(|package| {
+                        (
+                            package.source_digest(),
+                            package.permissions(),
+                            package.tool_permissions(),
+                        )
+                    })
                     .map_err(ToString::to_string),
             ),
         )?;

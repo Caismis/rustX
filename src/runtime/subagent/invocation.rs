@@ -319,6 +319,7 @@ mod tests {
                 tools,
                 skills: crate::runtime::agent_profile::AgentSkillSelection::Exact(skills),
                 inherit_project_instructions: true,
+                permissions: None,
                 extensions,
                 workflows: std::collections::BTreeSet::default(),
             },
@@ -425,8 +426,14 @@ mod tests {
     fn sub258_explicit_empty_tool_and_skill_selections_are_empty() {
         let role = role();
         let cleared = parse(serde_json::json!({"tools": {}, "skills": []})).expect("parses");
-        assert!(cleared.effective_tools(&role).is_empty());
-        assert!(cleared.effective_skills(&role).is_empty());
+        assert_eq!(
+            cleared.effective_tools(&role),
+            [] as [crate::capabilities::selection::AgentToolSelection; 0]
+        );
+        assert_eq!(
+            cleared.effective_skills(&role),
+            [] as [std::string::String; 0]
+        );
     }
 
     /// An explicit `null` is a different spelling from an absent key and must

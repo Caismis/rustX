@@ -53,7 +53,7 @@ fn model_source<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
         assert_eq!(chunk.cut, page.read_cut);
         assert_eq!(chunk.domain, page.domain);
         assert_eq!(chunk.item_offset, item_offset);
-        assert!(chunk.path.is_empty());
+        assert_eq!(chunk.path, [] as [std::string::String; 0]);
         assert_eq!(chunk.offset, offset);
         assert_eq!(
             chunk.representation,
@@ -209,7 +209,7 @@ fn catalog_value(
     rustx::model::catalog::ModelCatalogView { models }
 }
 
-const LIVENESS: std::time::Duration = std::time::Duration::from_mins(2);
+const LIVENESS: std::time::Duration = std::time::Duration::from_secs(45);
 
 /// The literal credential the fixture catalog binds. It must never appear in
 /// any client-visible value.
@@ -339,7 +339,10 @@ async fn standalone_model_selection_remains_writable_through_host_attachment_and
     let checkpoint = host.checkpoint().unwrap();
     assert_eq!(checkpoint.snapshot.model.unwrap().configured, b);
     assert!(checkpoint.cursor > initial_cursor);
-    assert!(provider.requests().is_empty());
+    assert_eq!(
+        provider.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     host.shutdown().await.unwrap();
 }
 
@@ -399,7 +402,10 @@ async fn the_identity_receipt_and_checkpoint_keep_the_redacted_session_model() {
         Some(ModelProfileId::new("on")),
         "the model's declared default profile is selected"
     );
-    assert_eq!(model.summary, Some(AuxiliaryModelView::Session));
+    assert!(matches!(
+        model.auxiliary,
+        Some(AuxiliaryModelView::Session { .. })
+    ));
 
     // The effective capabilities are the intersection, not the raw claim.
     assert!(
@@ -658,7 +664,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
 
     let summary_policy = rustx::model::session::AuxiliaryModelPolicy::Explicit {
         model: model_ref("summary/summary-model"),
-        profile: None,
+        profile: crate::model::AuxiliaryProfileSelection::ModelDefault,
         request_params: common::request_params(serde_json::json!({"summary_tag": "keep"})),
         max_output_tokens: Some(300),
     };
@@ -667,10 +673,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         profile: Some(ModelProfileId::new("off")),
         request_params: common::request_params(serde_json::json!({"top_k": 40})),
         max_output_tokens: Some(1_000),
-        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-        classification_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
-        btw_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
-        summary_model: summary_policy.clone(),
+        auxiliary: summary_policy.clone(),
     };
     let initial_response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(1),
@@ -683,10 +686,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         profile: None,
         request_params: rustx::model::RequestParams::new(),
         max_output_tokens: None,
-        title_model: crate::model::session::AuxiliaryModelPolicy::Session,
-        classification_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
-        btw_model: Box::new(crate::model::session::AuxiliaryModelPolicy::Session),
-        summary_model: summary_policy.clone(),
+        auxiliary: summary_policy.clone(),
     };
     let response = attachment.handle_request(RuntimeClientRequest::ModelSet {
         id: RequestId::new(2),
@@ -706,7 +706,7 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
     assert_eq!(model.effective.as_ref().unwrap().profile, None);
     assert_eq!(model.effective.as_ref().unwrap().max_output_tokens, 2_048);
     assert!(model.effective.as_ref().unwrap().request_params.is_empty());
-    let Some(AuxiliaryModelView::Explicit(summary)) = model.summary else {
+    let Some(AuxiliaryModelView::Explicit { effective: summary }) = model.auxiliary else {
         panic!("the explicit summary policy survives the primary switch");
     };
     assert_eq!(summary.model, model_ref("summary/summary-model"));
@@ -722,8 +722,8 @@ async fn primary_model_selection_resets_primary_overrides_and_preserves_summary_
         .expect("snapshot");
     assert_eq!(snapshot.model.as_ref().unwrap().configured, selected);
     assert_eq!(
-        snapshot.model.as_ref().unwrap().summary,
-        Some(AuxiliaryModelView::Explicit(summary))
+        snapshot.model.as_ref().unwrap().auxiliary,
+        Some(AuxiliaryModelView::Explicit { effective: summary })
     );
 }
 
@@ -755,7 +755,10 @@ async fn runtime_client_lists_a_model_without_synthetic_profiles() {
         .iter()
         .find(|model| model.model == model_ref("always/always-on"))
         .expect("always-on model is listed");
-    assert!(always_on.profiles.is_empty());
+    assert_eq!(
+        always_on.profiles,
+        [] as [crate::model::catalog::ModelProfileView; 0]
+    );
     assert_eq!(always_on.default_profile, None);
 }
 
@@ -874,10 +877,10 @@ async fn the_attempt_view_reports_the_model_it_was_admitted_with() {
         model_ref("alpha/model-a"),
         "the settled attempt still reports the model it ran with"
     );
-    assert_eq!(
+    assert!(matches!(
         attempt.model.as_ref().unwrap().summary,
-        AuxiliaryModelView::Session
-    );
+        AuxiliaryModelView::Session { .. }
+    ));
 }
 
 /// The incremental A -> B invariant, proven from the event stream alone.
@@ -1150,10 +1153,10 @@ async fn model_set_protected_keys_use_serialization_neutral_diagnostics() {
         ),
         (
             2,
-            serde_json::json!({"model": "alpha/model-a", "summaryModel": {
+            serde_json::json!({"model": "alpha/model-a", "auxiliary": {
                 "mode": "explicit", "model": "summary/summary-model", "request_params": {"messages": []}
             }}),
-            "explicit summary",
+            "auxiliary",
         ),
     ] {
         let config: SessionModelConfig =

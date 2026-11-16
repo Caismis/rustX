@@ -14,8 +14,7 @@ use crate::runtime::subagent::catalog::SubagentName;
 use crate::runtime::subagent::ipc::{SUBAGENT_IPC_VERSION, SubagentChildSpec};
 use crate::runtime::subagent::resolver::{ResolvedSubagentSpec, ResolvedSubagentTool};
 use crate::tools::types::{
-    ToolApprovalPolicy, ToolConcurrencyPolicy, ToolDefinition, ToolExecutionPolicy,
-    ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
+    ToolDefinition, ToolExecutionPolicy, ToolInvocationPolicy, ToolOrigin, ToolReplayPolicy,
 };
 
 #[cfg(feature = "mcp-fixture")]
@@ -195,7 +194,9 @@ fn spec_with_extensions(
                 crate::runtime::subagent::resolver::ResolvedSubagentMaterialization::default(),
             extensions,
         },
-        approval_mode: crate::runtime::ApprovalMode::Policy,
+        // Binding/gating proofs may carry tools; Full Access avoids Plan Ask
+        // stalls when a caller registers a mutating FakeTool.
+        approval_mode: crate::runtime::ApprovalMode::FullAccess,
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: crate::context::SessionContextPolicy {
@@ -274,7 +275,10 @@ async fn child_binding_gates_historical_guidance_before_activation() {
         store.load_pending().unwrap()[0].message_id,
         accepted.message_id
     );
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert!(
         !store
             .read_events(None, 128)
@@ -370,12 +374,9 @@ async fn ext259_parent_and_concurrent_child_todo_lists_never_alias() {
             .todo_snapshot()
             .expect("a Todo-enabled child composes a list")
     };
-    assert!(
-        parent
-            .todo_snapshot()
-            .expect("parent list")
-            .tasks
-            .is_empty()
+    assert_eq!(
+        parent.todo_snapshot().expect("parent list").tasks,
+        [] as [crate::tools::todo::TodoTask; 0]
     );
     for child in &children {
         assert!(
@@ -537,7 +538,7 @@ async fn ext256_a_child_projects_only_its_frozen_extension_composition() {
     // enables the extension and configures it differently.
     std::fs::write(
         dir.path().join("workspace/rustx.toml"),
-        r#"schema_version = 11
+        r#"schema_version = 12
 agent_id = "agent-host"
 
 [context]
@@ -703,7 +704,7 @@ async fn ext256_child_materialization_never_rereads_configuration_for_its_extens
     let dir = lab();
     std::fs::write(
         dir.path().join("workspace/rustx.toml"),
-        r#"schema_version = 11
+        r#"schema_version = 12
 agent_id = "agent-host"
 
 [context]
@@ -1039,7 +1040,6 @@ async fn frozen_skill_definitions_keep_live_locations_without_copying_assets() {
                 skill_id: package.id().clone(),
                 version_id: package.version_id().clone(),
             },
-            dependencies: package.dependencies().clone(),
             catalog_entry: crate::skills::SkillCatalogEntry {
                 name: "selected".into(),
                 description: "Frozen summary".into(),
@@ -1320,6 +1320,8 @@ fn fixture_binding(test_name: &str, prefix: &str) -> crate::tools::mcp::McpServe
             ]),
         },
         policy: ToolInvocationPolicy::default(),
+        permissions: None,
+        tool_permissions: std::collections::BTreeMap::new(),
     }
 }
 
@@ -1352,8 +1354,6 @@ async fn frozen_fixture_tool(
         description: tool.description,
         input_schema: tool.input_schema,
         execution_policy: binding.policy.execution,
-        concurrency_policy: binding.policy.concurrency,
-        approval_policy: binding.policy.approval,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
@@ -1514,8 +1514,6 @@ async fn a_missing_mcp_definition_fails_before_the_child_is_ready() {
         description: "a tool the server does not publish".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
@@ -1568,8 +1566,6 @@ async fn an_unreachable_required_mcp_server_fails_child_composition() {
         description: "issue".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
@@ -1600,6 +1596,8 @@ async fn an_unreachable_required_mcp_server_fails_child_composition() {
                 environment: std::collections::BTreeMap::new(),
             },
             policy: ToolInvocationPolicy::default(),
+            permissions: None,
+            tool_permissions: std::collections::BTreeMap::new(),
         },
     );
     let error = LocalConversationCore::compose_subagent_child(
@@ -1627,8 +1625,6 @@ async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
         description: "issue".to_owned(),
         input_schema: serde_json::json!({"type": "object"}),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
-        concurrency_policy: ToolConcurrencyPolicy::Sequential,
-        approval_policy: ToolApprovalPolicy::Never,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
             server_id: server_id.clone(),
@@ -1658,4 +1654,19 @@ async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
         format!("{error:?}").contains("was not given a binding"),
         "the child refuses rather than looking a server up for itself: {error:?}"
     );
+}
+
+#[test]
+fn configured_baseline_keys_survive_child_reconstruction() {
+    let entries = vec![
+        ("HOME".to_owned(), "/home/ada".to_owned()),
+        ("LANG".to_owned(), "C.UTF-8".to_owned()),
+        ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+        ("PATH".to_owned(), "/usr/local/bin:/usr/bin".to_owned()),
+        ("TOKEN".to_owned(), "kept".to_owned()),
+    ];
+    let environment =
+        super::configured_child_environment(entries.clone()).expect("configured baseline");
+    assert_eq!(environment.authorized_entries(), entries.as_slice());
+    assert!(crate::tools::environment::ToolEnvironment::from_authorized(entries).is_err());
 }

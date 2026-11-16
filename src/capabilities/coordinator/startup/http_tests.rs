@@ -128,6 +128,8 @@ impl HttpFixture {
                     headers: std::collections::BTreeMap::default(),
                 },
                 policy: crate::tools::types::ToolInvocationPolicy::default(),
+                permissions: None,
+                tool_permissions: std::collections::BTreeMap::new(),
             },
             server,
             shutdown,
@@ -515,7 +517,7 @@ fn assert_timed_out_batch(
         4
     );
     assert_eq!(coordinator.pending_mcp_retirements(), 0);
-    assert!(candidate.available_tools().tools().is_empty());
+    assert_eq!(candidate.available_tools().tools(), []);
     assert!(candidate.mcp_runtimes.is_empty());
     coordinator.commit(candidate).unwrap();
     assert!(coordinator.current_snapshot().tool_registry().is_empty());

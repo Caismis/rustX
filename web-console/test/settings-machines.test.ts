@@ -3,7 +3,7 @@ import { displayText, translator } from '../src/locale/translation';
 import { workspaceApprovalBlock, approvalIdentity, approvalMutation } from '../src/app/new-conversation/approval';
 import { expect, it, vi } from 'vitest';
 import { assign, createActor, setup, type ActorRefFrom, type InspectionEvent } from 'xstate';
-import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v77';
+import type { ConfigurationApplication, SourceMutation, SourceSettings } from '../../protocol/app-server/v78';
 import { admitsSourceMutation, mutationOutcome, settingsTargetMachine } from '../src/app/settings/machines/settings-target';
 import { awaitingCommitObservation, discardable, requiresReview, unitTransactionMachine } from '../src/app/settings/machines/unit-transaction';
 import { applicationCurrent, applicationKnown, observationUnavailable, sessionConfigurationMachine } from '../src/app/settings/machines/session-configuration';
@@ -3099,7 +3099,7 @@ it('composer and Settings holders share one target transaction owner; opening re
 });
 
 // New Conversation reads this authority; it never owns a second approval actor.
-const approvalSource = (revision: string, mode: 'policy' | 'full_access'): SourceSettings => ({
+const approvalSource = (revision: string, mode: 'plan' | 'full_access'): SourceSettings => ({
   ...cfg3Source(), target: { kind: 'workspace', directory: '/workspace' },
   workspace: { path: '/workspace/rustx.toml', revision, authored: { approval_mode: mode } }, prospective_approval_mode: mode,
 });
@@ -3110,7 +3110,7 @@ function requestApproval(actor: ReturnType<typeof settingsActor>) {
 }
 it('first-submit readiness remains closed across approval write, confirmed commit and failed reread until exact source observation', async () => {
   const scripted = scriptedPort(); const actor = settingsActor(scripted.port, undefined, true);
-  scripted.reads[0].resolve(approvalSource('workspace-1', 'policy')); await flush();
+  scripted.reads[0].resolve(approvalSource('workspace-1', 'plan')); await flush();
   expect(workspaceApprovalBlock(actor)).toBeUndefined();
   requestApproval(actor);
   expect(workspaceApprovalBlock(actor)).toBe('workspace:approval.applying');
@@ -3127,9 +3127,9 @@ it('first-submit readiness remains closed across approval write, confirmed commi
 });
 it.each([new OutcomeUncertain(), new RpcFailure({ code: -32000, message: 'Conflict', data: { kind: 'source_conflict', scope: 'workspace', expected: 'workspace-1', actual: 'external' } })])('permission uncertainty/conflict preserves intent and refuses admission after a reread: %s', async error => {
   const scripted = scriptedPort(); const actor = settingsActor(scripted.port, undefined, true);
-  scripted.reads[0].resolve(approvalSource('workspace-1', 'policy')); await flush(); requestApproval(actor);
+  scripted.reads[0].resolve(approvalSource('workspace-1', 'plan')); await flush(); requestApproval(actor);
   scripted.writes[0].reject(error); await flush();
-  scripted.reads.at(-1)!.resolve(approvalSource('external', 'policy')); await flush();
+  scripted.reads.at(-1)!.resolve(approvalSource('external', 'plan')); await flush();
   expect(workspaceApprovalBlock(actor)).toMatch(/^workspace:approval\.(uncertain|conflict)$/);
   expect(actor.getSnapshot().context.units[approvalIdentity]?.getSnapshot().context.draft?.value).toBe('full_access');
   expect(scripted.writes).toHaveLength(1); actor.stop();

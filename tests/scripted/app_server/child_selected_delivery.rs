@@ -15,7 +15,7 @@ fn giant_selected_delivery(
         id: ToolCallId::new("selected-child-call"),
         tool_id: ToolId::new("tool-present"),
         name: "present".into(),
-        arguments: serde_json::json!({}),
+        arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({})),
     };
     child
         .store

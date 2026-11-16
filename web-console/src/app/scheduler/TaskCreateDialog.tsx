@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, useSyncExternalStore } from 'react';
-import type { ScheduleTiming, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v77';
+import type { ScheduleTiming, SessionModelConfig, SourceSettings } from '../../../../protocol/app-server/v78';
 import type { AppServerClient } from '../../client/app-server';
 import { sameValue, transportSelection, useClientSelector } from '../../client/selectors';
 import type { WorkspaceAuthority } from '../../workspaces/authority';

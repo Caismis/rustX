@@ -1152,7 +1152,10 @@ async fn canonical_frontier_has_no_audit_carryover_or_request_only_item() {
             finish_reason: ModelFinishReason::Stop
         }
     ));
-    assert!(audit.publication_audits.is_empty());
+    assert_eq!(
+        audit.publication_audits,
+        [] as [crate::publication::frame::PublicationAudit; 0]
+    );
     assert!(
         model.requests()[0]
             .messages
@@ -1278,12 +1281,12 @@ async fn carryover_degrades_and_is_omitted_before_cannot_fit_or_compaction() {
             "attempt-137-fit-consumer",
             first.result.conversation,
             &model,
-            48,
+            100,
             1,
         ),
         &cancellation,
         &tool_runtime,
-        runtime_with_window(48),
+        runtime_with_window(100),
     )
     .await
     .run()
@@ -1387,7 +1390,7 @@ async fn overflow_compaction_only_degrades_the_frozen_carryover_source() {
 
     let summary = "s".repeat(360);
     let consumer_runtime = runtime_with_estimator(
-        700,
+        760,
         Arc::new(ScriptedEstimator::new(100, 10, 0)),
         vec![FakeSummaryStep::Return(summary)],
     );

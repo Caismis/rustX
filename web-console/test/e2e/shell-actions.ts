@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import type { AttachmentTarget } from '../../../protocol/app-server/v77';
+import type { AttachmentTarget } from '../../../protocol/app-server/v78';
 import type { wireProbe } from './wire-probe';
 
 /** A dirty editor's save has settled when its button is idle and disabled. */
