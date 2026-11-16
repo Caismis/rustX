@@ -169,3 +169,10 @@ Regression cases accept reordered/null-equivalent evidence while rejecting
 changed ownership, frontiers, domain revisions and collection generations.
 The related reader suites pass 114 tests; the explicit cut/interaction cases
 pass 28, and all 1,367 TUI tests pass (one intentional skip).
+
+The desktop and narrow-screen Retry fixtures had the same full-transition
+assumption as child capabilities. Their probe now shares one contiguous
+checkpoint/registration fold, and settlement facts are extracted from both
+full transitions and typed deltas. All six browser scenarios across child
+capabilities, composer, file delivery and Retry pass in the pinned container.
+Actual native action coordinates and UI residency checks remain unchanged.

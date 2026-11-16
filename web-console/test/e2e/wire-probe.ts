@@ -2,6 +2,7 @@ import type { Page } from '@playwright/test';
 import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, Notification, TraceDetail } from '../../../protocol/app-server/v80';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
+import { checkpointSnapshot, foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import { METHOD_POLICY, requestLane, type MethodName } from '../../../protocol/app-server/method-policy';
 import { RpcFailure } from '../../src/client/errors';
 
@@ -189,6 +190,27 @@ export async function wireProbe(page: Page, observer?: {
     });
   });
   return { requests, responses, notifications, requestTimes,
+    /** Fold only the current checkpoint's real registration, including typed
+     * patches. Missing or duplicate cursors are fixture failures, not repaired
+     * with history pages or another registration's replay. */
+    projection(target: AttachmentTarget) {
+      const newest = [...responses].reverse();
+      const checkpoint = newest.find(row => row.method === 'session/checkpoint'
+        && sameTarget(requests.find(request => request.id === row.id)?.params.target, target))?.result.checkpoint;
+      if (!checkpoint) return undefined;
+      const registration = newest.find(row => row.result?.type === 'subscribed'
+        && sameTarget(row.result.target, target) && row.result.after_cursor === checkpoint.cursor)?.result;
+      if (!registration) return undefined;
+      let snapshot = checkpointSnapshot(checkpoint), cursor = BigInt(checkpoint.cursor);
+      for (const note of notifications) {
+        if (note.method !== 'session/event' || !sameTarget(note.params.target, target)
+          || note.params.registration_id !== registration.registration_id) continue;
+        if (BigInt(note.params.cursor) !== cursor + 1n) throw Error('Native projection probe cursor is not contiguous.');
+        snapshot = foldRuntimeEvent(snapshot, note.params.event);
+        cursor++;
+      }
+      return snapshot;
+    },
     /** A real Attach ACK delivered on the current physical browser transport.
      * Historical responses remain available for assertions and request counts.
      * Held/lost replies and replies from retired sockets cannot satisfy this barrier. */

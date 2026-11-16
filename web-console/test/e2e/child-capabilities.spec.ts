@@ -5,8 +5,7 @@ import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
-import { checkpointSnapshot, foldRuntimeEvent, transitionFacts } from '../../../protocol/app-server/projection';
-import { sameTarget } from '../../../protocol/app-server/attachment-identity';
+import { transitionFacts } from '../../../protocol/app-server/projection';
 
 test('native child live cuts, independent title, active and file-only resume uploads, file and image preview', async ({ page }, info) => {
   page.setDefaultTimeout(15_000);
@@ -137,22 +136,7 @@ test('native child live cuts, independent title, active and file-only resume upl
     // Fold its exact contiguous stream: completed membership may arrive as a
     // typed patch rather than a full read_domains_updated transcript.
     await expect.poll(()=>{
-      const responses = [...wire.responses].reverse();
-      const checkpoint = responses.find(row => row.method === 'session/checkpoint'
-        && sameTarget(wire.requests.find(request => request.id === row.id)?.params.target, parentTarget))?.result.checkpoint;
-      if (!checkpoint) return false;
-      const registration = responses.find(row => row.result?.type === 'subscribed'
-        && sameTarget(row.result.target, parentTarget) && row.result.after_cursor === checkpoint.cursor)?.result;
-      if (!registration) return false;
-      let snapshot = checkpointSnapshot(checkpoint), cursor = BigInt(checkpoint.cursor);
-      for (const note of wire.notifications) {
-        if (note.method !== 'session/event' || !sameTarget(note.params.target, parentTarget)
-          || note.params.registration_id !== registration.registration_id) continue;
-        expect(BigInt(note.params.cursor)).toBe(cursor + 1n);
-        snapshot = foldRuntimeEvent(snapshot, note.params.event);
-        cursor++;
-      }
-      return snapshot.transcript.entries?.some(entry=>{
+      return wire.projection(parentTarget)?.transcript.entries?.some(entry=>{
         const process=entry.turn_process;
         return process!=null&&process.conversation_id===parentTarget.conversation_id
           &&process.attempt_id===parentAttempt.attempt_id&&process.outcome==='completed';
