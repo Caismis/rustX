@@ -127,3 +127,13 @@ only the indeterminate-outcome class, rather than accepting multiple scheduler
 landings. Provider arrival/disconnect gates, exact frozen reconstruction, and
 zero-resend checks remain. All 53 composed conformance tests and both Clippy
 configurations pass after this test-only correction.
+
+The next exact-head contract run found a real catalog-observer release race:
+its lifecycle admission could wake native drain before the async capture had
+dropped its runtime owner. The observer now retains the runtime and admission
+in one ordered tuple, releasing the runtime first on completion or cancellation,
+including cancellation before the future is polled. The failed-unload recovery
+test retains its immediate weak-owner assertion; no sleep or relaxed settlement
+condition substitutes for physical release.
+The complete manager suite passes 480 tests (two intentional ignores), with
+both Clippy configurations, formatting and strict rustdoc passing as well.

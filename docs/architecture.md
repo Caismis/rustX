@@ -581,6 +581,8 @@ Only after Loaded and its receipt are visible does the owned future begin
 consuming catalog revisions; a losing initialization drops the inert future.
 The observer therefore remains counted for drain without acquiring a new
 active preparation admission after callers can enter compaction or an Attempt.
+Its retained runtime is released before its lifecycle admission wakes drain,
+including when the inert observer is cancelled before its first poll.
 
 DurabilityGate keeps a short state mutex and an owned ownership permission.
 A failure request immediately closes later admission without parking the
