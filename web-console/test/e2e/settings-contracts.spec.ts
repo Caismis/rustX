@@ -6,7 +6,7 @@ import { expect, test } from '@playwright/test';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { choose, returnHome, openSettingsPage, openWorkspaceSettings, selectedSettingsPage } from './shell-actions';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
 // Real native source fixtures: the browser only edits the generated projection.
@@ -132,5 +132,5 @@ profiles = { deep = { request_params = '{}' }, quick = { request_params = '{"tem
     await openSettingsPage(page, 'Advanced');
     await expect(settings.locator('[data-lifecycle=ready]')).toBeVisible();
     expect(errors).toEqual([]);
-  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+  } finally { const report = await stopDogfoodPage(page, fixture, false); expect(report.requestCount).toBe(0); }
 });

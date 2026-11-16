@@ -1,7 +1,7 @@
 import { test, expect, type Locator } from '@playwright/test';
 import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, expectSettled, choose } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -190,7 +190,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
     expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
     expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } finally { await stopDogfoodPage(page, fixture, passed); }
 });
 
 test('managed Artifact Markdown/text/code previews download original bytes through artifact/read', async ({ page }, testInfo) => {

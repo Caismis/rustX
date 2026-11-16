@@ -269,3 +269,25 @@ passes are correctness checks, not a latency comparison.
 The complete Web suite passes 4,932 tests (four intentional skips), and TUI
 passes 1,367 (one skip). The subsequent candidate supersedes the still-compiling
 macOS job of `43847335005`; that run is not recorded as macOS FULL acceptance.
+
+At `ca12e861c`, browser shard 3 passes all 242 cases, including both large
+Workflow scopes. The retained request metadata records a 21.109-second Global
+source write with no socket close; this ordinary run does not itself exercise
+the old 30-second limit. The deterministic fake-clock regressions cover the
+longer wait. Shard 1 passes 308 cases but fails the Settings fixture during
+teardown: every content/save/repair assertion in its trace succeeds, then a
+proxy callback receives `ECONNREFUSED` after the fixture closes its Product Host
+while its browser page remains live.
+
+Twenty-three ordinary teardown sites in sixteen routed browser specs now use
+the existing `stopDogfoodPage` owner order: retire and drain Node proxy callbacks,
+remove interception, close the page, then stop the Host/native fixture. This
+also covers the same still-open-page pattern in configuration and model flows.
+The helper now returns the original stop report after cleanup, preserving
+provider-count and failure assertions without returning from a `finally` block
+or swallowing earlier errors. The existing staggered-callback regression also
+checks that returned report. Production transport, deliberate disconnection
+scenarios and performance measurement fixtures are unchanged.
+Web typechecking and all 43 affected browser/Host-lifetime cases pass in the
+pinned container, including the originally failing Settings case, both
+staggered/held callback regressions, report propagation and interrupted output.

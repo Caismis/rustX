@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { materializeEffective } from '../../../protocol/app-server/effective-observation';
 import { RpcFailure } from '../../src/client/errors';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 import { wireProbe } from './wire-probe';
@@ -175,7 +175,7 @@ for (const width of [1440, 390]) {
       passed = true;
     } finally {
       const diagnostics = passed ? undefined : fixture.diagnostics();
-      const report = await fixture.stop(passed);
+      const report = await stopDogfoodPage(page, fixture, passed);
       if (!passed) console.error('Historical capability failure:', JSON.stringify({ diagnostics, report }));
     }
   });

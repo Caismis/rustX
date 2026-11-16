@@ -1,7 +1,7 @@
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openWorkspaceSettings, openSettingsPage, returnHome } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -176,5 +176,5 @@ test('Harness New Conversation, permission, model, native process and Models con
     expect((await new AxeBuilder({ page }).withTags(['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']).analyze()).violations).toEqual([]);
     await returnHome(page); await noOverflow();
     expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } finally { await stopDogfoodPage(page, fixture, passed); }
 });
