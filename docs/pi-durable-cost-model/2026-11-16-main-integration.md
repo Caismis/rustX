@@ -30,3 +30,55 @@ Earlier integration checks passed protocol/TUI/Web typechecks, TUI tests (1,367 
 Final strict lint/doc/protocol drift checks and exact-head FULL CI are tracked on PR #485. This document does not treat historical or parent-commit CI as final-head validation. The PR must not be merged with failed or incomplete required checks.
 
 No Pi, pi-rust, or DeepSeek performance product was rerun for this integration.
+
+## Integrated fixed-work counter baseline
+
+The old exact counter test described the pre-main contract. Two independent
+current runs produced the same new text/tool tuples. Exact assertions are
+retained with the integrated baseline:
+
+| Per completed warmed turn | Text before | Text integrated | Tool before | Tool integrated |
+| --- | ---: | ---: | ---: | ---: |
+| SQL calls | 621 | 622 | 1,392 | 1,393 |
+| Fresh prepares | 18 | 18 | 38 | 38 |
+| SQLite VM steps | 20,413 | 20,491 | 45,266 | 45,410 |
+| Commits | 7 | 7 | 13 | 13 |
+| WAL frames (512-byte pages) | 258 | 260 | 553 | 555 |
+| Event index entries | 58 | 58 | 112 | 112 |
+
+The additional keyed canonical read establishes the adopted message's task
+provenance. The combined schema also evaluates the new Workflow agent-node
+index predicate. These are structural counters, not elapsed-time or device-write
+measurements. The table records the net integration cost; it does not attribute
+every VM step or WAL frame to one sub-change. The independent idle-root test
+still requires one page, and query-plan tests retain bounded indexed reads.
+
+## Finalization regressions
+
+The broad local library run initially passed 6,230 tests with five failures and
+28 intentional ignores. Investigation distinguished the failures:
+
+- Permission recovery loaded the complete frozen request and projected history
+  just to recover permission metadata and compare activation IDs. It now uses
+  authenticated request metadata and the current projection checkpoint. The
+  existing cold-attach history-growth bounds remain unchanged.
+- The exact warmed-turn counter expectations are updated above; no thresholds
+  were widened.
+- Merge resolution accidentally restored the old physical sparse-file addition
+  assertion. Restore the PR's existing `skip-worktree` coverage regression, as
+  documented by the private-index design; production behavior is unchanged.
+- The Workspace Python generation-race fixture now replaces the pin inode at
+  its synchronization gate. It no longer relies on same-length writes receiving
+  distinct filesystem mtimes; production generation handling is unchanged.
+- The multi-interpreter boundary fixture needed a second installed Python minor.
+  After installing Python 3.13 alongside 3.12, the unchanged fixture passed.
+
+Strict rustdoc links were also repaired. Follow-up test and exact-head CI results
+are recorded in the PR; the initial failing run is not final acceptance.
+
+The focused permission/native-request/bootstrap run passed **52 tests, zero
+failures, zero ignores**. Cold attachment at 64, 512 and 2,048 text turns now
+uses exactly 85 returned rows and 1,672 SQLite VM steps (55 statements) at each
+size. Tool histories at 64 and 512 turns use exactly 222 rows and 4,959 steps
+(66 statements). These are deterministic structural measurements, not new
+end-to-end latency measurements. The unchanged growth bounds pass.

@@ -324,6 +324,24 @@ impl RequestStore for SqliteConversationStore {
             })?;
         nonnegative(value, "Todo progress sequence")
     }
+    fn load_request_permission_state(
+        &self,
+        request_id: &RequestId,
+    ) -> Result<crate::durable::store::request::RequestPermissionState, ConversationStoreError>
+    {
+        self.read_transaction(|transaction| {
+            let (snapshot, _, _) = snapshot::require_started_request_tx(
+                transaction,
+                &self.conversation_id,
+                request_id,
+            )?;
+            Ok(crate::durable::store::request::RequestPermissionState {
+                projection_activation: snapshot.history_cut.activation,
+                permission_mode: snapshot.permission_mode,
+                task_message: snapshot.permission_task_message.clone(),
+            })
+        })
+    }
     fn load_request_snapshot(
         &self,
         request_id: &RequestId,

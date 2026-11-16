@@ -845,12 +845,15 @@ impl ConversationRuntime {
         ) = match recovery
             .latest_primary_request()
             .map(|request_id| {
-                let snapshot = store.load_request_snapshot(request_id)?;
-                let current = store.projected_history()?;
+                let permission = store.load_request_permission_state(request_id)?;
+                let activation = store.projection_head()?.map_or(
+                    crate::context::checkpoint::ProjectionActivationId(0),
+                    |head| head.activation.activation,
+                );
                 Ok::<_, crate::durable::ConversationStoreError>((
-                    (snapshot.history_cut.activation == current.cut.activation)
-                        .then_some(snapshot.permission_mode),
-                    snapshot.permission_task_message,
+                    (permission.projection_activation == activation)
+                        .then_some(permission.permission_mode),
+                    permission.task_message,
                 ))
             })
             .transpose()

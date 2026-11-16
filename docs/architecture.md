@@ -6765,6 +6765,10 @@ durable facts
   outside the authenticated fold, or a named row that is not the expected fact,
   fails closed. This is not a second history. Schema 114 remains the only
   accepted store; there is no reader for an older frontier.
+  Permission recovery reads the latest primary request's authenticated frozen
+  metadata and the current projection checkpoint. It does not materialize the
+  selected manifest or projected conversation merely to compare activation IDs.
+  Full request/history consumers retain their own complete read validation.
 - **Classify** is a pure function of that evidence. It never depends on
   wall-clock timing, current provider availability, current plugin/config
   state, whether a Runtime Client is attached, or a random retry decision.

@@ -98,7 +98,7 @@ async fn sparse_file_already_absent_at_baseline_creates_no_changes_card() {
 }
 
 #[tokio::test]
-async fn sparse_file_materialized_after_baseline_is_an_addition() {
+async fn skip_worktree_materialization_remains_hidden_by_git() {
     let dir = repository();
     let root = dir.path();
     mark_skipped(root);
@@ -111,14 +111,7 @@ async fn sparse_file_materialized_after_baseline_is_an_addition() {
     fs::write(root.join("tracked.txt"), after).unwrap();
     record.finish().await;
 
-    let attempt = AttemptId::new("materialized");
-    let summary = store.summary(&attempt).unwrap();
-    assert_eq!((summary.total, summary.added, summary.deleted), (1, 2, 0));
-    assert_eq!(summary.files[0].display, "tracked.txt");
-    let comparison = store.comparison(&attempt, 0).await.unwrap().unwrap();
-    assert_eq!(comparison.hunks.len(), 1);
-    assert_eq!(comparison.hunks[0].old_text, "");
-    assert_eq!(comparison.hunks[0].new_text, after);
+    assert!(store.summary(&AttemptId::new("materialized")).is_none());
     unchanged_skipped_index(root, &index);
 }
 

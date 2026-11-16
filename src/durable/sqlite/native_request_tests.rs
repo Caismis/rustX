@@ -205,6 +205,12 @@ fn native_configuration_reopen_preserves_nondefault_permission_task() {
         snapshot.permission_task_message
     );
     assert_eq!(loaded, snapshot);
+    let reads = store.request_snapshot_body_reads.load(std::sync::atomic::Ordering::SeqCst);
+    let permission = store.load_request_permission_state(&snapshot.request_id).unwrap();
+    assert_eq!(permission.permission_mode, snapshot.permission_mode);
+    assert_eq!(permission.task_message, snapshot.permission_task_message);
+    assert_eq!(permission.projection_activation, snapshot.history_cut.activation);
+    assert_eq!(store.request_snapshot_body_reads.load(std::sync::atomic::Ordering::SeqCst), reads);
 }
 
 #[test]
@@ -220,6 +226,7 @@ fn shared_native_configuration_corruption_is_rejected_by_scalar_full_and_retry_r
             .commit_model_turn_start(&[], &snapshot, Utc::now())
             .unwrap();
         store.lock().unwrap().execute_batch(corruption).unwrap();
+        assert!(store.load_request_permission_state(&snapshot.request_id).is_err());
         {
             let mut connection = store.lock().unwrap();
             let transaction = connection.transaction().unwrap();

@@ -84,10 +84,10 @@
 //!
 //! # Bounded working set
 //!
-//! The evidence fold starts at the durable [`RecoveryFrontier`] — the same
+//! The evidence fold starts at the durable [`RecoveryFrontier`](crate::runtime::recovery::RecoveryFrontier) — the same
 //! fold through one Journal sequence, advanced by every Journal append in its
 //! own transaction — and pages only the Journal facts after it
-//! ([`JournalStore::read_events`]), retaining only the *unresolved* state.
+//! ([`JournalStore::read_events`](crate::durable::JournalStore::read_events)), retaining only the *unresolved* state.
 //! Reads are O(facts after the frontier + unresolved work), normally
 //! O(unresolved work); hot memory is O(unresolved work):
 //!
