@@ -186,3 +186,21 @@ polls the original viewport limits and adds the missing top-edge check.
 Both viewport cases pass locally before and after the synchronization change.
 No picker positioning, timeout budget for opening, screenshot reference or
 product behavior was changed.
+
+The Linux contract job then stopped making progress with only
+`idle_claim_has_both_attach_and_inbound_winners_at_publication` outstanding;
+the already-failed run was cancelled to retrieve its logs. The fixture assumed
+one idle scan necessarily reached the post-claim gate, although production
+deliberately permits conservative refusal for grace, epoch changes and
+coordinator contention. Its async gate helper spawned a blocking entry waiter
+that survived the 180-second fixture timeout and prevented executor shutdown.
+This post-claim arrival now uses a cancellation-safe async wait from the
+blocking scan worker; boundary parking remains synchronous and test-only.
+The fixture explicitly exercises a refused scan
+before grace expiry and drives subsequent scans until the actual claim, then
+retains every attach, inbound, stale-incarnation and cold-reload assertion.
+No production idle threshold, claim predicate or liveness timeout changes.
+The corrected manager suite passes 480 tests (two intentional ignores), and
+both synchronization-probe tests pass. A four-thread local run of the original
+Linux contract selection passed 5,934 tests before this correction; that does
+not override the archived remote stall or count as validation of the correction.

@@ -271,12 +271,28 @@ async fn idle_claim_has_both_attach_and_inbound_winners_at_publication() {
             tokio::task::yield_now().await;
         }
         f.manager.reap_idle();
-        clock.advance(100);
         let probe = f.manager.probe(a.conversation_id());
         let guard = probe.idle_after_claim.arm_scoped();
-        let manager = f.manager.clone();
-        let scan = tokio::task::spawn_blocking(move || manager.reap_idle());
-        gate_entered(&probe.idle_after_claim).await;
+        // An idle probe is not a successful claim: grace, a new epoch or
+        // coordinator contention can conservatively refuse this scan. Start
+        // before grace expires so the no-claim path is exercised explicitly.
+        let mut refused = 0;
+        let scan = loop {
+            let manager = f.manager.clone();
+            let mut scan = tokio::task::spawn_blocking(move || manager.reap_idle());
+            tokio::select! {
+                () = probe.idle_after_claim.wait_entered_async() => break scan,
+                result = &mut scan => {
+                    result.unwrap();
+                    refused += 1;
+                    clock.advance(100);
+                }
+            }
+        };
+        assert!(
+            refused > 0,
+            "the fixture must handle a scan without a claim"
+        );
         assert_eq!(
             f.manager.residency(a.conversation_id()),
             ResidencyState::Unloading

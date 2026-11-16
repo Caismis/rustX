@@ -35,11 +35,11 @@ use super::{ConversationRuntime, RuntimeInner};
 ///   restores `ConversationState`, clears the maintenance slot, or publishes
 ///   manual completion to Runtime Client observers.
 ///
-/// All synchronization is `std` (mutex + condvar) because the coordinator
+/// Boundary parking uses a `std` mutex + condvar because the coordinator
 /// boundary is a `std` mutex critical section; the parking blocks the OS
-/// thread, so the race tests run on a multi-threaded runtime. These hooks
-/// exist only under `#[cfg(test)]` and are never installed by production
-/// code.
+/// thread, so the race tests run on a multi-threaded runtime. Async entry
+/// waiters use a cancellation-safe notification. These hooks exist only
+/// under `#[cfg(test)]` and are never installed by production code.
 #[cfg(test)]
 #[derive(Debug, Default)]
 #[allow(clippy::struct_field_names)]
@@ -151,6 +151,7 @@ pub(crate) struct CoordinatorProbe {
 pub(crate) struct Gate {
     pub(super) state: Mutex<GateState>,
     pub(super) condvar: std::sync::Condvar,
+    entered: tokio::sync::Notify,
 }
 
 #[cfg(test)]
@@ -184,6 +185,7 @@ impl Gate {
         }
         state.entered = true;
         self.condvar.notify_all();
+        self.entered.notify_waiters();
         while !state.proceed {
             state = self
                 .condvar
@@ -209,6 +211,26 @@ impl Gate {
                 .condvar
                 .wait(state)
                 .expect("coordinator probe wait poisoned");
+        }
+    }
+
+    /// Cancellation drops only the async waiter, never an unjoinable blocking
+    /// task when a conservatively refused operation does not enter the gate.
+    /// The entering worker must be blocking or hand off its async executor core.
+    pub(crate) async fn wait_entered_async(&self) {
+        loop {
+            let entered = self.entered.notified();
+            tokio::pin!(entered);
+            entered.as_mut().enable();
+            if self
+                .state
+                .lock()
+                .expect("coordinator probe lock poisoned")
+                .entered
+            {
+                return;
+            }
+            entered.await;
         }
     }
 
