@@ -34,7 +34,7 @@ SPEC.loader.exec_module(CAPACITY)
 VERSION = int(re.search(r'APP_SERVER_PROTOCOL_VERSION: u16 = (\d+)',
                        (REPO / 'src/app_server/protocol.rs').read_text())[1])
 CAPACITY.PROTOCOL_VERSION = VERSION
-PROMPT, RESPONSE = 'turn growth', 'ok'
+from turn_growth_oracle import PROMPT, RESPONSE, tool_call, verify_request
 
 
 def write(path, value):
@@ -121,11 +121,8 @@ async def provider_main(a):
     steps = []
     for i in range(a.turns):
         if a.provider == 'tool':
-            if a.git_workspace_mutations and i == 1:
-                command = "printf 'in-turn\\n' > growth-modified.txt\nprintf 'created\\n' > turn-created.txt\nrm turn-deleted.txt\ncat fixture.txt"
-                call = ToolCall(f'change-{i:08}', 'bash', json.dumps({'execution_mode': 'foreground', 'description': 'Verify workspace changes', 'command': command}))
-            else:
-                call = ToolCall(f'read-{i:08}', 'read', '{"path":"fixture.txt"}')
+            call_id, name, envelope = tool_call(i, a.git_workspace_mutations)
+            call = ToolCall(call_id, name, json.dumps(envelope))
             steps.append(Step(expect, Stream(call, Finish('tool_calls'), Usage(16, 1))))
         steps.append(Step(expect, Stream(Text(RESPONSE), Finish(), Usage(16, 1))))
     state = ScenarioRun(Scenario('turn_growth_' + a.provider, *steps))
@@ -139,19 +136,12 @@ async def provider_main(a):
     requests = []
     for i, request in enumerate(state.requests):
         body = request.json
-        users = [m for m in body['messages'] if m['role'] == 'user']
-        expected = i // (2 if a.provider == 'tool' else 1) + 1
-        assert len(users) == expected, (i, len(users), expected)
-        assert all(m['content'] == PROMPT or m['content'] == [{'type': 'text', 'text': PROMPT}] for m in users)
-        tools = [m for m in body['messages'] if m['role'] == 'tool']
-        assert len(tools) == (i // 2 + i % 2 if a.provider == 'tool' else 0), i
-        assert all('fixed tool result' in json.dumps(m['content']) for m in tools), i
+        counts = verify_request(body, i, a.provider, a.git_workspace_mutations)
         encoded = request.body_text
         if isinstance(encoded, str):
             encoded = encoded.encode()
         requests.append({'index': i, 'body_bytes': len(encoded), 'sha256': hashlib.sha256(encoded).hexdigest(),
-                         'messages': len(body['messages']), 'users': len(users),
-                         'tools': sum(m['role'] == 'tool' for m in body['messages'])})
+                         **counts})
     write(a.provider_output, {'ok': report['ok'], 'requestCount': report['requestCount'],
                               'failures': report['failures'], 'requests': requests})
     return 0 if report['ok'] else 1
@@ -246,7 +236,8 @@ async def scenario(a, kind, out):
         subprocess.run(['git', '-C', str(workspace), 'add', '--all'], check=True)
         subprocess.run(['git', '-C', str(workspace), '-c', 'user.name=Benchmark',
                         '-c', 'user.email=benchmark@example.invalid',
-                        '-c', 'core.hooksPath=/dev/null', 'commit', '--quiet', '-m', 'Fixture'], check=True)
+                        '-c', 'core.hooksPath=/dev/null', '-c', 'maintenance.auto=false',
+                        '-c', 'gc.auto=0', 'commit', '--quiet', '-m', 'Fixture'], check=True)
         write(out / 'workspace.json', {
             'source': str(a.git_workspace_source.resolve()) if a.git_workspace_source else None,
             'source_head': subprocess.check_output(['git', '-C', str(a.git_workspace_source),
@@ -268,7 +259,10 @@ async def scenario(a, kind, out):
     try:
         ready = json.loads(await asyncio.wait_for(provider.stdout.readline(), 30))
         base = f"http://127.0.0.1:{ready['port']}"
-        (out / 'rustx.toml').write_text(f'''[agent]
+        # Preauthorize only the isolated deterministic mutation fixture. This is
+        # a top-level current setting, never a legacy native_tools overlay.
+        permission = 'approval_mode = "full_access"\n' if a.git_workspace_mutations else ''
+        (out / 'rustx.toml').write_text(f'''{permission}[agent]
 [agent.tools]
 builtin = ["read", "write", "edit", "glob", "grep", "bash", "job_status"]
 [agent.model]
@@ -294,10 +288,6 @@ max_resident_runtimes = 8
 idle_grace_ms = 1000
 shutdown_deadline_ms = 30000
 ''')
-        if a.git_workspace_mutations:
-            # Only this deterministic, local mutation fixture preauthorizes Bash.
-            with (out / 'rustx.toml').open('a') as config:
-                config.write('\n[native_tools.bash]\napproval = "never"\n')
         await server.start()
         result = await server.client.call('thread/start', {'settings': {'cwd': str(workspace)}})
         session, thread = result['session']['id'], result['thread']['id']
@@ -336,6 +326,9 @@ shutdown_deadline_ms = 30000
                 summary = result['summary']
                 comparisons = {}
                 if turn == 2:
+                    assert (workspace / 'growth-modified.txt').read_text() == 'in-turn\n'
+                    assert (workspace / 'turn-created.txt').read_text() == 'created\n'
+                    assert not (workspace / 'turn-deleted.txt').exists()
                     assert summary is not None, 'the fixture Bash call must produce a workspace change card'
                     assert [f['display'] for f in summary['files']] == [
                         'growth-modified.txt', 'turn-created.txt', 'turn-deleted.txt'], summary
@@ -446,6 +439,11 @@ shutdown_deadline_ms = 30000
             counts = collections.Counter(m['role'] for m in messages)
             assert counts['user'] == a.turns, counts
             assert counts['tool'] == (a.turns if kind == 'tool' else 0), counts
+            for turn, message in enumerate(m for m in messages if m['role'] == 'tool'):
+                call_id, name, _ = tool_call(turn, a.git_workspace_mutations)
+                assert message['tool_call_id'] == call_id and message['tool_id'] == {'read': 'tool-read', 'bash': 'tool-bash'}[name], message
+                assert message['result']['status'] == {'type': 'success'}, message
+
             assert counts['assistant'] == a.turns * (2 if kind == 'tool' else 1), counts
             assert sum(m['content'] == [{'type': 'text', 'text': RESPONSE}] for m in messages if m['role'] == 'assistant') == a.turns
         slopes = regress(windows, ['cpu_ms_per_turn', 'wall_ms_per_turn', 'idle_ms_per_turn',
@@ -472,7 +470,7 @@ async def main(a):
         os.sched_setaffinity(0, a.affinity)
     out = a.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    inputs = [Path(__file__).resolve(), Path(CAPACITY.__file__), REPO / 'Cargo.lock',
+    inputs = [Path(__file__).resolve(), Path(CAPACITY.__file__), REPO / 'Cargo.lock', Path(__file__).with_name('turn_growth_oracle.py'),
               *sorted((REPO / 'test-support/fake-provider/src').rglob('*.py'))]
     write(out / 'identity.json', {'head': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(),
         'binary': str(a.binary.resolve()), 'binary_sha256': hashlib.sha256(a.binary.read_bytes()).hexdigest(),
