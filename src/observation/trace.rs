@@ -2,6 +2,7 @@
 //! the native request commit. Reads use indexed byte ranges; the Runtime
 //! Client's Trace reader pages these values and never reconstructs them.
 
+pub use types::TraceContributionPresentation;
 pub(crate) mod bounds;
 pub(crate) mod content;
 pub(crate) mod frozen;
@@ -14,9 +15,9 @@ pub use bounds::{
     TRACE_DETAIL_BYTES, TRACE_PAGE_BYTES, TRACE_RECORD_BYTES, TRACE_SUMMARY_CONTEXT,
     TRACE_SUMMARY_CONTEXT_BYTES, TraceJson, TracePreview, TraceText,
 };
-pub(crate) use frozen::{
-    request_detail as frozen_request_detail, request_outcome as frozen_request_outcome,
-};
+#[cfg(test)]
+pub(crate) use frozen::request_detail as frozen_request_detail;
+pub(crate) use frozen::request_outcome as frozen_request_outcome;
 pub use types::{
     TraceArtifact, TraceContentBlock, TraceContextKind, TraceContextPresentation,
     TraceContextSource, TraceCursor, TraceDetail, TraceFieldKind, TraceFieldSource,

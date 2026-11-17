@@ -1,0 +1,182 @@
+{
+  "measured_head": "b8ce4cb649b96affcfcfa22d9f1447d976f8a219",
+  "complete_fixture_head": "8a24bc99a173ca14899c2721094e683c6e6acca1",
+  "files": {
+    "0-cancel-after.log": {
+      "bytes": 318,
+      "sha256": "fd89b8f82fa65048117996aaaac63b1fca35601a3bd7706fdfbcaa6003db8d96"
+    },
+    "0-cancel-before.log": {
+      "bytes": 318,
+      "sha256": "fd7b762b7c37937064dfa62053d16d5ee3349c1bfa54cd7511552c4e0e6bc79c"
+    },
+    "0-large-after.log": {
+      "bytes": 317,
+      "sha256": "2505a8f54d88aea1b6f57723200f7ea44a70858424cad38092f79e2eb98658b2"
+    },
+    "0-large-before.log": {
+      "bytes": 317,
+      "sha256": "7c476a7fcae1afbb17ce680a770e504b43f758f8bc2b2df975aff08e51db5537"
+    },
+    "0-short-large-after.log": {
+      "bytes": 324,
+      "sha256": "7713b42855324760203cc8f59e98dfe8ea526a9df1a0402eab37f45d54f22d51"
+    },
+    "0-short-large-before.log": {
+      "bytes": 324,
+      "sha256": "6e0d52d16e11183ca0867e0e4a9a16ce2144fa994c9eca0279ff9422a54cce48"
+    },
+    "0-short-small-after.log": {
+      "bytes": 323,
+      "sha256": "701d57401eecb2a0f10ddb49ca20a8a0edd4d50c758dc0a8dc6b45eb613eb2c4"
+    },
+    "0-short-small-before.log": {
+      "bytes": 323,
+      "sha256": "d9edb89433c3b5611bea3936980567f2b14e243e10a5918a3b01e33edc597a29"
+    },
+    "0-stream-after.log": {
+      "bytes": 318,
+      "sha256": "117da792568fc98043e5f49fd9df3dd60098fe91b00f44d304ba82d9b92be7b0"
+    },
+    "0-stream-before.log": {
+      "bytes": 318,
+      "sha256": "3f19ea874843e7850d8720c7ee3913f88e5c575ad4ed1e991b023a91676b4f85"
+    },
+    "0-tool-after.log": {
+      "bytes": 316,
+      "sha256": "33627330a6d78d27c032ec4b51bfe27b42858e2c0988ead4dc0cfae0a776085b"
+    },
+    "0-tool-before.log": {
+      "bytes": 316,
+      "sha256": "13459326efd3cc6e590f1fc81b65547b916fb101b122658451cdfaa00091f25a"
+    },
+    "1-cancel-after.log": {
+      "bytes": 318,
+      "sha256": "3e7c5bb39e7d03bb9e782b6062a19696a05f5e0bc92694bf86ee90c256e941db"
+    },
+    "1-cancel-before.log": {
+      "bytes": 318,
+      "sha256": "ab0c5bcd95ba0614ff15c561abccc6845f94b143234c78f8267e44629545b44f"
+    },
+    "1-large-after.log": {
+      "bytes": 317,
+      "sha256": "6068b4b52e657d9b097961da264bead5992d4e5e0a208d36320670cd34b26fef"
+    },
+    "1-large-before.log": {
+      "bytes": 317,
+      "sha256": "91d04484a47d1a605bfff9f4e338313f0c6779c7f9f6a24476f2da706db2c91b"
+    },
+    "1-short-large-after.log": {
+      "bytes": 324,
+      "sha256": "8071b398a7e646b41d84e580b5d3d26f81655dfe13ec136a98f6a44418554641"
+    },
+    "1-short-large-before.log": {
+      "bytes": 324,
+      "sha256": "367af424c63f563bf0969e3bdd5fcbd19ba2ee820d1f9a25142e83ba636b4661"
+    },
+    "1-short-small-after.log": {
+      "bytes": 323,
+      "sha256": "60afd8dfdf06ace15bd9a6e6e59533912000f2553f886b77804bdeffb9a73167"
+    },
+    "1-short-small-before.log": {
+      "bytes": 323,
+      "sha256": "3722c947190a0e26264410e7ed87632e6803c12cc1e9cafbc6be1aeeb5ff3cf0"
+    },
+    "1-stream-after.log": {
+      "bytes": 318,
+      "sha256": "57676d08508713d25b044c65989ec39a4eb3dc5b32529520306aad144a73f686"
+    },
+    "1-stream-before.log": {
+      "bytes": 318,
+      "sha256": "ee36da3a2eec63c27e6449bbe77e81aa7743c8d9252e89157ce3c8a4ff5c6757"
+    },
+    "1-tool-after.log": {
+      "bytes": 316,
+      "sha256": "131444b75daa0c5c9f9cde46dc271acc24a7faaacb2e3db454c6437c196f7ef8"
+    },
+    "1-tool-before.log": {
+      "bytes": 316,
+      "sha256": "6056cb74a99884c00ff731ddb3522c13230ad091d36d7f8d4e93403b51c7b5d4"
+    },
+    "2-cancel-after.log": {
+      "bytes": 318,
+      "sha256": "7336edb900af6c4e614ca858cac6d37f18e410320b023206e04baa4aae6accc1"
+    },
+    "2-cancel-before.log": {
+      "bytes": 318,
+      "sha256": "c62f5f5b620380929f66005bd1c61e9f5e1d095f09ef3bdd3876ad0037797db2"
+    },
+    "2-large-after.log": {
+      "bytes": 317,
+      "sha256": "1b1257bba8a936e6b025fbff1e2a34ff5d3d7b73b91f8152971c18f8c719c884"
+    },
+    "2-large-before.log": {
+      "bytes": 317,
+      "sha256": "9efe5e222b15ea28f9c8e4d8a86d42c8dc7ad9c0427b3650302c1ac944aec387"
+    },
+    "2-short-large-after.log": {
+      "bytes": 324,
+      "sha256": "e128bd47b1d568e34eca7b670fc1f3c5439e3a6d22a3d9ef15d44c6ddb0810e6"
+    },
+    "2-short-large-before.log": {
+      "bytes": 324,
+      "sha256": "885d852a6e277b523eb71320c7b23d90a39d50891644bcbc40fee971f68a0625"
+    },
+    "2-short-small-after.log": {
+      "bytes": 323,
+      "sha256": "b7d8f31c6104e7e74d2a04a43ac60dfc6582a3264b0bbf2eab4524ee8d14e361"
+    },
+    "2-short-small-before.log": {
+      "bytes": 323,
+      "sha256": "2f3f0cbb164048953a4039dcc7708188a4ae4b3a4c61c3c342d6e9d508ae2172"
+    },
+    "2-stream-after.log": {
+      "bytes": 318,
+      "sha256": "c652bb38aa61e8500b3c40d24bfe74a366a2047295fe95506900dc372b79a13f"
+    },
+    "2-stream-before.log": {
+      "bytes": 318,
+      "sha256": "7a1b5598fef6ffd70618f9b108909d34e11660ae392c6d2976954ade79438f61"
+    },
+    "2-tool-after.log": {
+      "bytes": 316,
+      "sha256": "dd8fc00621085cdc328ffa52a8369648548ea569c1e854f76748b5c681998696"
+    },
+    "2-tool-before.log": {
+      "bytes": 316,
+      "sha256": "96a458df9669c23905192e001112674c9bbdfbb65d138931dc92a75959ac925f"
+    },
+    "README.md": {
+      "bytes": 1491,
+      "sha256": "f7d68bd75eb676559da3ca35a4005afba13b227aa22c56a5fd86ac9cdb262e37"
+    },
+    "benchmark-library-profile.json": {
+      "bytes": 626,
+      "sha256": "f619787b6ca755fa6689fdcdf272cd6e04e3b7c36e5821dcd6a2eba8e6ba7810"
+    },
+    "build-identity.json": {
+      "bytes": 2349,
+      "sha256": "bc9951049dede5cba3e9a83c803eb3e06d33f89379c71de8f13ea4713d979638"
+    },
+    "complete-restoration.patch": {
+      "bytes": 51351,
+      "sha256": "6245e0f7fb30a9e6a8ee8e5c3299a7a8cd99e2900a70fb64dcac297d4fae7e55"
+    },
+    "fixture-follow-up.patch": {
+      "bytes": 1279,
+      "sha256": "8df7d484b5f190705e2413fc590b2292bd89a7d8461a8af5f79c017226861e3d"
+    },
+    "formal-acceptance.log": {
+      "bytes": 14922,
+      "sha256": "5304cfe3bbaeaaa42031d25de2fa73ce4650edf4a7511231c8b562ce2b9349c8"
+    },
+    "measured-restoration.patch": {
+      "bytes": 52321,
+      "sha256": "57526cdac3ba46083407bdc313d9af7e0fa18073dcd3908472ca1fea19bdf4eb"
+    },
+    "paired-oracle-results.json": {
+      "bytes": 5091,
+      "sha256": "747d7df53cb500c4a334cda8f00298fb0a6774e785141364db16729d08f95d93"
+    }
+  }
+}

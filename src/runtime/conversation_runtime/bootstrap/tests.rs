@@ -1,8 +1,8 @@
 use crate::durable::CanonicalStore;
+use crate::durable::InboxStore;
 use crate::durable::JournalStore;
 use crate::durable::ProjectionStore;
 use crate::durable::RequestStore;
-use crate::durable::inbox::InboxStore;
 use crate::runtime::conversation_runtime::test_support::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -2049,6 +2049,7 @@ fn construction_validates_ownership() {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -2133,6 +2134,7 @@ fn construction_outside_execution_runtime_fails_typed() {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -2187,6 +2189,7 @@ async fn invalid_model_timeout_policy_fails_before_runtime_ownership_transfer() 
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
                 context: ConversationContextConfig {
+                    status_clock: std::sync::Arc::new(crate::context::SystemClock),
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,
@@ -2303,6 +2306,7 @@ async fn invalid_tool_deadline_policy_fails_before_runtime_ownership_transfer() 
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy,
                 context: ConversationContextConfig {
+                    status_clock: std::sync::Arc::new(crate::context::SystemClock),
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,
@@ -2413,7 +2417,7 @@ async fn incomplete_tool_tail_is_repaired_and_pending_remains_intact() {
             .append_canonical(&assistant_tool_block("assistant-tool", "call-1"))
             .expect("assistant tool call");
         store
-            .accept_inbound(crate::durable::inbox::InboundDraft {
+            .accept_inbound(crate::durable::InboundDraft {
                 message_id: None,
                 source: UserSource::Human,
                 kind: InboundKind::Message,
@@ -2614,7 +2618,7 @@ async fn recovered_pending_inbound_is_auto_admitted_with_zero_clients() {
         &[],
         |store, _| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -2688,7 +2692,7 @@ async fn class_b_restart_continues_the_adopted_turn_without_duplicating_it() {
         &[],
         |store, conversation_id| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -2784,7 +2788,7 @@ async fn class_b_recovery_uses_the_same_model_turn_start_gate() {
         &[],
         |store, conversation_id| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -2901,7 +2905,7 @@ async fn class_c_restart_issues_no_provider_request_of_its_own() {
         &[],
         |store, conversation_id| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -3038,7 +3042,7 @@ async fn class_e_restart_issues_no_replacement_request() {
         &[],
         |store, conversation_id| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,

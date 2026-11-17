@@ -404,7 +404,7 @@ fn assert_tool_units_complete(messages: &rustx::model::SelectedModelInput, conte
 
 fn anthropic_state(signature: &str) -> ProviderContinuationState {
     ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": signature}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": signature}).into(),
     })
 }
 

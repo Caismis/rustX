@@ -60,6 +60,11 @@ pub struct RuntimeDurabilityFailure {
     pub diagnostic: String,
 }
 
+/// An immutable historical head shares unchanged rows and persistent container nodes.
+/// Serde retains the protocol's ordinary descriptor array representation.
+pub type RuntimeClientMessageDescriptorHead =
+    imbl::Vector<std::sync::Arc<RuntimeClientMessageDescriptor>>;
+
 /// The authoritative Runtime Client snapshot of one conversation runtime.
 ///
 /// Every section is a deterministic projection of one authoritative
@@ -114,7 +119,7 @@ pub struct RuntimeClientSnapshot {
     /// current Surface working set, while historical Ledger pages remain
     /// available through `ConversationStore` APIs.
     pub messages: Vec<MessageBlock>,
-    pub message_descriptors: Vec<RuntimeClientMessageDescriptor>,
+    pub message_descriptors: Vec<std::sync::Arc<RuntimeClientMessageDescriptor>>,
     /// Native projection-selected settlement head; retained audit bodies remain in storage.
     #[serde(default)]
     pub publication_settlements: Vec<RuntimeClientPublicationSettlementRecord>,
@@ -181,7 +186,9 @@ pub struct RuntimeClientSnapshot {
     #[serde(default)]
     pub context: RuntimeClientContextView,
     /// The active capability projection.
-    pub capabilities: CapabilityView,
+    // Frozen cuts share the exact original header, including rows omitted by
+    // checkpoint admission. Serde and the schema expose only the header.
+    pub capabilities: std::sync::Arc<CapabilityView>,
     /// The active runtime resource generation: the project context files
     /// the runtime actually loaded, and whether an agent profile is frozen
     /// into the generation.

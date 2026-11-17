@@ -1,0 +1,16 @@
+{
+  "head": "bb132f76595f34409fa4b1d3bc1095ee22f71e53",
+  "helpers": {
+    "run-traces.py": "d18a65efe4f863b011afd5f1f2e3545e15338d60d0ab4637fd28b5de93d54d8a",
+    "trace_products.py": "523741abd5e426df7bbc1c55aa61497857c4120682c097a87ed2abe20e8c8f13",
+    "replay_wal.py": "f0eddb756b38e299bd1797c6e60e5d63ed1bcf8f02549a92633ec433cd2b5f2d",
+    "ledger_summary.py": "65f16dc7f42bd751c1ad8644ffad80e7036394eb1266ebb6d66e5db09d0871ef",
+    "run-threeway.py": "65f2471def04a7ef7c25fd0f53ff937e689fff78fb35217ce60cf9c5d39b8a20",
+    "compare-three-revisions.py": "2fc8968bf645ac7a88cbd6d57ba452866211fc1513d620f3f9c13ee7e2aeffab",
+    "summarize-threeway.py": "c736c1b3e83da298ecdf8cae3e5766ef2f2f402b513b296209aab450b5b70c26",
+    "run-memory.py": "a9bd0d67156c046d147d6ca6c6a7517178838e979982924447d6ff29aa4dde18",
+    "audit-memory.py": "800a81226370b278495afcce3b2767376219e4601fb752e0510a094bf42a67fd",
+    "run-native.py": "ca6f8e685eef71e2a9904acc77433ca33f1e47f8b3cb38917367614c8e71e32e",
+    "audit-native.py": "a3d838c48ddc3f383848a62038c483287fe7ab6aea8de64ad3d59adc6b859c70"
+  }
+}

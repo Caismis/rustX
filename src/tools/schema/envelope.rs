@@ -2,12 +2,9 @@
 //! beneath an invocation envelope. Metadata never becomes part of a business
 //! object, including when a reference returns to that object's root.
 
-use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
-    sync::LazyLock,
-};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use referencing::{Draft, Registry, Resolver, Resource};
+use referencing::{Draft, Registry, Resolved, Resolver, Resource};
 use serde_json::{Map, Value, json};
 
 use super::{SchemaError, build_validator};
@@ -32,13 +29,19 @@ pub(super) fn compile_business_resources(
     // Validate the unchanged document, including structural errors in siblings
     // ignored by legacy $ref evaluation. Both compilations are strictly no-I/O.
     let validator = build_validator(canonical).map_err(invalid_schema)?;
-    let resource = Resource::from_contents(canonical.clone()).map_err(invalid_schema)?;
-    let root_uri = resource.id().unwrap_or("json-schema:///").to_owned();
-    let registry = Registry::options()
-        .retriever(Box::new(referencing::DefaultRetriever))
-        .try_new(root_uri.clone(), resource)
+    let resource = Resource::from_contents(canonical.clone());
+    let root_uri = referencing::ResourceRef::new(resource.contents(), resource.draft())
+        .id()
+        .unwrap_or("json-schema:///")
+        .to_owned();
+    let registry = Registry::new()
+        .retriever(referencing::DefaultRetriever)
+        .add(&root_uri, resource)
+        .map_err(invalid_schema)?
+        .prepare()
         .map_err(invalid_schema)?;
-    let resolver = registry.try_resolver(&root_uri).map_err(invalid_schema)?;
+    let resolver =
+        registry.resolver(referencing::uri::from_str(&root_uri).map_err(invalid_schema)?);
     let root_uri = resolver.base_uri().as_str().to_owned();
     let mut graph = ResourceGraph {
         registry: &registry,
@@ -59,31 +62,32 @@ pub(super) fn compile_business_resources(
 /// Catalog observation uses this check; admitting an executable registration
 /// additionally compiles the complete business contract above.
 pub(super) fn validate_declaration(schema: &Value) -> Result<(), SchemaError> {
-    let draft = Draft::default().detect(schema).map_err(invalid_schema)?;
-    let validator = METASCHEMA_VALIDATORS
-        .get(&draft)
-        .ok_or_else(|| SchemaError::InvalidSchema(format!("unsupported schema dialect {draft:?}")))?
-        .as_ref()
-        .map_err(|message| SchemaError::InvalidSchema(message.clone()))?;
-    validator.validate(schema).map_err(invalid_schema)
+    // Generated draft validators check the declaration only. They do not resolve
+    // external resources, so this path cannot retain bundled meta-schema trees
+    // or fetch a dialect URI.
+    let draft = Draft::default().detect(schema);
+    let result = match draft {
+        Draft::Draft4 => jsonschema::draft4::meta::validate(schema),
+        Draft::Draft6 => jsonschema::draft6::meta::validate(schema),
+        Draft::Draft7 => jsonschema::draft7::meta::validate(schema),
+        Draft::Draft201909 => jsonschema::draft201909::meta::validate(schema),
+        Draft::Draft202012 => jsonschema::draft202012::meta::validate(schema),
+        // Unknown and future drafts are not a known closed dialect. Reject them instead of
+        // guessing a validator or fetching their meta-schema.
+        _ => {
+            return Err(SchemaError::InvalidSchema(format!(
+                "unsupported schema dialect {draft:?}"
+            )));
+        }
+    };
+    result.map_err(invalid_schema)
 }
 
-static METASCHEMA_VALIDATORS: LazyLock<BTreeMap<Draft, Result<jsonschema::Validator, String>>> =
-    LazyLock::new(|| {
-        [
-            (Draft::Draft4, &*referencing::meta::DRAFT4),
-            (Draft::Draft6, &*referencing::meta::DRAFT6),
-            (Draft::Draft7, &*referencing::meta::DRAFT7),
-            (Draft::Draft201909, &*referencing::meta::DRAFT201909),
-            (Draft::Draft202012, &*referencing::meta::DRAFT202012),
-        ]
-        .into_iter()
-        .map(|(draft, schema)| {
-            let validator = build_validator(schema).map_err(|error| error.to_string());
-            (draft, validator)
-        })
-        .collect()
-    });
+/// The resolved draft is the registry's inherited resource dialect, not a
+/// fresh `$schema` guess from the target fragment.
+fn resolved_parts(resolved: Resolved<'_>) -> (&Value, Resolver<'_>, Draft) {
+    resolved.into_inner()
+}
 
 struct ResourceNodes<'a> {
     original_root: &'a Value,
@@ -96,31 +100,38 @@ struct ResourceNodes<'a> {
 /// grouped by that registry's resource identity, preserving dialect and dynamic
 /// scope while replacing static references with their resolved node addresses.
 struct ResourceGraph<'a> {
-    registry: &'a Registry,
+    registry: &'a Registry<'a>,
     keys: HashMap<(usize, String, Draft), String>,
     resources: BTreeMap<String, ResourceNodes<'a>>,
     dynamic_names: BTreeSet<String>,
 }
 
 impl<'a> ResourceGraph<'a> {
+    fn resolver_at(&self, uri: &str) -> Result<Resolver<'a>, SchemaError> {
+        Ok(self
+            .registry
+            .resolver(referencing::uri::from_str(uri).map_err(invalid_schema)?))
+    }
+
     fn ensure_resource(&mut self, resolver: &Resolver<'a>) -> Result<(), SchemaError> {
         let uri = resolver.base_uri().as_str().to_owned();
         if self.resources.contains_key(&uri) {
             return Ok(());
         }
         let root = resolver.lookup("#").map_err(invalid_schema)?;
+        let (contents, root_resolver, draft) = resolved_parts(root);
         self.resources.insert(
             uri.clone(),
             ResourceNodes {
-                original_root: root.contents(),
-                draft: root.draft(),
+                original_root: contents,
+                draft,
                 root_name: None,
                 nodes: Map::new(),
             },
         );
         // Register the resource before compiling its root so recursive root
         // references find the same resource rather than creating a new one.
-        let name = self.target(root.contents(), root.resolver(), root.draft())?;
+        let name = self.target(contents, &root_resolver, draft)?;
         self.resource_mut(&uri)?.root_name = Some(name);
         Ok(())
     }
@@ -170,7 +181,7 @@ impl<'a> ResourceGraph<'a> {
         let (draft, resolver) = if referenced {
             (inherited, parent.clone())
         } else {
-            let draft = inherited.detect(source).map_err(invalid_schema)?;
+            let draft = inherited.detect(source);
             let resolver = parent
                 .in_subresource(draft.create_resource_ref(source))
                 .map_err(invalid_schema)?;
@@ -238,7 +249,10 @@ impl<'a> ResourceGraph<'a> {
         reference: &str,
     ) -> Result<Value, SchemaError> {
         match resolver.lookup(reference) {
-            Ok(target) => self.reference(target.contents(), target.resolver(), target.draft()),
+            Ok(target) => {
+                let (contents, target_resolver, draft) = resolved_parts(target);
+                self.reference(contents, &target_resolver, draft)
+            }
             // The unchanged canonical validator has already accepted this
             // document. An unresolved ref can therefore occur only where the
             // engine does not execute it, such as `if` without then/else and
@@ -256,21 +270,19 @@ impl<'a> ResourceGraph<'a> {
     ) -> Result<(), SchemaError> {
         // Resolve the lexical target without one call path's dynamic scope;
         // the emitted engine must choose each invocation's override itself.
-        let lexical = self
-            .registry
-            .try_resolver(resolver.base_uri().as_str())
-            .map_err(invalid_schema)?;
+        let lexical = self.resolver_at(resolver.base_uri().as_str())?;
         let Ok(target) = lexical.lookup(reference) else {
             // As with a static ref, canonical compilation has already proved
             // that an unresolved dynamic ref is not executed.
             return Ok(());
         };
-        self.target(target.contents(), target.resolver(), target.draft())?;
+        let (contents, target_resolver, draft) = resolved_parts(target);
+        self.target(contents, &target_resolver, draft)?;
         let absolute = referencing::uri::resolve_against(&resolver.base_uri().borrow(), reference)
             .map_err(invalid_schema)?;
         let fragment = absolute.fragment().map_or("", |fragment| fragment.as_str());
         if fragment.is_empty() || fragment.starts_with('/') {
-            let rewritten = self.reference(target.contents(), target.resolver(), target.draft())?;
+            let rewritten = self.reference(contents, &target_resolver, draft)?;
             emitted["$dynamicRef"] = rewritten["$ref"].clone();
         } else {
             self.dynamic_names.insert(fragment.to_owned());
@@ -285,16 +297,15 @@ impl<'a> ResourceGraph<'a> {
             let resources: Vec<_> = self.resources.keys().cloned().collect();
             let names: Vec<_> = self.dynamic_names.iter().cloned().collect();
             for uri in resources {
-                let resolver = self.registry.try_resolver(&uri).map_err(invalid_schema)?;
+                let resolver = self.resolver_at(&uri)?;
                 for name in &names {
-                    if let Ok(target) = resolver.lookup(&format!("#{name}"))
-                        && target
-                            .contents()
-                            .get("$dynamicAnchor")
-                            .and_then(Value::as_str)
+                    if let Ok(target) = resolver.lookup(&format!("#{name}")) {
+                        let (contents, target_resolver, draft) = resolved_parts(target);
+                        if contents.get("$dynamicAnchor").and_then(Value::as_str)
                             == Some(name.as_str())
-                    {
-                        self.target(target.contents(), target.resolver(), target.draft())?;
+                        {
+                            self.target(contents, &target_resolver, draft)?;
+                        }
                     }
                 }
             }

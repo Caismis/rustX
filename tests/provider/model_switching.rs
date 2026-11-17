@@ -61,7 +61,8 @@ pub(crate) fn tool_history(
                 deliveries: vec![],
                 truncation: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }),
     ]
 }
@@ -84,7 +85,7 @@ async fn generic_tool_id_collision_never_rewrites_owned_responses_output() {
                 text: None,
                 provider_state: Some(ProviderContinuationState::OpenAiResponses(
                     OpenAiResponsesContinuation::Stateless {
-                        items: items.clone(),
+                        items: items.clone().into(),
                     },
                 )),
             }),
@@ -139,7 +140,7 @@ async fn active_continuation_cannot_borrow_another_binding_or_model() {
                     },
                 ),
                 _ => ProviderContinuationState::Anthropic(AnthropicContinuation {
-                    opaque: serde_json::json!({"type":"thinking", "thinking":"thought", "signature":"foreign"}),
+                    opaque: serde_json::json!({"type":"thinking", "thinking":"thought", "signature":"foreign"}).into(),
                 }),
             };
             let output = MessageBlock::Assistant(AssistantMessageBlock {
@@ -275,7 +276,7 @@ async fn every_protocol_pair_scopes_reasoning_and_preserves_tool_pairs() {
                     ModelProtocol::OpenAiChatCompletions => None,
                     ModelProtocol::AnthropicMessages => Some(ProviderContinuationState::Anthropic(
                         AnthropicContinuation {
-                            opaque: serde_json::json!({"type":"thinking", "thinking":"source thought", "signature":"native-anthropic-signature"}),
+                            opaque: serde_json::json!({"type":"thinking", "thinking":"source thought", "signature":"native-anthropic-signature"}).into(),
                         },
                     )),
                     ModelProtocol::OpenAiResponses => {
@@ -285,7 +286,7 @@ async fn every_protocol_pair_scopes_reasoning_and_preserves_tool_pairs() {
                                     serde_json::json!({"type":"reasoning", "id":"rs_original", "summary":[{"type":"summary_text", "text":"source thought"}], "encrypted_content":"native-responses-cipher"}),
                                     serde_json::json!({"type":"message", "role":"assistant", "id":"msg_original", "content":[{"type":"output_text", "text":"previous answer", "annotations":[]}]}),
                                     serde_json::json!({"type":"function_call", "id":"fc_original", "call_id":id, "name":"read", "arguments":"{}"}),
-                                ],
+                                ].into(),
                             },
                         ))
                     }
@@ -337,7 +338,8 @@ async fn every_protocol_pair_scopes_reasoning_and_preserves_tool_pairs() {
                             deliveries: vec![],
                             truncation: None,
                             managed_output: None,
-                        },
+                        }
+                        .into(),
                     })
                     .into(),
                 );
@@ -398,7 +400,7 @@ async fn foreign_redacted_thinking_leaves_no_empty_assistant_and_refusal_is_read
         let mut request = simple_request(target, "model", "follow up");
         request.messages.insert(0, MessageBlock::Assistant(AssistantMessageBlock {
             id: MessageId::new("opaque-history"),
-            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock { origin: None, text: None, provider_state: Some(ProviderContinuationState::Anthropic(AnthropicContinuation { opaque:serde_json::json!({"type":"redacted_thinking", "data":"must-not-leak"}) })) })],
+            content: vec![AssistantContentBlock::Reasoning(ReasoningBlock { origin: None, text: None, provider_state: Some(ProviderContinuationState::Anthropic(AnthropicContinuation { opaque:serde_json::json!({"type":"redacted_thinking", "data":"must-not-leak"}).into() })) })],
         }).into());
         request.messages.insert(
             1,

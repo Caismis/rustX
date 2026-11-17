@@ -1,0 +1,104 @@
+{
+  "archive": "raw.tar.xz",
+  "archive_bytes": 10602364,
+  "archive_sha256": "0d10c07fdcc7666950097d4806590fef9c869822a6181570cf464d5ffe3f7e71",
+  "compression": "xz preset 0",
+  "created_utc": "2026-10-30T06:02:36.186926+00:00",
+  "excluded_entries": 3,
+  "excluded_reasons": {
+    "compiled conformance artifact": 2,
+    "dependency/build/cache/archive/extract directory": 1
+  },
+  "format": "rustx-shared-domains-raw-evidence-v1",
+  "manifest_bytes": 332532,
+  "manifest_sha256": "dfb6897012462747bdd52e959ad5a4456148bc4c1c69fbbc945e977803a8df7e",
+  "phases": {
+    "baseline": {
+      "head": "ef63fb2cd35d18fb0223d0729d2ab98191f2838b",
+      "production_tree": "7add77966c0baf0bdcb4cddd8615d9f1f8029859",
+      "sha256": "09dd30e83fc942eb6a630f9fe070f60b5c18523243bd07f63a5ad959fbeec6ee"
+    },
+    "baseline_schema": 85,
+    "candidate": {
+      "head": "11fb672eb2513195e31a4d2b7ba9726af0289ee6",
+      "production_tree": "24397ae655ace6d390c49bc900ab67de60479c64",
+      "sha256": "4a141e7199734cf74cdba0320280c936a973e28a581f96c8cc4992858bc287d6"
+    },
+    "candidate_schema": 86,
+    "checked_request_pairs": 1692,
+    "cpu_affinity": [
+      2,
+      8
+    ],
+    "diagnostic_products": 8,
+    "formal_products": 144,
+    "new_deepseek_products": 0,
+    "new_pi_products": 0,
+    "paired_comparisons": 72,
+    "profile_products": 0,
+    "scope": "144 fresh Rust formal products only. Eight isolated diagnostics and every failed/historical attempt remain separate. Fixed prior Pi/DeepSeek is a separately pinned dependency, not new paired products.",
+    "supplementary_products": 0
+  },
+  "raw_bytes": 1229034355,
+  "raw_files": 1104,
+  "reference_pins": {
+    "archive_manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+    "deepseek_products": 12,
+    "pi_products": 60,
+    "policy": "Fixed previously strict-audited products; no new Pi/DSH execution. Ratios use separate batch medians; no cross-batch pairing or randomized concurrency claim. Full raw references remain in the content-hash-pinned previous archive. Portable new reports consume this exact prior audit; re-auditing old raw is a separate archived command, not a fresh product.",
+    "prior_rust_sha256": "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+    "prior_source": "d22ce66c5a1cda895cac382ce2c350f345933876",
+    "reference_archive": "docs/pi-durable-cost-model/evidence/pi-flow-runtime-20261027/raw.tar.xz",
+    "reference_archive_bytes": 24024636,
+    "reference_archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+    "reference_audit": "previous-complete-all-audit.json",
+    "reference_audit_sha256": "902e748b08ff085dc4d1edcd7a38eea181bde0b5542a8972bbd3e459472eb98f",
+    "references": {
+      "deepseek_node": "v24.19.0",
+      "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+      "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c"
+    }
+  },
+  "replay_commands": {
+    "diagnostic": [
+      "python3",
+      "diagnostic-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--formal-audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../diagnostic-raw-audit.json"
+    ],
+    "formal": [
+      "python3",
+      "direct-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--output",
+      "../direct-raw-audit.json"
+    ],
+    "summary": [
+      "python3",
+      "summarize-results.py",
+      "--root",
+      ".",
+      "--audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../report-data.json",
+      "--markdown",
+      "../report-tables.md"
+    ]
+  },
+  "stream_verified_all_members": true,
+  "strict_report_sha256": {
+    "diagnostic-audit.json": "2784d0fdfc1c4f2bc4cfd4c159c94be64c5cb20e618dcf3981276fdb321a8f22",
+    "direct-audit.json": "cdb688b9dff55e4fef42132affefe2e9423394248a86dd35baf8672b654c66c3",
+    "report-data.json": "c4bd356d95a48ffd111f63da25629ca773d5a90e55aa515b100fb5d933ef1593",
+    "report-tables.md": "2ab41ccde4fcca7abd1f1c1d6e5586d2cf7f0b001ee1d258432d939a1247c4b4"
+  }
+}

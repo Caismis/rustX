@@ -1,0 +1,149 @@
+{
+  "scope": "Derived directly from the 18 original comparison records retained in the archive; each pair compares two Rust revisions. Historical comparator field names rust/pi do not denote actual Pi in this matrix.",
+  "pairs": [
+    {
+      "file": "0-cancel-comparison.json",
+      "case": "cancel",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+    },
+    {
+      "file": "0-large-comparison.json",
+      "case": "large",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+    },
+    {
+      "file": "0-short-large-comparison.json",
+      "case": "short-large",
+      "ordered_checked_requests": 96,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+    },
+    {
+      "file": "0-short-small-comparison.json",
+      "case": "short-small",
+      "ordered_checked_requests": 40,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+    },
+    {
+      "file": "0-stream-comparison.json",
+      "case": "stream",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+    },
+    {
+      "file": "0-tool-comparison.json",
+      "case": "tool",
+      "ordered_checked_requests": 2,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+    },
+    {
+      "file": "1-cancel-comparison.json",
+      "case": "cancel",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+    },
+    {
+      "file": "1-large-comparison.json",
+      "case": "large",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+    },
+    {
+      "file": "1-short-large-comparison.json",
+      "case": "short-large",
+      "ordered_checked_requests": 96,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+    },
+    {
+      "file": "1-short-small-comparison.json",
+      "case": "short-small",
+      "ordered_checked_requests": 40,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+    },
+    {
+      "file": "1-stream-comparison.json",
+      "case": "stream",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+    },
+    {
+      "file": "1-tool-comparison.json",
+      "case": "tool",
+      "ordered_checked_requests": 2,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+    },
+    {
+      "file": "2-cancel-comparison.json",
+      "case": "cancel",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "d645f37d870fa639001743efaafa6adc87994b516f31a290a68c8bcc32f397b6"
+    },
+    {
+      "file": "2-large-comparison.json",
+      "case": "large",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "2eff6176b8bf03139379fe41eed4939073c25acd9bf40d0c5adfc777f8f460ab"
+    },
+    {
+      "file": "2-short-large-comparison.json",
+      "case": "short-large",
+      "ordered_checked_requests": 96,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "0470c7d81e34e64f315b4a650e4ddb80521a19babd8b6b3499376f25aa057937"
+    },
+    {
+      "file": "2-short-small-comparison.json",
+      "case": "short-small",
+      "ordered_checked_requests": 40,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "5390510949ea4c0b3fb6b9ba1f9a1667deb2c8e475c1a36dd7766e0fc81a7ad2"
+    },
+    {
+      "file": "2-stream-comparison.json",
+      "case": "stream",
+      "ordered_checked_requests": 1,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "e3fe7cf0614155fd3a2ef3e570b6d57eb5b9aac2b3b5c59db730bfddd5bc4aed"
+    },
+    {
+      "file": "2-tool-comparison.json",
+      "case": "tool",
+      "ordered_checked_requests": 2,
+      "all_core_equal": true,
+      "all_full_request_equal": true,
+      "sha256": "db73a22b25344348dd1a3aa6536f139c69d5c126c521df5e89bd46620d652493"
+    }
+  ]
+}

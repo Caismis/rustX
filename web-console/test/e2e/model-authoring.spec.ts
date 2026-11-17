@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { choose, connectRemote, openEmptySession, openSettingsPage, settledSave } from './shell-actions';
 import { captureEvidence } from './screenshot';
@@ -34,7 +34,7 @@ test('new sessions receive independently configured title and compaction models'
 
     });
     expect(errors).toEqual([]);
-  } finally { await native?.shutdown(); await fixture.stop(false); }
+  } finally { await native?.shutdown(); await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const width of [1440, 390]) test(`Responses profile API parameters save directly and preserve the independent output limit at ${width}px`, async ({page}) => {
@@ -106,7 +106,7 @@ request_params = '{}'
   } catch (error) {
     await test.info().attach('native-diagnostics', {body:JSON.stringify(fixture.diagnostics()),contentType:'application/json'});
     throw error;
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });
 
 for (const width of [1440, 390]) test(`provider-only setup stays editable and adds its first native model at ${width}px`, async ({ page }) => {
@@ -233,5 +233,5 @@ for (const width of [1440, 390]) test(`provider-only setup stays editable and ad
       await test.info().attach('connection-details', { body: await page.locator('body').innerText(), contentType: 'text/plain' });
     }
     throw error;
-  } finally { await fixture.stop(false); }
+  } finally { await stopDogfoodPage(page, fixture, false); }
 });

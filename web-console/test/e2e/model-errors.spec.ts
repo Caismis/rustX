@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
 import { wireDiagnostics } from './wire-diagnostics';
@@ -78,6 +78,6 @@ for (const locale of ['en', 'zh'] as const) for (const theme of ['light', 'dark'
     } catch (error) {
       console.error('Native model-error observation diagnostic', JSON.stringify({ wire: diagnostic(), native_stderr: fixture.diagnostics().appErrors.slice(-4096) }));
       throw error;
-    } finally { await fixture.stop(passed); }
+    } finally { await stopDogfoodPage(page, fixture, passed); }
   });
 }

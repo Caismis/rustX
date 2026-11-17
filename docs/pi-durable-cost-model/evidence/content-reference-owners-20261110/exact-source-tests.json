@@ -1,0 +1,85 @@
+{
+  "binary": "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+  "sha256": "9bd11e3085184b1ebbae2699329380ae08b4c564dccd222ac04323e86526ae2a",
+  "profile": {
+    "opt_level": "0",
+    "debuginfo": "line-tables-only",
+    "debug_assertions": true,
+    "overflow_checks": true,
+    "test": true
+  },
+  "groups": [
+    {
+      "group": "observation::",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "observation::",
+        "--test-threads=8"
+      ],
+      "exit": 0,
+      "result": "ok. 264 passed; 0 failed; 0 ignored; 0 measured; 5575 filtered out; finished in 13.38s",
+      "log_sha256": "dc34d3c3aab2b9569e54dc6c077088ba8f2fadb247aebc6a75625550d5a17875"
+    },
+    {
+      "group": "runtime_client::",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "runtime_client::",
+        "--test-threads=8"
+      ],
+      "exit": 0,
+      "result": "ok. 609 passed; 0 failed; 2 ignored; 0 measured; 5228 filtered out; finished in 33.10s",
+      "log_sha256": "1025af13809c62b93e21d12b83adc1aaad3f5675dca3b3fa78c3a04c8a83c122"
+    },
+    {
+      "group": "durable::sqlite::",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "durable::sqlite::",
+        "--test-threads=8"
+      ],
+      "exit": 0,
+      "result": "ok. 836 passed; 0 failed; 1 ignored; 0 measured; 5002 filtered out; finished in 71.98s",
+      "log_sha256": "4d6319356ca158e37d8ba9268a81ba60b863eba0757b4a0501e76fb44446f333"
+    },
+    {
+      "group": "agent::execution::",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "agent::execution::",
+        "--test-threads=8"
+      ],
+      "exit": 0,
+      "result": "ok. 94 passed; 0 failed; 0 ignored; 0 measured; 5745 filtered out; finished in 3.66s",
+      "log_sha256": "c0308bd1820e25522576e43e87d4b738d312d78780a452a59866c09a57ba746f"
+    },
+    {
+      "group": "app_server::schema::",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "app_server::schema::",
+        "--test-threads=8"
+      ],
+      "exit": 0,
+      "result": "ok. 8 passed; 0 failed; 0 ignored; 0 measured; 5831 filtered out; finished in 0.66s",
+      "log_sha256": "8023a3c5771e2e353c6a726d83138f870d5649b3317f8d3fb81cbdc91d6ae359"
+    },
+    {
+      "group": "app_server::wire::",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "app_server::wire::",
+        "--test-threads=8"
+      ],
+      "exit": 0,
+      "result": "ok. 10 passed; 0 failed; 0 ignored; 0 measured; 5829 filtered out; finished in 4.53s",
+      "log_sha256": "20cf57a9c22065be7d8d022dda457cb0fb4a2be99b7a49ed3b572452787ce958"
+    }
+  ],
+  "unique_passed": 1664,
+  "unique_ignored": 3,
+  "test_executions": 1824,
+  "source_head": "490f43b429489c20768a06129ad126cf7b48fa6f",
+  "source_tree": "39d469ea5f361438bf274938a2d94c688b78b030",
+  "fresh_all_feature_cli_and_supervisors": "exact-source-bins.jsonl"
+}

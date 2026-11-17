@@ -1,7 +1,7 @@
 //! Real child native mutations against a nested, frozen Session binding.
 use super::*;
 use serde_json::{Value, json};
-use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
 fn tool_reply(name: &str, arguments: &Value) -> crate::common::FixtureReply {
     let arguments = crate::common::tool_call_envelope(arguments.clone());
@@ -88,7 +88,7 @@ fn route_native_tools(body: &str) -> crate::common::FixtureReply {
             );
             tool_reply(
                 "bash",
-                &json!({"command":"test \"$(cat child.txt)\" = after && printf 'NATIVE-BASH-OK\\n'", "execution_mode":"foreground"}),
+                &json!({"command":"read -r ready < .python-probe-ready && test \"$(cat child.txt)\" = after && printf 'NATIVE-BASH-OK\\n'", "execution_mode":"foreground"}),
             )
         }
         4 => {
@@ -145,15 +145,41 @@ async fn a_real_child_executes_native_tools_in_the_frozen_nested_workspace() {
         "builtin = [\"read\"]",
         "builtin = [\"read\", \"write\", \"edit\", \"bash\"]",
     );
+    // The final Tool result cannot arrive until a real supervised Python
+    // preparation is running. It remains blocked until child drain cancels it,
+    // so terminal success proves its anchor release preceded IPC shutdown.
+    let bin = root.path().join("probe-bin");
+    std::fs::create_dir(&bin).unwrap();
+    let uv = bin.join("uv");
+    std::fs::write(
+        &uv,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'uv 0.10.2'; exit 0; fi\nprintf 'ready\\n' > .python-probe-ready\nexec /bin/sleep 300\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&uv, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(workspace.join(".python-probe-ready"))
+            .status()
+            .unwrap()
+            .success()
+    );
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
     let models = models_json(&server.url("/v1"));
-    let mut process = launch_parent(
+    let mut process = launch_parent_with_environment(
         root.path(),
         &workspace,
         &models,
         &session,
-        "native-secret",
+        &[
+            ("RUSTX_SUBAGENT_TEST_KEY", "native-secret"),
+            ("PATH", &path),
+        ],
         None,
-        false,
     )
     .await;
     process.attach().await;

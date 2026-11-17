@@ -290,7 +290,8 @@ async fn live_openai_chat_tool_call() {
                 "type": "object",
                 "properties": {"location": {"type": "string"}},
                 "required": ["location"],
-            }),
+            })
+            .into(),
         }],
         effective_system_prompt: String::new(),
         continuation: None,

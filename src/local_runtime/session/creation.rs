@@ -186,7 +186,7 @@ impl SessionCatalog {
         };
         let mut nodes = BTreeMap::new();
         nodes.insert(node_id.clone(), node);
-        let mut sessions = BTreeMap::new();
+        let mut sessions = imbl::OrdMap::new();
         sessions.insert(
             session_id.clone(),
             PersistedSession {
@@ -223,7 +223,7 @@ impl SessionCatalog {
             path,
             node_observation_index: Arc::new(observation::node_index(&document)),
             document,
-            published: false,
+            published: None,
             lifecycle: None,
             #[cfg(test)]
             write_fault: Arc::new(Mutex::new(None)),

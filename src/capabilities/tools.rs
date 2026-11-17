@@ -149,10 +149,13 @@ impl AvailableToolCatalog {
     /// deterministic registration order. This projection performs no I/O.
     #[must_use]
     pub(crate) fn new(registrations: Vec<ValidatedToolRegistration>) -> Self {
-        let registrations: Vec<_> = registrations
+        let mut registrations: Vec<_> = registrations
             .into_iter()
             .map(ValidatedToolRegistration::into_registration)
             .collect();
+        for registration in &mut registrations {
+            registration.bind_schema();
+        }
         Self {
             tools: registrations
                 .iter()
@@ -504,7 +507,8 @@ mod tests {
             input_schema: serde_json::json!({
                 "type": "object",
                 "additionalProperties": false
-            }),
+            })
+            .into(),
             execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
             replay_policy: ToolReplayPolicy::Never,
             origin,
@@ -633,7 +637,8 @@ mod tests {
             let uri = url::Url::from_file_path(&path).unwrap().to_string();
             definition.input_schema = serde_json::json!({
                 "type": "object", "$ref": uri,
-            });
+            })
+            .into();
             // An available declaration is compiled before active projection.
             // Neither selected nor unselected tools can grant host-file access.
             let error = select_tools(
@@ -654,7 +659,8 @@ mod tests {
             captured["$id"] = serde_json::json!(uri);
             definition.input_schema = serde_json::json!({
                 "type": "object", "$ref": uri, "$defs": {"captured": captured},
-            });
+            })
+            .into();
             let registration = ToolRegistration::plain(definition.clone(), Arc::new(NoopTool));
             std::fs::remove_file(path).unwrap();
             let (available, active) = select_tools(&[registration], &[], &intent).unwrap();

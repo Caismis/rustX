@@ -6,7 +6,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::resources::{LedgerFrontier, ResourceReadCut};
 use crate::message::types::{
@@ -129,10 +128,9 @@ impl CheckpointCandidate {
     /// Only a non-serializable runtime value could violate this contract.
     #[must_use]
     pub fn fingerprint(&self) -> String {
-        let mut hash = Sha256::new();
-        serde_json::to_writer(crate::model::projected::DigestWriter(&mut hash), self)
-            .expect("checkpoint content serializes");
-        format!("{:x}", hash.finalize())
+        let mut hash = crate::model::projected::DigestWriter::default();
+        serde_json::to_writer(&mut hash, self).expect("checkpoint content serializes");
+        format!("{:x}", hash.finish().1)
     }
 
     /// Validate the complete materialization budget before resolving source bodies.
@@ -678,7 +676,8 @@ mod tests {
                 deliveries: Vec::new(),
                 truncation: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     }
     fn target(item: u32, block: u32) -> CheckpointCallCoordinate {
@@ -872,10 +871,11 @@ mod tests {
         };
         for native in [
             ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"signature":"signed"}),
+                opaque: serde_json::json!({"signature":"signed"}).into(),
             }),
             ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-                items: vec![serde_json::json!({"type":"reasoning","encrypted_content":"opaque"})],
+                items: vec![serde_json::json!({"type":"reasoning","encrypted_content":"opaque"})]
+                    .into(),
             }),
         ] {
             let source = MessageBlock::Assistant(AssistantMessageBlock {

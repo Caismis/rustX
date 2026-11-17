@@ -214,12 +214,12 @@ fn compare(
     }
 }
 struct KeyChars {
-    reader: BufReader<std::fs::File>,
+    reader: BufReader<super::byte_carrier::Reader>,
     remaining: u64,
 }
 impl KeyChars {
     fn new(layout: &Layout, (start, end): (u64, u64)) -> std::io::Result<Self> {
-        let mut file = std::fs::File::open(layout.directory.path().join("bytes"))?;
+        let mut file = layout.open_bytes().map_err(error)?;
         file.seek(std::io::SeekFrom::Start(start + 1))?;
         #[cfg(test)]
         super::canonical::WORK.with(|work| {

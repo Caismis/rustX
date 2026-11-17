@@ -1,5 +1,5 @@
 import { test, expect, type Locator } from '@playwright/test';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose } from './shell-actions';
 
@@ -82,6 +82,6 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
         await expectSharedAnchor(page.getByText('Recovered after timeout.', { exact: true }), notices.first());
       }
       expect(errors).toEqual([]); passed = true;
-    } finally { await fixture.stop(passed); }
+    } finally { await stopDogfoodPage(page, fixture, passed); }
   });
 }

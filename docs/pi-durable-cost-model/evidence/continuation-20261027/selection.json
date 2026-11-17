@@ -1,0 +1,31 @@
+{
+  "payload_files": 2146,
+  "payload_bytes": 1690655299,
+  "patterns": [
+    "*.json",
+    "*.py",
+    "*.txt",
+    "*.stdout",
+    "*.stderr",
+    "baseline-b-build/*",
+    "candidate-d-build/*.json",
+    "candidate-d-build/*.stdout",
+    "candidate-d-build/*.stderr",
+    "candidate-e-build/*.json",
+    "candidate-e-build/*.stdout",
+    "candidate-e-build/*.stderr",
+    "check2/**/*",
+    "candidate-e-check/**/*",
+    "candidate-e-check2/**/*",
+    "candidate-e-optimized-check*/**/*",
+    "candidate-e-python-*/**/*",
+    "deepseek-setup/**/*",
+    "deepseek*smoke*/**/*",
+    "direct-no-live/**/*",
+    "direct-live/**/*",
+    "candidate-e-direct/**/*",
+    "final-cohorts/**/*",
+    "three-engine-final/**/*"
+  ],
+  "scope": "All formal runtime/append/three-engine and candidate Reader raw data; identities, commands, validation and failed functional/setup attempts. No checkout, packages or executable binaries. Analysis notes completed later may be delivered externally."
+}

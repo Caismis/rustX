@@ -1,7 +1,7 @@
 //! Settled generation display metrics derived from request-owned evidence.
-use super::types::{TraceGeneration, TraceGenerationTimeline};
 use crate::model::generation_evidence::GenerationEvidence;
 use crate::model::types::ModelUsage;
+use crate::observation::trace::{TraceGeneration, TraceGenerationTimeline};
 
 /// Derives display metrics from settled evidence and this request's usage.
 pub(crate) fn generation_metrics(

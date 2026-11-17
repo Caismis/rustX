@@ -411,7 +411,7 @@ async fn host_drain_and_native_activation_have_both_initialization_winners() {
                     &access.database_path,
                 )
                 .unwrap();
-                crate::durable::inbox::InboxStore::accept_inbound(
+                crate::durable::InboxStore::accept_inbound(
                     &store,
                     crate::durable::InboundDraft {
                         message_id: None,

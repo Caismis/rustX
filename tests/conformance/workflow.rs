@@ -398,6 +398,7 @@ struct Driver {
     #[allow(dead_code)]
     attachment: RuntimeAttachment,
     events: EventSubscription,
+    literals: std::sync::Mutex<rustx::runtime_client::checkpoint::RuntimeClientCheckpoint>,
 }
 
 impl Driver {
@@ -1011,11 +1012,8 @@ impl Driver {
         let RuntimeClientResult::Initialized { .. } = initialized else {
             panic!("initialize returns the initial snapshot");
         };
-        let cursor = runtime
-            .host()
-            .checkpoint()
-            .expect("bounded checkpoint")
-            .cursor;
+        let checkpoint = runtime.host().checkpoint().expect("bounded checkpoint");
+        let cursor = checkpoint.cursor;
         let (events, _) = runtime
             .host()
             .subscribe_events(attachment.attachment_id(), cursor)
@@ -1025,7 +1023,49 @@ impl Driver {
             runtime,
             attachment,
             events,
+            literals: std::sync::Mutex::new(checkpoint),
         }
+    }
+
+    // The observer consumes the new wire vocabulary before the existing
+    // semantic assertions. Retain carrier literals, never hydrated reads or
+    // native tool refinements, as the basis of subsequent edits.
+    async fn next_event(&self) -> EventDelivery {
+        let delivery = self.events.next().await;
+        let EventDelivery::Event(mut record) = delivery else {
+            return delivery;
+        };
+        let mut base = self.literals.lock().unwrap();
+        let complete = rustx::runtime_client::delta::expand_event(&base, &record.event)
+            .expect("contiguous native publication literals");
+        match &complete {
+            RuntimeClientEvent::ProjectionTransition { events, metadata } => {
+                for fact in events {
+                    match fact {
+                        RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                            base.snapshot = checkpoint.snapshot.clone();
+                        }
+                        RuntimeClientEvent::ReadDomainsUpdated { transcript, .. } => {
+                            base.snapshot.transcript = *transcript.clone();
+                        }
+                        RuntimeClientEvent::MessageDescriptorCommitted { head, .. } => {
+                            base.snapshot.message_descriptors = head.iter().cloned().collect();
+                        }
+                        _ => {}
+                    }
+                }
+                base.cursor = record.cursor;
+                base.read_cut.clone_from(&metadata.read_cut);
+                base.content.clone_from(&metadata.content);
+                base.collections.clone_from(&metadata.collections);
+            }
+            RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
+                base.clone_from(checkpoint);
+            }
+            _ => panic!("one native projection carrier"),
+        }
+        record.event = Arc::new(complete);
+        EventDelivery::Event(record)
     }
 
     fn submit(&self) -> std::pin::Pin<Box<tokio::sync::futures::Notified<'_>>> {
@@ -1074,7 +1114,7 @@ impl Driver {
                 .clone()
         });
         loop {
-            let delivery = tokio::time::timeout(EVENT_TIMEOUT, self.events.next())
+            let delivery = tokio::time::timeout(EVENT_TIMEOUT, self.next_event())
                 .await
                 .expect("Workflow attempt settles");
             match delivery {
@@ -1651,7 +1691,7 @@ async fn fixed_question_and_review_use_root_client_while_parent_model_remains_in
         let mut seen = 0;
         let mut answered = Vec::new();
         while seen < 2 {
-            let delivery = tokio::time::timeout(EVENT_TIMEOUT, driver.events.next())
+            let delivery = tokio::time::timeout(EVENT_TIMEOUT, driver.next_event())
                 .await
                 .expect("human publication liveness guard");
             let EventDelivery::Event(event) = delivery else {
@@ -1858,11 +1898,8 @@ impl Driver {
         let RuntimeClientResult::Initialized { .. } = initialized else {
             panic!("initialized")
         };
-        let cursor = runtime
-            .host()
-            .checkpoint()
-            .expect("bounded checkpoint")
-            .cursor;
+        let checkpoint = runtime.host().checkpoint().expect("bounded checkpoint");
+        let cursor = checkpoint.cursor;
         let (events, _) = runtime
             .host()
             .subscribe_events(attachment.attachment_id(), cursor)
@@ -1872,6 +1909,7 @@ impl Driver {
             runtime,
             attachment,
             events,
+            literals: std::sync::Mutex::new(checkpoint),
         }
     }
 }
@@ -2015,7 +2053,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
         let mut answered = Vec::new();
         'wait: loop {
             let EventDelivery::Event(event) =
-                tokio::time::timeout(std::time::Duration::from_mins(1), driver.events.next())
+                tokio::time::timeout(std::time::Duration::from_mins(1), driver.next_event())
                     .await
                     .unwrap()
             else {
@@ -2024,7 +2062,7 @@ async fn reference_repair(exhausted: bool, tampered: bool) {
             // Every complete published record is a readiness observation.
             // Workflow source revisions can arrive in outer metadata without
             // an inline WorkflowsUpdated fact or checkpoint replacement.
-            let (kind, revision) = match &event.event {
+            let (kind, revision) = match event.event.as_ref() {
                 RuntimeClientEvent::ProjectionTransition { metadata, .. } => (
                     "projection_transition",
                     metadata.read_cut.domain_revisions.get("workflows").copied(),
@@ -2302,7 +2340,7 @@ async fn shipped_parallel_reverses_completion_without_git_or_parent_orchestratio
     // The native owner publication, not elapsed time, proves the second child
     // settled while the first provider response is still held.
     loop {
-        let EventDelivery::Event(_) = tokio::time::timeout(EVENT_TIMEOUT, driver.events.next())
+        let EventDelivery::Event(_) = tokio::time::timeout(EVENT_TIMEOUT, driver.next_event())
             .await
             .unwrap()
         else {

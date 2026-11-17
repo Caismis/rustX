@@ -1,0 +1,51 @@
+{
+  "accepted": true,
+  "authenticated_members": 12006,
+  "native_products": 30,
+  "native_images": 3360,
+  "full_records_checked": 112992,
+  "hot_products": 64,
+  "functional_products": 8,
+  "recheck_hot_products": 32,
+  "history_groups": 6,
+  "source_products": 6,
+  "commands": [
+    {
+      "script": "audit-source.py",
+      "exit": 0
+    },
+    {
+      "script": "audit-native.py",
+      "exit": 0
+    },
+    {
+      "script": "audit-requests.py",
+      "exit": 0
+    },
+    {
+      "script": "audit-cache.py",
+      "exit": 0
+    },
+    {
+      "script": "audit-hot.py",
+      "exit": 0
+    },
+    {
+      "script": "audit-host.py",
+      "exit": 0
+    },
+    {
+      "script": "audit-recheck.py",
+      "exit": 0
+    },
+    {
+      "script": "arithmetic.py",
+      "exit": 0
+    },
+    {
+      "script": "make-tables.py",
+      "exit": 0
+    }
+  ],
+  "scope": "Standard Python offline: no product, compiler, git, symbolizer, Node or network. Filesystem artifact basenames alone normalized; no wire/native/counter/content values normalized. Omitted executables authenticated by stored prearchive byte proofs, not rehashed as if present. Same summary and tables reproduced byte-for-byte."
+}

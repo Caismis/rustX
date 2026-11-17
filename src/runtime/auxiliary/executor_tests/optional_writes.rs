@@ -111,7 +111,7 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
         );
         vec![Some(1), Some(2)]
     } else {
-        assert!(call.is_none());
+        assert!(call.is_none(), "{probe:?}: {call:?}");
         assert_eq!(
             fixture.store.auxiliary_integrity_counts_for_test(),
             (0, [0; 5])
@@ -228,7 +228,6 @@ async fn cancelled_optional_start(request_start: bool, probe: AuxiliaryStartProb
 #[tokio::test(flavor = "current_thread")]
 async fn cancelled_optional_call_start_preserves_journal_atomicity_and_observation_drain() {
     for probe in [
-        AuxiliaryStartProbe::ReadinessInsert,
         AuxiliaryStartProbe::ObservationFields,
         AuxiliaryStartProbe::ObservationJson,
     ] {
@@ -239,7 +238,6 @@ async fn cancelled_optional_call_start_preserves_journal_atomicity_and_observati
 #[tokio::test(flavor = "current_thread")]
 async fn cancelled_optional_request_start_preserves_journal_atomicity_and_observation_drain() {
     for probe in [
-        AuxiliaryStartProbe::ReadinessInsert,
         AuxiliaryStartProbe::ObservationFields,
         AuxiliaryStartProbe::ObservationJson,
     ] {

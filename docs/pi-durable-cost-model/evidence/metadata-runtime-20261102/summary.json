@@ -1,0 +1,116 @@
+{
+  "archive": "raw.tar.xz",
+  "archive_bytes": 24107580,
+  "archive_sha256": "dadcf09cd1e4bb8c9588fc6441741482e7ec0399cf41372f385be95b8883c08c",
+  "compression": "xz preset 0",
+  "created_utc": "2026-11-02T09:12:37.013110+00:00",
+  "excluded_entries": 10,
+  "excluded_reasons": {
+    "compiled conformance artifact": 7,
+    "dependency/build/cache/archive/extract directory": 3
+  },
+  "format": "rustx-metadata-runtime-raw-evidence-v1",
+  "manifest_bytes": 676928,
+  "manifest_sha256": "3d5c11bc2ef9fef46b9b934f3a3ee87db23eddc1fdf0b6f1cb4dfc7b6f873936",
+  "phases": {
+    "baseline": {
+      "head": "2184461af208af8480a53497a91aabb059c44e16",
+      "production_tree": "9f7652ed98ab2149da718153c239e5466b3576fb",
+      "sha256": "8b19873c647647f9eda7a331e071539a18d07f1266ec0e2d1130f8515fc0d2ce"
+    },
+    "baseline_schema": 87,
+    "candidate": {
+      "head": "a664c5a96546c3e49c5638c3c959b08df3c77fec",
+      "production_tree": "dd0b2c579159d532420979209157e94d32d80131",
+      "sha256": "62c2e96a5a611de0df64e35065ae9bfd04a794bafef882a2214244ff1cb4587e"
+    },
+    "candidate_schema": 87,
+    "checked_request_pairs": 1692,
+    "cpu_affinity": [
+      2,
+      8
+    ],
+    "diagnostic_products": 8,
+    "formal_products": 144,
+    "new_deepseek_products": 0,
+    "new_pi_products": 0,
+    "paired_comparisons": 72,
+    "profile_products": 0,
+    "scope": "144 fresh Rust formal products, 144 separate targeted ablation products and eight column/WAL diagnostics. The matrices are not pooled. Fixed prior Pi/DeepSeek is a separately pinned dependency, not new paired products.",
+    "supplementary_products": 144,
+    "targeted_ablation_comparisons": 72,
+    "targeted_ablation_request_pairs": 6912
+  },
+  "raw_bytes": 5783734450,
+  "raw_files": 2106,
+  "reference_pins": {
+    "archive_manifest_sha256": "99eb50b72ea06e1cf66b56ac8a487ff24bebcd5a3b6ce14f24ec3d6afbbb4a23",
+    "deepseek_products": 12,
+    "pi_products": 60,
+    "policy": "Fixed previously strict-audited products; no new Pi/DSH execution. Ratios use separate batch medians; no cross-batch pairing or randomized concurrency claim. Full raw references remain in the content-hash-pinned previous archive. Portable new reports consume this exact prior audit; re-auditing old raw is a separate archived command, not a fresh product.",
+    "prior_rust_sha256": "775b6426d1ce59e1f80e746000d52527e876917f117361841ce120b183d042bb",
+    "prior_source": "d22ce66c5a1cda895cac382ce2c350f345933876",
+    "reference_archive": "docs/pi-durable-cost-model/evidence/pi-flow-runtime-20261027/raw.tar.xz",
+    "reference_archive_bytes": 24024636,
+    "reference_archive_sha256": "eef4c601144965e23fc32b303be67bbccdc7b0197b332d62deba9933840b49ec",
+    "reference_audit": "previous-complete-all-audit.json",
+    "reference_audit_sha256": "902e748b08ff085dc4d1edcd7a38eea181bde0b5542a8972bbd3e459472eb98f",
+    "references": {
+      "deepseek_node": "v24.19.0",
+      "deepseek_revision": "687f282e8625c6b8d11ff58211a90524be2e4317",
+      "deepseek_tree": "f127f0f96a815eac4dea336a2ae0d9cd0f2aa82d",
+      "pi_revision": "90d863f7c1183b965f099855715d6e88c7b8a52c"
+    }
+  },
+  "replay_commands": {
+    "ablations": [
+      "python3",
+      "ablation-audit.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--output",
+      "../ablation-raw-audit.json"
+    ],
+    "diagnostic": [
+      "python3",
+      "diagnostic-audit-corrected.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--formal-audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../diagnostic-raw-audit.json"
+    ],
+    "formal": [
+      "python3",
+      "direct-audit-corrected.py",
+      "--root",
+      ".",
+      "--raw-only",
+      "--output",
+      "../direct-raw-audit.json"
+    ],
+    "summary": [
+      "python3",
+      "summarize-results.py",
+      "--root",
+      ".",
+      "--audit",
+      "../direct-raw-audit.json",
+      "--output",
+      "../report-data.json",
+      "--markdown",
+      "../report-tables.md"
+    ]
+  },
+  "stream_verified_all_members": true,
+  "strict_report_sha256": {
+    "ablation-audit.json": "f1092e6a6f894a66a3c917f761e53868f7ed139cb1b2fc2810c8cc5b970bfb3c",
+    "diagnostic-audit-final.json": "e2eb7d0be5ebe42ae099d254aa6abf5123497ff799993bd85ad0a6de6b8c95f9",
+    "direct-audit-final.json": "32d1c5eed778ca6f8c627474ff69d4a955ce5a99aaa7f5c64f5420539b990bcf",
+    "report-data.json": "258b0c1f7f9bfc81821e615673ad45c7db522cb04c136c1e48ac62e6c18484cd",
+    "report-tables.md": "5ee284f388a3ce088bae65e163981096d5c183247d15060d8476f826239faa12"
+  }
+}

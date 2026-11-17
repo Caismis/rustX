@@ -1,0 +1,1106 @@
+{
+  "checkpoint-concurrency/node-harness-final.log": {
+    "bytes": 1127,
+    "sha256": "b170f585c7342e513518830e7aa383a6efd299bd93683c2c8093aa7547ead658"
+  },
+  "checkpoint-concurrency/python-harness-final.log": {
+    "bytes": 141,
+    "sha256": "6f72f2821467cc572cd401ad55992ca69c8a2da476cfcd8f455e885f345c4d02"
+  },
+  "pi-observer-modes/repaired-frozen-harness-sha256.json": {
+    "bytes": 1381,
+    "sha256": "7decf0d39a74fb17a26bcda4e116a25f113c455f1cca7d13d6d09289f02063ff"
+  },
+  "pi-observer-modes/repaired-optimized-rust-negatives.log": {
+    "bytes": 3102,
+    "sha256": "583fbabaa6b0a54b4b7f489708a5bd59681b37a2e5be89f645c2cfddfc787688"
+  },
+  "pi-observer-modes/repaired-optimized-smoke-summary.json": {
+    "bytes": 548,
+    "sha256": "4cc8a58a26ee5635d28c443027f8e49b0aa7a5e0f8b371a2084375454a4bc7ec"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-comparison.json": {
+    "bytes": 593,
+    "sha256": "745f073730c8bbc560a74ffe1699243282c1a1bcb7dfb0f24dbfd0b8c96ba2b9"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-pi.json": {
+    "bytes": 63367,
+    "sha256": "acbc860c1162dacd24fd2042c0fdca2b075aab495cf315307b0a7526e0a16f0d"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-pi.log": {
+    "bytes": 171,
+    "sha256": "1aeaa6c38d0b70fbf426d6b82f3a41993f1933ed1ca1680a97f818192bb25420"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-pi.process.json": {
+    "bytes": 8315,
+    "sha256": "90399074bf6ed5afc8aa049856e45b2e2daf6fd056364651b359e13446bf3477"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-pi.provider.log": {
+    "bytes": 67,
+    "sha256": "0d2070509589672247476f073fbf3feb3548c499414f4c313bbee7bd58f6aa23"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-pi.provider.stdout": {
+    "bytes": 4599,
+    "sha256": "d69adebe9900c570850685fee55e19d21532d65e678531aebe17596f09b344ae"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-rust.json": {
+    "bytes": 208427,
+    "sha256": "768c1a8d28b2219728031b927af7455dee6414f81cb920d4368471aa516591a2"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-rust.log": {
+    "bytes": 344,
+    "sha256": "5a1a9a0ba94f72224c5fb8f255ed90e94549604b55cf3fe8c6236ca6a9ec5a99"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-rust.process.json": {
+    "bytes": 22700,
+    "sha256": "6aafcaa65c61ab6d6cf693dd92ff46b35f32ab3d72f49c340ec4805e80fc819f"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-rust.provider.log": {
+    "bytes": 67,
+    "sha256": "324f8cc1b22b9aa3ddcfa5bbc43229b1e0c709457e7150d435ac7e0da342ab50"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-cancel-rust.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "9bf4e366b812b1972a79acba3391403bd8ff31f55400425b908420045c6aa232"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-comparison.json": {
+    "bytes": 592,
+    "sha256": "9e7c05b600106e82b570976b917b9c80b316e20b864c251bea9e4f2fc1ec4f08"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-pi.json": {
+    "bytes": 264879,
+    "sha256": "b6a6ae109299e2d454835cb99a1c30c0decf43c62b8d0008e44238cce602875a"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-pi.log": {
+    "bytes": 170,
+    "sha256": "bb37a9fb5980703a0f8257dbdfd355a41fbda4d038014489419fc55ea7967d9a"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-pi.process.json": {
+    "bytes": 30081,
+    "sha256": "c7bff2f972b90249c5c4b80ded9303f1741318b5b3e5d9de60d98d84a35a3e37"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-pi.provider.log": {
+    "bytes": 66,
+    "sha256": "77dc41dc4171c7f8f7dff158dea80a271d7c83da33bb9acafb4ae18655bf033e"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-pi.provider.stdout": {
+    "bytes": 16942,
+    "sha256": "05e878c56ce81ee2630a31ff9a766ed023032125cf3958bace62e953713f1a2e"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-rust.json": {
+    "bytes": 317239,
+    "sha256": "9277a33d8e9f88cfb317a7bb6dfdc4eb48693733ca6a4519bf69110df2b2bfbe"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-rust.log": {
+    "bytes": 343,
+    "sha256": "cab6849f3e62e6228ab0bbd411c2f5be01e667e302cbbe58c3826097f1ffb4a6"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-rust.process.json": {
+    "bytes": 44468,
+    "sha256": "e8d84e853df848a07a43e8019c69980916291ea9fc661744689315177d696d29"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-rust.provider.log": {
+    "bytes": 66,
+    "sha256": "89e5d54555763e5e0dbe33072747c4707e9c80deb017d092ce5dcce42afaf4fb"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-large-rust.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "372994d3b928aa239aae8947120278c343b1a90232e5fd7ed13b96cbc017cd37"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-comparison.json": {
+    "bytes": 49514,
+    "sha256": "62da37fef292ddefefe236670c918cfd0dce81aa246f2d8cd432afadcc464da7"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-pi.json": {
+    "bytes": 11450694,
+    "sha256": "6d321f93bde55465b34e00732a930752a3d0a16b6e7375021bb35cd914206ba3"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-pi.log": {
+    "bytes": 176,
+    "sha256": "187db6e9c58d9cc760ab6db98487cc20dc44be2b7c9b381b8fe1618cf35ee5b0"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-pi.process.json": {
+    "bytes": 1650089,
+    "sha256": "5a7836ca1dff55acde6deb491b92a8bb3955a5a91c703beaa8403796b205f773"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-pi.provider.log": {
+    "bytes": 72,
+    "sha256": "17d08cbe00bd3da91d4ac9d1c0730b231ed1c5ef49e37b23543f020c81ae3411"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-pi.provider.stdout": {
+    "bytes": 863148,
+    "sha256": "414002827a2d50ad792e643307625f7f569380bd8c20b30cf21faa8b6c65c43c"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-rust.json": {
+    "bytes": 25035563,
+    "sha256": "a60ee1e5847bba133fefe188546f66718ed93f8636939cd1d74a7d270912c3a3"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-rust.log": {
+    "bytes": 350,
+    "sha256": "564219759d310d44dd4aa1de459056e1d4fd0816d1984ce66312bb97064f64cb"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-rust.process.json": {
+    "bytes": 4384601,
+    "sha256": "102c9bef330e6b7b687bd71f0e4470af240352a46a16c610334811fa4a0414f0"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-rust.provider.log": {
+    "bytes": 72,
+    "sha256": "364aa2eae391da419d0816dce65544660ba984da3fc7d462f75e1b6ac678f62b"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-large-rust.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "c3be1d3ddbb5b1abf43b76a5901b9a41bdc73345c76cbc6e3d2c546d3fe92e7f"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-comparison.json": {
+    "bytes": 20674,
+    "sha256": "4c294ddf2aac01be8f7a6dad1d0d1fe17043d556401be099244249133d237a4e"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-pi.json": {
+    "bytes": 2552400,
+    "sha256": "a8f40a0762f1de991ef7846964443ac959b6bd223c99b497f799144b31ad2d07"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-pi.log": {
+    "bytes": 176,
+    "sha256": "8c01945122cc4fbde2641d1159c3fba7cbc54d43b866e39e31218171731cf316"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-pi.process.json": {
+    "bytes": 455103,
+    "sha256": "cc22ab139066bc4760d281acb4314a1516d8a40aec5c9bfca5f5e13999324aa3"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-pi.provider.log": {
+    "bytes": 72,
+    "sha256": "ae9c9e653d46d1033453dbd5d0a2adad0f2fe31ebf8cec5bec39c7d5e983748b"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-pi.provider.stdout": {
+    "bytes": 247764,
+    "sha256": "b690d3ed80ef2a6925ada0934380f337bd79fb9d55c7506edbbe991105041953"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-rust.json": {
+    "bytes": 6889531,
+    "sha256": "b33bb0eb9296aba28448ff7394227c6c5b20aa47184da1b8d5ea992f9be8860b"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-rust.log": {
+    "bytes": 349,
+    "sha256": "da43eb37f58b7728a85572b53a426e1b3e2fd9ddc5189a9f89bc5f8d9281828f"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-rust.process.json": {
+    "bytes": 1262935,
+    "sha256": "020b81b0c7d35a1bf193048a84707867d9e04a28403caec098be9178b8610b2f"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-rust.provider.log": {
+    "bytes": 72,
+    "sha256": "b2f87374389ab1c55c436a26b7e2279aa555a3d2dabc97e57870aa74351887eb"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-short-small-rust.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "1616c5ed20d2d5bc1105e3ed7af655f2bce745803d481b51358164213558a2ce"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-comparison.json": {
+    "bytes": 593,
+    "sha256": "5548f37c100018114694d6613c20670cd0b165cf353f56cf10d5adc470fac720"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-pi.json": {
+    "bytes": 82071,
+    "sha256": "22f9c85b5daea50dba4c7db6dcbb7ed4c82fdc33ab9196910dbf30b04debe28a"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-pi.log": {
+    "bytes": 171,
+    "sha256": "2e455b50cadde77c64bd4963c46320ba55eb01e9d840939de255be17ad530412"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-pi.process.json": {
+    "bytes": 52527,
+    "sha256": "1a40beb450147dbec8f5d3c0a31416852042093755c2e8e3c07088d90cac75f0"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-pi.provider.log": {
+    "bytes": 67,
+    "sha256": "5b27fc4bf962227ecc75491e79124a3c1f8798dc95710c9d1cc97462f4f1d144"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-pi.provider.stdout": {
+    "bytes": 31697,
+    "sha256": "3a241ceb354ee1fbe0853304dc5cce5672ee9a594fed0a2abd37720f81f25042"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-rust.json": {
+    "bytes": 226655,
+    "sha256": "429bc225fd8b63a16b320cfaebb8f2a69657e53a5835d83fb3536b0adc7512f9"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-rust.log": {
+    "bytes": 344,
+    "sha256": "ff7e89dc8f89950fc7be708acf3e6d79266accd55382dd5bc45c1b1fe49aabca"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-rust.process.json": {
+    "bytes": 66912,
+    "sha256": "06f7f3bf5d09152279b20c493b10e543b1daf51a1c6b72bb93170c19ab2704fe"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-rust.provider.log": {
+    "bytes": 67,
+    "sha256": "1dd1d6dd4e320c72cd34f4c88bb6b0ee3a3a321067b652b80a79d3fe454b53b0"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-stream-rust.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "a969dd59f0b2235a475b3f0dfdd6b42b368ba2ccd9199befdb40c9aa7613b3ed"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-comparison.json": {
+    "bytes": 1105,
+    "sha256": "941dd5bd0b16db0b53aa9d03c3e008c013e47ecd05d3d5b97e646b891091f857"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-pi.json": {
+    "bytes": 96129,
+    "sha256": "9ff92f18a5cfcf3c4d801e0a3ec639f3a64bfba52ba95d69b6e4e4c09c816fd6"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-pi.log": {
+    "bytes": 169,
+    "sha256": "3a4aea7920894f5ba53b95fd5b77a88dfb692a5e682810de66b834216496af7a"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-pi.process.json": {
+    "bytes": 16280,
+    "sha256": "e2318dafb9ae3542475174722ddf7af85d79d513f656503f6dee27564fa555f6"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-pi.provider.log": {
+    "bytes": 65,
+    "sha256": "cc56dc628fde94ae31d66e79d51e2054c8b9f05d39f34049bd7e38a6e94794ac"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-pi.provider.stdout": {
+    "bytes": 9182,
+    "sha256": "243a287428fe59edaa154e82ca23f19cdc4963cbe80ed15ebafa28ee3853dbb2"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-rust.json": {
+    "bytes": 360796,
+    "sha256": "c7374c27f33308794a1d05dbf0cdbc3bed61c236cd943c8c268d8c9c8e57a6a9"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-rust.log": {
+    "bytes": 342,
+    "sha256": "3a58776e345184bea63e67345bf9dd4577adb07f9652c6e29902bbe2c3ca1435"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-rust.process.json": {
+    "bytes": 45241,
+    "sha256": "e8bedbaec3272811fa82139a08d19be6253009d311a6a586a140cf938b7ae24b"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-rust.provider.log": {
+    "bytes": 65,
+    "sha256": "0313c36d713b6dca0d87d10f1b5e93731a7ad4627bb9690fa5e803026ce56e5f"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/0-tool-rust.provider.stdout": {
+    "bytes": 26227,
+    "sha256": "0abbe38b61bf74f4c030d0a4cd147e0fb334eeb4f406d3cfa9a090a9e5f7d565"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber/manifest.json": {
+    "bytes": 558,
+    "sha256": "6faabfc97551f3073a15f2e38d9b6a0f265a336556c3d865a355666e3214ef81"
+  },
+  "pi-observer-modes/repaired-smoke-live-subscriber.log": {
+    "bytes": 5716,
+    "sha256": "655e2f112e3c4005349286a4c35186cff863a694c89113c2202d6a0ef5c6f6a0"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-comparison.json": {
+    "bytes": 596,
+    "sha256": "5cbed30eb5841d23278dc72717870302975d7a42f6330a738fd7a6446abac09b"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-pi.json": {
+    "bytes": 63222,
+    "sha256": "d6a412b1efef2215d234401723803fb1d7065333874e57eea6def99ebc892603"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-pi.log": {
+    "bytes": 174,
+    "sha256": "29393e1ee51e9fe2d33186c98e4137442fabc415e97d9c2e62680e3a573e003b"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-pi.process.json": {
+    "bytes": 8321,
+    "sha256": "135ed7169b9c4b3c19b905ca11bb47830c968d8bbc86719402a3a9282519122e"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-pi.provider.log": {
+    "bytes": 67,
+    "sha256": "a6261456a7800997a9e46e3872add4212242f6f8e678d2958f8c59789e37e6d2"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-pi.provider.stdout": {
+    "bytes": 4599,
+    "sha256": "0e2c2bbc9163f893f4c60295f606bb985e8fd8d47436c0aed4dba56108c241ae"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-rust.json": {
+    "bytes": 208276,
+    "sha256": "a848fe87bd3a5e8de0c14cc0e615d764a42fd9eada6ead797ae0a28148be8575"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-rust.log": {
+    "bytes": 347,
+    "sha256": "de9435d9957c9a1750f5e9a1e0db529a196fa2f52be61841ef4c23a1d66f1a32"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-rust.process.json": {
+    "bytes": 22703,
+    "sha256": "0ceefb0fcba4c38004208e7a2b8df0dce6f44f647c0165222c2821cf23ec849c"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-rust.provider.log": {
+    "bytes": 67,
+    "sha256": "3186b2e8b396facf46949f1315914e1d8de6946f9a845baf5e225710f80b34e6"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-cancel-rust.provider.stdout": {
+    "bytes": 13098,
+    "sha256": "cf1981fdb20c616e9f20d8eaa75ae8ad8c64255df365091385872bd80fb722d0"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-comparison.json": {
+    "bytes": 595,
+    "sha256": "70c40c1fc40b941ab0c51411691bd8c197e1c9144428f7d0a3af2e722bb2bbe4"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-pi.json": {
+    "bytes": 231920,
+    "sha256": "df05516116c4e4fabe96c3d1e19932781cd1bd1eb671a8dc5b23082a03b9ffff"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-pi.log": {
+    "bytes": 173,
+    "sha256": "7b29dd5fe7785aae9351f8283297fd40e6481bbee1e21f500399d93d24f48136"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-pi.process.json": {
+    "bytes": 30087,
+    "sha256": "53af8c3469fa140601db4fb9d2a015c9315fa11996edadcab3f5dd9fc42e2130"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-pi.provider.log": {
+    "bytes": 66,
+    "sha256": "d18a47db879ca987b4bade3505c02f4959f72eb16202479b715e42d50d9c14d5"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-pi.provider.stdout": {
+    "bytes": 16942,
+    "sha256": "d12842df8fa7d58a20527ee122eccefcb0d441e1d284e9eba283539cb1561eec"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-rust.json": {
+    "bytes": 284323,
+    "sha256": "d7251377fe3795243c713d57067f8429a85de92590471a92f8c8538ad74b404c"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-rust.log": {
+    "bytes": 346,
+    "sha256": "5e9d2c0743e2c935306ef9ca98f61bb689e8002d5b522d0dcaab2f5cc90967a2"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-rust.process.json": {
+    "bytes": 44471,
+    "sha256": "a8f9890faabc7311eeab580d66f25c4407cb89c84fd8131a1962301699dd2564"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-rust.provider.log": {
+    "bytes": 66,
+    "sha256": "40ff89a3a7fd43fa0391e35590c1b9276c2377b2fc8e5bd013b9000987859e87"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-large-rust.provider.stdout": {
+    "bytes": 25441,
+    "sha256": "071e58f1769eb98353e2317c0ba2d5b36c0c0bc1ddd054130bd312a1ef7f9d21"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-comparison.json": {
+    "bytes": 49517,
+    "sha256": "34f31399def3724b6a6b48b680bc53acd4208b3912fd6764fbe9d10d44cb0d75"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-pi.json": {
+    "bytes": 11450614,
+    "sha256": "ffcd9a6207f6b9f81394bf2ac4cbd74d77b25289cf3abe179ebaab7f8a16a23c"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-pi.log": {
+    "bytes": 179,
+    "sha256": "80bfb54c5b97dd73f68bd1b57b7a5b5ff965ef5ddfcba4adbdf9e4fb11fc9d52"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-pi.process.json": {
+    "bytes": 1650095,
+    "sha256": "84c009951cfc89a33da7769e339ccc2c1bd7609e2375431a81b22f55d6fb2ac1"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-pi.provider.log": {
+    "bytes": 72,
+    "sha256": "9c0be73a79df23a6ccc7b880ff9271774d2cfa0267d7c6c8d111a3e84297f48e"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-pi.provider.stdout": {
+    "bytes": 863148,
+    "sha256": "11a67640c065031dfa1ac0ee58419cb64c896d82e5ca4885a90786c96080508e"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-rust.json": {
+    "bytes": 25020519,
+    "sha256": "5bb263e4b893c81667c56a2391d6b93082cd1c04e3b24c7c180e1edbaa083136"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-rust.log": {
+    "bytes": 352,
+    "sha256": "8bb6f882f9edfc4453a8a21707fe28670ecf94371b32d763b027688cdaf8e6f0"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-rust.process.json": {
+    "bytes": 4384602,
+    "sha256": "bf30e0dda7f60fc845cfff1dda28b31266a7ca7d64f717a114b2b31b628e6d40"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-rust.provider.log": {
+    "bytes": 72,
+    "sha256": "edb25b837f516924e762a813341eca9d95c337142f373c1ae1d480c35810a8fa"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-large-rust.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "811f145158eb1ba9bfc05a99224a772eece2f05b0081beadaf4bdeaf74933d2b"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-comparison.json": {
+    "bytes": 20677,
+    "sha256": "dac6791fbe0c70760351044dc95795e039d82efadc6f610284d1992ece51bfbd"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-pi.json": {
+    "bytes": 2552699,
+    "sha256": "402b5cf883e1b08533c40edabae013d260fdd3393487c5bfd52a87ae340d6880"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-pi.log": {
+    "bytes": 179,
+    "sha256": "a39e27b94391bef503d7a78e27a107d1981b61b55ba507985c7e70f3f8baf607"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-pi.process.json": {
+    "bytes": 455111,
+    "sha256": "ea77e8fce604f5513c9fb4c89576400de6cd9f00f9b518745af0cdb84db9baad"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-pi.provider.log": {
+    "bytes": 72,
+    "sha256": "20fece92b3e205fe651acb291da24cd485de8ae233765c26e516cc87b980765b"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-pi.provider.stdout": {
+    "bytes": 247764,
+    "sha256": "194fe84c9b3575d53428efa92af175c7208934543d9bba05174a894591c94b0c"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-rust.json": {
+    "bytes": 6883276,
+    "sha256": "3573f425d122ae2b2153b54d9a60fdc2484668c979bfcd7147d9c6ebe16f9d3e"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-rust.log": {
+    "bytes": 352,
+    "sha256": "b59f92c15e36cdd39e6b4f927cf66c0a7448ef426beda7b45f8768f3788bd6cc"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-rust.process.json": {
+    "bytes": 1262938,
+    "sha256": "f2323bf908046a610e46bedfe1fd0e8a7b64b9504f233e017285e3aabee7f061"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-rust.provider.log": {
+    "bytes": 72,
+    "sha256": "477d5ecfe993cfbc9de61f80a228c5112be374c261fabcf2cc4a80a81486c369"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-short-small-rust.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "028407d0bf18f9877647123dcbf017591f5eee204e75c70ca184c75c064a41e4"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-comparison.json": {
+    "bytes": 596,
+    "sha256": "6b13927c2af2e827676ef0e6b39d620947978e14794a7234ebf0ee32c6589539"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-pi.json": {
+    "bytes": 79642,
+    "sha256": "b2a51deed539d86df2be3531fb2249970c78a1b6dd614b8571bb959bfef8d0a8"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-pi.log": {
+    "bytes": 174,
+    "sha256": "bc431b5342aecd050c477a7ab992fbe492b27debfe10a40a3c22c08a4ebaa0f3"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-pi.process.json": {
+    "bytes": 52533,
+    "sha256": "3c6b45b01045230528a5bda238ce86a89f1df1ec5df802c813cd2f890ec83e49"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-pi.provider.log": {
+    "bytes": 67,
+    "sha256": "3fa54a809bf89cb41ba004a5aea17d2bd8642531a0ef4e58e4b7cc91e179be0e"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-pi.provider.stdout": {
+    "bytes": 31697,
+    "sha256": "568f6e53009196c38ee47400a780ec3e59e9846371af8295e5b1e5a65b1db432"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-rust.json": {
+    "bytes": 224197,
+    "sha256": "b322e8dfb2371aef4f5bca9ab804ccc8a695c553a274bcb6d98ace43d96634c9"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-rust.log": {
+    "bytes": 347,
+    "sha256": "bc22376faefef404607deea6a85778c75eba9790d7d1151eabf50706fadcd3cc"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-rust.process.json": {
+    "bytes": 66915,
+    "sha256": "4bc6fa28920e43a478f6995c2858e330349ecd5fdda9154169084470d6593bb0"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-rust.provider.log": {
+    "bytes": 67,
+    "sha256": "e4b5da6d6c6c9f9fe1c00979975dd1704f6b2c81f62396cdbe21ceeb9bd6dd3c"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-stream-rust.provider.stdout": {
+    "bytes": 40196,
+    "sha256": "bb48f383716269c12762ea1c9f00e7f8f7cc55f9b068301b3e30e2eb28cdb9c1"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-comparison.json": {
+    "bytes": 1108,
+    "sha256": "30b0f4e45fb5b6e9c8e0337a37c155e85c8c6bb540289cbaa276925379ca14eb"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-pi.json": {
+    "bytes": 95883,
+    "sha256": "6f6b507fb50b426d5195977b331945cb84f5a34b86672220d54629337f7173ee"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-pi.log": {
+    "bytes": 172,
+    "sha256": "836d94cdddf4a663e35b0df255e9abe5dbd388994cda60cb905b1f465f2ab444"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-pi.process.json": {
+    "bytes": 16289,
+    "sha256": "46406f549c9ac13e391a639a505a9de6020f0d09d96d9f4f92acf1aebd03ed97"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-pi.provider.log": {
+    "bytes": 65,
+    "sha256": "846a99a7492c623c09e7416295ce7436b99d6744ba7604fce1c8276f347446ef"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-pi.provider.stdout": {
+    "bytes": 9185,
+    "sha256": "5c77652226618584ca35ac81d1e2035797fd591da5722627b772e19eaa8bb804"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-rust.json": {
+    "bytes": 360379,
+    "sha256": "3f0030669646c00a74eda3b136e461de7756ad85184ff31999eb30a5e4f1b451"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-rust.log": {
+    "bytes": 345,
+    "sha256": "b1f5a4bc7536bf72d7989f13103f10c10007e7cbd5aab095a0aa529fbfc681a5"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-rust.process.json": {
+    "bytes": 45247,
+    "sha256": "3e38c6096eb6062817083809944015bc56527e0757390df2f94920e3a029b55c"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-rust.provider.log": {
+    "bytes": 65,
+    "sha256": "cc674f875ad6f19a6343f937ff066e2a02a032810209b10818d418d8d1f09142"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/0-tool-rust.provider.stdout": {
+    "bytes": 26230,
+    "sha256": "e9d7c1a7d6481101ea2e0dae5c2d4d9b098fe30a19a7cbf77144aa510ba97be1"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber/manifest.json": {
+    "bytes": 561,
+    "sha256": "5ed78c244c38b8cad89a4d7461a74503ebe7184e8c56fc71c1bf73b72ea8dfaa"
+  },
+  "pi-observer-modes/repaired-smoke-no-live-subscriber.log": {
+    "bytes": 5770,
+    "sha256": "62787e6abf2a360643521f5542b4bdd912ba7d5bc19e446781256b50f207e819"
+  },
+  "pi-observer-modes/repaired-validation-pack.json": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "pi-observer-repaired-build/build.stderr": {
+    "bytes": 119,
+    "sha256": "1a37bf92ff1f858414dfecde9be33058aee08b7f7cfb9b6ab9276756339770ae"
+  },
+  "pi-observer-repaired-build/build.stdout": {
+    "bytes": 461346,
+    "sha256": "2a170554fd9d86d197409f489d51e5044ff68155c5c8e322ab2cfb72fcaebb93"
+  },
+  "pi-observer-repaired-build/identity.json": {
+    "bytes": 2468,
+    "sha256": "ec98b9ed46b002e0afb559132ce9133a7154f49691d36619c271e1b39d9acce9"
+  },
+  "pi-observer-repaired-profile/control-profile-costs.json": {
+    "bytes": 20989,
+    "sha256": "053310e822b0d51c8eb2b17e66271d73f2fea7aa16ece296deaeb1cd0a3f8970"
+  },
+  "pi-observer-repaired-profile/disjoint-cpu-attribution.json": {
+    "bytes": 2785,
+    "sha256": "e404efe01e5937679c1805432b58883c3dc1a3fd854e0865db211cf13084523e"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-control/manifest.json": {
+    "bytes": 660,
+    "sha256": "938597d198519e8b9b6f902b37daa58b8e7b56791a617c24382c0a8cd9a03b8c"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-control/sample.json": {
+    "bytes": 25048206,
+    "sha256": "382fdd71f3270619ad82b71a858bdd1793646003dcddb199c44ea3908e9109a8"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-control/sample.log": {
+    "bytes": 366,
+    "sha256": "25919417a9f4a0654ccdadc9d86bf127d7172a7e2a8b3f8684951bf0258d3f06"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-control/sample.process.json": {
+    "bytes": 4384601,
+    "sha256": "8a504b772724ff420fbf72872d20c5f878363e52e3a01234af6157818f0c09c2"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-control/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "1de218e76fdeaf10fb6b029fc3ae22fecfa4e4d69592144b9f3013f39d4609fa"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-control/sample.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "439f023f0eddbe3517160e62b40e4deac670bc6cf191204031209e22071debac"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-control.log": {
+    "bytes": 34,
+    "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_driver_drop.cpu": {
+    "bytes": 10776,
+    "sha256": "8a65d01af70a63965f5c73772cb8951202c4ba31e54fae800fdbfb84aa93271b"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_final_writer_close.cpu": {
+    "bytes": 141960,
+    "sha256": "770d7db4ac0481df0ea08bc1ff9acacc01cae93f2dcf3601a356699a23a28886"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_initialization.cpu": {
+    "bytes": 261115,
+    "sha256": "d0354c009a7e469b1612c133d1bcad990bb26d967eccde36ba548a030c981180"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_late_snapshot.cpu": {
+    "bytes": 142929,
+    "sha256": "719afc6ea72a09dd511f334b11715aeec65d4bec0daed150844782a01358b2a7"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_provider_start.cpu": {
+    "bytes": 22999,
+    "sha256": "839eb687dd928684388c6b85c2cc2084fafcdbf4a7d7b5c8c43ff583f9247c93"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_reopen_verification.cpu": {
+    "bytes": 10776,
+    "sha256": "a9ced7410640c258f15cf055c9bf6841d4f716d26242347e023ed6e431d3af43"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_shutdown.cpu": {
+    "bytes": 11448,
+    "sha256": "103ffc25372385158cca6c553ebf80c1b9e376eb0ae8b79513aff61afe4562c3"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_turns.cpu": {
+    "bytes": 11751,
+    "sha256": "75e63a17db03abeb3d0a5db87ac9290549ebc00d0e1b402834b1c1841f0ce4e0"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/after_verification.cpu": {
+    "bytes": 11073,
+    "sha256": "e84e7b0b2e275c6fcc03df2983fa7fddd7a3484b68d91caaabfcad6cc719461c"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/before_initialization.cpu": {
+    "bytes": 8630,
+    "sha256": "bdda4b0eca4715d8b15e4054057cbcdd785fc5ccad76f099390598c7719834c5"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/before_measured_turns.cpu": {
+    "bytes": 145943,
+    "sha256": "a48eeee7337babfbe1aeaf1208c96639a88995728e59fe0c27c9f860ee21ecc1"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/manifest.json": {
+    "bytes": 1100,
+    "sha256": "6d143f077d60677c131aed80bef18ecd37ed407f4979c3355c7ae92f44a51669"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/sample.json": {
+    "bytes": 25045532,
+    "sha256": "85ec349b22e2c52113d7aff0a4a871f80b951bc81af9df85d25945796e4d0449"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/sample.log": {
+    "bytes": 891,
+    "sha256": "185791100e56aa6def9832708533bcd8821d26cd53d7381668b963a74cfb401f"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/sample.process.json": {
+    "bytes": 4385045,
+    "sha256": "c508109c4bc3cf8109d2843ce4ff7d3ec4f89e25eeb15a02489801144d117a9c"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "17c2bad30a169655ad72eb395f52f07a89b3585514f842dd2c16cbe79cc5b401"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/sample.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "49646b0d1a98f5876e5209e069ef48f93813303bc3900b7e7b9fb66c8e99deb7"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/steady-cumulative.txt": {
+    "bytes": 108131,
+    "sha256": "4cdb0420413745682b2b3c4f67f2441e07f822a0862f116528331dda0a615597"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/steady-cumulative.txt.stderr": {
+    "bytes": 222,
+    "sha256": "7311f1a697f1516dc5f585d8a48daed2cc21da757615186876ba8acd4665635f"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/steady-flat.txt": {
+    "bytes": 108131,
+    "sha256": "2f1607835d3fd0f9857ab3dde10931bfcc4d0d5ef65507dcd33ae13e2a232c95"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/steady-flat.txt.stderr": {
+    "bytes": 222,
+    "sha256": "7311f1a697f1516dc5f585d8a48daed2cc21da757615186876ba8acd4665635f"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/steady-stacks.txt": {
+    "bytes": 2111081,
+    "sha256": "491086acca91786e59840f1b837170171d91f8a78112d58dc1c1264b3022be34"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu/steady-stacks.txt.stderr": {
+    "bytes": 222,
+    "sha256": "7311f1a697f1516dc5f585d8a48daed2cc21da757615186876ba8acd4665635f"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-large-cpu.log": {
+    "bytes": 34,
+    "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-control/manifest.json": {
+    "bytes": 660,
+    "sha256": "181a7aa6b48e4a4f1e353ef6fa6bdbe32c5d70108901bb40a88598f92f660d30"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-control/sample.json": {
+    "bytes": 6894839,
+    "sha256": "25d36c8e37ec9f5cb95225e4f3aa8dca78ecf5fd71a231d9fa108fdd7ccd0abd"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-control/sample.log": {
+    "bytes": 365,
+    "sha256": "8846aaba99db7d9b2287eed808602e203717238d89e8a265088d9ebe71c48c68"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-control/sample.process.json": {
+    "bytes": 1262935,
+    "sha256": "80f6b1697e87a97ddeead38bed80973475b6f3ef125a019206f6154b0fcea103"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-control/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "335e28f3c865ce20f48e4ca3b0cd0453ee6d75488a43855f9e61d825b205e97d"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-control/sample.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "ec584a21d342d3df6dbeefaaa3adfea1ca2477f5dda865675b022e91f8188fea"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-control.log": {
+    "bytes": 34,
+    "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_driver_drop.cpu": {
+    "bytes": 10370,
+    "sha256": "f8af91b6ccb8d9ac05e8a460667dfd3b3d046e3917ed6575541eb3c67e9edd87"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_final_writer_close.cpu": {
+    "bytes": 37306,
+    "sha256": "221973c9d17092639687270048767f28990e3a0cb84c411e47942e2c6a563b3d"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_initialization.cpu": {
+    "bytes": 38571,
+    "sha256": "0d70b86a5f96b879babdd630b26325f561a0ddcff97f5d0e4be0e569436ba480"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_late_snapshot.cpu": {
+    "bytes": 36379,
+    "sha256": "ad55790b3c25d527d67130eba741691819ec9a5adfae4ea4f9a3039da7458f94"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_provider_start.cpu": {
+    "bytes": 21847,
+    "sha256": "b84acd0808e107d436c7792d0bb4d7c4bcf5dd896287c667becb37e0bcf88647"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_reopen_verification.cpu": {
+    "bytes": 10370,
+    "sha256": "ed668911d438c2f70bb2fff91ef7d30daba62ec415ad7ab8b332ef7006b0e4cc"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_shutdown.cpu": {
+    "bytes": 10730,
+    "sha256": "2dae2a7fd7894be77d9d6cd71edbb07429dfb09e9bc0c7ec7d9df11ced3c6f0b"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_turns.cpu": {
+    "bytes": 12011,
+    "sha256": "17696249f79be3ccb6931c219f9a45945bdb56d3f995350756fe4e264f61d952"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/after_verification.cpu": {
+    "bytes": 10667,
+    "sha256": "8a5a5ce9b3f06b2d0927b0c4e0dedad3fdd6a70b6addb98cf2349352752cccdc"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/before_initialization.cpu": {
+    "bytes": 8630,
+    "sha256": "9685eade30644accded3a60ce37ac5b99d25264ded8f3a974cdb19a590f87435"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/before_measured_turns.cpu": {
+    "bytes": 130035,
+    "sha256": "24ce32d9e59b6dc099af773c3668474f43ce616e97a24e532022205f86bcbaeb"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/manifest.json": {
+    "bytes": 1100,
+    "sha256": "7ade96635d385d46f39452d2a8d50c7fed66a322bd6ed03bfee7991ce17fa797"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/sample.json": {
+    "bytes": 6893875,
+    "sha256": "5063efff45e7414b34a5e8429f1673cfff7d7ab37d1f16c14d8ce8b06d72d904"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/sample.log": {
+    "bytes": 884,
+    "sha256": "09d5855fe1a1197778fd2b2f022cdcd5ecdabe57c67e20a63e6058070ea30935"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/sample.process.json": {
+    "bytes": 1263379,
+    "sha256": "dd3cfd009a146222c4df489b402b5c82b312dd9857ff0f1dc5f8b402461cd0a5"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "88983649faaa9c0c00be750ada96ac58c538147b109783ea576fb86b07e2309c"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/sample.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "e1082bc8035f98911fa2782a4301c29620caeb3b96d7ca7f2c81e8f77da69316"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/steady-cumulative.txt": {
+    "bytes": 102471,
+    "sha256": "4fa657f466e05b61c26de99edba70d6b0d9399cb846ac3786f75754bff533dd8"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/steady-cumulative.txt.stderr": {
+    "bytes": 222,
+    "sha256": "81a11dcbf4a8afb75f906593e2399260ece8192b831750182357770634854ade"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/steady-flat.txt": {
+    "bytes": 102471,
+    "sha256": "bb390fb0c3a58190953aeb5e9ade54fdfed0b47dd1233996d4a46e75964a6a81"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/steady-flat.txt.stderr": {
+    "bytes": 222,
+    "sha256": "81a11dcbf4a8afb75f906593e2399260ece8192b831750182357770634854ade"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/steady-stacks.txt": {
+    "bytes": 1860243,
+    "sha256": "1402571f5873ca87adf0b296c15e5a695ff9504abc432f981332e1c57db28144"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu/steady-stacks.txt.stderr": {
+    "bytes": 222,
+    "sha256": "81a11dcbf4a8afb75f906593e2399260ece8192b831750182357770634854ade"
+  },
+  "pi-observer-repaired-profile/live-subscriber-short-small-cpu.log": {
+    "bytes": 34,
+    "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-control/manifest.json": {
+    "bytes": 663,
+    "sha256": "81142f1490276312a794d52b64129ca618b26a4cc4c3c10368842e782b80c49f"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-control/sample.json": {
+    "bytes": 25033253,
+    "sha256": "a69fd2bf3e2c09989b146099eb977c6d1cf6609f8897f73c39fb79b05bff2bf2"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-control/sample.log": {
+    "bytes": 368,
+    "sha256": "338ca3ef71b3717e53b3568a4d34efe227c577625e43003ae130977bc2d316ae"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-control/sample.process.json": {
+    "bytes": 4384602,
+    "sha256": "1e27529412151dfac4b607c3e93aae732c80fcf77fe20b5f82a005b2067abf5c"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-control/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "a76b09758acb9acb864448c04bbb73d72ef08cb7f83729fdb1eb9ab6c9dcd6f4"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-control/sample.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "34eec2492b0675191da24d818686cee6090cd82e7dd128384f04111d03583680"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-control.log": {
+    "bytes": 34,
+    "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_driver_drop.cpu": {
+    "bytes": 10256,
+    "sha256": "cb49c18071c378edef90e500cbc73de63d46f9b1a014d347e1be093bb05937b7"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_final_writer_close.cpu": {
+    "bytes": 145088,
+    "sha256": "840db196d9c62031ce98d5c0bdf6d18ee465d07932d212b54c09fd55f90a30a1"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_initialization.cpu": {
+    "bytes": 155354,
+    "sha256": "514dd050daeefdca108881200f937a4de414dcc662e6ba619a10cc378fcf939f"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_late_snapshot.cpu": {
+    "bytes": 144396,
+    "sha256": "d035e73cdfc0e57945aa007cd4fa7eea741f041afa372eed28292729db6aad81"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_provider_start.cpu": {
+    "bytes": 22866,
+    "sha256": "64980d99fd4957a43057f7360ffc78d4f6e2f80481e15e79ce917af598acd95e"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_reopen_verification.cpu": {
+    "bytes": 10080,
+    "sha256": "b953d1014df05b1be092a35ecdafbd02f4d803288fafb0115c0434458b10e18f"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_shutdown.cpu": {
+    "bytes": 10696,
+    "sha256": "8c916718f795ff9f50d7e2133bf26dd12d0acdffe084ba1686a224cb0ef9e5b0"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_turns.cpu": {
+    "bytes": 11842,
+    "sha256": "f61e25f3940c1980371d397a380804f4dd70f4805e3b0384809bb325f81ad8a0"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/after_verification.cpu": {
+    "bytes": 10380,
+    "sha256": "6c3a04e165e85c36dd9870d0444f8e06656ed32c10e819e3c88ad879a8527d7b"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/before_initialization.cpu": {
+    "bytes": 8630,
+    "sha256": "2a7b619dcfe93b339c7a8d02af4cec6826e33732c754be1889f080b5b38294a6"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/before_measured_turns.cpu": {
+    "bytes": 84466,
+    "sha256": "8869eeeb271d80e5c2c1637245c70ee57092b453afaa26e7179cf67bb1fc6e50"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/manifest.json": {
+    "bytes": 1109,
+    "sha256": "b5902acfb8f2b0cb9c37a22f99c94c1d449947f6c1455971ddea211b2bf56368"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/sample.json": {
+    "bytes": 25030576,
+    "sha256": "50aebbb7004497891ee25f51fac43e57fd701d737b32f341f697ac882e1abe72"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/sample.log": {
+    "bytes": 892,
+    "sha256": "160cd156fbe53f217411c732069517f17f4ea80d6dc55805a8c232c099508e86"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/sample.process.json": {
+    "bytes": 4385052,
+    "sha256": "42113ceaab01cac226186eda07d1ac5f6ef06e0c69b73a56676ee476dd394d89"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "eeaec3649a2fbc082dc41a0c8fb99fc68d467ab6a307133c3213a4ee07fa6cfd"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/sample.provider.stdout": {
+    "bytes": 2116812,
+    "sha256": "c15aacbaaa639f9582d813ed6c4cb1886adabf8be8e8de365811b380cdec45ad"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/steady-cumulative.txt": {
+    "bytes": 74570,
+    "sha256": "de03f201cc35124d87f277ac60bae99e13e81e30e5b8def356c0087b442e6245"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/steady-cumulative.txt.stderr": {
+    "bytes": 225,
+    "sha256": "818e3749a0fe9d620742a3ebcd555a7f86f15b7618bae268ad1ec8f74485f98d"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/steady-flat.txt": {
+    "bytes": 74570,
+    "sha256": "7a0b824c77fa8a9a53d611b39c79053062b5aa926d80cec3b696ec40a023421a"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/steady-flat.txt.stderr": {
+    "bytes": 225,
+    "sha256": "818e3749a0fe9d620742a3ebcd555a7f86f15b7618bae268ad1ec8f74485f98d"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/steady-stacks.txt": {
+    "bytes": 1168561,
+    "sha256": "f0a7b7b23323a20cb2436d20e23c74e92fef5b0d8e6bd990b3309e7c0a00fa63"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu/steady-stacks.txt.stderr": {
+    "bytes": 225,
+    "sha256": "818e3749a0fe9d620742a3ebcd555a7f86f15b7618bae268ad1ec8f74485f98d"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-large-cpu.log": {
+    "bytes": 34,
+    "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-control/manifest.json": {
+    "bytes": 663,
+    "sha256": "2409c38b396bdde2861995ef2eba4b22f629c54afd240f7439c9147a97ff217a"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-control/sample.json": {
+    "bytes": 6888750,
+    "sha256": "60feab08d81c025151f3a25bf644ad33adf672dd8f97c0f39ed5c3fcf100f4f5"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-control/sample.log": {
+    "bytes": 368,
+    "sha256": "c70d5701fc1ef1ff24673a1bb07517b2795b527e639287fec9490bf17459d747"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-control/sample.process.json": {
+    "bytes": 1262938,
+    "sha256": "512e90e459d2a586d698bdb04ad52e14fe733127eb3f3f3f8fc4905570518b85"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-control/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "f523e05ff468572da0b6218ed0f37b58fdbd613c8dcbea19564d0c836ad44fd3"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-control/sample.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "8853fb5d1b0fd3d1bb7286143d131af53175e0d46be0dd4477f353c975c715d4"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-control.log": {
+    "bytes": 34,
+    "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_driver_drop.cpu": {
+    "bytes": 10206,
+    "sha256": "a8aebf6cd9eb535ce3cdc342f69e2abfeb7ecf1e62d3584a3a2774cd988a7bed"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_final_writer_close.cpu": {
+    "bytes": 35758,
+    "sha256": "8c1443554cfd5aec568d8a5d8595b971d96145450fc5ff80f57e8352c817de8c"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_initialization.cpu": {
+    "bytes": 26494,
+    "sha256": "c2d37b891ec23ce7d3f4996c6c4fb2f8be84b105adfb27f49c6d2ba9a568121b"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_late_snapshot.cpu": {
+    "bytes": 36194,
+    "sha256": "f21dfbe1de2d54dd2c4c41689ec71f435c5c473c5c3e97d2c864fea1e0a3d656"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_provider_start.cpu": {
+    "bytes": 21002,
+    "sha256": "b6058d51c5199cfd28fbd7030b9178dbbc5d135527ac4101ab7f12e26d43b091"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_reopen_verification.cpu": {
+    "bytes": 10022,
+    "sha256": "25694d78943fa3286799f6ec74d7ba2dd43520fb3936659e7d9d5cad98df3dc2"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_shutdown.cpu": {
+    "bytes": 10022,
+    "sha256": "5669bdeb4277ebc4083202f9b1caf7b14b8b24ac35092cfcf76165e89a0745d6"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_turns.cpu": {
+    "bytes": 11426,
+    "sha256": "9f630922cf26be10e4deaa3f470264355cc0c4a0e9b47db0b0998b354d99ce0e"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/after_verification.cpu": {
+    "bytes": 10322,
+    "sha256": "017071ba6f70ebc0ef0079495b3e268e57b94f547d6a168fc2c4e29bd7c3d9e3"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/before_initialization.cpu": {
+    "bytes": 8630,
+    "sha256": "76c89f10d42b1315aac1a1425d4a777a05f55a7da5f8248ea40f383b0e956904"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/before_measured_turns.cpu": {
+    "bytes": 78402,
+    "sha256": "83eda907dfbe3e18de3a1a19acc1f1a6cf9288730f168560bee0deaeae578e61"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/manifest.json": {
+    "bytes": 1109,
+    "sha256": "17aed7e9eda1a1a3e8bf5dc44dca60e487864993bd51d2bc92652cbb6d5ed7b1"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/sample.json": {
+    "bytes": 6887908,
+    "sha256": "51fdbbb3cfad1d96d7071d31b2d0f56d9561b03e196e63a2f45d85d09df1d85d"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/sample.log": {
+    "bytes": 885,
+    "sha256": "9d574659e736c4be1b938efc0ca4323fd2fc79f03d8387ebc634ea79a550e396"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/sample.process.json": {
+    "bytes": 1263389,
+    "sha256": "702222c7c465c45e2faa04f4654d5ff95acc22d2ac56c33f1829c6ea8eccbf09"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/sample.provider.log": {
+    "bytes": 72,
+    "sha256": "81f2c88a35bd0c8ae23a941a69813530f87023154b914bdeab34c9d53a236f45"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/sample.provider.stdout": {
+    "bytes": 662604,
+    "sha256": "618f91f13cc23d4b6fa9c13f9e85cf20da0d4406ba61d4ddc2349efb7c82f42e"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/steady-cumulative.txt": {
+    "bytes": 71467,
+    "sha256": "07e2a58b9147331794bec051e06c90d9a2c3aab545346f71e12bf2b4409780e0"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/steady-cumulative.txt.stderr": {
+    "bytes": 225,
+    "sha256": "f5ac0d8720d1a0849c8f2b8d8e1cd5009bb2fcfd772dca9cc5ce766cc6bdd39e"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/steady-flat.txt": {
+    "bytes": 71467,
+    "sha256": "6138001887d36ef656050758eb81ccd57918824107be9128dbd852536bfbc5e6"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/steady-flat.txt.stderr": {
+    "bytes": 225,
+    "sha256": "f5ac0d8720d1a0849c8f2b8d8e1cd5009bb2fcfd772dca9cc5ce766cc6bdd39e"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/steady-stacks.txt": {
+    "bytes": 1060998,
+    "sha256": "21996c80d0d2de5d32ea206277d806b64f87462476f0da3354329a68dd794e0f"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu/steady-stacks.txt.stderr": {
+    "bytes": 225,
+    "sha256": "f5ac0d8720d1a0849c8f2b8d8e1cd5009bb2fcfd772dca9cc5ce766cc6bdd39e"
+  },
+  "pi-observer-repaired-profile/no-live-subscriber-short-small-cpu.log": {
+    "bytes": 34,
+    "sha256": "1194152019a5b3c03115275ac8b6eb54d7e2b5efa8e9ad6c643643f5d5d00d54"
+  },
+  "pi-observer-repaired-profile/partition-result.json": {
+    "bytes": 2015,
+    "sha256": "cf7dae192f83aafe3eca697d115406a5120450aa88e8a0aa10f597e58fb7c33d"
+  },
+  "pi-observer-repaired-profile/partition-stacks.py": {
+    "bytes": 3190,
+    "sha256": "7030276f82c6ecd3d5b33b33b8b379a4c9ab401685fc1908473aabd452c60d7d"
+  },
+  "pi-observer-repaired-profile/run-profile.log": {
+    "bytes": 430,
+    "sha256": "aa0427d7dadbbcfd2c4cc4362d54972d62e76ad3794f1466e5e7cc65d4fefd68"
+  },
+  "pi-observer-repaired-profile/run-profile.py": {
+    "bytes": 1792,
+    "sha256": "ebfaa6c65cdc1e1ffbe3cf78d9ceb2a27c15c0e41bb70d3891e056da7085bf76"
+  },
+  "pi-observer-repaired-profile/sql-prepare-owners.json": {
+    "bytes": 21375,
+    "sha256": "4b0b431a3d98327b674d06afc6de6c7d18064e507ee6b24ff20601d76819585e"
+  }
+}

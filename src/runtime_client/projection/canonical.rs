@@ -1,4 +1,6 @@
 //! Canonical receipt, descriptor and audit folding, and in-flight foreground text/argument assembly.
+use super::prepared_capture;
+use super::shared_snapshot;
 use super::{
     Arc, AttemptId, ContentBlockIndex, ForegroundSettlement, ForegroundToolState, InFlightBlock,
     MessageId, RuntimeClientEvent, RuntimeClientProjection, RuntimeClientTranscriptCursor,
@@ -47,6 +49,9 @@ impl RuntimeClientProjection {
             if canonical_header_position(header).is_some_and(|position| {
                 position >= batch.first_position && position <= batch.last_position
             }) {
+                if batch.read_cut.ledger_through > self.canonical_observed_through {
+                    self.install_canonical_tool_proposals(attempt_id, header, &mut events);
+                }
                 self.rebind_canonical_foreground(header, &mut events);
             }
         }
@@ -79,10 +84,10 @@ impl RuntimeClientProjection {
             self.install_todo_head(todos);
             events.push(RuntimeClientEvent::ReadDomainsUpdated {
                 projection_head: self.snapshot.context.projection_head.clone(),
-                transcript: self.snapshot.transcript.clone(),
-                trace: self.snapshot.trace.clone(),
+                transcript: Box::new(self.snapshot.transcript.owned()),
+                trace: None,
                 occupancy: self.snapshot.context.occupancy.clone(),
-                todos: self.snapshot.todos.clone(),
+                todos: self.snapshot.todos.owned(),
             });
         }
         events
@@ -118,14 +123,18 @@ impl RuntimeClientProjection {
         self.snapshot
             .message_descriptors
             .iter()
-            .any(|current| current == descriptor)
+            .any(|current| current.as_ref() == descriptor)
             && match &header.display {
                 Some(message) => {
                     self.snapshot
                         .messages
                         .iter()
                         .any(|current| current == message)
-                        && self.head_bindings.get(message.id()) == Some(&header.content)
+                        && self
+                            .head_bindings
+                            .get(message.id())
+                            .map(prepared_capture::PreparedBindingHead::values)
+                            == Some(header.content.as_slice())
                 }
                 None => !self
                     .snapshot
@@ -137,25 +146,26 @@ impl RuntimeClientProjection {
 
     pub(super) fn install_canonical_descriptor(
         &mut self,
-        descriptor: &crate::observation::transcript::RuntimeClientMessageDescriptor,
+        descriptor: Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>,
     ) -> Option<MessageId> {
-        if let Some(existing) = self
-            .snapshot
-            .message_descriptors
-            .iter_mut()
-            .find(|existing| existing.locator == descriptor.locator)
+        let head = &mut self.snapshot.message_descriptors;
+        if let Some(index) = head
+            .iter()
+            .position(|row| row.locator == descriptor.locator)
         {
-            existing.clone_from(descriptor);
+            head.set(index, descriptor);
         } else {
-            self.snapshot.message_descriptors.push(descriptor.clone());
+            let position = canonical_locator_position(&descriptor.locator);
+            let index = head
+                .iter()
+                .position(|row| canonical_locator_position(&row.locator) > position)
+                .unwrap_or(head.len());
+            head.insert(index, descriptor);
         }
-        self.snapshot
-            .message_descriptors
-            .sort_by_key(|descriptor| canonical_locator_position(&descriptor.locator));
         let evicted = if self.snapshot.message_descriptors.len()
             > super::super::checkpoint::CHECKPOINT_NATIVE_HEAD_ITEMS
         {
-            self.snapshot.message_descriptors.remove(0).identity
+            self.snapshot.message_descriptors.remove(0).identity.clone()
         } else {
             None
         };
@@ -188,18 +198,19 @@ impl RuntimeClientProjection {
         if !owns_header && self.canonical_header_unchanged(&header, &descriptor) {
             return events;
         }
-        let evicted_message_id = self.install_canonical_descriptor(&descriptor);
+        let descriptor = Arc::new(descriptor);
+        let evicted_message_id = self.install_canonical_descriptor(Arc::clone(&descriptor));
         let transcript_cursor = transcript_cursor.map(RuntimeClientTranscriptCursor::from);
         events.push(RuntimeClientEvent::MessageDescriptorCommitted {
             attempt_id: attempt_id.clone(),
             descriptor,
-            head: self.snapshot.message_descriptors.clone(),
+            head: self.snapshot.message_descriptors.owned(),
             transcript_cursor,
             evicted_message_id: evicted_message_id.clone(),
         });
         if let Some(message) = header.display {
             self.head_bindings
-                .insert(message.id().clone(), header.content);
+                .insert(message.id().clone(), header.content.into());
             if let Some(existing) = self
                 .snapshot
                 .messages
@@ -276,14 +287,14 @@ impl RuntimeClientProjection {
                                 block_index,
                                 ..
                             } if *block_index == slot.block_index => {
-                                Some(binding.content_ref.clone())
+                                Some(binding.content_ref.as_ref().clone())
                             }
                             _ => None,
                         })
                         .or_else(|| {
                             self.content_metadata
                                 .get(&(
-                                    "canonical_block_metadata",
+                                    "cb",
                                     locator.key().into_owned(),
                                     slot.block_index.get(),
                                     crate::observation::content::ContentRepresentation::CanonicalJsonV1.key(),
@@ -306,7 +317,7 @@ impl RuntimeClientProjection {
                     .as_ref()
                     .is_some_and(|flight| header.identity.as_ref() == Some(&flight.message_id))
                 {
-                    attempt.in_flight = None;
+                    attempt.in_flight = shared_snapshot::CowDomain::default();
                     self.publication_start = None;
                     self.live_frontiers.clear();
                 }
@@ -404,7 +415,7 @@ impl RuntimeClientProjection {
                     .as_ref()
                     .is_some_and(|flight| summary.message_id.as_ref() == Some(&flight.message_id))
             {
-                attempt.in_flight = None;
+                attempt.in_flight = shared_snapshot::CowDomain::default();
             }
         }
         let audit = receipt.header.display.map(|entry| {
@@ -420,7 +431,7 @@ impl RuntimeClientProjection {
             return vec![RuntimeClientEvent::AssistantPublicationDeferredSettled {
                 attempt_id,
                 settlement: receipt.summary.into(),
-                settlement_head: self.snapshot.publication_settlements.clone(),
+                settlement_head: self.snapshot.publication_settlements.owned(),
                 audit: audit.map(Box::new),
                 transcript_cursor: receipt.transcript_cursor.into(),
                 read_cut: receipt.read_cut,
@@ -433,7 +444,7 @@ impl RuntimeClientProjection {
             attempt_id,
             audit: Box::new(audit),
             transcript_cursor: receipt.transcript_cursor.into(),
-            settlement_head: self.snapshot.publication_settlements.clone(),
+            settlement_head: self.snapshot.publication_settlements.owned(),
         }]
     }
 
@@ -471,8 +482,7 @@ impl RuntimeClientProjection {
         };
         let Some(existing) = in_flight
             .blocks
-            .iter_mut()
-            .find(|block| block_index_of(block) == block_index)
+            .find_mut(|block| block_index_of(block) == block_index)
         else {
             if in_flight.blocks.len() >= 32 {
                 return;
@@ -529,7 +539,7 @@ impl RuntimeClientProjection {
             .map(|flight| flight.message_id.clone());
         if let Some(in_flight) = attempt.in_flight.as_mut()
             && let Some(InFlightBlock::ToolCall { arguments, .. }) =
-                in_flight.blocks.iter_mut().find(|block| match block {
+                in_flight.blocks.find_mut(|block| match block {
                     InFlightBlock::ToolCall {
                         block_index: index, ..
                     }
@@ -588,7 +598,7 @@ impl RuntimeClientProjection {
         attempt_id: &AttemptId,
         call_id: &ToolCallId,
         occurrence: Option<&crate::message::types::ToolCallOccurrenceRef>,
-        result: ToolExecutionResult,
+        result: &ToolExecutionResult,
     ) -> ForegroundSettlement {
         let Some(attempt) = self
             .snapshot
@@ -623,7 +633,10 @@ impl RuntimeClientProjection {
             return ForegroundSettlement::AlreadySettled;
         }
         let arguments = arguments_of(&slot.state);
-        slot.state = ForegroundToolState::Settled { arguments, result };
+        slot.state = ForegroundToolState::Settled {
+            arguments,
+            result: result.clone(),
+        };
         ForegroundSettlement::Applied
     }
 }

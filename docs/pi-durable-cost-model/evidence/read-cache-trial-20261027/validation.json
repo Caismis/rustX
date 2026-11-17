@@ -1,0 +1,55 @@
+{
+  "head": "8760f570999a4693f59db5c446804afce34b74c8",
+  "production_tree": "807eb84ba5bfcb9d68ba6c39988aaff157e298a6",
+  "rust_passed": 1211,
+  "ignored": 1,
+  "counts": {
+    "tests-sqlite": {
+      "passed": 424,
+      "failed": 0,
+      "ignored": 0,
+      "stdout": "tests-sqlite.stdout"
+    },
+    "tests-client": {
+      "passed": 525,
+      "failed": 0,
+      "ignored": 1,
+      "stdout": "tests-client.stdout"
+    },
+    "tests-read-layout": {
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0,
+      "stdout": "tests-read-layout.stdout"
+    },
+    "tests-content": {
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0,
+      "stdout": "tests-content.stdout"
+    },
+    "tests-durable": {
+      "passed": 147,
+      "failed": 0,
+      "ignored": 0,
+      "stdout": "tests-durable.stdout"
+    },
+    "tests-process": {
+      "passed": 62,
+      "failed": 0,
+      "ignored": 0,
+      "stdout": "tests-process.stdout"
+    }
+  },
+  "commands_file": "check-build-commands.json",
+  "functional_root_opt_level": 0,
+  "performance_build": "separate ordinary optimized release build; identity in candidate-build/identity.json",
+  "clippy_exit": 0,
+  "inherited_checks_reference": "../local-performance-20261027/validation.json (unchanged frontend and Python/Node benchmark files)",
+  "not_run": [
+    "Rust scale groups",
+    "full browser E2E",
+    "full repository CI",
+    "current-main merge verification"
+  ]
+}

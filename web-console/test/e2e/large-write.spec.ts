@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
 
@@ -56,5 +56,5 @@ test('large native write remains expandable after settlement and reload', async 
     await test.info().attach('native-write-descriptors', { body: JSON.stringify(evidence), contentType: 'application/json' });
     await page.screenshot({ path: '/tmp/rustx-large-write-failure.png' });
     throw error;
-  } finally { await fixture.stop(passed); }
+  } finally { await stopDogfoodPage(page, fixture, passed); }
 });

@@ -1,0 +1,21 @@
+{
+  "node": "v24.22.0",
+  "sqlite": "3.53.4",
+  "pragmas": {
+    "journal_mode": {
+      "journal_mode": "wal"
+    },
+    "synchronous": {
+      "synchronous": 1
+    },
+    "page_size": {
+      "page_size": 4096
+    },
+    "wal_autocheckpoint": {
+      "wal_autocheckpoint": 1000
+    },
+    "busy_timeout": {
+      "timeout": 5000
+    }
+  }
+}

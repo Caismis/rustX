@@ -321,7 +321,7 @@ pub(crate) struct GoalToolContext<'a> {
 /// Leaf observer called under the domain publication mutex; never acquires
 /// coordinator locks.
 pub(crate) trait GoalObserver: Send + Sync {
-    fn changed(&self, receipt: Option<&Arc<crate::durable::inbox::GoalObservationReceipt>>);
+    fn changed(&self, receipt: Option<&Arc<crate::durable::GoalObservationReceipt>>);
 }
 
 /// One durable state owner.

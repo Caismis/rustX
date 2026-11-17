@@ -51,7 +51,7 @@ test('Dogfood teardown drains staggered Host callbacks before removing intercept
   const resumes: (() => void)[] = [];
   let enter!: () => void;
   const entered = new Promise<void>(resolve => { enter = resolve; });
-  let stopping: Promise<void> | undefined;
+  let stopping: ReturnType<typeof stopDogfoodPage> | undefined;
   try {
     await routeWorkspaceHost(page, fixture, {
       before: () => new Promise<void>(resolve => { resumes.push(resolve); if (resumes.length === 2) enter(); }),
@@ -70,7 +70,8 @@ test('Dogfood teardown drains staggered Host callbacks before removing intercept
     await expect.poll(() => page.evaluate(() => (window as unknown as { proxyResponses: number }).proxyResponses)).toBe(1);
     expect(page.isClosed()).toBe(false);
     resumes[1]();
-    await stopping;
+    const report = await stopping;
+    expect(report.requestCount).toBe(0);
   } finally {
     resumes.forEach(resume => resume());
     if (stopping) await stopping;

@@ -1,10 +1,97 @@
 //! Provider-neutral, request-only image data and bounded PNG validation.
 //! Durable messages retain artifact references; encoded payloads never enter Trace.
 use crate::runtime::identity::ArtifactId;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::{Arc, OnceLock};
 
-/// Ephemeral bytes keyed by the canonical managed artifact identity.
-pub type ResolvedImages = BTreeMap<ArtifactId, Vec<u8>>;
+/// Request image owners keyed by the canonical managed artifact identity.
+pub type ResolvedImages = BTreeMap<ArtifactId, FrozenImage>;
+
+/// Immutable encoded PNG bytes and their owner-scoped validation result.
+/// Historical reads restore bytes without restoring any in-memory proof.
+#[derive(Debug, Clone)]
+pub struct FrozenImage(Arc<ImageBytes>);
+
+#[derive(Debug)]
+struct ImageBytes {
+    bytes: Vec<u8>,
+    measurement: OnceLock<Result<ImageMeasurement, String>>,
+}
+
+impl FrozenImage {
+    /// Validate a fresh image capture and retain its original encoded allocation.
+    /// # Errors
+    /// Rejects unsupported, corrupt, animated or oversized PNGs.
+    pub fn new(bytes: Vec<u8>) -> Result<Self, String> {
+        let measurement = measure_png(&bytes)?;
+        Ok(Self(Arc::new(ImageBytes {
+            bytes,
+            measurement: OnceLock::from(Ok(measurement)),
+        })))
+    }
+
+    /// The exact frozen bytes, including for historical serialization.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0.bytes
+    }
+
+    /// Validates restored bytes on first semantic use. A fresh capture and
+    /// every clone of the same owner use the one existing proof.
+    /// # Errors
+    /// Rejects invalid restored image bytes before budgeting or transport.
+    pub fn measurement(&self) -> Result<ImageMeasurement, String> {
+        self.0
+            .measurement
+            .get_or_init(|| measure_png(self.as_bytes()))
+            .clone()
+    }
+
+    pub(crate) fn input_tokens(&self) -> Option<u64> {
+        self.measurement().ok().map(ImageMeasurement::input_tokens)
+    }
+}
+
+impl std::ops::Deref for FrozenImage {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl PartialEq for FrozenImage {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0) || self.as_bytes() == other.as_bytes()
+    }
+}
+impl Eq for FrozenImage {}
+
+impl Serialize for FrozenImage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.0.bytes.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for FrozenImage {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self(Arc::new(ImageBytes {
+            bytes: Vec::deserialize(deserializer)?,
+            measurement: OnceLock::new(),
+        })))
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn take_decodes() -> usize {
+    DECODES.with(|count| count.replace(0))
+}
 
 /// Validate a complete static PNG snapshot without unbounded decoding.
 /// # Errors
@@ -71,6 +158,8 @@ pub fn measure_png(bytes: &[u8]) -> Result<ImageMeasurement, String> {
         .output_buffer_size()
         .filter(|size| *size <= MAX_DECODE)
         .ok_or("image exceeds decoded allocation limit")?;
+    #[cfg(test)]
+    DECODES.with(|count| count.set(count.get() + 1));
     let mut pixels = vec![0; len];
     reader
         .next_frame(&mut pixels)
@@ -111,19 +200,21 @@ pub(crate) fn project_with_changes(
     };
     let mut remaining = if image_input { 16 } else { 0 };
     for (index, message) in messages.iter_mut().enumerate().rev() {
-        let requires_projection = needs_projection(message, image_input, remaining);
-        if requires_projection {
-            changed(index, message);
+        let (count, requires_projection) =
+            image_projection_requirement(message, image_input, remaining);
+        if !requires_projection {
+            remaining -= count;
+            continue;
         }
+        changed(index, message);
         let Some(message) = (match message {
             crate::model::input::ModelInputMessage::Canonical(message) => Some(message),
             crate::model::input::ModelInputMessage::RequestOnly(_) => None,
             crate::model::input::ModelInputMessage::Derived(derived) => {
                 project_derived_images(&mut derived.message, image_input, &mut remaining);
-                if requires_projection
-                    && !derived
-                        .transformations
-                        .contains(&crate::model::projected::SemanticTransformation::ImageDowngrade)
+                if !derived
+                    .transformations
+                    .contains(&crate::model::projected::SemanticTransformation::ImageDowngrade)
                 {
                     derived
                         .transformations
@@ -136,7 +227,7 @@ pub(crate) fn project_with_changes(
         };
         match message {
             MessageBlock::Tool(tool) => {
-                for block in tool.result.content.iter_mut().rev() {
+                for block in Arc::make_mut(&mut tool.result).content.iter_mut().rev() {
                     if let ToolResultContent::Image(image) = block {
                         if remaining > 0 {
                             remaining -= 1;
@@ -170,40 +261,38 @@ pub(crate) fn project_with_changes(
     }
 }
 
-fn needs_projection(
+fn image_projection_requirement(
     message: &crate::model::input::ModelInputMessage,
     enabled: bool,
     remaining: usize,
-) -> bool {
+) -> (usize, bool) {
     use crate::message::types::{AssistantContentBlock, UserContentBlock};
     use crate::model::projected::ModelMessageView;
     use crate::tools::types::ToolResultContent;
-    match message.view() {
-        ModelMessageView::User(content) => {
-            content
-                .iter()
-                .filter(|block| matches!(block, UserContentBlock::Image(_)))
-                .take(remaining + 1)
-                .count()
-                > remaining
-        }
-        ModelMessageView::Tool(_, result) => {
-            result
-                .content
-                .iter()
-                .filter(|block| matches!(block, ToolResultContent::Image(_)))
-                .take(remaining + 1)
-                .count()
-                > remaining
-        }
+    let count = match message.view() {
+        ModelMessageView::User(content) => content
+            .iter()
+            .filter(|block| matches!(block, UserContentBlock::Image(_)))
+            .take(remaining + 1)
+            .count(),
+        ModelMessageView::Tool(_, result) => result
+            .content
+            .iter()
+            .filter(|block| matches!(block, ToolResultContent::Image(_)))
+            .take(remaining + 1)
+            .count(),
         ModelMessageView::Assistant(content) => {
-            !enabled
-                && content
-                    .iter()
-                    .any(|block| matches!(block, AssistantContentBlock::Image(_)))
+            return (
+                0,
+                !enabled
+                    && content
+                        .iter()
+                        .any(|block| matches!(block, AssistantContentBlock::Image(_))),
+            );
         }
-        ModelMessageView::RequestOnly(_) => false,
-    }
+        ModelMessageView::RequestOnly(_) => 0,
+    };
+    (count, count > remaining)
 }
 
 fn project_derived_images(
@@ -320,8 +409,7 @@ pub fn resolve(
                 return Err("request exceeds the 16-image limit".into());
             }
             let bytes = read(&image.artifact_id)?;
-            validate_png(&bytes)?;
-            images.insert(image.artifact_id.clone(), bytes);
+            images.insert(image.artifact_id.clone(), FrozenImage::new(bytes)?);
         }
     }
     Ok(images)
@@ -346,6 +434,42 @@ mod tests {
         }
         bytes
     }
+    #[test]
+    fn frozen_owner_reuses_validation_and_restores_only_encoded_bytes() {
+        let bytes = png(2, 3);
+        let json = serde_json::to_vec(&bytes).unwrap();
+        let allocation = bytes.as_ptr();
+        take_decodes();
+        let captured = FrozenImage::new(bytes).unwrap();
+        let peer = captured.clone();
+        assert_eq!(captured.as_ptr(), allocation);
+        assert_eq!(peer.as_ptr(), allocation);
+        assert_eq!(captured.input_tokens(), peer.input_tokens());
+        assert_eq!(take_decodes(), 1);
+        assert_eq!(serde_json::to_vec(&peer).unwrap(), json);
+
+        let restored: FrozenImage = serde_json::from_slice(&json).unwrap();
+        assert_eq!(restored, peer);
+        assert_eq!(take_decodes(), 0);
+        assert_eq!(
+            restored.measurement().unwrap(),
+            ImageMeasurement {
+                width: 2,
+                height: 3
+            }
+        );
+        assert_eq!(restored.clone().input_tokens(), peer.input_tokens());
+        assert_eq!(take_decodes(), 1);
+        let restored_bad: FrozenImage = serde_json::from_str("[1,2,3]").unwrap();
+        assert!(restored_bad.measurement().is_err());
+
+        let owner = Arc::downgrade(&captured.0);
+        drop(captured);
+        assert_eq!(owner.strong_count(), 1);
+        drop(peer);
+        assert_eq!(owner.strong_count(), 0);
+    }
+
     #[test]
     fn validates_complete_snapshot_and_rejects_corruption_truncation_and_limits() {
         let valid = png(1, 1);
@@ -443,7 +567,7 @@ mod tests {
                 id: MessageId::new("result"),
                 tool_call_id: ToolCallId::new("call"),
                 tool_id: ToolId::new("tool-read-image"),
-                result,
+                result: result.into(),
             }),
         )];
         let canonical = messages.clone();
@@ -469,7 +593,19 @@ mod tests {
             store.read_bounded(id).map_err(|error| error.to_string())
         })
         .unwrap();
-        assert_eq!(resolved[&id], bytes);
+        assert_eq!(resolved[&id].as_bytes(), bytes);
+        project(&mut messages, true);
+        let [crate::model::input::ModelInputMessage::Canonical(MessageBlock::Tool(kept))] =
+            messages.as_slice()
+        else {
+            panic!("one canonical tool result");
+        };
+        let [crate::model::input::ModelInputMessage::Canonical(MessageBlock::Tool(original))] =
+            canonical.as_slice()
+        else {
+            panic!("one canonical tool result");
+        };
+        assert!(Arc::ptr_eq(&kept.result, &original.result));
         omit_images(&mut messages);
         let crate::model::input::ModelInputMessage::Canonical(MessageBlock::Tool(projected)) =
             &messages[0]

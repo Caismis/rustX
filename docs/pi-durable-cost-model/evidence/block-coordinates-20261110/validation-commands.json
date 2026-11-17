@@ -1,0 +1,80 @@
+[
+  {
+    "name": "run-traces.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/run-traces.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "run-threeway.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/run-threeway.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "summarize-threeway.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/summarize-threeway.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "run-memory.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/run-memory.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "audit-memory.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/audit-memory.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "run-native.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/run-native.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "audit-native.py",
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/audit-native.py"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "functional",
+    "command": [
+      "/usr/bin/python3",
+      "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/compare-revisions.py",
+      "--before",
+      "/home/capi/.cache/rustx-pr485-history-growth-20261109/kind-build/conformance",
+      "--after",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/build/conformance",
+      "--observer-mode",
+      "live-subscriber",
+      "--output",
+      "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/functional",
+      "--pairs",
+      "1",
+      "--case",
+      "tool",
+      "--case",
+      "cancel"
+    ],
+    "exit": 0
+  }
+]

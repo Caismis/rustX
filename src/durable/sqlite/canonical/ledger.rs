@@ -2,6 +2,7 @@
 
 use crate::conversation::{SurfaceOp, SurfaceRevision};
 use crate::durable::sqlite::inbox::pending_message_exists;
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::durable::sqlite::{
     content, decode, encode, map_insert_error, nonnegative, observation, observation_state,
     observation_tools, observation_trace, optional_display_layout, projection, seq_to_i64, storage,
@@ -16,18 +17,23 @@ use std::collections::{BTreeMap, BTreeSet};
 pub(in crate::durable::sqlite) fn ensure_surface_head(
     transaction: &Transaction<'_>,
 ) -> Result<(), ConversationStoreError> {
-    let exists: bool = transaction
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM surface_head WHERE id=1)",
+    let (has_revision, has_generation): (bool, bool) = transaction
+        .query_row_cached(
+            "SELECT surface_revision IS NOT NULL,surface_compaction_generation IS NOT NULL FROM rustx_store WHERE id=1",
             [],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .map_err(|e| storage(e.to_string()))?;
-    if exists {
+    if has_revision != has_generation {
+        return Err(ConversationStoreError::InvalidReference(
+            "canonical frontier metadata is incomplete".into(),
+        ));
+    }
+    if has_revision {
         return Ok(());
     }
     let ledger: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
@@ -40,7 +46,7 @@ pub(in crate::durable::sqlite) fn ensure_surface_head(
     }
     transaction
         .execute(
-            "INSERT INTO surface_head(id,revision,compaction_generation) VALUES(1,0,0)",
+            "UPDATE rustx_store SET surface_revision=0,surface_compaction_generation=0 WHERE id=1",
             [],
         )
         .map_err(|e| storage(e.to_string()))?;
@@ -52,12 +58,14 @@ pub(in crate::durable::sqlite) fn read_surface_head(
 ) -> Result<Option<(i64, i64)>, ConversationStoreError> {
     connection
         .query_row(
-            "SELECT revision,compaction_generation FROM surface_head WHERE id=1",
+            "SELECT surface_revision,surface_compaction_generation FROM rustx_store WHERE id=1 AND (surface_revision IS NOT NULL OR surface_compaction_generation IS NOT NULL)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
-        .map_err(|error| storage(format!("load Surface head: {error}")))
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("load Surface head: {error}"))
+        })
 }
 
 pub(in crate::durable::sqlite) fn head_frontier(
@@ -70,16 +78,21 @@ pub(in crate::durable::sqlite) fn head_frontier(
     ConversationStoreError,
 > {
     let ledger: i64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
         )
         .map_err(|e| storage(e.to_string()))?;
     let revision: Option<i64> = connection
-        .query_row("SELECT revision FROM surface_head WHERE id=1", [], |row| {
-            row.get(0)
-        })
+        .query_row_cached(
+            "SELECT surface_revision,surface_compaction_generation FROM rustx_store WHERE id=1 AND (surface_revision IS NOT NULL OR surface_compaction_generation IS NOT NULL)",
+            [],
+            |row| {
+                let _: i64 = row.get(1)?;
+                row.get(0)
+            },
+        )
         .optional()
         .map_err(|e| storage(e.to_string()))?;
     if revision.is_none_or(|revision| revision != ledger) && ledger != 0 {
@@ -114,6 +127,8 @@ pub(in crate::durable::sqlite) fn materialize_head(
     checkpoint: Option<crate::durable::projection::ProjectionCheckpoint>,
 ) -> Result<DurableConversationHead, ConversationStoreError> {
     use crate::context::checkpoint::CheckpointMessage;
+    #[cfg(test)]
+    HEAD_MATERIALIZATIONS.with(|count| count.set(count.get() + 1));
     let mut ids = Vec::new();
     let mut seen = BTreeSet::new();
     let base = checkpoint
@@ -134,7 +149,7 @@ pub(in crate::durable::sqlite) fn materialize_head(
         }
     }
     let mut statement = connection
-        .prepare(CANONICAL_SUFFIX_IDS)
+        .prepare_cached(CANONICAL_SUFFIX_IDS)
         .map_err(|e| storage(e.to_string()))?;
     let rows = statement
         .query_map(params![seq_to_i64(base)?, ledger], |row| {
@@ -162,11 +177,18 @@ pub(in crate::durable::sqlite) fn materialize_head(
     })
 }
 
+#[cfg(test)]
+thread_local! { static HEAD_MATERIALIZATIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+#[cfg(test)]
+pub(in crate::durable::sqlite) fn take_head_materializations() -> usize {
+    HEAD_MATERIALIZATIONS.with(|count| count.replace(0))
+}
+
 /// Appending needs the frontier, not an owned copy of every active identity.
 /// Without a checkpoint the ledger UNIQUE identity constraint supplies the
-/// uniqueness proof. Still visit the bounded suffix and validate each borrowed
-/// UTF-8 value: this preserves corruption/resource checks without allocating an
-/// identity vector and tree. This is a bounded scan, not constant-time context.
+/// uniqueness proof, and the durable identity frontier records how far every
+/// identity has already been validated; only the tail after it is visited.
 pub(in crate::durable::sqlite) fn append_head(
     connection: &Connection,
 ) -> Result<(SurfaceRevision, u64), ConversationStoreError> {
@@ -177,24 +199,90 @@ pub(in crate::durable::sqlite) fn append_head(
         let head = materialize_head(connection, ledger, checkpoint)?;
         return Ok((head.revision, head.compaction_generation));
     }
-    validate_append_identities(connection, ledger)?;
+    let count = validate_append_identities(connection, ledger, false)?;
+    record_identity_frontier(connection, ledger, count)?;
     Ok((
         SurfaceRevision::new(nonnegative(ledger, "canonical frontier")?),
         0,
     ))
 }
 
+/// Read-only validation of the same head an append would use.
+pub(in crate::durable::sqlite) fn validate_head(
+    connection: &Connection,
+) -> Result<(), ConversationStoreError> {
+    let (ledger, checkpoint) = head_frontier(connection)?;
+    if checkpoint.is_some() {
+        materialize_head(connection, ledger, checkpoint)?;
+    } else {
+        validate_append_identities(connection, ledger, false)?;
+    }
+    Ok(())
+}
+
+/// Records that every identity through `ledger` was validated, inside the
+/// writer transaction that validated them.
+pub(in crate::durable::sqlite) fn record_identity_frontier(
+    connection: &Connection,
+    ledger: i64,
+    count: usize,
+) -> Result<(), ConversationStoreError> {
+    connection
+        .execute_cached(
+            "UPDATE rustx_store SET canonical_identity_through=?1,canonical_identity_count=?2 WHERE id=1 AND (canonical_identity_through!=?1 OR canonical_identity_count!=?2)",
+            params![ledger, i64::try_from(count).map_err(|_| storage("canonical identity count"))?],
+        )
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("record canonical identity frontier: {error}"),
+            )
+        })?;
+    Ok(())
+}
+
+/// Validates every canonical identity through `ledger` and returns their
+/// count.
+///
+/// The store root records the Ledger position through which identities were
+/// validated when they were appended, and how many there are. That frontier
+/// must name an existing row at or before the Ledger frontier; only the rows
+/// after it are read, with the same per-identity and working-set bounds.
+/// `from_start` ignores the frontier and validates every row.
 pub(in crate::durable::sqlite) fn validate_append_identities(
     connection: &Connection,
     ledger: i64,
+    from_start: bool,
 ) -> Result<usize, ConversationStoreError> {
+    let (through, validated): (i64, i64) = if from_start {
+        (0, 0)
+    } else {
+        connection
+        .query_row_cached(
+            "SELECT canonical_identity_through,canonical_identity_count FROM rustx_store WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|e| storage(e.to_string()))?
+    };
+    if through > ledger || (through > 0 && !ledger_position_exists(connection, through)?) {
+        return Err(ConversationStoreError::InvalidReference(
+            "canonical identity frontier disagrees with the Ledger".into(),
+        ));
+    }
+    let mut count =
+        usize::try_from(validated).map_err(|_| storage("negative canonical identity count"))?;
+    if count > 8192 {
+        return Err(crate::context::resources::bound(
+            "canonical working set exceeds bounded projection size",
+        ));
+    }
     let mut statement = connection
-        .prepare(CANONICAL_SUFFIX_IDS)
+        .prepare_cached(CANONICAL_SUFFIX_IDS)
         .map_err(|e| storage(e.to_string()))?;
     let mut rows = statement
-        .query(params![0, ledger])
+        .query(params![through, ledger])
         .map_err(|e| storage(e.to_string()))?;
-    let mut count = 0;
     while let Some(row) = rows.next().map_err(|e| storage(e.to_string()))? {
         if count >= 8192 {
             return Err(crate::context::resources::bound(
@@ -213,17 +301,58 @@ pub(in crate::durable::sqlite) fn validate_append_identities(
     Ok(count)
 }
 
+fn ledger_position_exists(
+    connection: &Connection,
+    position: i64,
+) -> Result<bool, ConversationStoreError> {
+    connection
+        .query_row_cached(
+            "SELECT EXISTS(SELECT 1 FROM message_ledger WHERE position=?1)",
+            [position],
+            |row| row.get(0),
+        )
+        .map_err(|e| storage(e.to_string()))
+}
+
+/// Advances the durable identity frontier over one appended identity that
+/// directly follows it. An identity over the bound is never covered, so the
+/// next validation reaches it and rejects the head as before.
+fn advance_identity_frontier(
+    transaction: &Transaction<'_>,
+    previous: SurfaceRevision,
+    appended: SurfaceRevision,
+    id: &MessageId,
+) -> Result<(), ConversationStoreError> {
+    if id.as_str().len() > 4096 {
+        return Ok(());
+    }
+    transaction
+        .execute_cached(
+            "UPDATE rustx_store SET canonical_identity_through=?2,canonical_identity_count=canonical_identity_count+1 WHERE id=1 AND canonical_identity_through=?1",
+            params![seq_to_i64(previous.get())?, seq_to_i64(appended.get())?],
+        )
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("advance canonical identity frontier: {error}"),
+            )
+        })?;
+    Ok(())
+}
+
 pub(in crate::durable::sqlite) fn update_surface_head(
     transaction: &Transaction<'_>,
     revision: SurfaceRevision,
     generation: u64,
 ) -> Result<(), ConversationStoreError> {
     transaction
-        .execute(
-            "UPDATE surface_head SET revision=?1,compaction_generation=?2 WHERE id=1",
+        .execute_cached(
+            "UPDATE rustx_store SET surface_revision=?1,surface_compaction_generation=?2 WHERE id=1 AND surface_revision IS NOT NULL",
             params![seq_to_i64(revision.get())?, seq_to_i64(generation)?],
         )
-        .map_err(|error| storage(format!("update Surface head: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("update Surface head: {error}"))
+        })?;
     Ok(())
 }
 
@@ -239,14 +368,19 @@ pub(in crate::durable::sqlite) fn associate_canonical_tool_result(
     };
     let owner = &tool.occurrence;
     let association: Option<(String, String, Option<String>)> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT call_id,tool_id,result_message_id FROM canonical_tool_calls
          WHERE assistant_message_id=?1 AND block_index=?2",
             params![owner.assistant_message_id.as_str(), owner.block_index.get()],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
-        .map_err(|error| storage(format!("canonical Tool occurrence: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("canonical Tool occurrence: {error}"),
+            )
+        })?;
     let Some((call_id, tool_id, previous)) = association else {
         return Err(ConversationStoreError::InvalidReference(
             "Tool result occurrence does not name a canonical ToolCall block".into(),
@@ -262,8 +396,8 @@ pub(in crate::durable::sqlite) fn associate_canonical_tool_result(
             "canonical Tool occurrence already has a result".into(),
         ));
     }
-    transaction.execute("UPDATE canonical_tool_calls SET result_message_id=?1,result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), owner.assistant_message_id.as_str(), owner.block_index.get()])
-        .map_err(|error| storage(format!("canonical Tool result index: {error}")))?;
+    transaction.execute_cached("UPDATE canonical_tool_calls SET result_message_id=?1,result_ledger_position=(SELECT position FROM message_ledger WHERE message_id=?1) WHERE assistant_message_id=?2 AND block_index=?3", params![tool.id.as_str(), owner.assistant_message_id.as_str(), owner.block_index.get()])
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("canonical Tool result index: {error}")))?;
     Ok(())
 }
 
@@ -271,7 +405,7 @@ pub(in crate::durable::sqlite) fn append_message_and_surface(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
-    append_message_with_head(transaction, message, None, append_head(transaction)?)
+    append_message_with_head(transaction, message, None, append_head(transaction)?, None)
 }
 
 /// Appends a destination-owned immutable canonical fact during lineage bootstrap.
@@ -289,11 +423,17 @@ pub(in crate::durable::sqlite) fn append_message_with_head(
     message: &MessageBlock,
     allowed_pending_message_id: Option<&MessageId>,
     (head_revision, generation): (SurfaceRevision, u64),
+    publication_header: Option<&mut Option<observation::PublicationHeader>>,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     let id = crate::conversation::message_id_of(message);
-    let transcript_cursor =
-        append_message_ledger(transaction, message, allowed_pending_message_id)?;
+    let transcript_cursor = append_message_ledger_with_capture(
+        transaction,
+        message,
+        allowed_pending_message_id,
+        publication_header,
+    )?;
     let revision = head_revision.next();
+    advance_identity_frontier(transaction, head_revision, revision, &id)?;
     append_surface_op(
         transaction,
         revision,
@@ -304,10 +444,26 @@ pub(in crate::durable::sqlite) fn append_message_with_head(
     Ok(transcript_cursor)
 }
 
-pub(in crate::durable::sqlite) fn append_message_ledger(
+fn human_activity_max(
+    connection: &Connection,
+    position: i64,
+    time: chrono::DateTime<chrono::Utc>,
+) -> Result<(i64, u32), ConversationStoreError> {
+    let previous: Option<(i64, u32)> = connection
+        .query_row_cached(super::HUMAN_ACTIVITY_SQL, [position], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })
+        .optional()
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let current = (time.timestamp(), time.timestamp_subsec_nanos());
+    Ok(previous.unwrap_or(current).max(current))
+}
+
+fn append_message_ledger_with_capture(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
     allowed_pending_message_id: Option<&MessageId>,
+    publication_header: Option<&mut Option<observation::PublicationHeader>>,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     let id = crate::conversation::message_id_of(message);
     if pending_message_exists(transaction, &id)? && allowed_pending_message_id != Some(&id) {
@@ -317,12 +473,14 @@ pub(in crate::durable::sqlite) fn append_message_ledger(
         return Err(ConversationStoreError::DuplicateMessageId(id));
     }
     let position: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT COALESCE(MAX(position),0)+1 FROM message_ledger",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("next Ledger position: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("next Ledger position: {error}"))
+        })?;
     let (ordinary_user, human_activity_at, opening_preview) = match message {
         MessageBlock::User(user) if user.kind == InboundKind::Message => (
             true,
@@ -339,20 +497,41 @@ pub(in crate::durable::sqlite) fn append_message_ledger(
     } else {
         None
     };
+    let activity_max = human_activity_at
+        .map(|time| human_activity_max(transaction, position, time))
+        .transpose()?;
     transaction
-        .execute(
-            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_seconds,human_activity_nanos,opening_preview,native_todo,ordinary_human,title_source_text) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),human_activity_at.map(|time|time.timestamp()),human_activity_at.map(|time|time.timestamp_subsec_nanos()),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text],
+        .execute_cached(
+            "INSERT INTO message_ledger(position,message_id,message_json,ordinary_user,human_activity_at,human_activity_max_seconds,human_activity_max_nanos,opening_preview,native_todo,ordinary_human,title_source_text,todo_publication) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
+            params![position, id.as_str(), encode(message, "canonical message")?,ordinary_user,human_activity_at.map(|time|time.to_rfc3339()),activity_max.map(|value|value.0),activity_max.map(|value|value.1),opening_preview,observation_state::todo_value(message).is_some(),ordinary_human,title_source_text,crate::tools::todo::is_publication(message)],
         )
         .map_err(|error| map_insert_error(&error, &id))?;
-    let _ = optional_display_layout(transaction, || {
+    // The physical carrier is allocated first, but descriptor admission must
+    // still see the cursor that existed before this append, as it did before
+    // co-location. Admitting the new cursor early can discard an inline body.
+    let prior_cursor = match load_transcript_reference(transaction, "message", id.as_str()) {
+        Err(error @ ConversationStoreError::OperationCancelled) => return Err(error),
+        result => result,
+    };
+    let transcript_cursor = transcript_visible_message(message)
+        .then(|| append_transcript_reference(transaction, "message", id.as_str()))
+        .transpose()?;
+    let retain_publication = publication_header.is_some();
+    let captured = optional_display_layout(transaction, || {
         content::index_message(transaction, message)?;
-        observation::index::index_message(
+        let position = nonnegative(position, "header ledger position")?;
+        observation::index::index_message_capture(
             transaction,
             message,
-            Some(nonnegative(position, "header ledger position")?),
+            Some(position),
+            retain_publication,
+            prior_cursor?,
         )
     })?;
+    if let Some(publication_header) = publication_header {
+        // A proof escapes only after the whole original optional domain commits.
+        *publication_header = captured.flatten();
+    }
     if let MessageBlock::Assistant(assistant) = message {
         let mut tool_ordinal = 0_u64;
         for (index, block) in assistant.content.iter().enumerate() {
@@ -360,12 +539,12 @@ pub(in crate::durable::sqlite) fn append_message_ledger(
                 let block_index =
                     u32::try_from(index).map_err(|_| storage("Tool block index overflow"))?;
                 transaction
-                    .execute(
-                        "INSERT INTO canonical_tool_calls(assistant_message_id,block_index,call_id,tool_id,observation_ledger,observation_call_id,observation_tool_id,observation_tool_ordinal,observation_name)
-                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+                    .execute_cached(
+                        "INSERT INTO canonical_tool_calls(assistant_message_id,block_index,call_id,tool_id,observation_ledger,observation_call_id,observation_tool_id,observation_tool_ordinal,observation_name,assistant_ledger_position)
+                         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?5)",
                         params![assistant.id.as_str(), block_index, call.id.as_str(), call.tool_id.as_str(),position,(call.id.as_str().len()<=256).then_some(call.id.as_str()),(call.tool_id.as_str().len()<=256).then_some(call.tool_id.as_str()),tool_ordinal, observation_tools::name_preview(&call.name)],
                     )
-                    .map_err(|error| storage(format!("canonical Tool occurrence: {error}")))?;
+                    .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("canonical Tool occurrence: {error}")))?;
                 tool_ordinal = tool_ordinal
                     .checked_add(1)
                     .ok_or_else(|| storage("Tool ordinal overflow"))?;
@@ -375,26 +554,29 @@ pub(in crate::durable::sqlite) fn append_message_ledger(
     associate_canonical_tool_result(transaction, message)?;
     let _ = optional_display_layout(transaction, || {
         let conversation: String = transaction
-            .query_row(
+            .query_row_cached(
                 "SELECT conversation_id FROM rustx_store WHERE id=1",
                 [],
                 |row| row.get(0),
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let conversation = ConversationId::parse(conversation).map_err(storage)?;
         let position = nonnegative(position, "native Trace C position")?;
         observation_trace::index_proposals(transaction, &conversation, position, message)?;
         observation_trace::index_canonical(transaction, &conversation, position, message)
     })?;
-    if transcript_visible_message(message) {
-        Ok(Some(append_transcript_reference(
-            transaction,
-            "message",
-            id.as_str(),
-        )?))
-    } else {
-        Ok(None)
+    if let Some(cursor) = transcript_cursor {
+        patch_message_transcript(transaction, &id, cursor)?;
     }
+    Ok(transcript_cursor)
+}
+
+pub(in crate::durable::sqlite) fn append_message_ledger(
+    transaction: &Transaction<'_>,
+    message: &MessageBlock,
+    allowed_pending_message_id: Option<&MessageId>,
+) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
+    append_message_ledger_with_capture(transaction, message, allowed_pending_message_id, None)
 }
 
 /// Whether one canonical message is ordinary user-facing transcript content.
@@ -419,99 +601,106 @@ pub(in crate::durable::sqlite) fn append_transcript_reference(
     reference_id: &str,
 ) -> Result<TranscriptCursor, ConversationStoreError> {
     let existing: Option<i64> = transaction
-        .query_row(
-            "SELECT position FROM transcript_order
-             WHERE reference_kind=?1 AND reference_id=?2",
+        .query_row_cached(
+            "SELECT position FROM transcript_entries
+             WHERE native_reference_kind=?1 AND native_reference_id=?2",
             params![reference_kind, reference_id],
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("transcript reference probe: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("transcript reference probe: {error}"),
+            )
+        })?;
     if let Some(position) = existing {
         if reference_kind == "message" {
             transaction
-                .execute(
+                .execute_cached(
                     "UPDATE message_ledger SET native_transcript=?1 WHERE message_id=?2",
                     params![position, reference_id],
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         }
-        let _ = optional_display_layout(transaction, || {
-            transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]).map_err(|error| super::super::sqlite_error(&error, error.to_string()))?;
-            Ok(())
-        })?;
         return Ok(TranscriptCursor::new(
             u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
         ));
     }
     let current: i64 = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT next_transcript_position FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("read transcript position: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("read transcript position: {error}"),
+            )
+        })?;
     let position = current
         .checked_add(1)
         .ok_or_else(|| storage("transcript position exhausted"))?;
     transaction
-        .execute(
-            "INSERT INTO transcript_order(position,reference_kind,reference_id) VALUES(?1,?2,?3)",
+        .execute_cached(
+            "INSERT INTO transcript_entries(position,native_reference_kind,native_reference_id) VALUES(?1,?2,?3)",
             params![position, reference_kind, reference_id],
         )
-        .map_err(|error| storage(format!("insert transcript reference: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("insert transcript reference: {error}"),
+            )
+        })?;
     let _ = optional_display_layout(transaction, || {
         transaction
-            .execute(
-                "INSERT INTO transcript_observation_readiness(position,ready) VALUES(?1,0)",
+            .execute_cached(
+                "INSERT INTO transcript_observation_readiness(position) VALUES(?1)",
                 [position],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         transaction
-            .execute(
-                "UPDATE transcript_order SET observation_readiness_missing=0 WHERE position=?1",
+            .execute_cached(
+                "UPDATE transcript_entries SET observation_readiness_missing=0 WHERE position=?1",
                 [position],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(())
     })?;
-    transaction
-        .execute(
-            "UPDATE rustx_store SET next_transcript_position=?1,retained_transcript_count=retained_transcript_count+1 WHERE id=1",
-            [position],
-        )
-        .map_err(|error| storage(format!("update transcript position: {error}")))?;
+    transaction . execute_cached ( "UPDATE rustx_store SET next_transcript_position=?1,retained_transcript_count=retained_transcript_count+1 WHERE id=1" , [ position ] , ) . map_err ( | error | crate::durable::sqlite::sqlite_error(&error, format ! ( "update transcript position: {error}" ) ) ) ? ;
     if reference_kind == "message" {
         transaction
-            .execute(
+            .execute_cached(
                 "UPDATE message_ledger SET native_transcript=?1 WHERE message_id=?2",
                 params![position, reference_id],
             )
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     }
-    let _ = optional_display_layout(transaction, || {
-        transaction.execute("UPDATE observation_headers SET transcript_position=?1,header_json=CASE WHEN reference_kind='message' THEN CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) ELSE header_json END WHERE reference_kind=?2 AND reference_id=?3",params![position,reference_kind,reference_id]).map_err(|error| super::super::sqlite_error(&error, error.to_string()))?;
-        Ok(())
-    })?;
     Ok(TranscriptCursor::new(
         u64::try_from(position).map_err(|_| storage("negative transcript position"))?,
     ))
 }
 
 pub(in crate::durable::sqlite) fn load_transcript_reference(
-    transaction: &Transaction<'_>,
+    transaction: &Connection,
     reference_kind: &str,
     reference_id: &str,
 ) -> Result<Option<TranscriptCursor>, ConversationStoreError> {
     transaction
-        .query_row(
-            "SELECT position FROM transcript_order
-             WHERE reference_kind=?1 AND reference_id=?2",
+        .query_row_cached(
+            "SELECT position FROM transcript_entries
+             WHERE native_reference_kind=?1 AND native_reference_id=?2",
             params![reference_kind, reference_id],
             |row| row.get::<_, i64>(0),
         )
         .optional()
-        .map_err(|error| storage(format!("transcript reference lookup: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("transcript reference lookup: {error}"),
+            )
+        })?
         .map(|position| {
             u64::try_from(position)
                 .map(TranscriptCursor::new)
@@ -520,44 +709,73 @@ pub(in crate::durable::sqlite) fn load_transcript_reference(
         .transpose()
 }
 
+pub(in crate::durable::sqlite) fn patch_message_transcript(
+    connection: &Connection,
+    id: &MessageId,
+    cursor: TranscriptCursor,
+) -> Result<(), ConversationStoreError> {
+    // Preserve the separate, optional post-admission JSON patch and its failure
+    // boundary. It must not rerun typed admission or roll back native authority.
+    let _ = optional_display_layout(connection, || {
+        connection.execute_cached(
+            "UPDATE transcript_entries SET header_json=CAST(json_set(header_json,'$.transcript_cursor',?1) AS BLOB) WHERE reference_kind='message' AND reference_id=?2",
+            params![cursor.get(), id.as_str()],
+        ).map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
 pub(in crate::durable::sqlite) fn append_surface_op(
     transaction: &Transaction<'_>,
     revision: SurfaceRevision,
     generation: u64,
     operation: &SurfaceOp,
 ) -> Result<(), ConversationStoreError> {
-    transaction
-        .execute(
-            "INSERT INTO surface_ops(revision,compaction_generation,op_json) VALUES(?1,?2,?3)",
+    let SurfaceOp::Append { message_id } = operation;
+    let inserted=transaction
+        .execute_cached(
+            "INSERT INTO surface_ops(revision,compaction_generation,ledger_position,message_id) SELECT ?1,?2,position,?3 FROM message_ledger WHERE message_id=?3",
             params![
                 seq_to_i64(revision.get())?,
                 seq_to_i64(generation)?,
-                encode(operation, "Surface operation")?
+                message_id.as_str()
             ],
         )
-        .map_err(|error| storage(format!("append Surface operation: {error}")))?;
-    let SurfaceOp::Append { message_id } = operation;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("append Surface operation: {error}"),
+            )
+        })?;
+    if inserted != 1 {
+        return Err(ConversationStoreError::InvalidReference(
+            "Surface append requires a canonical Ledger position".into(),
+        ));
+    }
     {
-        transaction.execute("UPDATE message_ledger SET first_append_revision=COALESCE(first_append_revision,?1) WHERE message_id=?2",params![revision.get(),message_id.as_str()]).map_err(|error|storage(error.to_string()))?;
+        transaction.execute_cached("UPDATE message_ledger SET first_append_revision=COALESCE(first_append_revision,?1) WHERE message_id=?2",params![revision.get(),message_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
         // Existing native Surface commit owns first appearance. This index
         // never rewrites Surface membership, Compaction or canonical history.
         let _ = optional_display_layout(transaction, || {
             let boundary: Option<u64> = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT position FROM message_ledger WHERE message_id=?1 AND ordinary_user=1",
                     [message_id.as_str()],
                     |row| row.get(0),
                 )
                 .optional()
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             if let Some(position) = boundary {
-                transaction.execute("INSERT OR IGNORE INTO surface_observation_boundaries SELECT COALESCE((SELECT MAX(ordinal)+1 FROM surface_observation_boundaries),0),?1,?2",params![position,seq_to_i64(revision.get())?]).map_err(|error|storage(error.to_string()))?;
+                transaction.execute_cached("INSERT OR IGNORE INTO surface_observation_boundaries SELECT COALESCE((SELECT MAX(ordinal)+1 FROM surface_observation_boundaries),0),?1,?2",params![position,seq_to_i64(revision.get())?]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
                 transaction
-                    .execute(
+                    .execute_cached(
                         "UPDATE message_ledger SET boundary_indexed=1 WHERE position=?1",
                         [position],
                     )
-                    .map_err(|error| storage(error.to_string()))?;
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                    })?;
             }
             Ok(())
         })?;
@@ -570,12 +788,19 @@ pub(in crate::durable::sqlite) fn message_exists(
     message_id: &MessageId,
 ) -> Result<bool, ConversationStoreError> {
     connection
-        .query_row(
+        .query_row_cached(
             "SELECT EXISTS(SELECT 1 FROM pending_inbound WHERE message_id=?1) OR EXISTS(SELECT 1 FROM message_ledger WHERE message_id=?1)",
             [message_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("message identity probe: {error}")))
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("message identity probe: {error}")))
+}
+
+#[cfg(test)]
+thread_local! { static BODY_LOADS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+pub(in crate::durable::sqlite) fn take_body_loads() -> usize {
+    BODY_LOADS.with(|count| count.replace(0))
 }
 
 /// Both lookups use existing unique Ledger identity and Journal sequence keys.
@@ -585,13 +810,19 @@ pub(in crate::durable::sqlite) fn load_message(
 ) -> Result<MessageBlock, ConversationStoreError> {
     let json: String = connection
         .prepare_cached("SELECT message_json FROM message_ledger WHERE message_id=?1")
-        .map_err(|error| storage(format!("Ledger lookup prepare: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("Ledger lookup prepare: {error}"))
+        })?
         .query_row([message_id.as_str()], |row| row.get(0))
         .optional()
-        .map_err(|error| storage(format!("Ledger message lookup: {error}")))?
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("Ledger message lookup: {error}"))
+        })?
         .ok_or_else(|| {
             ConversationStoreError::InvalidReference(format!("message {message_id} is unavailable"))
         })?;
+    #[cfg(test)]
+    BODY_LOADS.with(|count| count.set(count.get() + 1));
     let message: MessageBlock = decode(&json, "Ledger message")?;
     if crate::conversation::message_id_of(&message) != *message_id {
         return Err(ConversationStoreError::InvalidReference(format!(
@@ -645,6 +876,20 @@ pub(in crate::durable::sqlite) fn load_surface_history(
     Ok(replay_surface_history(connection, through)?.1)
 }
 
+pub(in crate::durable::sqlite) fn surface_append_operation(
+    message_id: String,
+    ledger_message_id: Option<&str>,
+) -> Result<SurfaceOp, ConversationStoreError> {
+    if ledger_message_id != Some(message_id.as_str()) {
+        return Err(ConversationStoreError::InvalidReference(format!(
+            "Surface operation references missing or mismatched Ledger message {message_id}"
+        )));
+    }
+    Ok(SurfaceOp::Append {
+        message_id: MessageId::new(message_id),
+    })
+}
+
 pub(in crate::durable::sqlite) fn replay_surface_history(
     connection: &Connection,
     revision: SurfaceRevision,
@@ -667,22 +912,30 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
     let mut history = Vec::new();
     let mut statement = connection
         .prepare(
-            "SELECT revision,compaction_generation,op_json
-             FROM surface_ops WHERE revision <= ?1 ORDER BY revision",
+            "SELECT s.revision,s.compaction_generation,s.message_id,m.message_id
+             FROM surface_ops s LEFT JOIN message_ledger m ON m.position=s.ledger_position AND m.message_id=s.message_id WHERE s.revision <= ?1 ORDER BY s.revision",
         )
-        .map_err(|error| storage(format!("read Surface history: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("read Surface history: {error}"))
+        })?;
     let rows = statement
         .query_map([seq_to_i64(revision.get())?], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
             ))
         })
-        .map_err(|error| storage(format!("read Surface history query: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("read Surface history query: {error}"),
+            )
+        })?;
     let mut expected_revision = 1_u64;
     for row in rows {
-        let (stored_revision, stored_generation, json) =
+        let (stored_revision, stored_generation, message_id, ledger_message_id) =
             row.map_err(|error| storage(format!("Surface history row: {error}")))?;
         if u64::try_from(stored_revision).ok() != Some(expected_revision) {
             return Err(ConversationStoreError::InvalidReference(
@@ -690,8 +943,7 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
             ));
         }
         let _ = nonnegative(stored_generation, "canonical append metadata")?;
-        let operation: SurfaceOp = decode(&json, "Surface operation")?;
-        validate_surface_operation_references(connection, &operation)?;
+        let operation = surface_append_operation(message_id, ledger_message_id.as_deref())?;
         apply_surface_op(&mut active, &operation)?;
         history.push(operation);
         expected_revision = expected_revision
@@ -704,7 +956,9 @@ pub(in crate::durable::sqlite) fn replay_surface_history(
             [seq_to_i64(revision.get())?],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("Surface history count: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("Surface history count: {error}"))
+        })?;
     let expected_next_revision = revision
         .get()
         .checked_add(1)
@@ -739,7 +993,7 @@ pub(in crate::durable::sqlite) fn validate_canonical_frontier(
     frontier: crate::context::resources::LedgerFrontier,
 ) -> Result<(), ConversationStoreError> {
     let head: i64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
@@ -772,5 +1026,7 @@ pub(in crate::durable::sqlite) fn ledger_message_exists(
     connection
         .prepare_cached("SELECT EXISTS(SELECT 1 FROM message_ledger WHERE message_id=?1)")
         .and_then(|mut statement| statement.query_row([message_id.as_str()], |row| row.get(0)))
-        .map_err(|error| storage(format!("event Ledger reference: {error}")))
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("event Ledger reference: {error}"))
+        })
 }

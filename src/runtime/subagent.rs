@@ -154,7 +154,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 
-use crate::durable::inbox::InboundDraft;
+use crate::durable::InboundDraft;
 use crate::events::types::{
     EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, SubagentOwnershipKind,
     SubagentTerminalState,

@@ -7,6 +7,7 @@ use crate::context::resources::{
     JournalFrontier, LedgerFrontier, ResourceLimits, ResourcePage, ResourceReadCut, bound,
 };
 use crate::durable::TranscriptCursor;
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEventEnvelope};
 use crate::message::types::MessageBlock;
 use crate::runtime::identity::{ConversationId, MessageId};
@@ -17,14 +18,14 @@ pub(super) fn cut(
 ) -> Result<ResourceReadCut, ConversationStoreError> {
     let reading = super::reading::cut(connection, conversation)?;
     let ledger: i64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
         )
         .map_err(|e| sqlite_error(&e, e.to_string()))?;
     let activation: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(activation),0) FROM projection_activations",
             [],
             |row| row.get(0),
@@ -261,8 +262,8 @@ pub(super) fn trajectory(
     let mut bytes = source.bytes;
     let mut result = Vec::new();
     for (position, message) in source.rows {
-        let transcript: Option<u64> = connection.query_row("SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1 AND position<=?2", params![message.id().as_str(), cut.transcript.get()], |r|r.get(0)).optional().map_err(|e|storage(e.to_string()))?;
-        let mut query = connection.prepare_cached("SELECT sequence,CASE WHEN octet_length(event_json)<=?4 THEN event_json END,octet_length(event_json) FROM events WHERE json_extract(event_json,'$.event.message_id')=?1 AND json_extract(event_json,'$.event.type')=?2 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1").map_err(|e|storage(e.to_string()))?;
+        let transcript: Option<u64> = connection.query_row("SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1 AND position<=?2", params![message.id().as_str(), cut.transcript.get()], |r|r.get(0)).optional().map_err(|e|storage(e.to_string()))?;
+        let mut query = connection.prepare_cached("SELECT sequence,CASE WHEN octet_length(event_json)<=?4 THEN event_json END,octet_length(event_json) FROM events WHERE event_message_id=?1 AND event_kind=?2 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1").map_err(|e|storage(e.to_string()))?;
         let kind = match &message {
             MessageBlock::Assistant(_) => "assistant_message_committed",
             MessageBlock::Tool(_) => "tool_message_committed",
@@ -300,7 +301,7 @@ pub(super) fn trajectory(
                 if let Some(commit) = &committed
                     && let (Some(attempt), Some(turn)) = (&commit.attempt_id, &commit.turn_id)
                 {
-                    let mut query = connection.prepare_cached("SELECT sequence,CASE WHEN octet_length(event_json)<=?5 THEN event_json END,octet_length(event_json) FROM events WHERE json_extract(event_json,'$.event.tool_call_id')=?1 AND attempt_id=?2 AND turn_id=?3 AND sequence<=?4 AND json_extract(event_json,'$.event.type') IN ('tool_execution_started','tool_execution_completed','tool_execution_failed') ORDER BY sequence LIMIT 3").map_err(|e|storage(e.to_string()))?;
+                    let mut query = connection.prepare_cached("SELECT sequence,CASE WHEN octet_length(event_json)<=?5 THEN event_json END,octet_length(event_json) FROM events WHERE event_tool_call_id=?1 AND attempt_id=?2 AND turn_id=?3 AND sequence<=?4 AND event_kind IN ('tool_execution_started','tool_execution_completed','tool_execution_failed') ORDER BY sequence LIMIT 3").map_err(|e|storage(e.to_string()))?;
                     let mut rows = query
                         .query(params![
                             call.id.as_str(),

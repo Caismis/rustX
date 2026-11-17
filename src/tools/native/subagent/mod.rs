@@ -555,7 +555,8 @@ chat_reasoning_replay = "omit"
             id: ToolId::new(format!("tool-{name}")),
             name: name.to_owned(),
             description: format!("{name} capability"),
-            input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+            input_schema: serde_json::json!({"type": "object", "additionalProperties": false})
+                .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,

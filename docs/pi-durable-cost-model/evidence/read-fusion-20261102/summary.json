@@ -1,0 +1,87 @@
+{
+  "accepted": true,
+  "source_inputs_unchanged": true,
+  "checks": 15,
+  "tests": [
+    {
+      "label": "tests-sqlite",
+      "passed": 640,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-client",
+      "passed": 616,
+      "failed": 0,
+      "ignored": 1
+    },
+    {
+      "label": "tests-app-server",
+      "passed": 43,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-conversation-runtime",
+      "passed": 96,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-read-layout",
+      "passed": 26,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-content",
+      "passed": 27,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-agent",
+      "passed": 585,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-tool-registry",
+      "passed": 19,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-recovery",
+      "passed": 14,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-process-death",
+      "passed": 72,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-durable",
+      "passed": 151,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-process",
+      "passed": 62,
+      "failed": 0,
+      "ignored": 0
+    },
+    {
+      "label": "tests-artifact-lineage",
+      "passed": 8,
+      "failed": 0,
+      "ignored": 0
+    }
+  ],
+  "passed": 2359,
+  "ignored": 1
+}

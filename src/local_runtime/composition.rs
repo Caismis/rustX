@@ -180,6 +180,10 @@ pub enum StartupSession {
 /// need provider synchronization use an explicit catalog endpoint aimed at a
 /// local HTTP fixture.
 pub struct LocalRuntimeDependencies {
+    /// Clock for model-facing Agent Status time contributions. Production uses
+    /// UTC wall time; deterministic fixtures can supply the same model input
+    /// without changing runtime event clocks or monotonic deadlines.
+    pub status_clock: Arc<dyn crate::context::AgentStatusClock>,
     pub host_tools: Arc<crate::tools::host::HostToolService>,
     /// Local product Session selection; never part of effective configuration.
     pub startup_session: StartupSession,
@@ -200,6 +204,7 @@ impl Default for LocalRuntimeDependencies {
         Self {
             host_tools: Arc::default(),
             startup_session: StartupSession::Empty,
+            status_clock: Arc::new(crate::context::SystemClock),
             credentials: None,
             estimator: Arc::new(DefaultTokenEstimator),
             child_program: None,
@@ -585,8 +590,7 @@ impl LocalConversationCore {
         cancellation: &crate::runtime::cancellation::CancellationSignal,
         host_tools: &[crate::tools::host::HostToolDefinition],
     ) -> Result<Self, LocalRuntimeError> {
-        startup.note_recovery_receipt(SubmissionIntent::now());
-        // Keep the one-shot preparation state off the awaiting caller's stack.
+        startup.note_recovery_receipt(SubmissionIntent::now()); // Keep the one-shot preparation state off the awaiting caller's stack.
         Box::pin(async move {
             startup
                 .bind_policy(paths.config.mcp_startup_policy)
@@ -594,8 +598,7 @@ impl LocalConversationCore {
             if cancellation.is_cancelled() {
                 return Err(LocalRuntimeError::Cancelled);
             }
-            let product_root = conversation_access.root().to_path_buf();
-            // The current runtime default was validated by the composition
+            let product_root = conversation_access.root().to_path_buf(); // The current runtime default was validated by the composition
             // caller before any first-Session publication. Validate it here too
             // for direct low-level callers, while the selected durable Session
             // model remains an independent Session-local choice.
@@ -625,9 +628,7 @@ impl LocalConversationCore {
             // retains its generation. Conversation Todo/Goal state owners remain
             // stable independently of whether a generation exposes their Tools.
             // Named Agents resolve their own independent Plugin profiles.
-            let extensions = runtime_config.extension_composition();
-
-            // 5-6. The conversation identity authority and the one conversation
+            let extensions = runtime_config.extension_composition(); // 5-6. The conversation identity authority and the one conversation
             // tool runtime (workspace, runtime-private artifact root, canonical
             // mailbox, background registry, base authorized environment, and the
             // Todo/Goal domain owners).
@@ -635,8 +636,7 @@ impl LocalConversationCore {
             let mut tool_runtime_config = crate::tools::runtime::ConversationRuntimeConfig::new(
                 &paths.workspace,
                 artifacts_root.clone(),
-            )
-            // The one frozen composition, handed to its materialization owner.
+            ) // The one frozen composition, handed to its materialization owner.
             // Everything Todo downstream — the Tool plane the coordinator
             // composes, the presentation Agent Status consumes, the Runtime
             // Client projection — is derived from what this materializes, never
@@ -649,15 +649,12 @@ impl LocalConversationCore {
                     .map_err(|error| LocalRuntimeError::ToolRuntime {
                         detail: format!("{error:?}"),
                     })?;
-
             tool_runtime.uploads = Some(Arc::new(
                 super::session::uploads::SessionUploadResolver::new(
                     &product_root,
                     conversation_id.clone(),
                 ),
-            ));
-
-            // 7-8. The base tool registry with the explicit native composition,
+            )); // 7-8. The base tool registry with the explicit native composition,
             // using *this* conversation's background registry for the
             // `execution` intrinsic and this conversation's subagent
             // registry for the `subagent` intrinsic (Issue #60).
@@ -673,14 +670,12 @@ impl LocalConversationCore {
                 .cloned()
                 .collect::<BTreeSet<_>>();
             let main_catalog = subagent_catalog.selected_definitions(&main_admission);
-            let mut workflows = paths.workflows.as_ref().clone();
-            //
+            let mut workflows = paths.workflows.as_ref().clone(); //
             // The frozen model timeout policy is resolved once here so the
             // parent runtime and every launched subagent child share exactly
             // the same deadlines (Issue #138): the child inherits the policy
             // through its typed startup specification and applies it locally.
-            let model_timeout_policy = runtime_config.timeout_policy()?;
-            // The frozen tool execution-liveness policy (Issue #204) follows the
+            let model_timeout_policy = runtime_config.timeout_policy()?; // The frozen tool execution-liveness policy (Issue #204) follows the
             // same inheritance: one generic policy for the parent runtime and
             // every subagent child, carried through the typed child spec.
             let tool_deadline_policy = runtime_config.tool_deadline_policy()?;
@@ -715,8 +710,7 @@ impl LocalConversationCore {
                                     detail: error.to_string(),
                                 })?
                             }
-                        },
-                        // Child conversation stores and their disposable
+                        }, // Child conversation stores and their disposable
                         // physical incarnations live below the launch's one
                         // runtime-private root. Keeping this identity namespace
                         // independent of the selected Session's artifact path
@@ -725,11 +719,9 @@ impl LocalConversationCore {
                         product_root: crate::runtime::local_storage::ProductRoot::clone(
                             &conversation_access,
                         ),
-                    },
-                    // The Session's authorized execution binding. Children
+                    }, // The Session's authorized execution binding. Children
                     // share it; no Git or isolated resource is derived from it.
-                    workspace: tool_runtime.workspace().root().to_path_buf(),
-                    // Generation-owned capacity belongs to the live registry;
+                    workspace: tool_runtime.workspace().root().to_path_buf(), // Generation-owned capacity belongs to the live registry;
                     // safe-boundary publication replaces capacity when no child owns it.
                     max_active: runtime_config.subagents.max_concurrent,
                 },
@@ -770,9 +762,7 @@ impl LocalConversationCore {
             // Agent profiles independently select prompt visibility.
             let skill_discovery = SkillDiscoveryConfig {
                 automatic: paths.skill_sources.clone(),
-            };
-
-            // 9. The resolver supplied the complete CFG3 profile and policies.
+            }; // 9. The resolver supplied the complete CFG3 profile and policies.
             // The existing coordinator prepares only finite admitted source demand.
             let source_demand = admitted_source_demand(
                 &runtime_config,
@@ -789,8 +779,7 @@ impl LocalConversationCore {
                     source_demand,
                     conversation_id: tool_runtime.conversation_id().clone(),
                     workspace: tool_runtime.workspace().clone(),
-                    base_tool_registry: Arc::new(base_registry),
-                    // Stable owner-backed Plugin registrations. Each generation's
+                    base_tool_registry: Arc::new(base_registry), // Stable owner-backed Plugin registrations. Each generation's
                     // authored profile selects enabled Plugins independently of
                     // ordinary Tool availability; Todo/Goal state remains domain-owned.
                     extension_tools: tool_runtime.extension_tool_plane(),
@@ -816,7 +805,6 @@ impl LocalConversationCore {
             .map_err(|error| LocalRuntimeError::Capability {
                 detail: format!("{error:?}"),
             })?;
-
             let startup_owner = capability.clone();
             let outcome = async {
                 // 10-11. Build one complete candidate off-side before publishing any
@@ -870,8 +858,7 @@ impl LocalConversationCore {
                         LocalRuntimeError::Capability {
                             detail: error.to_string(),
                         }
-                    })?;
-                    // This is the sole startup publication boundary. Every value below
+                    })?; // This is the sole startup publication boundary. Every value below
                     // was admitted against the exact candidate that is now committed,
                     // so startup cannot expose a capability generation whose subagent or
                     // Workflow catalog belongs to another configuration generation.
@@ -909,9 +896,7 @@ impl LocalConversationCore {
                         .clone()
                         .unwrap_or_else(|| Arc::new(paths.credentials.clone())),
                     workflow_runtime,
-                ));
-
-                // Reopening a selected lineage must re-supply only its immutable
+                )); // Reopening a selected lineage must re-supply only its immutable
                 // bootstrap prefix to ConversationRuntime. Later canonical turns are
                 // recovered by the runtime itself; passing the whole transcript here
                 // would incorrectly change the store's bootstrap identity.
@@ -920,9 +905,7 @@ impl LocalConversationCore {
                     .load_bootstrap_history()
                     .map_err(|error| LocalRuntimeError::ToolRuntime {
                         detail: error.to_string(),
-                    })?;
-
-                // 12-13. The context policy/estimator/status pieces and the one
+                    })?; // 12-13. The context policy/estimator/status pieces and the one
                 // authoritative conversation runtime coordinator, constructed
                 // **inactive**: the final composition path activates it after the
                 // optional Runtime Client host binds.
@@ -934,14 +917,14 @@ impl LocalConversationCore {
                     model_timeout_policy,
                     tool_deadline_policy,
                     context: ConversationContextConfig {
+                        status_clock: Arc::clone(&dependencies.status_clock),
                         policy: runtime_config.context_policy(),
-                        estimator: Arc::clone(&dependencies.estimator),
-                        // The root Agent's frozen native Agent Extension composition
+                        estimator: Arc::clone(&dependencies.estimator), // The root Agent's frozen native Agent Extension composition
                         // is materialized here, once, and never again (Issue #256).
                         // Its Todo half was materialized alongside the conversation's
                         // other owned resources in the tool runtime above.
                         status_engine: extensions
-                            .agent_status_engine(Arc::new(crate::context::SystemClock)),
+                            .agent_status_engine(Arc::clone(&dependencies.status_clock)),
                     },
                     tool_runtime: tool_runtime.clone(),
                     capability: capability.clone(),
@@ -951,14 +934,11 @@ impl LocalConversationCore {
                     subagents: Some(subagents),
                     workflow_output: None,
                 })?;
-
                 runtime.install_initialization_cancellation(cancellation.clone());
-
                 let catalog_loader = resource_loader.clone();
                 runtime.install_runtime_catalog_preparer(Arc::new(move |capability, adopted| {
                     catalog_loader.prepare_runtime_catalogs(capability, adopted)
                 }));
-
                 Ok(Self {
                     runtime,
                     tool_runtime,

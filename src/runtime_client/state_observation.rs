@@ -1,7 +1,7 @@
 //! Range and field pages over the existing native Goal, Todo, and Compaction sources.
-use super::checkpoint::{CheckpointPage, CheckpointValueChunk};
-use super::types::{RuntimeClientCursor, RuntimeClientError};
 use crate::observation::cut::{CheckpointKey, CheckpointPageItem, CheckpointReadCut};
+use crate::runtime_client::checkpoint::{CheckpointPage, CheckpointValueChunk};
+use crate::runtime_client::types::{RuntimeClientCursor, RuntimeClientError};
 use base64::Engine as _;
 
 pub(crate) fn selection(domain: &str) -> Option<(&str, Vec<String>)> {

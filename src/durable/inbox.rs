@@ -51,6 +51,9 @@ pub struct InboundDraft {
 /// Finite source evidence of one native pending transition, never canonical content.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingObservationReceipt {
+    /// A shared native family owns publication at this final Journal member.
+    /// The mailbox callback still runs for independent observers in owner order.
+    pub native_release_sequence: Option<u64>,
     pub ready_through: Option<u64>,
     /// Existing owner-published T prefix captured in this native transaction.
     pub ready_t_through: Option<u64>,

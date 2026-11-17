@@ -1,6 +1,7 @@
 //! Typed auxiliary index rows and their bounded queries.
 
 use super::super::sqlite_error;
+use crate::durable::sqlite::statements::FixedStatements;
 
 use super::{
     AUXILIARY_TERMINAL_ENVELOPE_ENCODED_MAX, AuxiliaryCallId, AuxiliaryCallOutcome,
@@ -207,7 +208,7 @@ pub(super) fn request_snapshot_exists(
 ) -> Result<bool, ConversationStoreError> {
     transaction
         .query_row(
-            "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE request_id=?1)",
+            "SELECT EXISTS(SELECT 1 FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1))",
             [request_id.as_str()],
             |row| row.get(0),
         )
@@ -246,7 +247,7 @@ pub(super) fn owner_row_query(
         Option<String>,
     );
     let row: Option<OwnerTupleRow> = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT owner_kind,attempt_id,turn_id,retry_number,call_id,
                     auxiliary_ordinal,start_sequence,terminal_sequence,terminal_kind
              FROM request_owners WHERE request_id=?1",
@@ -748,7 +749,7 @@ pub(super) fn request_snapshot_started_sequence(
 ) -> Result<Option<u64>, ConversationStoreError> {
     transaction
         .query_row(
-            "SELECT started_sequence FROM request_snapshots WHERE request_id=?1",
+            "SELECT started_sequence FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
             [request_id.as_str()],
             |row| row.get::<_, Option<i64>>(0),
         )

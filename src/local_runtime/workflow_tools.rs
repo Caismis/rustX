@@ -372,7 +372,7 @@ async fn list(
                     result: WorkflowToolResult::declared(tool.output_schema.as_ref()),
                     name: tool.name,
                     description: tool.description,
-                    input_schema: tool.input_schema,
+                    input_schema: tool.input_schema.into(),
                 })
                 .collect(),
             ..state(WorkflowToolSourceState::Listed)
@@ -419,7 +419,7 @@ mod tests {
                     .map(|index| WorkflowToolChoice {
                         name: format!("tool_{index:03}"),
                         description: "Quoted \"description\" and Unicode 界\n".repeat(8),
-                        input_schema: json!({"type":"object","properties":properties}),
+                        input_schema: json!({"type":"object","properties":properties}).into(),
                         result: WorkflowToolResult::Text {},
                     })
                     .collect(),

@@ -483,7 +483,7 @@ impl AgentStatusSurfaceView {
                     actual: message.message.id().clone(),
                 });
             }
-            selection.append(Arc::new(message.message.clone()));
+            selection.append(Arc::new(message.message.clone().into()));
         }
         Ok(Self::from_snapshot(ConversationSurfaceSnapshot {
             revision,
@@ -1932,7 +1932,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     }
 

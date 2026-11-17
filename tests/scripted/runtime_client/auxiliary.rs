@@ -107,9 +107,13 @@ async fn classification_is_strict_ephemeral_and_duplicate_semantics_exclude_curr
             .iter()
             .all(|request| request.tools.is_empty() && request.continuation.is_none())
     );
-    assert_eq!(
-        host.checkpoint().unwrap().snapshot.transcript.entries,
-        [] as [crate::observation::transcript::RuntimeClientTranscriptEntry; 0]
+    assert!(
+        host.checkpoint()
+            .unwrap()
+            .snapshot
+            .transcript
+            .entries
+            .is_empty()
     );
     host.shutdown().await.unwrap();
 }
@@ -611,7 +615,7 @@ async fn classification_history_is_bounded_data_and_never_a_tool_continuation() 
         );
         let request = fixture.model.requests().last().unwrap().clone();
         assert_eq!(request.messages.len(), 1);
-        assert_eq!(request.messages.tool_indices(), [] as [usize; 0]);
+        assert!(!request.messages.has_tool_relationships());
         assert!(request.tools.is_empty() && request.continuation.is_none());
         let crate::model::ModelInputMessage::RequestOnly(question) = &request.messages[0] else {
             panic!("classification data")
@@ -693,7 +697,7 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
     );
     let requests = fixture.model.requests();
     assert_eq!(requests.len(), 2);
-    assert_eq!(requests[1].messages.tool_indices(), [] as [usize; 0]);
+    assert!(!requests[1].messages.has_tool_relationships());
     assert!(requests[1].continuation.is_none() && requests[1].tools.is_empty());
     fixture.host.projection_settled().await;
     assert_eq!(
@@ -713,7 +717,7 @@ async fn btw_runs_while_the_primary_tool_is_physically_parked_without_changing_i
     ));
     assert_eq!(fixture.model.requests().len(), 3);
     let continued = fixture.model.requests().last().unwrap().clone();
-    assert_ne!(continued.messages.tool_indices(), [] as [usize; 0]);
+    assert!(continued.messages.has_tool_relationships());
     assert!(
         !serde_json::to_string(&continued.messages)
             .unwrap()

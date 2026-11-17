@@ -269,6 +269,7 @@ fn fixture_in_process(
         frozen: FrozenCall {
             start,
             request,
+            provider_body_limit: None,
             invocation,
             timeout: ModelTimeoutPolicy::default(),
             resource_revision: 7,

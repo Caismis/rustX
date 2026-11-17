@@ -464,15 +464,17 @@ impl ConversationToolRuntime {
         // Conversation state survives Plugin selection changes. Owning this
         // state grants no model capability; each generation selects its Plugin
         // Tool surfaces independently.
+        // Only the newest published list is the list, read by its index.
         let todos = Some(
             ConversationTodoList::rebuilt(
                 conversation_id.clone(),
-                &durable_binding
+                durable_binding
                     .full_store()
-                    .load_canonical()
+                    .latest_todo_publication()
                     .map_err(|error| {
                         ConversationRuntimeError::DurableConversation(error.to_string())
-                    })?,
+                    })?
+                    .as_slice(),
             )
             .map_err(ConversationRuntimeError::TodoList)?,
         );

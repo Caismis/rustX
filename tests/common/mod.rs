@@ -529,7 +529,7 @@ pub fn tool(name: &str, id: &str) -> rustx::tools::types::ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
-        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Idempotent,
         origin: ToolOrigin::Builtin,
@@ -581,6 +581,8 @@ pub struct DurableExecutionAudit {
     /// durable plane deliberately keeps no permanent per-frame history
     /// (Issue #108).
     pub publication_frames: Vec<PublicationFrame>,
+    /// Complete messages released through committed canonical receipts.
+    pub canonical_notifications: Vec<MessageBlock>,
     /// The bounded immutable audits of every stream that settled without
     /// canonical acceptance.
     pub publication_audits: Vec<PublicationAudit>,
@@ -718,6 +720,7 @@ pub fn durable_agent_result_with_publication(
         event_history,
         snapshot_history,
         publication_frames: publication.frames(),
+        canonical_notifications: publication.committed(),
         publication_audits: publication.audits(),
     }
 }
@@ -731,6 +734,7 @@ pub fn durable_agent_result_with_publication(
 pub struct RecordingPublicationObserver {
     opened: Mutex<Vec<PublicationStreamStart>>,
     frames: Mutex<Vec<PublicationFrame>>,
+    committed: Mutex<Vec<MessageBlock>>,
     audits: Mutex<Vec<PublicationAudit>>,
     trace: Mutex<Vec<PublicationObservation>>,
     frame_count: watch::Sender<usize>,
@@ -741,6 +745,7 @@ impl Default for RecordingPublicationObserver {
         Self {
             opened: Mutex::new(Vec::new()),
             frames: Mutex::new(Vec::new()),
+            committed: Mutex::new(Vec::new()),
             audits: Mutex::new(Vec::new()),
             trace: Mutex::new(Vec::new()),
             frame_count: watch::Sender::new(0),
@@ -768,6 +773,15 @@ impl RecordingPublicationObserver {
     #[must_use]
     pub fn frames(&self) -> Vec<PublicationFrame> {
         self.frames.lock().expect("publication frame lock").clone()
+    }
+
+    /// Complete content actually released at the canonical notification seam.
+    #[must_use]
+    pub fn committed(&self) -> Vec<MessageBlock> {
+        self.committed
+            .lock()
+            .expect("canonical notification lock")
+            .clone()
     }
 
     /// The audits of every non-canonical settlement.
@@ -818,9 +832,13 @@ impl AgentExecutionObserver for RecordingPublicationObserver {
     fn observe_committed(
         &self,
         _attempt_id: &AttemptId,
-        _block: &MessageBlock,
+        block: &MessageBlock,
         _receipt: &rustx::durable::TranscriptCommitReceipt,
     ) {
+        self.committed
+            .lock()
+            .expect("canonical notification lock")
+            .push(block.clone());
     }
 
     fn observe_status(
@@ -970,7 +988,7 @@ pub fn tool_policies(
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
-        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}).into(),
         execution_policy: execution,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
@@ -1183,7 +1201,8 @@ pub fn todo_result_message(
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 
@@ -1285,7 +1304,7 @@ pub fn model_tool(name: &str, id: &str) -> rustx::tools::types::ModelToolDefinit
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
-        input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        input_schema: serde_json::json!({"type": "object", "properties": {}}).into(),
     }
 }
 
@@ -1306,7 +1325,8 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
             "type": "object",
             "properties": {"command": {"type": "string"}},
             "required": ["command"],
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,

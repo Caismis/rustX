@@ -1,7 +1,8 @@
+import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { replaceTranscript } from './transcript';
 import { OutcomeUncertain, RequestNotDispatched, RpcFailure, isOutcomeUncertain } from './errors';
-import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v78';
+import type { AttachmentTarget, GoalMutation, GoalRef, PendingInboundRef, Request1 } from '../../../protocol/app-server/v80';
 import type { ObservationPhase } from '../../../protocol/app-server/observation';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { CancellationTarget, ClientView, CompactionRequestEvidence, ConnectionRequest, GoalControlOutcome, InboundControlOutcome, SessionView } from './contracts';
@@ -60,7 +61,7 @@ export class SessionControls {
     if (!current()) throw new Error('Goal observation was replaced.');
     if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
     const bytes = Uint8Array.from(atob(chunk.bytes_base64), value => value.charCodeAt(0));
-    if (JSON.stringify(chunk.cut) !== JSON.stringify(cut) || chunk.domain !== 'goal' || chunk.item_offset !== 0
+    if (checkpointReadCutKey(chunk.cut) !== checkpointReadCutKey(cut) || chunk.domain !== 'goal' || chunk.item_offset !== 0
       || JSON.stringify(chunk.path) !== JSON.stringify(path) || chunk.offset !== 0 || chunk.next_offset != null
       || !Number.isSafeInteger(chunk.readable_end) || chunk.readable_end !== bytes.length || bytes.length > 65_536) throw new Error('Goal objective range changed.');
     const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);

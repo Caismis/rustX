@@ -44,7 +44,7 @@ fn tools() -> Vec<ModelToolDefinition> {
         id: ToolId::new("measured-tool"),
         name: "measured".into(),
         description: "exact 水 \\\" JSON".into(),
-        input_schema: serde_json::json!({"type":"object","properties":{"opaque":{"enum":[-0.0,18_446_744_073_709_551_615_u64,"\\n"]}}}),
+        input_schema: serde_json::json!({"type":"object","properties":{"opaque":{"enum":[-0.0,18_446_744_073_709_551_615_u64,"\\n"]}}}).into(),
     }]
 }
 fn engine(estimator: Arc<dyn TokenEstimator>) -> ContextEngine {
@@ -190,7 +190,8 @@ fn observed_shared_root_uses_exact_content_and_scalars_across_distinct_roots_and
             .is_none()
     );
     let mut changed_tools = tools.clone();
-    changed_tools[0].input_schema["description"] = "different catalog".into();
+    std::sync::Arc::make_mut(&mut changed_tools[0].input_schema)["description"] =
+        "different catalog".into();
     assert!(
         anchor
             .covered_prefix_model_input(&extended, "fixed", &changed_tools)

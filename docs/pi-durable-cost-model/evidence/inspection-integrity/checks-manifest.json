@@ -1,0 +1,50 @@
+{
+  "pi-inspection-clippy-final.log": {
+    "bytes": 117,
+    "sha256": "069627889036ee8c480bc5911485c1679d4013f554d66568162a44e2b38691b2"
+  },
+  "pi-inspection-clippy-root-final.log": {
+    "bytes": 117,
+    "sha256": "effdf207f61f470ed793a0237c4047996777a2113d9d2872cfdca92c3389cf94"
+  },
+  "pi-inspection-clippy.log": {
+    "bytes": 117,
+    "sha256": "effdf207f61f470ed793a0237c4047996777a2113d9d2872cfdca92c3389cf94"
+  },
+  "pi-inspection-durable.log": {
+    "bytes": 49385,
+    "sha256": "d9e291adc74ac01dd7ddd6df5f70ab954f9cca12080feb9edb553e98d0f89593"
+  },
+  "pi-inspection-initial-raw-whitespace.log": {
+    "bytes": 1932,
+    "sha256": "1a22eeae555a28f1538a8b3380b40c31bbbdfded1d5d05cf2b69b5bc7dfc7c97"
+  },
+  "pi-inspection-initial-root-tests.log": {
+    "bytes": 51581,
+    "sha256": "ed60278591257e9d03257b9eb4a70cd34ca344555dd11abf09e7e9b7c83468d9"
+  },
+  "pi-inspection-initial-scalar-cfg.log": {
+    "bytes": 794,
+    "sha256": "5f80acaeb180ab89d165b84e5d58e7c4ad124882d9c855107f3373638e3291b8"
+  },
+  "pi-inspection-lazy-fixtures.log": {
+    "bytes": 1184,
+    "sha256": "d7770cb0d2ef1840d422192f576b7ad9fbe9f4684286b83caa6b87015fc44821"
+  },
+  "pi-inspection-root-corruption.log": {
+    "bytes": 489,
+    "sha256": "d6e087254bbeefee5527516d211b032732af47e12ec2bc1b8e6e03ff380dfcb5"
+  },
+  "pi-inspection-root-reuse.log": {
+    "bytes": 405,
+    "sha256": "7ef660e269c695e5be4e19a8bf7de108ecc22b6b11878fd45b31a3cf73667422"
+  },
+  "pi-inspection-source.log": {
+    "bytes": 3375,
+    "sha256": "cfcc150570c96b823859da56c7e7b9c27fa23c0126c9ee342e87b05d6b2f21fb"
+  },
+  "pi-inspection-span-corruption.log": {
+    "bytes": 426,
+    "sha256": "b56da1b7ff19098486a48e12ec64fe929085b6b737d246983a57179647fdaa49"
+  }
+}

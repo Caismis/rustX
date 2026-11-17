@@ -48,7 +48,7 @@ impl FileContents {
         Self {
             old_text: text(before),
             new_text: text(after),
-            binary,
+            binary: binary && !oversized,
             oversized,
         }
     }
