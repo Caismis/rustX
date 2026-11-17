@@ -279,7 +279,10 @@ async fn archive_auxiliary_audit_preserves_owner_usage_and_excludes_provider_pro
             "reason": "minimal audit facts retain identities and outcomes, not temporary input or generated output",
         })
     );
-    assert!(records(&files, &conversation, "requests").is_empty());
+    assert_eq!(
+        records(&files, &conversation, "requests"),
+        [] as [serde_json::Value; 0]
+    );
 
     let audit = records(&files, &conversation, "auxiliary_audit");
     assert_eq!(audit.len(), 4);
@@ -399,7 +402,10 @@ async fn archive_cut_before_auxiliary_settlement_does_not_leak_later_terminal() 
             .collect::<Vec<_>>(),
         ["auxiliary_call_started", "model_request_started"]
     );
-    assert!(records(&old_files, &conversation, "generations").is_empty());
+    assert_eq!(
+        records(&old_files, &conversation, "generations"),
+        [] as [serde_json::Value; 0]
+    );
     let old_journal = records(&old_files, &conversation, "journal");
     assert!(old_journal.iter().all(|row| {
         !matches!(
@@ -476,8 +482,14 @@ async fn archive_exports_only_named_inherited_summary_generation_audit() {
             .iter()
             .all(|record| record["call_id"] != serde_json::json!(unrelated_call))
     );
-    assert!(records(&files, &clone.conversation_id, "auxiliary_audit").is_empty());
-    assert!(records(&files, &clone.conversation_id, "requests").is_empty());
+    assert_eq!(
+        records(&files, &clone.conversation_id, "auxiliary_audit"),
+        [] as [serde_json::Value; 0]
+    );
+    assert_eq!(
+        records(&files, &clone.conversation_id, "requests"),
+        [] as [serde_json::Value; 0]
+    );
     let all = files
         .values()
         .map(|bytes| String::from_utf8_lossy(bytes))
@@ -639,7 +651,7 @@ async fn archive_keeps_valid_auxiliary_audit_when_optional_request_source_is_abs
         .unwrap()
         .execute_batch(
             "CREATE TRIGGER omit_optional_request_source
-             BEFORE INSERT ON request_observation_fields
+             BEFORE INSERT ON request_source_roots
              BEGIN SELECT RAISE(FAIL,'optional request source absent'); END;",
         )
         .unwrap();
@@ -649,11 +661,9 @@ async fn archive_keeps_valid_auxiliary_audit_when_optional_request_source_is_abs
     let optional_rows: u64 =
         rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
             .unwrap()
-            .query_row(
-                "SELECT count(*) FROM request_observation_fields",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT count(*) FROM request_source_roots", [], |row| {
+                row.get(0)
+            })
             .unwrap();
     assert_eq!(optional_rows, 0);
     let files = decode(
@@ -708,7 +718,10 @@ async fn archive_v6_contract_preserves_accepted_contributions_and_journal_vocabu
     );
     let requests = records(&files, &conversation, "requests");
     assert_eq!(requests.len(), 1);
-    assert!(!snapshot.contributions.is_empty());
+    assert_ne!(
+        snapshot.contributions,
+        [] as [crate::context::contribution::ContributionStart; 0]
+    );
     assert_eq!(
         requests[0]["contributions"],
         serde_json::json!(snapshot.contributions)
@@ -877,7 +890,10 @@ async fn archive_cut_excludes_live_writes_and_later_descendants() {
     );
     assert_eq!(records(&files, &conversation, "requests").len(), 1);
     assert_eq!(records(&files, &conversation, "generations").len(), 1);
-    assert!(records(&files, &child, "messages").is_empty());
+    assert_eq!(
+        records(&files, &child, "messages"),
+        [] as [serde_json::Value; 0]
+    );
     let all = files
         .values()
         .map(|b| String::from_utf8_lossy(b))
@@ -1048,7 +1064,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
     let private = |secret: &str| {
         Some(ProviderContinuationState::Anthropic(
             AnthropicContinuation {
-                opaque: serde_json::json!(secret),
+                opaque: serde_json::json!(secret).into(),
             },
         ))
     };
@@ -1289,8 +1305,14 @@ async fn archive_preserves_native_inherited_response_provenance_without_executio
     let responses = records(&files, &cloned.conversation_id, "inherited_responses");
     assert_eq!(responses.len(), 1);
     assert_eq!(responses[0]["origin"], serde_json::json!(origin));
-    assert!(records(&files, &cloned.conversation_id, "journal").is_empty());
-    assert!(records(&files, &cloned.conversation_id, "requests").is_empty());
+    assert_eq!(
+        records(&files, &cloned.conversation_id, "journal"),
+        [] as [serde_json::Value; 0]
+    );
+    assert_eq!(
+        records(&files, &cloned.conversation_id, "requests"),
+        [] as [serde_json::Value; 0]
+    );
 }
 
 fn claim_child(parent: &SqliteConversationStore, child: &ConversationId) {
@@ -1401,10 +1423,10 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
     let MessageBlock::Tool(tool) = &mut history[2] else {
         panic!("Tool fixture")
     };
-    tool.result.status = ToolExecutionStatus::Failed {
+    std::sync::Arc::make_mut(&mut tool.result).status = ToolExecutionStatus::Failed {
         error: authored.into(),
     };
-    tool.result.content = vec![ToolResultContent::Text(TextBlock {
+    std::sync::Arc::make_mut(&mut tool.result).content = vec![ToolResultContent::Text(TextBlock {
         text: authored.into(),
     })];
     let canonical_tool = serde_json::to_value(&history[2]).unwrap();
@@ -1460,7 +1482,8 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
                         truncation: None,
                         workflow: None,
                         managed_output: None,
-                    },
+                    }
+                    .into(),
                 },
                 _ => unreachable!(),
             };
@@ -1544,7 +1567,7 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
     let MessageBlock::Tool(tool) = &mut history[2] else {
         panic!("Tool fixture")
     };
-    tool.result.managed_output = Some(Box::new(partial.clone()));
+    std::sync::Arc::make_mut(&mut tool.result).managed_output = Some(Box::new(partial.clone()));
     let original_result = tool.result.clone();
     let canonical_tool = serde_json::to_value(&history[2]).unwrap();
     let (directory, catalog, _) = open_catalog();
@@ -1561,7 +1584,7 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
     ];
     for (index, continuation) in continuations.into_iter().enumerate() {
         let mut result = original_result.clone();
-        result.managed_output = Some(Box::new(continuation));
+        std::sync::Arc::make_mut(&mut result).managed_output = Some(Box::new(continuation));
         store
             .append_event(RuntimeEventEnvelope {
                 tool_occurrence: None,
@@ -1669,7 +1692,10 @@ async fn private_agent_authority_never_enters_archive_or_lineage_copy() {
         copied.load_agent_authority(&agent).is_err(),
         "history copy grants no executable child authority"
     );
-    assert!(copied.read_events(None, 256).unwrap().events.is_empty());
+    assert_eq!(
+        copied.read_events(None, 256).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
 }
 
 #[tokio::test]
@@ -1852,13 +1878,16 @@ async fn inherited_turn_archive(member: bool) {
         assert_eq!(manifest["artifacts"], serde_json::json!([]));
         assert!(!files.keys().any(|name| name.starts_with("artifacts/")));
         assert_eq!(destination.conversation_read_cut().unwrap(), before);
-        assert!(destination.read_events(None, 64).unwrap().events.is_empty());
-        assert!(
+        assert_eq!(
+            destination.read_events(None, 64).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
+        assert_eq!(
             destination
                 .read_request_snapshots(None, 64)
                 .unwrap()
-                .snapshots
-                .is_empty()
+                .snapshots,
+            [] as [crate::model::snapshot::RequestSnapshot; 0]
         );
         if copy == 0 {
             let next = catalog.prepare_clone_session(&state(), &frozen).unwrap();
@@ -1893,7 +1922,7 @@ async fn lossy_archive_reports_missing_old_encrypted_input_without_invalidating_
             text: None,
             provider_state: Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(
                 crate::runtime::continuation::OpenAiResponsesContinuation::Stateless {
-                    items: vec![serde_json::json!({"type":"reasoning", "id":"rs-old", "encrypted_content":"OLD_ENCRYPTED_INPUT_BYTES"})],
+                    items: vec![serde_json::json!({"type":"reasoning", "id":"rs-old", "encrypted_content":"OLD_ENCRYPTED_INPUT_BYTES"})].into(),
                 },
             )),
         })],
@@ -2018,7 +2047,10 @@ async fn archive_preserves_consumer_defined_auxiliary_attribution() {
             "reference": "document-42:revision-7",
         })
     );
-    assert!(records(&files, &conversation, "requests").is_empty());
+    assert_eq!(
+        records(&files, &conversation, "requests"),
+        [] as [serde_json::Value; 0]
+    );
 }
 
 #[tokio::test]

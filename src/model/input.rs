@@ -2,7 +2,7 @@
 //!
 //! `MessageBlock` is the canonical conversation type and therefore always
 //! carries a real Ledger identity. A primary request may also carry a narrow
-//! request-only value which is frozen in its [`RequestSnapshot`]. Keeping the
+//! request-only value which is frozen in its [`RequestSnapshot`](crate::model::snapshot::RequestSnapshot). Keeping the
 //! two variants distinct makes it impossible for an adapter or a caller to
 //! manufacture a canonical `MessageId` for execution-recovery context.
 
@@ -508,7 +508,10 @@ pub(crate) fn assemble_selected_model_input(
     let _profile = crate::agent::execution::attribution::Timer::new(
         crate::agent::execution::attribution::Phase::InputAssembly,
     );
-    if !manifest.messages().same_input(historical) {
+    if !manifest
+        .messages_with_preparation(historical)
+        .same_input(historical)
+    {
         return Err("historical input differs from its native manifest".into());
     }
     let mut selected = manifest.clone();
@@ -536,7 +539,7 @@ pub(crate) fn assemble_selected_model_input(
             )),
         );
     }
-    Ok((selected.messages(), selected))
+    Ok((selected.messages_with_preparation(historical), selected))
 }
 
 fn assemble_with_location<'a>(

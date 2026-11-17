@@ -46,8 +46,9 @@ impl RuntimeObserver {
         receipt: &crate::durable::observation::NativeObservationBatch,
         journal_sequence: u64,
     ) {
-        // No member releases its ready bit before the complete shared
-        // family has installed one native transition.
+        // No member (including AttemptStarted in the first-turn family)
+        // releases its ready bit before the final callback installs the whole
+        // same-commit transition. Earlier callbacks remain read-only.
         if receipt
             .journal_range
             .is_some_and(|(_, last)| last != journal_sequence)
@@ -58,45 +59,12 @@ impl RuntimeObserver {
             fanout.source_failed();
             return;
         }
-        let release = || -> Result<(), crate::durable::ConversationStoreError> {
-            if let Some(canonical) = &receipt.canonical {
-                inner.store.mark_canonical_transcript_ready(
-                    canonical.first_position,
-                    canonical.last_position,
-                )?;
-            }
-            match &receipt.transition {
-                crate::durable::observation::NativeObservationTransition::Single(witness)
-                | crate::durable::observation::NativeObservationTransition::Adoption(witness)
-                | crate::durable::observation::NativeObservationTransition::Compaction(witness) => {
-                    if let Some(cursor) = witness.transcript_cursor {
-                        inner
-                            .store
-                            .mark_observation_transcript_ready(cursor.get())?;
-                    }
-                }
-                crate::durable::observation::NativeObservationTransition::WorkflowTerminal {
-                    terminal,
-                    output,
-                } => {
-                    for witness in [terminal, output] {
-                        if let Some(cursor) = witness.transcript_cursor {
-                            inner
-                                .store
-                                .mark_observation_transcript_ready(cursor.get())?;
-                        }
-                    }
-                }
-                _ => {}
-            }
-            if let Some((first, last)) = receipt.journal_range {
-                inner.store.mark_observation_direct(first, last)?;
-                fanout.source_ready(last);
-            }
-            Ok(())
-        };
-        if release().is_err() {
+        if inner.store.mark_native_observation_ready(receipt).is_err() {
             fanout.source_failed();
+            return;
+        }
+        if let Some((_, last)) = receipt.journal_range {
+            fanout.source_ready(last);
         }
     }
 
@@ -174,7 +142,7 @@ impl RuntimeObserver {
 }
 
 impl crate::goal::GoalObserver for RuntimeObserver {
-    fn changed(&self, receipt: Option<&Arc<crate::durable::inbox::GoalObservationReceipt>>) {
+    fn changed(&self, receipt: Option<&Arc<crate::durable::GoalObservationReceipt>>) {
         let Some(inner) = self.inner.upgrade() else {
             return;
         };
@@ -231,13 +199,13 @@ impl AgentExecutionObserver for RuntimeObserver {
             fanout.observe_tool_execution(event, tool_occurrence);
             if let Some(receipt) = receipt {
                 Self::publish_native_batch(&inner, fanout, receipt, journal_sequence);
-                return;
+            } else {
+                // Committed execution facts require their native receipt. A
+                // missing family receipt cannot release individual J/T rows:
+                // the complete same-commit display transition never installed.
+                fanout.source_failed();
             }
         }
-        self.push(ConversationObservation::Published {
-            journal_sequence,
-            observation: Box::new(ConversationObservation::JournalSourceReady),
-        });
     }
 
     fn observe_committed(
@@ -246,6 +214,11 @@ impl AgentExecutionObserver for RuntimeObserver {
         _block: &MessageBlock,
         receipt: &crate::durable::TranscriptCommitReceipt,
     ) {
+        if receipt.observation.native_release_sequence.is_some() {
+            // The final shared Journal receipt installs canonical content with
+            // its provider/turn/terminal facts, then releases their sources once.
+            return;
+        }
         self.push(ConversationObservation::CanonicalCommitted {
             attempt_id: Some(attempt_id.clone()),
             receipt: receipt.clone(),
@@ -368,9 +341,14 @@ impl AgentExecutionObserver for RuntimeObserver {
 impl InboundObserver for RuntimeObserver {
     fn on_pending(
         &self,
-        receipt: Option<&Arc<crate::durable::inbox::PendingObservationReceipt>>,
+        receipt: Option<&Arc<crate::durable::PendingObservationReceipt>>,
         cut: &crate::durable::reading::ConversationReadCut,
     ) {
+        if receipt.is_some_and(|receipt| receipt.native_release_sequence.is_some()) {
+            // The mailbox retains its native ordering and notifies independent
+            // observers; this display head belongs to the shared family release.
+            return;
+        }
         if let Some(inner) = self.inner.upgrade()
             && let Some(fanout) = inner.pending.get()
         {

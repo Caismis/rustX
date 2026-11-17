@@ -4,7 +4,7 @@ import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host.ts';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, expectSettled } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -65,5 +65,5 @@ test('browser native download and remote TUI consume the same authenticated nati
     expect(logical).not.toContain(fixture.token);
     expect(logical).not.toContain('fake-provider-only');
     passed = true;
-  } finally { await remote?.shutdown(); await fixture.stop(passed); }
+  } finally { await remote?.shutdown(); await stopDogfoodPage(page, fixture, passed); }
 });

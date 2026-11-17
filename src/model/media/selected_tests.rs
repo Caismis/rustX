@@ -132,11 +132,10 @@ fn selected_media_noop_does_not_copy_or_rehash_unchanged_canonical_and_derived_b
     legacy_materialize(&snapshot, &mut expected);
     assert!(take_work().copied_bytes > 128 * 4096);
     take_work();
-    assert!(
+    assert_eq!(
         snapshot
             .materialize_with_changes(&mut input, Some(&selected))
-            .unwrap()
-            .is_empty()
+            .unwrap(), [] as [usize; 0]
     );
     let work = take_work();
     assert_eq!(work.copied_bytes, 0);
@@ -180,10 +179,9 @@ fn selected_media_deltas_equal_legacy_upload_image_semantics_and_keep_exact_froz
     for enabled in [false, true] {
         let snapshot = MediaSnapshot {
             uploads: uploads.resolve(&original).unwrap(),
-            images: [(id.clone(), png())].into(),
+            images: [(id.clone(), crate::model::images::FrozenImage::new(png()).unwrap())].into(),
             enabled: Some(enabled),
             conversation: Some(scope.clone()),
-            ..Default::default()
         };
         let mut expected = original.clone();
         legacy_materialize(&snapshot, &mut expected);
@@ -209,11 +207,10 @@ fn selected_media_deltas_equal_legacy_upload_image_semantics_and_keep_exact_froz
             serde_json::to_vec(&selected).unwrap(),
             serde_json::to_vec(&SelectedInputManifest::from_messages(&scope, &actual)).unwrap()
         );
-        assert!(
+        assert_eq!(
             snapshot
                 .materialize_with_changes(&mut actual, Some(&selected))
-                .unwrap()
-                .is_empty()
+                .unwrap(), [] as [usize; 0]
         );
         assert_eq!(
             actual, expected,
@@ -300,7 +297,7 @@ fn tool_image(index: usize, id: &ArtifactId) -> ModelInputMessage {
             ContentBlockIndex::new(0),
         ),
         tool_id: ToolId::new("image-tool"),
-        result,
+        result: result.into(),
     }))
 }
 
@@ -350,7 +347,7 @@ fn borrowed_resource_capture_equals_rendered_oracle_for_occurrences_views_and_er
             expected
         );
         for (id, bytes) in &actual.images {
-            assert_eq!(*bytes, artifacts.read_bounded(id).unwrap());
+            assert_eq!(bytes.as_bytes(), artifacts.read_bounded(id).unwrap());
         }
         assert!(
             !actual.images.contains_key(&corrupt),

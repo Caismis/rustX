@@ -22,10 +22,9 @@ fn t08_t15_native_schema_initializes_all_bounded_read_indexes_before_reopen() {
     drop(store);
     let connection = rusqlite::Connection::open(&path).unwrap();
     for name in [
-        "events_observation_statistics_idx",
+        "events_aggregate_heads_idx",
         "events_observation_tool_idx",
-        "events_observation_members_idx",
-        "events_observation_execution_idx",
+        "events_attempt_heads_idx",
     ] {
         let table: String = connection
             .query_row(
@@ -93,7 +92,7 @@ fn t08_t20_content_range_reads_touch_at_most_two_finite_sqlite_rows() {
         );
     }
     let raw = rusqlite::Connection::open(&path).unwrap();
-    let plan:String=raw.query_row("EXPLAIN QUERY PLAN SELECT segment,bytes FROM content_segments WHERE source_kind='canonical' AND source_id='large-message' AND block_index=0 AND representation='utf8_text' AND segment>=1 AND segment<=2 ORDER BY segment LIMIT 2",[],|r|r.get(3)).unwrap();
+    let plan:String=raw.query_row("EXPLAIN QUERY PLAN SELECT segment,bytes FROM content_segments WHERE source_kind='canonical' AND source_id=(SELECT -id FROM content_source_ids WHERE alias='large-message') AND block_index=0 AND representation='utf8_text' AND segment>=1 AND segment<=2 ORDER BY segment LIMIT 2",[],|r|r.get(3)).unwrap();
     assert!(
         plan.contains("SEARCH content_segments USING PRIMARY KEY"),
         "{plan}"
@@ -258,12 +257,12 @@ fn t15_t20_message_and_transcript_headers_advance_without_source_body_reads() {
     assert!(
         connection
             .execute(
-                "UPDATE observation_headers SET header_json=zeroblob(16385)",
+                "UPDATE transcript_entries SET header_json=zeroblob(16385)",
                 []
             )
             .is_err()
     );
-    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT h.header_json FROM message_ledger m CROSS JOIN observation_headers h WHERE m.position>41 AND m.position<=73 AND h.reference_kind='message' AND h.reference_id=m.message_id ORDER BY m.position LIMIT 32", [], |row| row.get(3)).unwrap();
+    let plan: String = connection.query_row("EXPLAIN QUERY PLAN SELECT h.header_json FROM message_ledger m CROSS JOIN transcript_entries h WHERE m.position>41 AND m.position<=73 AND h.reference_kind='message' AND h.reference_id=m.message_id ORDER BY m.position LIMIT 32", [], |row| row.get(3)).unwrap();
     assert!(
         plan.contains("SEARCH m USING COVERING INDEX message_ledger_identity_position_idx"),
         "{plan}"
@@ -315,7 +314,8 @@ fn t08_t15_tool_result_headers_never_deserialize_historical_result_json() {
                 workflow: None,
                 managed_output: None,
                 deliveries: Vec::new(),
-            },
+            }
+            .into(),
         }),
     ];
     let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
@@ -448,10 +448,10 @@ fn t15_t19_canonical_block_pages_advance_and_binary_does_not_alias_artifacts() {
     // Metadata for this absent artifact is readable; a client cannot turn its
     // unresolved reference into retained BinaryBytes by changing representation.
     let mut forged = image.content[0].content_ref.clone();
-    forged.representation = ContentRepresentation::BinaryBytes;
+    std::sync::Arc::make_mut(&mut forged).representation = ContentRepresentation::BinaryBytes;
     assert!(store.content_read(&forged, 0, 65_536).is_err());
     let mut text_forged = blocks[0].content[0].content_ref.clone();
-    text_forged.representation = ContentRepresentation::BinaryBytes;
+    std::sync::Arc::make_mut(&mut text_forged).representation = ContentRepresentation::BinaryBytes;
     assert!(store.content_read(&text_forged, 0, 65_536).is_err());
     assert!(
         store
@@ -463,7 +463,7 @@ fn t15_t19_canonical_block_pages_advance_and_binary_does_not_alias_artifacts() {
 }
 
 #[test]
-fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
+fn t15_t20_journal_witness_and_statistics_use_bounded_native_evidence() {
     use crate::events::types::{
         AttemptFailure, EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope,
     };
@@ -583,59 +583,57 @@ fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
             },
         }
     );
-    let headers = store
-        .latest_observation_events(through, &["attempt_started".into()], None, 32)
-        .unwrap();
-    assert_eq!(headers.len(), 32);
-    assert_eq!(headers.first().unwrap().sequence, 10);
-    assert_eq!(headers.last().unwrap().sequence, 41);
-    assert!(
-        headers
-            .iter()
-            .all(|header| header.display.is_some() && !header.deferred)
-    );
-    assert!(serde_json::to_vec(&headers).unwrap().len() < 786_432);
     let failed = store
-        .latest_observation_events(through, &["attempt_failed".into()], Some(&attempt), 1)
+        .observation_event_witness(42, through)
+        .unwrap()
         .unwrap();
-    assert_eq!(failed.len(), 1);
-    assert_eq!(failed[0].sequence, 42);
-    assert!(failed[0].deferred);
-    assert!(failed[0].display.is_none());
-    assert_eq!(failed[0].attempt_id, Some(attempt));
+    assert_eq!(failed.sequence, 42);
+    assert!(failed.deferred);
+    assert_eq!(failed.attempt_id, Some(attempt));
+    assert!(serde_json::to_vec(&failed).unwrap().len() <= 16_384);
+    let source = store
+        .event_value_read(
+            42,
+            through,
+            &[
+                "event".into(),
+                "error".into(),
+                "error".into(),
+                "message".into(),
+            ],
+            0,
+            64,
+        )
+        .unwrap();
+    let original = serde_json::to_vec(&"diagnostic".repeat(300_000)).unwrap();
+    assert_eq!(source.bytes, original[..64]);
+    assert_eq!(source.readable_end, original.len() as u64);
+    assert_eq!(source.next_offset, Some(64));
+    assert!(store.observation_event_witness(42, start_cut).is_err());
     let connection = rusqlite::Connection::open(&path).unwrap();
     assert!(
         connection
-            .execute("UPDATE events SET observation_json=zeroblob(16385)", [])
+            .execute("UPDATE events SET observation_witness=zeroblob(49153)", [])
             .is_err()
     );
-    let plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT sequence,event_id,attempt_id,turn_id,observation_json FROM events INDEXED BY events_kind_idx WHERE json_extract(event_json,'$.event.type')='attempt_started' AND sequence<=42 AND sequence<41 ORDER BY sequence DESC LIMIT 1",[],|row|row.get(3)).unwrap();
-    assert!(
-        plan.contains("SEARCH events USING INDEX events_kind_idx"),
-        "{plan}"
-    );
-    assert!(!plan.contains("SCAN"));
-    let stats_plan:String=connection.query_row("EXPLAIN QUERY PLAN SELECT observation_statistics FROM events INDEXED BY events_observation_statistics_idx WHERE observation_statistics IS NOT NULL AND sequence<=42 ORDER BY sequence DESC LIMIT 1",[],|row|row.get(3)).unwrap();
-    assert!(
-        stats_plan.contains("SEARCH events USING INDEX events_observation_statistics_idx"),
-        "{stats_plan}"
-    );
-    assert!(!stats_plan.contains("SCAN"));
+    // Each exact mask seeks independently; combining two singleton results
+    // must never turn this bounded lookup into a historical scan or sort.
+    for mask in [2, 3] {
+        let stats_plan: String = connection.query_row(
+            "EXPLAIN QUERY PLAN SELECT sequence FROM events INDEXED BY events_aggregate_heads_idx WHERE observation_aggregate_heads>0 AND observation_aggregate_heads=?1 AND sequence<=42 ORDER BY sequence DESC LIMIT 1",
+            [mask], |row| row.get(3),
+        ).unwrap();
+        assert!(
+            stats_plan.contains("SEARCH events USING INDEX events_aggregate_heads_idx"),
+            "{stats_plan}"
+        );
+        assert!(!stats_plan.contains("SCAN"));
+    }
     assert!(
         connection
             .execute(
-                "UPDATE events SET observation_statistics=zeroblob(16385)",
+                "UPDATE events SET observation_statistics=zeroblob(98341)",
                 []
-            )
-            .is_err()
-    );
-    assert!(
-        store
-            .latest_observation_events(
-                through,
-                &["attempt_started".into(), "attempt_started".into()],
-                None,
-                32
             )
             .is_err()
     );
@@ -643,7 +641,7 @@ fn t15_t20_journal_family_headers_use_indexed_finite_native_columns() {
 
 #[test]
 fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
-    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    use crate::durable::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
     use crate::message::types::{InboundKind, UserContentBlock, UserSource};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pending-content.sqlite");
@@ -679,7 +677,10 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     assert_eq!(before.transcript_total, 1);
     let pending = store.transcript_header_page(&before, None, 32).unwrap();
     assert!(pending.headers[0].deferred);
-    assert!(pending.headers[0].content.is_empty());
+    assert_eq!(
+        pending.headers[0].content,
+        [] as [crate::observation::cut::ContentBinding; 0]
+    );
     assert_eq!(before.read.pending_total, 1);
     let heads = store.pending_header_page(&before.read, None, 32).unwrap();
     assert_eq!(heads.headers.len(), 1);
@@ -752,12 +753,12 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     assert_eq!(remove_cut, store.observation_read_cut().unwrap().read);
     let removed = store.observation_read_cut().unwrap();
     assert_eq!(removed.transcript_total, 0);
-    assert!(
+    assert_eq!(
         store
             .transcript_header_page(&removed, None, 32)
             .unwrap()
-            .headers
-            .is_empty()
+            .headers,
+        [] as [crate::durable::observation::TranscriptHeader; 0]
     );
     assert!(
         store
@@ -807,7 +808,8 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
             workflow: None,
             truncation: None,
             managed_output: None,
-        },
+        }
+        .into(),
     });
     {
         let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
@@ -822,7 +824,7 @@ fn t08_t12_t15_canonical_metadata_components_are_independent_bounded_sources() {
                             text: Some("visible text".into()),
                             provider_state: Some(ProviderContinuationState::Anthropic(
                                 AnthropicContinuation {
-                                    opaque: provider.clone(),
+                                    opaque: provider.clone().into(),
                                 },
                             )),
                         }),
@@ -1122,28 +1124,25 @@ fn timed_request_snapshot(
 }
 
 fn assert_request_source_point_indexes(connection: &rusqlite::Connection, sequence: u64) {
-    let hash_index: String = connection
+    let indexes: u64 = connection
         .query_row(
-            "SELECT name FROM pragma_index_list('request_source_pages') WHERE \"unique\"=1 AND origin='pk'",
-            [], |row| row.get(0),
+            "SELECT count(*) FROM pragma_index_list('request_source_pages')",
+            [],
+            |row| row.get(0),
         )
         .unwrap();
-    let columns: Vec<String> = connection
-        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")
-        .unwrap()
-        .query_map([&hash_index], |row| row.get(0))
-        .unwrap()
-        .collect::<Result<_, _>>()
-        .unwrap();
-    assert_eq!(columns, ["hash"]);
+    assert_eq!(
+        indexes, 0,
+        "Source pages use the numeric rowid without a global hash index"
+    );
     for (sql, key, expected) in [
         (
-            "EXPLAIN QUERY PLAN SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE hash=?1",
-            rusqlite::types::Value::Blob(vec![0; 32]),
-            format!("SEARCH request_source_pages USING INDEX {hash_index} (hash=?)"),
+            "EXPLAIN QUERY PLAN SELECT CASE WHEN typeof(bytes)='blob' AND length(bytes)<=65536 THEN bytes END FROM request_source_pages WHERE id=?1 AND hash=zeroblob(32)",
+            rusqlite::types::Value::Integer(1),
+            "SEARCH request_source_pages USING INTEGER PRIMARY KEY (rowid=?)".to_owned(),
         ),
         (
-            "EXPLAIN QUERY PLAN SELECT metadata,witness FROM request_source_roots WHERE source_id=?1",
+            "EXPLAIN QUERY PLAN SELECT metadata,checksum FROM request_source_roots WHERE source_id=?1",
             rusqlite::types::Value::Text(sequence.to_string()),
             "SEARCH request_source_roots USING PRIMARY KEY (source_id=?)".into(),
         ),
@@ -1214,7 +1213,7 @@ fn t08_t20_request_source_ranges_use_bounded_authenticated_composed_pages() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute(
-            "UPDATE request_snapshots SET snapshot_json='invalid JSON'",
+            "UPDATE request_snapshot_payloads SET snapshot_json='invalid JSON'",
             [],
         )
         .unwrap();
@@ -1275,7 +1274,10 @@ fn t08_t15_t20_native_state_sources_survive_large_cache_eviction_and_reject_stal
     assert_eq!((todo_head.total, todo_head.loaded), (73, 0));
     assert_eq!(todo_head.next_offset, Some(0));
     assert_eq!(todo_head.snapshot.next_id, 74);
-    assert!(todo_head.snapshot.tasks.is_empty());
+    assert_eq!(
+        todo_head.snapshot.tasks,
+        [] as [crate::tools::todo::TodoTask; 0]
+    );
     assert!(serde_json::to_vec(&todo_head).unwrap().len() <= 16_384);
     let goal = store
         .write_goal(GoalWrite::Create {
@@ -1438,7 +1440,9 @@ fn t14_t15_t20_canonical_todo_receipt_preserves_exact_bounded_head_and_allocator
     let MessageBlock::Tool(tool) = &mut messages[1] else {
         panic!("canonical Todo source");
     };
-    let crate::tools::types::ToolResultContent::Json { value } = &mut tool.result.content[0] else {
+    let crate::tools::types::ToolResultContent::Json { value } =
+        &mut std::sync::Arc::make_mut(&mut tool.result).content[0]
+    else {
         panic!("native Todo JSON");
     };
     value["next_id"] = serde_json::Value::from(u64::MAX);
@@ -1545,7 +1549,8 @@ fn todo_source_messages(description: &str) -> Vec<MessageBlock> {
                 workflow: None,
                 managed_output: None,
                 deliveries: Vec::new(),
-            },
+            }
+            .into(),
         }),
     ]
 }
@@ -1771,7 +1776,7 @@ fn t08_t12_t15_t20_giant_canonical_identity_uses_finite_native_ledger_locator() 
     let connection = rusqlite::Connection::open(&path).unwrap();
     let maximum: u64 = connection
         .query_row(
-            "SELECT MAX(length(source_id)) FROM content_segments WHERE source_kind='canonical'",
+            "SELECT MAX(length(source_id)) FROM content_frontiers WHERE source_kind='canonical'",
             [],
             |row| row.get(0),
         )
@@ -1860,7 +1865,7 @@ fn t08_t15_t20_surface_boundary_pages_read_native_headers_without_surface_or_mes
         .execute("UPDATE message_ledger SET message_json='invalid JSON'", [])
         .unwrap();
     connection
-        .execute("UPDATE surface_ops SET op_json='invalid JSON'", [])
+        .execute_batch("PRAGMA foreign_keys=OFF; UPDATE surface_ops SET ledger_position=1; PRAGMA foreign_keys=ON")
         .unwrap();
     drop(connection);
     let store = SqliteConversationStore::open(conversation, &path).unwrap();
@@ -2031,7 +2036,10 @@ fn t08_t14_t15_many_blocks_keep_original_metadata_and_advancing_frontiers() {
         let page = store
             .message_block_header_page_by_locator(&cut, &locator, offset, 32)
             .unwrap();
-        assert!(!page.headers.is_empty());
+        assert_ne!(
+            page.headers,
+            [] as [crate::durable::observation::MessageBlockHeader; 0]
+        );
         seen += page.headers.len();
         let Some(next) = page.next_offset else { break };
         assert!(next > offset);
@@ -2042,7 +2050,7 @@ fn t08_t14_t15_many_blocks_keep_original_metadata_and_advancing_frontiers() {
 
 #[test]
 fn t08_t12_t15_t20_pending_sequence_reads_giant_identity_without_body_deserialization() {
-    use crate::durable::inbox::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
+    use crate::durable::{InboundDraft, PendingInboundRef, PendingMutationOutcome};
     use crate::message::types::{InboundKind, UserContentBlock, UserSource};
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("pending-giant-id.sqlite");
@@ -2102,7 +2110,7 @@ fn t08_t12_t15_t20_pending_sequence_reads_giant_identity_without_body_deserializ
 
 #[test]
 fn t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit() {
-    use crate::durable::inbox::InboundDraft;
+    use crate::durable::InboundDraft;
     use crate::message::types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource};
     use crate::observation::content::CanonicalContentLocator;
     let directory = tempfile::tempdir().unwrap();
@@ -2111,7 +2119,7 @@ fn t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit
     let store = SqliteConversationStore::open(conversation, &path).unwrap();
     store.initialize(&[]).unwrap();
     let connection = rusqlite::Connection::open(&path).unwrap();
-    connection.execute_batch("CREATE TRIGGER reject_observation_header BEFORE INSERT ON observation_headers BEGIN SELECT RAISE(ABORT,'derived header unavailable'); END;").unwrap();
+    connection.execute_batch("CREATE TRIGGER reject_observation_header BEFORE UPDATE OF header_json ON transcript_entries BEGIN SELECT RAISE(ABORT,'derived header unavailable'); END;").unwrap();
     let timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
     let message = MessageBlock::User(UserMessageBlock {
         id: MessageId::new("original-native-c"),
@@ -2124,7 +2132,10 @@ fn t10_t14_t19_derived_canonical_and_pending_headers_do_not_refuse_native_commit
     });
     let receipt = store.append_canonical(&message).unwrap();
     assert!(receipt.observation.source_unavailable);
-    assert!(receipt.observation.head.is_empty());
+    assert_eq!(
+        receipt.observation.head,
+        [] as [crate::durable::observation::MessageHeader; 0]
+    );
     assert_eq!(receipt.observation.human_activity_at, Some(timestamp));
     assert_eq!(
         receipt.observation.opening_preview.as_deref(),
@@ -2630,7 +2641,7 @@ fn t12_t14_t19_source_cut_provenance_rejects_old_journal_with_new_canonical_fron
     let connection = rusqlite::Connection::open(path).unwrap();
     connection
         .execute(
-            "DELETE FROM observation_headers WHERE ledger_position=3",
+            "UPDATE transcript_entries SET header_json=NULL,reference_kind=NULL,reference_id=NULL,ledger_position=NULL WHERE ledger_position=3",
             [],
         )
         .unwrap();
@@ -2702,7 +2713,7 @@ fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
     let connection = rusqlite::Connection::open(&path).unwrap();
     connection
         .execute(
-            "DELETE FROM observation_headers WHERE ledger_position=2",
+            "UPDATE transcript_entries SET header_json=NULL,reference_kind=NULL,reference_id=NULL,ledger_position=NULL WHERE ledger_position=2",
             [],
         )
         .unwrap();
@@ -2717,7 +2728,7 @@ fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
     }
     let counts: (u64, u64) = connection
         .query_row(
-            "SELECT (SELECT COUNT(*) FROM message_ledger),(SELECT COUNT(*) FROM transcript_order)",
+            "SELECT (SELECT COUNT(*) FROM message_ledger),(SELECT COUNT(*) FROM transcript_entries)",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -2729,7 +2740,7 @@ fn t08_t15_t20_missing_middle_descriptor_never_skips_native_history() {
     );
     assert_eq!(store.observation_read_cut().unwrap(), cut);
     let plan: String = connection.query_row(
-        "EXPLAIN QUERY PLAN SELECT t.position,h.header_json FROM transcript_order t LEFT JOIN observation_headers h INDEXED BY observation_headers_transcript_idx ON h.transcript_position=t.position WHERE t.position<4 ORDER BY t.position DESC LIMIT 33",
+        "EXPLAIN QUERY PLAN SELECT t.position,t.header_json FROM transcript_entries t WHERE t.position>0 AND t.position<4 ORDER BY t.position DESC LIMIT 33",
         [], |row| row.get(3),
     ).unwrap();
     assert!(plan.contains("INTEGER PRIMARY KEY"), "{plan}");
@@ -2885,7 +2896,7 @@ fn assert_complete_canonical_index_plans(connection: &rusqlite::Connection) {
             "message_ledger_opening_idx",
         ),
         (
-            "EXPLAIN QUERY PLAN SELECT human_activity_at FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=14 ORDER BY human_activity_seconds DESC,human_activity_nanos DESC LIMIT 1",
+            "EXPLAIN QUERY PLAN SELECT human_activity_max_seconds,human_activity_max_nanos FROM message_ledger INDEXED BY message_ledger_human_activity_idx WHERE human_activity_at IS NOT NULL AND position<=14 ORDER BY position DESC LIMIT 1",
             "message_ledger_human_activity_idx",
         ),
     ] {

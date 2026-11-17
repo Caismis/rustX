@@ -145,7 +145,10 @@ async fn measure(servers: usize, profile: Profile, order: ConversationOrder) -> 
             assert_eq!(measurement.requests.get("handshake"), Some(&servers));
             assert_eq!(measurement.requests.get("tools/list"), Some(&servers));
             assert!(!measurement.requests.contains_key("tools/call"));
-            assert!(model.inner.requests().is_empty());
+            assert_eq!(
+                model.inner.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
             return Row {
                 profile,
                 servers,
@@ -232,6 +235,7 @@ async fn measure(servers: usize, profile: Profile, order: ConversationOrder) -> 
             },
             estimator: Arc::new(crate::context::DefaultTokenEstimator),
             status_engine: None,
+            status_clock: Arc::new(crate::context::status::SystemClock),
         },
         tool_runtime,
         capability: owner,

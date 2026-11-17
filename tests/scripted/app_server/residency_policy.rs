@@ -200,7 +200,7 @@ async fn operation_wins_idle_and_drain_retains_owned_lease_after_waiter_drop() {
     assert!(!drain.is_finished());
     drop(accepted);
     probe.before_operation.release();
-    assert!(drain.await.unwrap().is_empty());
+    assert_eq!(drain.await.unwrap(), [] as [std::string::String; 0]);
     f.host.finish_drain().unwrap();
     assert_eq!(f.host.diagnostics().lifecycle, ServerLifecycle::Terminated);
     f.close().await;
@@ -271,12 +271,28 @@ async fn idle_claim_has_both_attach_and_inbound_winners_at_publication() {
             tokio::task::yield_now().await;
         }
         f.manager.reap_idle();
-        clock.advance(100);
         let probe = f.manager.probe(a.conversation_id());
         let guard = probe.idle_after_claim.arm_scoped();
-        let manager = f.manager.clone();
-        let scan = tokio::task::spawn_blocking(move || manager.reap_idle());
-        gate_entered(&probe.idle_after_claim).await;
+        // An idle probe is not a successful claim: grace, a new epoch or
+        // coordinator contention can conservatively refuse this scan. Start
+        // before grace expires so the no-claim path is exercised explicitly.
+        let mut refused = 0;
+        let scan = loop {
+            let manager = f.manager.clone();
+            let mut scan = tokio::task::spawn_blocking(move || manager.reap_idle());
+            tokio::select! {
+                () = probe.idle_after_claim.wait_entered_async() => break scan,
+                result = &mut scan => {
+                    result.unwrap();
+                    refused += 1;
+                    clock.advance(100);
+                }
+            }
+        };
+        assert!(
+            refused > 0,
+            "the fixture must handle a scan without a claim"
+        );
         assert_eq!(
             f.manager.residency(a.conversation_id()),
             ResidencyState::Unloading
@@ -409,14 +425,17 @@ async fn inactive_goal_can_idle_unload_and_policy_is_user_only() {
         "[agent.plugins.goal]\nenabled = true\n",
     )
     .unwrap();
+    let id = f.id(0).await;
+    let probe = f.manager.probe(&id);
+    probe.status_before_wait.arm();
     let a = f.load(0).await.unwrap().unwrap();
+    probe.status_before_wait.entered().await;
     f.manager.reap_idle();
     clock.advance(1000);
     f.manager.reap_idle();
-    assert_eq!(
-        f.manager.residency(a.conversation_id()),
-        ResidencyState::Unloading
-    );
+    let residency = f.manager.residency(a.conversation_id());
+    probe.status_before_wait.release();
+    assert_eq!(residency, ResidencyState::Unloading);
     std::fs::write(
         f.workspaces[1].join("rustx.toml"),
         "[app_server]\nmax_resident_runtimes = 2\n",
@@ -454,7 +473,11 @@ async fn concurrent_distinct_loads_cannot_oversubscribe_one_slot() {
 async fn one_reaper_timer_wakes_from_manual_clock_and_unloads_automatically() {
     bounded(async {
         let (f, clock) = policy(1, 2).await;
+        let id = f.id(0).await;
+        let probe = f.manager.probe(&id);
+        probe.status_before_wait.arm();
         let a = f.load(0).await.unwrap().unwrap();
+        probe.status_before_wait.entered().await;
         let native = a.inspect_runtime().unwrap();
         while native.idle_epoch().is_err() {
             tokio::task::yield_now().await;
@@ -469,23 +492,20 @@ async fn one_reaper_timer_wakes_from_manual_clock_and_unloads_automatically() {
             .wait_for(|deadline| *deadline == 1000)
             .await
             .unwrap();
-        assert_eq!(
-            f.manager.residency(a.conversation_id()),
-            ResidencyState::Loaded
-        );
+        let initial_residency = f.manager.residency(a.conversation_id());
         clock.advance(1000);
         observed
             .wait_for(|deadline| *deadline == 2000)
             .await
             .unwrap();
-        assert_ne!(
-            f.manager.residency(a.conversation_id()),
-            ResidencyState::Loaded
-        );
-        f.manager.unload(a.conversation_id()).await.unwrap();
+        let residency_after_tick = f.manager.residency(a.conversation_id());
+        probe.status_before_wait.release();
         stop.cancel();
         worker.await.unwrap();
+        f.manager.unload(a.conversation_id()).await.unwrap();
         f.close().await;
+        assert_eq!(initial_residency, ResidencyState::Loaded);
+        assert_ne!(residency_after_tick, ResidencyState::Loaded);
     })
     .await;
 }
@@ -770,7 +790,7 @@ async fn host_admission_commit_accounts_for_requests_connections_and_attachments
         ));
         assert!(f.manager.is_empty());
         drop(request);
-        assert!(drain.await.is_empty());
+        assert_eq!(drain.await, [] as [std::string::String; 0]);
         assert!(f.host.finish_drain().is_err());
         drop(connection);
         assert!(f.host.finish_drain().is_err());
@@ -851,7 +871,7 @@ async fn host_request_and_runtime_lease_commit_before_drain_as_one_admission() {
         assert!(!called.load(Ordering::SeqCst));
         probe.before_operation.release();
         assert_eq!(response.await.unwrap(), 291);
-        assert!(draining.await.unwrap().is_empty());
+        assert_eq!(draining.await.unwrap(), [] as [std::string::String; 0]);
         f.host.finish_drain().unwrap();
         f.close().await;
     })

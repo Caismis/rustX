@@ -1,0 +1,15 @@
+PASS cargo build --release --locked --bin rustx (5m23s)
+PASS baseline: two uninterrupted hot PIDs, 512 turns/scenario, 32-turn windows, independent cold 32/128/512
+PASS native SQLite integrity_check, fixed user/assistant/tool contents and role counts
+PASS provider wire-body oracle: 512 text and 1024 tool requests
+PASS consistent backup request counts: text 32/128/512; tool 64/256/1024
+PASS CPU profiling low128/high128, both scenarios; folded stacks exported
+PASS strace 512 turns/scenario; no unmatched unfinished/resumed calls
+PASS exact bundled SQLite 3.53.2 query probe; original linear steps, forced existing range index 79 steps
+PASS Python compile + OLS known-line fixture + accepted-result assertions
+PASS final harness/binary SHA-256 match baseline identity
+PASS databases.tar.xz: 76 archived files byte-for-byte SHA-256 verified
+PASS 4 gzip raw stacks + 2 xz raw traces: uncompressed SHA-256 verified; recomputed analysis from compressed traces
+PASS git diff --check and git diff --exit-code HEAD -- src/
+No commit or push; reference repositories read only.
+PASS exact write-attribution recomputation from .json.gz and .strace.xz

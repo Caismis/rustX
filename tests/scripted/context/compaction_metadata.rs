@@ -90,7 +90,8 @@ fn tool_result(id: &str, owner: &MessageId, index: usize, call: &ToolCall) -> Me
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 
@@ -180,8 +181,8 @@ fn unselected_previous_summary_metadata_is_not_a_global_accumulator() {
     let _previous =
         crate::context::compaction_metadata::retired_span_metadata(&file_operation_history());
     let selected = crate::context::compaction_metadata::retired_span_metadata(&[user("new")]);
-    assert!(selected.read_files().is_empty());
-    assert!(selected.modified_files().is_empty());
+    assert_eq!(selected.read_files(), [] as [String; 0]);
+    assert_eq!(selected.modified_files(), [] as [String; 0]);
 }
 #[test]
 fn model_prose_cannot_create_file_operation_facts() {

@@ -211,7 +211,7 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
         let MethodResult::EffectiveConfiguration { projection } = operation.await.unwrap() else {
             panic!("the admitted original configuration read succeeds during retirement");
         };
-        assert!(!projection.revision.is_empty());
+        assert_ne!(projection.revision, "");
         assert!(
             projection.inline.is_some() || !projection.fields.is_empty(),
             "the bounded receipt retains original selected-field evidence"
@@ -222,7 +222,7 @@ async fn admitted_async_operation_drains_before_delete_releases_resources() {
         ));
         assert!(weak_host.upgrade().is_none());
         assert!(weak_runtime.upgrade().is_none());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert!(
             matches!(
                 f.manager.sessions.delete_preview(&target.session_id).await,
@@ -314,7 +314,7 @@ async fn attachment_capacity_rejection_never_composes_and_detach_reclaims_withou
                 .load(std::sync::atomic::Ordering::SeqCst),
             1
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         for target in targets {
             call(&connection, 302, Method::SessionDetach { target }).await;
         }
@@ -408,7 +408,7 @@ async fn concurrent_final_slot_is_reserved_before_composition() {
             Response::Success(_)
         ));
         assert_eq!(connection.attachment_counts(), (2, 0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         for session in &sessions {
             f.manager
                 .unload(&session.active_conversation_id)
@@ -822,7 +822,7 @@ async fn stale_connection_cannot_retain_or_control_replacement() {
                 ..
             })
         ));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         drop(connection);
         f.close().await;
     })
@@ -866,7 +866,10 @@ async fn t13_attach_identity_checkpoint_and_subscribe_preserve_the_native_cut() 
             panic!("checkpoint")
         };
         let cursor = checkpoint.cursor;
-        assert!(checkpoint.snapshot.inbound.pending.is_empty());
+        assert_eq!(
+            checkpoint.snapshot.inbound.pending,
+            [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+        );
         // Publication between C and registration remains in native Replay;
         // explicit subscribe(C) does not jump to latest.
         let accepted = runtime.submit_inbound(input("request-A")).unwrap();
@@ -910,13 +913,19 @@ async fn t13_attach_identity_checkpoint_and_subscribe_preserve_the_native_cut() 
             assert_eq!(routed, target);
             assert_eq!(cursor.get(), previous + 1);
             previous = cursor.get();
-            let RuntimeClientEvent::ProjectionTransition { events, metadata } = *event else {
-                panic!("one bounded native transition");
+            let (events, revision) = match event.as_ref() {
+                RuntimeClientEvent::ProjectionTransition { events, metadata } => {
+                    (events, metadata.read_cut.revision)
+                }
+                RuntimeClientEvent::ProjectionDelta { events, metadata } => {
+                    (events, metadata.read_cut.revision)
+                }
+                _ => panic!("one bounded native transition"),
             };
-            assert_eq!(metadata.read_cut.revision, cursor.get());
+            assert_eq!(revision, cursor.get());
             let mut settled = false;
             for event in events {
-                if let RuntimeClientEvent::InboundEnqueued { message, .. } = &event {
+                if let RuntimeClientEvent::InboundEnqueued { message, .. } = event {
                     assert_eq!(message.id, accepted.message_id);
                     occurrences += 1;
                 }

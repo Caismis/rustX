@@ -2,6 +2,7 @@ import { writeFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 test.use({ video: 'on', trace: 'on' });
 test('issue420 fixed long response browser recording', async ({ page }, info) => {
+  const errors: string[] = []; page.on('pageerror', error => errors.push(error.message));
   await page.goto(`http://127.0.0.1:${process.env.RUSTX_E2E_FIXTURE_PORT ?? 5174}/test/fixtures/incremental.html`);
   await page.waitForFunction(() => typeof (window as any).run420 === 'function');
   const metrics = await page.evaluate(() => (window as any).run420());
@@ -14,4 +15,5 @@ test('issue420 fixed long response browser recording', async ({ page }, info) =>
   expect(metrics.historyBottomWrites).toBe(0);
   expect(metrics.readingTopAfterGrowth - metrics.readingTopBeforeGrowth).toBe(123);
   expect(metrics.rowReplacements).toBe(0);
+  expect(errors).toEqual([]);
 });

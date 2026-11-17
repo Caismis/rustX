@@ -91,7 +91,10 @@ impl ModelAdapter for ConsumerAdapter {
         assert_eq!(requests[0].model, request.model());
         assert!(requests[0].started_sequence > call.started_sequence);
         assert!(requests[0].terminal_sequence.is_none());
-        assert!(request.tools.is_empty());
+        assert_eq!(
+            request.tools,
+            [] as [crate::tools::types::ModelToolDefinition; 0]
+        );
         assert!(request.continuation.is_none());
         assert!(request.continuation_source.is_none());
         let prefix = futures_util::stream::iter([
@@ -266,6 +269,7 @@ fn fixture_in_process(
         frozen: FrozenCall {
             start,
             request,
+            provider_body_limit: None,
             invocation,
             timeout: ModelTimeoutPolicy::default(),
             resource_revision: 7,
@@ -463,7 +467,10 @@ fn assert_completed_journal(store: &SqliteConversationStore, call_id: &Auxiliary
             .unwrap(),
         4
     );
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 }
 
 struct CloseScopeOnDrop(Arc<AuxiliaryScope>);
@@ -1117,12 +1124,12 @@ async fn required_request_start_rollback_refunds_budget_but_fails_native_durabil
                 "Call-only settlement succeeds after RequestStart rollback"
             );
         }
-        assert!(
+        assert_eq!(
             fixture
                 .store
                 .read_auxiliary_call_requests(&call_id, cut, None, 32)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
         let journal = fixture.store.read_events(None, 32).unwrap().events;
         assert_eq!(
@@ -1206,12 +1213,12 @@ async fn cancelled_request_start_rollback_refunds_budget_without_failing_durabil
             .outcome,
         Some(AuxiliaryCallOutcome::Cancelled)
     );
-    assert!(
+    assert_eq!(
         fixture
             .store
             .read_auxiliary_call_requests(&call_id, cut, None, 32)
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
     );
     assert_eq!(fixture.store.read_events(None, 32).unwrap().events.len(), 2);
     let fresh = CancellationSignal::new();
@@ -1291,12 +1298,12 @@ async fn cancellation_during_shared_start_probes_refunds_budget_without_durabili
                 .outcome,
             Some(AuxiliaryCallOutcome::Cancelled)
         );
-        assert!(
+        assert_eq!(
             fixture
                 .store
                 .read_auxiliary_call_requests(&record.call_id, cut, None, 32)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
         let fresh = CancellationSignal::new();
         let allowances = (0..12)

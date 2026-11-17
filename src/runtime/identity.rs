@@ -464,32 +464,6 @@ id_type! {
 }
 
 id_type! {
-    /// Identifies the immutable shared Python environment of one active
-    /// Skill capability set.
-    ///
-    /// M6 derives `PythonEnvironmentDigest` deterministically from the
-    /// environment-relevant inputs: format/version domain, OS, architecture,
-    /// resolved Python runtime identity, resolved pip identity, and the
-    /// sorted normalized direct dependency map. It is distinct from
-    /// [`SkillVersionId`]: a description-only Skill change can produce a new
-    /// Skill version without changing the Python environment identity.
-    PythonEnvironmentDigest
-}
-
-id_type! {
-    /// Identifies the immutable shared Node environment of one active Skill
-    /// capability set.
-    ///
-    /// M6 derives `NodeEnvironmentDigest` deterministically from the
-    /// environment-relevant inputs: format/version domain, OS, architecture,
-    /// resolved Node runtime identity, resolved npm identity, and the sorted
-    /// normalized direct dependency map. It is distinct from
-    /// [`SkillVersionId`]: a description-only Skill change can produce a new
-    /// Skill version without changing the Node environment identity.
-    NodeEnvironmentDigest
-}
-
-id_type! {
     /// Identifies a durable artifact produced or referenced by the runtime.
     ///
     /// An artifact is identified by an opaque runtime-owned id, never by a
@@ -760,6 +734,90 @@ impl RuntimeResourceRevision {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn surface_history_does_not_retain_duplicate_identity_owners() {
+        use crate::conversation::{ConversationSurface, SurfaceRevision};
+        use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+        use std::sync::Arc;
+
+        let first = MessageId::new("surface-owner-first");
+        let mut surface = ConversationSurface::new();
+        let mut identities = Vec::new();
+        for count in 1..=4096 {
+            let id = if count == 1 {
+                first.clone()
+            } else {
+                MessageId::new(format!("surface-owner-{count}"))
+            };
+            identities.push(Arc::downgrade(&id.0));
+            surface
+                .append(Arc::new(crate::model::ModelInputMessage::Canonical(
+                    MessageBlock::User(UserMessageBlock {
+                        id,
+                        content: Vec::new(),
+                        source: UserSource::Human,
+                        kind: InboundKind::Message,
+                        timestamp: None,
+                    }),
+                )))
+                .unwrap();
+            if ![32, 512, 4096].contains(&count) {
+                continue;
+            }
+            // Only this probe, the selected body and the selection index own
+            // the identity. Historical operations retain no extra reference.
+            assert_eq!(Arc::strong_count(&first.0), 3, "history={count}");
+            assert_eq!(
+                identities
+                    .iter()
+                    .map(std::sync::Weak::strong_count)
+                    .sum::<usize>(),
+                2 * count + 1,
+                "only the body and selection index retain each historical identity"
+            );
+            let operations = surface.ops();
+            assert_eq!(operations.len(), count);
+            assert_eq!(
+                Arc::strong_count(&first.0),
+                4,
+                "explicit audit owns its result"
+            );
+            drop(operations);
+            assert_eq!(Arc::strong_count(&first.0), 3);
+            assert_eq!(
+                surface
+                    .reconstruct(SurfaceRevision::new(1))
+                    .unwrap()
+                    .as_slice(),
+                std::slice::from_ref(&first)
+            );
+        }
+        let revision = surface.revision();
+        let hydrated = ConversationSurface::from_current_head(surface.selection(), revision, 7);
+        drop(surface);
+        assert_eq!(
+            Arc::strong_count(&first.0),
+            3,
+            "bootstrap stores a prefix length, not copied IDs"
+        );
+        assert_eq!(
+            identities
+                .iter()
+                .map(std::sync::Weak::strong_count)
+                .sum::<usize>(),
+            2 * 4096 + 1
+        );
+        assert_eq!(
+            hydrated.ops(),
+            [] as [crate::conversation::surface::SurfaceOp; 0]
+        );
+        assert_eq!(hydrated.reconstruct(revision).unwrap().len(), 4096);
+        assert!(
+            hydrated
+                .reconstruct(SurfaceRevision::new(revision.get() - 1))
+                .is_err()
+        );
+    }
+    #[test]
     fn t20_large_provider_identity_clones_share_the_original_allocation() {
         let original = super::ToolCallId::new("provider-id".repeat(400_000));
         let cloned = original.clone();
@@ -773,9 +831,8 @@ mod tests {
 
     use super::{
         AgentId, AgentVersionId, ArtifactId, AttemptId, AuxiliaryCallId, CapabilityRevision,
-        ConversationId, EventId, McpServerId, MessageId, NodeEnvironmentDigest,
-        PythonEnvironmentDigest, RequestId, SkillId, SkillVersionId, SubagentId, ToolCallId,
-        ToolExecutionId, ToolId, TurnId, UuidV7Generator,
+        ConversationId, EventId, McpServerId, MessageId, RequestId, SkillId, SkillVersionId,
+        SubagentId, ToolCallId, ToolExecutionId, ToolId, TurnId, UuidV7Generator,
     };
 
     #[test]
@@ -881,12 +938,6 @@ mod tests {
         let _ = round_trip(&McpServerId::new("mcp-fs"));
         let _ = round_trip(&SkillId::new("skill-readme"));
         let _ = round_trip(&SkillVersionId::new(
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        ));
-        let _ = round_trip(&PythonEnvironmentDigest::new(
-            "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-        ));
-        let _ = round_trip(&NodeEnvironmentDigest::new(
             "sha256:0000000000000000000000000000000000000000000000000000000000000000",
         ));
         let _ = round_trip(&ArtifactId::new("artifact-1"));

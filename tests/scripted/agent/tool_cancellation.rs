@@ -595,7 +595,7 @@ async fn issue136_completion_wins_before_cancellation() {
         messages[0].result.status,
         ToolExecutionStatus::Success
     ));
-    assert_eq!(messages[0].result, success_result("real result"));
+    assert_eq!(messages[0].result.as_ref(), &success_result("real result"));
     assert_eq!(
         model.requests().len(),
         1,
@@ -656,14 +656,14 @@ async fn run_cancellation_winner_with_late_executor_outcome(
             .expect("cancellation settlement pause remains installed");
         release.send_replace(true);
     });
-    let audit = run_with_tool_cancellation_settlement_pause(
+    let audit = Box::pin(run_with_tool_cancellation_settlement_pause(
         &model,
         tools,
         AttemptLifecycle::inert(),
         &cancellation,
         &NoopObserver,
         cancellation_settlement_pause,
-    )
+    ))
     .await;
     controller.await.expect("late completion controller");
     (audit, side_effect, model)
@@ -799,14 +799,14 @@ async fn issue136_physical_result_winner_freezes_executor_cancellation_reason() 
             .expect("physical settlement pause remains installed");
     });
 
-    let audit = run_with_tool_physical_settlement_pause(
+    let audit = Box::pin(run_with_tool_physical_settlement_pause(
         &model,
         tools,
         AttemptLifecycle::inert(),
         &cancellation,
         &NoopObserver,
         physical_settlement_pause,
-    )
+    ))
     .await;
     controller
         .await
@@ -987,7 +987,10 @@ async fn issue136_incomplete_proposal_has_no_tool_execution_authority() {
     )
     .await;
 
-    assert!(tool_messages(&audit).is_empty());
+    assert_eq!(
+        tool_messages(&audit),
+        [] as [crate::message::types::ToolMessageBlock; 0]
+    );
     assert!(!audit.event_history.iter().any(|event| matches!(
         event,
         RuntimeEvent::ToolExecutionStarted { .. } | RuntimeEvent::ToolExecutionCompleted { .. }

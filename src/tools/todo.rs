@@ -1,7 +1,7 @@
 //! The conversation-owned task list: the state half of the **Todo Native
 //! Agent Extension** (Issue #259).
 //!
-//! One conversation owns one [`ConversationTodoList`]: the authoritative
+//! One conversation owns one `ConversationTodoList`: the authoritative
 //! set of tasks the model is tracking for that conversation, the id
 //! allocator that names them, and the mutation semantics that keep the
 //! dependency graph honest. The model-facing `todo` tool is a thin adapter
@@ -31,7 +31,7 @@
 //! its canonical history holds. Those are facts of the conversation, not of the
 //! current runtime: nothing deletes, rewrites, or hides them, and a later
 //! launch that composes Todo again rebuilds the latest accepted snapshot from
-//! them — see [`ConversationTodoList::rebuilt`], which reads the newest
+//! them — see `ConversationTodoList::rebuilt`, which reads the newest
 //! committed result rather than replaying mutations, so re-enabling produces
 //! no new `ToolResult`s and no duplicate events.
 //!
@@ -42,7 +42,7 @@
 //! result. That result is an ordinary durable Ledger fact, so the list needs
 //! no sidecar file, no separate durability path, and no migration: a
 //! restarted process rebuilds the list by reading the last snapshot the
-//! conversation ever committed ([`ConversationTodoList::rebuilt`]), and a
+//! conversation ever committed (`ConversationTodoList::rebuilt`), and a
 //! client renders the same list by reading the same fact from the
 //! transcript it already holds.
 //!
@@ -93,10 +93,10 @@
 //! rejected append, a poisoned attempt — leaves the conversation's list
 //! exactly as canonical history describes it.
 //!
-//! Provisional state is owned, not ambient. [`ConversationTodoList::open_batch`]
-//! hands out one [`TodoBatch`] at a time and refuses to take the list away
+//! Provisional state is owned, not ambient. `ConversationTodoList::open_batch`
+//! hands out one `TodoBatch` at a time and refuses to take the list away
 //! from a batch that already holds it; every mutation goes through the
-//! [`TodoWriter`] that batch hands its own executors, and a writer whose
+//! `TodoWriter` that batch hands its own executors, and a writer whose
 //! batch is closed writes nothing. So an executor driven outside the Agent
 //! Loop has no writer and mutates nothing, and one driven *beside* a running
 //! batch cannot slip a task into a list that batch is about to publish as
@@ -108,7 +108,7 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::message::types::MessageBlock;
-use crate::runtime::identity::{ConversationId, ToolId};
+use crate::runtime::identity::ConversationId;
 use crate::tools::types::{ToolExecutionStatus, ToolResultContent};
 
 /// The durable identity of the native `todo` tool.
@@ -514,7 +514,7 @@ impl std::error::Error for TodoRebuildError {}
 /// The complete state of one conversation's list.
 ///
 /// This is the persistence format: it is what a successful mutation
-/// publishes, and it is what [`ConversationTodoList::rebuilt`] reads back.
+/// publishes, and it is what `ConversationTodoList::rebuilt` reads back.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 #[derive(schemars::JsonSchema)]
@@ -968,6 +968,15 @@ pub(crate) struct TodoUpdate {
 /// }
 /// ```
 ///
+/// ```rust
+/// use rustx::tools::{runtime::ConversationToolRuntime, todo::TodoSnapshot};
+///
+/// fn read_snapshot(runtime: &ConversationToolRuntime) -> Option<TodoSnapshot> {
+///     runtime.todo_snapshot()
+/// }
+/// let _ = read_snapshot;
+/// ```
+///
 /// [`ConversationToolRuntime::todo_snapshot`]: crate::tools::runtime::ConversationToolRuntime::todo_snapshot
 #[derive(Clone)]
 pub(crate) struct ConversationTodoList {
@@ -1085,7 +1094,10 @@ impl TodoBatch {
     /// `blocks` is the exact `ToolResult` batch that just became canonical.
     /// The newest `todo` result in it *is* the list now; a batch that
     /// committed no `todo` result moves nothing, whatever was staged.
-    pub fn settle(self, blocks: &[MessageBlock]) -> TodoSettlement {
+    pub fn settle<'a>(
+        self,
+        blocks: impl IntoIterator<Item = &'a MessageBlock, IntoIter: DoubleEndedIterator>,
+    ) -> TodoSettlement {
         let list = self.list.clone();
         let mut state = list.state();
         // Releasing what this token holds, not claiming something that might
@@ -1104,12 +1116,13 @@ impl TodoBatch {
         // Canonical history is the authority: the list becomes exactly what
         // these committed blocks published, never whatever this batch
         // happened to stage.
-        let moved = if let Some(Ok(published)) = blocks.iter().rev().find_map(published_snapshot) {
-            state.committed = published;
-            true
-        } else {
-            false
-        };
+        let moved =
+            if let Some(Ok(published)) = blocks.into_iter().rev().find_map(published_snapshot) {
+                state.committed = published;
+                true
+            } else {
+                false
+            };
         drop(state);
         if moved {
             TodoSettlement::Installed
@@ -1536,14 +1549,12 @@ fn stage(
 pub fn published_snapshot(
     message: &MessageBlock,
 ) -> Option<Result<TodoSnapshot, TodoRebuildError>> {
+    if !is_publication(message) {
+        return None;
+    }
     let MessageBlock::Tool(tool) = message else {
         return None;
     };
-    if tool.tool_id != ToolId::new(TODO_TOOL_ID)
-        || tool.result.status != ToolExecutionStatus::Success
-    {
-        return None;
-    }
     let Some(value) = tool
         .result
         .content
@@ -1556,6 +1567,15 @@ pub fn published_snapshot(
         return Some(Err(TodoRebuildError::Missing));
     };
     Some(decode_snapshot(value))
+}
+
+/// Whether `message` is a successful `todo` result: the messages whose
+/// newest instance is the list (see [`published_snapshot`]).
+#[must_use]
+pub fn is_publication(message: &MessageBlock) -> bool {
+    matches!(message, MessageBlock::Tool(tool)
+        if tool.tool_id.as_str() == TODO_TOOL_ID
+            && tool.result.status == ToolExecutionStatus::Success)
 }
 
 /// Decodes and validates one published list, strictly.
@@ -1952,7 +1972,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     }
 
@@ -2125,7 +2146,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             })]),
             TodoSettlement::Unchanged
         );
@@ -2475,7 +2497,7 @@ mod tests {
         let MessageBlock::Tool(tool) = &mut malformed else {
             panic!("a tool result");
         };
-        tool.result.content = vec![ToolResultContent::Json {
+        std::sync::Arc::make_mut(&mut tool.result).content = vec![ToolResultContent::Json {
             value: serde_json::json!({ "tasks": [{ "id": 1 }], "next_id": 2 }),
         }];
 
@@ -2497,9 +2519,10 @@ mod tests {
         let MessageBlock::Tool(tool) = &mut missing else {
             panic!("a tool result");
         };
-        tool.result.content = vec![ToolResultContent::Text(TextBlock {
-            text: "Created #1".to_owned(),
-        })];
+        std::sync::Arc::make_mut(&mut tool.result).content =
+            vec![ToolResultContent::Text(TextBlock {
+                text: "Created #1".to_owned(),
+            })];
         assert_eq!(
             ConversationTodoList::rebuilt(
                 ConversationId::new("conv_97f22362-c165-70d9-8ae7-6f04b44108e1"),
@@ -2534,7 +2557,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             })],
         )
         .expect("rebuild");

@@ -1,0 +1,305 @@
+{
+  "scope": "One control/diagnostic pair per case/mode; moved predicate plus per-fit atomic counters; diagnostic overhead/noise, not a formal performance comparison or subtraction. Extra evidence field follows cleanup.",
+  "pairs": [
+    {
+      "mode": "no-live-subscriber",
+      "case": "short-small",
+      "control": {
+        "mean_turn_ms": 31.618312500000002,
+        "turn_cpu_ms_per_turn": 33.4375,
+        "through_cleanup_self_cpu_ms": 2170.0,
+        "through_cleanup_process_write_mib": 80.3125,
+        "max_sampled_anon_pss_mib": 123.1015625
+      },
+      "diagnostic": {
+        "mean_turn_ms": 33.02396875,
+        "turn_cpu_ms_per_turn": 35.3125,
+        "through_cleanup_self_cpu_ms": 2200.0,
+        "through_cleanup_process_write_mib": 80.796875,
+        "max_sampled_anon_pss_mib": 123.51171875
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 1.0444570294508917,
+        "turn_cpu_ms_per_turn": 1.0560747663551402,
+        "through_cleanup_self_cpu_ms": 1.0138248847926268,
+        "through_cleanup_process_write_mib": 1.0060311284046692,
+        "max_sampled_anon_pss_mib": 1.0033318525099955
+      }
+    },
+    {
+      "mode": "no-live-subscriber",
+      "case": "short-large",
+      "control": {
+        "mean_turn_ms": 34.74915625,
+        "turn_cpu_ms_per_turn": 36.25,
+        "through_cleanup_self_cpu_ms": 7050.0,
+        "through_cleanup_process_write_mib": 204.58984375,
+        "max_sampled_anon_pss_mib": 205.3125
+      },
+      "diagnostic": {
+        "mean_turn_ms": 37.645875,
+        "turn_cpu_ms_per_turn": 40.625,
+        "through_cleanup_self_cpu_ms": 7020.0,
+        "through_cleanup_process_write_mib": 204.5859375,
+        "max_sampled_anon_pss_mib": 204.23046875
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 1.08336083699874,
+        "turn_cpu_ms_per_turn": 1.1206896551724137,
+        "through_cleanup_self_cpu_ms": 0.9957446808510638,
+        "through_cleanup_process_write_mib": 0.9999809069212411,
+        "max_sampled_anon_pss_mib": 0.9947298325722983
+      }
+    },
+    {
+      "mode": "no-live-subscriber",
+      "case": "stream",
+      "control": {
+        "mean_turn_ms": 1582.258,
+        "turn_cpu_ms_per_turn": 150.0,
+        "through_cleanup_self_cpu_ms": 270.0,
+        "through_cleanup_process_write_mib": 4.4140625,
+        "max_sampled_anon_pss_mib": 89.3359375
+      },
+      "diagnostic": {
+        "mean_turn_ms": 1571.132,
+        "turn_cpu_ms_per_turn": 150.0,
+        "through_cleanup_self_cpu_ms": 260.0,
+        "through_cleanup_process_write_mib": 4.5,
+        "max_sampled_anon_pss_mib": 89.0390625
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 0.9929682769813772,
+        "turn_cpu_ms_per_turn": 1.0,
+        "through_cleanup_self_cpu_ms": 0.9629629629629629,
+        "through_cleanup_process_write_mib": 1.0194690265486726,
+        "max_sampled_anon_pss_mib": 0.9966768692610407
+      }
+    },
+    {
+      "mode": "no-live-subscriber",
+      "case": "large",
+      "control": {
+        "mean_turn_ms": 42.34,
+        "turn_cpu_ms_per_turn": 50.0,
+        "through_cleanup_self_cpu_ms": 150.0,
+        "through_cleanup_process_write_mib": 4.13671875,
+        "max_sampled_anon_pss_mib": 88.6875
+      },
+      "diagnostic": {
+        "mean_turn_ms": 43.249,
+        "turn_cpu_ms_per_turn": 40.0,
+        "through_cleanup_self_cpu_ms": 150.0,
+        "through_cleanup_process_write_mib": 4.140625,
+        "max_sampled_anon_pss_mib": 88.171875
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 1.0214690599905527,
+        "turn_cpu_ms_per_turn": 0.8,
+        "through_cleanup_self_cpu_ms": 1.0,
+        "through_cleanup_process_write_mib": 1.0009442870632672,
+        "max_sampled_anon_pss_mib": 0.9941860465116279
+      }
+    },
+    {
+      "mode": "no-live-subscriber",
+      "case": "tool",
+      "control": {
+        "mean_turn_ms": 63.204,
+        "turn_cpu_ms_per_turn": 60.0,
+        "through_cleanup_self_cpu_ms": 180.0,
+        "through_cleanup_process_write_mib": 5.8984375,
+        "max_sampled_anon_pss_mib": 88.203125
+      },
+      "diagnostic": {
+        "mean_turn_ms": 65.184,
+        "turn_cpu_ms_per_turn": 70.0,
+        "through_cleanup_self_cpu_ms": 180.0,
+        "through_cleanup_process_write_mib": 5.890625,
+        "max_sampled_anon_pss_mib": 90.47265625
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 1.0313271311942283,
+        "turn_cpu_ms_per_turn": 1.1666666666666667,
+        "through_cleanup_self_cpu_ms": 1.0,
+        "through_cleanup_process_write_mib": 0.9986754966887417,
+        "max_sampled_anon_pss_mib": 1.0257307351638618
+      }
+    },
+    {
+      "mode": "no-live-subscriber",
+      "case": "cancel",
+      "control": {
+        "mean_turn_ms": 34.785,
+        "turn_cpu_ms_per_turn": 40.0,
+        "through_cleanup_self_cpu_ms": 150.0,
+        "through_cleanup_process_write_mib": 3.8359375,
+        "max_sampled_anon_pss_mib": 87.76171875
+      },
+      "diagnostic": {
+        "mean_turn_ms": 34.332,
+        "turn_cpu_ms_per_turn": 40.0,
+        "through_cleanup_self_cpu_ms": 150.0,
+        "through_cleanup_process_write_mib": 3.83203125,
+        "max_sampled_anon_pss_mib": 87.8671875
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 0.9869771453212592,
+        "turn_cpu_ms_per_turn": 1.0,
+        "through_cleanup_self_cpu_ms": 1.0,
+        "through_cleanup_process_write_mib": 0.9989816700610998,
+        "max_sampled_anon_pss_mib": 1.0012017625851248
+      }
+    },
+    {
+      "mode": "live-subscriber",
+      "case": "short-small",
+      "control": {
+        "mean_turn_ms": 44.4025625,
+        "turn_cpu_ms_per_turn": 59.6875,
+        "through_cleanup_self_cpu_ms": 3120.0,
+        "through_cleanup_process_write_mib": 80.30859375,
+        "max_sampled_anon_pss_mib": 135.54296875
+      },
+      "diagnostic": {
+        "mean_turn_ms": 45.6746875,
+        "turn_cpu_ms_per_turn": 62.8125,
+        "through_cleanup_self_cpu_ms": 3240.0,
+        "through_cleanup_process_write_mib": 80.24609375,
+        "max_sampled_anon_pss_mib": 136.0859375
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 1.0286498104698347,
+        "turn_cpu_ms_per_turn": 1.0523560209424083,
+        "through_cleanup_self_cpu_ms": 1.0384615384615385,
+        "through_cleanup_process_write_mib": 0.9992217520307408,
+        "max_sampled_anon_pss_mib": 1.0040058791319635
+      }
+    },
+    {
+      "mode": "live-subscriber",
+      "case": "short-large",
+      "control": {
+        "mean_turn_ms": 51.554875,
+        "turn_cpu_ms_per_turn": 68.4375,
+        "through_cleanup_self_cpu_ms": 9640.0,
+        "through_cleanup_process_write_mib": 204.69921875,
+        "max_sampled_anon_pss_mib": 223.82421875
+      },
+      "diagnostic": {
+        "mean_turn_ms": 51.86534375,
+        "turn_cpu_ms_per_turn": 70.0,
+        "through_cleanup_self_cpu_ms": 9710.0,
+        "through_cleanup_process_write_mib": 204.7578125,
+        "max_sampled_anon_pss_mib": 220.38671875
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 1.0060221026624543,
+        "turn_cpu_ms_per_turn": 1.0228310502283104,
+        "through_cleanup_self_cpu_ms": 1.0072614107883817,
+        "through_cleanup_process_write_mib": 1.0002862431540178,
+        "max_sampled_anon_pss_mib": 0.9846419658283739
+      }
+    },
+    {
+      "mode": "live-subscriber",
+      "case": "stream",
+      "control": {
+        "mean_turn_ms": 1581.996,
+        "turn_cpu_ms_per_turn": 160.0,
+        "through_cleanup_self_cpu_ms": 270.0,
+        "through_cleanup_process_write_mib": 4.41796875,
+        "max_sampled_anon_pss_mib": 89.65625
+      },
+      "diagnostic": {
+        "mean_turn_ms": 1574.232,
+        "turn_cpu_ms_per_turn": 140.0,
+        "through_cleanup_self_cpu_ms": 270.0,
+        "through_cleanup_process_write_mib": 4.40625,
+        "max_sampled_anon_pss_mib": 87.83984375
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 0.99509227583382,
+        "turn_cpu_ms_per_turn": 0.875,
+        "through_cleanup_self_cpu_ms": 1.0,
+        "through_cleanup_process_write_mib": 0.9973474801061007,
+        "max_sampled_anon_pss_mib": 0.9797403276402927
+      }
+    },
+    {
+      "mode": "live-subscriber",
+      "case": "large",
+      "control": {
+        "mean_turn_ms": 54.945,
+        "turn_cpu_ms_per_turn": 60.0,
+        "through_cleanup_self_cpu_ms": 190.0,
+        "through_cleanup_process_write_mib": 4.109375,
+        "max_sampled_anon_pss_mib": 89.9765625
+      },
+      "diagnostic": {
+        "mean_turn_ms": 45.129,
+        "turn_cpu_ms_per_turn": 50.0,
+        "through_cleanup_self_cpu_ms": 150.0,
+        "through_cleanup_process_write_mib": 4.109375,
+        "max_sampled_anon_pss_mib": 89.375
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 0.8213486213486213,
+        "turn_cpu_ms_per_turn": 0.8333333333333334,
+        "through_cleanup_self_cpu_ms": 0.7894736842105263,
+        "through_cleanup_process_write_mib": 1.0,
+        "max_sampled_anon_pss_mib": 0.9933142311365807
+      }
+    },
+    {
+      "mode": "live-subscriber",
+      "case": "tool",
+      "control": {
+        "mean_turn_ms": 74.025,
+        "turn_cpu_ms_per_turn": 90.0,
+        "through_cleanup_self_cpu_ms": 210.0,
+        "through_cleanup_process_write_mib": 5.875,
+        "max_sampled_anon_pss_mib": 90.890625
+      },
+      "diagnostic": {
+        "mean_turn_ms": 95.042,
+        "turn_cpu_ms_per_turn": 120.0,
+        "through_cleanup_self_cpu_ms": 240.0,
+        "through_cleanup_process_write_mib": 5.875,
+        "max_sampled_anon_pss_mib": 90.03515625
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 1.283917595406957,
+        "turn_cpu_ms_per_turn": 1.3333333333333333,
+        "through_cleanup_self_cpu_ms": 1.1428571428571428,
+        "through_cleanup_process_write_mib": 1.0,
+        "max_sampled_anon_pss_mib": 0.990587931923672
+      }
+    },
+    {
+      "mode": "live-subscriber",
+      "case": "cancel",
+      "control": {
+        "mean_turn_ms": 41.763,
+        "turn_cpu_ms_per_turn": 50.0,
+        "through_cleanup_self_cpu_ms": 160.0,
+        "through_cleanup_process_write_mib": 3.8203125,
+        "max_sampled_anon_pss_mib": 88.80859375
+      },
+      "diagnostic": {
+        "mean_turn_ms": 39.214,
+        "turn_cpu_ms_per_turn": 40.0,
+        "through_cleanup_self_cpu_ms": 150.0,
+        "through_cleanup_process_write_mib": 3.828125,
+        "max_sampled_anon_pss_mib": 86.3203125
+      },
+      "diagnostic_over_control": {
+        "mean_turn_ms": 0.9389651126595312,
+        "turn_cpu_ms_per_turn": 0.8,
+        "through_cleanup_self_cpu_ms": 0.9375,
+        "through_cleanup_process_write_mib": 1.0020449897750512,
+        "max_sampled_anon_pss_mib": 0.9719815262810645
+      }
+    }
+  ]
+}

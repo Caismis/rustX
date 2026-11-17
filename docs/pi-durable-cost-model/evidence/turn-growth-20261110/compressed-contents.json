@@ -1,0 +1,38 @@
+[
+  {
+    "path": "cpu-low128-tool.folded",
+    "bytes": 10056359,
+    "sha256": "3a2490766fe1fe411cefe9e8df9e705fbdc58d18b16987365735518d3524ef15",
+    "compressed": "cpu-low128-tool.folded.gz"
+  },
+  {
+    "path": "cpu-high128-tool.folded",
+    "bytes": 14624886,
+    "sha256": "5fd0bca6df19c27d0e0dcaffe9dfa65be22f732dc8dd9f3c2e34aa88265b9de5",
+    "compressed": "cpu-high128-tool.folded.gz"
+  },
+  {
+    "path": "cpu-high128-text.folded",
+    "bytes": 4806469,
+    "sha256": "ea1f29c7b9fdf53408c9524cb52f799a18079b2c9d00379114b845e2741c99a3",
+    "compressed": "cpu-high128-text.folded.gz"
+  },
+  {
+    "path": "cpu-low128-text.folded",
+    "bytes": 3408236,
+    "sha256": "a81ba3cbc5a579caec7eae3ec77a96310c41fd3ef085f75b2db85ef1409fb150",
+    "compressed": "cpu-low128-text.folded.gz"
+  },
+  {
+    "path": "strace/text/server-1.strace",
+    "bytes": 475715379,
+    "sha256": "ba5e0ce6dd1629753a587286159e34fe2368d5d12215ec850e020b6701835f3c",
+    "compressed": "strace/text/server-1.strace.xz"
+  },
+  {
+    "path": "strace/tool/server-1.strace",
+    "bytes": 2093760041,
+    "sha256": "63de55bfbee25bf247ccd592a8a7af56fc6b304e03dde2fcf9d124e15840b4c9",
+    "compressed": "strace/tool/server-1.strace.xz"
+  }
+]

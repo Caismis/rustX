@@ -1,5 +1,16 @@
 # Runtime Invariants
 
+## Native resource and notification ownership (#560)
+
+- Companion executables resolve beside the running executable; no Cargo
+  build-directory inference supplies production execution authority.
+- Python guards are runtime-owned embedded bytes, or an explicitly provisioned
+  executable sibling validated against those bytes. Failure to acquire a valid
+  guard fails Python lookup closed.
+- App Server command admission releases its State mutex before watch publication;
+  observers release watch borrows before acquiring State. Notification hints do
+  not replace exact command identity or physical process settlement.
+
 ## Environment service ownership (#533)
 
 1. Every authenticated, initialized ordinary client has equal command/file/management API eligibility; common native source, OS, state, secret and capacity restrictions remain effective.
@@ -49,8 +60,24 @@ Checkpoint descriptors are frozen under Projection synchronization, materialized
 off-lock at the same native cut, then validated within two attempts and one shared
 five-second deadline. Loaded bytes are caches. Native field/page ordinals, positive
 settlement heads and publication frontiers remain authority despite cache eviction
-(C1, N3). Native Journal readiness and direct-publication provenance index existing
+(C1, N3). A prepared metadata array can be shared by complete transitions and
+checkpoints. The arrays describe ordered immutable content. Each issued cut
+retains its own authority, source validation and replay admission, even when
+two publications share the same arrays. Clipping and enrichment that change
+the content detach before mutation. Published events are immutable and shared by
+the replay window and its consumers. The window retains a contiguous suffix of
+published cursors, allowing direct slot lookup. Each subscriber still advances
+its own cursor and must recover when its next position has been evicted.
+
+Native Journal readiness and direct-publication provenance index existing
 source facts; they create no second journal, client ACK registry or execution owner.
+Within a connection epoch, readiness retains only pending Journal and transcript
+positions. Releasing a native batch deletes its pending positions and unions its
+exact direct Journal runs in the same TEMP transaction. Direct ranges are
+disjoint and coalesced. A native deletion removes its position from the range;
+rollback restores the original range and holes. Independent opens start at the
+committed baseline with no direct claims. The publisher wakes readers only after
+the complete release commits.
 
 A successful manual compaction command returns its own native
 `ManualCompactionOutcome`: generation, checkpoint identity, activation identity,
@@ -487,6 +514,10 @@ refusal, missing required properties, unexpected properties, incomplete output
 and exceeded budgets cannot become a typed accepted result or business commit.
 Native rejection never causes a prompt-mode retry. Technical retries retain
 the exact prepared request, fingerprint, invocation and resource revision.
+The admitted native Call worker prepares one provider body before CallStart.
+Its ordinary retries share that body and the captured media. Every dispatch
+still requires its own confirmed RequestStart and one-shot grant. Workflow
+performs its bounded count-only validation before capacity admission.
 
 Manual maintenance keeps an actual native task join. Reply waiter loss does
 not release its native lifetime or lose the checked-out conversation. The
@@ -528,7 +559,7 @@ infallible hot-state installation or authoritative reload. File-backed SQLite
 uses WAL, `synchronous=NORMAL`, foreign keys, and the explicit bounded writer
 busy handler. Successful commits survive process death with a healthy OS and
 filesystem. Machine/OS failure can lose recent commits without a fixed loss window.
-P, U and C remain distinct commits; observed I/O failures never become success. Development
+Ordinary accepted P/U/C facts share one final commit; observed I/O failures never become success. Development
 schema `SQLITE_SCHEMA_VERSION` is the only accepted schema; incompatible
 development schemas fail explicitly at open and are not migrated. Version 36 records typed Session upload references and frozen
 request-time path projection. Version 35
@@ -570,14 +601,18 @@ schema are rejected rather than decoded with missing or invented workspace
 authority. The review-only
 intermediate schema history was never a supported format.
 
-SQLite schema 85 binds request fingerprints to the native JSON Schema capability
+SQLite schema 114 is the only accepted store. It binds admission-captured Workflow
+run definition snapshots (`workflow_definition_snapshots`, `workflow_snapshot_chunks`,
+and `workflow_run_snapshots`) atomically to `WorkflowStarted` events, and adds the
+generated workflow-agent node index, without staging tables or mutable YAML fallbacks.
+Schema 85 bound request fingerprints to the native JSON Schema capability
 and the per-Call prepared response schema and strategy. These semantics also
 change fingerprints for text requests. Schema 84 also admits bounded native
 `WorkflowNodeWaiting` Journal facts and reserved Auxiliary Call identities, plus
 `WorkflowNodeInputRecorded` / `WorkflowNodeOutputRecorded` and their data-node kinds.
 Exact run/type/sequence and full-instance/type/sequence indexes bound Workflow
 trace lookups to the selected run and visit, including absent I/O and terminals.
-Stores from schema 83 or earlier fail with
+Any store other than schema 114 fails with
 `SchemaVersionMismatch` at open, before historical reconstruction; no legacy
 fingerprint comparison, migration or compatibility reader is available.
 The Event envelope remains version 1; its framing did not change.
@@ -712,7 +747,7 @@ spine; clients merge live and older pages by durable transcript cursor. Entry
 identity only detects the same durable fact, and page reads do not move the
 live event cursor.
 
-App Server v50 navigation adds native Turn-relative finite windows at a captured
+App Server v52 navigation adds native Turn-relative finite windows at a captured
 `ConversationReadCut`. It owns positioning and mutation rejection. Web presentation
 retains at most 256 historical entries / 8 MiB plus the independent finite live
 snapshot; it never walks from a distant Turn to the live tail. New navigation,
@@ -2828,9 +2863,8 @@ ownership commits. Global invocation policies remain global, not profile prose.
   parent holds the exact `pgid` and owns catastrophic containment for it.
 - **One containment abstraction covers every supervised unit.** Native Bash,
   MCP stdio (a synthesized Python tool server's venv interpreter included),
-  the parent runtime's Python uv builds, and Skill environment
-  subprocesses all enter the same `AnchorGate`. There
-  is no `McpSubagentAnchor` or `BashSubagentAnchor`.
+  and the parent runtime's Python uv builds all enter the same `AnchorGate`.
+  There is no `McpSubagentAnchor` or `BashSubagentAnchor`.
 - **The top-level process is unchanged.** With no authority installed the
   gate resolves immediately, so the existing single-level lifecycle is
   bit-for-bit the same.
@@ -3309,9 +3343,8 @@ An attempt sees one immutable capability revision for its entire lifetime.
 M6 makes this operational: one `AgentExecution` holds one RAII attempt
 capability lease (`src/capabilities`) pinning one immutable
 `CapabilitySnapshot` (revision, immutable ToolRegistry handle, immutable
-Skill snapshot/catalog with `SkillId` + `SkillVersionId` bindings, Python/
-Node environment identity and path when present, and the effective
-ToolEnvironment) for the complete lifetime of the attempt. There is no
+Skill snapshot/catalog with `SkillId` + `SkillVersionId` bindings and the
+effective ToolEnvironment) for the complete lifetime of the attempt. There is no
 capability-free execution constructor, and no model turn re-discovers
 Skills.
 
@@ -3326,14 +3359,14 @@ hold attempt leases and never block a capability commit.
   → the next independent Attempt captures the new revision. There is no unchecked window
   between the deciding quiescence observation and the active-snapshot
   swap, and no sleep-based coordination.
-- A candidate may be prepared independently (Skill discovery, dependency
-  merge, environment materialization); only its activation respects the
+- A candidate may be prepared independently (Skill discovery and optional
+  source preparation); only its activation respects the
   commit boundary. An identical rediscovery/preparation is a no-op that
   never fabricates a new revision; a candidate prepared from an obsolete
   base revision is rejected as stale.
 - The no-op equivalence covers the executable identity, not only the
   model-visible contract: a candidate is a no-op only when the tool
-  definitions, available catalog, Skills, environment digests **and** the
+  definitions, available catalog, Skills, **and** the
   effective frozen MCP server bindings are all equivalent. A changed
   executable binding — a configured server whose command/args/env/cwd/
   endpoint/headers/policy changed, or a managed Python package whose
@@ -3345,11 +3378,27 @@ hold attempt leases and never block a capability commit.
   generation until its leases settle.
 - Failed preparation or commit leaves the current active revision
   authoritative.
-- `CapabilityRevision`, `SkillVersionId`, `PythonEnvironmentDigest`, and
-  `NodeEnvironmentDigest` remain distinct identities: a description-only
-  Skill change yields a new Skill version and a new capability revision
-  without changing environment identities when dependency inputs are
-  unchanged.
+- `CapabilityRevision` and `SkillVersionId` remain distinct identities: a
+  description-only Skill change yields a new Skill version and a new
+  capability revision. It does not change the effective tool environment.
+  Managed Python package fingerprints are a separate identity owned by
+  `src/tools/python.rs`.
+- Native Agent Bash, Workflow Bash, and Subagent Bash inherit the launched
+  host environment, then the configured `[environment]` overrides, then the
+  Workspace `.venv` when it is ready. The command environment is frozen
+  before permission approval and is not recomputed when a background command
+  starts. Managed Python, manual terminals, generic `command/exec`, and MCP
+  keep the fixed `child_environment` baseline. Skills do not change either
+  environment. Workspace Python preparation never deletes or rebuilds an
+  existing `.venv`. `uv` is optional for reuse and must be at least 0.10.0
+  to create a missing environment. Preparation belongs to process/host drain,
+  not transport lifetime. The original root identity and one validated input
+  generation authorize physical work and Ready publication. Creation rechecks
+  its target after acquiring capacity, and uv selects over all root version
+  constraints. An existing empty directory is never initialized. Physical programs
+  inherit that Owner's cancellation signal. Command environments travel in
+  private snapshots retained through settlement, not an aggregated OS
+  environment string. See `docs/execution-environment.md`.
 - Skill, native-tool, and MCP capability mutations (a Python tool package's
   included, since it is an MCP source) in a live product
   runtime occur through native configuration coordination. Complete preserved
@@ -3389,29 +3438,20 @@ hold attempt leases and never block a capability commit.
   background processes, event-writer or drain transitions) remain the M9
   scheduler's concern, not part of the M6 commit guard.
 
-Capability environments are prepared and validated before an atomic
-revision swap. The prospective canonical environment-store path is checked
-against the canonical Workspace before any directory is created, including
-through symlinked existing ancestors. Python environments are built at their
-final digest path and become reusable only after an exact deterministic ready
-manifest is atomically committed; Node environments use private staging and
-atomic rename. Same-process preparations of one ecosystem/digest coalesce
-behind one `EnvironmentStore`-owned materialization task. Candidate
-preparation lifetime is distinct from shared build lifetime: dropping a
-caller only stops its wait, while the owner continues through supervised
-process settlement and publication. Published digest environments are
-immutable: they are reused only when their committed manifest matches the
-expected digest inputs and are never installed into again. The in-flight
-entry is released only after the owner returns, making a retry unable to
-overlap the previous physical writer.
+The runtime-private environment-store root stays disjoint from the model
+Workspace, including through symlinked ancestors. Managed Python may create
+`<store>/python-tools` when a package is prepared. Skill discovery, selection,
+refresh, and child propagation create no `python/` or `node/` environment
+there and start no uv, pip, npm, or interpreter probe.
 
-**Skill resource boundary.** Capability metadata and environment identities
-are snapshotted. Accepted Skill source files (`SKILL.md`, scripts,
-references, and assets) remain current filesystem resources, read at use time
-through ordinary native tool semantics at their host paths. The Skill catalog
-publishes the canonical absolute host path established at discovery time, and ordinary Workspace authorization is not
+**Skill resource boundary.** Admitted Skill definitions are snapshotted.
+Accepted Skill source files (`SKILL.md`, scripts, references, and assets)
+remain current filesystem resources, read at use time through ordinary native
+tool semantics at their host paths. The Skill catalog publishes the host path
+established at discovery time, and ordinary Workspace authorization is not
 weakened: native Read/Write/Edit/Grep/Glob already accept absolute host paths.
 A package rewrite is observed only at the next quiescent re-discovery.
+Discovery does not hash or watch package payloads.
 
 ### M7 external tool invariants
 
@@ -6532,20 +6572,28 @@ the publication plane and is never a canonical message.
 No semantic output is released to a user-facing Runtime Client before rustX
 has durably committed that publication.
 
-### Three linearization points
+### Final model settlement
 
-```text
-P — Provider outcome         ModelRequestCompleted durable   (Event Journal)
-U — Publication outcome      final frame + terminal marker   (publication plane)
-C — Conversation acceptance  canonical Assistant durable     (Message Ledger)
-```
+P (provider completion), U (final frames/terminal marker) and C (canonical
+Assistant acceptance) are distinct facts with the durable implication
+`C => U => P`. Ordinary accepted output commits them together. For no-tool output,
+TurnCompleted and either finite inbox adoption or empty-inbox AttemptCompleted
+share that same transaction. Before commit all final changes roll back; after
+commit the complete final result survives healthy-OS process death. Observer
+notification follows commit, including when a process dies before publishing it.
+A terminal commit failure cannot leave a canonical final answer behind.
+The final accepted output uses its canonical receipt; final staging frames are
+consumed inside COMMIT and their invalidated live-prefix receipts never escape.
+Partial streaming still uses committed frame receipts until canonical replacement.
 
-The required commit ordering is `P < U < C`, and the durable store — not only
-Agent Loop control flow — enforces `C => U => P`. P and U are never combined
-into one transaction: they are different facts and a crash between them must
-stay distinguishable. `ModelRequestCompleted` is likewise never merged with
-the Assistant commit, because provider completion remains an external
-execution fact even when canonicalization later fails.
+The existing mailbox publication mutex fences inbox selection through commit and
+terminal/adoption notification. Tool calls still need a later Tool Plane intent
+before external effects, and preserve unknown-outcome/replay policies. Workflow
+cross-owner preparation and rejected noncanonical output retain separate P/U/audit
+transitions; those cuts never authorize an unaccepted tool proposal. This is an
+intentional reduction in ordinary final crash cuts, authorized by the Pi Durable
+cost-model change. No exactly-once external execution or power-loss guarantee is
+introduced. Development schema 75 refuses older stores without conversion.
 
 The store re-proves the exact chain at U and C. It decodes the named Request
 Snapshot and its durable `ModelRequestStarted` envelope, checks the stream's
@@ -6568,16 +6616,21 @@ outcome that can establish P.
 ### The U transaction
 
 The final publication frame and the publication terminal marker commit in one
-transaction; only after it succeeds may the final buffered payload be
-released. When no visible payload remains, a terminal-only frame carries the
-terminal transition. There is no "write the final frame, publish, then mark
+transaction. Ordinary accepted output publishes the complete canonical receipt
+after that compound commit; consumed final staging references are not released.
+Prepared Workflow/rejected output releases its committed staging receipts. When
+no visible payload remains, a terminal-only frame carries the terminal transition. There is no "write the final frame, publish, then mark
 complete" sequence to crash inside.
 
 ### Bounded publication writes
 
 Provider chunk size is not the publication unit. The bounded coalescer flushes
-on maximum bytes, a structural boundary (a tool-call proposal start or
-completion), or the stream terminal. When the first payload enters an empty
+on 64 KiB of conservative payload weight, 128 nonmergeable frames, the 100 ms
+oldest-payload deadline, or the stream terminal. Tool proposal start/completion
+retain distinct ordered frames without forcing a transaction. Tool identities
+and completed arguments count toward pressure; one incoming oversized payload
+flushes immediately without truncation. These pressure exceptions differ from
+Pi Durable's timer-only snapshot cadence. When the first payload enters an empty
 buffer, it owns one absolute monotonic deadline `oldest_pending_time +
 max_latency`; later canonical provider events do not reset or extend it. The coalescer
 owns the deadline and the runtime monotonic clock owns the wake-up mechanism,
@@ -6608,7 +6661,9 @@ forbidden; once canonical acceptance commits, no audit may be created for it.
 The canonical transition validates that the exact stream is
 publication-complete, appends the Ledger fact, advances the Surface, records
 `AssistantMessageCommitted`, and clears the stream's publication staging — all
-in one transaction.
+in one transaction. The assembled Assistant body moves into the prepared
+commit. Durable writing borrows it, and successful installation moves it into
+the Ledger before observers or tools use the committed result.
 
 The first stream open is itself a durable generation admission: the named
 Request Snapshot must exist and decode, its start fact must be present, and
@@ -6621,7 +6676,10 @@ idempotent only after this validation succeeds.
 In-flight frames are transient lifecycle staging. Canonical acceptance deletes
 them; audit terminalization consolidates them into one bounded immutable
 audit and removes them. No settled stream leaves O(number-of-frames)
-permanent history.
+permanent history. Appending a content suffix extends the latest revision for
+that source, block and representation. The writer verifies its end against the
+current physical tail before advancing the frontier. Historical reads still
+verify their exact selected revision and stay within its end.
 
 ### Audit semantics
 
@@ -6853,6 +6911,21 @@ runtime supervision/quiescence contract.
   provider availability, current config, and client attachment),
   `RecoveryPlan::reconcile` (atomic durable commits), and a typed
   `ResumeDisposition` permission;
+
+- the recovered latest primary request and continuation task are frontier
+  pointers, not a full Journal scan. `rustx_store.recovery_frontier` is the
+  JSON fold through one Journal sequence, updated in that fact's append
+  transaction. `primary` holds the exact request id and sequence of the latest
+  Agent `ModelRequestStarted` row as `{id, at}`; the named row and its Agent
+  owner must agree with that identity. `task` names the unresolved
+  adoption winner as `{id, kind, at}`, where `kind` is `human` or `delegated`
+  and `at` is the `InboundTurnAdopted` sequence. The latest Human wins; the
+  first delegated input is kept only while no task is selected; a notice-only
+  batch does not erase it; consumption of the obligation clears it. Recovery
+  authenticates each pointer against its named row and, for `task`, against
+  the canonical message provenance. Disagreement fails closed. Reopen folds
+  only rows after `through`. Schema 114 rejects every other store; the frontier
+  has no older-shape reader;
 
 - recovery runs after the tool-runtime ownership transfer and before the
   runtime object exists, so a rejected construction reconciles nothing and
@@ -8205,7 +8278,7 @@ confirmed `CallStarted`, without waiting for inference or retirement.
 - Before the first Send, one native connection owns at most one transferable
   unsent draft. Selection starts only its effective configured Root/enabled-Workflow
   MCP demand. No Session/catalog row, canonical input, upload receipt, provider
-  request, Agent execution, Skill environment or Python build is created.
+  request, Agent execution, or Python build is created.
 - A scope supervisor coalesces replacement intent. Superseded pending and ready
   resources are cancelled and physically settled before unsent replacement work
   starts. Global source reservations include live ready and retiring generations;
@@ -8420,3 +8493,38 @@ reads or delayed notifications from replacing newer status, and transport loss o
 observation gaps display unavailability rather than fabricated idle. Bounded
 read repair never loads a cold runtime or repeats semantic work. See the
 [status ownership matrix](app-server/shared-control.md#thread-runtime-status-v74-amendment).
+
+## Workflow run snapshot identity, publication, and read authorization (Issue #552)
+
+- **Admission-bound immutable snapshot.** `WorkflowProgram` captures
+  `WorkflowRunDefinitionSnapshot` from the exact parsed bytes at resource admission
+  and compile time. Executable `program_digest` remains strictly independent of
+  `source_revision`, `has_source_presentation`, and `editor` layout coordinates.
+- **Single-transaction run start.** `JournalStore::publish_workflow_start` commits
+  `WorkflowStarted`, content-addressed `(workflow_id, program_digest, source_revision)`
+  definition chunks (<= 65,536 bytes per chunk, 16 MiB document bound), and
+  `workflow_run_snapshots` (`ON DELETE CASCADE` on `events(sequence)`) atomically;
+  ordinary `append_event` refuses `RuntimeEvent::WorkflowStarted` so starts cannot
+  bypass snapshot capture, any write failure rolls back all four tables cleanly, and
+  optional observability failures never alter execution outcomes.
+- **Cut- and conversation-authorized reads.** Live (`conversation/workflowRunSnapshot*`)
+  and cold (`session/workflowRunSnapshot*`) snapshot reads enforce
+  `run_id.conversation_id` equality, `ObservationReadCut` (`committed_sequence <=
+  cut.read.journal`), chunk bounds (`1 <= limit <= 65_536`, `offset <= byte_length`),
+  and SHA-256 verification before decoding. Missing or pre-cut runs return `null`
+  with no fallback to mutable `.agents/workflows/<id>.yaml` files.
+
+- **Observation remains observation.** Run lookup, snapshot reads, trace paging,
+  exact selected-visit lookups (`conversation/workflowTraceNode`, cold
+  `session/workflowTraceNode`), `TraceInspectionContent::Workflow` root identity,
+  selected I/O and child navigation reuse native inspection authority without
+  scanning runs, reading eager I/O bodies, preparing or replaying a tool/model call,
+  or appending a second status journal. Historical unsettled states need an exact
+  current run and instance to claim a live owner; absent/malformed identities remain
+  incomplete, `WorkflowStarted`-only roots never fall back to `nodes[0]` or disk
+  source, and old-cut selected headers never leak across cut advancements.
+- **View and authoring ownership are separate.** Run Canvas has no editor actor or
+  save port. Conversation, attachment, activation, cut, visit and reader
+  replacement retire callbacks and fence held successes, held errors and lazy reads.
+  Status/paging updates preserve camera and focus;
+  explicit current-owner closure alone may restore the opener.

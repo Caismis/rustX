@@ -688,7 +688,10 @@ mod tests {
         let crate::model::input::ModelInputMessage::Derived(wrapper) = &first.messages[0] else {
             panic!("summary service input must not fabricate a canonical identity");
         };
-        assert!(wrapper.sources.is_empty());
+        assert_eq!(
+            wrapper.sources,
+            [] as [crate::model::projected::CanonicalMessageRef; 0]
+        );
         let crate::model::projected::ProjectedMessage::User { content, .. } = &wrapper.message
         else {
             panic!("summary service input must use the User role");
@@ -732,7 +735,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             })])
             .into_iter()
             .map(Into::into)
@@ -788,7 +792,8 @@ mod tests {
                             truncation: None,
                             workflow: None,
                             managed_output: None,
-                        },
+                        }
+                        .into(),
                     })])
                     .into_iter()
                     .map(Into::into)
@@ -838,7 +843,8 @@ mod tests {
                         truncation: None,
                         workflow: None,
                         managed_output: None,
-                    },
+                    }
+                    .into(),
                 })])
                 .into_iter()
                 .map(Into::into)

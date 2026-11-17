@@ -321,7 +321,7 @@ pub(crate) struct GoalToolContext<'a> {
 /// Leaf observer called under the domain publication mutex; never acquires
 /// coordinator locks.
 pub(crate) trait GoalObserver: Send + Sync {
-    fn changed(&self, receipt: Option<&Arc<crate::durable::inbox::GoalObservationReceipt>>);
+    fn changed(&self, receipt: Option<&Arc<crate::durable::GoalObservationReceipt>>);
 }
 
 /// One durable state owner.
@@ -799,7 +799,10 @@ mod tests {
             let facts = store.read_events(None, 64).unwrap().events;
             assert!(!domain.authorizes_continuation().unwrap());
             assert!(domain.reserve_and_accept(draft).unwrap().is_none());
-            assert!(store.load_pending().unwrap().is_empty());
+            assert_eq!(
+                store.load_pending().unwrap(),
+                [] as [crate::durable::inbox::PendingInboundItem; 0]
+            );
             assert_eq!(store.load_goal().unwrap(), Some(stopped));
             assert_eq!(store.read_events(None, 64).unwrap().events, facts);
         }
@@ -890,7 +893,10 @@ mod tests {
                 .is_err()
         );
         assert_eq!(domain.view().unwrap(), GoalView { current: None });
-        assert!(store.read_events(None, 64).unwrap().events.is_empty());
+        assert_eq!(
+            store.read_events(None, 64).unwrap().events,
+            [] as [crate::events::types::RuntimeEventEnvelope; 0]
+        );
         let goal = create(&domain);
         let before = store.read_events(None, 64).unwrap().events;
         store.arm_fail_event_times(1);
@@ -932,7 +938,10 @@ mod tests {
         store.arm_fail_accept_times(1);
         assert!(domain.reserve_and_accept(draft).is_err());
         assert_eq!(store.read_events(None, 64).unwrap().events, facts_before);
-        assert!(store.load_pending().unwrap().is_empty());
+        assert_eq!(
+            store.load_pending().unwrap(),
+            [] as [crate::durable::inbox::PendingInboundItem; 0]
+        );
         assert_eq!(store.load_goal().unwrap(), Some(goal));
         let accepted = domain.reserve_and_accept(draft).unwrap().unwrap();
         let committed = store.load_goal().unwrap().unwrap();

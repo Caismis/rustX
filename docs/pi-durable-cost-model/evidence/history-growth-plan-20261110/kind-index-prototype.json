@@ -1,0 +1,96 @@
+{
+  "scope": "SQLite 3.45.1 retained index layout on a copied schema-102 64+32-turn image; not write or timing measurements",
+  "reader_version": "3.45.1",
+  "kinds": [
+    "assistant_message_committed",
+    "attempt_completed",
+    "attempt_started",
+    "inbound_turn_adopted",
+    "model_request_completed",
+    "model_request_started",
+    "turn_completed",
+    "turn_started"
+  ],
+  "indexes": [
+    {
+      "original": "events_kind_idx",
+      "probe": "native_kind_probe",
+      "original_ddl": "CREATE INDEX events_kind_idx ON events(json_extract(event_json, '$.event.type'))",
+      "baseline": {
+        "pages": 13,
+        "payload": 18016,
+        "unused": 6152
+      },
+      "candidate": {
+        "pages": 5,
+        "payload": 4384,
+        "unused": 3496
+      },
+      "rebuilt_control": {
+        "pages": 11,
+        "payload": 18016,
+        "unused": 2080
+      }
+    },
+    {
+      "original": "events_primary_trace_kind_idx",
+      "probe": "observation_kind_probe",
+      "original_ddl": "CREATE INDEX events_primary_trace_kind_idx\n    ON events(observation_kind) WHERE observation_trace_fact_required=1",
+      "baseline": {
+        "pages": 13,
+        "payload": 18016,
+        "unused": 6152
+      },
+      "candidate": {
+        "pages": 5,
+        "payload": 4384,
+        "unused": 3496
+      },
+      "rebuilt_control": {
+        "pages": 11,
+        "payload": 18016,
+        "unused": 2080
+      }
+    },
+    {
+      "original": "events_attempt_kind_idx",
+      "probe": "attempt_kind_probe",
+      "original_ddl": "CREATE INDEX events_attempt_kind_idx ON events(attempt_id, json_extract(event_json, '$.event.type'))",
+      "baseline": {
+        "pages": 34,
+        "payload": 53658,
+        "unused": 13266
+      },
+      "candidate": {
+        "pages": 22,
+        "payload": 40026,
+        "unused": 2466
+      },
+      "rebuilt_control": {
+        "pages": 31,
+        "payload": 53658,
+        "unused": 7158
+      }
+    },
+    {
+      "original": "events_step_kind_idx",
+      "probe": "step_kind_probe",
+      "original_ddl": "CREATE INDEX events_step_kind_idx ON events(attempt_id, turn_id, json_extract(event_json, '$.event.type')) WHERE attempt_id IS NOT NULL AND turn_id IS NOT NULL",
+      "baseline": {
+        "pages": 22,
+        "payload": 37982,
+        "unused": 5374
+      },
+      "candidate": {
+        "pages": 16,
+        "payload": 29054,
+        "unused": 2086
+      },
+      "rebuilt_control": {
+        "pages": 21,
+        "payload": 37982,
+        "unused": 3338
+      }
+    }
+  ]
+}

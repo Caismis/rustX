@@ -2,8 +2,8 @@
 //! capability materialization, preparation cancellation and parent loss.
 
 use crate::durable::CanonicalStore;
+use crate::durable::ConversationInboundCapability;
 use crate::durable::JournalStore;
-use crate::durable::inbox::ConversationInboundCapability;
 use std::sync::Arc;
 
 use super::super::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
@@ -275,7 +275,10 @@ async fn child_binding_gates_historical_guidance_before_activation() {
         store.load_pending().unwrap()[0].message_id,
         accepted.message_id
     );
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert!(
         !store
             .read_events(None, 128)
@@ -371,12 +374,9 @@ async fn ext259_parent_and_concurrent_child_todo_lists_never_alias() {
             .todo_snapshot()
             .expect("a Todo-enabled child composes a list")
     };
-    assert!(
-        parent
-            .todo_snapshot()
-            .expect("parent list")
-            .tasks
-            .is_empty()
+    assert_eq!(
+        parent.todo_snapshot().expect("parent list").tasks,
+        [] as [crate::tools::todo::TodoTask; 0]
     );
     for child in &children {
         assert!(
@@ -465,7 +465,8 @@ fn todo_result_message(
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 
@@ -1040,7 +1041,6 @@ async fn frozen_skill_definitions_keep_live_locations_without_copying_assets() {
                 skill_id: package.id().clone(),
                 version_id: package.version_id().clone(),
             },
-            dependencies: package.dependencies().clone(),
             catalog_entry: crate::skills::SkillCatalogEntry {
                 name: "selected".into(),
                 description: "Frozen summary".into(),
@@ -1353,7 +1353,7 @@ async fn frozen_fixture_tool(
         id: ToolId::new(format!("mcp:{server_id}:{name}")),
         name: tool.name,
         description: tool.description,
-        input_schema: tool.input_schema,
+        input_schema: tool.input_schema.into(),
         execution_policy: binding.policy.execution,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
@@ -1513,7 +1513,7 @@ async fn a_missing_mcp_definition_fails_before_the_child_is_ready() {
         id: ToolId::new("mcp:gamma:gamma_absent"),
         name: "gamma_absent".to_owned(),
         description: "a tool the server does not publish".to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
@@ -1565,7 +1565,7 @@ async fn an_unreachable_required_mcp_server_fails_child_composition() {
         id: ToolId::new("tool-get-issue"),
         name: "get_issue".to_owned(),
         description: "issue".to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
@@ -1624,7 +1624,7 @@ async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
         id: ToolId::new("tool-get-issue"),
         name: "get_issue".to_owned(),
         description: "issue".to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
@@ -1655,4 +1655,19 @@ async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
         format!("{error:?}").contains("was not given a binding"),
         "the child refuses rather than looking a server up for itself: {error:?}"
     );
+}
+
+#[test]
+fn configured_baseline_keys_survive_child_reconstruction() {
+    let entries = vec![
+        ("HOME".to_owned(), "/home/ada".to_owned()),
+        ("LANG".to_owned(), "C.UTF-8".to_owned()),
+        ("LC_ALL".to_owned(), "C.UTF-8".to_owned()),
+        ("PATH".to_owned(), "/usr/local/bin:/usr/bin".to_owned()),
+        ("TOKEN".to_owned(), "kept".to_owned()),
+    ];
+    let environment =
+        super::configured_child_environment(entries.clone()).expect("configured baseline");
+    assert_eq!(environment.authorized_entries(), entries.as_slice());
+    assert!(crate::tools::environment::ToolEnvironment::from_authorized(entries).is_err());
 }

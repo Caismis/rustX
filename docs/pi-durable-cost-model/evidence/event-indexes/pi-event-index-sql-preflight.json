@@ -1,0 +1,90 @@
+{
+  "sqlite": "3.53.1",
+  "scope": "Host SQLite syntax/query-plan preflight only; production bundled SQLite tests still required.",
+  "indexes": [
+    {
+      "name": "events_context_reading_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_context_reading_idx WHERE (json_extract(event_json, '$.event.type') = 'compaction_completed' OR COALESCE(json_type(event_json, '$.event.usage'), 'null') != 'null') = 1 AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_context_reading_idx (<expr>=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_message_id_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_message_id_kind_idx WHERE json_extract(event_json, '$.event.message_id')='identity' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_message_id_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE 1 AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_kind_idx (<expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_attempt_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_attempt_kind_idx WHERE attempt_id='a' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_attempt_kind_idx (attempt_id=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_step_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_step_kind_idx WHERE attempt_id='a' AND turn_id='t' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_step_kind_idx (attempt_id=? AND turn_id=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_compaction_operation_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json, '$.event.operation_id')='identity' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_compaction_operation_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_request_id_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_request_id_kind_idx WHERE json_extract(event_json, '$.event.request_id')='identity' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_request_id_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_tool_call_scope_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_tool_call_scope_kind_idx WHERE json_extract(event_json, '$.event.tool_call_id')='identity' AND attempt_id IS NULL AND turn_id IS NULL AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_tool_call_scope_kind_idx (<expr>=? AND attempt_id=? AND turn_id=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_execution_id_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_execution_id_kind_idx WHERE json_extract(event_json, '$.event.execution_id')='identity' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_execution_id_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_subagent_id_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_subagent_id_kind_idx WHERE json_extract(event_json, '$.event.subagent_id')='identity' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_subagent_id_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_run_id_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_run_id_kind_idx WHERE json_extract(event_json, '$.event.run_id')='identity' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_run_id_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"
+      ]
+    },
+    {
+      "name": "events_interaction_id_kind_idx",
+      "sql": "SELECT sequence FROM events INDEXED BY events_interaction_id_kind_idx WHERE json_extract(event_json, '$.event.interaction_id')='identity' AND json_extract(event_json,'$.event.type')='type' AND sequence<100 ORDER BY sequence DESC LIMIT 32",
+      "plan": [
+        "SEARCH events USING COVERING INDEX events_interaction_id_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"
+      ]
+    }
+  ]
+}

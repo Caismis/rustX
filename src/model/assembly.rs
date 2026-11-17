@@ -657,7 +657,7 @@ mod tests {
         };
         assert_eq!(block.text, "hello world");
         assert_eq!(turn.finish_reason, ModelFinishReason::Stop);
-        assert!(turn.tool_calls.is_empty());
+        assert_eq!(turn.tool_calls, [] as [crate::tools::types::ToolCall; 0]);
         assert!(turn.continuation.is_none());
     }
 
@@ -704,7 +704,8 @@ mod tests {
                     "id": "rs_1",
                     "summary": [],
                     "encrypted_content": "opaque"
-                })],
+                })]
+                .into(),
             });
         let turn = assemble(&[
             ModelEvent::ContinuationState {
@@ -805,7 +806,7 @@ mod tests {
             matches!(&turn.content[0], AssistantContentBlock::Refusal(r) if r.text == "I cannot comply.")
         );
         assert_eq!(turn.finish_reason, ModelFinishReason::Refusal);
-        assert!(turn.tool_calls.is_empty());
+        assert_eq!(turn.tool_calls, [] as [crate::tools::types::ToolCall; 0]);
     }
 
     /// Multiple refusal deltas concatenate into one refusal block.
@@ -1048,7 +1049,7 @@ mod tests {
             ModelEvent::ContinuationState {
                 block_index: ContentBlockIndex::new(0),
                 state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-                    opaque: serde_json::json!({"signature": "opaque-state"}),
+                    opaque: serde_json::json!({"signature": "opaque-state"}).into(),
                 }),
             },
             text(1, "visible output"),

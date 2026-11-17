@@ -79,7 +79,8 @@ fn protocol_envelopes_round_trip_deterministically() {
             attempt_id: rustx::runtime::identity::AttemptId::new("attempt-1"),
             model: Some(Box::new(support::attempt_model_view("fixture/model-a"))),
             execution_settings: None,
-        },
+        }
+        .into(),
     };
     let json = serde_json::to_string(&event).expect("serialize event");
     let value: serde_json::Value = serde_json::from_str(&json).expect("json");
@@ -221,15 +222,18 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
     let pending = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(20),
         event: RuntimeClientEvent::InteractionPending {
-            interaction: crate::observation::interaction::interaction_header(&RoutedInteraction {
-                interaction: InteractionRef::new(
-                    request.conversation_id.clone(),
-                    request.id.clone(),
-                ),
-                source: InteractionSource::Primary,
-                request: request.clone().into(),
-            }),
-        },
+            interaction: Box::new(crate::observation::interaction::interaction_header(
+                &RoutedInteraction {
+                    interaction: InteractionRef::new(
+                        request.conversation_id.clone(),
+                        request.id.clone(),
+                    ),
+                    source: InteractionSource::Primary,
+                    request: request.clone().into(),
+                },
+            )),
+        }
+        .into(),
     };
     let submitted_settled = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(21),
@@ -243,7 +247,8 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
                     response: submitted,
                 },
             },
-        },
+        }
+        .into(),
     };
     let declined_settled = RuntimeClientProtocolEvent {
         cursor: RuntimeClientCursor::new(22),
@@ -257,7 +262,8 @@ fn v3_questionnaire_pending_response_decline_and_settlement_round_trip() {
                     response: QuestionnaireResponse::Declined,
                 },
             },
-        },
+        }
+        .into(),
     };
 
     let pending_json = serde_json::to_value(&pending).expect("pending questionnaire JSON");
@@ -402,7 +408,7 @@ async fn attachment_request_correlation_and_version_negotiation() {
         "conv_ab537f72-9ee5-7ccf-989d-90fbe352ca87"
     );
     assert_eq!(agent_id.as_str(), "agent-a");
-    assert!(!attachment_id.as_str().is_empty());
+    assert_ne!(attachment_id.as_str(), "");
 
     // Multiple pipelined requests correlate by id.
     let responses: Vec<RuntimeClientResponse> = (1..=3)

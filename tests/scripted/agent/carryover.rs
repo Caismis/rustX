@@ -1152,7 +1152,10 @@ async fn canonical_frontier_has_no_audit_carryover_or_request_only_item() {
             finish_reason: ModelFinishReason::Stop
         }
     ));
-    assert!(audit.publication_audits.is_empty());
+    assert_eq!(
+        audit.publication_audits,
+        [] as [crate::publication::frame::PublicationAudit; 0]
+    );
     assert!(
         model.requests()[0]
             .messages

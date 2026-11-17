@@ -10,11 +10,11 @@
 //! ```
 //!
 //! The source representation exists only inside the source context entered by
-//! [`parse_detailed`], [`write`], and [`source_schema`]. Every other
+//! [`parse_detailed`], [`write`](fn@write), and [`source_schema`]. Every other
 //! (de)serialization of an authoring type — App Server projections, mutations,
 //! and generated protocol schemas — uses the structured object. The JSON string
 //! is parsed here, once, into the structured
-//! [`RequestParams`](crate::model::invocation::RequestParams) map; it never
+//! [`RequestParams`] map; it never
 //! reaches validation, runtime resolution, frozen snapshots, or adapters.
 
 use std::cell::Cell;

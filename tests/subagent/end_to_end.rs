@@ -128,6 +128,21 @@ async fn launch_parent(
     resume: Option<&rustx::local_runtime::SessionId>,
     fail_live_inspection: bool,
 ) -> Parent {
+    let mut environment = vec![("RUSTX_SUBAGENT_TEST_KEY", key)];
+    if fail_live_inspection {
+        environment.push(("RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE", "1"));
+    }
+    launch_parent_with_environment(root, workspace, models, session, &environment, resume).await
+}
+
+async fn launch_parent_with_environment(
+    root: &std::path::Path,
+    workspace: &std::path::Path,
+    models: &str,
+    session: &str,
+    environment: &[(&str, &str)],
+    resume: Option<&rustx::local_runtime::SessionId>,
+) -> Parent {
     std::fs::create_dir_all(workspace.join(".agents/agents/explore")).expect("workspace");
     std::fs::write(
         workspace.join(".agents/agents/explore.toml"),
@@ -141,16 +156,7 @@ async fn launch_parent(
         format!("{}\n{models}", toml::to_string_pretty(&document).unwrap()),
     )
     .expect("rustx.toml");
-    let mut environment = vec![("RUSTX_SUBAGENT_TEST_KEY", key)];
-    if fail_live_inspection {
-        environment.push(("RUSTX_TEST_LIVE_INSPECTION_BIND_FAILURE", "1"));
-    }
-    Parent::spawn(
-        &ParentBindings::under(root, workspace),
-        &environment,
-        resume,
-    )
-    .await
+    Parent::spawn(&ParentBindings::under(root, workspace), environment, resume).await
 }
 
 /// Launches a new parent Session over `<root>/workspace`.
@@ -916,7 +922,7 @@ async fn subagent_process_stack(alias_root: bool) {
             records: Vec::new(),
         })
         .await;
-    let Ok(MethodResult::Trace { page: trace }) = trace else {
+    let Ok(MethodResult::Trace { page: trace, .. }) = trace else {
         panic!("child Trace after exit: {trace:?}");
     };
     assert!(
@@ -1049,7 +1055,7 @@ async fn subagent_process_stack(alias_root: bool) {
     assert_eq!(detail_page.read_cut.conversation_id, child_conversation_id);
     let messages =
         original_child_request_messages(&mut reopened, &agent_id, &detail_page, &request_id).await;
-    assert!(!messages.is_empty());
+    assert_ne!(messages, [] as [serde_json::Value; 0]);
     let mut task_in_original_messages = false;
     for message in &messages {
         let role: rustx::observation::trace::TraceMessageRole =
@@ -1084,7 +1090,10 @@ async fn subagent_process_stack(alias_root: bool) {
                 .iter()
                 .all(|binding| { binding.content_ref.conversation_id == child_conversation_id })
         );
-        assert!(!collections.is_empty());
+        assert_ne!(
+            collections,
+            [] as [rustx::observation::cut::CollectionFrontier; 0]
+        );
         assert!(
             collections
                 .iter()
@@ -1109,7 +1118,7 @@ async fn subagent_process_stack(alias_root: bool) {
                 .collect(),
         })
         .await;
-    let Ok(MethodResult::Trace { page: older }) = older else {
+    let Ok(MethodResult::Trace { page: older, .. }) = older else {
         panic!("child Trace paging: {older:?}");
     };
     assert_eq!(older.records.len(), 1);
@@ -1372,7 +1381,7 @@ async fn running_child_inspection_is_execution_independent() {
                 "refused Child endpoint is explicit unavailable: {trace:?}"
             );
         } else {
-            let Ok(MethodResult::Trace { page: trace }) = trace else {
+            let Ok(MethodResult::Trace { page: trace, .. }) = trace else {
                 panic!("running child Trace: {trace:?}");
             };
             let requests: Vec<_> = trace
@@ -1380,7 +1389,7 @@ async fn running_child_inspection_is_execution_independent() {
                 .iter()
                 .filter(|record| record.kind == rustx::observation::trace::TraceKind::Request)
                 .collect();
-            assert!(!requests.is_empty());
+            assert_ne!(requests, [] as [&rustx::observation::trace::TraceRecord; 0]);
             assert_eq!(
                 requests.last().unwrap().state,
                 rustx::observation::trace::TraceState::Running
@@ -1962,7 +1971,10 @@ async fn hard_parent_death_recovery(kill_child_without_drain: bool) {
         agent.activation_state,
         rustx::runtime::subagent::SubagentState::Interrupted
     );
-    assert!(direct_subagent_pids(repeated.child.id().expect("repeated pid")).is_empty());
+    assert_eq!(
+        direct_subagent_pids(repeated.child.id().expect("repeated pid")),
+        [] as [u32; 0]
+    );
     assert_recovered_shutdown(repeated.shutdown().await, kill_child_without_drain);
 }
 

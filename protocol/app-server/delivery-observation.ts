@@ -1,5 +1,5 @@
-import type { CheckpointPage, CheckpointReadCut, CheckpointValueChunk, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, SessionFileReference } from './v78.ts';
-import { canonicalLocatorKey } from './content-identity.ts';
+import type { CheckpointPage, CheckpointReadCut, CheckpointValueChunk, RuntimeClientDeliveryHead, RuntimeClientDeliveryItem, SessionFileReference } from './v80.ts';
+import { canonicalLocatorKey, checkpointReadCutKey } from './content-identity.ts';
 
 const uint64 = (value:unknown):bigint => {
  if(typeof value!=="string"||value.length>20||!/^(0|[1-9][0-9]*)$/.test(value))throw new Error("Native delivery quantity is unavailable.");
@@ -35,7 +35,7 @@ export function deliveryPage(head:RuntimeClientDeliveryHead,page:CheckpointPage,
  if(page.items.length>8)throw new Error("Native delivery page exceeds its item bound.");
  const items=page.items.map(row=>{const item=deliveryItem(row.value);if(uint64(row.offset)!==BigInt(item.index))throw new Error('Native delivery index changed.');return item;});
  const end=offset+items.length,total=uint64(head.total),next=end<total?end:null;
- if(JSON.stringify(page.read_cut)!==JSON.stringify(cut)||page.domain!==head.domain||uint64(page.total)!==total||!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(end)||items.length>8||items.some((item,i)=>item.index!==offset+i)||BigInt(end)>total||BigInt(offset)<total&&!items.length||(page.next_offset==null?null:uint64(page.next_offset))!==(next==null?null:BigInt(next)))throw new Error('Native delivery page did not advance exactly.');
+ if(checkpointReadCutKey(page.read_cut)!==checkpointReadCutKey(cut)||page.domain!==head.domain||uint64(page.total)!==total||!Number.isSafeInteger(offset)||offset<0||!Number.isSafeInteger(end)||items.length>8||items.some((item,i)=>item.index!==offset+i)||BigInt(end)>total||BigInt(offset)<total&&!items.length||(page.next_offset==null?null:uint64(page.next_offset))!==(next==null?null:BigInt(next)))throw new Error('Native delivery page did not advance exactly.');
  return {...head,items:items as RuntimeClientDeliveryHead["items"],next_offset:next};
 }
 /** One selected original reference, capped by the native per-delivery bound, never the whole Tool result. */
@@ -45,7 +45,7 @@ export async function readDeliveryMetadata(item:RuntimeClientDeliveryItem,cut:Ch
   const encoded=chunk.bytes_base64;
   if(encoded.length>87_384||encoded.length%4!==0||encoded.length/4*3-(encoded.endsWith('==')?2:encoded.endsWith('=')?1:0)>65_536)throw new Error('Native delivery chunk exceeds its byte bound.');
   const data=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0)),next=offset+data.length;
-  if(chunk.representation!=='canonical_json_v1'||JSON.stringify(chunk.cut)!==JSON.stringify(cut)||chunk.domain!==item.metadata_domain||chunk.item_offset!==0||chunk.path.length!==0||chunk.offset!==offset||chunk.readable_end!==end||!data.length||next>end||(chunk.next_offset??null)!==(next<end?next:null))throw new Error('Native delivery metadata range changed.');
+  if(chunk.representation!=='canonical_json_v1'||checkpointReadCutKey(chunk.cut)!==checkpointReadCutKey(cut)||chunk.domain!==item.metadata_domain||chunk.item_offset!==0||chunk.path.length!==0||chunk.offset!==offset||chunk.readable_end!==end||!data.length||next>end||(chunk.next_offset??null)!==(next<end?next:null))throw new Error('Native delivery metadata range changed.');
   bytes.set(data,offset);offset=next;
  }
  if(!current())throw new Error('Native delivery view changed.');return deliveryFile(JSON.parse(new TextDecoder('utf-8',{ignoreBOM:true,fatal:true}).decode(bytes)));

@@ -31,12 +31,20 @@ pub trait JournalStore: Send + Sync + 'static {
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
     /// Appends one standalone execution fact after validating every durable
     /// reference and lifecycle terminal rule. Canonical-message,
-    /// compaction-completion, request-start, and background-publication facts
-    /// must use their specialized combined transition; this method rejects
-    /// them so a reference event cannot be split from its durable authority.
+    /// compaction-completion, request-start, workflow-start, and
+    /// background-publication facts must use their specialized combined
+    /// transition; this method rejects them so a reference event cannot be
+    /// split from its durable authority.
     fn append_event(
         &self,
         event: RuntimeEventEnvelope,
+    ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
+    /// Atomically persists a `WorkflowStarted` Event Journal fact together with
+    /// its immutable admission-bound definition snapshot and run binding.
+    fn publish_workflow_start(
+        &self,
+        event: RuntimeEventEnvelope,
+        snapshot: &crate::runtime::workflow::WorkflowRunDefinitionSnapshot,
     ) -> Result<RuntimeEventEnvelope, ConversationStoreError>;
     /// Commits a non-success Workflow-owned child terminal fact without a
     /// parent inbound notification. Successful Workflow terminals must use
@@ -86,10 +94,28 @@ pub trait JournalStore: Send + Sync + 'static {
         &self,
         query: &crate::durable::presentation::FactQuery,
     ) -> Result<Vec<RuntimeEventEnvelope>, ConversationStoreError>;
+    /// The durable recovery frontier: the Journal fold through one exact
+    /// sequence, advanced atomically with every Journal append. Its anchor
+    /// row is verified; a frontier ahead of the Journal or naming another row
+    /// is rejected.
+    fn recovery_frontier(
+        &self,
+    ) -> Result<crate::runtime::recovery::RecoveryFrontier, ConversationStoreError>;
+
     /// Reads a bounded Event Journal page in stable sequence order.
     fn read_events(
         &self,
         after_sequence: Option<u64>,
         limit: usize,
     ) -> Result<EventPage, ConversationStoreError>;
+
+    /// Commits an attempt's admission and its first logical turn together.
+    /// The two facts retain their native order and share one observation
+    /// receipt. Cancellation before turn preparation uses `append_event` for
+    /// the attempt alone; subsequent turns also use that standalone method.
+    fn commit_attempt_first_turn(
+        &self,
+        attempt: RuntimeEventEnvelope,
+        turn: RuntimeEventEnvelope,
+    ) -> Result<[RuntimeEventEnvelope; 2], ConversationStoreError>;
 }

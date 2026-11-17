@@ -57,6 +57,9 @@ use super::harness::{CONVERSATION, MODEL};
 
 /// One inbound message answered by one plain streaming text turn.
 pub(crate) const TEXT_TURN: &str = "text_turn";
+/// Structurally complete provider output rejected by native tool preflight.
+/// Its provider/publication facts never authorize canonical tool execution.
+pub(crate) const REJECTED_TOOL_TURN: &str = "rejected_tool_turn";
 pub(crate) const GOAL_ROUND: &str = "goal_round";
 pub(crate) const GOAL_REOPEN_PAUSED: &str = "goal_reopen_paused";
 pub(crate) const GOAL_RECOVER_INTERRUPT: &str = "goal_recover_interrupt";
@@ -122,6 +125,9 @@ pub(crate) const LIVE_RESOURCE_EDIT: &str = "live_resource_edit";
 /// A reload attempted while an attempt owns the session.
 /// A reload attempted while a **compaction** owns the session.
 /// A reload attempted while a pending **interaction** owns the session.
+pub(crate) const WORKFLOW_RUN_START: &str = "workflow_run_start";
+/// Recompose after a workflow crash without admitting any new work or model calls.
+pub(crate) const WORKFLOW_RUN_REOPEN: &str = "workflow_run_reopen";
 /// A reopened conversation that admits one new request.
 pub(crate) const COLD_RESUME: &str = "cold_resume";
 /// One unresolved publication whose terminal attempt transition can be
@@ -538,15 +544,8 @@ impl Child {
                 | REOPEN_SUBAGENT_RESUME
         );
         let dependencies = LocalRuntimeDependencies {
-            child_program: real_child.then(|| {
-                std::env::current_exe()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("rustx")
-            }),
+            child_program: real_child
+                .then(|| crate::runtime::process_runner::companion_binary("rustx")),
             ..LocalRuntimeDependencies::default()
         };
         let registry = if real_child {
@@ -909,12 +908,18 @@ fn call_steps(index: u32, call: &ScriptedCall) -> Vec<FakeStep> {
         .collect()
 }
 
+/// A fixed pressure-sized payload keeps crash cuts reachable without clocks
+/// or sleeps, including with the 64 KiB partial policy.
+fn wide_text_chunk() -> FakeStep {
+    text(&format!("{WIDE_TEXT}{}", ".".repeat(65_536)))
+}
+
 /// One plain streaming text turn whose payload provably crosses the
 /// publication byte threshold before the terminal event.
 fn wide_text_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         text(" tail"),
         done(ModelFinishReason::Stop),
     ]
@@ -927,7 +932,7 @@ fn wide_text_turn() -> Vec<FakeStep> {
 fn unresolved_output_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::Failed {
             error: ModelError {
                 kind: ModelErrorKind::Transport,
@@ -949,7 +954,7 @@ fn unresolved_output_turn() -> Vec<FakeStep> {
 fn retryable_unresolved_output_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::Failed {
             error: ModelError {
                 kind: ModelErrorKind::Transport,
@@ -986,7 +991,7 @@ fn short_text_turn() -> Vec<FakeStep> {
 fn structurally_incomplete_turn() -> Vec<FakeStep> {
     vec![
         started(),
-        text(WIDE_TEXT),
+        wide_text_chunk(),
         FakeStep::Emit(ModelEvent::ToolCallStarted {
             block_index: ContentBlockIndex::new(1),
             call: ToolCallStart {
@@ -1006,7 +1011,7 @@ fn structurally_incomplete_turn() -> Vec<FakeStep> {
 
 /// A turn that proposes one complete tool call after releasing frames.
 fn calling_turn(call: &ScriptedCall) -> Vec<FakeStep> {
-    let mut steps = vec![started(), text(WIDE_TEXT)];
+    let mut steps = vec![started(), wide_text_chunk()];
     steps.extend(call_steps(1, call));
     steps.push(done(ModelFinishReason::ToolCalls));
     steps
@@ -1089,10 +1094,16 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 runtime.admit_now_for_test();
             }
             assert!(!runtime.has_current_attempt());
-            assert!(child.model.requests().is_empty());
+            assert_eq!(
+                child.model.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
             runtime.shutdown().await.unwrap();
             assert_eq!(runtime.goal_view().unwrap().unwrap().current, Some(before));
-            assert!(child.model.requests().is_empty());
+            assert_eq!(
+                child.model.requests(),
+                [] as [crate::model::types::ModelRequest; 0]
+            );
             note("reenabled-paused-proved");
             park_owning(child).await;
         }
@@ -1111,10 +1122,17 @@ async fn scenario_body(root: &Path, scenario: &str) {
         GOAL_RECOVER_INTERRUPT | GOAL_RECOVER_STALE_INTERRUPT | HUMAN_RECOVER_INTERRUPT => {
             recovered_interrupt(root, scenario).await;
         }
-        TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE => {
+        TEXT_TURN | TEXT_TURN_NO_CLIENT | TERMINAL_ONLY_TURN | STRUCTURAL_FAILURE
+        | REJECTED_TOOL_TURN => {
             let script = match scenario {
                 TERMINAL_ONLY_TURN => short_text_turn(),
                 STRUCTURAL_FAILURE => structurally_incomplete_turn(),
+                REJECTED_TOOL_TURN => calling_turn(&ScriptedCall {
+                    id: "call-unknown",
+                    tool_id: "unknown-tool",
+                    name: "unknown_tool",
+                    arguments: serde_json::json!({}),
+                }),
                 _ => wide_text_turn(),
             };
             let client = scenario != TEXT_TURN_NO_CLIENT;
@@ -1141,10 +1159,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 // runtime alive here makes the process own the exact in-flight
                 // transition until SIGKILL.
                 park_owning(child).await;
-            } else {
-                child.log.wait_settled(1).await;
-                note("settled");
             }
+            child.log.wait_settled(1).await;
+            note("settled");
         }
         INTERNAL_RETRY_SUCCESS => {
             let child = Child::require(
@@ -1165,10 +1182,9 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 // kills the attempt-terminal transaction so recovery must
                 // derive that fact from durable request/snapshot evidence.
                 park_owning(child).await;
-            } else {
-                child.log.wait_settled(1).await;
-                note("settled");
             }
+            child.log.wait_settled(1).await;
+            note("settled");
         }
         TOOL_TURN => {
             let call = read_call("call-read-1", "note.txt");
@@ -1521,7 +1537,7 @@ async fn scenario_body(root: &Path, scenario: &str) {
                 vec![
                     vec![
                         started(),
-                        text(WIDE_TEXT),
+                        wide_text_chunk(),
                         FakeStep::ParkUntilReleased(receiver),
                         text(" tail"),
                         done(ModelFinishReason::Stop),
@@ -1877,8 +1893,93 @@ async fn scenario_body(root: &Path, scenario: &str) {
             child.submit("the projection subject");
             park_owning((child, supervisor)).await;
         }
+        WORKFLOW_RUN_START => {
+            let composed = compose_workflow_emulator_child(root, true).await;
+            composed
+                .0
+                .runtime()
+                .submit_inbound(user_text("workflow conformance request"))
+                .expect("accept workflow inbound message");
+            park_owning(composed).await;
+        }
+        WORKFLOW_RUN_REOPEN => {
+            let composed = compose_workflow_emulator_child(root, false).await;
+            if let Some(registry) = composed.0.runtime().subagent_registry() {
+                registry.wait_recovery_reconciliation().await;
+            }
+            let live = composed.0.runtime().tool_runtime().workflows().snapshot();
+            assert!(
+                live.runs.is_empty(),
+                "reopened runtime must never invent a phantom live workflow run: {live:?}"
+            );
+            let _recovery = composed.0.runtime().recovery();
+            note(&format!("workflow-reopen:live_runs={}", live.runs.len()));
+            park_owning(composed).await;
+        }
         other => panic!("unknown FND-06 scenario {other}"),
     }
+}
+
+/// Composes one workflow-capable child runtime over the external `ProviderEmulator`
+/// HTTP/SSE binding (`ModelBindingRegistry::new`) and real `rustx` child executable.
+async fn compose_workflow_emulator_child(
+    root: &Path,
+    client: bool,
+) -> (
+    HeadlessConversationRuntime,
+    Option<event_recorder::ObserverTask>,
+    Arc<Log>,
+) {
+    let paths = lab_paths(root);
+    let launch = paths.try_resolve().expect("resolve workflow lab launch");
+    let runtime_config = launch.config().clone();
+    let child_program = crate::runtime::process_runner::companion_binary("rustx");
+    assert!(
+        child_program.is_file(),
+        "workflow crash child requires built `rustx` binary at {}",
+        child_program.display()
+    );
+    let dependencies = LocalRuntimeDependencies {
+        child_program: Some(child_program),
+        ..LocalRuntimeDependencies::default()
+    };
+    let registry = crate::model::invocation::ModelBindingRegistry::new(
+        launch
+            .models
+            .resolve(&launch.credentials)
+            .expect("resolve emulator model catalog"),
+    )
+    .expect("construct emulator model bindings");
+    let state = SessionPersistentState {
+        model: Some(runtime_config.initial_model().clone()),
+        ..SessionPersistentState::from_input(&crate::local_runtime::SessionConfigInput::new(
+            root.join("workspace"),
+        ))
+    };
+    let controller = Arc::new(
+        crate::runtime::local_storage::ProductController::acquire(&launch.runtime_root)
+            .expect("acquire lab controller"),
+    );
+    let artifacts_root = controller.root().join(
+        "sessions/ses_0199c989-03a0-7000-8000-000000000001/conversations/conv_0199c989-03a0-7000-8000-000000000001",
+    );
+    let core = LocalConversationCore::compose_from_config(
+        &launch,
+        &dependencies,
+        registry,
+        runtime_config,
+        state,
+        ConversationId::new(CONVERSATION),
+        artifacts_root,
+        controller,
+    )
+    .await
+    .expect("compose emulator workflow child runtime");
+    let log = Log::new();
+    *log.runtime.lock().expect("fixture runtime") = Some(core.runtime().clone());
+    let observer = client
+        .then(|| event_recorder::bind(&core, Arc::clone(&log), false).expect("bind observer"));
+    (core.into_headless(), observer, log)
 }
 
 /// The model watch proves recovery admitted an attempt. The exit gate proves

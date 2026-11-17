@@ -361,14 +361,14 @@ async fn named_subagent_and_mcp_share_one_frozen_parent_generation() {
             .count(),
         1
     );
-    assert!(
+    assert_eq!(
         fixture
             .runtime
             .runtime()
             .subagent_registry()
             .expect("parent subagent registry")
-            .all_snapshots()
-            .is_empty()
+            .all_snapshots(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
     );
     assert!(!journal.iter().any(|event| matches!(
         event,
@@ -566,7 +566,10 @@ async fn first_request_waits_for_complete_selected_mcp_discovery() {
         !loading.is_finished(),
         "selected MCP discovery remains a startup prerequisite"
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     tokio::time::resume();
     gate.release();
     let fixture = tokio::time::timeout(std::time::Duration::from_secs(15), loading)
@@ -664,7 +667,7 @@ async fn headless_first_submission_waits_ten_seconds_for_exact_selected_tools() 
         "headless initialization settled before selected MCP discovery was released: {:?}",
         loading.await
     );
-    assert!(provider.request_bodies().is_empty());
+    assert_eq!(provider.request_bodies(), [] as [std::string::String; 0]);
     tokio::time::resume();
     gate.release();
     let runtime = tokio::time::timeout(std::time::Duration::from_secs(15), loading)

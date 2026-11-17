@@ -12,7 +12,6 @@ fn t10_t14_failed_workflow_append_does_not_release_uncommitted_source_revisions(
         origin: (context.attempt_id().unwrap().clone()).into(),
         invocation: 1,
     };
-    let run = WorkflowRun::new(program.clone(), id.clone());
     let publication = Arc::new(std::sync::Mutex::new(Vec::new()));
     let receipts = publication.clone();
     runtime
@@ -42,17 +41,20 @@ fn t10_t14_failed_workflow_append_does_not_release_uncommitted_source_revisions(
     };
     let original_cut = plane.store.observation_read_cut().unwrap();
     plane.store.arm_fail_event_times(1);
-    runtime.emit_observability(&run, fact.clone());
+    runtime.emit_workflow_start_observability(fact.clone(), program.run_snapshot());
     assert!(publication.lock().unwrap().is_empty());
-    assert!(
+    assert_eq!(
         runtime
             .read_model
-            .published_source_cuts_after(read_model::WorkflowRevision(0))
-            .is_empty()
+            .published_source_cuts_after(read_model::WorkflowRevision(0)),
+        [] as [std::sync::Arc<crate::runtime::workflow::read_model::WorkflowSnapshot>; 0]
     );
     assert_eq!(plane.store.observation_read_cut().unwrap(), original_cut);
-    assert!(plane.store.read_events(None, 2).unwrap().events.is_empty());
-    runtime.emit_observability(&run, fact.clone());
+    assert_eq!(
+        plane.store.read_events(None, 2).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
+    runtime.emit_workflow_start_observability(fact.clone(), program.run_snapshot());
     let delivered = publication.lock().unwrap();
     assert_eq!(delivered.len(), 1);
     let (cuts, sequence) = &delivered[0];

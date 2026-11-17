@@ -291,4 +291,3 @@ it('JSON round-trips native permission defaults, mixed overrides, and optional t
  expect(()=>parseMcpJson(JSON.stringify({command:'server',tools:{read:{permissions:{plan:'ask',automatic:'ask'}}}}))).toThrow(/plan, automatic, and full_access/);
  expect(()=>parseMcpJson(JSON.stringify({command:'server',tools:{read:{timeoutMs:1}}}))).toThrow('Unsupported field');
 });
-

@@ -241,11 +241,11 @@ async fn failed_model_wait_append_withholds_call_identity_until_confirmed_progre
     let (confirmed, confirmed_sequence) = latest(&published);
     assert_eq!(confirmed, before);
     assert_eq!(confirmed_sequence, sequence);
-    assert!(
+    assert_eq!(
         runtime
             .read_model
-            .published_source_cuts_after(before.revision)
-            .is_empty()
+            .published_source_cuts_after(before.revision),
+        [] as [std::sync::Arc<crate::runtime::workflow::read_model::WorkflowSnapshot>; 0]
     );
     assert!(
         plane

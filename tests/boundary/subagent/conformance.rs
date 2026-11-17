@@ -351,6 +351,7 @@ async fn child_fixture_scoped_at_with_mode(
             model_timeout_policy: inherited_policy(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(rustx::context::SystemClock),
                 policy: rustx::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -477,7 +478,8 @@ fn child_approval_tools() -> (
             "properties": {"target": {"type": "string"}},
             "required": ["target"],
             "additionalProperties": false
-        }),
+        })
+        .into(),
         execution_policy: rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
         replay_policy: rustx::tools::types::ToolReplayPolicy::Never,
         origin: rustx::tools::types::ToolOrigin::Builtin,
@@ -687,6 +689,7 @@ async fn compose_parent_runtime_plane(
         model_timeout_policy: inherited_policy(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(rustx::context::SystemClock),
             policy: rustx::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -1216,7 +1219,7 @@ fn parent_pending_texts(plane: &ParentPlane) -> Vec<String> {
         .store
         .select_pending_batch()
         .expect("pending batch")
-        .map(|batch| {
+        .map_or_else(Vec::new, |batch| {
             batch
                 .items
                 .iter()
@@ -1228,7 +1231,6 @@ fn parent_pending_texts(plane: &ParentPlane) -> Vec<String> {
                 })
                 .collect()
         })
-        .unwrap_or_default()
 }
 
 /// Asserts the parent received exactly one successful terminal publication
@@ -2634,7 +2636,10 @@ async fn child_questionnaire_routes_through_root_without_parent_mediation() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("root projection");
-    assert!(root_snapshot.pending_interactions.is_empty());
+    assert_eq!(
+        root_snapshot.pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 
     attachment.detach();
     child.runtime.shutdown().await.expect("child drains");
@@ -3195,7 +3200,7 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
                         )
                     {
                         assert!(interactions.iter().all(|known: &crate::observation::interaction::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
-                        interactions.push(interaction.clone());
+                        interactions.push(*interaction.clone());
                     }
                     }
                 }
@@ -3373,7 +3378,10 @@ async fn mixed_child_interactions_route_by_full_identity_without_cross_talk() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("root snapshot");
-    assert!(snapshot.pending_interactions.is_empty());
+    assert_eq!(
+        snapshot.pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 
     attachment.detach();
     child_one
@@ -3472,7 +3480,7 @@ async fn child_death_removes_only_its_routed_interactions() {
                         )
                     {
                         assert!(interactions.iter().all(|known: &crate::observation::interaction::RuntimeClientInteractionHeader| known.interaction != interaction.interaction));
-                        interactions.push(interaction.clone());
+                        interactions.push(*interaction.clone());
                     }
                     }
                 }
@@ -3776,13 +3784,9 @@ async fn root_detach_preserves_headless_child_publication_and_routed_cancellatio
             .iter()
             .any(|event| matches!(event, RuntimeEvent::InteractionRequested { .. }))
     );
-    assert!(
-        parent
-            .plane
-            .registry
-            .pending_interaction_head()
-            .head
-            .is_empty()
+    assert_eq!(
+        parent.plane.registry.pending_interaction_head().head,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
     );
     reconnected.detach();
     child.runtime.shutdown().await.expect("child drains");
@@ -5062,14 +5066,22 @@ async fn await_child_publication_fact<T>(
             else {
                 panic!("{description}: Child publication stopped or requires repair");
             };
-            let rustx::runtime_client::RuntimeClientEvent::ProjectionTransition {
-                metadata, ..
-            } = &record.event
-            else {
-                panic!("complete native Child transition");
+            let (actual_conversation, actual_activation) = match record.event.as_ref() {
+                rustx::runtime_client::RuntimeClientEvent::ProjectionTransition {
+                    metadata,
+                    ..
+                } => (
+                    &metadata.read_cut.conversation_id,
+                    metadata.read_cut.activation_id.as_ref(),
+                ),
+                rustx::runtime_client::RuntimeClientEvent::ProjectionDelta { metadata, .. } => (
+                    &metadata.read_cut.conversation_id,
+                    metadata.read_cut.activation_id.as_ref(),
+                ),
+                _ => panic!("complete native Child transition"),
             };
-            assert_eq!(&metadata.read_cut.conversation_id, conversation);
-            assert_eq!(metadata.read_cut.activation_id.as_ref(), Some(activation));
+            assert_eq!(actual_conversation, conversation);
+            assert_eq!(actual_activation, Some(activation));
             if let Some(value) = record.event.facts().iter().find_map(&predicate) {
                 return value;
             }
@@ -6476,7 +6488,10 @@ async fn goal350_subagent_terminal_publication_wakes_next_continuation() {
         })
         .unwrap();
     parent.runtime.admit_now_for_test();
-    assert!(parent.model.requests().is_empty());
+    assert_eq!(
+        parent.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     assert_eq!(
         parent
             .plane

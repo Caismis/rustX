@@ -48,7 +48,7 @@ fn invalid_arguments(detail: impl std::fmt::Display) -> String {
 // typed indexes and property names found in the tool's generated input schema.
 fn malformed_arguments(path: &serde_path_to_error::Path) -> String {
     let schema = input_schema::<AskUserInput>();
-    let mut field_schema = &schema;
+    let mut field_schema = schema.as_ref();
     let mut field_path = String::new();
     for segment in path {
         match segment {
@@ -568,18 +568,18 @@ mod tests {
         .unwrap();
         let baseline =
             crate::tools::schema::compile_model_definition(&crate::tools::types::ToolDefinition {
-                input_schema: before.clone(),
+                input_schema: before.clone().into(),
                 ..definition()
             })
             .unwrap();
         assert!(baseline.input_schema["properties"]["arguments"].is_object());
-        let mut after = registry().definitions().remove(0).input_schema;
+        let mut after = (*registry().definitions().remove(0).input_schema).clone();
         let captured_after: serde_json::Value = serde_json::from_str(include_str!(
             "../../../tests/fixtures/ask_user/schema-after.json"
         ))
         .unwrap();
         assert_eq!(after, captured_after);
-        assert_eq!(after, definition().input_schema);
+        assert_eq!(&after, definition().input_schema.as_ref());
         let text_paths = [
             ("/properties/questions/items/properties/question", 4096),
             ("/properties/questions/items/properties/header", 16),
@@ -602,8 +602,14 @@ mod tests {
             .collect();
         expected_patterns.sort();
         assert_eq!(schema_keyword_paths(&before, "pattern"), expected_patterns);
-        assert!(schema_keyword_paths(&after, "pattern").is_empty());
-        assert!(schema_keyword_paths(&after, "uniqueItems").is_empty());
+        assert_eq!(
+            schema_keyword_paths(&after, "pattern"),
+            [] as [std::string::String; 0]
+        );
+        assert_eq!(
+            schema_keyword_paths(&after, "uniqueItems"),
+            [] as [std::string::String; 0]
+        );
         for (path, max) in text_paths {
             assert_eq!(before.pointer(path).unwrap()["pattern"], r"\S");
             let field = after.pointer(path).unwrap();

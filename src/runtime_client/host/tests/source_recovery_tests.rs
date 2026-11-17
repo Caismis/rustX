@@ -130,7 +130,10 @@ async fn explicit_checkpoint_repairs_a_real_source_fault_on_the_original_worker_
     assert_eq!(repaired.cursor.get(), before.cursor.get() + 1);
     assert_eq!(repaired.read_cut.source_cut, before.read_cut.source_cut);
     assert_original_source_unchanged(&fixture, &native, &original_journal);
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     let EventDelivery::Event(event) = subscriber.try_next() else {
         panic!("one original-worker repair transition")
     };
@@ -231,17 +234,20 @@ async fn unix_checkpoint_source_repair_keeps_the_current_thread_executor_service
     };
     assert_eq!(checkpoint.cursor.get(), before.cursor.get() + 1);
     assert_eq!(checkpoint.read_cut.source_cut, before.read_cut.source_cut);
-    assert!(
+    assert_eq!(
         fixture
             .store
             .as_ref()
             .unwrap()
             .read_events(None, 32)
             .unwrap()
-            .events
-            .is_empty()
+            .events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
     drop(reader);
     assert!(matches!(
         serving.await.unwrap(),
@@ -335,7 +341,7 @@ async fn checkpoint_source_repair_fails_at_its_deadline_and_a_later_checkpoint_r
     // the publication stays held, never with a stale checkpoint.
     let inner = fixture.host.inner.clone();
     let expired = tokio::task::spawn_blocking(move || {
-        inner.repair_failed_source_for_checkpoint(std::time::Instant::now())
+        inner.hydrate_read_domains_for_checkpoint(std::time::Instant::now())
     })
     .await
     .unwrap();

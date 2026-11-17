@@ -245,7 +245,7 @@ async fn catalog_observer_is_registered_before_activation_and_never_competes_aft
                 .count(),
             1
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         drop(release_observer);
         f.close().await;
     })
@@ -319,7 +319,7 @@ async fn native_compaction_transfer_releases_its_lease_before_reply_or_waiter_lo
                     "empty history cannot compact"
                 );
             }
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             f.close().await;
         }
     })

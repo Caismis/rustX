@@ -133,7 +133,8 @@ fn tool_result(message_id: &str, call_id: &str, body: &str) -> MessageBlock {
                     locator: "/tmp/rx-0000000000000001/r-0000000000000001.txt".into(),
                 },
             )),
-        },
+        }
+        .into(),
     })
 }
 
@@ -292,9 +293,6 @@ fn open_publication(
         request_id: request_id.clone(),
         message_id,
     };
-    store
-        .open_publication_stream(&start)
-        .expect("open publication");
     (request_id, start)
 }
 
@@ -417,12 +415,12 @@ fn settled_interaction(interaction_id: &InteractionId) -> RuntimeEventEnvelope {
 fn requirement_01_acceptance_is_the_transcript_visibility_frontier() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
-    assert!(
+    assert_eq!(
         store
             .load_transcript_page(None, 10)
             .expect("empty page")
-            .entries
-            .is_empty()
+            .entries,
+        [] as [rustx::durable::TranscriptEntry; 0]
     );
 
     let accepted = store
@@ -456,7 +454,10 @@ fn requirement_02_projection_compaction_preserves_every_canonical_transcript_ent
     let original = vec![user_message("user-a", "a"), user_message("user-b", "b")];
     store.initialize(&original).unwrap();
     let receipt = super::checkpoint(&store, "P1", 2, "summary");
-    assert!(store.load_head().unwrap().active_message_ids.is_empty());
+    assert_eq!(
+        store.load_head().unwrap().active_message_ids,
+        [] as [rustx::runtime::MessageId; 0]
+    );
     assert_eq!(
         store.projection_head().unwrap().unwrap(),
         receipt.checkpoint
@@ -758,12 +759,12 @@ fn requirement_07_agent_status_is_excluded_from_normal_transcript() {
             correlation: None,
         })
         .expect("status context acceptance");
-    assert!(
+    assert_eq!(
         store
             .load_transcript_page(None, 10)
             .expect("page before status adoption")
-            .entries
-            .is_empty()
+            .entries,
+        [] as [rustx::durable::TranscriptEntry; 0]
     );
     store
         .adopt_pending_batch(accepted_context.sequence, None)
@@ -791,10 +792,10 @@ fn requirement_08_incomplete_publication_is_distinct_from_canonical_assistant() 
     store.initialize(&[]).expect("initialize");
     let (_request_id, start) = open_publication(&store, "incomplete");
     store
-        .stage_publication_frames(&[text_frame(&start, 0, "partial")])
+        .stage_publication_frames(&start, &[text_frame(&start, 0, "partial")])
         .expect("stage");
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("incomplete audit");
     assert_eq!(audit.0.kind, PublicationAuditKind::Incomplete);
     store
@@ -833,15 +834,15 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
 
     let (_request_id, incomplete) = open_publication(&store, "incomplete-2");
     store
-        .stage_publication_frames(&[text_frame(&incomplete, 0, "partial")])
+        .stage_publication_frames(&incomplete, &[text_frame(&incomplete, 0, "partial")])
         .expect("stage incomplete");
     store
-        .terminalize_publication_audit(&incomplete.stream_id, fixed_time())
+        .terminalize_publication_audit(&incomplete, fixed_time())
         .expect("incomplete audit");
 
     let (request_id, unaccepted) = open_publication(&store, "unaccepted");
     store
-        .stage_publication_frames(&[text_frame(&unaccepted, 0, "complete")])
+        .stage_publication_frames(&unaccepted, &[text_frame(&unaccepted, 0, "complete")])
         .expect("stage unaccepted");
     store
         .append_event(envelope(
@@ -864,12 +865,12 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
         .expect("provider outcome");
     store
         .commit_publication_terminal(
-            &unaccepted.stream_id,
+            &unaccepted,
             &[frame(&unaccepted, 1, PublicationPayload::TerminalOnly)],
         )
         .expect("publication terminal");
     store
-        .terminalize_publication_audit(&unaccepted.stream_id, fixed_time())
+        .terminalize_publication_audit(&unaccepted, fixed_time())
         .expect("unaccepted audit");
 
     let audits = all_entries(&store, 10)
@@ -891,7 +892,10 @@ fn requirement_09_unaccepted_and_incomplete_publications_stay_distinct() {
             PublicationAuditKind::Unaccepted,
         ]
     );
-    assert!(store.load_canonical().expect("canonical").is_empty());
+    assert_eq!(
+        store.load_canonical().expect("canonical"),
+        [] as [rustx::message::MessageBlock; 0]
+    );
 }
 
 /// Requirement 10: a publication-audit tool proposal is typed audit content
@@ -902,10 +906,10 @@ fn requirement_10_audited_tool_proposal_is_unaccepted_and_unexecuted() {
     store.initialize(&[]).expect("initialize");
     let (_request_id, start) = open_publication(&store, "proposal-audit");
     store
-        .stage_publication_frames(&proposal_frames(&start))
+        .stage_publication_frames(&start, &proposal_frames(&start))
         .expect("proposal frames");
     let audit = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("incomplete proposal audit");
     assert_eq!(audit.0.kind, PublicationAuditKind::Incomplete);
     assert!(matches!(
@@ -920,7 +924,10 @@ fn requirement_10_audited_tool_proposal_is_unaccepted_and_unexecuted() {
             .iter()
             .all(|event| !matches!(event.event, RuntimeEvent::ToolExecutionStarted { .. }))
     );
-    assert!(store.load_canonical().expect("canonical").is_empty());
+    assert_eq!(
+        store.load_canonical().expect("canonical"),
+        [] as [rustx::message::MessageBlock; 0]
+    );
 }
 
 /// Requirement 11: requested and settled interaction facts are historical
@@ -954,8 +961,14 @@ async fn requirement_11_interaction_audits_page_without_recovering_a_waiter() {
         .attach(RUNTIME_CLIENT_PROTOCOL_VERSION)
         .expect("attach after audit recovery");
     let snapshot = initialized_snapshot(&result, runtime.host());
-    assert!(snapshot.pending_interactions.is_empty());
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.pending_interactions,
+        [] as [rustx::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [rustx::runtime_client::InboundItemView; 0]
+    );
     let page = runtime
         .host()
         .transcript_page(None, 10)
@@ -1006,19 +1019,19 @@ fn interaction_audit_transition_is_the_only_cursor_returning_interaction_path() 
         store.append_event(requested.clone()),
         Err(ConversationStoreError::InvalidReference(_))
     ));
-    assert!(
+    assert_eq!(
         store
             .read_events(None, 10)
             .expect("Journal after rejected request")
-            .events
-            .is_empty()
+            .events,
+        [] as [rustx::events::RuntimeEventEnvelope; 0]
     );
-    assert!(
+    assert_eq!(
         store
             .load_transcript_page(None, 10)
             .expect("transcript after rejected request")
-            .entries
-            .is_empty()
+            .entries,
+        [] as [rustx::durable::TranscriptEntry; 0]
     );
 
     let (persisted_requested, requested_cursor) = store
@@ -1198,11 +1211,8 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
         request_id,
         message_id: publication_message_id,
     };
-    store
-        .open_publication_stream(&start)
-        .expect("PublicationStreamId collision is scoped");
     let (_, publication_cursor) = store
-        .terminalize_publication_audit(&start.stream_id, fixed_time())
+        .terminalize_publication_audit(&start, fixed_time())
         .expect("publication audit");
 
     let entries = all_entries(&store, 10);

@@ -305,7 +305,10 @@ async fn submit_while_busy_queues_for_the_next_drain() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
 }
 
 /// Protocol cancellation of the current attempt: acceptance is not
@@ -588,8 +591,8 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
         }]
     );
 
-    // Release and resume after C: exactly the remaining delta arrives, so
-    // the client reconstructs "hello world" with no duplicate output.
+    // Resume after the checkpoint cursor. The final canonical notification
+    // replaces the partial prefix; no transient final delta is replayed.
     release_tx.send(true).expect("release");
     let resumed = receive_until(&subscription, |event| {
         event
@@ -611,10 +614,33 @@ async fn streaming_repair_from_a_mid_stream_snapshot() {
             _ => None,
         })
         .collect();
+    assert!(
+        deltas.is_empty(),
+        "the final tail uses the canonical notification"
+    );
+    let committed: Vec<_> = resumed
+        .iter()
+        .flat_map(|event| event.event.facts())
+        .filter_map(|fact| match fact {
+            RuntimeClientEvent::MessageCommitted {
+                message: MessageBlock::Assistant(assistant),
+                ..
+            } => Some(assistant),
+            _ => None,
+        })
+        .collect();
     assert_eq!(
-        deltas,
-        vec!["world".to_owned()],
-        "no duplicated output after resume"
+        committed.len(),
+        1,
+        "one canonical rebind after the partial checkpoint"
+    );
+    assert_eq!(
+        committed[0].content,
+        vec![rustx::message::types::AssistantContentBlock::Text(
+            rustx::message::content::TextBlock {
+                text: "hello world".into()
+            }
+        )]
     );
 
     let (final_snapshot, _) = host
@@ -1070,7 +1096,7 @@ async fn agent_status_shares_one_composition() {
     );
     assert_eq!(
         snapshot.statuses.as_slice(),
-        std::slice::from_ref(status_view),
+        std::slice::from_ref(status_view.as_ref()),
         "the snapshot window and the live event describe one composition"
     );
 }
@@ -1140,7 +1166,10 @@ async fn disabled_time_and_background_with_no_actionable_todos_emit_no_status() 
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert!(snapshot.statuses.is_empty());
+    assert_eq!(
+        snapshot.statuses,
+        [] as [crate::observation::status::AgentStatusView; 0]
+    );
 }
 
 /// Agent Status is composed **exactly once** per model request that
@@ -1299,7 +1328,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                 id: ToolId::new("tool-ls"),
                 name: "ls".to_owned(),
                 description: "list files".to_owned(),
-                input_schema: serde_json::json!({"type": "object"}),
+                input_schema: serde_json::json!({"type": "object"}).into(),
                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,
@@ -1309,7 +1338,7 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
                     id: ToolId::new("tool-ls"),
                     name: "ls".to_owned(),
                     description: "list files".to_owned(),
-                    input_schema: serde_json::json!({"type": "object"}),
+                    input_schema: serde_json::json!({"type": "object"}).into(),
                     execution_policy: ToolExecutionPolicy::ForegroundOnly,
                     replay_policy: ToolReplayPolicy::Never,
                     origin: ToolOrigin::Builtin,
@@ -1344,7 +1373,10 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
     assert_eq!(capabilities.tools[0].id, ToolId::new("tool-ls"));
     assert_eq!(capabilities.tools[0].name, "ls");
     assert_eq!(capabilities.tools[0].origin, ToolOrigin::Builtin);
-    assert!(capabilities.skills.is_empty());
+    assert_eq!(
+        capabilities.skills,
+        [] as [crate::observation::capability_source::RuntimeClientSkill; 0]
+    );
 
     // The snapshot carries the same semantic projection (one
     // implementation, not two).
@@ -1352,5 +1384,5 @@ async fn capability_projection_carries_builtin_tools_and_revision() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert_eq!(snapshot.capabilities, capabilities);
+    assert_eq!(snapshot.capabilities.as_ref(), &capabilities);
 }

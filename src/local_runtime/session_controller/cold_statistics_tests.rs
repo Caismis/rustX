@@ -149,7 +149,7 @@ async fn cold_statistics_read_model(
             .decode(chunk.bytes_base64)
             .unwrap();
         assert!(raw.len() <= 65_536);
-        assert!(!raw.is_empty());
+        assert_ne!(raw, [] as [u8; 0]);
         bytes.extend(raw);
         let Some(next) = chunk.next_offset else {
             break;

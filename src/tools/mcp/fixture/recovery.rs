@@ -266,10 +266,7 @@ impl RecoveryControl {
             ),
             (
                 RECOVERY_LIST_TTL_MS_ENV.to_owned(),
-                script
-                    .list_ttl_ms
-                    .map(|ttl| ttl.to_string())
-                    .unwrap_or_default(),
+                script.list_ttl_ms.map_or_default(|ttl| ttl.to_string()),
             ),
         ])
     }

@@ -1,0 +1,10 @@
+{
+  "accepted": true,
+  "archive_sha256": "90e8f8f44d2fb3170eee26441b2a582ef7783d24a493d3e7ec19f013b8e4d8fe",
+  "verified_members": 1831,
+  "wal_reparsed": 2,
+  "counter_products_reparsed": 8,
+  "support_audit_equal": true,
+  "formal_audit_equal": true,
+  "scope": "Checks all regular members, then reparses raw WAL, diagnostic counters, native recorded oracles and counter arithmetic. Does not execute products/builds/network or freshly verify absent executable bytes."
+}

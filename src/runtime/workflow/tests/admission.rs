@@ -98,7 +98,10 @@ fn cfg274_missing_role_and_required_child_exact_tool_disable_instead_of_suppress
             scope: AgentScope::OneShotChild,
         },
     );
-    assert!(ordinary.tools.is_empty());
+    assert_eq!(
+        ordinary.tools,
+        [] as [crate::tools::types::ToolDefinition; 0]
+    );
     assert_eq!(ordinary.diagnostics.len(), 1);
     let disabled = cfg274_admit_child(cfg274_agent_source(), &agents, &available, &ready, &skills);
     assert_eq!(
@@ -307,7 +310,7 @@ async fn cfg274_disabled_direct_start_runs_zero_nodes_tools_and_children() {
         format!("{:?}", plane.registry.listing(false, 100)),
         format!("{before:?}")
     );
-    assert!(runtime.read_model.snapshot().runs.is_empty());
+    assert_eq!(runtime.read_model.snapshot().runs, Vec::new());
     assert!(
         !plane
             .store
@@ -440,12 +443,9 @@ async fn cfg274_enabled_run_freezes_generation_across_dependency_loss() {
         crate::agent::AttemptLifecycle::default(),
     )
     .with_test_workflow(&source);
-    assert!(
-        r1.resources()
-            .capability()
-            .tool_registry()
-            .names()
-            .is_empty()
+    assert_eq!(
+        r1.resources().capability().tool_registry().names(),
+        [] as [&str; 0]
     );
     let mut started = probe.started.subscribe();
     let (_, cancellation) = workflow_cancellation();
@@ -567,7 +567,10 @@ fn cfg275_disabled_workflow_metadata_never_becomes_an_ordinary_agent_tool() {
         &crate::capabilities::CapabilityAvailability::new(),
     )
     .unwrap();
-    assert!(resolved.tools.is_empty());
+    assert_eq!(
+        resolved.tools,
+        [] as [crate::tools::types::ToolDefinition; 0]
+    );
     assert!(matches!(
         resolved.diagnostics.as_slice(),
         [crate::runtime::agent_profile::AgentProfileDiagnostic::Tool(
@@ -708,7 +711,10 @@ fn resource_authority_follows_effective_workflow_agent_selection_and_frozen_gene
         &skills,
     );
     let frozen = bind(&original);
-    assert!(frozen.tools.is_empty());
+    assert_eq!(
+        frozen.tools,
+        [] as [crate::runtime::subagent::resolver::ResolvedSubagentTool; 0]
+    );
     assert_eq!(frozen.resource_sources, [source.clone()].into());
     assert_eq!(
         frozen

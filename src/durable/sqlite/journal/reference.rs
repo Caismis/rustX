@@ -8,6 +8,7 @@ use crate::durable::sqlite::auxiliary;
 use crate::durable::sqlite::canonical::ledger::{
     ledger_message_exists, load_head, load_message_tx,
 };
+use crate::durable::sqlite::native_request;
 use crate::durable::sqlite::publication::proposal::{
     canonical_generation_owner, record_tool_proposal_dependency,
 };
@@ -15,12 +16,15 @@ use crate::durable::sqlite::request::contribution::{
     read_logical_step_progress_tx, validate_contribution_emission_shape,
 };
 use crate::durable::sqlite::request::snapshot::{
-    find_request_outcome_event, read_request_snapshot_tx, require_started_request_tx,
-    validate_started_request_row_tx,
+    find_request_outcome_event, validate_started_request_row_tx,
+};
+use crate::durable::sqlite::request::snapshot::{
+    read_request_snapshot_with_validation, require_started_request_with_validation,
 };
 use crate::durable::sqlite::request::{
     reconstruct_request_start_reference, validate_request_start_metadata,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::durable::sqlite::{decode, projection, storage};
 use crate::durable::{ConversationStoreError, InboundDraft};
 use crate::events::interaction::{
@@ -34,7 +38,6 @@ use crate::message::types::{
 };
 use crate::model::ModelRequestOwner;
 use crate::runtime::identity::{AgentId, AttemptId, ConversationId, InteractionId, TurnId};
-use rusqlite::OptionalExtension;
 use rusqlite::Transaction;
 
 /// The attempt and turn envelope one interaction audit fact is pinned to.
@@ -127,12 +130,12 @@ pub(in crate::durable::sqlite) fn validate_approval_subject_against_canonical(
             // The coordinator supplies this immutable subject only after preflight.
             let key = native_approval_key(invocation_id);
             let exists: bool = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
                     [&key],
                     |row| row.get(0),
                 )
-                .map_err(|error| storage(error.to_string()))?;
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
             if exists {
                 return Err(ConversationStoreError::InvalidReference(
                     "native invocation already has a pinned approval subject".into(),
@@ -431,7 +434,12 @@ pub(in crate::durable::sqlite) fn validate_agent_admission_reference(
             [agent_id.as_str()],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("Agent admission authority: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("Agent admission authority: {error}"),
+            )
+        })?;
     if !admitted {
         return Err(invalid());
     }
@@ -454,10 +462,11 @@ pub(in crate::durable::sqlite) fn validate_agent_admission_reference(
 }
 
 #[allow(clippy::too_many_lines)] // Closed validation of every durable event family.
-pub(in crate::durable::sqlite) fn validate_event_reference(
-    transaction: &Transaction<'_>,
+pub(in crate::durable::sqlite) fn validate_event_reference_with_requests(
+    requests: &mut native_request::Validation<'_, '_>,
     envelope: &RuntimeEventEnvelope,
 ) -> Result<(), ConversationStoreError> {
+    let transaction = requests.transaction();
     match &envelope.event {
         RuntimeEvent::ContextContributionEmitted {
             producer,
@@ -468,7 +477,7 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
         } => {
             validate_contribution_emission_shape(emission)?;
             let Some((snapshot, Some(started_sequence), _)) =
-                read_request_snapshot_tx(transaction, request_id)?
+                read_request_snapshot_with_validation(requests, request_id)?
             else {
                 return Err(ConversationStoreError::InvalidReference(format!(
                     "contribution emission references request {request_id}, which has not started"
@@ -531,8 +540,8 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
             retry_number,
             ..
         } => {
-            let (snapshot, _, _) = require_started_request_tx(
-                transaction,
+            let (snapshot, _, _) = require_started_request_with_validation(
+                requests,
                 &envelope.conversation_id,
                 failed_request_id,
             )?;
@@ -585,7 +594,7 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
             owner, request_id, ..
         } => match owner {
             ModelRequestOwner::Agent { .. } => {
-                let Some(row) = read_request_snapshot_tx(transaction, request_id)? else {
+                let Some(row) = read_request_snapshot_with_validation(requests, request_id)? else {
                     return Err(ConversationStoreError::InvalidReference(format!(
                         "model request outcome references request {request_id}, which never started"
                     )));
@@ -733,7 +742,7 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
             }
             let key = format!("subagent:{subagent_id}");
             let exists: bool = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
                     [&key],
                     |row| row.get(0),
@@ -809,12 +818,17 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
             }
             let key = format!("interaction:{interaction_id}");
             let exists: bool = transaction
-                .query_row(
+                .query_row_cached(
                     "SELECT EXISTS(SELECT 1 FROM lifecycle_state WHERE lifecycle_key=?1)",
                     [&key],
                     |row| row.get(0),
                 )
-                .map_err(|error| storage(format!("interaction uniqueness probe: {error}")))?;
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("interaction uniqueness probe: {error}"),
+                    )
+                })?;
             if exists {
                 return Err(ConversationStoreError::TerminalViolation(format!(
                     "interaction {interaction_id} already has a durable requested fact"
@@ -1082,16 +1096,11 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
                     crate::runtime::subagent::terminal_settlement_event_id(subagent_id)
                 }
             };
-            let terminal: Option<String> = transaction
-                .query_row(
-                    "SELECT event_json FROM events WHERE event_id=?1",
-                    [terminal_id.as_str()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| {
-                    storage(format!("physical settlement terminal lookup: {error}"))
-                })?;
+            let terminal = super::find_event_json_by_id(
+                transaction,
+                terminal_id.as_str(),
+                "physical settlement terminal lookup",
+            )?;
             let terminal = terminal.ok_or_else(|| {
                 ConversationStoreError::InvalidReference(
                     "physical settlement without terminal publication".into(),
@@ -1158,15 +1167,13 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
             }
             if node_id.node.is_empty()
                 || node_id.node.len() > 64
-                || node_id.block.definition.blocks.len()
-                    > 2 * crate::runtime::workflow::MAX_BLOCK_DEPTH
+                || !node_id.block.has_valid_nesting()
                 || node_id
                     .block
                     .definition
                     .blocks
                     .iter()
                     .any(|key| key.is_empty() || key.len() > 64)
-                || node_id.block.invocations.len() != node_id.block.definition.blocks.len() / 2 + 1
             {
                 return Err(ConversationStoreError::InvalidReference(
                     "Workflow output event has an invalid node identity".to_owned(),
@@ -1202,4 +1209,15 @@ pub(in crate::durable::sqlite) fn validate_event_reference(
         _ => {}
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_lines)] // Closed validation of every durable event family.
+pub(in crate::durable::sqlite) fn validate_event_reference(
+    transaction: &Transaction<'_>,
+    envelope: &RuntimeEventEnvelope,
+) -> Result<(), ConversationStoreError> {
+    validate_event_reference_with_requests(
+        &mut native_request::Validation::new(transaction),
+        envelope,
+    )
 }

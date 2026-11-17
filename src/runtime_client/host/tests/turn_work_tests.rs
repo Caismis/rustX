@@ -1,0 +1,370 @@
+// Fixed per-turn observation work of a subscribed native host.
+//
+// Each scenario runs complete text or tool turns through the production
+// runtime, publication and projection worker with one attached subscriber,
+// then counts every SQL statement the conversation connection executed (from
+// any thread), the bounded checkpoint-head read-backs among them, and the
+// encoded publication bytes. Counts are per settled turn after warm-up.
+use super::*;
+use crate::durable::sqlite::query_work::{self, ScopeWork};
+
+struct FixedTool;
+
+impl ToolExecutor for FixedTool {
+    fn start<'a>(
+        &'a self,
+        _invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+        crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+            Box::pin(async move {
+                ToolExecutionResult {
+                    deliveries: Vec::new(),
+                    status: ToolExecutionStatus::Success,
+                    content: vec![ToolResultContent::Text(TextBlock {
+                        text: "fixed tool result\n".to_owned(),
+                    })],
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    truncation: None,
+                    workflow: None,
+                    managed_output: None,
+                }
+            }),
+            context.cancellation.clone(),
+        )
+    }
+
+    fn progress_capability(&self) -> ToolProgressCapability {
+        ToolProgressCapability::None
+    }
+}
+
+fn fixed_tool() -> ToolDefinition {
+    ToolDefinition {
+        id: ToolId::new("tool-read"),
+        name: "read".to_owned(),
+        description: String::new(),
+        input_schema: serde_json::json!({"type": "object"}).into(),
+        execution_policy: ToolExecutionPolicy::ForegroundOnly,
+        replay_policy: ToolReplayPolicy::Never,
+        origin: ToolOrigin::Builtin,
+    }
+}
+
+fn tool_call_step(turn: usize, definition: &ToolDefinition) -> Vec<GatedStep> {
+    let id = ToolCallId::new(format!("read-{turn:08}"));
+    let arguments = r#"{"arguments":{"path":"fixture.txt"}}"#;
+    vec![
+        GatedStep::Emit(ModelEvent::Started),
+        GatedStep::Emit(ModelEvent::ToolCallStarted {
+            block_index: ContentBlockIndex::new(0),
+            call: crate::tools::types::ToolCallStart {
+                id: id.clone(),
+                tool_id: definition.id.clone(),
+                name: definition.name.clone(),
+            },
+        }),
+        GatedStep::Emit(ModelEvent::ToolCallArgumentsDelta {
+            block_index: ContentBlockIndex::new(0),
+            call_id: id.clone(),
+            arguments_delta: arguments.to_owned(),
+        }),
+        GatedStep::Emit(ModelEvent::ToolCallCompleted {
+            block_index: ContentBlockIndex::new(0),
+            call: ToolCall {
+                id,
+                tool_id: definition.id.clone(),
+                name: definition.name.clone(),
+                arguments: serde_json::from_str(arguments).unwrap(),
+            },
+        }),
+        GatedStep::Emit(ModelEvent::Completed {
+            finish_reason: ModelFinishReason::ToolCalls,
+            usage: None,
+        }),
+    ]
+}
+
+#[derive(Debug, Default)]
+struct TurnWork {
+    sql: std::collections::BTreeMap<&'static str, ScopeWork>,
+    source_signals: usize,
+    records: u64,
+    encoded_bytes: usize,
+    /// Delivered transitions, their read-domain facts, and their JSON bytes.
+    transitions: usize,
+    read_domain_facts: usize,
+    delivered_bytes: usize,
+    transport_bytes: usize,
+    transport_payload_bytes: usize,
+    full_json_bytes: usize,
+    full_transport_bytes: usize,
+    full_payload_bytes: usize,
+}
+
+fn captured_wire_value<T: serde::Serialize + schemars::JsonSchema>(value: &T) -> serde_json::Value {
+    struct Wire<'a, T>(&'a T, Arc<crate::observation::structural_json::plan::Plan>);
+    impl<T: serde::Serialize> serde::Serialize for Wire<'_, T> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            crate::observation::structural_json::serialize_wire(self.0, &self.1, serializer)
+        }
+    }
+    let schema = crate::observation::structural_json::root::<T>();
+    let encoded = Wire(value, schema);
+    let bytes = crate::observation::bounded::bounded_bytes(
+        &encoded,
+        crate::observation::bounded::CHECKPOINT_TARGET_BYTES,
+    )
+    .unwrap();
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+fn count_delivered(work: &mut TurnWork, events: &[RuntimeClientProtocolEvent]) {
+    for event in events {
+        work.transitions += 1;
+        let (bytes, payload) = crate::app_server::transport::event_notification_work(event);
+        work.transport_bytes += bytes;
+        work.transport_payload_bytes += payload;
+        let full = RuntimeClientProtocolEvent {
+            cursor: event.cursor,
+            event: Arc::new(complete_transition(&event.event).clone()),
+        };
+        let (full_bytes, full_payload) =
+            crate::app_server::transport::event_notification_work(&full);
+        work.full_json_bytes += serde_json::to_vec(full.event.as_ref()).unwrap().len();
+        work.full_transport_bytes += full_bytes;
+        work.full_payload_bytes += full_payload;
+        work.delivered_bytes += serde_json::to_vec(event.event.as_ref()).unwrap().len();
+        work.read_domain_facts += event
+            .event
+            .facts()
+            .iter()
+            .filter(|fact| {
+                matches!(
+                    fact,
+                    RuntimeClientEvent::ReadDomainsUpdated { .. }
+                        | RuntimeClientEvent::ReadDomainsPatched { .. }
+                )
+            })
+            .count();
+    }
+}
+
+const WARM_TURNS: usize = 3;
+const MEASURED_TURNS: usize = 8;
+
+async fn measure_turns(tool: bool) -> TurnWork {
+    let turns = WARM_TURNS + MEASURED_TURNS;
+    let definition = fixed_tool();
+    let mut registry = ToolRegistry::new();
+    if tool {
+        registry
+            .register(definition.clone(), Arc::new(FixedTool))
+            .unwrap();
+    }
+    let scripts = (0..turns)
+        .flat_map(|turn| {
+            if tool {
+                vec![tool_call_step(turn, &definition), one_turn_stop()]
+            } else {
+                vec![one_turn_stop()]
+            }
+        })
+        .collect();
+    let (adapter, fixture) = host_fixture(scripts, registry, status_engine()).await;
+    let inner = fixture.host.weak_inner().upgrade().unwrap();
+    let profile = Arc::new(Mutex::new(
+        crate::runtime_client::projection::PublicationEncodingProfile::default(),
+    ));
+    inner
+        .state
+        .lock()
+        .unwrap()
+        .projection
+        .profile_encoding(Arc::clone(&profile));
+    let store = fixture.store.clone().unwrap();
+    let (attachment, _) = fixture
+        .host
+        .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let initial = fixture.host.checkpoint().unwrap();
+    let mut captured = Vec::new();
+    let capture = std::env::var_os("RUSTX_N1_CAPTURE");
+    let subscription = attachment.subscribe_events(initial.cursor).unwrap();
+    let mut work = TurnWork::default();
+    let mut initial_signals = 0;
+    for turn in 0..turns {
+        if turn == WARM_TURNS {
+            fixture.host.projection_settled().await;
+            while let EventDelivery::Event(_) = subscription.try_next() {}
+            store.begin_shared_query_work();
+            *profile.lock().unwrap() =
+                crate::runtime_client::projection::PublicationEncodingProfile::default();
+            work = TurnWork::default();
+            initial_signals = inner.pending.source_signal_count();
+        }
+        fixture
+            .host
+            .submit_inbound(submit_content(&format!("turn {turn}")))
+            .unwrap();
+        let mut events = receive_until(&subscription, |event| {
+            matches!(
+                event.event.as_ref(),
+                RuntimeClientEvent::AttemptSettled { .. }
+            )
+        })
+        .await;
+        fixture.host.projection_settled().await;
+        while let EventDelivery::Event(event) = subscription.try_next() {
+            events.push(event);
+        }
+        count_delivered(&mut work, &events);
+        if capture.is_some() {
+            for event in &events {
+                captured.push(serde_json::json!({
+                    "cursor":event.cursor.to_string(),
+                    "event":captured_wire_value(event.event.as_ref()),
+                    "full":captured_wire_value(complete_transition(&event.event)),
+                }));
+            }
+        }
+    }
+    for (scope, measured) in query_work::take_shared() {
+        work.sql.insert(scope, measured);
+    }
+    store.finish_shared_query_work();
+    work.source_signals = inner.pending.source_signal_count() - initial_signals;
+    let encoded = profile.lock().unwrap().clone();
+    work.records = encoded.records;
+    work.encoded_bytes = encoded.bytes;
+    assert_eq!(adapter.requests().len(), turns * if tool { 2 } else { 1 });
+    if let Some(path) = capture {
+        use std::io::Write;
+        let value = serde_json::json!({"kind":if tool {"tool"} else {"text"},"initial":captured_wire_value(&initial),"events":captured});
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        writeln!(file, "{value}").unwrap();
+    }
+    fixture.runtime.shutdown().await.unwrap();
+    work
+}
+
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "per-turn averages of small test counts"
+)]
+fn report(kind: &str, work: &TurnWork) {
+    let per_turn = |value: f64| value / MEASURED_TURNS as f64;
+    for (scope, sql) in &work.sql {
+        eprintln!(
+            "{kind} turn work scope={scope} calls/turn={:.2} statements/turn={:.1} steps/turn={:.1} rows/turn={:.1} transactions/turn={:.2}",
+            per_turn(sql.entries as f64),
+            per_turn(sql.statements as f64),
+            per_turn(sql.steps as f64),
+            per_turn(sql.rows as f64),
+            per_turn(sql.transactions as f64),
+        );
+        if std::env::var_os("RUSTX_TURN_WORK_SQL").is_some() {
+            let mut statements: Vec<_> = sql.by_sql.iter().collect();
+            statements.sort_by_key(|(_, work)| std::cmp::Reverse(work.1));
+            for (text, (calls, steps, rows)) in statements.into_iter().take(60) {
+                eprintln!(
+                    "  {kind}/{scope} calls/turn={:.2} steps/turn={:.1} rows/turn={:.1} {}",
+                    per_turn(*calls as f64),
+                    per_turn(*steps as f64),
+                    per_turn(*rows as f64),
+                    text.chars().take(220).collect::<String>()
+                );
+            }
+        }
+    }
+    eprintln!(
+        "{kind} turn work publications/turn={:.2} encoded_bytes/turn={:.1} delivered/turn={:.2} read_domain_facts/turn={:.2} delivered_json_bytes/turn={:.1} transport_json_bytes/turn={:.1} transport_payload_bytes/turn={:.1} full_json_bytes/turn={:.1} full_transport_bytes/turn={:.1} full_payload_bytes/turn={:.1}",
+        per_turn(work.records as f64),
+        per_turn(work.encoded_bytes as f64),
+        per_turn(work.transitions as f64),
+        per_turn(work.read_domain_facts as f64),
+        per_turn(work.delivered_bytes as f64),
+        per_turn(work.transport_bytes as f64),
+        per_turn(work.transport_payload_bytes as f64),
+        per_turn(work.full_json_bytes as f64),
+        per_turn(work.full_transport_bytes as f64),
+        per_turn(work.full_payload_bytes as f64),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn fixed_turn_observation_work() {
+    for (kind, tool) in [("text", false), ("tool", true)] {
+        let work = measure_turns(tool).await;
+        report(kind, &work);
+        assert_eq!(usize::try_from(work.records).unwrap(), work.transitions);
+        let byte_limit = MEASURED_TURNS * if tool { 115_000 } else { 45_000 };
+        assert!(
+            work.transport_bytes <= byte_limit,
+            "{kind}: complete notification byte bound"
+        );
+        assert!(
+            work.encoded_bytes <= byte_limit,
+            "{kind}: publication metering byte bound"
+        );
+        assert!(
+            work.transport_bytes * 5 < work.full_transport_bytes,
+            "{kind}: complete notifications must shrink below one fifth of the identical full trace"
+        );
+        assert!(
+            work.encoded_bytes * 5 < work.full_payload_bytes,
+            "{kind}: publication metering must shrink below one fifth of the identical full trace"
+        );
+        assert!(
+            work.transport_payload_bytes * 5 < work.full_payload_bytes,
+            "{kind}: transport encoding must shrink below one fifth of the identical full trace"
+        );
+        let events: usize = work
+            .sql
+            .values()
+            .flat_map(|scope| &scope.by_sql)
+            .filter(|(sql, _)| sql.starts_with("INSERT INTO events("))
+            .map(|(_, work)| work.0)
+            .sum();
+        let drains = work
+            .sql
+            .get("journal_drain")
+            .map_or(0, |scope| scope.transactions);
+        eprintln!(
+            "{kind} measured source work: events={events} signals={} drain_transactions={drains}",
+            work.source_signals
+        );
+        // Commit and readiness release can signal separately for one event.
+        // Bound actual SQL reads by this queue's signals, not event count or
+        // the scheduling-dependent amount of coalescing between them.
+        assert!(
+            drains <= work.source_signals,
+            "{kind}: {drains} source read transactions for {} signals and {events} events",
+            work.source_signals
+        );
+        // Journal preparation separately authenticates the result field of
+        // each completed tool. These transactions are not source drain polls;
+        // coalescing must not be required to hide them inside the event bound.
+        assert_eq!(
+            work.sql
+                .get("prepared_lock")
+                .map_or(0, |scope| scope.transactions),
+            if tool { MEASURED_TURNS } else { 0 },
+            "{kind}: exactly one field read per completed tool"
+        );
+        // Each live read-back that runs is current when it owns the
+        // connection; retired ones run no SQL.
+        assert_eq!(
+            work.sql
+                .get("retired_checkpoint_head")
+                .map_or(0, |scope| scope.statements),
+            0
+        );
+    }
+}

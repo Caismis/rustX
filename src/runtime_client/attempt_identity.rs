@@ -1,9 +1,9 @@
 //! Selected original inherited attempt fields under an immutable native cut.
 use super::RuntimeClientError;
-use super::checkpoint::{CheckpointValueChunk, CheckpointValueRepresentation};
 use crate::durable::ConversationStore;
 use crate::observation::cut::CheckpointReadCut;
 use crate::observation::turn::InheritedAttemptIdentityKind as Kind;
+use crate::runtime_client::checkpoint::{CheckpointValueChunk, CheckpointValueRepresentation};
 
 pub(crate) fn selection(domain: &str) -> Option<(Kind, u64)> {
     let domain = domain

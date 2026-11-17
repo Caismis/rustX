@@ -200,7 +200,7 @@ pub struct ConversationRuntimeConfig {
     ///
     /// This is the single authority from which every Todo facet follows.
     /// The conversation tool runtime is the composition's *materialization
-    /// owner*: it builds the [`ConversationTodoList`] exactly when
+    /// owner*: it builds the `ConversationTodoList` exactly when
     /// `extensions.todo()` is `Some`, and everything downstream — the
     /// extension Tool plane, the Agent Status presentation, the Runtime
     /// Client projection — is derived from what it materialized rather than
@@ -464,15 +464,17 @@ impl ConversationToolRuntime {
         // Conversation state survives Plugin selection changes. Owning this
         // state grants no model capability; each generation selects its Plugin
         // Tool surfaces independently.
+        // Only the newest published list is the list, read by its index.
         let todos = Some(
             ConversationTodoList::rebuilt(
                 conversation_id.clone(),
-                &durable_binding
+                durable_binding
                     .full_store()
-                    .load_canonical()
+                    .latest_todo_publication()
                     .map_err(|error| {
                         ConversationRuntimeError::DurableConversation(error.to_string())
-                    })?,
+                    })?
+                    .as_slice(),
             )
             .map_err(ConversationRuntimeError::TodoList)?,
         );
@@ -757,12 +759,9 @@ impl ConversationToolRuntime {
 
     /// The base authorized tool environment of the conversation.
     ///
-    /// M6: this is the construction-time base authorized environment. It is
-    /// **no longer the effective environment directly supplied to
-    /// executions**: foreground executions and background dispatches use
-    /// the attempt capability snapshot's immutable effective `ToolEnvironment`
-    /// (base authorized environment plus the deterministic Skill
-    /// environment overlay).
+    /// Foreground executions and background dispatches use the attempt
+    /// capability snapshot's immutable effective `ToolEnvironment`, which is
+    /// this base environment. Skills do not add entries.
     #[must_use]
     pub fn environment(&self) -> &ToolEnvironment {
         &self.environment

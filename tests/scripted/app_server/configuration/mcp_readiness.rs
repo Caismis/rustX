@@ -452,7 +452,10 @@ async fn idle_runtime_catalog_publishes_before_the_next_attempt_without_input() 
             crate::tools::types::ToolExecutionStatus::Failed { .. }
         ));
         wait_runtime_catalog(&runtime, &mut publications, before).await;
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             runtime
                 .tool_runtime()
@@ -539,7 +542,10 @@ async fn unchanged_live_catalog_consumes_epoch_without_semantic_publication() {
         assert_eq!(current.binding_revision, original.binding_revision);
         assert_eq!(*publications.borrow(), published);
         assert!(!publications.has_changed().unwrap());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             runtime
                 .tool_runtime()
@@ -584,7 +590,10 @@ async fn failed_explicit_runtime_refresh_retains_last_good_without_automatic_ret
                 .iter()
                 .any(|diagnostic| diagnostic.field == "runtime.catalog")
         );
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         write_guidance(&fixture, "new authored instructions".into()).await;
         applied(&fixture, 0).await;
         let adopted = runtime.runtime_resources();
@@ -639,7 +648,10 @@ async fn failed_explicit_runtime_refresh_retains_last_good_without_automatic_ret
             guidance(runtime.runtime_resources().project_context_files()),
             "new authored instructions"
         );
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         fixture.close().await;
         mcp.close().await;
     })
@@ -668,7 +680,10 @@ async fn first_submission_joins_unarmed_early_preparation_with_one_native_budget
         !loading.is_finished(),
         "early preparation has no elapsed-time deadline"
     );
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     tokio::time::resume();
 
     let connection = crate::app_server::connection::AppServerConnection::new(fixture.host.clone());
@@ -806,7 +821,10 @@ async fn unload_and_drain_cancel_unarmed_loading_and_retire_bound_receipts() {
             let loading = fixture.load(0);
             mcp.control.gate.entered().await;
             assert!(!loading.is_finished());
-            assert!(fixture.provider.request_bodies().is_empty());
+            assert_eq!(
+                fixture.provider.request_bodies(),
+                [] as [std::string::String; 0]
+            );
             let probe = fixture.manager.probe(&session.active_conversation_id);
             let receipt = if with_receipt {
                 probe.before_submission_registration.arm();
@@ -828,7 +846,10 @@ async fn unload_and_drain_cancel_unarmed_loading_and_retire_bound_receipts() {
                 None
             };
             if drain {
-                assert!(fixture.manager.drain_all_runtimes().await.is_empty());
+                assert_eq!(
+                    fixture.manager.drain_all_runtimes().await,
+                    [] as [std::string::String; 0]
+                );
             } else {
                 fixture
                     .manager
@@ -863,7 +884,10 @@ async fn unload_and_drain_cancel_unarmed_loading_and_retire_bound_receipts() {
                 fixture.manager.is_empty(),
                 "late live result cannot activate a retired load"
             );
-            assert!(fixture.provider.request_bodies().is_empty());
+            assert_eq!(
+                fixture.provider.request_bodies(),
+                [] as [std::string::String; 0]
+            );
             assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
             fixture.close().await;
             mcp.close().await;
@@ -936,7 +960,10 @@ async fn first_unpolled_submission_receipt_keeps_its_absolute_deadline() {
     tokio::time::advance(std::time::Duration::from_secs(4)).await;
     tokio::task::yield_now().await;
     assert!(!loading.is_finished());
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     tokio::time::advance(std::time::Duration::from_secs(1)).await;
     tokio::task::yield_now().await;
     tokio::time::resume();
@@ -963,7 +990,10 @@ async fn first_unpolled_submission_receipt_keeps_its_absolute_deadline() {
         .unwrap();
     assert!(unavailable());
     assert_eq!(runtime.runtime_resources().revision(), revision);
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     fixture.close().await;
     mcp.close().await;
 }
@@ -1039,7 +1069,10 @@ async fn accepted_exact_node_clock_precedes_blocked_catalog_lookup() {
         };
         assert!(flight.startup.deadline().has_expired());
     }
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     tokio::time::resume();
     let mut completed = mcp.control.completed.subscribe();
     mcp.control.gate.release();
@@ -1065,7 +1098,10 @@ async fn accepted_exact_node_clock_precedes_blocked_catalog_lookup() {
                 crate::capabilities::CapabilitySourceState::Unavailable { .. }
             ))
     );
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     assert!(
         fixture
             .manager
@@ -1135,7 +1171,10 @@ async fn cold_attach_consumes_an_accepted_receipt_before_starting_mcp() {
     mcp.control.gate.release();
     bounded(loading).await.unwrap().unwrap();
     assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 1);
-    assert!(fixture.provider.request_bodies().is_empty());
+    assert_eq!(
+        fixture.provider.request_bodies(),
+        [] as [std::string::String; 0]
+    );
     assert!(
         fixture
             .manager
@@ -1196,16 +1235,16 @@ async fn host_drain_fences_accepted_cold_and_loading_submission_receipts() {
             assert!(matches!(receipt.await.produced(), crate::app_server::protocol::Response::Failure(_)));
             assert!(fixture.manager.is_empty());
             assert_eq!(probe.compositions.load(Ordering::SeqCst), compositions);
-            assert!(fixture.provider.request_bodies().is_empty());
+            assert_eq!(fixture.provider.request_bodies(), [] as [std::string::String; 0]);
             assert!(!draining.is_finished(), "the second native request still prevents the final inventory");
             if already_loading {
                 let mut completed = mcp.control.completed.subscribe();
                 mcp.control.gate.release();
                 completed.wait_for(|completed| *completed == 1).await.unwrap();
             }
-            assert!(fixture.provider.request_bodies().is_empty());
+            assert_eq!(fixture.provider.request_bodies(), [] as [std::string::String; 0]);
             drop(second_owner);
-            assert!(draining.await.unwrap().is_empty());
+            assert_eq!(draining.await.unwrap(), [] as [std::string::String; 0]);
             assert!(fixture.manager.is_empty());
             assert!(fixture.manager.registry.0.lock().unwrap().submission_receipts.is_empty());
             fixture.close().await;
@@ -1287,7 +1326,10 @@ async fn failed_initialization_receipt_cannot_follow_retry_and_resurrect_after_u
         assert!(fixture.manager.is_empty());
         assert_eq!(probe.compositions.load(Ordering::SeqCst), 2);
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert!(
             fixture
                 .manager
@@ -1311,7 +1353,7 @@ async fn failed_initialization_receipt_cannot_follow_retry_and_resurrect_after_u
 async fn durable_recovery_receipt_precedes_later_send_and_bounds_initial_mcp() {
     use crate::app_server::connection::AppServerConnection;
     use crate::app_server::protocol::{Method, MethodResult};
-    use crate::durable::inbox::InboxStore;
+    use crate::durable::InboxStore;
 
     for adopted in [false, true] {
         let late = McpFixture::start().await;
@@ -1344,7 +1386,10 @@ async fn durable_recovery_receipt_precedes_later_send_and_bounds_initial_mcp() {
                 .unwrap();
             if adopted {
                 store.adopt_pending_batch(accepted.sequence, None).unwrap();
-                assert!(store.load_pending().unwrap().is_empty());
+                assert_eq!(
+                    store.load_pending().unwrap(),
+                    [] as [crate::durable::inbox::PendingInboundItem; 0]
+                );
             }
         }
         let connection = AppServerConnection::new(fixture.host.clone());
@@ -1393,7 +1438,10 @@ async fn durable_recovery_receipt_precedes_later_send_and_bounds_initial_mcp() {
             .checked_add(std::time::Duration::from_secs(15))
             .unwrap();
         assert_eq!(startup.deadline().deadline(), Some(deadline));
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         let remaining = deadline
             .checked_duration_since(tokio::time::Instant::now())
             .unwrap();
@@ -1405,7 +1453,10 @@ async fn durable_recovery_receipt_precedes_later_send_and_bounds_initial_mcp() {
         .await;
         tokio::task::yield_now().await;
         assert!(!loading.is_finished());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         tokio::time::advance(std::time::Duration::from_millis(1)).await;
         tokio::time::resume();
         bounded(loading).await.unwrap().unwrap();
@@ -1520,7 +1571,7 @@ async fn live_catalog_publication_never_parks_on_background_ownership() {
             "the background ownership mutex remains parked"
         );
         assert!(runtime.configuration_cut().admitted_attempt.is_none());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(fixture.provider.request_bodies(), [] as [std::string::String; 0]);
         hook.proceed();
         let crate::tools::background::BackgroundDispatchOutcome::Accepted { execution_id, .. } =
             commit.await.unwrap().unwrap()
@@ -1532,7 +1583,7 @@ async fn live_catalog_publication_never_parks_on_background_ownership() {
         background.wait_until_settled(&execution_id).await;
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 2);
         assert_eq!(mcp.control.calls.load(Ordering::SeqCst), 0);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(fixture.provider.request_bodies(), [] as [std::string::String; 0]);
         fixture.close().await;
         mcp.close().await;
     })
@@ -1603,7 +1654,10 @@ async fn live_catalog_busy_frontier_defers_existing_admission_without_parking_co
         submit.await.unwrap().unwrap();
         // This native control read completes while the frontier is still held.
         assert!(runtime.configuration_cut().admitted_attempt.is_none());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(mcp.control.lists.load(Ordering::SeqCst), 3);
         drop(release_frontier);
         held.await.unwrap().unwrap();
@@ -1729,7 +1783,10 @@ async fn superseded_refresh_completion_cannot_publish_into_authored_source_bindi
                     .iter()
                     .all(|diagnostic| diagnostic.field != "runtime.catalog")
             );
-            assert!(fixture.provider.request_bodies().is_empty());
+            assert_eq!(
+                fixture.provider.request_bodies(),
+                [] as [std::string::String; 0]
+            );
             assert_eq!(original.control.lists.load(Ordering::SeqCst), 2);
             assert_eq!(replacement.control.lists.load(Ordering::SeqCst), 1);
             fixture.close().await;
@@ -1958,7 +2015,10 @@ async fn sibling_live_catalog_success_preserves_failed_source_refresh_diagnostic
         assert_eq!(catalog_failure(&runtime).as_ref(), Some(&failure));
         assert_eq!(failed.control.lists.load(Ordering::SeqCst), 2);
         assert_eq!(healthy.control.lists.load(Ordering::SeqCst), 3);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         failed.control.fail.store(false, Ordering::SeqCst);
         let before = *publications.borrow();
         runtime.refresh_runtime_catalogs().await.unwrap();
@@ -1966,7 +2026,10 @@ async fn sibling_live_catalog_success_preserves_failed_source_refresh_diagnostic
         assert!(catalog_failure(&runtime).is_none());
         assert_eq!(failed.control.lists.load(Ordering::SeqCst), 3);
         assert_eq!(healthy.control.lists.load(Ordering::SeqCst), 4);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         fixture.close().await;
         failed.close().await;
         healthy.close().await;
@@ -2036,7 +2099,10 @@ async fn completed_recovery_rebases_over_todo_adoption_and_sibling_replacement()
         assert!(definitions.iter().any(|tool| tool.name == TOOL));
         assert_eq!(recovering.control.lists.load(Ordering::SeqCst), 3);
         assert_eq!(sibling.control.lists.load(Ordering::SeqCst), 3);
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         runtime
             .submit_inbound(input("request-B: rebased complete source inventory"))
             .unwrap();
@@ -2296,8 +2362,8 @@ async fn scheduler85_review_cold_targets_bound_held_mcp_pagination() {
                             outcome,
                             ScheduledWorkflowOutcome::OutcomeUnknown { .. }
                         ));
-                        assert!(view.effects.is_empty());
-                        assert!(f.provider.request_bodies().is_empty());
+                        assert_eq!(view.effects, [] as [crate::runtime::workflow::scheduled::lifecycle::ScheduledWorkflowEffect; 0]);
+                        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
                     } else {
                         assert_eq!(outcome, ScheduledWorkflowOutcome::Completed);
                     }

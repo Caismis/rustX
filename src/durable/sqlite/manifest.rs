@@ -1,9 +1,11 @@
 //! Native selected-input topology. Optional Source metadata never enters these digests.
+use super::statements::FixedStatements;
 use super::{
     Arc, AtomicU64, Connection, ConversationStoreError, Digest, Mutex, OptionalExtension, Ordering,
     Sha256, decode, nonnegative, params, seq_to_i64, storage,
 };
 
+pub(super) mod geometry;
 #[cfg(test)]
 mod tests;
 use crate::model::projected::FrozenModelInput;
@@ -19,7 +21,7 @@ pub(super) fn node_read_work() -> (usize, usize) {
 pub(super) fn take_node_read_work() -> (usize, usize) {
     NODE_READ_WORK.with(|work| work.replace((0, 0)))
 }
-pub(super) const MAX_HEIGHT: u8 = 32;
+pub(super) const MAX_HEIGHT: u8 = 64;
 pub(super) const MAX_ITEMS: u64 = 8192;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(super) struct NodeRef {
@@ -30,7 +32,7 @@ pub(super) struct NodeRef {
 }
 #[derive(Debug, Clone)]
 pub(super) enum NodeKind {
-    Leaf,
+    Leaf { item_digest: [u8; 32], item_id: u64 },
     Branch { left: NodeRef, right: NodeRef },
 }
 #[derive(Debug, Clone)]
@@ -42,29 +44,46 @@ pub(super) struct Selection {
     pub root: Option<NodeRef>,
     seats: Vec<(std::sync::Weak<InputNode>, NodeRef)>,
     epoch: u64,
+    pub geometry: geometry::Session,
 }
 
+// Frozen bodies are immutable, so filling optional Source never rewrites them.
+const ITEM_SCHEMA: &str = "CREATE TABLE native_input_items(id INTEGER PRIMARY KEY,item_json TEXT NOT NULL CHECK(typeof(item_json)='text' AND length(CAST(item_json AS BLOB))<=67108864))";
 const NODE_SCHEMA: &str = "CREATE TABLE native_input_nodes (
         id INTEGER PRIMARY KEY,digest BLOB NOT NULL CHECK(typeof(digest)='blob' AND length(digest)=32),
         count INTEGER NOT NULL CHECK(typeof(count)='integer' AND count BETWEEN 1 AND 8192),
-        height INTEGER NOT NULL CHECK(typeof(height)='integer' AND height BETWEEN 1 AND 32),
+        height INTEGER NOT NULL CHECK(typeof(height)='integer' AND height BETWEEN 1 AND 64),
         item_digest BLOB CHECK(item_digest IS NULL OR (typeof(item_digest)='blob' AND length(item_digest)=32)),
         left_id INTEGER REFERENCES native_input_nodes(id),right_id INTEGER REFERENCES native_input_nodes(id),
         left_digest BLOB,right_digest BLOB,
-        item_json TEXT,
-        CHECK((typeof(item_json)='text' AND item_digest IS NOT NULL AND count=1 AND height=1 AND left_id IS NULL AND right_id IS NULL AND left_digest IS NULL AND right_digest IS NULL) OR (item_json IS NULL AND item_digest IS NULL AND typeof(left_id)='integer' AND left_id>0 AND typeof(right_id)='integer' AND right_id>0 AND typeof(left_digest)='blob' AND length(left_digest)=32 AND typeof(right_digest)='blob' AND length(right_digest)=32))
+        item_id INTEGER REFERENCES native_input_items(id),
+        source_native_digest BLOB CHECK(source_native_digest IS NULL OR (typeof(source_native_digest)='blob' AND length(source_native_digest)=32)),
+        source_hash BLOB CHECK(source_hash IS NULL OR (typeof(source_hash)='blob' AND length(source_hash)=32)),
+        source_metadata BLOB CHECK(source_metadata IS NULL OR (typeof(source_metadata)='blob' AND length(source_metadata)<=65536)),
+        CHECK((typeof(item_id)='integer' AND item_id>0 AND item_digest IS NOT NULL AND count=1 AND height=1 AND left_id IS NULL AND right_id IS NULL AND left_digest IS NULL AND right_digest IS NULL) OR (item_id IS NULL AND item_digest IS NULL AND typeof(left_id)='integer' AND left_id>0 AND typeof(right_id)='integer' AND right_id>0 AND typeof(left_digest)='blob' AND length(left_digest)=32 AND typeof(right_digest)='blob' AND length(right_digest)=32))
     )";
 pub(super) fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
     connection
-        .execute_batch(NODE_SCHEMA)
-        .map_err(|error| storage(format!("native selected input schema: {error}")))
+        .execute_batch(ITEM_SCHEMA)
+        .and_then(|()| connection.execute_batch(NODE_SCHEMA))
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("native selected input schema: {error}"),
+            )
+        })
 }
 pub(super) fn verify_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name='native_input_nodes'",[],|r|r.get(0)).optional().map_err(|error|storage(error.to_string()))?;
-    if sql.flatten().as_deref() != Some(NODE_SCHEMA) {
-        return Err(ConversationStoreError::IncompatibleSchema(
-            "native selected input schema differs".into(),
-        ));
+    for (name, expected) in [
+        ("native_input_nodes", NODE_SCHEMA),
+        ("native_input_items", ITEM_SCHEMA),
+    ] {
+        let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN typeof(sql)='text' AND length(CAST(sql AS BLOB))<=8192 THEN sql END FROM sqlite_schema WHERE type='table' AND name=?1",[name],|r|r.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+        if sql.flatten().as_deref() != Some(expected) {
+            return Err(ConversationStoreError::IncompatibleSchema(
+                "native selected input schema differs".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -92,25 +111,8 @@ fn digest_branch(left: NodeRef, right: NodeRef) -> [u8; 32] {
     }
     sha.finalize().into()
 }
-fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStoreError> {
-    #[cfg(test)]
-    NODE_READ_WORK.with(|work| {
-        let (headers, shapes) = work.get();
-        work.set((headers + 1, shapes));
-        crate::agent::execution::attribution::record_native(
-            crate::agent::execution::attribution::NativeWork {
-                index_queries: 1,
-                ..Default::default()
-            },
-        );
-    });
-    let row: (Vec<u8>, u64, u8) = connection
-        .query_row(
-            "SELECT CASE WHEN typeof(digest)='blob' AND length(digest)=32 THEN digest END,count,height FROM native_input_nodes WHERE id=?1",
-            [seq_to_i64(id)?],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-        )
-        .map_err(|e| storage(e.to_string()))?;
+type HeaderRow = (Vec<u8>, u64, u8);
+fn decoded_header(id: u64, row: HeaderRow) -> Result<NodeRef, ConversationStoreError> {
     if row.1 == 0 || row.1 > MAX_ITEMS || row.2 == 0 || row.2 > MAX_HEIGHT {
         return Err(invalid("native selected input header bounds"));
     }
@@ -121,21 +123,66 @@ fn header(connection: &Connection, id: u64) -> Result<NodeRef, ConversationStore
         height: row.2,
     })
 }
+/// One node row joined with the actual rows of both children. Child headers
+/// still come from their own stored rows, never from the parent's copies.
+macro_rules! node_sql {
+    ($source:literal) => {
+        concat!(
+            "SELECT CASE WHEN typeof(n.digest)='blob' AND length(n.digest)=32 THEN n.digest END,n.count,n.height,",
+            "CASE WHEN typeof(n.item_digest)='blob' AND length(n.item_digest)=32 THEN n.item_digest END,n.left_id,n.right_id,",
+            "CASE WHEN typeof(n.left_digest)='blob' AND length(n.left_digest)=32 THEN n.left_digest END,",
+            "CASE WHEN typeof(n.right_digest)='blob' AND length(n.right_digest)=32 THEN n.right_digest END,",
+            "CASE WHEN typeof(n.item_id)='integer' AND n.item_id>0 THEN n.item_id END,",
+            "l.id,CASE WHEN typeof(l.digest)='blob' AND length(l.digest)=32 THEN l.digest END,l.count,l.height,",
+            "r.id,CASE WHEN typeof(r.digest)='blob' AND length(r.digest)=32 THEN r.digest END,r.count,r.height,",
+            $source,
+            " FROM native_input_nodes n LEFT JOIN native_input_nodes l ON l.id=n.left_id",
+            " LEFT JOIN native_input_nodes r ON r.id=n.right_id WHERE n.id=?1"
+        )
+    };
+}
+const NODE_SQL: &str = node_sql!("NULL");
+const NODE_SOURCE_SQL: &str = node_sql!(
+    "CASE WHEN typeof(n.source_metadata)='blob' AND length(n.source_metadata)<=65536 AND n.source_native_digest=?2 AND n.source_hash=?3 THEN n.source_metadata END"
+);
+type ChildRow = (Option<u64>, Option<Vec<u8>>, Option<u64>, Option<u8>);
+fn child_header(id: u64, row: ChildRow) -> Result<NodeRef, ConversationStoreError> {
+    match row {
+        (Some(actual), Some(digest), Some(count), Some(height)) if actual == id => {
+            decoded_header(id, (digest, count, height))
+        }
+        _ => Err(storage("native selected input child unavailable")),
+    }
+}
 type NodeRow = (
     Option<Vec<u8>>,
     Option<u64>,
     Option<u64>,
     Option<Vec<u8>>,
     Option<Vec<u8>>,
+    Option<u64>,
 );
+type JoinedRow = (HeaderRow, NodeRow, ChildRow, ChildRow, Option<Vec<u8>>);
 pub(super) fn node(
     connection: &Connection,
     expected: &NodeRef,
 ) -> Result<Node, ConversationStoreError> {
-    let actual = header(connection, expected.id)?;
-    if actual != *expected {
-        return Err(invalid("native selected input node identity"));
-    }
+    node_row(connection, expected, None).map(|(node, _)| node)
+}
+/// Reads a node and, in the same row, its optional Source metadata bytes,
+/// selected only while the row carries exactly `source_hash`.
+pub(super) fn node_with_source(
+    connection: &Connection,
+    expected: &NodeRef,
+    source_hash: &[u8; 32],
+) -> Result<(Node, Option<Vec<u8>>), ConversationStoreError> {
+    node_row(connection, expected, Some(source_hash))
+}
+fn node_row(
+    connection: &Connection,
+    expected: &NodeRef,
+    source_hash: Option<&[u8; 32]>,
+) -> Result<(Node, Option<Vec<u8>>), ConversationStoreError> {
     #[cfg(test)]
     NODE_READ_WORK.with(|work| {
         let (headers, shapes) = work.get();
@@ -147,22 +194,64 @@ pub(super) fn node(
             },
         );
     });
-    let (item,left,right,left_digest,right_digest): NodeRow=connection.query_row("SELECT CASE WHEN typeof(item_digest)='blob' AND length(item_digest)=32 THEN item_digest END,left_id,right_id,CASE WHEN typeof(left_digest)='blob' AND length(left_digest)=32 THEN left_digest END,CASE WHEN typeof(right_digest)='blob' AND length(right_digest)=32 THEN right_digest END FROM native_input_nodes WHERE id=?1",[seq_to_i64(expected.id)?],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(|e|storage(e.to_string()))?;
-    let kind = match (item, left, right, left_digest, right_digest) {
-        (Some(item), None, None, None, None) if actual.count == 1 && actual.height == 1 => {
-            if digest_leaf(&bytes32(item)?) != actual.digest {
+    let id = seq_to_i64(expected.id)?;
+    let read = |row: &rusqlite::Row<'_>| -> rusqlite::Result<JoinedRow> {
+        Ok((
+            (row.get(0)?, row.get(1)?, row.get(2)?),
+            (
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+            ),
+            (row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?),
+            (row.get(13)?, row.get(14)?, row.get(15)?, row.get(16)?),
+            row.get(17)?,
+        ))
+    };
+    // Read this node's identity and shape together with its children's
+    // actual headers. No construction or historical proof is reused.
+    let (head, shape, left_row, right_row, source) = match source_hash {
+        None => connection.query_row_cached(NODE_SQL, [id], read),
+        Some(hash) => connection.query_row_cached(
+            NODE_SOURCE_SQL,
+            params![id, expected.digest.as_slice(), hash.as_slice()],
+            read,
+        ),
+    }
+    .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    let actual = decoded_header(expected.id, head)?;
+    if actual != *expected {
+        return Err(invalid("native selected input node identity"));
+    }
+    let (item, left, right, left_digest, right_digest, item_id) = shape;
+    let kind = match (item, left, right, left_digest, right_digest, item_id) {
+        (Some(item), None, None, None, None, Some(item_id))
+            if actual.count == 1 && actual.height == 1 =>
+        {
+            let item_digest = bytes32(item)?;
+            if digest_leaf(&item_digest) != actual.digest {
                 return Err(invalid("native selected leaf hash"));
             }
-            NodeKind::Leaf
+            NodeKind::Leaf {
+                item_digest,
+                item_id,
+            }
         }
-        (None, Some(left), Some(right), Some(lh), Some(rh)) => {
-            let left = header(connection, left)?;
-            let right = header(connection, right)?;
+        (None, Some(left), Some(right), Some(lh), Some(rh), None) => {
+            #[cfg(test)]
+            NODE_READ_WORK.with(|work| {
+                let (headers, shapes) = work.get();
+                work.set((headers + 2, shapes));
+            });
+            let left = child_header(left, left_row)?;
+            let right = child_header(right, right_row)?;
             if left.digest != bytes32(lh)?
                 || right.digest != bytes32(rh)?
                 || left.count.checked_add(right.count) != Some(actual.count)
                 || 1 + left.height.max(right.height) != actual.height
-                || left.height.abs_diff(right.height) > 1
                 || digest_branch(left, right) != actual.digest
             {
                 return Err(invalid("native selected branch hash/geometry"));
@@ -171,21 +260,36 @@ pub(super) fn node(
         }
         _ => return Err(invalid("native selected node closed shape")),
     };
-    Ok(Node { kind })
+    Ok((Node { kind }, source))
 }
-pub(super) fn leaf_input(
+// Use the item digest certified by the node shape to bind the exact body.
+// Keep the byte cap in SQL so a rejected leaf never allocates its body in Rust.
+fn read_leaf_bounded(
     connection: &Connection,
-    expected: &NodeRef,
-) -> Result<FrozenModelInput, ConversationStoreError> {
-    if !matches!(node(connection, expected)?.kind, NodeKind::Leaf) {
-        return Err(invalid("native selected input is not a leaf"));
+    id: u64,
+    item_digest: [u8; 32],
+    remaining: usize,
+) -> Result<(FrozenModelInput, usize), ConversationStoreError> {
+    let limit = remaining.min(64 * 1024 * 1024);
+    let (length, json): (u64, Option<String>) = connection
+        .query_row_cached(
+            "SELECT octet_length(item_json),
+                    CASE WHEN typeof(item_json)='text' AND octet_length(item_json)<=?2
+                         THEN item_json END
+             FROM native_input_items WHERE id=?1",
+            params![seq_to_i64(id)?, limit],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .map_err(|error| storage(error.to_string()))?;
+    let length = usize::try_from(length).map_err(|_| invalid("native input byte size"))?;
+    if length > remaining {
+        return Err(invalid("native selected input byte budget"));
     }
-    let (json,digest):(Option<String>,Vec<u8>)=connection.query_row("SELECT CASE WHEN typeof(item_json)='text' AND octet_length(item_json)<=67108864 THEN item_json END,item_digest FROM native_input_nodes WHERE id=?1",[seq_to_i64(expected.id)?],|r|Ok((r.get(0)?,r.get(1)?))).map_err(|e|storage(e.to_string()))?;
     let json = json.ok_or_else(|| invalid("native selected input leaf byte bound"))?;
-    if <[u8; 32]>::from(Sha256::digest(json.as_bytes())) != bytes32(digest)? {
+    if <[u8; 32]>::from(Sha256::digest(json.as_bytes())) != item_digest {
         return Err(invalid("native selected input leaf bytes"));
     }
-    decode(&json, "native selected input leaf")
+    Ok((decode(&json, "native selected input leaf")?, length))
 }
 pub(super) fn persist(
     connection: &Connection,
@@ -205,6 +309,7 @@ pub(super) fn persist(
         root: None,
         seats: Vec::new(),
         epoch: owner.epoch.load(Ordering::Acquire),
+        geometry: geometry::Session::new(&owner.geometry),
     };
     if let Some(root) = &input.root {
         selected.root = Some(persist_node(connection, root, owner, &mut selected)?);
@@ -250,7 +355,21 @@ fn persist_node(
             (digest_branch(a, b), None, None, Some(a), Some(b))
         }
     };
-    connection.execute("INSERT INTO native_input_nodes(digest,count,height,item_digest,item_json,left_id,right_id,left_digest,right_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![digest.as_slice(),input.count as u64,input.height,item_digest.as_ref().map(<[u8;32]>::as_slice),item_json,left.map(|r|r.id),right.map(|r|r.id),left.as_ref().map(|r|r.digest.as_slice()),right.as_ref().map(|r|r.digest.as_slice())]).map_err(|e|storage(e.to_string()))?;
+    let item_id = if let Some(json) = &item_json {
+        connection
+            .execute_cached(
+                "INSERT INTO native_input_items(item_json) VALUES(?1)",
+                [json],
+            )
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        Some(nonnegative(
+            connection.last_insert_rowid(),
+            "native input item id",
+        )?)
+    } else {
+        None
+    };
+    connection.execute_cached("INSERT INTO native_input_nodes(digest,count,height,item_digest,item_id,left_id,right_id,left_digest,right_digest) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![digest.as_slice(),input.count as u64,input.height,item_digest.as_ref().map(<[u8;32]>::as_slice),item_id,left.map(|r|r.id),right.map(|r|r.id),left.as_ref().map(|r|r.digest.as_slice()),right.as_ref().map(|r|r.digest.as_slice())]).map_err(|e|storage(e.to_string()))?;
     let reference = NodeRef {
         id: nonnegative(connection.last_insert_rowid(), "native input node id")?,
         digest,
@@ -280,22 +399,19 @@ pub(super) fn load_bounded(
     }
     while let Some(reference) = stack.pop() {
         match node(connection, &reference)?.kind {
-            NodeKind::Leaf => {
-                let length: u64 = connection
-                    .query_row(
-                        "SELECT octet_length(item_json) FROM native_input_nodes WHERE id=?1",
-                        [seq_to_i64(reference.id)?],
-                        |r| r.get(0),
-                    )
-                    .map_err(|e| storage(e.to_string()))?;
-                bytes = bytes
-                    .checked_add(
-                        usize::try_from(length).map_err(|_| invalid("native input byte size"))?,
-                    )
-                    .and_then(|n| n.checked_add(usize::from(!input.is_empty())))
-                    .filter(|n| *n <= max_bytes)
+            NodeKind::Leaf {
+                item_digest,
+                item_id,
+            } => {
+                let separator = usize::from(!input.is_empty());
+                let remaining = max_bytes
+                    .checked_sub(bytes)
+                    .and_then(|budget| budget.checked_sub(separator))
                     .ok_or_else(|| invalid("native selected input byte budget"))?;
-                input.push(leaf_input(connection, &reference)?);
+                let (leaf, length) =
+                    read_leaf_bounded(connection, item_id, item_digest, remaining)?;
+                bytes += separator + length;
+                input.push(leaf);
             }
             NodeKind::Branch { left, right } => {
                 stack.push(right);
@@ -308,25 +424,33 @@ pub(super) fn load_bounded(
 
 static NEXT_OWNER: AtomicU64 = AtomicU64::new(1);
 pub(super) struct Owner {
+    pub bodies: Arc<crate::conversation::bodies::CanonicalBodies>,
     pub id: u64,
-    pub epoch: AtomicU64,
+    pub epoch: Arc<AtomicU64>,
+    geometry: Arc<geometry::Cache>,
     pub frontier: AtomicU64,
     pub journal_frontier: AtomicU64,
     versions: Mutex<Option<(u64, u64)>>,
     pub history: Mutex<Option<(u64, crate::durable::projection::HistoricalModelInput)>>,
 }
 struct MutationColumns {
+    native: Vec<i32>,
+    items: Vec<i32>,
     canonical: Vec<i32>,
     journal: Vec<i32>,
     activation: Vec<i32>,
     bootstrap: Vec<i32>,
+    source: Vec<i32>,
 }
 impl MutationColumns {
     fn read(connection: &Connection) -> Self {
-        // Resolve indexes from the validated schema rather than assuming column order.
+        // Preupdate accessors accept logical schema ordinals, including virtual
+        // generated columns. table_info omits and renumbers those columns;
+        // table_xinfo preserves the ordinals SQLite converts to stored fields.
+        let source = std::cell::RefCell::new(Vec::new());
         let columns = |table: &str| {
             connection
-                .prepare(&format!("PRAGMA table_info({table})"))
+                .prepare(&format!("PRAGMA table_xinfo({table})"))
                 .expect("native dependency schema")
                 .query_map([], |row| {
                     Ok((row.get::<_, i32>(0)?, row.get::<_, String>(1)?))
@@ -334,7 +458,11 @@ impl MutationColumns {
                 .expect("native dependency columns")
                 .filter_map(|row| {
                     let (index, name) = row.expect("native dependency column");
+                    if table == "native_input_nodes" && name.starts_with("source_") {
+                        source.borrow_mut().push(index);
+                    }
                     let native = match table {
+                        "native_input_nodes" => !name.starts_with("source_"),
                         "message_ledger" => {
                             matches!(name.as_str(), "position" | "message_id" | "message_json")
                         }
@@ -348,10 +476,13 @@ impl MutationColumns {
         let canonical = columns("message_ledger");
         assert_eq!(canonical.len(), 3);
         Self {
+            native: columns("native_input_nodes"),
+            items: columns("native_input_items"),
             canonical,
             journal: columns("events"),
             activation: columns("projection_activations"),
             bootstrap: columns("bootstrap_identity"),
+            source: source.into_inner(),
         }
     }
 }
@@ -369,6 +500,24 @@ impl MutationColumns {
     ) -> bool {
         use rusqlite::hooks::PreUpdateCase;
         match (table, change) {
+            (
+                "native_input_nodes" | "native_input_items",
+                PreUpdateCase::Update {
+                    old_value_accessor: old,
+                    new_value_accessor: new,
+                },
+            ) => (if table == "native_input_nodes" {
+                &self.native
+            } else {
+                &self.items
+            })
+            .iter()
+            .any(|i| {
+                match (old.get_old_column_value(*i), new.get_new_column_value(*i)) {
+                    (Ok(a), Ok(b)) => a != b,
+                    _ => true,
+                }
+            }),
             ("events", PreUpdateCase::Insert(new)) => {
                 at_or_before(new.get_new_row_id(), &watched.journal_frontier)
             }
@@ -422,14 +571,27 @@ impl MutationColumns {
                 })
             }
             (
-                "native_input_nodes" | "projection_head" | "projection_checkpoints",
+                "native_input_nodes"
+                | "native_input_items"
+                | "tool_association_nodes"
+                | "tool_association_origin_sets"
+                | "projection_head"
+                | "projection_checkpoints",
                 PreUpdateCase::Insert(_),
             ) => table == "projection_head",
             (
                 "events" | "projection_activations" | "bootstrap_identity",
                 PreUpdateCase::Delete(_),
             )
-            | ("native_input_nodes" | "projection_head" | "projection_checkpoints", _)
+            | (
+                "native_input_nodes"
+                | "native_input_items"
+                | "tool_association_nodes"
+                | "tool_association_origin_sets"
+                | "projection_head"
+                | "projection_checkpoints",
+                _,
+            )
             | (_, PreUpdateCase::Unknown) => true,
             _ => false,
         }
@@ -437,9 +599,12 @@ impl MutationColumns {
 }
 impl Owner {
     fn new() -> Arc<Self> {
+        let epoch = Arc::new(AtomicU64::new(0));
         Arc::new(Self {
+            bodies: Arc::default(),
             id: NEXT_OWNER.fetch_add(1, Ordering::Relaxed),
-            epoch: AtomicU64::new(0),
+            geometry: geometry::Cache::new(Arc::clone(&epoch)),
+            epoch,
             frontier: AtomicU64::new(0),
             journal_frontier: AtomicU64::new(0),
             versions: Mutex::new(None),
@@ -453,6 +618,9 @@ impl Owner {
     pub fn install(
         connection: &Connection,
         append: Arc<super::append_validation::Owner>,
+        response: Arc<super::observation_response::Owner>,
+        statistics: Arc<super::observation_statistics::FoldCache>,
+        transaction_writes: Arc<std::sync::atomic::AtomicBool>,
     ) -> Result<Arc<Self>, ConversationStoreError> {
         let owner = Self::new();
         let watched = owner.clone();
@@ -466,8 +634,12 @@ impl Owner {
                     if db != "main" {
                         return;
                     }
+                    transaction_writes.store(true, Ordering::Release);
                     // One SQLite hook dispatches to independent proof owners.
                     append.observe(table, change);
+                    response.observe(table, change);
+                    statistics.observe(table, change);
+                    watched.geometry.observe(table, change, &columns.source);
                     let invalidates = columns.invalidates(&watched, table, change);
                     if invalidates {
                         watched.invalidate();
@@ -475,12 +647,13 @@ impl Owner {
                 },
             ))
             .map_err(|error| storage(format!("install native input observer: {error}")))?;
+        owner.geometry.enable();
         Ok(owner)
     }
     fn invalidate(&self) {
         let _ = self
             .epoch
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1));
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| n.checked_add(1));
     }
     pub fn capture(&self, connection: &Connection) -> Result<u64, ConversationStoreError> {
         // The caller's native read/write transaction must own its SQLite snapshot
@@ -488,16 +661,16 @@ impl Owner {
         // data_version follows the pinned read snapshot; a concurrent commit is
         // observed after that transaction ends, at the next snapshot capture.
         connection
-            .query_row("SELECT rootpage FROM sqlite_schema LIMIT 1", [], |row| {
+            .query_row_cached("SELECT rootpage FROM sqlite_schema LIMIT 1", [], |row| {
                 row.get::<_, i64>(0)
             })
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         let actual = (
             connection
-                .query_row("PRAGMA main.data_version", [], |r| r.get::<_, u64>(0))
+                .query_row_cached("PRAGMA main.data_version", [], |r| r.get::<_, u64>(0))
                 .map_err(|e| storage(e.to_string()))?,
             connection
-                .query_row("PRAGMA main.schema_version", [], |r| r.get::<_, u64>(0))
+                .query_row_cached("PRAGMA main.schema_version", [], |r| r.get::<_, u64>(0))
                 .map_err(|e| storage(e.to_string()))?,
         );
         let mut versions = self
@@ -510,6 +683,9 @@ impl Owner {
         *versions = Some(actual);
         Ok(self.epoch.load(Ordering::Acquire))
     }
+    pub(super) fn geometry_cache(&self) -> Arc<geometry::Cache> {
+        Arc::clone(&self.geometry)
+    }
 }
 
 impl Selection {
@@ -517,6 +693,7 @@ impl Selection {
         if self.epoch != owner.epoch.load(Ordering::Acquire) {
             return;
         }
+        self.geometry.commit();
         for (weak, node) in self.seats {
             if let Some(input) = weak.upgrade() {
                 *input.stored.lock().expect("committed native input seat") =

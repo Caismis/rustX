@@ -432,11 +432,9 @@ impl RuntimeInner {
             .install_observer_and_snapshots(observer.clone());
         // ---- T2b: the subagent registry (frozen by the same inactive
         //           mailbox binding) ----
-        let (agents, agents_cut) = self
-            .subagents
-            .as_ref()
-            .map(|subagents| subagents.install_observer_and_agent_snapshots(observer.clone()))
-            .unwrap_or_default();
+        let (agents, agents_cut) = self.subagents.as_ref().map_or_default(|subagents| {
+            subagents.install_observer_and_agent_snapshots(observer.clone())
+        });
         pending_interactions.extend(child_pending_interactions);
         pending_interactions.sort_by_key(|header| header.source_offset);
         // No fallible subsystem has been mutated after the pending read. The
@@ -836,17 +834,9 @@ impl ConversationRuntime {
                 });
             }
         };
-        // The recovered hot read model is built from the durable head **after**
-        // reconciliation, so it reflects the repaired canonical structure
-        // rather than the crash-time one.
-        let conversation = match Self::recovered_conversation(store.as_ref()) {
-            Ok(conversation) => conversation,
-            Err(error) => {
-                config.capability.release_conversation_runtime_claim();
-                config.tool_runtime.release_conversation_runtime_claim();
-                return Err(error);
-            }
-        };
+        // The hot read model is hydrated from the durable head on first use,
+        // which is always **after** reconciliation, so it reflects the
+        // repaired canonical structure rather than the crash-time one.
 
         let (
             last_permission_reminder_mode,
@@ -855,12 +845,15 @@ impl ConversationRuntime {
         ) = match recovery
             .latest_primary_request()
             .map(|request_id| {
-                let snapshot = store.load_request_snapshot(request_id)?;
-                let current = store.projected_history()?;
+                let permission = store.load_request_permission_state(request_id)?;
+                let activation = store.projection_head()?.map_or(
+                    crate::context::checkpoint::ProjectionActivationId(0),
+                    |head| head.activation.activation,
+                );
                 Ok::<_, crate::durable::ConversationStoreError>((
-                    (snapshot.history_cut.activation == current.cut.activation)
-                        .then_some(snapshot.permission_mode),
-                    snapshot.permission_task_message,
+                    (permission.projection_activation == activation)
+                        .then_some(permission.permission_mode),
+                    permission.task_message,
                 ))
             })
             .transpose()
@@ -1012,7 +1005,7 @@ impl ConversationRuntime {
                 last_permission_reminder_mode,
                 permission_task_message,
                 recovered_permission_task_message,
-                conversation: Some(conversation),
+                conversation: super::conversation_slot::ConversationSlot::Durable,
                 current_attempt: None,
                 scheduled: None,
                 scheduled_retries: std::collections::BTreeMap::default(),
@@ -1134,11 +1127,14 @@ impl ConversationRuntime {
             .map_err(|error| ConversationRuntimeError::Storage(error.to_string()))?;
         let active: Vec<_> = history
             .messages
-            .into_iter()
-            .filter_map(|m| m.as_canonical().cloned())
+            .shared_iter()
+            .filter(|m| m.as_canonical().is_some())
             .collect();
-        let ids = active.iter().map(|m| m.id().clone()).collect();
-        ConversationState::from_durable_head(
+        let ids = active
+            .iter()
+            .map(|m| m.canonical_id().expect("canonical Ledger body").clone())
+            .collect();
+        ConversationState::from_shared_durable_head(
             active,
             ids,
             SurfaceRevision::new(history.cut.ledger.0),
@@ -1263,7 +1259,7 @@ impl ConversationRuntime {
     ///
     /// This is the one explicit lifecycle boundary of Issue #61: the single
     /// `Inactive -> Running` transition of the shared
-    /// [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+    /// [`ConversationLifecycle`]
     /// every runtime-owned semantic boundary observes. Before it, the
     /// runtime is inert and a `RuntimeClientHost` may bind over it; at it,
     /// the Runtime Client host-binding decision is frozen. Activation is

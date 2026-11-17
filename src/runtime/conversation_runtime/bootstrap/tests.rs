@@ -1,8 +1,8 @@
 use crate::durable::CanonicalStore;
+use crate::durable::InboxStore;
 use crate::durable::JournalStore;
 use crate::durable::ProjectionStore;
 use crate::durable::RequestStore;
-use crate::durable::inbox::InboxStore;
 use crate::runtime::conversation_runtime::test_support::*;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1377,7 +1377,10 @@ async fn a_runtime_claim_winning_first_refuses_the_later_standalone_commit() {
         subagents.is_pristine(),
         "the refused start published no record"
     );
-    assert!(subagents.all_snapshots().is_empty());
+    assert_eq!(
+        subagents.all_snapshots(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
     assert!(
         store
             .read_events(None, 64)
@@ -1757,7 +1760,10 @@ async fn mcp_settlement_failure_wins_deterministic_activation_race() {
         runtime.submit_inbound(text_content("must be fenced")),
         Err(InboundAdmissionError::Shutdown)
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
 
     let shutdown = runtime.shutdown().await;
     let Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement { detail }) =
@@ -1844,7 +1850,10 @@ async fn mcp_settlement_failure_fences_after_activation_wins() {
         runtime.submit_inbound(text_content("must be fenced")),
         Err(InboundAdmissionError::Shutdown)
     );
-    assert!(model.requests().is_empty());
+    assert_eq!(
+        model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
 
     let shutdown = runtime.shutdown().await;
     let Err(crate::runtime::conversation_runtime::ShutdownError::RuntimeOwnedSettlement { detail }) =
@@ -1860,7 +1869,10 @@ async fn default_system_prompt_is_frozen_without_optional_instructions() {
     let dir = tempfile::tempdir().expect("temp dir");
     let (runtime, model) =
         headless_runtime(&dir, vec![one_turn_script(), one_turn_script()], None, None).await;
-    assert!(runtime.coordinator_ledger().unwrap().is_empty());
+    assert_eq!(
+        runtime.coordinator_ledger().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     runtime.activate();
     for attempt in 0..2 {
         runtime.submit_inbound(text_content("hello")).unwrap();
@@ -2037,6 +2049,7 @@ fn construction_validates_ownership() {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -2121,6 +2134,7 @@ fn construction_outside_execution_runtime_fails_typed() {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -2175,6 +2189,7 @@ async fn invalid_model_timeout_policy_fails_before_runtime_ownership_transfer() 
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
                 context: ConversationContextConfig {
+                    status_clock: std::sync::Arc::new(crate::context::SystemClock),
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,
@@ -2291,6 +2306,7 @@ async fn invalid_tool_deadline_policy_fails_before_runtime_ownership_transfer() 
                 model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
                 tool_deadline_policy,
                 context: ConversationContextConfig {
+                    status_clock: std::sync::Arc::new(crate::context::SystemClock),
                     policy: crate::context::SessionContextPolicy {
                         reserve_tokens: 0,
                         keep_recent_tokens: 0,
@@ -2401,7 +2417,7 @@ async fn incomplete_tool_tail_is_repaired_and_pending_remains_intact() {
             .append_canonical(&assistant_tool_block("assistant-tool", "call-1"))
             .expect("assistant tool call");
         store
-            .accept_inbound(crate::durable::inbox::InboundDraft {
+            .accept_inbound(crate::durable::InboundDraft {
                 message_id: None,
                 source: UserSource::Human,
                 kind: InboundKind::Message,
@@ -2602,7 +2618,7 @@ async fn recovered_pending_inbound_is_auto_admitted_with_zero_clients() {
         &[],
         |store, _| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -2676,7 +2692,7 @@ async fn class_b_restart_continues_the_adopted_turn_without_duplicating_it() {
         &[],
         |store, conversation_id| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -2772,7 +2788,7 @@ async fn class_b_recovery_uses_the_same_model_turn_start_gate() {
         &[],
         |store, conversation_id| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -2889,7 +2905,7 @@ async fn class_c_restart_issues_no_provider_request_of_its_own() {
         &[],
         |store, conversation_id| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -3026,7 +3042,7 @@ async fn class_e_restart_issues_no_replacement_request() {
         &[],
         |store, conversation_id| {
             let accepted = store
-                .accept_inbound(crate::durable::inbox::InboundDraft {
+                .accept_inbound(crate::durable::InboundDraft {
                     message_id: None,
                     source: UserSource::Human,
                     kind: InboundKind::Message,
@@ -3350,11 +3366,14 @@ async fn finite_workflow_committed_physical_proof_survives_runtime_reopen() {
     assert_eq!(snapshot.state, SubagentState::Succeeded);
     assert!(snapshot.is_settled());
     assert_eq!(registry.with_goal_idle(|| true), Some(true));
-    assert!(
+    assert_eq!(
         registry
             .list_agents(crate::runtime::subagent::MAX_AGENT_LIST_LIMIT)
-            .agents
-            .is_empty()
+            .agents,
+        [] as [(
+            crate::runtime::subagent::AgentSnapshot,
+            crate::runtime::subagent::SubagentSnapshot
+        ); 0]
     );
     assert!(matches!(
         registry.wait_agent(&accepted.child_agent_id).await,
@@ -3448,17 +3467,23 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
             registry.unproven_settlements(),
             std::slice::from_ref(&accepted.subagent_id)
         );
-        assert!(
+        assert_eq!(
             registry
                 .list_agents(crate::runtime::subagent::MAX_AGENT_LIST_LIMIT)
-                .agents
-                .is_empty()
+                .agents,
+            [] as [(
+                crate::runtime::subagent::AgentSnapshot,
+                crate::runtime::subagent::SubagentSnapshot
+            ); 0]
         );
         assert!(matches!(
             registry.wait_agent(&accepted.child_agent_id).await,
             Err(AgentControlError::Unknown(_))
         ));
-        assert!(model.requests().is_empty());
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
         let drained = Arc::new(tokio::sync::Notify::new());
         *reopened.inner.probe.lock().unwrap() = Some(CoordinatorProbe {
             drain_linearization: Some(drained.clone()),
@@ -3522,7 +3547,10 @@ async fn finite_workflow_recovery_tracks_physical_obligation_until_exact_owner_p
             1,
             "recovery never reattaches or replays the finite activation"
         );
-        assert!(model.requests().is_empty());
+        assert_eq!(
+            model.requests(),
+            [] as [crate::model::types::ModelRequest; 0]
+        );
         drop(reopened);
         drop(registry);
         tokio::time::resume();

@@ -1184,14 +1184,12 @@ async fn http_errors_normalize() {
     for (fixture, status, reason, headers, expected_kind) in cases {
         let fixture = fixture.to_owned();
         let fixture_for_server = fixture.clone();
-        let headers: Vec<(String, String)> = headers
-            .map(|headers| {
-                headers
-                    .into_iter()
-                    .map(|(name, value)| (name.to_owned(), value.to_owned()))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let headers: Vec<(String, String)> = headers.map_or_default(|headers| {
+            headers
+                .into_iter()
+                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                .collect()
+        });
         let server = crate::common::FixtureServer::start(move |_attempt, _head| {
             let mut reply = error_fixture(&fixture_for_server);
             reply.status = status;
@@ -1381,7 +1379,8 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })),
         rustx::model::ModelInputMessage::Canonical(user("msg-a", "A")),
         rustx::model::ModelInputMessage::Canonical(user("msg-b", "B")),
@@ -1433,7 +1432,8 @@ async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() 
         "the compiled reminder is translated verbatim: {function}"
     );
     assert_eq!(
-        function["parameters"], expected_schema,
+        &function["parameters"],
+        expected_schema.as_ref(),
         "the adapter preserves the entire compiled schema"
     );
     assert_compiled_execution_mode_schema(&function["parameters"], "command");

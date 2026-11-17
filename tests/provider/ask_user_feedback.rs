@@ -141,7 +141,7 @@ fn rejection_history(protocol: ModelProtocol) -> ModelRequest {
                     ),
                     tool_call_id: call.id,
                     tool_id: call.tool_id,
-                    result,
+                    result: result.into(),
                 },
             )));
     }
@@ -313,7 +313,8 @@ async fn assert_rejection_wire(protocol: ModelProtocol) {
         }
     };
     assert_eq!(
-        wire_schema, &schema,
+        wire_schema,
+        schema.as_ref(),
         "compiled native schema reaches the adapter unchanged"
     );
     assert_no_pattern(wire_schema);
@@ -322,7 +323,7 @@ async fn assert_rejection_wire(protocol: ModelProtocol) {
         "all result identities, ordering, and complete projections survive without drops or duplicates"
     );
     for (_, text) in &wire_results {
-        assert!(!text.is_empty());
+        assert_ne!(text, "");
         assert!(text.len() <= MAX_MODEL_TOOL_RESULT_BYTES);
     }
 }

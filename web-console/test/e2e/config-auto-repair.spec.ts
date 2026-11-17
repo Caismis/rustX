@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { returnHome, connectRemote, openEmptySession, openWorkspaceSettings, selectedSettingsPage } from './shell-actions';
 import { routeWorkspaceHost } from './workspace-host';
 
@@ -75,5 +75,5 @@ test('automatic configuration repair is announced once and inspected at its exac
     await expect(settings.getByRole('region', { name: 'Auto Repair', exact: true }).getByText('Removed an unknown field from agent', { exact: true })).toBeVisible();
     await expect(page.locator('.repair-notice')).toHaveCount(0);
     expect(errors).toEqual([]);
-  } finally { await fixture.stop(); }
+  } finally { await stopDogfoodPage(page, fixture); }
 });

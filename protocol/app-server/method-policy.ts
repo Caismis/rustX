@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v78.ts';
+import type { Request1 } from './v80.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -88,6 +88,8 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'agent/statistics': { effect: 'read' },
   'session/trace': { effect: 'read' },
   'session/traceLocateTool': { effect: 'read' },
+  'session/traceLocateWorkflow': { effect: 'read' },
+  'agent/traceLocateWorkflow': { effect: 'read' },
   // Inspection detail is a pure historical read: it advances no cursor,
   // consumes no pending work, and settles nothing, so a lost response is
   // safely retryable.
@@ -109,7 +111,10 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/effectiveConfiguration': { effect: 'read' },
   'session/effectiveConfigurationValueRead': { effect: 'read' },
   'session/effectiveConfigurationPage': { effect: 'read' },
-  'configuration/sourceWrite': { effect: 'side_effecting' },
+  // Native owns the atomic source write and the following consumer-state
+  // capture. A large source or retained consumer set can outlive an RPC clock;
+  // expiring that clock cannot cancel publication and discards its receipt.
+  'configuration/sourceWrite': { effect: 'side_effecting', unbounded: true },
   // Exact scoped Workflow file reads and offline candidate checks: they
   // execute, prepare and write nothing (Issue #491).
   'workflow/list': { effect: 'read' },
@@ -202,6 +207,12 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'conversation/contentRead': { effect: 'read' },
   'conversation/checkpointPage': { effect: 'read' },
   'conversation/checkpointValueRead': { effect: 'read' },
+  'conversation/workflowRunSnapshotHeader': { effect: 'read' },
+  'conversation/workflowRunSnapshotChunk': { effect: 'read' },
+  'conversation/workflowTraceNode': { effect: 'read' },
+  'session/workflowRunSnapshotHeader': { effect: 'read' },
+  'session/workflowRunSnapshotChunk': { effect: 'read' },
+  'session/workflowTraceNode': { effect: 'read' },
   'session/subscribe': { effect: 'connection_local' },
   'turn/start': { effect: 'side_effecting' },
   'turn/steer': { effect: 'side_effecting' },

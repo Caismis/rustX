@@ -50,7 +50,7 @@ async fn auxiliary_original_scope_closes_while_manager_handoff_is_parked() {
         ));
         probe.before_operation.release();
         assert!(matches!(task.await.unwrap(), Response::Failure(_)));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert!(matches!(
             runtime.auxiliary_lookup(&correlation, Some(&scope)),
             AuxiliarySubmissionLookup::ConfirmedNotAdmitted { .. }

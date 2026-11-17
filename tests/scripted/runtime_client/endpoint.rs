@@ -109,9 +109,13 @@ fn framed_checkpoint(
 }
 
 fn assert_event_cut(event: &rustx::runtime_client::RuntimeClientProtocolEvent) {
-    match &event.event {
+    match event.event.as_ref() {
         rustx::runtime_client::RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
             assert_eq!(metadata.read_cut.revision, event.cursor.get());
+        }
+        rustx::runtime_client::RuntimeClientEvent::ProjectionDelta { metadata, .. } => {
+            assert_eq!(metadata.read_cut.revision, event.cursor.get());
+            assert_eq!(metadata.base_cursor.get() + 1, event.cursor.get());
         }
         rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
             assert_eq!(checkpoint.cursor, event.cursor);
@@ -125,7 +129,7 @@ fn assert_read_suffix(
     event: &rustx::runtime_client::RuntimeClientProtocolEvent,
     terminal: &rustx::runtime::identity::AttemptId,
 ) {
-    match &event.event {
+    match event.event.as_ref() {
         rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
             let attempt = checkpoint
                 .snapshot
@@ -142,6 +146,7 @@ fn assert_read_suffix(
             event.event.facts().iter().all(|fact| matches!(
                 fact,
                 rustx::runtime_client::RuntimeClientEvent::ReadDomainsUpdated { .. }
+                    | rustx::runtime_client::RuntimeClientEvent::ReadDomainsPatched { .. }
                     | rustx::runtime_client::RuntimeClientEvent::TraceChanged
             )),
             "only a read-domain suffix follows the native terminal"
@@ -181,7 +186,7 @@ async fn receive_terminal(
             }
         }
         if let rustx::runtime_client::RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } =
-            &event.event
+            event.event.as_ref()
             && let Some(attempt) = &checkpoint.snapshot.attempt
             && matches!(
                 attempt.phase,
@@ -279,7 +284,7 @@ async fn initialize_alone_establishes_the_attachment() {
         .as_str()
         .expect("the runtime returns the attachment identity")
         .to_owned();
-    assert!(!attachment_id.is_empty());
+    assert_ne!(attachment_id, "");
     assert_eq!(
         response["result"]["conversation_id"],
         "conv_bec42b36-775e-75ba-95e2-701564095b4a"

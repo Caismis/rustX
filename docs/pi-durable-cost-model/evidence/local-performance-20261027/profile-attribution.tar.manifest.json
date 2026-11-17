@@ -1,0 +1,30 @@
+{
+  "analyze-fresh-profiles.py": {
+    "bytes": 8832,
+    "sha256": "d50b5c6a41b5d53facbfd900a69ed6c8be348b5b4553a0a96d0a05f0c10e96e4"
+  },
+  "profile-analysis-findings.json": {
+    "bytes": 8478,
+    "sha256": "72705b2a05116617bb34e78e2c1a7eab39ece4ebb70e2786d5063a7e00b4f871"
+  },
+  "profile-analysis.json": {
+    "bytes": 72537,
+    "sha256": "b26135a77fc0f1902157fe1adb33b13ce51bf7a5ec06802026d6c5075a4dff16"
+  },
+  "profile-candidate-live-large-cpu/steady-collapsed.txt": {
+    "bytes": 2016603,
+    "sha256": "704fb24a91f9695d63dae4c6f7b7545828731883e480ee3ff847ccac4bb33738"
+  },
+  "profile-candidate-live-small-cpu/steady-collapsed.txt": {
+    "bytes": 1490015,
+    "sha256": "0e5537b1c12b0f067bafed847cd89816cbacdfee1d45d3da5f633ed57367ae36"
+  },
+  "profile-candidate-no-live-large-cpu/steady-collapsed.txt": {
+    "bytes": 1132074,
+    "sha256": "1ed932de5cec25b596427b4055923a783e0dc42eea27aefabe80f4382f2c9bf6"
+  },
+  "profile-candidate-no-live-small-cpu/steady-collapsed.txt": {
+    "bytes": 1118914,
+    "sha256": "3c1fb5753fd25bbb1ed4a7bfe02334acc9932fa2ec338f49e14a30610e06cf07"
+  }
+}

@@ -142,8 +142,7 @@ fn canonicalize_deepest_existing(path: &Path) -> std::io::Result<PathBuf> {
     }
     let file_name = path
         .file_name()
-        .map(std::ffi::OsStr::to_os_string)
-        .unwrap_or_default();
+        .map_or_default(std::ffi::OsStr::to_os_string);
     Ok(canonicalize_deepest_existing(parent)?.join(file_name))
 }
 

@@ -114,7 +114,10 @@ async fn assert_raw_endpoints() {
         assert_eq!(comparison.binary, binary, "{name}");
         assert!(!comparison.oversized && !comparison.truncated, "{name}");
         if binary {
-            assert!(comparison.hunks.is_empty());
+            assert_eq!(
+                comparison.hunks,
+                [] as [crate::workspace_changes::comparison::ComparisonHunk; 0]
+            );
         } else {
             assert_eq!(comparison.hunks.len(), 1);
             assert_eq!(comparison.hunks[0].old_text, before_text);
@@ -122,7 +125,7 @@ async fn assert_raw_endpoints() {
         }
 
         let recorded = store
-            .0
+            .records
             .lock()
             .unwrap()
             .get(attempt.as_str())

@@ -555,7 +555,8 @@ chat_reasoning_replay = "omit"
             id: ToolId::new(format!("tool-{name}")),
             name: name.to_owned(),
             description: format!("{name} capability"),
-            input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+            input_schema: serde_json::json!({"type": "object", "additionalProperties": false})
+                .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
@@ -645,8 +646,6 @@ chat_reasoning_replay = "omit"
             Arc::new(registry),
             Arc::new(available),
             Arc::new(SkillSnapshot::new(Vec::new())),
-            None,
-            None,
             ToolEnvironment::new(),
             Arc::new(McpRuntimeLeaseAuthority::empty()),
             Arc::new(std::collections::BTreeMap::new()),
@@ -843,7 +842,10 @@ chat_reasoning_replay = "omit"
             plane.subagents.prepared_execution_policies(),
             vec![old, new]
         );
-        assert!(plane.subagents.listing(false, 16).snapshots.is_empty());
+        assert_eq!(
+            plane.subagents.listing(false, 16).snapshots,
+            [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+        );
     }
 
     #[test]

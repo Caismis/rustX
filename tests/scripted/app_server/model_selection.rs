@@ -413,7 +413,7 @@ async fn r04_manager_selection_and_attempt_admission_have_both_complete_orders()
                 let checkpoint = host.checkpoint().unwrap();
                 let (admitted, cursor) = (checkpoint.snapshot, checkpoint.cursor);
                 assert_eq!(*admitted.attempt.unwrap().model.unwrap(), old_invocation);
-                assert!(f.provider.request_bodies().is_empty());
+                assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
                 admission_cursor = Some(cursor);
                 drop(prepared);
                 contention.notified().await;
@@ -558,7 +558,7 @@ async fn r05_concurrent_prepared_selection_cannot_overwrite_the_winning_commit()
                 .unwrap(),
             before
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -620,7 +620,7 @@ async fn r06_catalog_publication_rejects_prepared_selection_and_commits_unrelate
         let instructions = super::configuration::guidance(published.project_context_files());
         assert_ne!(instructions, original_instructions);
         assert_eq!(instructions, "pending unrelated instructions");
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -758,7 +758,7 @@ async fn r07_catalog_failure_before_and_after_visibility_preserves_coherent_auth
             if !after_visibility {
                 assert_eq!(host.checkpoint().unwrap().cursor, cursor);
             }
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             f.close().await;
         }
     })
@@ -813,7 +813,7 @@ async fn r08_retirement_and_selection_commit_have_both_valid_orders() {
                 }),
             )
             .await;
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             f.close().await;
         }
     })
@@ -894,7 +894,7 @@ async fn r10_native_selection_survives_request_waiter_abort_without_replay() {
             original_settings.0 + 1,
             "readback and reconnect never replay the lost mutation"
         );
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;
@@ -952,7 +952,7 @@ async fn f4_later_deliberate_selection_fences_a_prepared_request_after_old_readb
         };
         let snapshot = reconnected.checkpoint().unwrap().snapshot;
         assert_eq!(snapshot.model.unwrap().configured, deliberate);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         f.close().await;
     })
     .await;

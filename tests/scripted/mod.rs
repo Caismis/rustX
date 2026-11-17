@@ -92,6 +92,9 @@ pub(crate) mod support;
 mod agent;
 mod background;
 mod capability;
+
+#[cfg(target_os = "linux")]
+pub(crate) use capability::exercise_skill_catalog_without_environments;
 mod context;
 mod extensions;
 mod interaction;

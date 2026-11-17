@@ -96,9 +96,12 @@ async fn thread_status_cold_reads_running_settlement_and_unload_need_no_attachme
         else {
             panic!("resident page")
         };
-        assert!(data.is_empty());
+        assert_eq!(
+            data,
+            [] as [crate::app_server::thread_status::ThreadStatusEntry; 0]
+        );
         assert!(f.manager.is_empty());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert_eq!(
             f.manager
                 .probe(&id)
@@ -261,7 +264,7 @@ async fn thread_status_busy_metadata_lock_recovers_without_a_semantic_wake() {
         assert_eq!(sessions[0].thread_id,id);
         assert!(sessions[0].thread_status.is_none());
         assert_eq!(connection.attachment_counts(),(0,0));
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         drop(release);
         held.await.unwrap();
         // Resume the actual wait, not an unconditional capture: recovery must
@@ -357,7 +360,7 @@ async fn archive_idle_probe_never_holds_registry_while_another_thread_is_observe
             ThreadStatus::Idle
         );
         assert!(!archiving.is_finished());
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         // The deliberate Unavailable observation wakes a recovery reader.
         // Keep it and the empty admission pass outside Coordinator while the
         // first archive claim runs; contention may legitimately refuse a claim.

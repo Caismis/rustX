@@ -9,7 +9,7 @@ import { expect, test } from '@playwright/test';
 import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 
 test('CFG3 structured source authoring, inert definitions, CAS and automatic no-op application', async ({ page }) => {
@@ -114,5 +114,5 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await page.screenshot({ path: test.info().outputPath('cfg3-agent-mobile-dark.png') });
     expect(errors).toEqual([]);
     expect(existsSync(join(fixture.directory, 'mcp-started'))).toBe(false);
-  } finally { const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+  } finally { const report = await stopDogfoodPage(page, fixture, false); expect(report.requestCount).toBe(0); }
 });

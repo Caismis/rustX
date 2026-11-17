@@ -20,7 +20,7 @@ async fn an_external_origin_requirement_is_no_longer_refused_by_the_registry() {
         id: crate::runtime::identity::ToolId::new("tool-get-issue"),
         name: "get_issue".to_owned(),
         description: "issue".to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: crate::tools::types::ToolExecutionPolicy::ForegroundOnly,
         replay_policy: crate::tools::types::ToolReplayPolicy::Never,
         origin: crate::tools::types::ToolOrigin::Mcp {
@@ -150,8 +150,14 @@ async fn a_commit_losing_the_cancellation_race_rolls_back_completely() {
     assert!(matches!(outcome, Ok(SubagentStartOutcome::RolledBack)));
     // No record, no durable trace, no ordinal consumption that recovery
     // would fold.
-    assert!(plane.registry.all_snapshots().is_empty());
-    assert!(events(&plane).is_empty());
+    assert_eq!(
+        plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
+    assert_eq!(
+        events(&plane),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
     #[cfg(unix)]
     assert!(matches!(
         nix::sys::signal::kill(
@@ -564,7 +570,10 @@ async fn prepare_rejects_an_invalid_task_before_any_spawn() {
         .await
         .expect_err("oversized context");
     assert!(matches!(error, SubagentStartError::ContextOversized { .. }));
-    assert!(plane.registry.all_snapshots().is_empty());
+    assert_eq!(
+        plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
 }
 
 #[tokio::test]
@@ -694,13 +703,16 @@ async fn goal_idle_append_releases_registry_mutex_and_excludes_ownership_commit(
     // This is the real Goal callback after it captured an idle claim and
     // before its SQLite request. Unrelated controls still take the mutex.
     hook.wait_until_entered();
-    assert!(plane.registry.all_snapshots().is_empty());
-    assert!(
-        plane
-            .registry
-            .list_agents(MAX_AGENT_LIST_LIMIT)
-            .agents
-            .is_empty()
+    assert_eq!(
+        plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
+    assert_eq!(
+        plane.registry.list_agents(MAX_AGENT_LIST_LIMIT).agents,
+        [] as [(
+            crate::runtime::subagent::registry::agents::AgentSnapshot,
+            crate::runtime::subagent::registry::observation::SubagentSnapshot
+        ); 0]
     );
     plane
         .registry
@@ -754,7 +766,10 @@ async fn ownership_commit_pause_keeps_registry_controls_available() {
     // Capacity and exact ID are reserved; the durable writer is parked
     // outside the registry mutex and before canonical ownership exists.
     hook.wait_until_entered();
-    assert!(plane.registry.all_snapshots().is_empty());
+    assert_eq!(
+        plane.registry.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
     assert_eq!(
         plane
             .registry
@@ -773,7 +788,10 @@ async fn ownership_commit_pause_keeps_registry_controls_available() {
         starting.await.unwrap(),
         Ok(SubagentStartOutcome::RolledBack)
     ));
-    assert!(events(&plane).is_empty());
+    assert_eq!(
+        events(&plane),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
     assert!(
         super::super::super::ipc::read_parent_frame(&mut child.peer)
             .await

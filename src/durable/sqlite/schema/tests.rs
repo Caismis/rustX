@@ -13,6 +13,50 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[test]
+fn frontier_schema_rejects_fake_primary_index_and_damaged_goal_index() {
+    for damage in ["partial", "descending", "missing_goal", "wrong_goal"] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("frontier-schema.sqlite");
+        let id = ConversationId::generate();
+        drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        match damage {
+            "partial" | "descending" => {
+                let key = if damage == "partial" {
+                    "source_kind,source_id,block_index,representation,revision"
+                } else {
+                    "source_id DESC,source_kind,block_index,representation,revision"
+                };
+                connection.execute_batch(&format!(
+                    "DROP TABLE content_frontiers;
+                     CREATE TABLE content_frontiers (
+                        source_kind TEXT NOT NULL, source_id INTEGER NOT NULL CHECK(typeof(source_id)='integer' AND source_id>-9223372036854775808),
+                        block_index INTEGER NOT NULL, representation TEXT NOT NULL, revision INTEGER NOT NULL, readable_end INTEGER NOT NULL,
+                        bytes BLOB CHECK(bytes IS NULL OR length(bytes)<=65536), PRIMARY KEY({key}));
+                     CREATE UNIQUE INDEX fake_frontier ON content_frontiers(source_id,source_kind,block_index,representation,revision) WHERE source_kind='observation_goal';
+                     CREATE INDEX content_frontiers_goal_idx ON content_frontiers(source_kind) WHERE source_kind='observation_goal';"
+                )).unwrap();
+            }
+            "missing_goal" => connection
+                .execute_batch("DROP INDEX content_frontiers_goal_idx")
+                .unwrap(),
+            "wrong_goal" => connection.execute_batch(
+                "DROP INDEX content_frontiers_goal_idx; CREATE INDEX content_frontiers_goal_idx ON content_frontiers(source_kind) WHERE source_kind='canonical';"
+            ).unwrap(),
+            _ => unreachable!(),
+        }
+        drop(connection);
+        assert!(
+            matches!(
+                SqliteConversationStore::open_existing(id, &path),
+                Err(ConversationStoreError::IncompatibleSchema(_))
+            ),
+            "{damage}"
+        );
+    }
+}
+
+#[test]
 fn wal_management_head_is_one_snapshot_while_another_writer_commits() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("conversation.sqlite");
@@ -42,9 +86,9 @@ fn wal_management_head_is_one_snapshot_while_another_writer_commits() {
 }
 
 #[test]
-fn a_version_32_profile_store_is_refused_without_migration() {
+fn a_version_100_stream_layout_is_refused_without_migration() {
     let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("profile-v33.sqlite");
+    let path = directory.path().join("stream-layout-v100.sqlite");
     let id = ConversationId::new("conv_bb2149cf-1f8d-7c3c-8c60-73f4acb0a518");
     {
         let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
@@ -53,7 +97,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
             .lock()
             .unwrap()
             .execute(
-                "UPDATE rustx_store SET schema_version = 32 WHERE id = 1",
+                "UPDATE rustx_store SET schema_version = 100 WHERE id = 1",
                 [],
             )
             .unwrap();
@@ -65,7 +109,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
         assert!(matches!(
             result,
             Err(ConversationStoreError::SchemaVersionMismatch {
-                stored: 32,
+                stored: 100,
                 expected: SQLITE_SCHEMA_VERSION
             })
         ));
@@ -79,7 +123,7 @@ fn a_version_32_profile_store_is_refused_without_migration() {
         )
         .unwrap();
     assert_eq!(
-        stored, 32,
+        stored, 100,
         "neither runtime nor management opening migrates"
     );
 }
@@ -152,9 +196,16 @@ fn incompatible_schema_fails_without_migration_or_repair() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("incompatible.sqlite");
     let connection = rusqlite::Connection::open(&path).unwrap();
+    let future_version = SQLITE_SCHEMA_VERSION + 1;
     connection
         .execute_batch(
-            "CREATE TABLE rustx_store (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, conversation_id TEXT NOT NULL, next_inbound_sequence INTEGER NOT NULL, next_event_sequence INTEGER NOT NULL); INSERT INTO rustx_store VALUES (1, 99, 'conv-1', 0, 0);",
+            "CREATE TABLE rustx_store (id INTEGER PRIMARY KEY, schema_version INTEGER NOT NULL, conversation_id TEXT NOT NULL, next_inbound_sequence INTEGER NOT NULL, next_event_sequence INTEGER NOT NULL);",
+        )
+        .unwrap();
+    connection
+        .execute(
+            "INSERT INTO rustx_store VALUES (1, ?1, 'conv-1', 0, 0)",
+            [future_version],
         )
         .unwrap();
     drop(connection);
@@ -164,9 +215,9 @@ fn incompatible_schema_fails_without_migration_or_repair() {
             &path
         ),
         Err(ConversationStoreError::SchemaVersionMismatch {
-            stored: 99,
+            stored,
             expected: SQLITE_SCHEMA_VERSION
-        })
+        }) if stored == future_version
     ));
 }
 
@@ -271,7 +322,7 @@ fn a_version_30_questionnaire_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 87);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
 
     // And the refusal is not ceremony: had the gate admitted the file,
     // these are the rows the typed decoder would have had to interpret,
@@ -336,7 +387,7 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
             expected: SQLITE_SCHEMA_VERSION
         })
     ));
-    assert_eq!(SQLITE_SCHEMA_VERSION, 87);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
 
     // And the refusal is not ceremony: the envelope framing is unchanged,
     // and the row the gate refused really is undecodable under the current
@@ -354,12 +405,332 @@ fn a_version_31_subagent_ownership_journal_is_refused_at_open_never_decoded() {
 }
 
 #[test]
+fn schema_101_event_indexes_are_refused_without_rewriting_the_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("event-indexes-v101.sqlite");
+    let id = ConversationId::generate();
+    {
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let connection = store.conn.lock().unwrap();
+        let broad_trace_index_exists: bool = connection
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='events_trace_kind_idx')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(!broad_trace_index_exists);
+        connection.execute_batch(
+            "UPDATE rustx_store SET schema_version=101 WHERE id=1;
+             DROP INDEX events_auxiliary_call_id_kind_idx;
+             CREATE INDEX events_auxiliary_call_id_kind_idx
+               ON events(event_call_id,event_kind);
+             CREATE INDEX events_trace_kind_idx ON events(observation_kind) WHERE observation_kind IS NOT NULL;",
+        ).unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    for opened in [
+        SqliteConversationStore::open(id.clone(), &path),
+        SqliteConversationStore::open_existing(id, &path),
+    ] {
+        assert!(matches!(
+            opened,
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 101,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn schema_102_text_kind_indexes_are_refused_without_rewriting_the_store() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("event-indexes-v102.sqlite");
+    let id = ConversationId::generate();
+    {
+        let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+        let connection = store.conn.lock().unwrap();
+        connection.execute_batch(
+            "DROP INDEX events_kind_idx;
+             CREATE INDEX events_kind_idx ON events(event_kind);
+             DROP INDEX events_primary_trace_kind_idx;
+             CREATE INDEX events_primary_trace_kind_idx ON events(observation_kind) WHERE observation_trace_fact_required=1;
+             UPDATE rustx_store SET schema_version=102 WHERE id=1;",
+        ).unwrap();
+    }
+    let before = std::fs::read(&path).unwrap();
+    for opened in [
+        SqliteConversationStore::open(id.clone(), &path),
+        SqliteConversationStore::open_existing(id, &path),
+    ] {
+        assert!(matches!(
+            opened,
+            Err(ConversationStoreError::SchemaVersionMismatch {
+                stored: 102,
+                expected: SQLITE_SCHEMA_VERSION
+            })
+        ));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn file_writer_uses_normal_wal_with_512_byte_pages() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = SqliteConversationStore::open(
+        ConversationId::generate(),
+        &directory.path().join("wal-policy.sqlite"),
+    )
+    .unwrap();
+    let connection = store.conn.lock().unwrap();
+    let journal: String = connection
+        .query_row("PRAGMA journal_mode", [], |row| row.get(0))
+        .unwrap();
+    let version: String = connection
+        .query_row("SELECT sqlite_version()", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(journal, "wal");
+    for (sql, expected) in [
+        ("PRAGMA synchronous", 1),
+        ("PRAGMA cache_size", -2000),
+        ("PRAGMA page_size", 512),
+        ("PRAGMA wal_autocheckpoint", 7825),
+    ] {
+        let actual: i64 = connection.query_row(sql, [], |row| row.get(0)).unwrap();
+        assert_eq!(actual, expected, "{sql}");
+    }
+    eprintln!("SQLite {version} WAL/NORMAL, 512-byte pages, 7825-frame autocheckpoint");
+}
+
+#[test]
+fn incompatible_page_geometry_is_rejected_without_modifying_the_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("wrong-page-size.sqlite");
+    let id = ConversationId::generate();
+    drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode=DELETE; PRAGMA page_size=2048; VACUUM; PRAGMA journal_mode=WAL;",
+        )
+        .unwrap();
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(page_size, 2048);
+    drop(connection);
+    let before = std::fs::read(&path).unwrap();
+    for open in [
+        SqliteConversationStore::open_existing,
+        SqliteConversationStore::open,
+    ] {
+        assert!(
+            matches!(open(id.clone(), &path), Err(ConversationStoreError::IncompatibleSchema(detail)) if detail.contains("page size"))
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+}
+
+#[test]
+fn rejected_wal_database_does_not_checkpoint_on_close() {
+    use rusqlite::config::DbConfig;
+    for old_version in [false, true] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("rejected.sqlite");
+        let wal = directory.path().join("rejected.sqlite-wal");
+        let id = ConversationId::generate();
+        drop(SqliteConversationStore::open(id.clone(), &path).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        if !old_version {
+            connection.execute_batch("PRAGMA journal_mode=DELETE; PRAGMA page_size=2048; VACUUM; PRAGMA journal_mode=WAL;").unwrap();
+        }
+        connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+            .unwrap();
+        connection
+            .set_db_config(DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, true)
+            .unwrap();
+        let update = if old_version {
+            "UPDATE rustx_store SET schema_version=109 WHERE id=1"
+        } else {
+            "UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1"
+        };
+        connection.execute(update, []).unwrap();
+        drop(connection);
+        let main_before = std::fs::read(&path).unwrap();
+        let wal_before = std::fs::read(&wal).unwrap();
+        for open in [
+            SqliteConversationStore::open,
+            SqliteConversationStore::open_existing,
+            SqliteConversationStore::open_for_archive,
+        ] {
+            let result = open(id.clone(), &path);
+            if old_version {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::SchemaVersionMismatch { stored: 109, .. })
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::IncompatibleSchema(_))
+                ));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), main_before);
+            assert_eq!(std::fs::read(&wal).unwrap(), wal_before);
+        }
+    }
+}
+
+#[test]
+fn accepted_writer_still_checkpoints_on_close() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("accepted.sqlite");
+    let wal = directory.path().join("accepted.sqlite-wal");
+    let id = ConversationId::generate();
+    let store = SqliteConversationStore::open(id, &path).unwrap();
+    store.conn.lock().unwrap().execute_batch("PRAGMA wal_checkpoint(TRUNCATE); UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1").unwrap();
+    assert!(std::fs::metadata(&wal).unwrap().len() > 0);
+    drop(store);
+    assert!(
+        !wal.exists(),
+        "last accepted writer should checkpoint on close"
+    );
+}
+
+#[test]
+#[allow(unsafe_code)]
+fn physical_pages_preserve_blob_limits_and_overflow_payloads() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("overflow.sqlite");
+    let store = SqliteConversationStore::open(ConversationId::generate(), &path).unwrap();
+    let connection = store.conn.lock().unwrap();
+    // This only queries the connection's configured limit; it does not change it.
+    let length_limit = unsafe {
+        rusqlite::ffi::sqlite3_limit(connection.handle(), rusqlite::ffi::SQLITE_LIMIT_LENGTH, -1)
+    };
+    assert!(length_limit > 64 * 1024 * 1024 + 4096);
+    let header = vec![b'h'; 16 * 1024];
+    let segment = vec![b's'; 64 * 1024];
+    connection
+        .execute(
+            "INSERT INTO transcript_entries(position,header_json) VALUES(1,?1)",
+            [&header],
+        )
+        .unwrap();
+    connection.execute("INSERT INTO content_segments(source_kind,source_id,block_index,representation,segment,bytes) VALUES('canonical',1,0,'j',0,?1)", [&segment]).unwrap();
+    let restored_header: Vec<u8> = connection
+        .query_row(
+            "SELECT header_json FROM transcript_entries WHERE position=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let restored_segment: Vec<u8> = connection
+        .query_row(
+            "SELECT bytes FROM content_segments WHERE source_kind='canonical' AND source_id=1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(restored_header, header);
+    assert_eq!(restored_segment, segment);
+    assert!(
+        connection
+            .execute(
+                "UPDATE transcript_entries SET header_json=?1 WHERE position=1",
+                [vec![0u8; 16 * 1024 + 1]]
+            )
+            .is_err()
+    );
+    assert!(connection.execute("UPDATE content_segments SET bytes=?1 WHERE source_kind='canonical' AND source_id=1", [vec![0u8; 64 * 1024 + 1]]).is_err());
+    for table in ["transcript_entries", "content_segments"] {
+        let overflow: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM dbstat WHERE name=?1 AND pagetype='overflow'",
+                [table],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(overflow > 0, "{table} should use overflow pages");
+    }
+    let integrity: String = connection
+        .query_row("PRAGMA integrity_check", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(integrity, "ok");
+    drop(connection);
+    drop(store);
+    let reopened = Connection::open(path).unwrap();
+    let restored: (Vec<u8>, Vec<u8>) = reopened.query_row(
+        "SELECT (SELECT header_json FROM transcript_entries WHERE position=1), (SELECT bytes FROM content_segments WHERE source_kind='canonical' AND source_id=1)",
+        [], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).unwrap();
+    assert_eq!(restored, (header, segment));
+}
+
+#[test]
+fn checkpoint_window_preserves_a_slow_reader_and_closes_cleanly() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("slow-reader.sqlite");
+    let id = ConversationId::generate();
+    let writer = SqliteConversationStore::open(id.clone(), &path).unwrap();
+    let accepted = writer.accept_inbound(draft("initial")).unwrap();
+    writer.adopt_pending_batch(accepted.sequence, None).unwrap();
+    let reader = Connection::open(&path).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let count = || {
+        reader
+            .query_row("SELECT count(*) FROM message_ledger", [], |row| {
+                row.get::<_, u64>(0)
+            })
+            .unwrap()
+    };
+    assert_eq!(count(), 1);
+    let body = "x".repeat(64 * 1024);
+    for _ in 0..32 {
+        let accepted = writer.accept_inbound(draft(&body)).unwrap();
+        writer.adopt_pending_batch(accepted.sequence, None).unwrap();
+    }
+    assert_eq!(count(), 1, "the reader keeps its original snapshot");
+    let head = writer.load_head().unwrap();
+    assert_eq!(head.active_message_ids.len(), 33);
+    {
+        let connection = writer.conn.lock().unwrap();
+        let (_, frames, checkpointed): (u64, u64, u64) = connection
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert!(
+            frames > 7825,
+            "a reader can retain WAL beyond the threshold"
+        );
+        assert!(checkpointed < frames);
+    }
+    reader.execute_batch("ROLLBACK").unwrap();
+    assert_eq!(count(), 33);
+    {
+        let connection = writer.conn.lock().unwrap();
+        let checkpoint: (u64, u64, u64) = connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .unwrap();
+        assert_eq!(checkpoint, (0, 0, 0));
+    }
+    drop(reader);
+    drop(writer);
+    let reopened = SqliteConversationStore::open_existing(id, &path).unwrap();
+    assert_eq!(reopened.load_head().unwrap(), head);
+}
+
+#[test]
 fn trace_schema_indexes_are_required_and_queries_use_them() {
     use crate::durable::presentation::{FactQuery, FactScope};
-    let store = SqliteConversationStore::in_memory(ConversationId::new(
-        "conv_ab18a567-5190-73a5-8156-2e8693be6392",
-    ))
-    .unwrap();
+    let id = ConversationId::new("conv_ab18a567-5190-73a5-8156-2e8693be6392");
+    let store = SqliteConversationStore::in_memory(id).unwrap();
     let connection = store.conn.lock().unwrap();
     verify_schema_shape(&connection).unwrap();
     let scopes = [
@@ -374,6 +745,10 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
             "events_step_kind_idx",
         ),
         (FactScope::Request("r".into()), "events_request_id_kind_idx"),
+        (
+            FactScope::Compaction(crate::runtime::identity::CompactionOperationId::new("o")),
+            "events_compaction_operation_kind_idx",
+        ),
         (FactScope::Message("m".into()), "events_message_id_kind_idx"),
         (FactScope::ContextReading, "events_context_reading_idx"),
         (
@@ -431,7 +806,7 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
             }
         }
     }
-    for (name, expression) in PRESENTATION_INDEXES {
+    for (name, definition) in PRESENTATION_INDEXES {
         connection
             .execute_batch(&format!("DROP INDEX {name}"))
             .unwrap();
@@ -448,7 +823,7 @@ fn trace_schema_indexes_are_required_and_queries_use_them() {
         );
         connection
             .execute_batch(&format!(
-                "DROP INDEX {name}; CREATE INDEX {name} ON events({expression})"
+                "DROP INDEX {name}; CREATE INDEX {name} ON events{definition}"
             ))
             .unwrap();
         verify_schema_shape(&connection).unwrap();
@@ -510,11 +885,65 @@ fn preceding_schema_is_rejected_before_event_deserialization() {
 }
 
 #[test]
+fn message_keyed_block_layout_is_rejected_without_rewriting_either_open_path() {
+    for version in [105, SQLITE_SCHEMA_VERSION] {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("message-keyed-blocks.sqlite");
+        let id = ConversationId::generate();
+        {
+            let store = SqliteConversationStore::open(id.clone(), &path).unwrap();
+            let connection = store.lock().unwrap();
+            connection.execute_batch(
+                "DROP TABLE observation_block_headers;
+                 CREATE TABLE observation_block_headers (
+                    ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
+                    block_index INTEGER NOT NULL CHECK(block_index>=0),
+                    header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+                    message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
+                    PRIMARY KEY(ledger_position,block_index),UNIQUE(message_id,block_index)
+                 );
+                 CREATE INDEX observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index);
+                 CREATE INDEX observation_block_kind_idx ON observation_block_headers(message_id,json_extract(header_json,'$.kind'),block_index);",
+            ).unwrap();
+            connection
+                .execute(
+                    "UPDATE rustx_store SET schema_version=?1 WHERE id=1",
+                    [version],
+                )
+                .unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        for existing_only in [false, true] {
+            let result = if existing_only {
+                SqliteConversationStore::open_existing(id.clone(), &path)
+            } else {
+                SqliteConversationStore::open(id.clone(), &path)
+            };
+            if version == 105 {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::SchemaVersionMismatch {
+                        stored: 105,
+                        expected: SQLITE_SCHEMA_VERSION,
+                    })
+                ));
+            } else {
+                assert!(matches!(
+                    result,
+                    Err(ConversationStoreError::IncompatibleSchema(_))
+                ));
+            }
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+        }
+    }
+}
+
+#[test]
 fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite() {
     use crate::runtime::identity::AuxiliaryCallId;
     use crate::runtime::workflow::read_model::WorkflowWait;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 87);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-wait.sqlite");
@@ -560,18 +989,28 @@ fn workflow_node_wait_vocabulary_requires_current_store_format_without_rewrite()
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
-    let files = std::fs::read_dir(directory.path())
+    // Refusal disables SQLite's close checkpoint, so SQLite can retain empty
+    // WAL/SHM sidecars even though the main file is unchanged.
+    let mut files = std::fs::read_dir(directory.path())
         .unwrap()
-        .map(|entry| entry.unwrap().file_name())
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(files, [std::ffi::OsString::from("workflow-wait.sqlite")]);
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "workflow-wait.sqlite",
+            "workflow-wait.sqlite-shm",
+            "workflow-wait.sqlite-wal"
+        ]
+    );
 }
 
 #[test]
 fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
     use crate::runtime::workflow::read_model::WorkflowNodeKind;
 
-    assert_eq!(SQLITE_SCHEMA_VERSION, 87);
+    assert_eq!(SQLITE_SCHEMA_VERSION, 114);
     assert_eq!(EVENT_SCHEMA_VERSION, 1);
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("workflow-node-io.sqlite");
@@ -635,11 +1074,21 @@ fn workflow_node_io_and_indexes_require_current_schema_without_rewrite() {
         ));
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
-    let files = std::fs::read_dir(directory.path())
+    // Refusal disables SQLite's close checkpoint, so SQLite can retain empty
+    // WAL/SHM sidecars even though the main file is unchanged.
+    let mut files = std::fs::read_dir(directory.path())
         .unwrap()
-        .map(|entry| entry.unwrap().file_name())
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(files, [std::ffi::OsString::from("workflow-node-io.sqlite")]);
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "workflow-node-io.sqlite",
+            "workflow-node-io.sqlite-shm",
+            "workflow-node-io.sqlite-wal"
+        ]
+    );
 }
 
 /// Pre-integration stores can hold retired workspace facts or lack the
@@ -703,7 +1152,16 @@ fn pre_integration_stores_are_refused_and_left_untouched() {
             .map(|entry| entry.unwrap().file_name().into_string().unwrap())
             .collect::<Vec<_>>();
         sidecars.sort();
-        assert_eq!(sidecars, ["pre-integration.sqlite"]);
+        // SQLite may keep the empty sidecars created while inspecting the
+        // refused file; it must not checkpoint and rewrite the main file.
+        assert_eq!(
+            sidecars,
+            [
+                "pre-integration.sqlite",
+                "pre-integration.sqlite-shm",
+                "pre-integration.sqlite-wal"
+            ]
+        );
     }
 }
 

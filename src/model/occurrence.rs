@@ -29,63 +29,139 @@ pub struct ActualRequestToolAssociation {
     /// and no correlation field is transmitted in this actual request.
     pub wire_id: Option<ProviderWireCorrelationId>,
 }
-/// An intermediate coordinate in the detached compiled historical sequence.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HistoricalToolAssociation {
-    pub call_message: u32,
-    pub call_block: u32,
-    pub result_message: u32,
-    pub source: CanonicalCallSource,
-    pub wire_id: ProviderWireCorrelationId,
-}
+mod history;
+#[cfg(test)]
+pub(crate) use history::HISTORICAL_VISITS;
+pub(crate) use history::{
+    AssociationCoordinates, AssociationNode, AssociationRoot, StoredAssociation, WirePolicy,
+    native_origins,
+};
+pub use history::{HistoricalToolAssociation, ToolAssociationHistory};
+use std::sync::{Arc, OnceLock};
 
-/// Frozen actual-request relationships. The native producer's validation proof
-/// shares the exact Store-issued selection origin; mutation revokes that proof.
-/// Serialization remains the established flat association array.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(transparent)]
+/// Native requests pin a shared, request-free history and a small coordinate
+/// binding. The public flat array is materialized only for inspection/replay.
+#[derive(Debug, Clone, Default)]
 pub struct FrozenToolAssociations {
-    values: std::sync::Arc<Vec<ActualRequestToolAssociation>>,
-    #[serde(skip)]
-    validation: Option<std::sync::Arc<AssociationValidation>>,
+    values: Arc<OnceLock<Vec<ActualRequestToolAssociation>>>,
+    pub(crate) binding: Option<Arc<AssociationBinding>>,
+    validation: Option<Arc<AssociationValidation>>,
+}
+#[derive(Debug)]
+pub(crate) struct AssociationBinding {
+    pub history: ToolAssociationHistory,
+    pub request: RequestId,
+    pub coordinates: AssociationCoordinates,
 }
 #[derive(Debug)]
 struct AssociationValidation {
-    origin: std::sync::Arc<crate::model::selected_input::SelectionOrigin>,
+    origin: Arc<crate::model::selected_input::SelectionOrigin>,
     request: RequestId,
     policy: [u8; 32],
 }
 impl PartialEq for FrozenToolAssociations {
     fn eq(&self, other: &Self) -> bool {
-        self.values == other.values
+        Arc::ptr_eq(&self.values, &other.values)
+            || self
+                .binding
+                .as_ref()
+                .zip(other.binding.as_ref())
+                .is_some_and(|(a, b)| {
+                    a.history.same_prefix(&b.history)
+                        && a.request == b.request
+                        && a.coordinates == b.coordinates
+                })
+            || **self == **other
     }
 }
 impl Eq for FrozenToolAssociations {}
 impl From<Vec<ActualRequestToolAssociation>> for FrozenToolAssociations {
     fn from(values: Vec<ActualRequestToolAssociation>) -> Self {
         Self {
-            values: std::sync::Arc::new(values),
+            values: Arc::new(OnceLock::from(values)),
+            binding: None,
             validation: None,
         }
+    }
+}
+impl Serialize for FrozenToolAssociations {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeSeq;
+        if let Some(values) = self.values.get() {
+            return values.serialize(serializer);
+        }
+        let mut sequence = serializer.serialize_seq(Some(self.len()))?;
+        if let Some(binding) = &self.binding {
+            for value in binding.iter() {
+                sequence.serialize_element(&value)?;
+            }
+        }
+        sequence.end()
+    }
+}
+impl<'de> Deserialize<'de> for FrozenToolAssociations {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Vec::<ActualRequestToolAssociation>::deserialize(deserializer).map(Self::from)
     }
 }
 impl std::ops::Deref for FrozenToolAssociations {
     type Target = Vec<ActualRequestToolAssociation>;
     fn deref(&self) -> &Self::Target {
-        &self.values
+        self.values.get_or_init(|| {
+            let Some(binding) = &self.binding else {
+                return Vec::new();
+            };
+            #[cfg(test)]
+            MATERIALIZATIONS.with(|work| work.set(work.get() + binding.history.len()));
+            binding.iter().collect()
+        })
+    }
+}
+impl AssociationBinding {
+    fn iter(&self) -> impl Iterator<Item = ActualRequestToolAssociation> + '_ {
+        let labels = self.coordinates.labels(&self.history);
+        self.history.iter().map(move |a| {
+            let call_message = self.coordinates.position(a.call_message);
+            ActualRequestToolAssociation {
+                call: ActualRequestCallCoordinate {
+                    message: RequestMessageOccurrence {
+                        request_id: self.request.clone(),
+                        item_index: call_message,
+                    },
+                    block: RequestBlockIndex(a.call_block),
+                },
+                result: RequestMessageOccurrence {
+                    request_id: self.request.clone(),
+                    item_index: self.coordinates.position(a.result_message),
+                },
+                source: a.source.clone(),
+                wire_id: if self.coordinates.wire.is_some() {
+                    labels
+                        .get(&(call_message, a.call_block))
+                        .cloned()
+                        .map(ProviderWireCorrelationId)
+                } else {
+                    a.wire_id.clone()
+                },
+            }
+        })
     }
 }
 impl std::ops::DerefMut for FrozenToolAssociations {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        let _ = &**self;
         self.validation = None;
-        std::sync::Arc::make_mut(&mut self.values)
+        self.binding = None;
+        Arc::make_mut(&mut self.values)
+            .get_mut()
+            .expect("materialized associations")
     }
 }
 impl<'a> IntoIterator for &'a FrozenToolAssociations {
     type Item = &'a ActualRequestToolAssociation;
     type IntoIter = std::slice::Iter<'a, ActualRequestToolAssociation>;
     fn into_iter(self) -> Self::IntoIter {
-        self.values.iter()
+        self.iter()
     }
 }
 impl<'a> IntoIterator for &'a mut FrozenToolAssociations {
@@ -95,6 +171,8 @@ impl<'a> IntoIterator for &'a mut FrozenToolAssociations {
         (**self).iter_mut()
     }
 }
+#[cfg(test)]
+thread_local! {pub(crate) static MATERIALIZATIONS:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};}
 fn association_policy(
     protocol: crate::model::ModelProtocol,
     replay_origin: Option<&crate::model::replay::ReplayOrigin>,
@@ -123,6 +201,73 @@ fn association_policy(
     digest.finalize().into()
 }
 impl FrozenToolAssociations {
+    /// An incremental, conservative JSON bound for native request admission.
+    /// The rare near-limit case still uses exact streaming byte accounting.
+    pub(crate) fn encoded_len_upper_bound(&self) -> Option<usize> {
+        if self.is_empty() {
+            return Some(2);
+        }
+        let binding = self.binding.as_ref()?;
+        binding.coordinates.wire.as_ref()?;
+        let request_bytes = serde_json::to_vec(&binding.request)
+            .ok()?
+            .len()
+            .checked_sub(2)?;
+        binding
+            .history
+            .encoded_bytes_upper
+            .checked_add(request_bytes.checked_mul(2)?.checked_mul(self.len())?)?
+            .checked_add(self.len().saturating_sub(1))?
+            .checked_add(2)
+    }
+    pub(crate) fn from_history(
+        history: ToolAssociationHistory,
+        request: RequestId,
+        coordinates: AssociationCoordinates,
+    ) -> Self {
+        Self {
+            values: Arc::new(OnceLock::new()),
+            binding: Some(Arc::new(AssociationBinding {
+                history,
+                request,
+                coordinates,
+            })),
+            validation: None,
+        }
+    }
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.binding.as_ref().map_or_else(
+            || self.values.get().map_or(0, Vec::len),
+            |b| b.history.len(),
+        )
+    }
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    pub(crate) fn rebind_request(&mut self, request: &RequestId) {
+        if let Some(binding) = &self.binding {
+            self.binding = Some(Arc::new(AssociationBinding {
+                history: binding.history.clone(),
+                request: request.clone(),
+                coordinates: binding.coordinates.clone(),
+            }));
+            self.values = Arc::new(OnceLock::new());
+            self.validation = self.validation.as_ref().map(|validation| {
+                Arc::new(AssociationValidation {
+                    origin: validation.origin.clone(),
+                    request: request.clone(),
+                    policy: validation.policy,
+                })
+            });
+        } else {
+            for association in self {
+                association.call.message.request_id = request.clone();
+                association.result.request_id = request.clone();
+            }
+        }
+    }
     pub(crate) fn certifies(
         &self,
         origin: &std::sync::Arc<crate::model::selected_input::SelectionOrigin>,
@@ -150,46 +295,75 @@ pub(crate) fn freeze_associations(
 ) -> Result<FrozenToolAssociations, String> {
     #[cfg(test)]
     let _reads = super::selected_input::PreparationReads::new();
-    let position = |index: u32| -> Result<u32, String> {
-        if inserted_at.is_some_and(|at| index as usize >= at) {
-            index
-                .checked_add(1)
-                .ok_or_else(|| "request occurrence overflow".into())
-        } else {
-            Ok(index)
-        }
+    let boundary = request.continuation_boundary()?;
+    let stored = request.protocol() == crate::model::ModelProtocol::OpenAiResponses
+        && matches!(
+            request.continuation,
+            Some(
+                crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(
+                    crate::runtime::continuation::OpenAiResponsesContinuation::Stored { .. }
+                )
+            )
+        );
+    let coordinates = AssociationCoordinates {
+        inserted_at: inserted_at
+            .map(u32::try_from)
+            .transpose()
+            .map_err(|_| "request occurrence overflow")?,
+        wire: Some(WirePolicy {
+            protocol: request.protocol(),
+            origin: request.invocation.replay_origin(),
+            stored_boundary: if stored {
+                Some(
+                    u32::try_from(boundary.ok_or("stored continuation lacks accepted output")?)
+                        .map_err(|_| "request occurrence overflow")?,
+                )
+            } else {
+                None
+            },
+        }),
     };
-    let mut associations = history
+    history
         .tool_associations
-        .iter()
-        .map(|association| {
-            Ok(ActualRequestToolAssociation {
-                call: ActualRequestCallCoordinate {
-                    message: RequestMessageOccurrence {
-                        request_id: request_id.clone(),
-                        item_index: position(association.call_message)?,
-                    },
-                    block: RequestBlockIndex(association.call_block),
-                },
-                result: RequestMessageOccurrence {
-                    request_id: request_id.clone(),
-                    item_index: position(association.result_message)?,
-                },
-                source: association.source.clone(),
-                wire_id: Some(association.wire_id.clone()),
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    if associations.is_empty() && !request.messages.has_tool_relationships() {
-        request.continuation_boundary()?;
-    } else {
-        install_wire_labels(request, &mut associations)?;
-        if !request
+        .validate_wire_policy(coordinates.wire.as_ref().expect("native policy"))?;
+    // Stored replay transmits only the uncovered suffix. Validate its native
+    // calls against the actual suffix, without enumerating the covered prefix.
+    if stored {
+        crate::model::adapter::correlation::request_labels_at(request, boundary)?;
+    }
+    let mut frozen = FrozenToolAssociations::from_history(
+        history.tool_associations.clone(),
+        request_id.clone(),
+        coordinates,
+    );
+    let shared_insertion = inserted_at.is_some_and(|at| {
+        at <= history.messages.len()
+            && history
+                .messages
+                .get(at)
+                .is_none_or(|message| !matches!(message.view(), ModelMessageView::Tool(_, _)))
+            && request.messages.len() > history.messages.len()
+            && matches!(
+                request.messages.get(at),
+                Some(crate::model::ModelInputMessage::RequestOnly(_))
+            )
+            && request
+                .messages
+                .range(0..at)
+                .same_input(&history.messages.range(0..at))
+            && request
+                .messages
+                .range(at + 1..history.messages.len() + 1)
+                .same_input(&history.messages.range(at..history.messages.len()))
+            && (history.messages.len() + 1..request.messages.len())
+                .all(|index| matches!(request.messages[index].view(), ModelMessageView::User(_)))
+    });
+    if !shared_insertion
+        && !request
             .messages
             .follows_native_history(&history.input_manifest)
-        {
-            validate_associations(request_id, request, &associations)?;
-        }
+    {
+        validate_associations(request_id, request, &frozen)?;
     }
     let validation = history.input_manifest.origin.as_ref().map(|origin| {
         std::sync::Arc::new(AssociationValidation {
@@ -203,10 +377,8 @@ pub(crate) fn freeze_associations(
             ),
         })
     });
-    Ok(FrozenToolAssociations {
-        values: std::sync::Arc::new(associations),
-        validation,
-    })
+    frozen.validation = validation;
+    Ok(frozen)
 }
 
 #[allow(clippy::too_many_lines)] // One complete request coordinate and Tool-batch validation fold.

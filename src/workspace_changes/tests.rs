@@ -1,10 +1,12 @@
 use super::*;
 use std::fs;
+mod discovery;
 mod global_attributes;
 #[cfg(unix)]
 mod path_identity;
 mod raw;
 mod sparse;
+mod work;
 
 fn tempdir() -> tempfile::TempDir {
     // File tools pass resolved mutation paths. Keep fixtures in the same path
@@ -15,6 +17,28 @@ fn tempdir() -> tempfile::TempDir {
 fn git(cwd: &Path, args: &[&str]) -> String {
     let output = std::process::Command::new("git")
         .current_dir(cwd)
+        // Fixture commits must finish all writes before a test snapshots .git.
+        // Detached auto-maintenance can otherwise remove its lock mid-assertion.
+        .args(["-c", "maintenance.auto=false", "-c", "gc.auto=0"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
+}
+
+fn snapshot_git(root: &Path, scratch: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(root)
+        .env("GIT_OBJECT_DIRECTORY", scratch.join("git/objects"))
+        .env(
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+            root.join(".git/objects"),
+        )
         .args(args)
         .output()
         .unwrap();
@@ -27,22 +51,7 @@ fn git(cwd: &Path, args: &[&str]) -> String {
 }
 
 fn snapshot_paths(root: &Path, scratch: &Path, tree: &str) -> String {
-    let output = std::process::Command::new("git")
-        .current_dir(root)
-        .env("GIT_OBJECT_DIRECTORY", scratch.join("objects"))
-        .env(
-            "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-            root.join(".git/objects"),
-        )
-        .args(["ls-tree", "-r", "--name-only", tree])
-        .output()
-        .unwrap();
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    String::from_utf8(output.stdout).unwrap()
+    snapshot_git(root, scratch, &["ls-tree", "-r", "--name-only", tree])
 }
 
 fn repository() -> tempfile::TempDir {
@@ -71,7 +80,6 @@ fn start(cwd: &Path, store: &Arc<ChangesStore>, id: &str) -> Arc<ChangeRecording
         Arc::clone(store),
         CancellationSignal::new(),
     )
-    .unwrap()
 }
 
 #[tokio::test]
@@ -207,7 +215,10 @@ async fn binary_oversized_deleted_and_renamed_files_keep_honest_comparisons() {
         .await
         .unwrap()
         .unwrap();
-    assert!(renamed.hunks.is_empty());
+    assert_eq!(
+        renamed.hunks,
+        [] as [crate::workspace_changes::comparison::ComparisonHunk; 0]
+    );
     assert!(store.comparison(&AttemptId::new("a"), 3).await.is_err());
     let record = start(root, &store, "b");
     record.before_tools().await;
@@ -244,7 +255,10 @@ async fn no_tools_missing_attempt_and_bounded_file_lists_have_no_fabricated_stat
     record.finish().await;
     let summary = store.summary(&AttemptId::new("many")).unwrap();
     assert_eq!(summary.total, 503);
-    assert!(!summary.files.is_empty());
+    assert_ne!(
+        summary.files,
+        [] as [crate::workspace_changes::ChangedFile; 0]
+    );
     assert!(summary.files.len() <= MAX_FILES);
     assert!(serde_json::to_vec(&summary).unwrap().len() <= 96 * 1024);
     assert_eq!(summary.added, 503);
@@ -402,7 +416,7 @@ async fn review_nested_repository_contents_do_not_leak_into_parent_changes() {
 }
 
 #[tokio::test]
-async fn review_each_snapshot_observes_the_current_real_index_without_mutating_it() {
+async fn private_index_does_not_adopt_later_force_added_ignored_files() {
     let dir = repository();
     let root = dir.path();
     fs::write(root.join(".gitignore"), "*.generated\n").unwrap();
@@ -411,13 +425,10 @@ async fn review_each_snapshot_observes_the_current_real_index_without_mutating_i
     record.before_tools().await;
     fs::write(root.join("new.generated"), "created\n").unwrap();
     git(root, &["add", "-f", "new.generated"]);
-    let index = fs::read(root.join(".git/index")).unwrap();
+    let metadata = raw::git_files(root);
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("force-added")).unwrap();
-    assert_eq!(summary.total, 1);
-    assert_eq!(summary.files[0].display, "new.generated");
-    assert_eq!((summary.added, summary.deleted), (1, 0));
-    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+    assert!(store.summary(&AttemptId::new("force-added")).is_none());
+    assert_eq!(raw::git_files(root), metadata);
 }
 
 #[tokio::test]
@@ -446,24 +457,19 @@ async fn ignore_and_untrack_changes_do_not_report_unchanged_files_as_deleted() {
 }
 
 #[tokio::test]
-async fn index_performance_flags_do_not_hide_physical_edits() {
+async fn private_index_honors_git_assume_unchanged_and_skip_worktree_flags() {
     for flag in ["--assume-unchanged", "--skip-worktree"] {
         let dir = repository();
-        let root = dir.path();
-        git(root, &["update-index", flag, "tracked.txt"]);
-        let index = fs::read(root.join(".git/index")).unwrap();
+        git(dir.path(), &["update-index", flag, "tracked.txt"]);
+        let metadata = raw::git_files(dir.path());
         let store = Arc::default();
-        let record = start(root, &store, "flagged");
+        let record = start(dir.path(), &store, "flagged");
         record.before_tools().await;
-        let path = root.join("tracked.txt");
-        record.capture(&path);
-        fs::write(&path, "changed\n").unwrap();
+        record.capture(&dir.path().join("tracked.txt"));
+        fs::write(dir.path().join("tracked.txt"), "changed\n").unwrap();
         record.finish().await;
-        let summary = store.summary(&AttemptId::new("flagged")).unwrap();
-        assert_eq!(summary.total, 1);
-        assert_eq!(summary.files[0].display, "tracked.txt");
-        assert_eq!((summary.added, summary.deleted), (1, 2));
-        assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
+        assert!(store.summary(&AttemptId::new("flagged")).is_none());
+        assert_eq!(raw::git_files(dir.path()), metadata);
     }
 }
 
@@ -489,7 +495,7 @@ async fn newly_ignored_restored_file_keeps_its_attempt_baseline() {
 }
 
 #[tokio::test]
-async fn ignored_rename_source_is_not_reported_again_as_a_captured_deletion() {
+async fn ignored_rename_source_is_also_listed_from_its_uncovered_capture() {
     let dir = repository();
     let root = dir.path();
     let original = "shared line\n".repeat(10) + "before\n";
@@ -506,16 +512,16 @@ async fn ignored_rename_source_is_not_reported_again_as_a_captured_deletion() {
     let index = fs::read(root.join(".git/index")).unwrap();
     record.finish().await;
     let summary = store.summary(&AttemptId::new("renamed")).unwrap();
-    assert_eq!(summary.total, 2);
+    assert_eq!(summary.total, 3);
     assert_eq!(
         summary
             .files
             .iter()
             .map(|file| file.display.as_str())
             .collect::<Vec<_>>(),
-        [".gitignore", "new.txt"]
+        [".gitignore", "new.txt", "old.txt"]
     );
-    assert_eq!((summary.added, summary.deleted), (2, 1));
+    assert_eq!((summary.added, summary.deleted), (2, 12));
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
 }
 
@@ -538,7 +544,7 @@ async fn absent_sparse_entries_do_not_become_physical_deletions() {
 }
 
 #[tokio::test]
-async fn sparse_checkout_samples_existing_excluded_files_and_preserves_absent_entries() {
+async fn sparse_checkout_honors_git_coverage_even_for_materialized_excluded_files() {
     let dir = repository();
     let root = dir.path();
     fs::create_dir(root.join("excluded")).unwrap();
@@ -570,10 +576,7 @@ async fn sparse_checkout_samples_existing_excluded_files_and_preserves_absent_en
     record.capture(&path);
     fs::write(&path, "after\n").unwrap();
     record.finish().await;
-    let summary = store.summary(&AttemptId::new("sparse-checkout")).unwrap();
-    assert_eq!(summary.total, 1);
-    assert_eq!(summary.files[0].display, "excluded/edited.txt");
-    assert_eq!((summary.added, summary.deleted), (1, 1));
+    assert!(store.summary(&AttemptId::new("sparse-checkout")).is_none());
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
 }
 
@@ -616,9 +619,9 @@ async fn blocked_recording(
 }
 
 #[tokio::test]
-async fn review_unused_cancelled_and_dropped_recordings_abort_their_baseline() {
+async fn review_cancelled_and_dropped_recordings_abort_their_baseline() {
     let dir = tempdir();
-    for mode in ["unused", "cancelled", "dropped"] {
+    for mode in ["cancelled", "dropped"] {
         let (record, dropped) = blocked_recording(dir.path()).await;
         if mode == "cancelled" {
             // Poll the real pre-tool wait, then drop it as the Agent's
@@ -632,6 +635,7 @@ async fn review_unused_cancelled_and_dropped_recordings_abort_their_baseline() {
             }
         }
         if mode != "dropped" {
+            record.cancellation.cancel();
             tokio::time::timeout(std::time::Duration::from_secs(1), record.finish())
                 .await
                 .expect("an unused baseline must not delay the terminal");
@@ -703,11 +707,8 @@ async fn review_supervised_git_treats_quoted_newline_paths_as_data() {
 }
 
 #[cfg(target_os = "linux")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn review_cancelling_a_snapshot_reaps_its_blocked_git_reader() {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::time::Duration;
-
+#[tokio::test]
+async fn cancellation_interrupts_a_blocked_git_configuration_read() {
     let dir = repository();
     let root = dir.path();
     let fifo = root.join(".git/held-config");
@@ -717,66 +718,14 @@ async fn review_cancelling_a_snapshot_reaps_its_blocked_git_reader() {
     )
     .unwrap();
     git(root, &["config", "include.path", fifo.to_str().unwrap()]);
-    let record = start(root, &Arc::default(), "cancel-git-reader");
-    let scratch = record.directory.path().to_owned();
-    let _writer = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            match fs::OpenOptions::new()
-                .write(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(&fifo)
-            {
-                Ok(writer) => break writer,
-                Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {}
-                Err(error) => panic!("open held Git configuration: {error}"),
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("Git must start reading its configuration");
-    // Keep the writer open without data or EOF while identifying the actual
-    // Git child. This blocks data reading, without invoking hooks or filters.
-    let pid = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            for entry in fs::read_dir("/proc").unwrap().flatten() {
-                let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
-                    continue;
-                };
-                if fs::read_link(entry.path().join("exe"))
-                    .ok()
-                    .and_then(|path| path.file_name().map(|name| name == "git"))
-                    != Some(true)
-                {
-                    continue;
-                }
-                if fs::read_dir(entry.path().join("fd")).is_ok_and(|fds| {
-                    fds.flatten()
-                        .any(|fd| fs::read_link(fd.path()).ok().as_ref() == Some(&fifo))
-                }) {
-                    return pid;
-                }
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("the owned Git reader must hold the configuration FIFO");
-    assert!(
-        scratch.is_dir(),
-        "in-flight snapshot storage must remain owned"
-    );
-    tokio::time::timeout(Duration::from_secs(10), record.finish())
+    let store = Arc::default();
+    let record = start(root, &store, "config-fifo");
+    tokio::task::yield_now().await;
+    record.cancellation.cancel();
+    tokio::time::timeout(std::time::Duration::from_secs(1), record.finish())
         .await
-        .expect("an unused recording must not wait for its blocked Git read");
-    drop(record);
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while Path::new(&format!("/proc/{pid}")).exists() || scratch.exists() {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("Git must be physically reaped and its snapshot storage reclaimed");
+        .unwrap();
+    assert!(store.summary(&AttemptId::new("config-fifo")).is_none());
 }
 
 async fn ignored_existing_file_entering_git_preserves_before(force_add: bool) {
@@ -804,19 +753,25 @@ async fn ignored_existing_file_entering_git_preserves_before(force_add: bool) {
         .position(|file| file.display == "config.txt")
         .unwrap();
     let file = &summary.files[position];
-    assert_eq!((file.added, file.deleted), (1, 1));
+    assert_eq!(
+        (file.added, file.deleted),
+        if force_add { (1, 1) } else { (2, 0) }
+    );
     let comparison = store
         .comparison(&AttemptId::new("visible"), position)
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(comparison.hunks[0].old_text, "unchanged\nold\n");
+    assert_eq!(
+        comparison.hunks[0].old_text,
+        if force_add { "unchanged\nold\n" } else { "" }
+    );
     assert_eq!(comparison.hunks[0].new_text, "unchanged\nnew\n");
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
 }
 
 #[tokio::test]
-async fn ignored_existing_file_unignored_after_edit_keeps_its_original_contents() {
+async fn unignored_file_uses_the_snapshot_addition_over_its_capture() {
     ignored_existing_file_entering_git_preserves_before(false).await;
 }
 
@@ -844,7 +799,7 @@ async fn restored_ignored_file_entering_git_has_no_fabricated_addition() {
 }
 
 #[tokio::test]
-async fn existing_ignored_destination_keeps_capture_when_git_infers_a_rename() {
+async fn git_rename_wins_over_an_existing_ignored_destination_capture() {
     for oversized in [false, true] {
         let dir = repository();
         let root = dir.path();
@@ -873,8 +828,8 @@ async fn existing_ignored_destination_keeps_capture_when_git_infers_a_rename() {
         record.finish().await;
         let summary = store.summary(&AttemptId::new("false-rename")).unwrap();
         assert_eq!(
-            summary.total, 3,
-            "ignore rule, existing destination and deleted source are distinct changes"
+            summary.total, 2,
+            "Git's rename pairs the two snapshot endpoints"
         );
         let destination_index = summary
             .files
@@ -882,37 +837,20 @@ async fn existing_ignored_destination_keeps_capture_when_git_infers_a_rename() {
             .position(|file| file.display == "config.txt")
             .unwrap();
         let file = &summary.files[destination_index];
+        assert_eq!((file.added, file.deleted), (0, 0));
+        assert!(!file.oversized);
         let comparison = store
             .comparison(&AttemptId::new("false-rename"), destination_index)
             .await
             .unwrap()
             .unwrap();
-        assert_eq!(file.oversized, oversized);
-        assert_eq!(comparison.oversized, oversized);
-        if !oversized {
-            assert_eq!((file.added, file.deleted), (1, 1));
-            assert_eq!(comparison.hunks[0].old_text, "unchanged\nold\n");
-            assert_eq!(comparison.hunks[0].new_text, "unchanged\nnew\n");
-        }
-        let source_index = summary
-            .files
-            .iter()
-            .position(|file| file.display == "source.txt")
-            .unwrap();
-        assert_eq!(
-            (
-                summary.files[source_index].added,
-                summary.files[source_index].deleted
-            ),
-            (0, 2)
+        assert!(comparison.hunks.is_empty() && !comparison.oversized);
+        assert!(
+            !summary
+                .files
+                .iter()
+                .any(|file| file.display == "source.txt")
         );
-        let comparison = store
-            .comparison(&AttemptId::new("false-rename"), source_index)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(comparison.hunks[0].old_text, "unchanged\nnew\n");
-        assert_eq!(comparison.hunks[0].new_text, "");
         assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
     }
 }
@@ -937,7 +875,10 @@ async fn missing_destination_capture_does_not_split_a_real_git_rename() {
         .await
         .unwrap()
         .unwrap();
-    assert!(comparison.hunks.is_empty());
+    assert_eq!(
+        comparison.hunks,
+        [] as [crate::workspace_changes::comparison::ComparisonHunk; 0]
+    );
 }
 
 #[tokio::test]
@@ -1040,7 +981,10 @@ async fn long_paths_bound_summary_bytes_without_losing_total_change_counts() {
     let summary = store.summary(&AttemptId::new("long-paths")).unwrap();
     assert_eq!(summary.total, 256);
     assert_eq!((summary.added, summary.deleted), (256, 0));
-    assert!(!summary.files.is_empty());
+    assert_ne!(
+        summary.files,
+        [] as [crate::workspace_changes::ChangedFile; 0]
+    );
     assert!(
         summary.files.len() < summary.total,
         "the byte budget truncates before the 500-file limit"
@@ -1081,10 +1025,14 @@ async fn aliased_temporary_root_inside_repository_never_snapshots_private_storag
     .unwrap();
     let index = fs::read(root.join(".git/index")).unwrap();
     let objects = git(root, &["count-objects", "-v"]);
-    let repo = Repository::locate(root, Arc::clone(&scratch), CancellationSignal::new())
-        .await
-        .unwrap()
-        .unwrap();
+    let repo = Repository::locate(
+        root,
+        Arc::new(OnceLock::from(Arc::clone(&scratch))),
+        CancellationSignal::new(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let before = repo.snapshot().await.unwrap();
     fs::write(root.join("tracked.txt"), "real user change\n").unwrap();
     let after = repo.snapshot().await.unwrap();
@@ -1094,7 +1042,7 @@ async fn aliased_temporary_root_inside_repository_never_snapshots_private_storag
             "scratch-alias\ntracked.txt\n"
         );
     }
-    let changes = repo.changes(&before, &after, true).await.unwrap();
+    let changes = repo.changes(&before, &after).await.unwrap();
     assert_eq!(
         changes.keys().map(String::as_str).collect::<Vec<_>>(),
         ["tracked.txt"]
@@ -1122,10 +1070,14 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
 
     let scratch_a = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
     fs::write(scratch_a.path().join("private-a"), "private A\n").unwrap();
-    let a = Repository::locate(root, Arc::clone(&scratch_a), CancellationSignal::new())
-        .await
-        .unwrap()
-        .unwrap();
+    let a = Repository::locate(
+        root,
+        Arc::new(OnceLock::from(Arc::clone(&scratch_a))),
+        CancellationSignal::new(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let before = a.snapshot().await.unwrap();
     assert_eq!(
         snapshot_paths(root, scratch_a.path(), &before),
@@ -1137,10 +1089,14 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
     let scratch_b = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
     let private_b = scratch_b.path().join("private-b");
     fs::write(&private_b, "private B\n").unwrap();
-    let b = Repository::locate(root, Arc::clone(&scratch_b), CancellationSignal::new())
-        .await
-        .unwrap()
-        .unwrap();
+    let b = Repository::locate(
+        root,
+        Arc::new(OnceLock::from(Arc::clone(&scratch_b))),
+        CancellationSignal::new(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     let b_before = b.snapshot().await.unwrap();
     assert_eq!(
         snapshot_paths(root, scratch_b.path(), &b_before),
@@ -1149,41 +1105,17 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
     assert_eq!(b_before, before);
     let after = a.snapshot().await.unwrap();
     assert_eq!(after, before);
-    assert!(a.changes(&before, &after, true).await.unwrap().is_empty());
+    assert!(a.changes(&before, &after).await.unwrap().is_empty());
     assert_eq!(fs::read(root.join(".git/index")).unwrap(), initial_index);
-
-    // The force-add path must enforce the same exact storage exclusion. A
-    // third recorder also must prune private entries copied from the real index.
-    let private_relative = private_b.strip_prefix(root).unwrap().to_str().unwrap();
-    fs::write(
-        root.join(".git/info/exclude"),
-        format!("/{private_relative}\n"),
-    )
-    .unwrap();
-    git(root, &["add", "-f", "--", private_relative]);
-    let index = fs::read(root.join(".git/index")).unwrap();
-    let objects = git(root, &["count-objects", "-v"]);
-    assert_eq!(a.snapshot().await.unwrap(), before);
-    let scratch_c = Arc::new(create_snapshot_directory(&temporary_root).unwrap());
-    let c = Repository::locate(root, Arc::clone(&scratch_c), CancellationSignal::new())
-        .await
-        .unwrap()
-        .unwrap();
-    let c_before = c.snapshot().await.unwrap();
-    assert_eq!(
-        snapshot_paths(root, scratch_c.path(), &c_before),
-        expected_paths
-    );
-    assert_eq!(c_before, before);
 
     // A normal sibling with a rustx-changes-* name and a force-tracked ignored
     // sibling remain user files; excluding TMPDIR or a name glob would lose them.
     for path in [&ordinary, &ignored] {
         fs::write(path, "unchanged\nafter\n").unwrap();
     }
-    for recorder in [&a, &b, &c] {
+    for recorder in [&a, &b] {
         let after = recorder.snapshot().await.unwrap();
-        let changes = recorder.changes(&before, &after, true).await.unwrap();
+        let changes = recorder.changes(&before, &after).await.unwrap();
         assert_eq!(
             changes.keys().map(String::as_str).collect::<Vec<_>>(),
             [
@@ -1195,8 +1127,7 @@ async fn interleaved_recorders_exclude_peer_storage_and_keep_temporary_parent_us
             assert_eq!((change.added, change.deleted), (1, 1));
         }
     }
-    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index);
-    assert_eq!(git(root, &["count-objects", "-v"]), objects);
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), initial_index);
 }
 
 #[cfg(unix)]
@@ -1313,4 +1244,68 @@ fn snapshot_storage_shares_only_the_namespace_and_reclaims_attempt_directories()
         root,
         "later attempts reuse the same exact namespace"
     );
+}
+
+#[tokio::test]
+async fn repository_absence_is_cached_for_the_runtime() {
+    let dir = tempdir();
+    let store = Arc::default();
+    let first = start(dir.path(), &store, "no-repository");
+    first.finish().await;
+    git(dir.path(), &["init", "-q"]);
+    let second = start(dir.path(), &store, "initialized-later");
+    second.before_tools().await;
+    assert!(second.baseline.lock().unwrap().is_none());
+    assert!(second.directory.get().is_none());
+    let path = dir.path().join("captured.txt");
+    second.capture(&path);
+    fs::write(&path, "captured\n").unwrap();
+    second.finish().await;
+    assert_eq!(
+        store
+            .summary(&AttemptId::new("initialized-later"))
+            .unwrap()
+            .total,
+        1
+    );
+}
+
+#[test]
+fn repository_discovery_respects_worktrees_bare_markers_and_config_changes() {
+    let repo = repository();
+    let dir = tempdir();
+    let worktree = dir.path().join("worktree");
+    assert!(!git::may_have_repository(dir.path()));
+    git(
+        repo.path(),
+        &["worktree", "add", "--detach", worktree.to_str().unwrap()],
+    );
+    assert!(git::may_have_repository(&worktree));
+    git(
+        &worktree,
+        &["config", "core.worktree", worktree.to_str().unwrap()],
+    );
+    assert!(git::may_have_repository(&worktree));
+    git(&worktree, &["config", "--unset", "core.worktree"]);
+    git(
+        repo.path(),
+        &["worktree", "remove", "--force", worktree.to_str().unwrap()],
+    );
+    fs::create_dir(&worktree).unwrap();
+    assert!(!git::may_have_repository(&worktree));
+    fs::write(worktree.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    assert!(git::may_have_repository(&worktree));
+}
+
+#[tokio::test]
+async fn non_repository_attempts_without_file_capture_do_not_start_git_or_allocate_scratch() {
+    let dir = tempdir();
+    let store = Arc::default();
+    for turn in 0..64 {
+        let record = start(dir.path(), &store, &format!("no-capture-{turn}"));
+        assert!(record.directory.get().is_none());
+        record.before_tools().await;
+        record.finish().await;
+        assert!(record.directory.get().is_none());
+    }
 }

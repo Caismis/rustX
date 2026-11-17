@@ -404,7 +404,7 @@ impl Parent {
                 },
             };
             if let NotificationMethod::Event { event, .. } = notification {
-                return *event;
+                return std::sync::Arc::unwrap_or_clone(event);
             }
         }
     }

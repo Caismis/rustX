@@ -318,6 +318,7 @@ impl AgentStatusClock for FixedStatusClock {
 /// replaying the same provider-neutral request semantics.
 #[tokio::test]
 async fn transient_retry_uses_shared_identity_and_frozen_request() {
+    crate::model::adapter::validation::take_preparation_work();
     let model = fake_model(vec![
         vec![
             FakeStep::Emit(ModelEvent::Started),
@@ -348,6 +349,10 @@ async fn transient_retry_uses_shared_identity_and_frozen_request() {
     )
     .await;
     let audit = finish_execution(execution, &tool_runtime, &publication).await;
+    assert_eq!(
+        crate::model::adapter::validation::take_preparation_work(),
+        (1, 1)
+    );
 
     assert!(matches!(
         audit.outcome,
@@ -729,8 +734,14 @@ async fn transient_retry_does_not_reset_overflow_budget() {
         snapshots[1].semantic_input_fingerprint,
         snapshots[2].semantic_input_fingerprint
     );
-    assert!(snapshots[1].request_context_ids.is_empty());
-    assert!(snapshots[2].request_context_ids.is_empty());
+    assert_eq!(
+        snapshots[1].request_context_ids,
+        [] as [crate::runtime::identity::MessageId; 0]
+    );
+    assert_eq!(
+        snapshots[2].request_context_ids,
+        [] as [crate::runtime::identity::MessageId; 0]
+    );
     for id in &snapshots[0].request_context_ids {
         for request in &requests {
             assert_eq!(

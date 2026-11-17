@@ -69,6 +69,7 @@
 //! Cancellation is a generic Agent Loop invariant for every execution:
 //! observable cancellation is checked before every model turn begins.
 
+use crate::events::types::RuntimeEvent;
 #[cfg(test)]
 pub(crate) mod attribution;
 mod compaction;
@@ -474,6 +475,7 @@ pub struct AgentExecution<'a> {
     pauses: test_sync::ExecutionPauses,
     turn: u32,
     terminal_emitted: bool,
+    precommitted_terminal: Option<RuntimeEvent>,
     /// Sparse permission-mode reminder eligibility for this attempt.
     pub(crate) permission_reminder: crate::runtime::permission::PermissionReminderState,
     /// Canonical opening task, refreshed at each new Human safe boundary.
@@ -487,3 +489,5 @@ pub struct AgentExecution<'a> {
 
 #[cfg(test)]
 mod test_fixtures;
+
+mod model_settlement;

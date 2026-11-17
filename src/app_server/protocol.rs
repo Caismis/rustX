@@ -1,4 +1,4 @@
-//! Rust authority for the App Server v78 envelope and method vocabulary.
+//! Rust authority for the App Server v80 envelope and method vocabulary.
 //!
 //! Request identities correlate responses on a connection. They carry no
 //! execution identity, persistence, or exactly-once guarantee.
@@ -12,7 +12,7 @@ use crate::runtime_client::types::{AttachmentId, RuntimeClientCursor};
 
 /// Independent of crate, journal, manifest and local stdio protocol versions.
 /// One version identifies the complete mandatory method vocabulary. No compatibility mode.
-pub const APP_SERVER_PROTOCOL_VERSION: u16 = 78;
+pub const APP_SERVER_PROTOCOL_VERSION: u16 = 80;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum JsonRpcVersion {
@@ -372,7 +372,7 @@ pub enum Method {
     Trace {
         target: AttachmentTarget,
         #[serde(default)]
-        #[schemars(length(max = 8))]
+        #[schemars(length(max = 128))]
         records: Vec<crate::observation::trace::TraceCursor>,
         before: Option<crate::observation::trace::TraceCursor>,
         limit: usize,
@@ -388,6 +388,12 @@ pub enum Method {
         target: AttachmentTarget,
         #[schemars(length(max = 256))]
         record_id: String,
+    },
+    /// Indexed read-only navigation to an exact admitted Workflow run.
+    #[serde(rename = "session/traceLocateWorkflow")]
+    TraceLocateWorkflow {
+        target: AttachmentTarget,
+        run_id: crate::runtime::workflow::WorkflowRunId,
     },
     #[serde(rename = "session/traceLocateTool")]
     TraceLocateTool {
@@ -436,7 +442,6 @@ pub enum Method {
         request_id: crate::runtime::identity::ManualCompactionRequestId,
     },
     /// Durable exact-node controls. These do not acquire a runtime attachment.
-
     #[serde(rename = "workflow/scheduled/getRecovery")]
     WorkflowScheduledRecovery {
         session_id: SessionId,
@@ -569,6 +574,12 @@ pub enum Method {
         agent_id: crate::runtime::identity::AgentId,
         record_id: String,
     },
+    #[serde(rename = "agent/traceLocateWorkflow")]
+    AgentTraceLocateWorkflow {
+        target: AttachmentTarget,
+        agent_id: crate::runtime::identity::AgentId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
     #[serde(rename = "agent/traceLocateTool")]
     AgentTraceLocateTool {
         target: AttachmentTarget,
@@ -688,6 +699,31 @@ pub enum Method {
         offset: u64,
         #[schemars(range(min = 1, max = 65_536))]
         max_bytes: u32,
+    },
+    #[serde(rename = "session/workflowRunSnapshotHeader")]
+    SessionWorkflowRunSnapshotHeader {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+    #[serde(rename = "session/workflowRunSnapshotChunk")]
+    SessionWorkflowRunSnapshotChunk {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        limit: usize,
+    },
+    #[serde(rename = "session/workflowTraceNode")]
+    SessionWorkflowTraceNode {
+        session_id: SessionId,
+        node_id: Option<SessionNodeId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
     },
     #[serde(rename = "session/historyContentRead")]
     SessionHistoryContentRead {
@@ -882,6 +918,36 @@ pub enum Method {
         offset: u64,
         limit: usize,
     },
+    #[serde(rename = "conversation/workflowRunSnapshotHeader")]
+    ConversationWorkflowRunSnapshotHeader {
+        target: AttachmentTarget,
+        #[serde(default)]
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        #[serde(default)]
+        cut: Option<crate::observation::cut::CheckpointReadCut>,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+    #[serde(rename = "conversation/workflowRunSnapshotChunk")]
+    ConversationWorkflowRunSnapshotChunk {
+        target: AttachmentTarget,
+        #[serde(default)]
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        #[serde(default)]
+        cut: Option<crate::observation::cut::CheckpointReadCut>,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: u64,
+        #[schemars(range(min = 1, max = 65_536))]
+        limit: usize,
+    },
+    #[serde(rename = "conversation/workflowTraceNode")]
+    ConversationWorkflowTraceNode {
+        target: AttachmentTarget,
+        #[serde(default)]
+        agent_id: Option<crate::runtime::identity::AgentId>,
+        cut: crate::observation::cut::CheckpointReadCut,
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+    },
     #[serde(rename = "session/checkpoint")]
     SessionCheckpoint {
         target: AttachmentTarget,
@@ -927,13 +993,13 @@ pub enum Method {
     #[serde(rename = "inbound/edit")]
     InboundEdit {
         target: AttachmentTarget,
-        expected: crate::durable::inbox::PendingInboundRef,
+        expected: crate::durable::PendingInboundRef,
         text: String,
     },
     #[serde(rename = "inbound/remove")]
     InboundRemove {
         target: AttachmentTarget,
-        expected: crate::durable::inbox::PendingInboundRef,
+        expected: crate::durable::PendingInboundRef,
     },
     #[serde(rename = "turn/interrupt")]
     TurnCancel {
@@ -1171,6 +1237,8 @@ impl Method {
             | Self::ProjectionDetail { .. }
             | Self::TraceDetail { .. }
             | Self::TraceLocateTool { .. }
+            | Self::TraceLocateWorkflow { .. }
+            | Self::AgentTraceLocateWorkflow { .. }
             | Self::Transcript { .. }
             | Self::ConversationTurns { .. }
             | Self::ModelGet { .. }
@@ -1237,6 +1305,12 @@ impl Method {
             | Self::WorkflowToolCatalog { .. }
             | Self::WorkflowCheck { .. }
             | Self::WorkflowAnalyze { .. }
+            | Self::SessionWorkflowRunSnapshotHeader { .. }
+            | Self::SessionWorkflowRunSnapshotChunk { .. }
+            | Self::SessionWorkflowTraceNode { .. }
+            | Self::ConversationWorkflowRunSnapshotHeader { .. }
+            | Self::ConversationWorkflowRunSnapshotChunk { .. }
+            | Self::ConversationWorkflowTraceNode { .. }
             | Self::McpProbe { .. }
             | Self::SettingsRead { .. }
             | Self::SettingsValueRead { .. }
@@ -1627,7 +1701,7 @@ pub enum MethodResult {
         download: super::archive_download::ArchiveDownloadDescriptor,
     },
     InboundMutation {
-        outcome: crate::durable::inbox::PendingMutationOutcome,
+        outcome: crate::durable::PendingMutationOutcome,
     },
     ArtifactBytes {
         data: String,
@@ -1652,9 +1726,15 @@ pub enum MethodResult {
     },
     Trace {
         page: crate::observation::trace::TracePage,
+        /// Complete input prefix examined; resubmit any remaining interests.
+        #[schemars(range(max = 128))]
+        refreshed: usize,
     },
     TraceToolLocation {
         location: Option<crate::runtime_client::trace::TraceToolLocation>,
+    },
+    TraceWorkflowLocation {
+        location: Option<crate::runtime_client::trace::TraceWorkflowLocation>,
     },
     SessionHistory {
         conversation_id: ConversationId,
@@ -1775,6 +1855,15 @@ pub enum MethodResult {
     },
     CheckpointPage {
         page: crate::runtime_client::checkpoint::CheckpointPage,
+    },
+    WorkflowRunSnapshotHeader {
+        header: Option<crate::runtime::workflow::WorkflowRunSnapshotHeader>,
+    },
+    WorkflowRunSnapshotChunk {
+        chunk: Option<crate::runtime::workflow::WorkflowRunSnapshotChunk>,
+    },
+    WorkflowTraceNode {
+        node: Option<crate::durable::observation::WorkflowTraceNode>,
     },
     Checkpoint {
         checkpoint: Box<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>,
@@ -1960,7 +2049,7 @@ pub enum NotificationMethod {
         registration_id: String,
         target: AttachmentTarget,
         cursor: RuntimeClientCursor,
-        event: Box<crate::runtime_client::event::RuntimeClientEvent>,
+        event: std::sync::Arc<crate::runtime_client::event::RuntimeClientEvent>,
     },
     /// Source preparation failed. This registration is fenced without consuming a Cursor;
     /// recovery requires an explicit checkpoint/subscription after the source is serviceable.

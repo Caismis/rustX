@@ -46,17 +46,20 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
             .await
             .unwrap();
         assert!(matches!(deleted, SessionDeleteResult::Deleted { .. }));
-        assert!(
+        assert_eq!(
             fixture
                 .manager
                 .sessions
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
-        assert!(fixture.manager.diagnostics().sessions.is_empty());
+        assert_eq!(
+            fixture.manager.diagnostics().sessions,
+            [] as [crate::local_runtime::session_runtime_manager::SessionResidencyDiagnostic; 0]
+        );
         assert!(
             fixture
                 .manager
@@ -84,15 +87,15 @@ async fn issue385_user_commit_refreshes_desired_source_of_sessionless_workspace(
         // only the retained desired source; it creates nothing.
         write_guidance(&fixture, "desired B".into()).await;
         source_settled(&fixture, &SourceTarget::User).await;
-        assert!(
+        assert_eq!(
             fixture
                 .manager
                 .sessions
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
         assert!(
             fixture
@@ -415,17 +418,20 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
             .await
             .unwrap();
         assert!(matches!(deleted, SessionDeleteResult::Deleted { .. }));
-        assert!(
+        assert_eq!(
             fixture
                 .manager
                 .sessions
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
-        assert!(fixture.manager.diagnostics().sessions.is_empty());
+        assert_eq!(
+            fixture.manager.diagnostics().sessions,
+            [] as [crate::local_runtime::session_runtime_manager::SessionResidencyDiagnostic; 0]
+        );
         assert!(
             fixture
                 .manager
@@ -484,15 +490,15 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
         )
         .await;
         source_settled(&fixture, &SourceTarget::User).await;
-        assert!(
+        assert_eq!(
             fixture
                 .manager
                 .sessions
                 .list_sessions(None, 0, 32)
                 .await
                 .unwrap()
-                .sessions
-                .is_empty()
+                .sessions,
+            [] as [crate::local_runtime::session::SessionSummary; 0]
         );
         assert!(
             fixture
@@ -541,7 +547,10 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
             selected(&model_b)
         );
         assert!(fixture.manager.configuration_runtime(&second.id).is_none());
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         let pending = fixture
             .manager
             .configuration_application(&second.id)
@@ -586,7 +595,10 @@ async fn issue385_future_default_source_generation_publishes_without_session_mut
                 .load(Ordering::SeqCst),
             0
         );
-        assert!(fixture.provider.request_bodies().is_empty());
+        assert_eq!(
+            fixture.provider.request_bodies(),
+            [] as [std::string::String; 0]
+        );
         assert_eq!(
             fixture
                 .manager

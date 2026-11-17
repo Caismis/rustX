@@ -1,7 +1,7 @@
 //! The Runtime Client projection: the one linearization owner of externally
 //! visible Runtime Client state.
 //!
-//! [`RuntimeClientProjection`] owns:
+//! `RuntimeClientProjection` owns:
 //!
 //! ```text
 //! current snapshot read model
@@ -83,8 +83,8 @@
 //! INTERNAL / NOT EXPOSED          -> no snapshot change, no client event
 //! ```
 //!
-//! Internal provider/request mechanics ([`ModelRequestStarted`],
-//! [`ModelRequestFailed`], [`ModelRetryScheduled`]) and compaction
+//! Internal provider/request mechanics ([`RuntimeEvent::ModelRequestStarted`],
+//! [`RuntimeEvent::ModelRequestFailed`], [`RuntimeEvent::ModelRetryScheduled`]) and compaction
 //! mechanics stay internal unless they express a client-relevant semantic
 //! fact. The mapping is defined here, in one place, so internal
 //! `RuntimeEvent` evolution cannot silently break the Runtime Client protocol.
@@ -95,7 +95,7 @@
 //!
 //! # Module structure
 //!
-//! One owner, [`RuntimeClientProjection`], with its inherent implementation
+//! One owner, `RuntimeClientProjection`, with its inherent implementation
 //! grouped by responsibility. No child owns a lock, task or cursor of its own.
 //!
 //! - lifecycle: construction, bootstrap from the native durable cut, activation;
@@ -107,6 +107,8 @@
 //!   cuts, durable read domains, and the off-lock checkpoint seed;
 //! - `in_flight` / views: pure in-flight block helpers and native snapshot views.
 
+use super::{checkpoint, response, snapshot, trace};
+use shared_snapshot::SharedSnapshot;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
@@ -114,13 +116,6 @@ use tokio::sync::Notify;
 
 use crate::observation::failure::RuntimeClientAttemptFailure;
 
-use super::event::{RuntimeClientEvent, RuntimeClientOutcome};
-use super::snapshot::{
-    AGENT_STATUS_WINDOW, InFlightAssistantMessage, InFlightBlock, InboundDiagnostics,
-    InboundDrainView, InboundItemView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
-    RuntimeClientContextView, RuntimeClientJob, RuntimeClientSnapshot,
-};
-use super::types::{RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent};
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{ContentBlockIndex, MessageBlock};
 use crate::model::session::{AttemptModelView, SessionModelView};
@@ -134,6 +129,15 @@ use crate::runtime::identity::{AttemptId, ConversationId, MessageId, ToolCallId,
 use crate::runtime::inbound::InboundItem;
 use crate::runtime::observation::ConversationObservation;
 use crate::runtime::types::ApprovalMode;
+use crate::runtime_client::event::{RuntimeClientEvent, RuntimeClientOutcome};
+use crate::runtime_client::snapshot::{
+    AGENT_STATUS_WINDOW, InFlightAssistantMessage, InFlightBlock, InboundDiagnostics,
+    InboundDrainView, InboundItemView, RuntimeClientAttempt, RuntimeClientAttemptPhase,
+    RuntimeClientContextView, RuntimeClientJob, RuntimeClientSnapshot,
+};
+use crate::runtime_client::types::{
+    RuntimeClientCursor, RuntimeClientError, RuntimeClientProtocolEvent,
+};
 use crate::tools::background::BackgroundExecutionSnapshot;
 use crate::tools::types::{ToolExecutionResult, ToolExecutionStatus};
 
@@ -147,14 +151,15 @@ mod observe;
 mod publication;
 mod read;
 mod read_domains;
+#[cfg(feature = "issue-387-profile")]
+mod retention_profile;
 mod subscription;
 pub(crate) mod views;
 
 use in_flight::{
     append_inline_prefix, arguments_of, block_index_of, bounded_diagnostic, bounded_outcome,
-    defer_result_content, deferred_live_block, foreground_slot_for_event, inline_block_bytes,
-    inline_label, inline_prefix, push_in_flight_block, retain_tool_execution,
-    update_stored_tool_slots,
+    deferred_live_block, foreground_slot_for_event, inline_block_bytes, inline_label,
+    inline_prefix, push_in_flight_block, retain_tool_execution, update_stored_tool_slots,
 };
 #[cfg(test)]
 use publication::encoded_event_bytes;
@@ -204,6 +209,7 @@ struct Subscriber {
     id: u64,
     /// The cursor through which this subscriber already consumed events.
     consumed: RuntimeClientCursor,
+    bases: publication::DeliveryBases,
     /// The edge-triggered wakeup handle. Carries no payload.
     notify: Arc<Notify>,
 }
@@ -271,6 +277,58 @@ struct NativePublicationState {
     publication_commit: bool,
 }
 
+/// Preserve source order and the first matching output, including duplicates.
+/// Index only borrowed source names; output growth cannot invalidate the keys.
+fn merge_source_frontiers(
+    sources: &imbl::OrdMap<String, crate::observation::cut::CollectionFrontier>,
+    output: &mut Vec<crate::observation::cut::CollectionFrontier>,
+) {
+    let overlay = |target: &mut crate::observation::cut::CollectionFrontier,
+                   source: &crate::observation::cut::CollectionFrontier| {
+        target.total = source.total;
+        target.next_offset = if target.loaded < source.loaded {
+            Some(0)
+        } else {
+            source.next_offset
+        };
+    };
+    if sources.is_empty() {
+        return;
+    }
+    if sources.len() == 1 {
+        let source = sources.values().next().expect("one source frontier");
+        if let Some(target) = output
+            .iter_mut()
+            .find(|value| value.domain == source.domain)
+        {
+            overlay(target, source);
+        } else {
+            output.push(source.clone());
+        }
+        return;
+    }
+    let mut positions: HashMap<&str, Option<usize>> = sources
+        .values()
+        .map(|source| (source.domain.as_str(), None))
+        .collect();
+    for (index, frontier) in output.iter().enumerate() {
+        if let Some(position) = positions.get_mut(frontier.domain.as_str()) {
+            position.get_or_insert(index);
+        }
+    }
+    for source in sources.values() {
+        let position = positions
+            .get_mut(source.domain.as_str())
+            .expect("indexed source frontier");
+        if let Some(index) = position {
+            overlay(&mut output[*index], source);
+        } else {
+            *position = Some(output.len());
+            output.push(source.clone());
+        }
+    }
+}
+
 /// Finite working state and the published seed guarded by the host's projection
 /// lock. Native owners install complete receipts through the CPU publication
 /// sink; the worker prepares indexed source facts outside this lock. Acquiring
@@ -295,9 +353,12 @@ pub(crate) struct RuntimeClientProjection {
     /// Trace-only progress must not starve a Session snapshot candidate.
     read_through: u64,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    head_bindings:
-        std::collections::BTreeMap<MessageId, Vec<crate::observation::cut::ContentBinding>>,
+    head_bindings: imbl::OrdMap<MessageId, prepared_capture::PreparedBindingHead>,
+    transcript_bindings: prepared_capture::PreparedBindingHead,
+    transcript_head: crate::observation::transcript::PreparedTranscriptHead,
     foreground_content: Vec<ForegroundResultContent>,
+    // Direct Committed fixtures use these headers; native receipts own theirs.
+    #[cfg(test)]
     prepared_messages: std::collections::BTreeMap<
         MessageId,
         (
@@ -347,7 +408,7 @@ pub(crate) struct RuntimeClientProjection {
             Option<crate::observation::tool::JournalFieldRef>,
         ),
     >,
-    live_frontiers: std::collections::BTreeMap<
+    live_frontiers: imbl::OrdMap<
         (
             crate::runtime::identity::PublicationStreamId,
             ContentBlockIndex,
@@ -357,23 +418,32 @@ pub(crate) struct RuntimeClientProjection {
         crate::observation::content::ContentRef,
     >,
     read_domains_dirty: bool,
+    /// One explicit checkpoint demand, coalesced until its bounded read completes.
+    read_domains_requested: bool,
     /// Failure of the current read-domain fence; cleared by matching success
     /// or a new invalidating revision, never by an obsolete read.
     read_failure: Option<String>,
     read_revision: u64,
+    /// Mirrors `read_revision` for off-lock readers: a read whose fence
+    /// revision is no longer current can never be installed.
+    latest_read_revision: Arc<std::sync::atomic::AtomicU64>,
     domain_sources: DomainSources,
     domain_source_bytes: usize,
-    source_frontiers:
-        std::collections::BTreeMap<String, crate::observation::cut::CollectionFrontier>,
-    collection_cuts:
-        std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
+    source_frontiers: imbl::OrdMap<String, crate::observation::cut::CollectionFrontier>,
+    collection_cuts: crate::observation::metadata::MetadataFragment<
+        crate::observation::metadata::ReadCutMap<
+            crate::runtime::identity::ObservationCollectionCut,
+        >,
+    >,
     pending_heads: std::collections::BTreeMap<
         String,
         Vec<crate::observation::interaction::RuntimeClientInteractionHeader>,
     >,
     collection_ordinal: Option<u64>,
     tool_occurrence: Option<crate::events::types::ToolObservationOccurrence>,
-    domain_revisions: std::collections::BTreeMap<&'static str, u64>,
+    domain_revisions: crate::observation::metadata::MetadataFragment<
+        crate::observation::metadata::ReadCutMap<u64>,
+    >,
     /// Exact dense auxiliary-audit total seeded by the owning Store read.
     auxiliary_audit_total: Option<u64>,
     /// The cursor of the last published event (0 = nothing published yet).
@@ -382,11 +452,11 @@ pub(crate) struct RuntimeClientProjection {
     /// snapshot/subscribe fail explicitly. Never wraps.
     exhausted: bool,
     /// The deterministic snapshot read model.
-    snapshot: RuntimeClientSnapshot,
+    snapshot: SharedSnapshot,
     capability_head: crate::observation::capability_source::PreparedCapabilityHead,
     trace_head: super::checkpoint::PreparedTraceHead,
     /// The bounded projection replay ring, oldest first.
-    replay: VecDeque<(RuntimeClientCursor, RuntimeClientEvent)>,
+    replay: VecDeque<(RuntimeClientCursor, Arc<RuntimeClientEvent>)>,
     /// Scalar cut-to-cursor lookup, bounded by the same replay retention.
     replay_cut_cursors: HashMap<u64, RuntimeClientCursor>,
     /// Genuine constructor cut, retained only while replay after cursor zero is serviceable.
@@ -436,9 +506,16 @@ struct ForegroundResultContent {
 
 #[derive(Clone)]
 pub(crate) struct CheckpointSeed {
-    snapshot: RuntimeClientSnapshot,
-    workflow_source: Option<crate::observation::workflow_source::WorkflowReadSource>,
+    display: Option<Arc<publication::PublicationBasis>>,
+    prepared: prepared_capture::PreparedCaptures,
+    attempt_bindings: prepared_capture::PreparedAttemptBindings,
+    prepared_attempt: prepared_attempt::PreparedAttemptItems,
+    metadata_frontiers: prepared_capture::MetadataFrontiers,
+    metadata_arrays: super::checkpoint::metadata_fragment::MetadataArrays,
+    read_domains: Option<ReadDomainCut>,
+    snapshot: SharedSnapshot,
     capability_head: crate::observation::capability_source::PreparedCapabilityHead,
+    workflow_source: Option<crate::observation::workflow_source::WorkflowReadSource>,
     trace_head: super::checkpoint::PreparedTraceHead,
     cursor: RuntimeClientCursor,
     read_cut: crate::observation::cut::CheckpointReadCut,
@@ -446,17 +523,22 @@ pub(crate) struct CheckpointSeed {
     journal_failure: bool,
     source_pending: bool,
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
-    head_bindings:
-        std::collections::BTreeMap<MessageId, Vec<crate::observation::cut::ContentBinding>>,
+    head_bindings: imbl::OrdMap<MessageId, prepared_capture::PreparedBindingHead>,
+    transcript_bindings: prepared_capture::PreparedBindingHead,
+    transcript_head: crate::observation::transcript::PreparedTranscriptHead,
     foreground_content: Vec<ForegroundResultContent>,
-    source_frontiers:
-        std::collections::BTreeMap<String, crate::observation::cut::CollectionFrontier>,
-    collection_cuts:
-        std::collections::BTreeMap<String, crate::runtime::identity::ObservationCollectionCut>,
-    domain_revisions: std::collections::BTreeMap<&'static str, u64>,
+    source_frontiers: imbl::OrdMap<String, crate::observation::cut::CollectionFrontier>,
+    collection_cuts: crate::observation::metadata::MetadataFragment<
+        crate::observation::metadata::ReadCutMap<
+            crate::runtime::identity::ObservationCollectionCut,
+        >,
+    >,
+    domain_revisions: crate::observation::metadata::MetadataFragment<
+        crate::observation::metadata::ReadCutMap<u64>,
+    >,
     content_metadata: ContentMetadata,
     publication_start: Option<crate::publication::PublicationStreamStart>,
-    live_frontiers: std::collections::BTreeMap<
+    live_frontiers: imbl::OrdMap<
         (
             crate::runtime::identity::PublicationStreamId,
             ContentBlockIndex,
@@ -471,6 +553,7 @@ pub(crate) struct CheckpointSeed {
 }
 
 pub(crate) struct PublicationDraft {
+    previous: Option<Arc<CheckpointSeed>>,
     #[cfg(test)]
     encoding_profile: Option<Arc<std::sync::Mutex<PublicationEncodingProfile>>>,
     seed: CheckpointSeed,
@@ -508,12 +591,86 @@ pub(crate) struct ReadDomainCut {
     source_cut: Option<crate::durable::observation::ObservationReadCut>,
 }
 
+/// Off-lock view of the newest read-domain revision. Revisions only grow, so a
+/// cut whose revision differs is already retired: installation rejects it.
+#[derive(Clone, Debug)]
+pub(crate) struct ReadSupersession(Arc<std::sync::atomic::AtomicU64>);
+
+impl ReadSupersession {
+    pub(crate) fn retires(&self, cut: &ReadDomainCut) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Acquire) != cut.revision
+    }
+}
+
+fn deferred_result_content(result: &ToolExecutionResult) -> ToolExecutionResult {
+    ToolExecutionResult {
+        workflow: None,
+        status: result.status.clone(),
+        content: Vec::new(),
+        duration_ms: result.duration_ms,
+        exit_code: result.exit_code,
+        artifacts: Vec::new(),
+        deliveries: Vec::new(),
+        truncation: result.truncation.clone(),
+        managed_output: None,
+    }
+}
+
+fn deferred_foreground_tool(
+    tool: &ForegroundToolExecution,
+    source: Option<&ForegroundResultContent>,
+) -> ForegroundToolExecution {
+    let result = |result: &ToolExecutionResult| {
+        if source.is_some() {
+            deferred_result_content(result)
+        } else {
+            result.clone()
+        }
+    };
+    ForegroundToolExecution {
+        occurrence: tool.occurrence.clone(),
+        message_id: tool.message_id.clone(),
+        block_index: tool.block_index,
+        call_id: tool.call_id.clone(),
+        metadata_ref: tool.metadata_ref.clone(),
+        assembly_complete: tool.assembly_complete,
+        result_source: tool.result_source.clone(),
+        result_metadata_ref: source
+            .map(|source| source.metadata.clone())
+            .or_else(|| tool.result_metadata_ref.clone()),
+        committed_result: tool.committed_result.as_ref().map(result),
+        committed_result_deferred: if source.is_some() {
+            tool.committed_result.is_some()
+        } else {
+            tool.committed_result_deferred
+        },
+        tool_id: tool.tool_id.clone(),
+        name: tool.name.clone(),
+        state: match &tool.state {
+            ForegroundToolState::Assembled { .. } => ForegroundToolState::Assembled {
+                arguments: String::new(),
+            },
+            ForegroundToolState::Running { progress, .. } => ForegroundToolState::Running {
+                arguments: String::new(),
+                progress: progress.clone(),
+            },
+            ForegroundToolState::Settled {
+                result: settled, ..
+            } => ForegroundToolState::Settled {
+                arguments: String::new(),
+                result: result(settled),
+            },
+        },
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct ReadDomainValues {
     pub(crate) projection_head: Option<crate::observation::head::RuntimeClientProjectionHeadView>,
     pub(crate) transcript: crate::observation::transcript::RuntimeClientTranscriptPage,
+    pub(crate) transcript_rows: crate::observation::transcript::PreparedTranscriptHead,
     pub(crate) occupancy: Option<crate::observation::occupancy::RuntimeClientContextOccupancy>,
-    pub(crate) trace: crate::observation::trace::TracePage,
+    pub(crate) trace: Option<crate::observation::trace::TracePage>,
     pub(crate) trace_total: u64,
 }
 
@@ -538,3 +695,15 @@ enum TextKind {
 
 #[cfg(test)]
 mod tests;
+
+mod attempt_view;
+
+mod canonical_tools;
+
+mod prepared_attempt;
+
+mod prepared_capture;
+
+mod shared_attempt;
+
+pub(crate) mod shared_snapshot;

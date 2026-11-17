@@ -311,7 +311,7 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
         snapshot.skill_catalog().is_none(),
         "discovered Skills are advertised only when the model can read their instructions"
     );
-    assert!(!snapshot.available_tools().tools().is_empty());
+    assert_ne!(snapshot.available_tools().tools(), []);
 
     let resumed_endpoint = resumed.endpoint();
     let resumed_initialized = resumed_endpoint.handle_request(RuntimeClientRequest::Initialize {
@@ -371,7 +371,10 @@ async fn resume_recomposes_current_runtime_and_preserves_only_session_model() {
             .collect::<Vec<_>>(),
         vec!["todo"]
     );
-    assert!(!available_tools.is_empty());
+    assert_ne!(
+        available_tools,
+        [] as [rustx::observation::capability_source::RuntimeClientTool; 0]
+    );
     assert!(!available_tools.iter().any(|tool| tool.name == "todo"));
     // Accept durable user work before creating an independent Session.
     let submitted = resumed_endpoint

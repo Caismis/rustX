@@ -1,0 +1,27 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/compare-revisions.py",
+    "--before",
+    "/home/capi/.cache/rustx-pr485-block-coordinates-20261110/build/conformance",
+    "--after",
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/candidate-build/conformance",
+    "--output",
+    "/home/capi/.cache/rustx-pr485-replay-layout-20261110/ordinary",
+    "--pairs",
+    "4",
+    "--observer-mode",
+    "live-subscriber",
+    "--case",
+    "short-small",
+    "--case",
+    "short-large",
+    "--case",
+    "large",
+    "--case",
+    "stream"
+  ],
+  "exit": 0,
+  "end_utc": "2026-11-10T02:00:32.393459+00:00",
+  "compiler_overlap_samples": 0
+}

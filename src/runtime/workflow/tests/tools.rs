@@ -95,7 +95,8 @@ fn definition() -> ToolDefinition {
         input_schema: schema(
             json!({"passed":{"type":"boolean"},"label":{"type":"string"}}),
             &["passed", "label"],
-        ),
+        )
+        .into(),
         execution_policy: ToolExecutionPolicy::ModelSelectable,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
@@ -174,8 +175,6 @@ fn context_with_environment(
                 .validated_registrations(),
         )),
         Arc::new(SkillSnapshot::new(Vec::new())),
-        None,
-        None,
         environment,
         Arc::new(McpRuntimeLeaseAuthority::empty()),
         Arc::new(BTreeMap::new()),
@@ -321,7 +320,10 @@ async fn tool_only_inactive_capability_has_no_provider_or_canonical_history_and_
         .await
         .unwrap();
     assert_eq!(result, json!({"passed":false}));
-    assert!(frozen.tool_registry().model_definitions().is_empty());
+    assert_eq!(
+        frozen.tool_registry().model_definitions(),
+        [] as [crate::tools::types::ModelToolDefinition; 0]
+    );
     assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
     let received = probe.received.lock().unwrap();
     assert!(matches!(received[0].id, ToolInvocationId::Workflow { .. }));
@@ -493,13 +495,9 @@ async fn native_observation_store_failure_has_no_permission_or_outcome_authority
     let (result, _) = run_outer(runtime, program(), context, cancellation).await;
     assert_eq!(result.status, ToolExecutionStatus::Success);
     assert_eq!(probe.starts.load(Ordering::SeqCst), 1);
-    assert!(
-        plane
-            .store
-            .read_events(None, 128)
-            .unwrap()
-            .events
-            .is_empty()
+    assert_eq!(
+        plane.store.read_events(None, 128).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
 }
 
@@ -537,7 +535,10 @@ async fn durable_approval_preparation_failure_never_publishes_or_starts() {
     assert!(matches!(error, WorkflowRunError::InvocationAuthority(_)));
     assert_eq!(probe.starts.load(Ordering::SeqCst), 0);
     assert_eq!(coordinator.pending_count(), 0);
-    assert!(audit.events().is_empty());
+    assert_eq!(
+        audit.events(),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
 }
 async fn run_outer(
     runtime: WorkflowRuntime,
@@ -884,7 +885,7 @@ async fn normalization_and_schema_rejection_start_zero_executors() {
             registration.normalizer = |_| Err("normalization rejected".into());
         } else {
             registration.definition.input_schema =
-                schema(json!({"missing":{"type":"string"}}), &["missing"]);
+                schema(json!({"missing":{"type":"string"}}), &["missing"]).into();
         }
         let context = context_with_registration(&plane, registration, full_access_lifecycle());
         let (_, cancellation) = workflow_cancellation();
@@ -1004,7 +1005,7 @@ impl ToolExecutor for Flaky {
                 self.ids.lock().unwrap().push(invocation.id.clone());
                 let failing = self
                     .failures
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
                         left.checked_sub(1)
                     })
                     .is_ok();

@@ -114,7 +114,7 @@ use super::resolver::ResolvedSubagentSpec;
 /// Version 37 combines frozen Resources authority with Scheduled Workflow and
 /// interaction origins and prepared execution inputs.
 /// Version 38 freezes Skill definitions and live locations; no package file lists.
-pub(crate) const SUBAGENT_IPC_VERSION: u16 = 38;
+pub(crate) const SUBAGENT_IPC_VERSION: u16 = 39;
 
 /// The hard upper bound of one control frame (`kind + payload`).
 ///
@@ -951,7 +951,8 @@ mod tests {
             id: ToolId::new(format!("tool-{name}")),
             name: name.to_owned(),
             description: format!("{name} tool"),
-            input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+            input_schema: serde_json::json!({"type": "object", "additionalProperties": false})
+                .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             replay_policy: ToolReplayPolicy::Never,
             origin,
@@ -1033,7 +1034,6 @@ mod tests {
                     skill_id: crate::runtime::identity::SkillId::new("skill-repository-navigation"),
                     version_id: crate::runtime::identity::SkillVersionId::new("sha256:skill-v1"),
                 },
-                dependencies: crate::skills::DependencyManifest::default(),
                 catalog_entry: crate::skills::SkillCatalogEntry {
                     name: "repository-navigation".to_owned(),
                     description: "Navigate the repository.".to_owned(),
@@ -1221,7 +1221,7 @@ mod tests {
         old_version["protocolVersion"] = serde_json::json!(30);
         let decoded = serde_json::from_value::<SubagentChildSpec>(old_version).unwrap();
         assert_ne!(decoded.protocol_version, SUBAGENT_IPC_VERSION);
-        assert_eq!(SUBAGENT_IPC_VERSION, 38);
+        assert_eq!(SUBAGENT_IPC_VERSION, 39);
     }
 
     #[test]

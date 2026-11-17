@@ -220,7 +220,10 @@ fn agent_authorities_reopen_from_private_capture_without_journal_secrets() {
         0,
         "failed public event commit rolls back the private authority row"
     );
-    assert!(store.read_events(None, 10).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 10).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
     store
         .append_agent_admission(event.clone(), &authority)
         .unwrap();
@@ -359,7 +362,8 @@ fn resumed_agent_origin_survives_creation_call_compaction() {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             }),
         ])
         .unwrap();
@@ -1213,7 +1217,10 @@ fn subagent_ownership_rejects_a_relative_session_workspace_binding() {
         ))
         .expect_err("durable ownership must reject a relative workspace binding");
     assert!(matches!(error, ConversationStoreError::InvalidReference(_)));
-    assert!(store.read_events(None, 8).unwrap().events.is_empty());
+    assert_eq!(
+        store.read_events(None, 8).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
+    );
 }
 
 /// The durable identity of a `SubagentOwnershipCommitted` fact is
@@ -1352,7 +1359,7 @@ fn subagent_terminal_provenance_revalidates_the_embedded_subagent_identity() {
             .expect("raw ownership row");
         transaction
             .execute(
-                "INSERT INTO lifecycle_state(lifecycle_key,terminal_event_id) VALUES(?1,NULL)",
+                "INSERT INTO lifecycle_state(lifecycle_key,terminal_sequence) VALUES(?1,NULL)",
                 [format!("subagent:{s1}")],
             )
             .expect("raw lifecycle opening");
@@ -1632,7 +1639,7 @@ fn t10_t19_derived_journal_body_failure_preserves_native_terminal_witness() {
             },
         ))
         .unwrap();
-    store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_segments WHEN NEW.source_kind='observation_journal' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
+    store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER refuse_display_body BEFORE INSERT ON content_frontiers WHEN NEW.source_kind='oj' BEGIN SELECT RAISE(ABORT,'derived source unavailable'); END").unwrap();
     let event = store
         .append_event(envelope(
             &id,
@@ -1726,7 +1733,10 @@ fn loop_lifecycle_facts_round_trip_without_executable_state() {
         .map(|e| e.event)
         .collect::<Vec<_>>();
     assert_eq!(read, facts);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 }
 
 /// Both typed cancellation phases are durable canonical facts. They must
@@ -1779,7 +1789,8 @@ fn issue136_cancellation_phases_survive_durable_reload() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     };
     let before_start = cancelled(

@@ -250,6 +250,48 @@ fn validate_frozen_budget(request: &ModelRequest) -> Result<(), String> {
     }
     Ok(())
 }
+#[derive(Default)]
+struct SnapshotInput {
+    manifest: crate::model::SelectedInputManifest,
+    images: crate::model::images::ResolvedImages,
+    fingerprint: String,
+    response_schema: Option<super::structured::PreparedResponseSchema>,
+    continuation_source: Option<crate::runtime::continuation::AcceptedOutputContinuationSource>,
+}
+
+impl SnapshotInput {
+    fn capture(
+        request: &ModelRequest,
+        selected: &crate::model::SelectedInputManifest,
+    ) -> Result<Self, String> {
+        #[cfg(test)]
+        let _reads = super::selected_input::PreparationReads::new();
+        if !selected.messages().same_input(&request.messages) {
+            return Err("native selected input count disagrees with request".into());
+        }
+        request.continuation_boundary()?;
+        selected.validate_budget()?;
+        if request
+            .images
+            .values()
+            .try_fold(0usize, |total, bytes| total.checked_add(bytes.len()))
+            .is_none_or(|total| total > MAX_FROZEN_IMAGE_BYTES)
+        {
+            return Err("frozen input exceeds image byte budget".into());
+        }
+        Ok(Self {
+            manifest: selected.clone(),
+            images: request.images.clone(),
+            fingerprint: selected.semantic_digest().map_or_else(
+                || request.semantic_input_fingerprint(),
+                |messages| request.semantic_input_fingerprint_with_messages(&messages),
+            ),
+            response_schema: request.response_schema.clone(),
+            continuation_source: request.continuation_source.clone(),
+        })
+    }
+}
+
 impl RequestSnapshot {
     /// Builds the frozen snapshot from the exact effective values used to
     /// create a primary request.
@@ -271,23 +313,98 @@ impl RequestSnapshot {
         continuation: Option<ProviderContinuationState>,
         request_context_ids: Vec<MessageId>,
     ) -> Self {
+        let messages = crate::model::SelectedModelInput::default().semantic_fingerprint();
+        let images = crate::model::images::ResolvedImages::new();
+        let fingerprint = super::types::fingerprint_metadata(&(
+            messages,
+            &images,
+            &effective_system_prompt,
+            &tool_definitions,
+            &invocation,
+            &continuation,
+            None::<super::structured::PreparedResponseSchema>,
+        ));
+        Self::with_input(
+            permission_mode,
+            identity,
+            canonical_frontier,
+            effective_system_prompt,
+            system_sections,
+            runtime_resource_revision,
+            invocation,
+            context_window_tokens,
+            profile,
+            tool_definitions,
+            capability_revision,
+            context_generation,
+            continuation,
+            request_context_ids,
+            SnapshotInput {
+                images,
+                fingerprint,
+                ..SnapshotInput::default()
+            },
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // Freeze the admitted request and the exact staged context metadata.
+    pub(crate) fn from_selected(
+        permission_mode: crate::runtime::types::ApprovalMode,
+        identity: RequestIdentity,
+        canonical_frontier: crate::context::resources::LedgerFrontier,
+        system_sections: Vec<AcceptedSystemSection>,
+        runtime_resource_revision: crate::runtime::RuntimeResourceRevision,
+        context_window_tokens: u64,
+        profile: Option<crate::model::catalog::ModelProfileId>,
+        capability_revision: CapabilityRevision,
+        context_generation: ContextGeneration,
+        request_context_ids: Vec<MessageId>,
+        request: &ModelRequest,
+        selected: &crate::model::SelectedInputManifest,
+    ) -> Result<Self, String> {
+        let input = SnapshotInput::capture(request, selected)?;
+        Ok(Self::with_input(
+            permission_mode,
+            identity,
+            canonical_frontier,
+            request.effective_system_prompt.clone(),
+            system_sections,
+            runtime_resource_revision,
+            request.invocation.clone(),
+            context_window_tokens,
+            profile,
+            request.tools.clone(),
+            capability_revision,
+            context_generation,
+            request.continuation.clone(),
+            request_context_ids,
+            input,
+        ))
+    }
+
+    #[allow(clippy::too_many_arguments)] // One constructor for the complete snapshot representation.
+    fn with_input(
+        permission_mode: crate::runtime::types::ApprovalMode,
+        identity: RequestIdentity,
+        canonical_frontier: crate::context::resources::LedgerFrontier,
+        effective_system_prompt: String,
+        system_sections: Vec<AcceptedSystemSection>,
+        runtime_resource_revision: crate::runtime::RuntimeResourceRevision,
+        invocation: ModelInvocationConfig,
+        context_window_tokens: u64,
+        profile: Option<crate::model::catalog::ModelProfileId>,
+        tool_definitions: Vec<ModelToolDefinition>,
+        capability_revision: CapabilityRevision,
+        context_generation: ContextGeneration,
+        continuation: Option<ProviderContinuationState>,
+        request_context_ids: Vec<MessageId>,
+        input: SnapshotInput,
+    ) -> Self {
         let provisional_message_id = identity.provisional_message_id();
-        let semantic_input_fingerprint = ModelRequest {
-            response_schema: None,
-            response_byte_limit: None,
-            images: crate::model::images::ResolvedImages::new(),
-            invocation: invocation.clone(),
-            messages: crate::model::SelectedModelInput::default(),
-            tools: tool_definitions.clone(),
-            effective_system_prompt: effective_system_prompt.clone(),
-            continuation: continuation.clone(),
-            continuation_source: None,
-        }
-        .semantic_input_fingerprint();
         Self {
             permission_mode,
             permission_task_message: None,
-            response_schema: None,
+            response_schema: input.response_schema,
             tool_associations: Vec::new().into(),
             history_cut: crate::durable::projection::RequestHistoryCut {
                 ledger: crate::context::resources::LedgerFrontier(
@@ -299,9 +416,9 @@ impl RequestSnapshot {
                 activation: crate::context::checkpoint::ProjectionActivationId(0),
                 base_frontier: crate::context::resources::LedgerFrontier(0),
             },
-            input: crate::model::SelectedInputManifest::default(),
-            images: crate::model::images::ResolvedImages::new(),
-            semantic_input_fingerprint,
+            input: input.manifest,
+            images: input.images,
+            semantic_input_fingerprint: input.fingerprint,
             request_id: identity.request_id(),
             identity,
             provisional_message_id,
@@ -316,7 +433,7 @@ impl RequestSnapshot {
             capability_revision,
             context_generation,
             continuation,
-            continuation_source: None,
+            continuation_source: input.continuation_source,
             request_context_ids,
             unresolved_output_carryover_source: None,
             unresolved_output_carryover: None,
@@ -377,30 +494,12 @@ impl RequestSnapshot {
         request: &ModelRequest,
         selected: &crate::model::SelectedInputManifest,
     ) -> Result<(), String> {
-        #[cfg(test)]
-        let _reads = super::selected_input::PreparationReads::new();
-        if !selected.messages().same_input(&request.messages) {
-            return Err("native selected input count disagrees with request".into());
-        }
-        request.continuation_boundary()?;
-        selected.validate_budget()?;
-        if request
-            .images
-            .values()
-            .try_fold(0usize, |total, bytes| total.checked_add(bytes.len()))
-            .is_none_or(|total| total > MAX_FROZEN_IMAGE_BYTES)
-        {
-            return Err("frozen input exceeds image byte budget".into());
-        }
-        self.input = selected.clone();
-        self.images.clone_from(&request.images);
-        self.response_schema.clone_from(&request.response_schema);
-        self.continuation_source
-            .clone_from(&request.continuation_source);
-        self.semantic_input_fingerprint = selected.semantic_digest().map_or_else(
-            || request.semantic_input_fingerprint(),
-            |messages| request.semantic_input_fingerprint_with_messages(&messages),
-        );
+        let input = SnapshotInput::capture(request, selected)?;
+        self.input = input.manifest;
+        self.images = input.images;
+        self.response_schema = input.response_schema;
+        self.continuation_source = input.continuation_source;
+        self.semantic_input_fingerprint = input.fingerprint;
         Ok(())
     }
 
@@ -466,11 +565,10 @@ impl RequestSnapshot {
 
     /// Checks native scalar metadata against the certified unfinished flat SHA.
     pub(crate) fn selected_fingerprint_matches(&self) -> bool {
-        use sha2::{Digest, Sha256};
         let Some(messages) = self.input.semantic_digest() else {
             return false;
         };
-        let bytes = serde_json::to_vec(&(
+        super::types::fingerprint_metadata(&(
             messages,
             &self.images,
             &self.effective_system_prompt,
@@ -478,9 +576,7 @@ impl RequestSnapshot {
             &self.invocation,
             &self.continuation,
             &self.response_schema,
-        ))
-        .expect("native request metadata serializes");
-        format!("{:x}", Sha256::digest(bytes)) == self.semantic_input_fingerprint
+        )) == self.semantic_input_fingerprint
     }
 
     /// Reconstruct with an already retained finite set of immutable dependencies.
@@ -642,7 +738,7 @@ mod tests {
                             let native = match protocol {
                                 ModelProtocol::AnthropicMessages => Some(
                                     ProviderContinuationState::Anthropic(AnthropicContinuation {
-                                        opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":"original-signature"}),
+                                        opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":"original-signature"}).into(),
                                     }),
                                 ),
                                 ModelProtocol::OpenAiResponses if mode == 1 && batch == 1 => {
@@ -662,7 +758,7 @@ mod tests {
                                                 serde_json::json!({"type":"reasoning","id":"reasoning-native","encrypted_content":"original-encrypted"}),
                                                 serde_json::json!({"type":"function_call","id":"fc-a","call_id":"repeat-a","name":"tool","arguments":"{}"}),
                                                 serde_json::json!({"type":"function_call","id":"fc-b","call_id":"repeat-b","name":"tool","arguments":"{}"}),
-                                            ],
+                                            ].into(),
                                         },
                                     ))
                                 }
@@ -716,7 +812,8 @@ mod tests {
                                         result:
                                             crate::scripted_suites::support::fake::success_result(
                                                 "result",
-                                            ),
+                                            )
+                                            .into(),
                                     })
                                     .into(),
                                 );
@@ -763,16 +860,107 @@ mod tests {
                             }
                         }
                         snapshot.freeze_input(&scope, &request).unwrap();
-                        snapshot.tool_associations = associations;
+                        snapshot.tool_associations = associations.clone();
+                        // Oracle: retain the old full-array mapping/relabeling semantics
+                        // across every Original/Derived, native replay and duplicate-ID case.
+                        let history = crate::durable::projection::HistoricalModelInput {
+                            tool_associations: snapshot
+                                .tool_associations
+                                .iter()
+                                .map(|a| {
+                                    let message =
+                                        &request.messages[a.call.message.item_index as usize];
+                                    let crate::model::projected::ModelMessageView::Assistant(
+                                        content,
+                                    ) = message.view()
+                                    else {
+                                        unreachable!()
+                                    };
+                                    let AssistantContentBlock::ToolCall(call) =
+                                        &content[a.call.block.0 as usize]
+                                    else {
+                                        unreachable!()
+                                    };
+                                    crate::model::occurrence::HistoricalToolAssociation {
+                                        call_message: a.call.message.item_index,
+                                        call_block: a.call.block.0,
+                                        result_message: a.result.item_index,
+                                        source: a.source.clone(),
+                                        wire_id: Some(
+                                            crate::model::occurrence::ProviderWireCorrelationId(
+                                                call.id.to_string(),
+                                            ),
+                                        ),
+                                        native_origins: crate::model::occurrence::native_origins(
+                                            &message.view(),
+                                        ),
+                                    }
+                                })
+                                .collect(),
+                            cut: snapshot.history_cut.clone(),
+                            messages: request.messages.clone(),
+                            input_manifest: snapshot.input.clone(),
+                            checkpoint_fingerprint: None,
+                            materialized_bytes: 0,
+                        };
+                        for insertion in [None, Some(0), Some(request.messages.len())] {
+                            let mut actual = request.clone();
+                            if let Some(at) = insertion {
+                                actual.messages.insert(at,crate::model::ModelInputMessage::RequestOnly(crate::model::input::RequestOnlyModelContext::AuxiliaryQuestion{text:"request-only oracle".into()}));
+                            }
+                            for retry in 0..3 {
+                                if retry == 2 {
+                                    actual.invocation.replay_binding =
+                                        Some("different-replay-origin".into());
+                                }
+                                let id = RequestId::new(format!("oracle-request-{retry}"));
+                                let frozen = crate::model::occurrence::freeze_associations(
+                                    &history, &id, &actual, insertion,
+                                );
+                                let labels =
+                                    crate::model::adapter::correlation::request_labels(&actual);
+                                let Ok(labels) = labels else {
+                                    assert!(frozen.is_err());
+                                    continue;
+                                };
+                                let frozen = frozen.unwrap();
+                                let mut expected = associations.to_vec();
+                                for a in &mut expected {
+                                    a.call.message.request_id = id.clone();
+                                    a.result.request_id = id.clone();
+                                    if insertion
+                                        .is_some_and(|at| a.call.message.item_index as usize >= at)
+                                    {
+                                        a.call.message.item_index += 1;
+                                    }
+                                    if insertion
+                                        .is_some_and(|at| a.result.item_index as usize >= at)
+                                    {
+                                        a.result.item_index += 1;
+                                    }
+                                    a.wire_id = labels
+                                        .get(&(a.call.message.item_index, a.call.block.0))
+                                        .cloned()
+                                        .map(crate::model::occurrence::ProviderWireCorrelationId);
+                                }
+                                let encoded = serde_json::to_vec(&frozen).unwrap();
+                                assert!(frozen.encoded_len_upper_bound().unwrap() >= encoded.len());
+                                assert_eq!(encoded, serde_json::to_vec(&expected).unwrap());
+                                assert_eq!(
+                                    *frozen, expected,
+                                    "protocol={protocol:?} mode={mode} derived={derived_call}/{derived_result} insertion={insertion:?} retry={retry}"
+                                );
+                            }
+                        }
                         let translate = |input: &ModelRequest| {
                             let tools = crate::model::adapter::validation::validate_request(
                                 input, protocol,
                             )
                             .unwrap();
                             match protocol {
-                                ModelProtocol::OpenAiChatCompletions => crate::model::adapter::openai::chat_completions::translate_request(input).unwrap(),
-                                ModelProtocol::OpenAiResponses => crate::model::adapter::openai::responses::translate_request(input,&tools,input.invocation.compat.responses_storage).unwrap(),
-                                ModelProtocol::AnthropicMessages => crate::model::adapter::anthropic::mapping::translate_request(input,&tools).unwrap(),
+                                ModelProtocol::OpenAiChatCompletions => serde_json::to_value(crate::model::adapter::openai::chat_completions::translate_request(input,&tools).unwrap()).unwrap(),
+                                ModelProtocol::OpenAiResponses => serde_json::to_value(crate::model::adapter::openai::responses::translate_request(input,&tools,input.invocation.compat.responses_storage).unwrap()).unwrap(),
+                                ModelProtocol::AnthropicMessages => serde_json::to_value(crate::model::adapter::anthropic::mapping::translate_request(input,&tools).unwrap()).unwrap(),
                             }
                         };
                         let mut captured = translate(&request);
@@ -802,7 +990,7 @@ mod tests {
                             .map(|(_, id)| id.clone())
                             .collect();
                         if mode == 1 {
-                            assert!(actual_calls.is_empty());
+                            assert_eq!(actual_calls, [] as [std::string::String; 0]);
                         } else {
                             assert_eq!(actual_calls, calls);
                         }
@@ -901,7 +1089,7 @@ mod tests {
         other = request.clone();
         other.images.insert(
             crate::runtime::identity::ArtifactId::new("image"),
-            vec![1, 2, 3],
+            serde_json::from_str("[1,2,3]").unwrap(),
         );
         assert_ne!(other.semantic_input_fingerprint(), fingerprint);
     }

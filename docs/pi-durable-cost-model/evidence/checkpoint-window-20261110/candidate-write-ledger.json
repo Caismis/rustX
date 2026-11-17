@@ -1,0 +1,5219 @@
+[
+  {
+    "history": 8,
+    "measured": 32,
+    "schema": 105,
+    "wal_bytes": 14754840,
+    "wal_frames": 7121,
+    "main_bytes": 3053568,
+    "wal_epochs": 4,
+    "checkpoint_main_syncs": 4,
+    "wal_syncs": 8,
+    "distinct_wal_pages": 877,
+    "phase_writes": {
+      "startup": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          16
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "before_initialization": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          171
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "note.txt",
+          "write",
+          "bytes",
+          31
+        ],
+        [
+          "note.txt",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_provider_start": [
+        [
+          "catalog.json.tmp",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "catalog.json.tmp",
+          "write",
+          "bytes",
+          1119
+        ],
+        [
+          "catalog.json.tmp",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "conv_01a1c1fe-c1dc-72b3-87d6-3840cb4f79cd",
+          "fsync",
+          "calls",
+          3
+        ],
+        [
+          "conv_01a1c1fe-c1dc-72b3-87d6-3840cb4f79cd",
+          "write",
+          "bytes",
+          41
+        ],
+        [
+          "conv_01a1c1fe-c1dc-72b3-87d6-3840cb4f79cd",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "conversation-reservations",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          2
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          514048
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          251
+        ],
+        [
+          "private",
+          "fsync",
+          "calls",
+          5
+        ],
+        [
+          "rollback_journal",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "rollback_journal",
+          "pwrite64",
+          "bytes",
+          524
+        ],
+        [
+          "rollback_journal",
+          "pwrite64",
+          "calls",
+          2
+        ],
+        [
+          "rustx.toml",
+          "write",
+          "bytes",
+          2116
+        ],
+        [
+          "rustx.toml",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "sessions",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          2
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          16
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          16
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          1
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          2
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          532536
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          515
+        ]
+      ],
+      "after_initialization": [
+        [
+          "conv_01a1c1fe-c1dc-72b3-87d6-3840cb4f79cd",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          616
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          77
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          1
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          3161904
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          3053
+        ]
+      ],
+      "before_measured_turns": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          2672
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          334
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          4
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          4
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          3053568
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          1491
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          4
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          8
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          14754840
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          14246
+        ]
+      ],
+      "after_late_snapshot": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          96
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          12
+        ]
+      ],
+      "after_verification": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          24
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          3
+        ]
+      ],
+      "after_shutdown": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          8
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_driver_drop": [
+        [
+          "conv_01a1c1fe-c1dc-72b3-87d6-3840cb4f79cd",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          409600
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          200
+        ],
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          8
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          8
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          1
+        ]
+      ],
+      "after_final_writer_close": [
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          8
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          8
+        ]
+      ],
+      "after_cleanup": [
+        [
+          "benchmark_output",
+          "write",
+          "bytes",
+          7357397
+        ],
+        [
+          "benchmark_output",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          164
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          10
+        ]
+      ]
+    },
+    "phase_commits": {
+      "inbound_acceptance": {
+        "commits": 32,
+        "wal_frames": 375
+      },
+      "inbound_adoption": {
+        "commits": 32,
+        "wal_frames": 1450
+      },
+      "attempt_turn_start": {
+        "commits": 32,
+        "wal_frames": 740
+      },
+      "request_start": {
+        "commits": 32,
+        "wal_frames": 2104
+      },
+      "final_settlement": {
+        "commits": 32,
+        "wal_frames": 2452
+      }
+    },
+    "group_ledger": {
+      "other btrees / page 1": {
+        "wal_frames": 601,
+        "main_bytes": 159744,
+        "retained_page_growth": 18,
+        "net_logical_column_bytes": 18441
+      },
+      "canonical and transcript rows": {
+        "wal_frames": 1892,
+        "main_bytes": 643072,
+        "retained_page_growth": 142,
+        "net_logical_column_bytes": 168657
+      },
+      "content frontiers and segment layout": {
+        "wal_frames": 682,
+        "main_bytes": 141312,
+        "retained_page_growth": 25,
+        "net_logical_column_bytes": 37752
+      },
+      "events and native/observation indexes": {
+        "wal_frames": 2459,
+        "main_bytes": 1019904,
+        "retained_page_growth": 306,
+        "net_logical_column_bytes": 467060
+      },
+      "request owner/snapshot/model": {
+        "wal_frames": 648,
+        "main_bytes": 313344,
+        "retained_page_growth": 80,
+        "net_logical_column_bytes": 111219
+      },
+      "request Trace catalog": {
+        "wal_frames": 286,
+        "main_bytes": 124928,
+        "retained_page_growth": 17,
+        "net_logical_column_bytes": 12126
+      },
+      "request manifest and Source": {
+        "wal_frames": 553,
+        "main_bytes": 651264,
+        "retained_page_growth": 180,
+        "net_logical_column_bytes": 288810
+      }
+    },
+    "process_hot": {
+      "write_bytes": 18341888,
+      "wchar": 18343560,
+      "syscw": 16103,
+      "cancelled_write_bytes": 0
+    },
+    "process_through_close": {
+      "write_bytes": 23306240,
+      "wchar": 23076890,
+      "syscw": 20255,
+      "cancelled_write_bytes": 94208
+    },
+    "mutations_at_commits": {
+      "content_frontiers": {
+        "inserted": 512,
+        "deleted": 32,
+        "updated": 0,
+        "inserted_column_bytes": 44534,
+        "changed_new_column_bytes": 0
+      },
+      "observation_headers": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 57297,
+        "changed_new_column_bytes": 35192
+      },
+      "pending_inbound": {
+        "inserted": 32,
+        "deleted": 32,
+        "updated": 0,
+        "inserted_column_bytes": 29243,
+        "changed_new_column_bytes": 0
+      },
+      "rustx_store": {
+        "inserted": 0,
+        "deleted": 0,
+        "updated": 160,
+        "inserted_column_bytes": 0,
+        "changed_new_column_bytes": 875
+      },
+      "transcript_order": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 4221,
+        "changed_new_column_bytes": 0
+      },
+      "events": {
+        "inserted": 256,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 467060,
+        "changed_new_column_bytes": 0
+      },
+      "message_ledger": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 51476,
+        "changed_new_column_bytes": 0
+      },
+      "observation_block_headers": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 35674,
+        "changed_new_column_bytes": 0
+      },
+      "surface_head": {
+        "inserted": 0,
+        "deleted": 0,
+        "updated": 64,
+        "inserted_column_bytes": 0,
+        "changed_new_column_bytes": 128
+      },
+      "surface_observation_boundaries": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 190,
+        "changed_new_column_bytes": 0
+      },
+      "surface_ops": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 5757,
+        "changed_new_column_bytes": 0
+      },
+      "trace_adoption_members": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 1211,
+        "changed_new_column_bytes": 0
+      },
+      "lifecycle_state": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 64,
+        "inserted_column_bytes": 3804,
+        "changed_new_column_bytes": 3256
+      },
+      "native_input_nodes": {
+        "inserted": 285,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 43559,
+        "changed_new_column_bytes": 0
+      },
+      "observation_models": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 5235,
+        "changed_new_column_bytes": 0
+      },
+      "request_owners": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 4184,
+        "changed_new_column_bytes": 380
+      },
+      "request_snapshots": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 90139,
+        "changed_new_column_bytes": 11281
+      },
+      "request_source_nodes": {
+        "inserted": 285,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 75523,
+        "changed_new_column_bytes": 0
+      },
+      "request_source_pages": {
+        "inserted": 229,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 158440,
+        "changed_new_column_bytes": 0
+      },
+      "request_source_roots": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 11288,
+        "changed_new_column_bytes": 0
+      },
+      "request_trace_catalogs": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 2042,
+        "changed_new_column_bytes": 0
+      },
+      "request_trace_definitions": {
+        "inserted": 224,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 10084,
+        "changed_new_column_bytes": 0
+      },
+      "publication_streams": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 10166,
+        "changed_new_column_bytes": 0
+      }
+    },
+    "native_nodes": 285,
+    "source_nodes": 285,
+    "source_metadata_bytes": 56480,
+    "source_pages": 229,
+    "source_page_bytes": 151112,
+    "request_catalogs": 32,
+    "request_catalog_definitions": 224,
+    "native_events": 256,
+    "event_json_bytes": 109694,
+    "event_domain_bytes": {
+      "observation_trace_fact": 67372,
+      "observation_trace_owner": 731,
+      "observation_trace_fact_required": 256,
+      "observation_kind": 4768,
+      "observation_unavailable": 256,
+      "observation_transcript": 0,
+      "observation_witness": 68285,
+      "observation_source": 8448,
+      "observation_assistant_ledger": 64,
+      "observation_tool_ledger": 0,
+      "observation_tool_block": 0,
+      "observation_tool_phase": 0,
+      "observation_turn_required": 256,
+      "observation_turn_ordinal": 63,
+      "observation_turn_anchor": 273,
+      "observation_turn_header": 27575,
+      "observation_turn_prompt": 608,
+      "observation_turn_prompt_positive": 256,
+      "observation_execution_owner": 455,
+      "observation_execution_required": 256,
+      "observation_execution": 30548,
+      "observation_members": 26582,
+      "observation_member_anchor": 182,
+      "observation_statistics": 73427,
+      "observation_occupancy": 0,
+      "observation_readiness_missing": 256,
+      "observation_statistics_required": 256,
+      "observation_members_required": 256,
+      "observation_trace_required": 256,
+      "observation_trace_total": 421
+    },
+    "event_kinds": [
+      {
+        "kind": "assistant_message_committed",
+        "rows": 40,
+        "column_bytes": {
+          "observation_trace_fact": 8574,
+          "observation_trace_owner": 107,
+          "observation_trace_fact_required": 40,
+          "observation_kind": 1080,
+          "observation_unavailable": 40,
+          "observation_transcript": 0,
+          "observation_witness": 11654,
+          "observation_source": 1320,
+          "observation_assistant_ledger": 76,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 40,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 106,
+          "observation_turn_header": 11457,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 40,
+          "observation_execution_owner": 106,
+          "observation_execution_required": 40,
+          "observation_execution": 8508,
+          "observation_members": 14884,
+          "event_timestamp": 1400,
+          "observation_member_anchor": 106,
+          "observation_statistics": 14751,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 40,
+          "observation_statistics_required": 40,
+          "observation_members_required": 40,
+          "observation_trace_required": 40,
+          "observation_trace_total": 100,
+          "sequence": 107,
+          "event_id": 2027,
+          "schema_version": 40,
+          "conversation_id": 1640,
+          "attempt_id": 2070,
+          "turn_id": 40,
+          "event_json": 16434
+        }
+      },
+      {
+        "kind": "attempt_completed",
+        "rows": 40,
+        "column_bytes": {
+          "observation_trace_fact": 13923,
+          "observation_trace_owner": 106,
+          "observation_trace_fact_required": 40,
+          "observation_kind": 680,
+          "observation_unavailable": 40,
+          "observation_transcript": 0,
+          "observation_witness": 11496,
+          "observation_source": 1320,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 40,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 106,
+          "observation_turn_header": 11817,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 40,
+          "observation_execution_owner": 106,
+          "observation_execution_required": 40,
+          "observation_execution": 14643,
+          "observation_members": 18265,
+          "event_timestamp": 1400,
+          "observation_member_anchor": 106,
+          "observation_statistics": 12563,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 40,
+          "observation_statistics_required": 40,
+          "observation_members_required": 40,
+          "observation_trace_required": 40,
+          "observation_trace_total": 0,
+          "sequence": 107,
+          "event_id": 2027,
+          "schema_version": 40,
+          "conversation_id": 1640,
+          "attempt_id": 2070,
+          "turn_id": 0,
+          "event_json": 16434
+        }
+      },
+      {
+        "kind": "attempt_started",
+        "rows": 40,
+        "column_bytes": {
+          "observation_trace_fact": 7174,
+          "observation_trace_owner": 106,
+          "observation_trace_fact_required": 40,
+          "observation_kind": 600,
+          "observation_unavailable": 40,
+          "observation_transcript": 0,
+          "observation_witness": 10332,
+          "observation_source": 1320,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 40,
+          "observation_turn_ordinal": 71,
+          "observation_turn_anchor": 106,
+          "observation_turn_header": 11141,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 40,
+          "observation_execution_owner": 106,
+          "observation_execution_required": 40,
+          "observation_execution": 2752,
+          "observation_members": 0,
+          "event_timestamp": 1400,
+          "observation_member_anchor": 0,
+          "observation_statistics": 16911,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 40,
+          "observation_statistics_required": 40,
+          "observation_members_required": 40,
+          "observation_trace_required": 40,
+          "observation_trace_total": 98,
+          "sequence": 106,
+          "event_id": 2026,
+          "schema_version": 40,
+          "conversation_id": 1640,
+          "attempt_id": 2070,
+          "turn_id": 0,
+          "event_json": 15072
+        }
+      },
+      {
+        "kind": "inbound_turn_adopted",
+        "rows": 40,
+        "column_bytes": {
+          "observation_trace_fact": 7984,
+          "observation_trace_owner": 105,
+          "observation_trace_fact_required": 40,
+          "observation_kind": 800,
+          "observation_unavailable": 40,
+          "observation_transcript": 0,
+          "observation_witness": 6031,
+          "observation_source": 1320,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 40,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 760,
+          "observation_turn_prompt_positive": 40,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 40,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 1400,
+          "observation_member_anchor": 0,
+          "observation_statistics": 0,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 40,
+          "observation_statistics_required": 40,
+          "observation_members_required": 40,
+          "observation_trace_required": 40,
+          "observation_trace_total": 98,
+          "sequence": 105,
+          "event_id": 2025,
+          "schema_version": 40,
+          "conversation_id": 1640,
+          "attempt_id": 0,
+          "turn_id": 0,
+          "event_json": 12681
+        }
+      },
+      {
+        "kind": "model_request_completed",
+        "rows": 40,
+        "column_bytes": {
+          "observation_trace_fact": 13334,
+          "observation_trace_owner": 107,
+          "observation_trace_fact_required": 40,
+          "observation_kind": 920,
+          "observation_unavailable": 40,
+          "observation_transcript": 0,
+          "observation_witness": 17214,
+          "observation_source": 1320,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 40,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 40,
+          "observation_execution_owner": 106,
+          "observation_execution_required": 40,
+          "observation_execution": 6046,
+          "observation_members": 0,
+          "event_timestamp": 1400,
+          "observation_member_anchor": 0,
+          "observation_statistics": 17591,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 40,
+          "observation_statistics_required": 40,
+          "observation_members_required": 40,
+          "observation_trace_required": 40,
+          "observation_trace_total": 0,
+          "sequence": 107,
+          "event_id": 2027,
+          "schema_version": 40,
+          "conversation_id": 1640,
+          "attempt_id": 2070,
+          "turn_id": 40,
+          "event_json": 27826
+        }
+      },
+      {
+        "kind": "model_request_started",
+        "rows": 40,
+        "column_bytes": {
+          "observation_trace_fact": 15546,
+          "observation_trace_owner": 107,
+          "observation_trace_fact_required": 40,
+          "observation_kind": 840,
+          "observation_unavailable": 40,
+          "observation_transcript": 0,
+          "observation_witness": 13134,
+          "observation_source": 1320,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 40,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 40,
+          "observation_execution_owner": 106,
+          "observation_execution_required": 40,
+          "observation_execution": 6046,
+          "observation_members": 0,
+          "event_timestamp": 1400,
+          "observation_member_anchor": 0,
+          "observation_statistics": 14721,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 40,
+          "observation_statistics_required": 40,
+          "observation_members_required": 40,
+          "observation_trace_required": 40,
+          "observation_trace_total": 98,
+          "sequence": 107,
+          "event_id": 2027,
+          "schema_version": 40,
+          "conversation_id": 1640,
+          "attempt_id": 2070,
+          "turn_id": 40,
+          "event_json": 22744
+        }
+      },
+      {
+        "kind": "turn_completed",
+        "rows": 40,
+        "column_bytes": {
+          "observation_trace_fact": 9934,
+          "observation_trace_owner": 106,
+          "observation_trace_fact_required": 40,
+          "observation_kind": 560,
+          "observation_unavailable": 40,
+          "observation_transcript": 0,
+          "observation_witness": 7704,
+          "observation_source": 1320,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 40,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 40,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 40,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 1400,
+          "observation_member_anchor": 0,
+          "observation_statistics": 0,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 40,
+          "observation_statistics_required": 40,
+          "observation_members_required": 40,
+          "observation_trace_required": 40,
+          "observation_trace_total": 0,
+          "sequence": 107,
+          "event_id": 2027,
+          "schema_version": 40,
+          "conversation_id": 1640,
+          "attempt_id": 2070,
+          "turn_id": 40,
+          "event_json": 12884
+        }
+      },
+      {
+        "kind": "turn_started",
+        "rows": 40,
+        "column_bytes": {
+          "observation_trace_fact": 7534,
+          "observation_trace_owner": 106,
+          "observation_trace_fact_required": 40,
+          "observation_kind": 480,
+          "observation_unavailable": 40,
+          "observation_transcript": 0,
+          "observation_witness": 7543,
+          "observation_source": 1320,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 40,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 40,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 40,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 1400,
+          "observation_member_anchor": 0,
+          "observation_statistics": 14721,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 40,
+          "observation_statistics_required": 40,
+          "observation_members_required": 40,
+          "observation_trace_required": 40,
+          "observation_trace_total": 98,
+          "sequence": 106,
+          "event_id": 2026,
+          "schema_version": 40,
+          "conversation_id": 1640,
+          "attempt_id": 2070,
+          "turn_id": 40,
+          "event_json": 12802
+        }
+      }
+    ],
+    "empty_opened_conversation": {
+      "page_count": 250,
+      "freelist": 0,
+      "useful_payload": 64475,
+      "unused": 444052,
+      "overflow_pages": 2
+    },
+    "pre_hot": {
+      "page_count": 494,
+      "freelist": 0,
+      "useful_payload": 502166,
+      "unused": 497280,
+      "overflow_pages": 89
+    },
+    "post_hot": {
+      "page_count": 1262,
+      "freelist": 0,
+      "useful_payload": 1775342,
+      "unused": 762309,
+      "overflow_pages": 249
+    },
+    "after_writer_close": {
+      "page_count": 1262,
+      "freelist": 0,
+      "useful_payload": 1775342,
+      "unused": 762309,
+      "overflow_pages": 249
+    },
+    "authenticated_wal_owners": {
+      "rustx_store": 160,
+      "sqlite_autoindex_observation_headers_1": 96,
+      "sqlite_autoindex_observation_headers_2": 76,
+      "pending_inbound": 64,
+      "sqlite_autoindex_pending_inbound_1": 64,
+      "transcript_order": 67,
+      "sqlite_autoindex_transcript_order_1": 74,
+      "transcript_observation_readiness_missing_idx": 64,
+      "content_frontiers": 682,
+      "observation_headers": 192,
+      "sqlite_schema": 133,
+      "sqlite_autoindex_observation_block_headers_1": 64,
+      "sqlite_autoindex_observation_block_headers_2": 76,
+      "observation_headers_ledger_idx": 64,
+      "surface_observation_boundaries": 32,
+      "sqlite_autoindex_surface_observation_boundaries_1": 32,
+      "sqlite_autoindex_surface_observation_boundaries_2": 32,
+      "observation_block_ledger_kind_idx": 64,
+      "observation_block_kind_idx": 76,
+      "sqlite_autoindex_message_ledger_1": 76,
+      "message_ledger_first_human_idx": 32,
+      "message_ledger_identity_position_idx": 78,
+      "message_ledger_native_transcript_idx": 64,
+      "surface_ops": 68,
+      "surface_head": 64,
+      "trace_adoption_members": 32,
+      "events_trace_owner_idx": 170,
+      "events_aggregate_heads_idx": 135,
+      "events_observation_turn_prompt_idx": 32,
+      "message_ledger_append_position_idx": 64,
+      "message_ledger_opening_idx": 32,
+      "message_ledger_human_activity_idx": 32,
+      "message_ledger_boundary_holes_idx": 32,
+      "events_primary_trace_kind_idx": 130,
+      "events_kind_idx": 130,
+      "events_attempt_kind_idx": 295,
+      "sqlite_autoindex_events_1": 290,
+      "observation_block_headers": 85,
+      "message_ledger": 128,
+      "events": 416,
+      "events_observation_turn_ordinal_idx": 32,
+      "events_observation_turn_anchor_idx": 64,
+      "events_execution_owner_idx": 96,
+      "lifecycle_state": 70,
+      "sqlite_autoindex_lifecycle_state_1": 62,
+      "events_step_kind_idx": 226,
+      "events_attempt_heads_idx": 184,
+      "observation_models": 57,
+      "sqlite_autoindex_observation_models_2": 36,
+      "observation_models_owner_idx": 34,
+      "request_snapshots": 160,
+      "sqlite_autoindex_request_snapshots_1": 32,
+      "sqlite_autoindex_request_snapshots_2": 34,
+      "request_trace_retry_idx": 32,
+      "request_snapshots_started_idx": 32,
+      "request_trace_catalogs": 34,
+      "request_trace_catalog_identity_idx": 34,
+      "request_trace_definitions": 89,
+      "request_trace_definition_identity_idx": 46,
+      "request_snapshots_canonical_frontier_idx": 32,
+      "native_input_nodes": 74,
+      "request_source_pages": 135,
+      "request_source_nodes": 101,
+      "request_owners": 69,
+      "sqlite_autoindex_request_owners_1": 34,
+      "sqlite_autoindex_request_owners_2": 32,
+      "sqlite_autoindex_request_owners_3": 64,
+      "events_primary_request_kind_idx": 66,
+      "events_request_id_kind_idx": 91,
+      "sqlite_autoindex_request_source_pages_1": 143,
+      "request_source_roots": 100,
+      "request_trace_definition_digest_idx": 83,
+      "sqlite_autoindex_publication_streams_1": 41,
+      "events_observation_assistant_ledger_idx": 32,
+      "events_observation_member_anchor_idx": 32,
+      "publication_streams_settlement_idx": 32,
+      "publication_streams_message_settlement_idx": 34,
+      "events_message_id_kind_idx": 38,
+      "publication_streams": 37
+    },
+    "authenticated_main_owners": {
+      "sqlite_schema": 8192,
+      "rustx_store": 8192,
+      "observation_block_headers": 67584,
+      "sqlite_autoindex_observation_block_headers_1": 8192,
+      "sqlite_autoindex_observation_block_headers_2": 20480,
+      "observation_headers": 169984,
+      "sqlite_autoindex_observation_headers_1": 8192,
+      "sqlite_autoindex_observation_headers_2": 24576,
+      "observation_headers_ledger_idx": 8192,
+      "surface_observation_boundaries": 8192,
+      "sqlite_autoindex_surface_observation_boundaries_1": 8192,
+      "sqlite_autoindex_surface_observation_boundaries_2": 8192,
+      "content_frontiers": 141312,
+      "observation_block_ledger_kind_idx": 8192,
+      "observation_block_kind_idx": 22528,
+      "observation_models": 26624,
+      "sqlite_autoindex_observation_models_2": 16384,
+      "observation_models_owner_idx": 12288,
+      "pending_inbound": 8192,
+      "sqlite_autoindex_pending_inbound_1": 8192,
+      "message_ledger": 94208,
+      "sqlite_autoindex_message_ledger_1": 20480,
+      "message_ledger_first_human_idx": 8192,
+      "message_ledger_identity_position_idx": 22528,
+      "message_ledger_native_transcript_idx": 8192,
+      "transcript_order": 16384,
+      "sqlite_autoindex_transcript_order_1": 24576,
+      "transcript_observation_readiness_missing_idx": 8192,
+      "surface_ops": 20480,
+      "surface_head": 8192,
+      "request_configurations": 16384,
+      "request_snapshots": 167936,
+      "sqlite_autoindex_request_snapshots_1": 8192,
+      "sqlite_autoindex_request_snapshots_2": 12288,
+      "request_trace_retry_idx": 8192,
+      "request_snapshots_started_idx": 8192,
+      "request_trace_catalogs": 12288,
+      "request_trace_catalog_identity_idx": 12288,
+      "request_trace_definitions": 40960,
+      "request_trace_definition_digest_idx": 36864,
+      "request_trace_definition_identity_idx": 22528,
+      "trace_adoption_members": 8192,
+      "request_trace_contexts": 2048,
+      "publication_streams": 28672,
+      "sqlite_autoindex_publication_streams_1": 22528,
+      "events": 638976,
+      "sqlite_autoindex_events_1": 49152,
+      "events_trace_owner_idx": 34816,
+      "events_observation_assistant_ledger_idx": 8192,
+      "events_aggregate_heads_idx": 12288,
+      "events_attempt_heads_idx": 36864,
+      "events_observation_member_anchor_idx": 8192,
+      "events_observation_turn_ordinal_idx": 8192,
+      "events_observation_turn_anchor_idx": 8192,
+      "events_observation_turn_prompt_idx": 8192,
+      "events_execution_owner_idx": 8192,
+      "lifecycle_state": 24576,
+      "sqlite_autoindex_lifecycle_state_1": 20480,
+      "message_ledger_append_position_idx": 8192,
+      "message_ledger_opening_idx": 8192,
+      "message_ledger_human_activity_idx": 8192,
+      "message_ledger_boundary_holes_idx": 8192,
+      "request_snapshots_canonical_frontier_idx": 8192,
+      "publication_streams_settlement_idx": 8192,
+      "publication_streams_message_settlement_idx": 12288,
+      "native_input_nodes": 67584,
+      "request_source_pages": 385024,
+      "sqlite_autoindex_request_source_pages_1": 47104,
+      "request_source_nodes": 104448,
+      "request_source_scalars": 2048,
+      "request_source_roots": 45056,
+      "events_primary_trace_kind_idx": 14336,
+      "request_owners": 16384,
+      "sqlite_autoindex_request_owners_1": 12288,
+      "sqlite_autoindex_request_owners_2": 8192,
+      "sqlite_autoindex_request_owners_3": 8192,
+      "events_primary_request_kind_idx": 12288,
+      "events_message_id_kind_idx": 16384,
+      "events_kind_idx": 14336,
+      "events_attempt_kind_idx": 65536,
+      "events_step_kind_idx": 45056,
+      "events_request_id_kind_idx": 30720
+    }
+  },
+  {
+    "history": 32,
+    "measured": 32,
+    "schema": 105,
+    "wal_bytes": 15819848,
+    "wal_frames": 7635,
+    "main_bytes": 3231744,
+    "wal_epochs": 4,
+    "checkpoint_main_syncs": 4,
+    "wal_syncs": 8,
+    "distinct_wal_pages": 949,
+    "phase_writes": {
+      "startup": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          16
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "before_initialization": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          172
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "note.txt",
+          "write",
+          "bytes",
+          31
+        ],
+        [
+          "note.txt",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_provider_start": [
+        [
+          "catalog.json.tmp",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "catalog.json.tmp",
+          "write",
+          "bytes",
+          1120
+        ],
+        [
+          "catalog.json.tmp",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "conv_01a1c1fe-d5a6-7a51-9fcd-7703cdf73d10",
+          "fsync",
+          "calls",
+          3
+        ],
+        [
+          "conv_01a1c1fe-d5a6-7a51-9fcd-7703cdf73d10",
+          "write",
+          "bytes",
+          41
+        ],
+        [
+          "conv_01a1c1fe-d5a6-7a51-9fcd-7703cdf73d10",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "conversation-reservations",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          2
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          514048
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          251
+        ],
+        [
+          "private",
+          "fsync",
+          "calls",
+          5
+        ],
+        [
+          "rollback_journal",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "rollback_journal",
+          "pwrite64",
+          "bytes",
+          524
+        ],
+        [
+          "rollback_journal",
+          "pwrite64",
+          "calls",
+          2
+        ],
+        [
+          "rustx.toml",
+          "write",
+          "bytes",
+          2116
+        ],
+        [
+          "rustx.toml",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "sessions",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          2
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          16
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          16
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          1
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          2
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          532536
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          515
+        ]
+      ],
+      "after_initialization": [
+        [
+          "conv_01a1c1fe-d5a6-7a51-9fcd-7703cdf73d10",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          2504
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          313
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          3
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          3
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          2267136
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          1107
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          4
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          7
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          14153960
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          13666
+        ]
+      ],
+      "before_measured_turns": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          2712
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          339
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          4
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          4
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          3231744
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          1578
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          4
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          8
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          15819848
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          15274
+        ]
+      ],
+      "after_late_snapshot": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          168
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          21
+        ]
+      ],
+      "after_verification": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          8
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_shutdown": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          8
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_driver_drop": [
+        [
+          "conv_01a1c1fe-d5a6-7a51-9fcd-7703cdf73d10",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          299008
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          146
+        ],
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          8
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          8
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          1
+        ]
+      ],
+      "after_final_writer_close": [
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          8
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          8
+        ]
+      ],
+      "after_cleanup": [
+        [
+          "benchmark_output",
+          "write",
+          "bytes",
+          14108841
+        ],
+        [
+          "benchmark_output",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          164
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          10
+        ]
+      ]
+    },
+    "phase_commits": {
+      "inbound_acceptance": {
+        "commits": 32,
+        "wal_frames": 355
+      },
+      "inbound_adoption": {
+        "commits": 32,
+        "wal_frames": 1461
+      },
+      "attempt_turn_start": {
+        "commits": 32,
+        "wal_frames": 793
+      },
+      "request_start": {
+        "commits": 32,
+        "wal_frames": 2283
+      },
+      "final_settlement": {
+        "commits": 32,
+        "wal_frames": 2743
+      }
+    },
+    "group_ledger": {
+      "other btrees / page 1": {
+        "wal_frames": 651,
+        "main_bytes": 186368,
+        "retained_page_growth": 16,
+        "net_logical_column_bytes": 18481
+      },
+      "canonical and transcript rows": {
+        "wal_frames": 2015,
+        "main_bytes": 718848,
+        "retained_page_growth": 134,
+        "net_logical_column_bytes": 169132
+      },
+      "content frontiers and segment layout": {
+        "wal_frames": 742,
+        "main_bytes": 227328,
+        "retained_page_growth": 25,
+        "net_logical_column_bytes": 37907
+      },
+      "events and native/observation indexes": {
+        "wal_frames": 2596,
+        "main_bytes": 1042432,
+        "retained_page_growth": 302,
+        "net_logical_column_bytes": 469919
+      },
+      "request owner/snapshot/model": {
+        "wal_frames": 686,
+        "main_bytes": 342016,
+        "retained_page_growth": 75,
+        "net_logical_column_bytes": 111483
+      },
+      "request Trace catalog": {
+        "wal_frames": 322,
+        "main_bytes": 163840,
+        "retained_page_growth": 16,
+        "net_logical_column_bytes": 12160
+      },
+      "request manifest and Source": {
+        "wal_frames": 623,
+        "main_bytes": 550912,
+        "retained_page_growth": 186,
+        "net_logical_column_bytes": 302493
+      }
+    },
+    "process_hot": {
+      "write_bytes": 19992576,
+      "wchar": 19695872,
+      "syscw": 17223,
+      "cancelled_write_bytes": 0
+    },
+    "process_through_close": {
+      "write_bytes": 38404096,
+      "wchar": 37965508,
+      "syscw": 33308,
+      "cancelled_write_bytes": 94208
+    },
+    "mutations_at_commits": {
+      "content_frontiers": {
+        "inserted": 512,
+        "deleted": 32,
+        "updated": 0,
+        "inserted_column_bytes": 44691,
+        "changed_new_column_bytes": 0
+      },
+      "observation_headers": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 57415,
+        "changed_new_column_bytes": 35259
+      },
+      "pending_inbound": {
+        "inserted": 32,
+        "deleted": 32,
+        "updated": 0,
+        "inserted_column_bytes": 29276,
+        "changed_new_column_bytes": 0
+      },
+      "rustx_store": {
+        "inserted": 0,
+        "deleted": 0,
+        "updated": 160,
+        "inserted_column_bytes": 0,
+        "changed_new_column_bytes": 954
+      },
+      "transcript_order": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 4253,
+        "changed_new_column_bytes": 0
+      },
+      "events": {
+        "inserted": 256,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 469919,
+        "changed_new_column_bytes": 0
+      },
+      "message_ledger": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 51648,
+        "changed_new_column_bytes": 0
+      },
+      "observation_block_headers": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 35710,
+        "changed_new_column_bytes": 0
+      },
+      "surface_head": {
+        "inserted": 0,
+        "deleted": 0,
+        "updated": 64,
+        "inserted_column_bytes": 0,
+        "changed_new_column_bytes": 158
+      },
+      "surface_observation_boundaries": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 222,
+        "changed_new_column_bytes": 0
+      },
+      "surface_ops": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 5790,
+        "changed_new_column_bytes": 0
+      },
+      "trace_adoption_members": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 1231,
+        "changed_new_column_bytes": 0
+      },
+      "lifecycle_state": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 64,
+        "inserted_column_bytes": 3808,
+        "changed_new_column_bytes": 3264
+      },
+      "native_input_nodes": {
+        "inserted": 319,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 47403,
+        "changed_new_column_bytes": 0
+      },
+      "observation_models": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 5248,
+        "changed_new_column_bytes": 0
+      },
+      "request_owners": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 4192,
+        "changed_new_column_bytes": 384
+      },
+      "request_snapshots": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 90347,
+        "changed_new_column_bytes": 11312
+      },
+      "request_source_nodes": {
+        "inserted": 319,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 85707,
+        "changed_new_column_bytes": 0
+      },
+      "request_source_pages": {
+        "inserted": 228,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 157990,
+        "changed_new_column_bytes": 0
+      },
+      "request_source_roots": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 11393,
+        "changed_new_column_bytes": 0
+      },
+      "request_trace_catalogs": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 2048,
+        "changed_new_column_bytes": 0
+      },
+      "request_trace_definitions": {
+        "inserted": 224,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 10112,
+        "changed_new_column_bytes": 0
+      },
+      "publication_streams": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 10176,
+        "changed_new_column_bytes": 0
+      }
+    },
+    "native_nodes": 319,
+    "source_nodes": 319,
+    "source_metadata_bytes": 64334,
+    "source_pages": 228,
+    "source_page_bytes": 150694,
+    "request_catalogs": 32,
+    "request_catalog_definitions": 224,
+    "native_events": 256,
+    "event_json_bytes": 109793,
+    "event_domain_bytes": {
+      "observation_trace_fact": 67938,
+      "observation_trace_owner": 768,
+      "observation_trace_fact_required": 256,
+      "observation_kind": 4768,
+      "observation_unavailable": 256,
+      "observation_transcript": 0,
+      "observation_witness": 68841,
+      "observation_source": 8448,
+      "observation_assistant_ledger": 79,
+      "observation_tool_ledger": 0,
+      "observation_tool_block": 0,
+      "observation_tool_phase": 0,
+      "observation_turn_required": 256,
+      "observation_turn_ordinal": 64,
+      "observation_turn_anchor": 288,
+      "observation_turn_header": 27614,
+      "observation_turn_prompt": 608,
+      "observation_turn_prompt_positive": 256,
+      "observation_execution_owner": 480,
+      "observation_execution_required": 256,
+      "observation_execution": 31106,
+      "observation_members": 26756,
+      "observation_member_anchor": 192,
+      "observation_statistics": 74048,
+      "observation_occupancy": 0,
+      "observation_readiness_missing": 256,
+      "observation_statistics_required": 256,
+      "observation_members_required": 256,
+      "observation_trace_required": 256,
+      "observation_trace_total": 480
+    },
+    "event_kinds": [
+      {
+        "kind": "assistant_message_committed",
+        "rows": 64,
+        "column_bytes": {
+          "observation_trace_fact": 13783,
+          "observation_trace_owner": 179,
+          "observation_trace_fact_required": 64,
+          "observation_kind": 1728,
+          "observation_unavailable": 64,
+          "observation_transcript": 0,
+          "observation_witness": 18724,
+          "observation_source": 2112,
+          "observation_assistant_ledger": 139,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 64,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 178,
+          "observation_turn_header": 18360,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 64,
+          "observation_execution_owner": 178,
+          "observation_execution_required": 64,
+          "observation_execution": 13741,
+          "observation_members": 23886,
+          "event_timestamp": 2240,
+          "observation_member_anchor": 178,
+          "observation_statistics": 23723,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 64,
+          "observation_statistics_required": 64,
+          "observation_members_required": 64,
+          "observation_trace_required": 64,
+          "observation_trace_total": 172,
+          "sequence": 179,
+          "event_id": 3251,
+          "schema_version": 64,
+          "conversation_id": 2624,
+          "attempt_id": 3318,
+          "turn_id": 64,
+          "event_json": 26322
+        }
+      },
+      {
+        "kind": "attempt_completed",
+        "rows": 64,
+        "column_bytes": {
+          "observation_trace_fact": 22347,
+          "observation_trace_owner": 178,
+          "observation_trace_fact_required": 64,
+          "observation_kind": 1088,
+          "observation_unavailable": 64,
+          "observation_transcript": 0,
+          "observation_witness": 18469,
+          "observation_source": 2112,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 64,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 178,
+          "observation_turn_header": 18936,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 64,
+          "observation_execution_owner": 178,
+          "observation_execution_required": 64,
+          "observation_execution": 23620,
+          "observation_members": 29331,
+          "event_timestamp": 2240,
+          "observation_member_anchor": 178,
+          "observation_statistics": 20191,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 64,
+          "observation_statistics_required": 64,
+          "observation_members_required": 64,
+          "observation_trace_required": 64,
+          "observation_trace_total": 0,
+          "sequence": 179,
+          "event_id": 3251,
+          "schema_version": 64,
+          "conversation_id": 2624,
+          "attempt_id": 3318,
+          "turn_id": 0,
+          "event_json": 26322
+        }
+      },
+      {
+        "kind": "attempt_started",
+        "rows": 64,
+        "column_bytes": {
+          "observation_trace_fact": 11542,
+          "observation_trace_owner": 178,
+          "observation_trace_fact_required": 64,
+          "observation_kind": 960,
+          "observation_unavailable": 64,
+          "observation_transcript": 0,
+          "observation_witness": 16609,
+          "observation_source": 2112,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 64,
+          "observation_turn_ordinal": 119,
+          "observation_turn_anchor": 178,
+          "observation_turn_header": 17837,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 64,
+          "observation_execution_owner": 178,
+          "observation_execution_required": 64,
+          "observation_execution": 4432,
+          "observation_members": 0,
+          "event_timestamp": 2240,
+          "observation_member_anchor": 0,
+          "observation_statistics": 27203,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 64,
+          "observation_statistics_required": 64,
+          "observation_members_required": 64,
+          "observation_trace_required": 64,
+          "observation_trace_total": 170,
+          "sequence": 178,
+          "event_id": 3250,
+          "schema_version": 64,
+          "conversation_id": 2624,
+          "attempt_id": 3318,
+          "turn_id": 0,
+          "event_json": 24144
+        }
+      },
+      {
+        "kind": "inbound_turn_adopted",
+        "rows": 64,
+        "column_bytes": {
+          "observation_trace_fact": 12830,
+          "observation_trace_owner": 177,
+          "observation_trace_fact_required": 64,
+          "observation_kind": 1280,
+          "observation_unavailable": 64,
+          "observation_transcript": 0,
+          "observation_witness": 9713,
+          "observation_source": 2112,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 64,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 1216,
+          "observation_turn_prompt_positive": 64,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 64,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 2237,
+          "observation_member_anchor": 0,
+          "observation_statistics": 0,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 64,
+          "observation_statistics_required": 64,
+          "observation_members_required": 64,
+          "observation_trace_required": 64,
+          "observation_trace_total": 170,
+          "sequence": 177,
+          "event_id": 3249,
+          "schema_version": 64,
+          "conversation_id": 2624,
+          "attempt_id": 0,
+          "turn_id": 0,
+          "event_json": 20310
+        }
+      },
+      {
+        "kind": "model_request_completed",
+        "rows": 64,
+        "column_bytes": {
+          "observation_trace_fact": 21398,
+          "observation_trace_owner": 179,
+          "observation_trace_fact_required": 64,
+          "observation_kind": 1472,
+          "observation_unavailable": 64,
+          "observation_transcript": 0,
+          "observation_witness": 27619,
+          "observation_source": 2112,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 64,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 64,
+          "observation_execution_owner": 178,
+          "observation_execution_required": 64,
+          "observation_execution": 9766,
+          "observation_members": 0,
+          "event_timestamp": 2240,
+          "observation_member_anchor": 0,
+          "observation_statistics": 28267,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 64,
+          "observation_statistics_required": 64,
+          "observation_members_required": 64,
+          "observation_trace_required": 64,
+          "observation_trace_total": 0,
+          "sequence": 179,
+          "event_id": 3251,
+          "schema_version": 64,
+          "conversation_id": 2624,
+          "attempt_id": 3318,
+          "turn_id": 64,
+          "event_json": 44555
+        }
+      },
+      {
+        "kind": "model_request_started",
+        "rows": 64,
+        "column_bytes": {
+          "observation_trace_fact": 24978,
+          "observation_trace_owner": 179,
+          "observation_trace_fact_required": 64,
+          "observation_kind": 1344,
+          "observation_unavailable": 64,
+          "observation_transcript": 0,
+          "observation_witness": 21091,
+          "observation_source": 2112,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 64,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 64,
+          "observation_execution_owner": 178,
+          "observation_execution_required": 64,
+          "observation_execution": 9766,
+          "observation_members": 0,
+          "event_timestamp": 2240,
+          "observation_member_anchor": 0,
+          "observation_statistics": 23693,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 64,
+          "observation_statistics_required": 64,
+          "observation_members_required": 64,
+          "observation_trace_required": 64,
+          "observation_trace_total": 170,
+          "sequence": 179,
+          "event_id": 3251,
+          "schema_version": 64,
+          "conversation_id": 2624,
+          "attempt_id": 3318,
+          "turn_id": 64,
+          "event_json": 36424
+        }
+      },
+      {
+        "kind": "turn_completed",
+        "rows": 64,
+        "column_bytes": {
+          "observation_trace_fact": 15958,
+          "observation_trace_owner": 178,
+          "observation_trace_fact_required": 64,
+          "observation_kind": 896,
+          "observation_unavailable": 64,
+          "observation_transcript": 0,
+          "observation_witness": 12397,
+          "observation_source": 2112,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 64,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 64,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 64,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 2240,
+          "observation_member_anchor": 0,
+          "observation_statistics": 0,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 64,
+          "observation_statistics_required": 64,
+          "observation_members_required": 64,
+          "observation_trace_required": 64,
+          "observation_trace_total": 0,
+          "sequence": 179,
+          "event_id": 3251,
+          "schema_version": 64,
+          "conversation_id": 2624,
+          "attempt_id": 3318,
+          "turn_id": 64,
+          "event_json": 20636
+        }
+      },
+      {
+        "kind": "turn_started",
+        "rows": 64,
+        "column_bytes": {
+          "observation_trace_fact": 12118,
+          "observation_trace_owner": 178,
+          "observation_trace_fact_required": 64,
+          "observation_kind": 768,
+          "observation_unavailable": 64,
+          "observation_transcript": 0,
+          "observation_witness": 12140,
+          "observation_source": 2112,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 64,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 64,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 64,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 2240,
+          "observation_member_anchor": 0,
+          "observation_statistics": 23693,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 64,
+          "observation_statistics_required": 64,
+          "observation_members_required": 64,
+          "observation_trace_required": 64,
+          "observation_trace_total": 170,
+          "sequence": 178,
+          "event_id": 3250,
+          "schema_version": 64,
+          "conversation_id": 2624,
+          "attempt_id": 3318,
+          "turn_id": 64,
+          "event_json": 20506
+        }
+      }
+    ],
+    "empty_opened_conversation": {
+      "page_count": 250,
+      "freelist": 0,
+      "useful_payload": 64475,
+      "unused": 444052,
+      "overflow_pages": 2
+    },
+    "pre_hot": {
+      "page_count": 1076,
+      "freelist": 0,
+      "useful_payload": 1454877,
+      "unused": 710595,
+      "overflow_pages": 209
+    },
+    "post_hot": {
+      "page_count": 1830,
+      "freelist": 0,
+      "useful_payload": 2746576,
+      "unused": 927845,
+      "overflow_pages": 369
+    },
+    "after_writer_close": {
+      "page_count": 1830,
+      "freelist": 0,
+      "useful_payload": 2746576,
+      "unused": 927845,
+      "overflow_pages": 369
+    },
+    "authenticated_wal_owners": {
+      "sqlite_schema": 133,
+      "rustx_store": 160,
+      "sqlite_autoindex_observation_headers_1": 96,
+      "pending_inbound": 64,
+      "sqlite_autoindex_pending_inbound_1": 64,
+      "transcript_observation_readiness_missing_idx": 64,
+      "content_frontiers": 742,
+      "sqlite_autoindex_observation_headers_2": 96,
+      "transcript_order": 66,
+      "sqlite_autoindex_transcript_order_1": 102,
+      "observation_headers": 192,
+      "sqlite_autoindex_observation_block_headers_1": 64,
+      "observation_headers_ledger_idx": 64,
+      "surface_observation_boundaries": 32,
+      "sqlite_autoindex_surface_observation_boundaries_1": 32,
+      "sqlite_autoindex_surface_observation_boundaries_2": 32,
+      "observation_block_ledger_kind_idx": 64,
+      "sqlite_autoindex_message_ledger_1": 95,
+      "message_ledger_first_human_idx": 32,
+      "message_ledger_native_transcript_idx": 64,
+      "surface_head": 64,
+      "trace_adoption_members": 34,
+      "events_aggregate_heads_idx": 161,
+      "events_observation_turn_prompt_idx": 32,
+      "message_ledger_append_position_idx": 64,
+      "message_ledger_opening_idx": 32,
+      "message_ledger_human_activity_idx": 32,
+      "message_ledger_boundary_holes_idx": 32,
+      "events_attempt_kind_idx": 313,
+      "sqlite_autoindex_events_1": 304,
+      "events_trace_owner_idx": 189,
+      "events_kind_idx": 157,
+      "events_primary_trace_kind_idx": 157,
+      "observation_block_kind_idx": 99,
+      "message_ledger_identity_position_idx": 93,
+      "sqlite_autoindex_observation_block_headers_2": 96,
+      "observation_block_headers": 85,
+      "surface_ops": 67,
+      "message_ledger": 128,
+      "events": 416,
+      "events_attempt_heads_idx": 177,
+      "events_observation_turn_ordinal_idx": 32,
+      "events_observation_turn_anchor_idx": 64,
+      "events_execution_owner_idx": 98,
+      "sqlite_autoindex_lifecycle_state_1": 89,
+      "events_step_kind_idx": 212,
+      "lifecycle_state": 70,
+      "observation_models": 65,
+      "observation_models_owner_idx": 38,
+      "request_snapshots": 160,
+      "sqlite_autoindex_request_snapshots_1": 32,
+      "request_trace_retry_idx": 32,
+      "request_snapshots_started_idx": 32,
+      "request_trace_definitions": 96,
+      "request_trace_definition_digest_idx": 88,
+      "request_snapshots_canonical_frontier_idx": 32,
+      "native_input_nodes": 80,
+      "request_source_pages": 134,
+      "request_source_nodes": 105,
+      "request_source_roots": 104,
+      "sqlite_autoindex_request_owners_2": 32,
+      "sqlite_autoindex_request_owners_3": 64,
+      "events_primary_request_kind_idx": 70,
+      "sqlite_autoindex_request_source_pages_1": 200,
+      "sqlite_autoindex_observation_models_2": 47,
+      "sqlite_autoindex_request_snapshots_2": 41,
+      "sqlite_autoindex_request_owners_1": 41,
+      "request_owners": 70,
+      "request_trace_catalog_identity_idx": 41,
+      "request_trace_catalogs": 33,
+      "events_request_id_kind_idx": 103,
+      "request_trace_definition_identity_idx": 64,
+      "events_observation_assistant_ledger_idx": 32,
+      "events_observation_member_anchor_idx": 32,
+      "publication_streams_settlement_idx": 32,
+      "events_message_id_kind_idx": 47,
+      "publication_streams_message_settlement_idx": 41,
+      "publication_streams": 37,
+      "sqlite_autoindex_publication_streams_1": 55
+    },
+    "authenticated_main_owners": {
+      "sqlite_schema": 8192,
+      "rustx_store": 8192,
+      "observation_block_headers": 61440,
+      "sqlite_autoindex_observation_block_headers_1": 8192,
+      "sqlite_autoindex_observation_block_headers_2": 38912,
+      "observation_headers": 155648,
+      "sqlite_autoindex_observation_headers_1": 8192,
+      "sqlite_autoindex_observation_headers_2": 40960,
+      "observation_headers_ledger_idx": 8192,
+      "surface_observation_boundaries": 8192,
+      "sqlite_autoindex_surface_observation_boundaries_1": 8192,
+      "sqlite_autoindex_surface_observation_boundaries_2": 8192,
+      "observation_block_ledger_kind_idx": 8192,
+      "observation_block_kind_idx": 40960,
+      "observation_models": 38912,
+      "sqlite_autoindex_observation_models_2": 24576,
+      "observation_models_owner_idx": 20480,
+      "pending_inbound": 8192,
+      "sqlite_autoindex_pending_inbound_1": 8192,
+      "message_ledger": 86016,
+      "sqlite_autoindex_message_ledger_1": 36864,
+      "message_ledger_first_human_idx": 8192,
+      "message_ledger_identity_position_idx": 36864,
+      "message_ledger_native_transcript_idx": 8192,
+      "sqlite_autoindex_transcript_order_1": 40960,
+      "transcript_observation_readiness_missing_idx": 8192,
+      "surface_ops": 24576,
+      "surface_head": 8192,
+      "request_snapshots": 151552,
+      "sqlite_autoindex_request_snapshots_1": 8192,
+      "request_trace_retry_idx": 8192,
+      "request_snapshots_started_idx": 8192,
+      "request_trace_catalogs": 16384,
+      "request_trace_definitions": 45056,
+      "request_trace_definition_digest_idx": 43008,
+      "request_trace_definition_identity_idx": 36864,
+      "trace_adoption_members": 12288,
+      "publication_streams": 28672,
+      "sqlite_autoindex_publication_streams_1": 36864,
+      "events": 573440,
+      "sqlite_autoindex_events_1": 51200,
+      "events_trace_owner_idx": 40960,
+      "events_observation_assistant_ledger_idx": 8192,
+      "events_aggregate_heads_idx": 18432,
+      "events_attempt_heads_idx": 43008,
+      "events_observation_member_anchor_idx": 8192,
+      "events_observation_turn_ordinal_idx": 8192,
+      "events_observation_turn_anchor_idx": 8192,
+      "events_observation_turn_prompt_idx": 8192,
+      "events_execution_owner_idx": 12288,
+      "lifecycle_state": 24576,
+      "sqlite_autoindex_lifecycle_state_1": 40960,
+      "message_ledger_append_position_idx": 8192,
+      "message_ledger_opening_idx": 8192,
+      "message_ledger_human_activity_idx": 8192,
+      "message_ledger_boundary_holes_idx": 8192,
+      "request_snapshots_canonical_frontier_idx": 8192,
+      "publication_streams_settlement_idx": 8192,
+      "native_input_nodes": 71680,
+      "request_source_pages": 229376,
+      "sqlite_autoindex_request_source_pages_1": 79872,
+      "request_source_nodes": 114688,
+      "request_source_roots": 55296,
+      "sqlite_autoindex_request_owners_2": 8192,
+      "sqlite_autoindex_request_owners_3": 8192,
+      "events_primary_request_kind_idx": 20480,
+      "events_message_id_kind_idx": 24576,
+      "events_attempt_kind_idx": 81920,
+      "events_step_kind_idx": 49152,
+      "events_request_id_kind_idx": 40960,
+      "content_frontiers": 227328,
+      "sqlite_autoindex_request_snapshots_2": 18432,
+      "sqlite_autoindex_request_owners_1": 18432,
+      "request_owners": 20480,
+      "publication_streams_message_settlement_idx": 18432,
+      "events_kind_idx": 22528,
+      "events_primary_trace_kind_idx": 22528,
+      "transcript_order": 16384,
+      "request_trace_catalog_identity_idx": 22528
+    }
+  },
+  {
+    "history": 64,
+    "measured": 32,
+    "schema": 105,
+    "wal_bytes": 16335744,
+    "wal_frames": 7884,
+    "main_bytes": 2590720,
+    "wal_epochs": 3,
+    "checkpoint_main_syncs": 3,
+    "wal_syncs": 6,
+    "distinct_wal_pages": 999,
+    "phase_writes": {
+      "startup": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          16
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "before_initialization": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          172
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "note.txt",
+          "write",
+          "bytes",
+          31
+        ],
+        [
+          "note.txt",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_provider_start": [
+        [
+          "catalog.json.tmp",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "catalog.json.tmp",
+          "write",
+          "bytes",
+          1120
+        ],
+        [
+          "catalog.json.tmp",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "conv_01a1c1ff-5b9b-71b3-9128-00c955808716",
+          "fsync",
+          "calls",
+          3
+        ],
+        [
+          "conv_01a1c1ff-5b9b-71b3-9128-00c955808716",
+          "write",
+          "bytes",
+          41
+        ],
+        [
+          "conv_01a1c1ff-5b9b-71b3-9128-00c955808716",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "conversation-reservations",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          2
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          514048
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          251
+        ],
+        [
+          "private",
+          "fsync",
+          "calls",
+          5
+        ],
+        [
+          "rollback_journal",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "rollback_journal",
+          "pwrite64",
+          "bytes",
+          524
+        ],
+        [
+          "rollback_journal",
+          "pwrite64",
+          "calls",
+          2
+        ],
+        [
+          "rustx.toml",
+          "write",
+          "bytes",
+          2116
+        ],
+        [
+          "rustx.toml",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "sessions",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          2
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          16
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          16
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          1
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          2
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          532536
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          515
+        ]
+      ],
+      "after_initialization": [
+        [
+          "conv_01a1c1ff-5b9b-71b3-9128-00c955808716",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          5304
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          663
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          7
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          7
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          5492736
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          2682
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          8
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          15
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          29980024
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          28946
+        ]
+      ],
+      "before_measured_turns": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          2640
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          330
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          3
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          3
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          2590720
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          1265
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          3
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          6
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          16335744
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          15771
+        ]
+      ],
+      "after_late_snapshot": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          272
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          34
+        ]
+      ],
+      "after_verification": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          24
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          3
+        ]
+      ],
+      "after_shutdown": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          8
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_driver_drop": [
+        [
+          "conv_01a1c1ff-5b9b-71b3-9128-00c955808716",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          872448
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          426
+        ],
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          8
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          8
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          1
+        ]
+      ],
+      "after_final_writer_close": [
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          8
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          8
+        ]
+      ],
+      "after_cleanup": [
+        [
+          "benchmark_output",
+          "write",
+          "bytes",
+          25975231
+        ],
+        [
+          "benchmark_output",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          164
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          10
+        ]
+      ]
+    },
+    "phase_commits": {
+      "inbound_acceptance": {
+        "commits": 32,
+        "wal_frames": 345
+      },
+      "inbound_adoption": {
+        "commits": 32,
+        "wal_frames": 1532
+      },
+      "attempt_turn_start": {
+        "commits": 32,
+        "wal_frames": 858
+      },
+      "request_start": {
+        "commits": 32,
+        "wal_frames": 2297
+      },
+      "final_settlement": {
+        "commits": 32,
+        "wal_frames": 2852
+      }
+    },
+    "group_ledger": {
+      "other btrees / page 1": {
+        "wal_frames": 679,
+        "main_bytes": 151552,
+        "retained_page_growth": 15,
+        "net_logical_column_bytes": 18496
+      },
+      "canonical and transcript rows": {
+        "wal_frames": 2108,
+        "main_bytes": 559104,
+        "retained_page_growth": 142,
+        "net_logical_column_bytes": 169630
+      },
+      "content frontiers and segment layout": {
+        "wal_frames": 790,
+        "main_bytes": 196608,
+        "retained_page_growth": 23,
+        "net_logical_column_bytes": 37986
+      },
+      "events and native/observation indexes": {
+        "wal_frames": 2623,
+        "main_bytes": 831488,
+        "retained_page_growth": 309,
+        "net_logical_column_bytes": 470377
+      },
+      "request owner/snapshot/model": {
+        "wal_frames": 705,
+        "main_bytes": 284672,
+        "retained_page_growth": 74,
+        "net_logical_column_bytes": 111441
+      },
+      "request Trace catalog": {
+        "wal_frames": 317,
+        "main_bytes": 124928,
+        "retained_page_growth": 16,
+        "net_logical_column_bytes": 12160
+      },
+      "request manifest and Source": {
+        "wal_frames": 662,
+        "main_bytes": 442368,
+        "retained_page_growth": 190,
+        "net_logical_column_bytes": 307617
+      }
+    },
+    "process_hot": {
+      "write_bytes": 19869696,
+      "wchar": 19716080,
+      "syscw": 17398,
+      "cancelled_write_bytes": 0
+    },
+    "process_through_close": {
+      "write_bytes": 59002880,
+      "wchar": 58255308,
+      "syscw": 51015,
+      "cancelled_write_bytes": 94208
+    },
+    "mutations_at_commits": {
+      "content_frontiers": {
+        "inserted": 512,
+        "deleted": 32,
+        "updated": 0,
+        "inserted_column_bytes": 44770,
+        "changed_new_column_bytes": 0
+      },
+      "observation_headers": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 57536,
+        "changed_new_column_bytes": 35328
+      },
+      "pending_inbound": {
+        "inserted": 32,
+        "deleted": 32,
+        "updated": 0,
+        "inserted_column_bytes": 29312,
+        "changed_new_column_bytes": 0
+      },
+      "rustx_store": {
+        "inserted": 0,
+        "deleted": 0,
+        "updated": 160,
+        "inserted_column_bytes": 0,
+        "changed_new_column_bytes": 1024
+      },
+      "transcript_order": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 4288,
+        "changed_new_column_bytes": 0
+      },
+      "events": {
+        "inserted": 256,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 470377,
+        "changed_new_column_bytes": 0
+      },
+      "message_ledger": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 51838,
+        "changed_new_column_bytes": 0
+      },
+      "observation_block_headers": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 35744,
+        "changed_new_column_bytes": 0
+      },
+      "surface_head": {
+        "inserted": 0,
+        "deleted": 0,
+        "updated": 64,
+        "inserted_column_bytes": 0,
+        "changed_new_column_bytes": 192
+      },
+      "surface_observation_boundaries": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 256,
+        "changed_new_column_bytes": 0
+      },
+      "surface_ops": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 5824,
+        "changed_new_column_bytes": 0
+      },
+      "trace_adoption_members": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 1248,
+        "changed_new_column_bytes": 0
+      },
+      "lifecycle_state": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 64,
+        "inserted_column_bytes": 3808,
+        "changed_new_column_bytes": 3264
+      },
+      "native_input_nodes": {
+        "inserted": 351,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 50891,
+        "changed_new_column_bytes": 0
+      },
+      "observation_models": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 5248,
+        "changed_new_column_bytes": 0
+      },
+      "request_owners": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 4192,
+        "changed_new_column_bytes": 384
+      },
+      "request_snapshots": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 90304,
+        "changed_new_column_bytes": 11313
+      },
+      "request_source_nodes": {
+        "inserted": 351,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 94678,
+        "changed_new_column_bytes": 0
+      },
+      "request_source_pages": {
+        "inserted": 224,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 150624,
+        "changed_new_column_bytes": 0
+      },
+      "request_source_roots": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 11424,
+        "changed_new_column_bytes": 0
+      },
+      "request_trace_catalogs": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 2048,
+        "changed_new_column_bytes": 0
+      },
+      "request_trace_definitions": {
+        "inserted": 224,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 10112,
+        "changed_new_column_bytes": 0
+      },
+      "publication_streams": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 10176,
+        "changed_new_column_bytes": 0
+      }
+    },
+    "native_nodes": 351,
+    "source_nodes": 351,
+    "source_metadata_bytes": 71161,
+    "source_pages": 224,
+    "source_page_bytes": 143456,
+    "request_catalogs": 32,
+    "request_catalog_definitions": 224,
+    "native_events": 256,
+    "event_json_bytes": 109769,
+    "event_domain_bytes": {
+      "observation_trace_fact": 68000,
+      "observation_trace_owner": 768,
+      "observation_trace_fact_required": 256,
+      "observation_kind": 4768,
+      "observation_unavailable": 256,
+      "observation_transcript": 0,
+      "observation_witness": 69024,
+      "observation_source": 8448,
+      "observation_assistant_ledger": 96,
+      "observation_tool_ledger": 0,
+      "observation_tool_block": 0,
+      "observation_tool_phase": 0,
+      "observation_turn_required": 256,
+      "observation_turn_ordinal": 64,
+      "observation_turn_anchor": 288,
+      "observation_turn_header": 27648,
+      "observation_turn_prompt": 608,
+      "observation_turn_prompt_positive": 256,
+      "observation_execution_owner": 480,
+      "observation_execution_required": 256,
+      "observation_execution": 31168,
+      "observation_members": 26880,
+      "observation_member_anchor": 192,
+      "observation_statistics": 74048,
+      "observation_occupancy": 0,
+      "observation_readiness_missing": 256,
+      "observation_statistics_required": 256,
+      "observation_members_required": 256,
+      "observation_trace_required": 256,
+      "observation_trace_total": 480
+    },
+    "event_kinds": [
+      {
+        "kind": "assistant_message_committed",
+        "rows": 96,
+        "column_bytes": {
+          "observation_trace_fact": 20759,
+          "observation_trace_owner": 275,
+          "observation_trace_fact_required": 96,
+          "observation_kind": 2592,
+          "observation_unavailable": 96,
+          "observation_transcript": 0,
+          "observation_witness": 28196,
+          "observation_source": 3168,
+          "observation_assistant_ledger": 235,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 96,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 274,
+          "observation_turn_header": 27576,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 96,
+          "observation_execution_owner": 274,
+          "observation_execution_required": 96,
+          "observation_execution": 20749,
+          "observation_members": 35950,
+          "event_timestamp": 3360,
+          "observation_member_anchor": 274,
+          "observation_statistics": 35675,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 96,
+          "observation_statistics_required": 96,
+          "observation_members_required": 96,
+          "observation_trace_required": 96,
+          "observation_trace_total": 268,
+          "sequence": 275,
+          "event_id": 4883,
+          "schema_version": 96,
+          "conversation_id": 3936,
+          "attempt_id": 4982,
+          "turn_id": 96,
+          "event_json": 39506
+        }
+      },
+      {
+        "kind": "attempt_completed",
+        "rows": 96,
+        "column_bytes": {
+          "observation_trace_fact": 33579,
+          "observation_trace_owner": 274,
+          "observation_trace_fact_required": 96,
+          "observation_kind": 1632,
+          "observation_unavailable": 96,
+          "observation_transcript": 0,
+          "observation_witness": 27781,
+          "observation_source": 3168,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 96,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 274,
+          "observation_turn_header": 28440,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 96,
+          "observation_execution_owner": 274,
+          "observation_execution_required": 96,
+          "observation_execution": 35620,
+          "observation_members": 44147,
+          "event_timestamp": 3360,
+          "observation_member_anchor": 274,
+          "observation_statistics": 30351,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 96,
+          "observation_statistics_required": 96,
+          "observation_members_required": 96,
+          "observation_trace_required": 96,
+          "observation_trace_total": 0,
+          "sequence": 275,
+          "event_id": 4883,
+          "schema_version": 96,
+          "conversation_id": 3936,
+          "attempt_id": 4982,
+          "turn_id": 0,
+          "event_json": 39506
+        }
+      },
+      {
+        "kind": "attempt_started",
+        "rows": 96,
+        "column_bytes": {
+          "observation_trace_fact": 17366,
+          "observation_trace_owner": 274,
+          "observation_trace_fact_required": 96,
+          "observation_kind": 1440,
+          "observation_unavailable": 96,
+          "observation_transcript": 0,
+          "observation_witness": 24993,
+          "observation_source": 3168,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 96,
+          "observation_turn_ordinal": 183,
+          "observation_turn_anchor": 274,
+          "observation_turn_header": 26765,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 96,
+          "observation_execution_owner": 274,
+          "observation_execution_required": 96,
+          "observation_execution": 6672,
+          "observation_members": 0,
+          "event_timestamp": 3360,
+          "observation_member_anchor": 0,
+          "observation_statistics": 40915,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 96,
+          "observation_statistics_required": 96,
+          "observation_members_required": 96,
+          "observation_trace_required": 96,
+          "observation_trace_total": 266,
+          "sequence": 274,
+          "event_id": 4882,
+          "schema_version": 96,
+          "conversation_id": 3936,
+          "attempt_id": 4982,
+          "turn_id": 0,
+          "event_json": 36240
+        }
+      },
+      {
+        "kind": "inbound_turn_adopted",
+        "rows": 96,
+        "column_bytes": {
+          "observation_trace_fact": 19329,
+          "observation_trace_owner": 273,
+          "observation_trace_fact_required": 96,
+          "observation_kind": 1920,
+          "observation_unavailable": 96,
+          "observation_transcript": 0,
+          "observation_witness": 14644,
+          "observation_source": 3168,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 96,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 1824,
+          "observation_turn_prompt_positive": 96,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 96,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 3360,
+          "observation_member_anchor": 0,
+          "observation_statistics": 0,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 96,
+          "observation_statistics_required": 96,
+          "observation_members_required": 96,
+          "observation_trace_required": 96,
+          "observation_trace_total": 266,
+          "sequence": 273,
+          "event_id": 4881,
+          "schema_version": 96,
+          "conversation_id": 3936,
+          "attempt_id": 0,
+          "turn_id": 0,
+          "event_json": 30489
+        }
+      },
+      {
+        "kind": "model_request_completed",
+        "rows": 96,
+        "column_bytes": {
+          "observation_trace_fact": 32150,
+          "observation_trace_owner": 275,
+          "observation_trace_fact_required": 96,
+          "observation_kind": 2208,
+          "observation_unavailable": 96,
+          "observation_transcript": 0,
+          "observation_witness": 41507,
+          "observation_source": 3168,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 96,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 96,
+          "observation_execution_owner": 274,
+          "observation_execution_required": 96,
+          "observation_execution": 14726,
+          "observation_members": 0,
+          "event_timestamp": 3360,
+          "observation_member_anchor": 0,
+          "observation_statistics": 42491,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 96,
+          "observation_statistics_required": 96,
+          "observation_members_required": 96,
+          "observation_trace_required": 96,
+          "observation_trace_total": 0,
+          "sequence": 275,
+          "event_id": 4883,
+          "schema_version": 96,
+          "conversation_id": 3936,
+          "attempt_id": 4982,
+          "turn_id": 96,
+          "event_json": 66771
+        }
+      },
+      {
+        "kind": "model_request_started",
+        "rows": 96,
+        "column_bytes": {
+          "observation_trace_fact": 37554,
+          "observation_trace_owner": 275,
+          "observation_trace_fact_required": 96,
+          "observation_kind": 2016,
+          "observation_unavailable": 96,
+          "observation_transcript": 0,
+          "observation_witness": 31715,
+          "observation_source": 3168,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 96,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 96,
+          "observation_execution_owner": 274,
+          "observation_execution_required": 96,
+          "observation_execution": 14726,
+          "observation_members": 0,
+          "event_timestamp": 3360,
+          "observation_member_anchor": 0,
+          "observation_statistics": 35645,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 96,
+          "observation_statistics_required": 96,
+          "observation_members_required": 96,
+          "observation_trace_required": 96,
+          "observation_trace_total": 266,
+          "sequence": 275,
+          "event_id": 4883,
+          "schema_version": 96,
+          "conversation_id": 3936,
+          "attempt_id": 4982,
+          "turn_id": 96,
+          "event_json": 54664
+        }
+      },
+      {
+        "kind": "turn_completed",
+        "rows": 96,
+        "column_bytes": {
+          "observation_trace_fact": 23990,
+          "observation_trace_owner": 274,
+          "observation_trace_fact_required": 96,
+          "observation_kind": 1344,
+          "observation_unavailable": 96,
+          "observation_transcript": 0,
+          "observation_witness": 18669,
+          "observation_source": 3168,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 96,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 96,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 96,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 3360,
+          "observation_member_anchor": 0,
+          "observation_statistics": 0,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 96,
+          "observation_statistics_required": 96,
+          "observation_members_required": 96,
+          "observation_trace_required": 96,
+          "observation_trace_total": 0,
+          "sequence": 275,
+          "event_id": 4883,
+          "schema_version": 96,
+          "conversation_id": 3936,
+          "attempt_id": 4982,
+          "turn_id": 96,
+          "event_json": 30972
+        }
+      },
+      {
+        "kind": "turn_started",
+        "rows": 96,
+        "column_bytes": {
+          "observation_trace_fact": 18230,
+          "observation_trace_owner": 274,
+          "observation_trace_fact_required": 96,
+          "observation_kind": 1152,
+          "observation_unavailable": 96,
+          "observation_transcript": 0,
+          "observation_witness": 18284,
+          "observation_source": 3168,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 96,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 96,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 96,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 3360,
+          "observation_member_anchor": 0,
+          "observation_statistics": 35645,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 96,
+          "observation_statistics_required": 96,
+          "observation_members_required": 96,
+          "observation_trace_required": 96,
+          "observation_trace_total": 266,
+          "sequence": 274,
+          "event_id": 4882,
+          "schema_version": 96,
+          "conversation_id": 3936,
+          "attempt_id": 4982,
+          "turn_id": 96,
+          "event_json": 30778
+        }
+      }
+    ],
+    "empty_opened_conversation": {
+      "page_count": 250,
+      "freelist": 0,
+      "useful_payload": 64475,
+      "unused": 444052,
+      "overflow_pages": 2
+    },
+    "pre_hot": {
+      "page_count": 1830,
+      "freelist": 0,
+      "useful_payload": 2746042,
+      "unused": 928379,
+      "overflow_pages": 369
+    },
+    "post_hot": {
+      "page_count": 2599,
+      "freelist": 0,
+      "useful_payload": 4045721,
+      "unused": 1167362,
+      "overflow_pages": 529
+    },
+    "after_writer_close": {
+      "page_count": 2599,
+      "freelist": 0,
+      "useful_payload": 4045721,
+      "unused": 1167362,
+      "overflow_pages": 529
+    },
+    "authenticated_wal_owners": {
+      "rustx_store": 160,
+      "sqlite_autoindex_observation_headers_1": 96,
+      "pending_inbound": 64,
+      "sqlite_autoindex_pending_inbound_1": 64,
+      "transcript_observation_readiness_missing_idx": 64,
+      "content_frontiers": 790,
+      "sqlite_autoindex_observation_headers_2": 118,
+      "transcript_order": 66,
+      "sqlite_autoindex_transcript_order_1": 115,
+      "observation_headers": 192,
+      "sqlite_schema": 130,
+      "observation_block_headers": 86,
+      "sqlite_autoindex_observation_block_headers_1": 64,
+      "observation_headers_ledger_idx": 64,
+      "surface_observation_boundaries": 32,
+      "sqlite_autoindex_surface_observation_boundaries_1": 32,
+      "sqlite_autoindex_surface_observation_boundaries_2": 32,
+      "observation_block_ledger_kind_idx": 66,
+      "message_ledger_first_human_idx": 32,
+      "message_ledger_native_transcript_idx": 64,
+      "surface_head": 64,
+      "events_observation_turn_prompt_idx": 32,
+      "message_ledger_append_position_idx": 66,
+      "message_ledger_opening_idx": 32,
+      "message_ledger_human_activity_idx": 32,
+      "message_ledger_boundary_holes_idx": 32,
+      "events_attempt_kind_idx": 264,
+      "events_kind_idx": 212,
+      "events_primary_trace_kind_idx": 212,
+      "events_aggregate_heads_idx": 166,
+      "sqlite_autoindex_observation_block_headers_2": 111,
+      "trace_adoption_members": 43,
+      "sqlite_autoindex_message_ledger_1": 115,
+      "sqlite_autoindex_events_1": 295,
+      "observation_block_kind_idx": 120,
+      "events_trace_owner_idx": 189,
+      "message_ledger_identity_position_idx": 90,
+      "surface_ops": 67,
+      "message_ledger": 128,
+      "events": 418,
+      "events_observation_turn_ordinal_idx": 32,
+      "events_observation_turn_anchor_idx": 66,
+      "sqlite_autoindex_lifecycle_state_1": 105,
+      "events_execution_owner_idx": 109,
+      "lifecycle_state": 72,
+      "events_step_kind_idx": 169,
+      "events_attempt_heads_idx": 158,
+      "request_snapshots": 160,
+      "sqlite_autoindex_request_snapshots_1": 32,
+      "request_trace_retry_idx": 32,
+      "request_snapshots_started_idx": 32,
+      "request_trace_definition_digest_idx": 89,
+      "request_snapshots_canonical_frontier_idx": 32,
+      "native_input_nodes": 93,
+      "request_source_pages": 130,
+      "sqlite_autoindex_request_source_pages_1": 234,
+      "request_source_nodes": 110,
+      "sqlite_autoindex_request_owners_2": 32,
+      "sqlite_autoindex_request_owners_3": 64,
+      "request_source_roots": 95,
+      "observation_models_owner_idx": 43,
+      "events_primary_request_kind_idx": 79,
+      "sqlite_autoindex_observation_models_2": 52,
+      "sqlite_autoindex_request_snapshots_2": 48,
+      "sqlite_autoindex_request_owners_1": 48,
+      "request_trace_catalog_identity_idx": 45,
+      "request_trace_catalogs": 33,
+      "observation_models": 62,
+      "events_request_id_kind_idx": 106,
+      "request_trace_definition_identity_idx": 58,
+      "request_owners": 68,
+      "request_trace_definitions": 92,
+      "events_observation_assistant_ledger_idx": 32,
+      "events_observation_member_anchor_idx": 32,
+      "publication_streams_settlement_idx": 32,
+      "events_message_id_kind_idx": 52,
+      "publication_streams_message_settlement_idx": 48,
+      "publication_streams": 37,
+      "sqlite_autoindex_publication_streams_1": 52
+    },
+    "authenticated_main_owners": {
+      "sqlite_schema": 6144,
+      "rustx_store": 6144,
+      "observation_block_headers": 43008,
+      "sqlite_autoindex_observation_block_headers_1": 6144,
+      "sqlite_autoindex_observation_block_headers_2": 32768,
+      "observation_headers": 106496,
+      "sqlite_autoindex_observation_headers_1": 6144,
+      "sqlite_autoindex_observation_headers_2": 36864,
+      "observation_headers_ledger_idx": 6144,
+      "surface_observation_boundaries": 6144,
+      "sqlite_autoindex_surface_observation_boundaries_1": 6144,
+      "sqlite_autoindex_surface_observation_boundaries_2": 6144,
+      "content_frontiers": 196608,
+      "observation_block_ledger_kind_idx": 10240,
+      "observation_block_kind_idx": 36864,
+      "observation_models": 28672,
+      "sqlite_autoindex_observation_models_2": 20480,
+      "observation_models_owner_idx": 18432,
+      "pending_inbound": 6144,
+      "sqlite_autoindex_pending_inbound_1": 6144,
+      "message_ledger": 63488,
+      "sqlite_autoindex_message_ledger_1": 36864,
+      "message_ledger_first_human_idx": 6144,
+      "message_ledger_identity_position_idx": 26624,
+      "message_ledger_native_transcript_idx": 6144,
+      "transcript_order": 14336,
+      "sqlite_autoindex_transcript_order_1": 38912,
+      "transcript_observation_readiness_missing_idx": 6144,
+      "surface_head": 6144,
+      "request_snapshots": 112640,
+      "sqlite_autoindex_request_snapshots_1": 6144,
+      "sqlite_autoindex_request_snapshots_2": 26624,
+      "request_trace_retry_idx": 6144,
+      "request_snapshots_started_idx": 6144,
+      "request_trace_definitions": 34816,
+      "request_trace_definition_digest_idx": 32768,
+      "request_trace_definition_identity_idx": 26624,
+      "publication_streams": 20480,
+      "events": 423936,
+      "sqlite_autoindex_events_1": 38912,
+      "events_trace_owner_idx": 30720,
+      "events_observation_assistant_ledger_idx": 6144,
+      "events_aggregate_heads_idx": 20480,
+      "events_attempt_heads_idx": 34816,
+      "events_observation_member_anchor_idx": 6144,
+      "events_observation_turn_ordinal_idx": 6144,
+      "events_observation_turn_anchor_idx": 10240,
+      "events_observation_turn_prompt_idx": 6144,
+      "events_execution_owner_idx": 20480,
+      "lifecycle_state": 18432,
+      "sqlite_autoindex_lifecycle_state_1": 32768,
+      "message_ledger_append_position_idx": 6144,
+      "message_ledger_opening_idx": 6144,
+      "message_ledger_human_activity_idx": 6144,
+      "message_ledger_boundary_holes_idx": 6144,
+      "request_snapshots_canonical_frontier_idx": 6144,
+      "publication_streams_settlement_idx": 6144,
+      "publication_streams_message_settlement_idx": 26624,
+      "native_input_nodes": 61440,
+      "request_source_pages": 163840,
+      "sqlite_autoindex_request_source_pages_1": 86016,
+      "request_source_nodes": 92160,
+      "request_source_roots": 38912,
+      "events_primary_trace_kind_idx": 26624,
+      "sqlite_autoindex_request_owners_1": 26624,
+      "sqlite_autoindex_request_owners_2": 6144,
+      "sqlite_autoindex_request_owners_3": 6144,
+      "events_primary_request_kind_idx": 20480,
+      "events_message_id_kind_idx": 28672,
+      "events_kind_idx": 26624,
+      "events_attempt_kind_idx": 61440,
+      "events_step_kind_idx": 34816,
+      "events_request_id_kind_idx": 28672,
+      "trace_adoption_members": 14336,
+      "request_trace_catalog_identity_idx": 20480,
+      "request_trace_catalogs": 10240,
+      "sqlite_autoindex_publication_streams_1": 20480,
+      "request_owners": 14336,
+      "surface_ops": 14336
+    }
+  },
+  {
+    "history": 96,
+    "measured": 32,
+    "schema": 105,
+    "wal_bytes": 17535496,
+    "wal_frames": 8463,
+    "main_bytes": 3743744,
+    "wal_epochs": 5,
+    "checkpoint_main_syncs": 4,
+    "wal_syncs": 9,
+    "distinct_wal_pages": 1093,
+    "phase_writes": {
+      "startup": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          16
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "before_initialization": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          172
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "note.txt",
+          "write",
+          "bytes",
+          31
+        ],
+        [
+          "note.txt",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_provider_start": [
+        [
+          "catalog.json.tmp",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "catalog.json.tmp",
+          "write",
+          "bytes",
+          1120
+        ],
+        [
+          "catalog.json.tmp",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "conv_01a1c1ff-99a2-7e81-a5c9-e61a7b155d83",
+          "fsync",
+          "calls",
+          3
+        ],
+        [
+          "conv_01a1c1ff-99a2-7e81-a5c9-e61a7b155d83",
+          "write",
+          "bytes",
+          41
+        ],
+        [
+          "conv_01a1c1ff-99a2-7e81-a5c9-e61a7b155d83",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "conversation-reservations",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          2
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          514048
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          251
+        ],
+        [
+          "private",
+          "fsync",
+          "calls",
+          5
+        ],
+        [
+          "rollback_journal",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "rollback_journal",
+          "pwrite64",
+          "bytes",
+          524
+        ],
+        [
+          "rollback_journal",
+          "pwrite64",
+          "calls",
+          2
+        ],
+        [
+          "rustx.toml",
+          "write",
+          "bytes",
+          2116
+        ],
+        [
+          "rustx.toml",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "sessions",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          2
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          16
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          16
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          1
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          2
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          532536
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          515
+        ]
+      ],
+      "after_initialization": [
+        [
+          "conv_01a1c1ff-99a2-7e81-a5c9-e61a7b155d83",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          8848
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1106
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          11
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          11
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          8957952
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          4374
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          11
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          22
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          46371712
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          44771
+        ]
+      ],
+      "before_measured_turns": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          2168
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          271
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          4
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          4
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          3743744
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          1828
+        ],
+        [
+          "wal",
+          "epochs",
+          "calls",
+          5
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          9
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "bytes",
+          17535496
+        ],
+        [
+          "wal",
+          "pwrite64",
+          "calls",
+          16931
+        ]
+      ],
+      "after_turns": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          8
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_late_snapshot": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          120
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          15
+        ]
+      ],
+      "after_verification": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          24
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          3
+        ]
+      ],
+      "after_shutdown": [
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          8
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          1
+        ]
+      ],
+      "after_driver_drop": [
+        [
+          "conv_01a1c1ff-99a2-7e81-a5c9-e61a7b155d83",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "fsync",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "main",
+          "pwrite64",
+          "bytes",
+          352256
+        ],
+        [
+          "main",
+          "pwrite64",
+          "calls",
+          172
+        ],
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          8
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          8
+        ],
+        [
+          "wal",
+          "fsync",
+          "calls",
+          1
+        ]
+      ],
+      "after_final_writer_close": [
+        [
+          "shm",
+          "ftruncate",
+          "calls",
+          1
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "bytes",
+          8
+        ],
+        [
+          "shm",
+          "pwrite64",
+          "calls",
+          8
+        ]
+      ],
+      "after_cleanup": [
+        [
+          "benchmark_output",
+          "write",
+          "bytes",
+          41120491
+        ],
+        [
+          "benchmark_output",
+          "write",
+          "calls",
+          1
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "bytes",
+          165
+        ],
+        [
+          "diagnostic_socket_or_pipe",
+          "write",
+          "calls",
+          10
+        ]
+      ]
+    },
+    "phase_commits": {
+      "inbound_acceptance": {
+        "commits": 32,
+        "wal_frames": 411
+      },
+      "inbound_adoption": {
+        "commits": 32,
+        "wal_frames": 1595
+      },
+      "attempt_turn_start": {
+        "commits": 32,
+        "wal_frames": 861
+      },
+      "request_start": {
+        "commits": 32,
+        "wal_frames": 2450
+      },
+      "final_settlement": {
+        "commits": 32,
+        "wal_frames": 3146
+      }
+    },
+    "group_ledger": {
+      "other btrees / page 1": {
+        "wal_frames": 800,
+        "main_bytes": 243712,
+        "retained_page_growth": 20,
+        "net_logical_column_bytes": 18706
+      },
+      "canonical and transcript rows": {
+        "wal_frames": 2272,
+        "main_bytes": 851968,
+        "retained_page_growth": 150,
+        "net_logical_column_bytes": 170290
+      },
+      "content frontiers and segment layout": {
+        "wal_frames": 801,
+        "main_bytes": 301056,
+        "retained_page_growth": 24,
+        "net_logical_column_bytes": 38119
+      },
+      "events and native/observation indexes": {
+        "wal_frames": 2785,
+        "main_bytes": 1163264,
+        "retained_page_growth": 309,
+        "net_logical_column_bytes": 472471
+      },
+      "request owner/snapshot/model": {
+        "wal_frames": 773,
+        "main_bytes": 378880,
+        "retained_page_growth": 78,
+        "net_logical_column_bytes": 111988
+      },
+      "request Trace catalog": {
+        "wal_frames": 352,
+        "main_bytes": 174080,
+        "retained_page_growth": 15,
+        "net_logical_column_bytes": 12212
+      },
+      "request manifest and Source": {
+        "wal_frames": 680,
+        "main_bytes": 630784,
+        "retained_page_growth": 198,
+        "net_logical_column_bytes": 317453
+      }
+    },
+    "process_hot": {
+      "write_bytes": 22781952,
+      "wchar": 22213792,
+      "syscw": 19062,
+      "cancelled_write_bytes": 0
+    },
+    "process_through_close": {
+      "write_bytes": 82432000,
+      "wchar": 80880108,
+      "syscw": 70399,
+      "cancelled_write_bytes": 94208
+    },
+    "mutations_at_commits": {
+      "content_frontiers": {
+        "inserted": 512,
+        "deleted": 32,
+        "updated": 0,
+        "inserted_column_bytes": 44961,
+        "changed_new_column_bytes": 0
+      },
+      "observation_headers": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 57738,
+        "changed_new_column_bytes": 35418
+      },
+      "pending_inbound": {
+        "inserted": 32,
+        "deleted": 32,
+        "updated": 0,
+        "inserted_column_bytes": 29457,
+        "changed_new_column_bytes": 0
+      },
+      "rustx_store": {
+        "inserted": 0,
+        "deleted": 0,
+        "updated": 160,
+        "inserted_column_bytes": 0,
+        "changed_new_column_bytes": 1124
+      },
+      "transcript_order": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 4345,
+        "changed_new_column_bytes": 0
+      },
+      "events": {
+        "inserted": 256,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 472471,
+        "changed_new_column_bytes": 0
+      },
+      "message_ledger": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 52008,
+        "changed_new_column_bytes": 0
+      },
+      "observation_block_headers": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 35858,
+        "changed_new_column_bytes": 0
+      },
+      "surface_head": {
+        "inserted": 0,
+        "deleted": 0,
+        "updated": 64,
+        "inserted_column_bytes": 0,
+        "changed_new_column_bytes": 192
+      },
+      "surface_observation_boundaries": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 284,
+        "changed_new_column_bytes": 0
+      },
+      "surface_ops": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 5881,
+        "changed_new_column_bytes": 0
+      },
+      "trace_adoption_members": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 1251,
+        "changed_new_column_bytes": 0
+      },
+      "lifecycle_state": {
+        "inserted": 64,
+        "deleted": 0,
+        "updated": 64,
+        "inserted_column_bytes": 3864,
+        "changed_new_column_bytes": 3271
+      },
+      "native_input_nodes": {
+        "inserted": 352,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 51732,
+        "changed_new_column_bytes": 0
+      },
+      "observation_models": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 5310,
+        "changed_new_column_bytes": 0
+      },
+      "request_owners": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 4251,
+        "changed_new_column_bytes": 387
+      },
+      "request_snapshots": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 32,
+        "inserted_column_bytes": 90719,
+        "changed_new_column_bytes": 11321
+      },
+      "request_source_nodes": {
+        "inserted": 352,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 95267,
+        "changed_new_column_bytes": 0
+      },
+      "request_source_pages": {
+        "inserted": 229,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 159026,
+        "changed_new_column_bytes": 0
+      },
+      "request_source_roots": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 11428,
+        "changed_new_column_bytes": 0
+      },
+      "request_trace_catalogs": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 2079,
+        "changed_new_column_bytes": 0
+      },
+      "request_trace_definitions": {
+        "inserted": 224,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 10133,
+        "changed_new_column_bytes": 0
+      },
+      "publication_streams": {
+        "inserted": 32,
+        "deleted": 0,
+        "updated": 0,
+        "inserted_column_bytes": 10316,
+        "changed_new_column_bytes": 0
+      }
+    },
+    "native_nodes": 352,
+    "source_nodes": 352,
+    "source_metadata_bytes": 71407,
+    "source_pages": 229,
+    "source_page_bytes": 151698,
+    "request_catalogs": 32,
+    "request_catalog_definitions": 224,
+    "native_events": 256,
+    "event_json_bytes": 110234,
+    "event_domain_bytes": {
+      "observation_trace_fact": 68258,
+      "observation_trace_owner": 792,
+      "observation_trace_fact_required": 256,
+      "observation_kind": 4768,
+      "observation_unavailable": 256,
+      "observation_transcript": 0,
+      "observation_witness": 69386,
+      "observation_source": 8448,
+      "observation_assistant_ledger": 96,
+      "observation_tool_ledger": 0,
+      "observation_tool_block": 0,
+      "observation_tool_phase": 0,
+      "observation_turn_required": 256,
+      "observation_turn_ordinal": 93,
+      "observation_turn_anchor": 297,
+      "observation_turn_header": 27819,
+      "observation_turn_prompt": 608,
+      "observation_turn_prompt_positive": 256,
+      "observation_execution_owner": 495,
+      "observation_execution_required": 256,
+      "observation_execution": 31342,
+      "observation_members": 27000,
+      "observation_member_anchor": 198,
+      "observation_statistics": 74263,
+      "observation_occupancy": 0,
+      "observation_readiness_missing": 256,
+      "observation_statistics_required": 256,
+      "observation_members_required": 256,
+      "observation_trace_required": 256,
+      "observation_trace_total": 480
+    },
+    "event_kinds": [
+      {
+        "kind": "assistant_message_committed",
+        "rows": 128,
+        "column_bytes": {
+          "observation_trace_fact": 27764,
+          "observation_trace_owner": 374,
+          "observation_trace_fact_required": 128,
+          "observation_kind": 3456,
+          "observation_unavailable": 128,
+          "observation_transcript": 0,
+          "observation_witness": 37728,
+          "observation_source": 4224,
+          "observation_assistant_ledger": 331,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 128,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 373,
+          "observation_turn_header": 36849,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 128,
+          "observation_execution_owner": 373,
+          "observation_execution_required": 128,
+          "observation_execution": 27814,
+          "observation_members": 48072,
+          "event_timestamp": 4480,
+          "observation_member_anchor": 373,
+          "observation_statistics": 47676,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 128,
+          "observation_statistics_required": 128,
+          "observation_members_required": 128,
+          "observation_trace_required": 128,
+          "observation_trace_total": 364,
+          "sequence": 374,
+          "event_id": 6518,
+          "schema_version": 128,
+          "conversation_id": 5248,
+          "attempt_id": 6674,
+          "turn_id": 128,
+          "event_json": 52752
+        }
+      },
+      {
+        "kind": "attempt_completed",
+        "rows": 128,
+        "column_bytes": {
+          "observation_trace_fact": 44843,
+          "observation_trace_owner": 373,
+          "observation_trace_fact_required": 128,
+          "observation_kind": 2176,
+          "observation_unavailable": 128,
+          "observation_transcript": 0,
+          "observation_witness": 37153,
+          "observation_source": 4224,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 128,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 373,
+          "observation_turn_header": 38001,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 128,
+          "observation_execution_owner": 373,
+          "observation_execution_required": 128,
+          "observation_execution": 47681,
+          "observation_members": 59025,
+          "event_timestamp": 4480,
+          "observation_member_anchor": 373,
+          "observation_statistics": 40561,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 128,
+          "observation_statistics_required": 128,
+          "observation_members_required": 128,
+          "observation_trace_required": 128,
+          "observation_trace_total": 0,
+          "sequence": 375,
+          "event_id": 6519,
+          "schema_version": 128,
+          "conversation_id": 5248,
+          "attempt_id": 6674,
+          "turn_id": 0,
+          "event_json": 52754
+        }
+      },
+      {
+        "kind": "attempt_started",
+        "rows": 128,
+        "column_bytes": {
+          "observation_trace_fact": 23218,
+          "observation_trace_owner": 373,
+          "observation_trace_fact_required": 128,
+          "observation_kind": 1920,
+          "observation_unavailable": 128,
+          "observation_transcript": 0,
+          "observation_witness": 33436,
+          "observation_source": 4224,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 128,
+          "observation_turn_ordinal": 276,
+          "observation_turn_anchor": 373,
+          "observation_turn_header": 35750,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 128,
+          "observation_execution_owner": 373,
+          "observation_execution_required": 128,
+          "observation_execution": 8912,
+          "observation_members": 0,
+          "event_timestamp": 4480,
+          "observation_member_anchor": 0,
+          "observation_statistics": 54701,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 128,
+          "observation_statistics_required": 128,
+          "observation_members_required": 128,
+          "observation_trace_required": 128,
+          "observation_trace_total": 362,
+          "sequence": 373,
+          "event_id": 6517,
+          "schema_version": 128,
+          "conversation_id": 5248,
+          "attempt_id": 6674,
+          "turn_id": 0,
+          "event_json": 48398
+        }
+      },
+      {
+        "kind": "inbound_turn_adopted",
+        "rows": 128,
+        "column_bytes": {
+          "observation_trace_fact": 25826,
+          "observation_trace_owner": 372,
+          "observation_trace_fact_required": 128,
+          "observation_kind": 2560,
+          "observation_unavailable": 128,
+          "observation_transcript": 0,
+          "observation_witness": 19575,
+          "observation_source": 4224,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 128,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 2432,
+          "observation_turn_prompt_positive": 128,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 128,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 4480,
+          "observation_member_anchor": 0,
+          "observation_statistics": 0,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 128,
+          "observation_statistics_required": 128,
+          "observation_members_required": 128,
+          "observation_trace_required": 128,
+          "observation_trace_total": 362,
+          "sequence": 372,
+          "event_id": 6516,
+          "schema_version": 128,
+          "conversation_id": 5248,
+          "attempt_id": 0,
+          "turn_id": 0,
+          "event_json": 40700
+        }
+      },
+      {
+        "kind": "model_request_completed",
+        "rows": 128,
+        "column_bytes": {
+          "observation_trace_fact": 42930,
+          "observation_trace_owner": 374,
+          "observation_trace_fact_required": 128,
+          "observation_kind": 2944,
+          "observation_unavailable": 128,
+          "observation_transcript": 0,
+          "observation_witness": 55454,
+          "observation_source": 4224,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 128,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 128,
+          "observation_execution_owner": 373,
+          "observation_execution_required": 128,
+          "observation_execution": 19714,
+          "observation_members": 0,
+          "event_timestamp": 4480,
+          "observation_member_anchor": 0,
+          "observation_statistics": 56764,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 128,
+          "observation_statistics_required": 128,
+          "observation_members_required": 128,
+          "observation_trace_required": 128,
+          "observation_trace_total": 0,
+          "sequence": 374,
+          "event_id": 6518,
+          "schema_version": 128,
+          "conversation_id": 5248,
+          "attempt_id": 6674,
+          "turn_id": 128,
+          "event_json": 89142
+        }
+      },
+      {
+        "kind": "model_request_started",
+        "rows": 128,
+        "column_bytes": {
+          "observation_trace_fact": 50214,
+          "observation_trace_owner": 374,
+          "observation_trace_fact_required": 128,
+          "observation_kind": 2688,
+          "observation_unavailable": 128,
+          "observation_transcript": 0,
+          "observation_witness": 42398,
+          "observation_source": 4224,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 128,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 128,
+          "observation_execution_owner": 373,
+          "observation_execution_required": 128,
+          "observation_execution": 19714,
+          "observation_members": 0,
+          "event_timestamp": 4480,
+          "observation_member_anchor": 0,
+          "observation_statistics": 47645,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 128,
+          "observation_statistics_required": 128,
+          "observation_members_required": 128,
+          "observation_trace_required": 128,
+          "observation_trace_total": 362,
+          "sequence": 374,
+          "event_id": 6518,
+          "schema_version": 128,
+          "conversation_id": 5248,
+          "attempt_id": 6674,
+          "turn_id": 128,
+          "event_json": 72994
+        }
+      },
+      {
+        "kind": "turn_completed",
+        "rows": 128,
+        "column_bytes": {
+          "observation_trace_fact": 32050,
+          "observation_trace_owner": 373,
+          "observation_trace_fact_required": 128,
+          "observation_kind": 1792,
+          "observation_unavailable": 128,
+          "observation_transcript": 0,
+          "observation_witness": 24972,
+          "observation_source": 4224,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 128,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 128,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 128,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 4480,
+          "observation_member_anchor": 0,
+          "observation_statistics": 0,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 128,
+          "observation_statistics_required": 128,
+          "observation_members_required": 128,
+          "observation_trace_required": 128,
+          "observation_trace_total": 0,
+          "sequence": 374,
+          "event_id": 6518,
+          "schema_version": 128,
+          "conversation_id": 5248,
+          "attempt_id": 6674,
+          "turn_id": 128,
+          "event_json": 41342
+        }
+      },
+      {
+        "kind": "turn_started",
+        "rows": 128,
+        "column_bytes": {
+          "observation_trace_fact": 24370,
+          "observation_trace_owner": 373,
+          "observation_trace_fact_required": 128,
+          "observation_kind": 1536,
+          "observation_unavailable": 128,
+          "observation_transcript": 0,
+          "observation_witness": 24459,
+          "observation_source": 4224,
+          "observation_assistant_ledger": 0,
+          "observation_tool_ledger": 0,
+          "observation_tool_block": 0,
+          "observation_tool_phase": 0,
+          "observation_turn_required": 128,
+          "observation_turn_ordinal": 0,
+          "observation_turn_anchor": 0,
+          "observation_turn_header": 0,
+          "observation_turn_prompt": 0,
+          "observation_turn_prompt_positive": 128,
+          "observation_execution_owner": 0,
+          "observation_execution_required": 128,
+          "observation_execution": 0,
+          "observation_members": 0,
+          "event_timestamp": 4480,
+          "observation_member_anchor": 0,
+          "observation_statistics": 47644,
+          "observation_occupancy": 0,
+          "observation_readiness_missing": 128,
+          "observation_statistics_required": 128,
+          "observation_members_required": 128,
+          "observation_trace_required": 128,
+          "observation_trace_total": 362,
+          "sequence": 373,
+          "event_id": 6517,
+          "schema_version": 128,
+          "conversation_id": 5248,
+          "attempt_id": 6674,
+          "turn_id": 128,
+          "event_json": 41084
+        }
+      }
+    ],
+    "empty_opened_conversation": {
+      "page_count": 250,
+      "freelist": 0,
+      "useful_payload": 64475,
+      "unused": 444052,
+      "overflow_pages": 2
+    },
+    "pre_hot": {
+      "page_count": 2598,
+      "freelist": 0,
+      "useful_payload": 4046129,
+      "unused": 1164918,
+      "overflow_pages": 529
+    },
+    "post_hot": {
+      "page_count": 3392,
+      "freelist": 0,
+      "useful_payload": 5359605,
+      "unused": 1440903,
+      "overflow_pages": 689
+    },
+    "after_writer_close": {
+      "page_count": 3392,
+      "freelist": 0,
+      "useful_payload": 5359605,
+      "unused": 1440903,
+      "overflow_pages": 689
+    },
+    "authenticated_wal_owners": {
+      "rustx_store": 160,
+      "sqlite_autoindex_observation_headers_1": 125,
+      "pending_inbound": 64,
+      "sqlite_autoindex_pending_inbound_1": 64,
+      "transcript_observation_readiness_missing_idx": 64,
+      "content_frontiers": 801,
+      "transcript_order": 67,
+      "sqlite_autoindex_observation_headers_2": 152,
+      "sqlite_autoindex_transcript_order_1": 141,
+      "observation_headers": 192,
+      "sqlite_schema": 132,
+      "sqlite_autoindex_observation_block_headers_1": 66,
+      "observation_headers_ledger_idx": 66,
+      "surface_observation_boundaries": 32,
+      "sqlite_autoindex_surface_observation_boundaries_1": 32,
+      "sqlite_autoindex_surface_observation_boundaries_2": 32,
+      "sqlite_autoindex_message_ledger_1": 139,
+      "message_ledger_first_human_idx": 32,
+      "message_ledger_native_transcript_idx": 66,
+      "surface_head": 64,
+      "events_observation_turn_prompt_idx": 32,
+      "message_ledger_opening_idx": 32,
+      "message_ledger_human_activity_idx": 34,
+      "message_ledger_boundary_holes_idx": 32,
+      "events_attempt_kind_idx": 308,
+      "events_kind_idx": 202,
+      "events_primary_trace_kind_idx": 202,
+      "events_aggregate_heads_idx": 175,
+      "observation_block_ledger_kind_idx": 70,
+      "observation_block_kind_idx": 127,
+      "events_trace_owner_idx": 187,
+      "message_ledger_identity_position_idx": 93,
+      "message_ledger_append_position_idx": 64,
+      "sqlite_autoindex_observation_block_headers_2": 142,
+      "surface_ops": 67,
+      "sqlite_autoindex_events_1": 246,
+      "trace_adoption_members": 35,
+      "observation_block_headers": 85,
+      "message_ledger": 128,
+      "events": 426,
+      "events_observation_turn_ordinal_idx": 32,
+      "sqlite_autoindex_lifecycle_state_1": 138,
+      "events_observation_turn_anchor_idx": 68,
+      "events_execution_owner_idx": 115,
+      "lifecycle_state": 98,
+      "events_step_kind_idx": 229,
+      "events_attempt_heads_idx": 221,
+      "request_snapshots": 160,
+      "sqlite_autoindex_request_snapshots_1": 32,
+      "request_trace_retry_idx": 32,
+      "request_snapshots_started_idx": 32,
+      "request_trace_definition_identity_idx": 67,
+      "request_snapshots_canonical_frontier_idx": 32,
+      "native_input_nodes": 96,
+      "sqlite_autoindex_request_source_pages_1": 253,
+      "request_source_nodes": 110,
+      "sqlite_autoindex_request_owners_2": 32,
+      "sqlite_autoindex_request_owners_3": 64,
+      "observation_models_owner_idx": 48,
+      "events_primary_request_kind_idx": 86,
+      "request_source_pages": 137,
+      "sqlite_autoindex_request_snapshots_2": 48,
+      "sqlite_autoindex_request_owners_1": 48,
+      "request_trace_catalogs": 33,
+      "request_trace_catalog_identity_idx": 75,
+      "request_owners": 68,
+      "events_request_id_kind_idx": 107,
+      "sqlite_autoindex_observation_models_2": 76,
+      "observation_models": 101,
+      "request_source_roots": 84,
+      "request_trace_definitions": 92,
+      "request_trace_definition_digest_idx": 85,
+      "publication_streams": 38,
+      "events_observation_assistant_ledger_idx": 32,
+      "events_observation_member_anchor_idx": 34,
+      "publication_streams_settlement_idx": 34,
+      "publication_streams_message_settlement_idx": 79,
+      "events_message_id_kind_idx": 83,
+      "sqlite_autoindex_publication_streams_1": 86
+    },
+    "authenticated_main_owners": {
+      "sqlite_schema": 8192,
+      "rustx_store": 8192,
+      "observation_block_headers": 55296,
+      "sqlite_autoindex_observation_block_headers_1": 12288,
+      "sqlite_autoindex_observation_block_headers_2": 63488,
+      "observation_headers": 143360,
+      "sqlite_autoindex_observation_headers_1": 14336,
+      "sqlite_autoindex_observation_headers_2": 69632,
+      "observation_headers_ledger_idx": 12288,
+      "surface_observation_boundaries": 8192,
+      "sqlite_autoindex_surface_observation_boundaries_1": 8192,
+      "sqlite_autoindex_surface_observation_boundaries_2": 8192,
+      "content_frontiers": 301056,
+      "observation_block_ledger_kind_idx": 16384,
+      "observation_block_kind_idx": 63488,
+      "observation_models": 51200,
+      "sqlite_autoindex_observation_models_2": 38912,
+      "observation_models_owner_idx": 22528,
+      "pending_inbound": 8192,
+      "sqlite_autoindex_pending_inbound_1": 8192,
+      "message_ledger": 79872,
+      "sqlite_autoindex_message_ledger_1": 65536,
+      "message_ledger_first_human_idx": 8192,
+      "message_ledger_identity_position_idx": 36864,
+      "message_ledger_native_transcript_idx": 12288,
+      "transcript_order": 20480,
+      "sqlite_autoindex_transcript_order_1": 63488,
+      "transcript_observation_readiness_missing_idx": 8192,
+      "surface_ops": 20480,
+      "surface_head": 8192,
+      "request_snapshots": 139264,
+      "sqlite_autoindex_request_snapshots_1": 8192,
+      "sqlite_autoindex_request_snapshots_2": 28672,
+      "request_trace_retry_idx": 8192,
+      "request_snapshots_started_idx": 8192,
+      "request_trace_catalog_identity_idx": 36864,
+      "request_trace_definitions": 45056,
+      "request_trace_definition_digest_idx": 43008,
+      "request_trace_definition_identity_idx": 36864,
+      "publication_streams": 26624,
+      "sqlite_autoindex_publication_streams_1": 40960,
+      "events": 536576,
+      "sqlite_autoindex_events_1": 55296,
+      "events_trace_owner_idx": 43008,
+      "events_observation_assistant_ledger_idx": 8192,
+      "events_aggregate_heads_idx": 36864,
+      "events_attempt_heads_idx": 51200,
+      "events_observation_member_anchor_idx": 12288,
+      "events_observation_turn_ordinal_idx": 8192,
+      "events_observation_turn_prompt_idx": 8192,
+      "lifecycle_state": 34816,
+      "sqlite_autoindex_lifecycle_state_1": 63488,
+      "message_ledger_opening_idx": 8192,
+      "message_ledger_human_activity_idx": 12288,
+      "message_ledger_boundary_holes_idx": 8192,
+      "request_snapshots_canonical_frontier_idx": 8192,
+      "publication_streams_settlement_idx": 8192,
+      "publication_streams_message_settlement_idx": 38912,
+      "native_input_nodes": 79872,
+      "sqlite_autoindex_request_source_pages_1": 151552,
+      "request_source_nodes": 114688,
+      "request_owners": 20480,
+      "sqlite_autoindex_request_owners_1": 28672,
+      "sqlite_autoindex_request_owners_2": 8192,
+      "sqlite_autoindex_request_owners_3": 8192,
+      "events_primary_request_kind_idx": 34816,
+      "events_message_id_kind_idx": 43008,
+      "events_step_kind_idx": 61440,
+      "events_request_id_kind_idx": 38912,
+      "events_attempt_kind_idx": 81920,
+      "events_kind_idx": 49152,
+      "events_primary_trace_kind_idx": 49152,
+      "request_source_roots": 67584,
+      "events_observation_turn_anchor_idx": 16384,
+      "request_source_pages": 217088,
+      "events_execution_owner_idx": 28672,
+      "request_trace_catalogs": 12288,
+      "message_ledger_append_position_idx": 8192,
+      "trace_adoption_members": 14336
+    }
+  }
+]

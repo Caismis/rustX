@@ -30,20 +30,18 @@ const AUXILIARY_TABLES: [&str; 4] = [
     "auxiliary_audit_facts",
 ];
 
-const MANDATORY_AUXILIARY_INDEXES: [&str; 13] = [
+const MANDATORY_AUXILIARY_INDEXES: [&str; 11] = [
     "auxiliary_requests_open_idx",
-    "auxiliary_requests_request_idx",
     "auxiliary_requests_terminal_idx",
     "auxiliary_audit_offset_idx",
     "auxiliary_audit_call_idx",
-    "auxiliary_audit_request_idx",
-    "auxiliary_audit_sequence_idx",
-    "auxiliary_calls_started_idx",
-    "auxiliary_calls_settled_idx",
     "request_owners_source_idx",
     "events_auxiliary_call_id_kind_idx",
     "events_auxiliary_fact_type_idx",
     "events_primary_trace_kind_idx",
+    "request_owners_terminal_idx",
+    "auxiliary_calls_terminal_idx",
+    "auxiliary_requests_outcome_idx",
 ];
 
 #[derive(Debug, Clone, Copy)]
@@ -288,7 +286,7 @@ fn table_rows(store: &SqliteConversationStore) -> [u64; 4] {
     AUXILIARY_TABLES.map(|table| query_u64(&connection, &format!("SELECT count(*) FROM {table}")))
 }
 
-fn mandatory_index_rows(store: &SqliteConversationStore) -> [u64; 13] {
+fn mandatory_index_rows(store: &SqliteConversationStore) -> [u64; 11] {
     let connection = store.lock().unwrap();
     MANDATORY_AUXILIARY_INDEXES.map(|index| {
         let (table, sql): (String, String) = connection
@@ -306,21 +304,19 @@ fn mandatory_index_rows(store: &SqliteConversationStore) -> [u64; 13] {
     })
 }
 
-fn expected_index_rows(calls: u64, facts: u64) -> [u64; 13] {
+fn expected_index_rows(calls: u64, facts: u64) -> [u64; 11] {
     [
         0,         // Every measured request is closed.
-        calls,     // auxiliary_requests_request_idx
         calls,     // auxiliary_requests_terminal_idx
         facts,     // auxiliary_audit_offset_idx
         facts,     // auxiliary_audit_call_idx
-        calls * 2, // auxiliary_audit_request_idx: start and settlement
-        facts,     // auxiliary_audit_sequence_idx
-        calls,     // auxiliary_calls_started_idx
-        calls,     // auxiliary_calls_settled_idx
         calls,     // request_owners_source_idx
-        facts,     // Non-partial Call lookup also indexes null request Call keys.
+        calls * 2, // Call start and settlement carry the top-level call ID.
         facts,     // events_auxiliary_fact_type_idx
         0,         // Primary Trace scope excludes every auxiliary request.
+        calls,     // request_owners_terminal_idx
+        calls,     // auxiliary_calls_terminal_idx
+        calls,     // auxiliary_requests_outcome_idx
     ]
 }
 
@@ -342,7 +338,7 @@ fn aux_01_representative_storage_growth_of_completed_one_request_calls() {
     let baseline_tables = table_rows(&store);
     let baseline_indexes = mandatory_index_rows(&store);
     assert_eq!(baseline_tables, [0, 0, 0, 0]);
-    assert_eq!(baseline_indexes, [0; 13]);
+    assert_eq!(baseline_indexes, [0; 11]);
 
     for ordinal in 0..MEASURED_CALLS {
         commit_completed_one_request_call(&store, ordinal).unwrap();
@@ -460,4 +456,40 @@ fn aux_01_representative_storage_growth_of_completed_one_request_calls() {
         "AUX_GROWTH_PAGE_BYTES_MINUS_LOGICAL_JOURNAL_BYTES={}",
         persisted_bytes_delta.saturating_sub(journal_bytes_added)
     );
+}
+
+#[test]
+fn bounded_work_auxiliary_turn_sql_is_flat_across_retained_calls() {
+    use crate::durable::sqlite::query_work::{self, HISTORY_SIZES};
+    let mut samples = Vec::new();
+    for size in HISTORY_SIZES {
+        let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
+        store.initialize(&[]).unwrap();
+        for ordinal in 1..=size {
+            commit_completed_one_request_call(&store, ordinal as u64).unwrap();
+        }
+        query_work::capture(&store.lock().unwrap());
+        commit_completed_one_request_call(&store, size as u64 + 1).unwrap();
+        let cut = store.auxiliary_audit_cut().unwrap();
+        let call = AuxiliaryCallId::parse(measurement_id("aux_", size as u64 + 1)).unwrap();
+        assert!(store.load_auxiliary_call(&call, cut).unwrap().is_some());
+        let page = store
+            .read_auxiliary_audit(cut, Some(size as u64 * FACTS_PER_CALL), 4)
+            .unwrap();
+        assert_eq!(page.records.len(), 4);
+        samples.push((size, query_work::finish(&store.lock().unwrap())));
+    }
+    let baseline = &samples[0].1;
+    assert!(baseline.len() > 50);
+    for (history, statements) in &samples {
+        assert_eq!(statements.len(), baseline.len());
+        for (sql, work) in statements {
+            let first = &baseline[sql];
+            assert_eq!(work.steps, first.steps, "history {history}: {sql}");
+            assert_eq!(work.calls, first.calls, "history {history}: {sql}");
+            assert_eq!(work.sorts, 0, "history {history}: {sql}");
+            assert_eq!(work.automatic, 0, "history {history}: {sql}");
+            assert_eq!(work.scans, first.scans, "history {history}: {sql}");
+        }
+    }
 }

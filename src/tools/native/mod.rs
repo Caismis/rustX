@@ -51,6 +51,7 @@
 pub(crate) mod agents;
 mod ask_user;
 mod bash;
+pub(crate) use bash::NAME as BASH_TOOL_NAME;
 mod edit;
 mod glob;
 mod goal;
@@ -519,7 +520,7 @@ pub(crate) const TODO_TOOL_NAME: &str = todo::NAME;
 
 /// The canonical [`ToolDefinition`] the Todo extension publishes (Issue #259).
 ///
-/// The identity half of [`todo_tool_registration`], without its executor.
+/// The identity half of `todo_tool_registration`, without its executor.
 /// It is the value the `ConversationRuntime` construction invariant compares a
 /// published capability generation against, and the one a test asserts an
 /// active registry carries — so neither has to restate a Tool id, a name, or a

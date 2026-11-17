@@ -135,7 +135,8 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
             "type": "object",
             "properties": {"text": {"type": "string"}},
             "required": ["text"]
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
@@ -342,7 +343,10 @@ async fn shutdown_propagates_existing_user_cancellation_to_pending_interaction()
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("post-shutdown snapshot");
-    assert!(snapshot.pending_interactions.is_empty());
+    assert_eq!(
+        snapshot.pending_interactions,
+        [] as [crate::observation::interaction::RuntimeClientInteractionHeader; 0]
+    );
 
     let stale = attachment
         .handle_request_async(RuntimeClientRequest::InteractionRespond {
@@ -740,7 +744,10 @@ async fn mcp_failure_closes_attempt_admission_before_worker_boundary() {
     };
     assert!(detail.contains("attempt admission MCP failure"));
     assert!(!fixture.runtime.has_current_attempt());
-    assert!(fixture.model.requests().is_empty());
+    assert_eq!(
+        fixture.model.requests(),
+        [] as [crate::model::types::ModelRequest; 0]
+    );
 }
 
 /// Lifecycle Draining remains the generic admission authority for manual
@@ -1321,6 +1328,7 @@ async fn shutdown_drains_after_settlement_control_plane_failure() {
             None,
         ),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -1918,7 +1926,10 @@ async fn runtime_shutdown_waits_for_workflow_child_native_quiescence() {
         .expect("shutdown result")
         .expect("workflow child drain");
     assert!(runtime.is_quiescent());
-    assert!(subagents.unsettled_snapshot().is_empty());
+    assert_eq!(
+        subagents.unsettled_snapshot(),
+        [] as [crate::runtime::subagent::SubagentSnapshot; 0]
+    );
     assert!(!child_root.exists());
     let snapshot = subagents
         .snapshot(&accepted.subagent_id)
@@ -2227,7 +2238,8 @@ async fn runtime_shutdown_waits_for_foreground_process_terminality() {
             },
             "required": ["command"],
             "additionalProperties": false
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
@@ -2354,7 +2366,7 @@ async fn runtime_shutdown_closes_parallel_foreground_start_frontier() {
         id: crate::runtime::identity::ToolId::new(id),
         name: name.to_owned(),
         description: String::new(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,

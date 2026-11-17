@@ -14,7 +14,7 @@ impl RuntimeClientHost {
     /// # One conversation authority
     ///
     /// The conversation identity of the host *is*
-    /// [`ConversationRuntime::conversation_id`]. The configuration carries
+    /// [`ConversationRuntime::conversation_id`](crate::runtime::conversation_runtime::ConversationRuntime::conversation_id). The configuration carries
     /// no conversation id of its own, so the host's identity, the
     /// projection's conversation, and the `initialized` result all name the
     /// conversation of the runtime it observes.
@@ -37,7 +37,7 @@ impl RuntimeClientHost {
     ///
     /// A host binds **before** its conversation runtime is activated. The
     /// composition constructs the runtime, optionally binds this host, and
-    /// then calls [`ConversationRuntime::activate`]; binding after
+    /// then calls [`ConversationRuntime::activate`](crate::runtime::conversation_runtime::ConversationRuntime::activate); binding after
     /// activation is refused with
     /// [`HostConstructionError::RuntimeAlreadyActivated`]. App Server residency
     /// keeps this host bound with zero clients; lower-level runtime-only
@@ -47,7 +47,7 @@ impl RuntimeClientHost {
     ///
     /// After the binding claim the host performs exactly one fallible
     /// step: the runtime's observation bridge handshake
-    /// ([`ConversationRuntime::install_observation_bridge`]), which
+    /// (`ConversationRuntime::install_observation_bridge`), which
     /// installs the observation queue and every subsystem seam and
     /// captures the bootstrap snapshot at one global cut, under the one
     /// coordinator lock and over an inert runtime. The projection then
@@ -83,7 +83,7 @@ impl RuntimeClientHost {
     /// durable store.
     ///
     /// This is the generic read-only conversation-attachment primitive over
-    /// durable authorities. It does not construct a [`ConversationRuntime`], install
+    /// durable authorities. It does not construct a [`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime), install
     /// an observation bridge, claim a mailbox, or acquire an execution
     /// lifecycle. The store supplies the current Surface/transcript and the
     /// Event Journal is folded into the same ordinary Runtime Client
@@ -141,6 +141,12 @@ impl RuntimeClientHost {
             audit_commit_hook: Mutex::new(None),
             #[cfg(test)]
             snapshot_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_page_admitted_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_source_wait_hook: Mutex::new(None),
             #[cfg(test)]
             cancellation_receipt_hook: Mutex::new(None),
             #[cfg(test)]
@@ -239,6 +245,12 @@ impl RuntimeClientHost {
             audit_commit_hook: Mutex::new(None),
             #[cfg(test)]
             snapshot_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_read_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_page_admitted_hook: Mutex::new(None),
+            #[cfg(test)]
+            checkpoint_source_wait_hook: Mutex::new(None),
             #[cfg(test)]
             cancellation_receipt_hook: Mutex::new(None),
             #[cfg(test)]

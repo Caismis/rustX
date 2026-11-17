@@ -1,12 +1,20 @@
 import { WorkspaceAuthority } from '../src/workspaces/authority';
 // @vitest-environment node
-import { afterEach, expect, it } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { afterEach, expect, it, vi } from 'vitest';
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { LocalWorkspaceHost } from '../host/workspaces';
 import { DesktopAdapter } from '../host/desktop';
 import { startWorkspaceHost } from './e2e/workspace-host';
+const publication = vi.hoisted(() => ({ inspect: undefined as undefined | ((from: string, to: string) => void) }));
+vi.mock('node:fs', async original => {
+  const fs = await original<typeof import('node:fs')>();
+  return { ...fs, renameSync: ((from, to) => {
+    if (String(from).endsWith('.pending')) publication.inspect?.(String(from), String(to));
+    fs.renameSync(from, to);
+  }) as typeof fs.renameSync };
+});
 const directories: string[] = [];
 afterEach(() => { directories.splice(0).forEach(path => rmSync(path, { force: true, recursive: true })); });
 function fixture(picker = true, endpoint = 'ws://127.0.0.1:8080/') {
@@ -121,6 +129,58 @@ it('browses configured roots and registers the exact confirmed descendant on a h
     expect(await host.classifyLocations([selected], f.endpoint)).toEqual([{ authorized: true, workspaceId: id }]);
     expect(await host.registerWorkspaceFolder(scope, 'a', { path, revision: current.revision })).toBe(id);
   } finally { await host.close(); }
+});
+
+it.each(['configured', 'native', 'browser'] as const)('%s registration admits the authorized directory rather than the location id', async mode => {
+  const home = mkdtempSync(join(tmpdir(), 'workspace-home-')); directories.push(home);
+  const previous = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    const shared = fixture();
+    const selected = mode === 'configured' ? shared.a : join(shared.a, 'selected');
+    if (mode !== 'configured') mkdirSync(selected);
+    const desktop = new DesktopAdapter({
+      platform: 'linux', env: { PATH: '/usr/bin', DISPLAY: ':fixture' },
+      executable: path => path === '/usr/bin/zenity' ? path : undefined,
+      launch: async () => { throw new Error('Unexpected launcher request'); },
+      pickFolder: async () => selected,
+    });
+    const host = new LocalWorkspaceHost({ ...shared.config, nativeFilesystem: 'shared', transportToken: 'fixture',
+      nativePicker: mode === 'native', browsePicker: mode === 'browser' }, desktop);
+    const [alpha] = (await host.listWorkspaces()).workspaces;
+    await host.removeWorkspace(await host.listWorkspaces(), alpha.id);
+    let publications = 0;
+    publication.inspect = (from, to) => {
+      expect(readFileSync(from, 'utf8')).toBe(selected);
+      expect(to.endsWith('.txt')).toBe(true);
+      expect(existsSync(to)).toBe(false);
+      expect(readdirSync(join(home, 'rustx', 'runtime', 'workspace-python', 'admit')).filter(name => name.endsWith('.txt'))).toEqual([]);
+      publications++;
+    };
+    const scope = await host.listWorkspaces();
+    if (mode === 'configured') await host.adoptWorkspace(scope, 'a');
+    else if (mode === 'native') await host.pickWorkspace(scope);
+    else {
+      const { revision } = await host.browseWorkspace(scope, 'a', 'selected');
+      await host.registerWorkspaceFolder(scope, 'a', { path: 'selected', revision });
+    }
+    expect(publications).toBe(1);
+    const admit = join(home, 'rustx', 'runtime', 'workspace-python', 'admit');
+    const files = readdirSync(admit);
+    expect(files).toHaveLength(1);
+    expect(readFileSync(join(admit, files[0]), 'utf8').trim()).toBe(selected);
+    const plain = fixture();
+    const before = readdirSync(admit);
+    const [plainAlpha] = (await plain.host.listWorkspaces()).workspaces;
+    await plain.host.removeWorkspace(await plain.host.listWorkspaces(), plainAlpha.id);
+    await plain.host.adoptWorkspace(await plain.host.listWorkspaces(), 'a');
+    expect(readdirSync(admit)).toEqual(before);
+    expect(existsSync(admit)).toBe(true);
+  } finally {
+    publication.inspect = undefined;
+    if (previous === undefined) delete process.env.HOME;
+    else process.env.HOME = previous;
+  }
 });
 
 it('canonical endpoint identity accepts URL equivalence and rejects different hosts/ports', async () => {

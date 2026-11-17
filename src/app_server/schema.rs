@@ -11,6 +11,12 @@ use super::protocol::{
     ServerCapabilities, Success,
 };
 
+/// Rust-derived numeric descriptors emitted with the public schema artifacts.
+#[must_use]
+pub fn numeric_codec_assets() -> Vec<(&'static str, Vec<u8>)> {
+    super::wire::numeric_codec_assets()
+}
+
 #[must_use]
 #[allow(clippy::too_many_lines)] // Typed fixture constructors, not protocol logic.
 /// Construct canonical wire fixtures without environment-dependent values.
@@ -288,7 +294,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 registration_id: "registration_fixture".into(),
                 target: target.clone(),
                 cursor: crate::runtime_client::RuntimeClientCursor::new(9_007_199_254_740_993),
-                event: Box::new(crate::runtime_client::RuntimeClientEvent::AttemptStarted {
+                event: std::sync::Arc::new(crate::runtime_client::RuntimeClientEvent::AttemptStarted {
                     attempt_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
                     model: None,
                     execution_settings: None,
@@ -342,7 +348,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
     fixtures.push(
         serde_json::from_value(serde_json::json!({
             "jsonrpc": "2.0", "id": "trace-tool-summary", "result": {
-                "type": "trace", "page": { "records": [{
+                "type": "trace", "refreshed": 0, "page": { "records": [{
                     "id": "trace:7", "position": "trace:7", "fields": [], "collections": [],
                     "location": { "attempt_id": "attempt-a", "step_id": "1" },
                     "kind": "tool", "state": "completed",
@@ -468,7 +474,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
         Method::InboundEdit {
             target: target.clone(),
-            expected: crate::durable::inbox::PendingInboundRef {
+            expected: crate::durable::PendingInboundRef {
                 sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
                 revision: EXACT,
             },
@@ -476,7 +482,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         },
         Method::InboundRemove {
             target: target.clone(),
-            expected: crate::durable::inbox::PendingInboundRef {
+            expected: crate::durable::PendingInboundRef {
                 sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
                 revision: EXACT,
             },
@@ -572,13 +578,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 read_cut: crate::observation::cut::CheckpointReadCut {
                     canonical_foreground: None,
                     live_publication: None,
-                    collection_cuts: std::collections::BTreeMap::new(),
+                    collection_cuts: crate::observation::metadata::MetadataFragment::default(),
                     conversation_id: target.conversation_id.clone(),
                     activation_id: None,
                     revision: EXACT,
                     through: EXACT,
                     source_cut: None,
-                    domain_revisions: std::collections::BTreeMap::default(),
+                    domain_revisions: crate::observation::metadata::MetadataFragment::default(),
                 },
                 domain: "jobs".into(),
                 total: 0,
@@ -590,7 +596,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             metrics: crate::observation::statistics::AgentStatistics::default(),
         },
         MethodResult::InboundMutation {
-            outcome: crate::durable::inbox::PendingMutationOutcome::Conflict,
+            outcome: crate::durable::PendingMutationOutcome::Conflict,
         },
         MethodResult::ConfigurationReceipt {
             scope: "session-fixture".into(),
@@ -628,13 +634,13 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 target_cursor: None,
                 page: crate::observation::transcript::RuntimeClientTranscriptPage {
                     source_cut: None,
-                    content: Vec::new(),
-                    collections: Vec::new(),
-                    deferred_entries: Vec::new(),
+                    content: Vec::new().into(),
+                    collections: Vec::new().into(),
+                    deferred_entries: Vec::new().into(),
                     inherited_through: Some(
                         crate::observation::transcript::RuntimeClientTranscriptCursor::new(0),
                     ),
-                    entries: Vec::new(),
+                    entries: Vec::new().into(),
                     next_cursor: None,
                     statistics: None,
                 },
@@ -689,7 +695,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             registration_id: "registration_fixture".into(),
             target,
             cursor: crate::runtime_client::RuntimeClientCursor::new(EXACT),
-            event: Box::new(
+            event: std::sync::Arc::new(
                 crate::runtime_client::RuntimeClientEvent::WorkflowsUpdated {
                     workflows: crate::runtime::workflow::read_model::WorkflowSnapshot {
                         revision: crate::runtime::workflow::read_model::WorkflowRevision(EXACT),
@@ -954,7 +960,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
         .iter()
         .map(|(name, yaml)| {
             let definition: WorkflowFileDocument =
-                serde_yaml::from_str(yaml).expect("native example parses");
+                serde_yaml_ng::from_str(yaml).expect("native example parses");
             let revision = format!("sha256:{:x}", sha2::Sha256::digest(yaml.as_bytes()));
             (
                 WorkflowId::parse(name).expect("example identity"),
@@ -1014,7 +1020,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
                     tools: vec![crate::runtime::workflow::WorkflowToolChoice {
                         name: "search_issues".into(),
                         description: "Search issues.".into(),
-                        input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}),
+                        input_schema: serde_json::json!({"type":"object","properties":{"query":{"type":"string"}},"required":["query"]}).into(),
                         result: crate::runtime::workflow::WorkflowToolResult::Text {},
                     }],
                 }],
@@ -1210,7 +1216,7 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
     fixtures.push(request(
         "workflow-save",
         Method::SourcesWrite {
-            target,
+            target: target.clone(),
             expected_revision: revision.clone(),
             mutation: SourceMutation::Workflow {
                 id: id.clone(),
@@ -1240,6 +1246,172 @@ fn workflow_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             }),
         },
     })));
+    let attachment_target = AttachmentTarget {
+        session_id: crate::local_runtime::session::SessionId::new(
+            "ses_00000000-0000-7000-8000-000000000001",
+        ),
+        conversation_id: crate::runtime::identity::ConversationId::new(
+            "conv_00000000-0000-7000-8000-000000000001",
+        ),
+        runtime_incarnation: serde_json::from_str("9007199254740993").expect("incarnation fixture"),
+        attachment_id: crate::runtime_client::types::AttachmentId::new("attachment-fixture"),
+    };
+    let run_id = crate::runtime::workflow::WorkflowRunId {
+        conversation_id: attachment_target.conversation_id.clone(),
+        origin: crate::runtime::workflow::WorkflowRunOrigin::Tool {
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-run-fixture"),
+        },
+        invocation: 1,
+    };
+    fixtures.push(request(
+        "workflow-trace-location",
+        Method::TraceLocateWorkflow {
+            target: attachment_target.clone(),
+            run_id: run_id.clone(),
+        },
+    ));
+    fixtures.push(request(
+        "agent-workflow-trace-location",
+        Method::AgentTraceLocateWorkflow {
+            target: attachment_target.clone(),
+            agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
+            run_id: run_id.clone(),
+        },
+    ));
+    fixtures.push(success(
+        "workflow-trace-unavailable",
+        MethodResult::TraceWorkflowLocation { location: None },
+    ));
+    let snapshot_cut = crate::observation::cut::CheckpointReadCut {
+        canonical_foreground: None,
+        live_publication: None,
+        collection_cuts: crate::observation::metadata::MetadataFragment::default(),
+        domain_revisions: crate::observation::metadata::MetadataFragment::default(),
+        conversation_id: attachment_target.conversation_id.clone(),
+        activation_id: None,
+        revision: 12,
+        through: 12,
+        source_cut: None,
+    };
+    fixtures.push(request(
+        "workflow-run-snapshot-header",
+        Method::ConversationWorkflowRunSnapshotHeader {
+            target: attachment_target.clone(),
+            agent_id: None,
+            cut: Some(snapshot_cut.clone()),
+            run_id: run_id.clone(),
+        },
+    ));
+    fixtures.push(success(
+        "workflow-run-snapshot-header",
+        MethodResult::WorkflowRunSnapshotHeader {
+            header: Some(crate::runtime::workflow::WorkflowRunSnapshotHeader {
+                run_id: run_id.clone(),
+                workflow_id: id.clone(),
+                program_digest: program.tool_identity().program_digest,
+                source_revision: revision.clone(),
+                snapshot_digest: "0".repeat(64),
+                has_source_presentation: false,
+                byte_length: 128,
+                sha256: "a".repeat(64),
+            }),
+        },
+    ));
+    fixtures.push(request(
+        "workflow-run-snapshot-chunk",
+        Method::ConversationWorkflowRunSnapshotChunk {
+            target: attachment_target.clone(),
+            agent_id: None,
+            cut: Some(snapshot_cut.clone()),
+            run_id: run_id.clone(),
+            offset: 0,
+            limit: crate::runtime::workflow::WORKFLOW_SNAPSHOT_CHUNK_BYTES,
+        },
+    ));
+    fixtures.push(success(
+        "workflow-run-snapshot-chunk",
+        MethodResult::WorkflowRunSnapshotChunk {
+            chunk: Some(crate::runtime::workflow::WorkflowRunSnapshotChunk {
+                offset: 0,
+                data: "e30=".into(),
+                next_offset: None,
+            }),
+        },
+    ));
+    fixtures.push(request(
+        "session-workflow-run-snapshot-header",
+        Method::SessionWorkflowRunSnapshotHeader {
+            session_id: attachment_target.session_id.clone(),
+            node_id: None,
+            cut: snapshot_cut.clone(),
+            run_id: run_id.clone(),
+        },
+    ));
+    fixtures.push(request(
+        "session-workflow-run-snapshot-chunk",
+        Method::SessionWorkflowRunSnapshotChunk {
+            session_id: attachment_target.session_id.clone(),
+            node_id: None,
+            cut: snapshot_cut.clone(),
+            run_id: run_id.clone(),
+            offset: 0,
+            limit: crate::runtime::workflow::WORKFLOW_SNAPSHOT_CHUNK_BYTES,
+        },
+    ));
+    let node_instance = crate::runtime::workflow::WorkflowNodeInstance {
+        block: crate::runtime::workflow::WorkflowBlockInstance {
+            run: run_id,
+            definition: crate::runtime::workflow::WorkflowDefinitionPath {
+                workflow_id: id.clone(),
+                blocks: Vec::new(),
+            },
+            invocations: vec![0],
+        },
+        node: "start".into(),
+        visit: 1,
+    };
+    fixtures.push(request(
+        "conversation-workflow-trace-node",
+        Method::ConversationWorkflowTraceNode {
+            target: attachment_target.clone(),
+            agent_id: None,
+            cut: snapshot_cut.clone(),
+            instance: node_instance.clone(),
+        },
+    ));
+    fixtures.push(request(
+        "session-workflow-trace-node",
+        Method::SessionWorkflowTraceNode {
+            session_id: attachment_target.session_id,
+            node_id: None,
+            cut: snapshot_cut,
+            instance: node_instance.clone(),
+        },
+    ));
+    fixtures.push(success(
+        "workflow-trace-node",
+        MethodResult::WorkflowTraceNode {
+            node: Some(crate::durable::observation::WorkflowTraceNode {
+                id: "workflow-node:1".into(),
+                instance: node_instance,
+                kind: None,
+                state: crate::durable::observation::WorkflowNodeTraceState::Incomplete,
+                timing: crate::observation::trace::TraceTiming {
+                    started_at: chrono::DateTime::UNIX_EPOCH,
+                    ended_at: None,
+                    duration_ms: None,
+                },
+                input: None,
+                output: None,
+                input_preview: None,
+                output_preview: None,
+                input_omitted: false,
+                output_omitted: false,
+                child: None,
+                child_agent_id: None,
+            }),
+        },
+    ));
 }
 
 #[allow(clippy::too_many_lines)] // Native Scheduler wire examples include exact integer domains.
@@ -1775,9 +1947,9 @@ mod tests {
             })
             .collect();
         generations.sort();
-        assert_eq!(generations, ["v78.schema.json", "v78.ts"]);
+        assert_eq!(generations, ["v80.schema.json", "v80.ts"]);
         assert_eq!(
-            std::fs::read_to_string(root.join("v78.schema.json")).unwrap(),
+            std::fs::read_to_string(root.join("v80.schema.json")).unwrap(),
             format!(
                 "{}\n",
                 serde_json::to_string_pretty(&protocol_schema()).unwrap()

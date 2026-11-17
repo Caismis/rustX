@@ -128,7 +128,7 @@ pub enum SubagentOwnershipKind {
 /// The current schema version of [`RuntimeEventEnvelope`].
 ///
 /// This version stamps the *envelope*, and it is deliberately independent of
-/// [`SQLITE_SCHEMA_VERSION`](crate::durable::SQLITE_SCHEMA_VERSION). Adding a
+/// [`SQLITE_SCHEMA_VERSION`](crate::durable::sqlite::SQLITE_SCHEMA_VERSION). Adding a
 /// new [`RuntimeEvent`] variant — including Issue #83's Workflow facts —
 /// changes what a journal may *contain*, not how an envelope is framed, and a
 /// store whose journal predates a variant is refused wholesale by the
@@ -199,8 +199,12 @@ impl PartialEq for RuntimeEventEnvelope {
 /// even when the envelope also carries the enclosing attempt or turn. Unknown
 /// payload fields are rejected so stale or contradictory encodings cannot
 /// silently deserialize.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, strum::AsRefStr,
+)]
+#[cfg_attr(test, derive(strum::VariantNames))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+#[strum(serialize_all = "snake_case")]
 pub enum RuntimeEvent {
     /// Observational Goal facts; never replayed as Goal state.
     Goal { fact: crate::goal::GoalFact },
@@ -527,7 +531,7 @@ pub enum RuntimeEvent {
         /// Identity of the executed tool.
         tool_id: ToolId,
         /// The normalized execution result.
-        result: ToolExecutionResult,
+        result: std::sync::Arc<ToolExecutionResult>,
     },
     /// Tool execution failed without producing a result.
     ToolExecutionFailed {
@@ -1403,7 +1407,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let value = serde_json::to_value(event).expect("serialize event");
         assert_eq!(value["type"], "tool_execution_completed");
@@ -1604,7 +1609,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call_a.clone(),
@@ -1619,7 +1625,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             },
         ];
         let mut completed: Vec<(ToolCallId, u64)> = Vec::new();

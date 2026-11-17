@@ -11,6 +11,7 @@ mod owner_tests;
 mod pure_read_tests;
 mod settlement_tests;
 mod source_recovery_tests;
+mod turn_work_tests;
 mod workflow_trace_tests;
 #[test]
 fn permanent_agent_settlement_is_a_typed_non_retryable_error() {
@@ -258,7 +259,7 @@ impl ParkingBackgroundTool {
                     id: ToolId::new("tool-bg"),
                     name: "bg".to_owned(),
                     description: String::new(),
-                    input_schema: serde_json::json!({"type": "object"}),
+                    input_schema: serde_json::json!({"type": "object"}).into(),
                     execution_policy: ToolExecutionPolicy::ModelSelectable,
                     replay_policy: ToolReplayPolicy::Never,
                     origin: ToolOrigin::Builtin,
@@ -550,6 +551,7 @@ async fn host_fixture_before_activation(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -647,6 +649,7 @@ async fn host_fixture_with_runtime_probe(
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -831,7 +834,7 @@ fn durable_history_fixture() -> DurableHistoryFixture {
         id: MessageId::new("child-tool-result"),
         tool_call_id: call.id.clone(),
         tool_id: call.tool_id.clone(),
-        result: tool_result.clone(),
+        result: tool_result.clone().into(),
     });
     append_durable_history(
         &store,
@@ -907,7 +910,7 @@ fn append_durable_history(
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: call.id.clone(),
                 tool_id: call.tool_id.clone(),
-                result: tool_result.clone(),
+                result: tool_result.clone().into(),
             },
         ))
         .expect("tool completion");
@@ -949,6 +952,16 @@ fn append_durable_history(
 /// never fail a correct run.
 const STREAM_LIVENESS_GUARD: std::time::Duration = std::time::Duration::from_secs(45);
 
+fn complete_transition(event: &RuntimeClientEvent) -> &RuntimeClientEvent {
+    match event {
+        RuntimeClientEvent::ProjectionDelta { metadata, .. } => metadata
+            .native_transition
+            .as_deref()
+            .expect("frozen native replay carrier"),
+        event => event,
+    }
+}
+
 /// Receives events until the predicate matches.
 async fn receive_until(
     subscription: &EventSubscription,
@@ -961,16 +974,23 @@ async fn receive_until(
             let EventDelivery::Event(event) = delivery else {
                 panic!("subscription must stay open and contiguous, got {delivery:?}");
             };
-            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &event.event else {
-                panic!("one complete native transition");
+            let revision = match event.event.as_ref() {
+                RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
+                    metadata.read_cut.revision
+                }
+                RuntimeClientEvent::ProjectionDelta { metadata, .. } => metadata.read_cut.revision,
+                _ => panic!("one complete native transition"),
             };
-            assert_eq!(metadata.read_cut.revision, event.cursor.get());
-            let matched = event.event.facts().iter().any(|fact| {
-                predicate(&RuntimeClientProtocolEvent {
-                    cursor: event.cursor,
-                    event: fact.clone(),
-                })
-            });
+            assert_eq!(revision, event.cursor.get());
+            let matched = complete_transition(&event.event)
+                .facts()
+                .iter()
+                .any(|fact| {
+                    predicate(&RuntimeClientProtocolEvent {
+                        cursor: event.cursor,
+                        event: Arc::new(fact.clone()),
+                    })
+                });
             seen.push(event);
             if matched {
                 return seen;
@@ -990,12 +1010,12 @@ async fn receive_until_metadata(
             let EventDelivery::Event(event) = subscription.next().await else {
                 panic!("native subscription must remain contiguous");
             };
-            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &event.event else {
+            let RuntimeClientEvent::ProjectionTransition { metadata, .. } = complete_transition(&event.event) else {
                 panic!("one complete native transition");
             };
             assert_eq!(metadata.read_cut.revision, event.cursor.get());
-            if predicate(metadata) { return event; }
-            if let Some(outcome) = event.event.facts().iter().find_map(|fact| match fact {
+            if predicate(metadata) { return RuntimeClientProtocolEvent {cursor:event.cursor,event:Arc::new(complete_transition(&event.event).clone())}; }
+            if let Some(outcome) = complete_transition(&event.event).facts().iter().find_map(|fact| match fact {
                 RuntimeClientEvent::AttemptSettled { outcome, .. } => Some(outcome),
                 _ => None,
             }) {
@@ -1128,7 +1148,10 @@ fn cold_empty_auxiliary_audit_has_no_pages_after_long_unrelated_history() {
         )
         .unwrap();
     assert_eq!(page.total, 0);
-    assert!(page.items.is_empty());
+    assert_eq!(
+        page.items,
+        [] as [crate::observation::cut::CheckpointPageItem; 0]
+    );
     assert_eq!(page.next_offset, None);
 }
 
@@ -1915,10 +1938,9 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
         .submit_inbound(submit_content("all native block descriptors"))
         .unwrap();
     receive_until_metadata(&subscription, |metadata| {
-        metadata
-            .content
-            .iter()
-            .any(|binding| binding.path == ["attempt", "in_flight", "blocks", "31", "text"])
+        metadata.content.iter().any(|binding| {
+            binding.path.as_ref() == ["attempt", "in_flight", "blocks", "31", "text"]
+        })
     })
     .await;
     let before = inner.checkpoint().unwrap();
@@ -1951,18 +1973,20 @@ async fn t06_t14_many_live_blocks_keep_every_descriptor_after_inline_budget_exha
     suffix_tx.send(true).unwrap();
     let update = receive_until_metadata(&subscription, |metadata| {
         metadata.content.iter().any(|binding| {
-            binding.path == ["attempt", "in_flight", "blocks", "31", "text"]
+            binding.path.as_ref() == ["attempt", "in_flight", "blocks", "31", "text"]
                 && binding.content_ref.readable_end > last.readable_end
         })
     })
     .await;
-    let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &update.event else {
+    let RuntimeClientEvent::ProjectionTransition { metadata, .. } =
+        complete_transition(&update.event)
+    else {
         unreachable!()
     };
     let event_ref = &metadata
         .content
         .iter()
-        .find(|binding| binding.path == ["attempt", "in_flight", "blocks", "31", "text"])
+        .find(|binding| binding.path.as_ref() == ["attempt", "in_flight", "blocks", "31", "text"])
         .unwrap()
         .content_ref;
     let after = inner.checkpoint().unwrap();
@@ -2223,9 +2247,9 @@ fn print_agent_request_delta(
             &previous.source_capture,
         ),
         (
-            "source_authenticate",
-            &current.source_authenticate,
-            &previous.source_authenticate,
+            "source_lookup",
+            &current.source_lookup,
+            &previous.source_lookup,
         ),
         ("source_leaf", &current.source_leaf, &previous.source_leaf),
         (
@@ -2234,14 +2258,9 @@ fn print_agent_request_delta(
             &previous.source_scalar,
         ),
         (
-            "source_paths",
-            &current.source_paths,
-            &previous.source_paths,
-        ),
-        (
-            "source_length",
-            &current.source_length,
-            &previous.source_length,
+            "source_geometry",
+            &current.source_geometry,
+            &previous.source_geometry,
         ),
         (
             "context_observe",
@@ -2275,9 +2294,9 @@ fn print_agent_work_delta(
     for (scope, current, previous) in [
         ("request", &current.source_work, &previous.source_work),
         (
-            "authenticate",
-            &current.source_auth_work,
-            &previous.source_auth_work,
+            "lookup",
+            &current.source_lookup_work,
+            &previous.source_lookup_work,
         ),
         (
             "new_leaf",
@@ -2313,8 +2332,7 @@ fn assert_agent_profile_complete(
         agent.source,
         agent.source_capture,
         agent.source_scalar,
-        agent.source_paths,
-        agent.source_length,
+        agent.source_geometry,
     ] {
         assert_eq!(phase.calls, turns);
     }
@@ -2326,7 +2344,7 @@ fn assert_agent_profile_complete(
     );
     assert!(agent.source_work.new_leaves > 0 && agent.source_work.new_nodes > 0);
     if turns > 1 {
-        assert!(agent.source_auth_work.samples > 0);
+        assert!(agent.source_lookup_work.samples > 0);
     }
 }
 
@@ -2342,7 +2360,7 @@ async fn await_profile_settlement(subscription: &EventSubscription) {
     assert_eq!(
         events
             .iter()
-            .flat_map(|event| event.event.facts())
+            .flat_map(|event| complete_transition(&event.event).facts())
             .filter(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
             .count(),
         1
@@ -2428,6 +2446,74 @@ async fn t19_native_publication_encoding_profile() {
     );
 }
 
+#[derive(Debug)]
+enum CheckpointRetryStep {
+    Waiting,
+    Returned(bool),
+}
+
+#[tokio::test]
+async fn checkpoint_epoch_retry_respects_deadline_and_closed_owner_on_current_thread() {
+    let (_release, parked) = model_release();
+    let (_, fixture) = gated_pending_fixture(parked).await;
+    let sequence = fixture
+        .runtime
+        .tool_runtime()
+        .mailbox()
+        .enqueue(inbound_text("bounded-retry", "before edit"))
+        .unwrap();
+    await_pending_fixture_publication(&fixture.host).await;
+    let inner = fixture.host.weak_inner().upgrade().unwrap();
+    inner.park_projection_worker();
+    let before = inner
+        .lock_published_state()
+        .projection
+        .checkpoint_read_cut();
+    let edited = inner
+        .store
+        .edit_pending(
+            &crate::durable::PendingInboundRef {
+                sequence,
+                revision: 0,
+            },
+            "after edit",
+        )
+        .unwrap();
+    *inner.checkpoint_source_wait_hook.lock().unwrap() = Some(Box::new(|| {
+        panic!("expired or closed owner must not wait for worker progress");
+    }));
+    let progress = inner.publication_gate.generation();
+    assert!(matches!(
+        inner.wait_checkpoint_retry(
+            before.source_cut.as_ref(),
+            progress,
+            std::time::Instant::now(),
+        ),
+        Err(RuntimeClientError::ReadCutExpired)
+    ));
+    inner.pending.close();
+    assert!(matches!(
+        inner.wait_checkpoint_retry(
+            before.source_cut.as_ref(),
+            progress,
+            std::time::Instant::now() + STREAM_LIVENESS_GUARD,
+        ),
+        Err(RuntimeClientError::ReadCutExpired)
+    ));
+    assert_eq!(inner.publication_gate.generation(), progress);
+    assert_eq!(
+        inner
+            .lock_published_state()
+            .projection
+            .checkpoint_read_cut(),
+        before
+    );
+    inner.checkpoint_source_wait_hook.lock().unwrap().take();
+    publish_pending_mutation(&inner, edited);
+    fixture.runtime.shutdown().await.unwrap();
+    inner.drain_projection().await.unwrap();
+}
+
 /// Captures real native authority on both sides of a contiguous stream.
 /// The TypeScript regression consumes this wire capture; its expected state
 /// is produced only by an independent native snapshot read.
@@ -2447,6 +2533,7 @@ async fn incremental_projection_independent_snapshot_capture() {
     let mut tools = ToolRegistry::new();
     tools.register(definition.clone(), Arc::new(tool)).unwrap();
     let call_id = ToolCallId::new("capture-call");
+    let (continue_stream, live_prefix_gate) = model_release();
     let script = vec![
         GatedStep::Emit(ModelEvent::Started),
         GatedStep::Emit(ModelEvent::ReasoningDelta {
@@ -2457,6 +2544,7 @@ async fn incremental_projection_independent_snapshot_capture() {
             block_index: ContentBlockIndex::new(1),
             text: "first ".into(),
         }),
+        GatedStep::ParkUntilReleased(live_prefix_gate),
         GatedStep::Emit(ModelEvent::TextDelta {
             block_index: ContentBlockIndex::new(1),
             text: "second".into(),
@@ -2509,22 +2597,46 @@ async fn incremental_projection_independent_snapshot_capture() {
         .host
         .submit_inbound(submit_content("projection equivalence"))
         .unwrap();
-    let mut events = receive_until(&subscription, |event| {
-        event
-            .event
-            .facts()
-            .iter()
-            .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
-    })
-    .await;
+    // Hold provider completion until an actual nonempty LiveRef has been
+    // committed and published. The tiny stream must not depend on beating
+    // the production coalescer deadline; preserve the original live/expiry
+    // assertions and the exact response bytes consumed by the client oracle.
+    let mut events =
+        receive_until(&subscription, |event| {
+            complete_transition(&event.event).facts().iter().any(|fact| {
+            matches!(
+                fact,
+                RuntimeClientEvent::BlockContentAdvanced { content_ref, .. }
+                    if content_ref.readable_end > 0 && matches!(
+                        &content_ref.source,
+                        crate::observation::content::ContentSource::LivePublicationPrefix { .. }
+                    )
+            )
+        })
+        })
+        .await;
+    continue_stream.send_replace(true);
+    events.extend(
+        receive_until(&subscription, |event| {
+            event
+                .event
+                .facts()
+                .iter()
+                .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
+        })
+        .await,
+    );
     // Attempt settlement is a semantic event, not completion of the
     // independently owned presentation read. Capture the equivalence cut
     // only after the terminal response's decorated domain was published.
     let terminal_read = |event: &RuntimeClientProtocolEvent| {
-        event.event.facts().iter().any(|fact| {
-            matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { transcript, .. }
+        complete_transition(&event.event)
+            .facts()
+            .iter()
+            .any(|fact| {
+                matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { transcript, .. }
                 if transcript.entries.iter().any(|entry| entry.completed_response.is_some()))
-        })
+            })
     };
     if !events.iter().any(terminal_read) {
         events.extend(receive_until(&subscription, terminal_read).await);
@@ -2543,11 +2655,10 @@ async fn incremental_projection_independent_snapshot_capture() {
         assert_eq!(event.cursor.get(), cursor);
     }
     assert_eq!(cursor, n.get());
-    let (expired_cursor, expired_reference) =
-        events
-            .iter()
-            .find_map(|event| {
-                event.event.facts().iter().find_map(|fact| match fact {
+    let (expired_cursor, expired_reference) = events
+        .iter()
+        .find_map(|event| {
+            complete_transition(&event.event).facts().iter().find_map(|fact| match fact {
                 RuntimeClientEvent::BlockContentAdvanced { content_ref, .. }
                     if content_ref.readable_end > 0
                         && matches!(
@@ -2556,8 +2667,8 @@ async fn incremental_projection_independent_snapshot_capture() {
                         ) => Some((event.cursor, content_ref.clone())),
                 _ => None,
             })
-            })
-            .expect("actual released nonempty LiveRef in the original native stream");
+        })
+        .expect("actual released nonempty LiveRef in the original native stream");
     // Canonical acceptance has expired this untouched original Live source.
     // Neither Replay retention nor a later read can redirect it to C/Audit.
     assert!(matches!(
@@ -2620,7 +2731,7 @@ async fn incremental_projection_independent_snapshot_capture() {
                     target: target.clone(),
                     registration_id: "capture-registration".into(),
                     cursor: event.cursor,
-                    event: Box::new(event.event),
+                    event: event.event,
                 },
             })
         })
@@ -2978,7 +3089,7 @@ async fn submit_while_busy_queues_for_the_next_drain() {
     // Wait until the first request is in flight (the adapter has been
     // asked) so the second submit provably arrives while busy.
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
+        complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
     })
     .await;
     assert_eq!(adapter.requests().len(), 1);
@@ -3135,7 +3246,7 @@ async fn cancel_current_attempt_acceptance_is_not_settlement() {
     let settled: Vec<_> = events
         .iter()
         .filter(|event| {
-            event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled {
+            complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled {
                     outcome: crate::runtime_client::event::RuntimeClientOutcome::Cancelled { .. },
                     ..
                 }))
@@ -3228,7 +3339,7 @@ async fn detach_is_not_cancellation() {
         .subscribe_events(cursor)
         .expect("resume from the retained cursor");
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| {
+        complete_transition(&event.event).facts().iter().any(|fact| {
             matches!(
                 fact,
                 RuntimeClientEvent::AttemptSettled {
@@ -3243,9 +3354,9 @@ async fn detach_is_not_cancellation() {
 
 fn publish_pending_mutation(
     inner: &Arc<super::ClientInner>,
-    outcome: crate::durable::inbox::PendingMutationOutcome,
+    outcome: crate::durable::PendingMutationOutcome,
 ) {
-    let crate::durable::inbox::PendingMutationOutcome::Applied {
+    let crate::durable::PendingMutationOutcome::Applied {
         pending_observation,
         read_cut,
     } = outcome
@@ -3345,12 +3456,12 @@ async fn assert_native_pending_removal_wakes_worker(fixture: &HostFixture, attem
     let before = fixture.host.checkpoint().unwrap();
     assert_eq!(before.snapshot.inbound.pending.len(), 1);
     let removed = mailbox
-        .remove_pending(&crate::durable::inbox::PendingInboundRef {
+        .remove_pending(&crate::durable::PendingInboundRef {
             sequence,
             revision: 0,
         })
         .unwrap();
-    let crate::durable::inbox::PendingMutationOutcome::Applied {
+    let crate::durable::PendingMutationOutcome::Applied {
         pending_observation: Some(receipt),
         read_cut,
     } = removed
@@ -3362,7 +3473,10 @@ async fn assert_native_pending_removal_wakes_worker(fixture: &HostFixture, attem
     await_pending_fixture_publication(&fixture.host).await;
     let after = fixture.host.checkpoint().unwrap();
     assert!(after.cursor > before.cursor);
-    assert!(after.snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        after.snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     assert_eq!(after.read_cut.source_cut.as_ref().unwrap().read, read_cut);
     assert_eq!(
         after.snapshot.attempt.as_ref().unwrap().attempt_id.as_ref(),
@@ -3462,7 +3576,7 @@ async fn pending_snapshot_and_reattach_repair_a_committed_unpublished_mutation()
         RuntimeClientAttemptPhase::Running
     ));
     let store = fixture.runtime.tool_runtime().durable_store();
-    let expected = crate::durable::inbox::PendingInboundRef {
+    let expected = crate::durable::PendingInboundRef {
         sequence,
         revision: 0,
     };
@@ -3492,7 +3606,7 @@ async fn pending_snapshot_and_reattach_repair_a_committed_unpublished_mutation()
         inbound_text("x", "committed edit").content
     );
     let removed = store
-        .remove_pending(&crate::durable::inbox::PendingInboundRef {
+        .remove_pending(&crate::durable::PendingInboundRef {
             revision: 1,
             ..expected
         })
@@ -3515,7 +3629,10 @@ async fn pending_snapshot_and_reattach_repair_a_committed_unpublished_mutation()
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("explicit reconnect checkpoint");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     assert!(!format!("{:?}", snapshot.transcript).contains("pending-repair"));
     assert!(
         fixture.runtime.has_current_attempt()
@@ -3608,12 +3725,12 @@ async fn detach_never_mutates_background_or_mailbox_state() {
         .snapshot(&execution_id);
     assert!(matches!(
     mailbox
-                    .remove_pending(&crate::durable::inbox::PendingInboundRef {
+                    .remove_pending(&crate::durable::PendingInboundRef {
                         sequence,
                         revision: 0,
                     })
                     .unwrap(),
-    crate::durable::inbox::PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
+    crate::durable::PendingMutationOutcome::Applied { read_cut, .. } if read_cut.pending_total <= read_cut.pending_through
     ));
     assert_eq!(
         fixture
@@ -3877,15 +3994,15 @@ async fn canonical_history_has_one_owner_at_a_time() {
         Some(Vec::new()),
         "an idle runtime owns an empty conversation state"
     );
-    assert!(
+    assert_eq!(
         fixture
             .host
             .checkpoint()
             .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("snapshot")
             .0
-            .messages
-            .is_empty()
+            .messages,
+        [] as [crate::message::types::MessageBlock; 0]
     );
 
     attachment.handle_request(RuntimeClientRequest::SubmitInbound {
@@ -3897,10 +4014,13 @@ async fn canonical_history_has_one_owner_at_a_time() {
     // stream) and is now parked inside tool execution, so the attempt
     // provably has not settled.
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| {
-            matches!(fact, RuntimeClientEvent::MessageCommitted { message, .. }
+        complete_transition(&event.event)
+            .facts()
+            .iter()
+            .any(|fact| {
+                matches!(fact, RuntimeClientEvent::MessageCommitted { message, .. }
                 if matches!(message, MessageBlock::Assistant(_)))
-        })
+            })
     })
     .await;
     await_background_started(&mut tool_started, "the parking tool started").await;
@@ -3950,7 +4070,7 @@ async fn canonical_history_has_one_owner_at_a_time() {
     .await;
     let committed_during_attempt: Vec<&MessageBlock> = settlement
         .iter()
-        .flat_map(|event| event.event.facts())
+        .flat_map(|event| complete_transition(&event.event).facts())
         .filter_map(|fact| match fact {
             RuntimeClientEvent::MessageCommitted { message, .. } => Some(message),
             _ => None,
@@ -4351,6 +4471,111 @@ async fn a_background_transition_and_checkpoint_capture_have_one_lock_order() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checkpoint_retry_waits_for_the_native_mutation_owner() {
+    let (_release, parked) = model_release();
+    let (_, fixture) = gated_pending_fixture(parked).await;
+    let mailbox = fixture.runtime.tool_runtime().mailbox();
+    let sequence = mailbox
+        .enqueue(inbound_text("edited-pending", "before edit"))
+        .unwrap();
+    await_pending_fixture_publication(&fixture.host).await;
+    let inner = fixture.host.weak_inner().upgrade().unwrap();
+    inner.park_projection_worker();
+    mailbox
+        .enqueue(inbound_text("second-pending", "unchanged"))
+        .unwrap();
+    let before = inner
+        .lock_published_state()
+        .projection
+        .checkpoint_read_cut();
+    assert!(
+        inner
+            .lock_published_state()
+            .projection
+            .read_domain_cut()
+            .is_some()
+    );
+    let edited = inner
+        .store
+        .edit_pending(
+            &crate::durable::PendingInboundRef {
+                sequence,
+                revision: 0,
+            },
+            "after native edit",
+        )
+        .unwrap();
+    let (step, steps) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel();
+    let waiting = step.clone();
+    *inner.checkpoint_source_wait_hook.lock().unwrap() = Some(Box::new(move || {
+        let _ = waiting.send(CheckpointRetryStep::Waiting);
+        let _ = released.recv();
+    }));
+    let reader = inner.clone();
+    let checkpoint = std::thread::spawn(move || {
+        let result = reader.checkpoint();
+        let _ = step.send(CheckpointRetryStep::Returned(result.is_ok()));
+        result
+    });
+    assert!(matches!(
+        steps.recv_timeout(STREAM_LIVENESS_GUARD).unwrap(),
+        CheckpointRetryStep::Waiting
+    ));
+    // An unrelated display publication is real progress, but does
+    // not install the edited pending owner's replacement Source epoch.
+    super::commit_display(&inner.state, &inner.publication_gate, |projection| {
+        projection.apply(ConversationObservation::Event {
+            attempt_id: AttemptId::new("unrelated-publication"),
+            event: RuntimeEvent::TurnStarted,
+        });
+    });
+    release.send(()).unwrap();
+    let second = steps.recv_timeout(STREAM_LIVENESS_GUARD).unwrap();
+    // Release the actual owner even on the red path, then assert the
+    // observed ordering after physical cleanup rather than leaking a gate.
+    publish_pending_mutation(&inner, edited);
+    let _ = release.send(());
+    if matches!(second, CheckpointRetryStep::Waiting) {
+        assert!(matches!(
+            steps.recv_timeout(STREAM_LIVENESS_GUARD).unwrap(),
+            CheckpointRetryStep::Returned(true)
+        ));
+    }
+    let result = checkpoint.join().unwrap();
+    inner.checkpoint_source_wait_hook.lock().unwrap().take();
+    fixture.runtime.shutdown().await.unwrap();
+    inner.drain_projection().await.unwrap();
+    assert!(
+        matches!(second, CheckpointRetryStep::Waiting),
+        "unrelated publication consumed the last attempt: {second:?}"
+    );
+    let checkpoint = result.unwrap();
+    assert!(
+        checkpoint
+            .read_cut
+            .source_cut
+            .as_ref()
+            .unwrap()
+            .read
+            .mutation_revision
+            > before.source_cut.as_ref().unwrap().read.mutation_revision
+    );
+    let edited = checkpoint
+        .snapshot
+        .inbound
+        .pending
+        .iter()
+        .find(|item| item.sequence == sequence)
+        .unwrap();
+    assert_eq!(edited.revision, 1);
+    assert_eq!(
+        edited.message.content,
+        inbound_text("unused", "after native edit").content
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn trace_snapshot_cut_excludes_commits_after_cursor_capture() {
     let (_, fixture) =
         host_fixture_with_native_tools(Vec::new(), ToolRegistry::new(), status_engine(), true)
@@ -4399,8 +4624,7 @@ async fn trace_snapshot_cut_excludes_commits_after_cursor_capture() {
     let (before, returned) = task.await.unwrap();
     assert_eq!(returned, cursor);
     assert_eq!(before.trace, baseline.trace);
-    assert!(matches!(subscription.try_next(), EventDelivery::Pending));
-    // Historical reads have their own frontier, but never fold the queue or move C.
+    assert!(matches!(subscription.try_next(), EventDelivery::Pending)); // Historical reads have their own frontier, but never fold the queue or move C.
     let _ = inner.trace_page(None, 32, Vec::new()).unwrap();
     assert_eq!(host_projection_snapshot(&inner).1, cursor);
     let sink = super::NativePublicationProjection {
@@ -4419,10 +4643,10 @@ async fn trace_snapshot_cut_excludes_commits_after_cursor_capture() {
         .unwrap();
     let (continuous, after_cursor) = checkpoint_state(&fixture.host);
     assert!(after_cursor > cursor);
-    let id = format!("trace:{}", committed.sequence);
-    // Default checkpoints preserve their published bounded read cache.
+    let id = format!("trace:{}", committed.sequence); // Default checkpoints preserve their published bounded read cache.
     // The read-only native Trace page discovers the newly represented J.
-    let RuntimeClientResult::TracePage { page } = inner.trace_page(None, 32, Vec::new()).unwrap()
+    let RuntimeClientResult::TracePage { page, .. } =
+        inner.trace_page(None, 32, Vec::new()).unwrap()
     else {
         panic!("native Trace page");
     };
@@ -4449,6 +4673,198 @@ async fn trace_snapshot_cut_excludes_commits_after_cursor_capture() {
     assert!(cursor >= after_cursor);
     assert_read_domain_replay(&inner, after_cursor, cursor);
     inner.unpark_projection_worker();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn native_shutdown_publishes_before_projection_drain_with_worker_parked() {
+    let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+    let inner = fixture.host.weak_inner().upgrade().unwrap();
+    inner.park_projection_worker();
+    fixture.runtime.shutdown().await.unwrap();
+    assert!(
+        inner
+            .lock_published_state()
+            .projection
+            .snapshot_ref()
+            .shutting_down,
+        "native shutdown publication cannot depend on the parked worker"
+    );
+    let cursor = inner.lock_published_state().projection.cursor();
+    inner.drain_projection().await.unwrap();
+    let checkpoint = fixture.host.checkpoint().unwrap();
+    assert!(checkpoint.snapshot.shutting_down);
+    assert_eq!(checkpoint.cursor, cursor);
+    assert!(fixture.runtime.is_quiescent());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checkpoint_retains_cut_across_two_native_admissions() {
+    let (_release, parked) = model_release();
+    let (adapter, fixture) = host_fixture(
+        vec![vec![GatedStep::ParkUntilReleased(parked)]],
+        ToolRegistry::new(),
+        status_engine(),
+    )
+    .await;
+    let mut requests = adapter.request_count();
+    fixture
+        .runtime
+        .submit_inbound(submit_content("active native turn"))
+        .unwrap();
+    requests.wait_for(|count| *count == 1).await.unwrap();
+    let inner = fixture.host.weak_inner().upgrade().unwrap();
+    inner.park_projection_worker();
+    let (frozen, cut) = {
+        let state = inner.lock_published_state();
+        (
+            state.projection.checkpoint_read_cut(),
+            state.projection.read_domain_fence(),
+        )
+    };
+    let expected = cut.read(inner.store.as_ref()).unwrap();
+    let native = fixture.runtime.clone();
+    let observed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls = observed.clone();
+    *inner.checkpoint_read_hook.lock().unwrap() = Some(Box::new(move || {
+        native
+            .submit_inbound(submit_content("first concurrent admission"))
+            .unwrap();
+        native
+            .submit_inbound(submit_content("second concurrent admission"))
+            .unwrap();
+        calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }));
+    let reader = inner.clone();
+    let checkpoint = tokio::task::spawn_blocking(move || reader.checkpoint())
+        .await
+        .unwrap()
+        .unwrap();
+    inner.checkpoint_read_hook.lock().unwrap().take();
+    assert_eq!(observed.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(checkpoint.read_cut, frozen);
+    assert_eq!(checkpoint.cursor.get(), frozen.revision);
+    assert_eq!(checkpoint.snapshot.transcript, expected.transcript);
+    assert_eq!(checkpoint.snapshot.context.occupancy, expected.occupancy);
+    assert_eq!(
+        checkpoint.snapshot.context.projection_head,
+        expected.projection_head
+    );
+    let current = inner.lock_published_state().projection.cursor();
+    assert!(current.get() >= checkpoint.cursor.get() + 2);
+    let (attachment, _) = fixture
+        .host
+        .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let replay = attachment.subscribe_events(checkpoint.cursor).unwrap();
+    let mut consumed = checkpoint.cursor;
+    while consumed < current {
+        let EventDelivery::Event(event) = replay.try_next() else {
+            panic!("captured checkpoint must retain every concurrent native publication");
+        };
+        assert_eq!(event.cursor.get(), consumed.get() + 1);
+        consumed = event.cursor;
+    }
+    fixture.runtime.shutdown().await.unwrap();
+    inner.drain_projection().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dormant_shutdown_checkpoint_materializes_the_frozen_native_cut() {
+    let scripts = [113, 229]
+        .into_iter()
+        .map(|input_tokens| {
+            let mut steps = one_turn_stop();
+            let Some(GatedStep::Emit(ModelEvent::Completed { usage, .. })) = steps.last_mut()
+            else {
+                panic!("terminal fixture");
+            };
+            *usage = Some(crate::model::ModelUsage {
+                input_tokens: Some(input_tokens),
+                output_tokens: Some(17),
+                total_tokens: Some(input_tokens + 17),
+                details: None,
+            });
+            steps
+        })
+        .collect();
+    let (_, fixture) = host_fixture(scripts, ToolRegistry::new(), status_engine()).await;
+    for text in ["unobserved first", "unobserved second"] {
+        let mut settled = Box::pin(fixture.runtime.settlement_signal().notified());
+        settled.as_mut().enable();
+        fixture
+            .runtime
+            .submit_inbound(submit_content(text))
+            .unwrap();
+        tokio::time::timeout(STREAM_LIVENESS_GUARD, settled)
+            .await
+            .unwrap();
+    }
+    fixture.runtime.shutdown().await.unwrap();
+    let inner = fixture.host.weak_inner().upgrade().unwrap();
+    inner.drain_projection().await.unwrap();
+    let (cut, cursor, frozen) = {
+        let state = inner.lock_published_state();
+        assert!(state.projection.snapshot_ref().shutting_down);
+        assert!(state.projection.read_domain_cut().is_some());
+        (
+            state.projection.read_domain_fence(),
+            state.projection.cursor(),
+            state.projection.checkpoint_read_cut(),
+        )
+    };
+    let expected = cut.read(inner.store.as_ref()).unwrap();
+    assert!(!expected.transcript.entries.is_empty());
+    assert_eq!(expected.occupancy.as_ref().unwrap().input_tokens, 229);
+    let expected_text = serde_json::to_string(&expected.transcript).unwrap();
+    assert!(
+        expected_text.contains("unobserved first") && expected_text.contains("unobserved second")
+    );
+    // A later authoritative append cannot enter the frozen shutdown view.
+    inner
+        .store
+        .append_canonical(&MessageBlock::User(inbound_text(
+            "future-after-shutdown",
+            "must stay outside shutdown cut",
+        )))
+        .unwrap();
+    for _ in 0..2 {
+        let (attachment, _) = fixture
+            .host
+            .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+            .unwrap();
+        let checkpoint = attachment.checkpoint().unwrap();
+        assert_eq!(
+            checkpoint.cursor, cursor,
+            "inspection must not publish after shutdown"
+        );
+        assert_eq!(checkpoint.read_cut, frozen);
+        assert_eq!(checkpoint.snapshot.transcript, expected.transcript);
+        assert_eq!(checkpoint.snapshot.context.occupancy, expected.occupancy);
+        assert_eq!(
+            checkpoint.snapshot.context.projection_head,
+            expected.projection_head
+        );
+        assert!(checkpoint.snapshot.shutting_down);
+        assert_eq!(
+            checkpoint.snapshot.trace.records,
+            expected.trace.as_ref().unwrap().records
+        );
+        let page = inner
+            .checkpoint_page(&checkpoint.read_cut, "transcript.entries", 0, 32)
+            .unwrap();
+        assert_eq!(
+            page.total,
+            frozen.source_cut.as_ref().unwrap().transcript_total
+        );
+        let page_text = serde_json::to_string(&page).unwrap();
+        assert!(page_text.contains("unobserved second"));
+        assert!(!page_text.contains("must stay outside shutdown cut"));
+        let trace = inner
+            .checkpoint_page(&checkpoint.read_cut, "trace.records", 0, 32)
+            .unwrap();
+        assert_eq!(trace.total, expected.trace_total);
+        attachment.detach();
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -4516,10 +4932,16 @@ async fn background_durable_commit_cannot_publish_a_half_semantic_snapshot() {
         panic!("accepted")
     };
     await_background_started(&mut started, "published background").await;
-    receive_until(&subscription, |event| event.event.facts().iter().any(|fact| {
-        matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { trace, .. }
-            if trace.records.iter().any(|record| record.native_id.as_deref() == Some(execution_id.as_str())))
-    })).await;
+    receive_until(&subscription, |event| {
+        complete_transition(&event.event)
+            .facts()
+            .iter()
+            .any(|fact| {
+                matches!(fact, RuntimeClientEvent::JobUpdated { job, .. }
+                    if job.job_id == execution_id)
+            })
+    })
+    .await;
     fixture.host.projection_settled().await;
     let after_checkpoint = fixture.host.checkpoint().unwrap();
     let after_cursor = after_checkpoint.cursor;
@@ -4587,8 +5009,9 @@ async fn background_durable_commit_cannot_publish_a_half_semantic_snapshot() {
         crate::observation::trace::TraceState::Running
     );
     assert_eq!(during_terminal.trace_updates[0].timing.duration_ms, None);
-    let RuntimeClientResult::TracePage { page: historical } =
-        inner.trace_page(None, 32, Vec::new()).unwrap()
+    let RuntimeClientResult::TracePage {
+        page: historical, ..
+    } = inner.trace_page(None, 32, Vec::new()).unwrap()
     else {
         panic!("Trace page")
     };
@@ -4929,7 +5352,7 @@ async fn snapshot_candidate_survives_moving_head_and_replays_exact_suffix() {
         };
         assert_eq!(event.cursor.get(), cursor.get() + u64::from(turn));
         assert!(
-            event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptTurnUpdated { turn: actual, .. } if *actual == turn))
+            complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::AttemptTurnUpdated { turn: actual, .. } if *actual == turn))
         );
     }
     assert_eq!(
@@ -4944,6 +5367,142 @@ async fn snapshot_candidate_survives_moving_head_and_replays_exact_suffix() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dormant_dirty_subscription_hydrates_without_a_checkpoint() {
+    let (_, fixture) =
+        host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;
+    let mut settled = Box::pin(fixture.runtime.settlement_signal().notified());
+    settled.as_mut().enable();
+    fixture
+        .runtime
+        .submit_inbound(submit_content("observe late"))
+        .unwrap();
+    tokio::time::timeout(STREAM_LIVENESS_GUARD, settled)
+        .await
+        .unwrap();
+    let inner = fixture.host.weak_inner().upgrade().unwrap();
+    let cursor = {
+        let state = inner.lock_published_state();
+        assert!(state.projection.read_domain_cut().is_some());
+        state.projection.cursor()
+    };
+    let (entered, entered_rx) = tokio::sync::oneshot::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    *inner.read_domain_hook.lock().unwrap() = Some(Box::new(move || {
+        let _ = entered.send(());
+        let _ = release_rx.recv();
+        Ok(())
+    }));
+    let (attachment, _) = fixture
+        .host
+        .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let subscription = attachment.subscribe_events(cursor).unwrap();
+    tokio::time::timeout(STREAM_LIVENESS_GUARD, entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(inner.lock_state().projection.read_domain_cut().is_some());
+    release.send(()).unwrap();
+    let events = receive_until(&subscription, |event| {
+        event
+            .event
+            .facts()
+            .iter()
+            .any(|fact| matches!(fact, RuntimeClientEvent::ReadDomainsUpdated { .. }))
+    })
+    .await;
+    assert_ne!(
+        events,
+        [] as [crate::runtime_client::types::RuntimeClientProtocolEvent; 0]
+    );
+    assert!(inner.lock_state().projection.read_domain_cut().is_none());
+    let checkpoint = attachment.checkpoint().unwrap();
+    assert!(!checkpoint.snapshot.transcript.entries.is_empty());
+    fixture.runtime.shutdown().await.unwrap();
+    inner.drain_projection().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn dormant_display_waits_for_checkpoint_demand_and_preserves_replay() {
+    use std::sync::atomic::Ordering;
+    let (_, fixture) = host_fixture(Vec::new(), ToolRegistry::new(), status_engine()).await;
+    let inner = fixture.host.weak_inner().upgrade().unwrap();
+    inner.projection_settled().await;
+    let before = fixture.host.checkpoint().unwrap();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let read_calls = Arc::clone(&calls);
+    let (entered, entered_rx) = tokio::sync::oneshot::channel();
+    let (release, release_rx) = std::sync::mpsc::channel();
+    *inner.checkpoint_read_hook.lock().unwrap() = Some(Box::new(move || {
+        read_calls.fetch_add(1, Ordering::SeqCst);
+        let _ = entered.send(());
+        // Sender ownership makes panic unwinding release this gate as well.
+        let _ = release_rx.recv();
+    }));
+    super::commit_display(&inner.state, &inner.publication_gate, |projection| {
+        projection.apply(ConversationObservation::Event {
+            attempt_id: AttemptId::new("dormant-display"),
+            event: RuntimeEvent::AttemptStarted {
+                attempt_id: AttemptId::new("dormant-display"),
+            },
+        });
+    });
+    let mut turns = inner.worker_turns.subscribe();
+    turns.borrow_and_update();
+    inner
+        .pending
+        .push(ConversationObservation::JournalSourceReady);
+    tokio::time::timeout(STREAM_LIVENESS_GUARD, turns.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert!(inner.lock_state().projection.read_domain_cut().is_some());
+    let frozen = inner
+        .lock_published_state()
+        .projection
+        .checkpoint_read_cut();
+    let reader = Arc::clone(&inner);
+    let checkpoint = tokio::task::spawn_blocking(move || reader.checkpoint());
+    tokio::time::timeout(STREAM_LIVENESS_GUARD, entered_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert!(
+        !checkpoint.is_finished(),
+        "checkpoint must await its display hydration"
+    );
+    release.send(()).unwrap();
+    let current = tokio::time::timeout(STREAM_LIVENESS_GUARD, checkpoint)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(inner.lock_state().projection.read_domain_cut().is_some());
+    assert_eq!(current.read_cut, frozen);
+    assert_eq!(current.cursor.get(), frozen.revision);
+    inner.checkpoint_read_hook.lock().unwrap().take();
+    assert!(current.cursor > before.cursor);
+    let (attachment, _) = fixture
+        .host
+        .attach(crate::runtime_client::RUNTIME_CLIENT_PROTOCOL_VERSION)
+        .unwrap();
+    let replay = attachment.subscribe_events(before.cursor).unwrap();
+    let mut consumed = before.cursor;
+    while consumed < current.cursor {
+        let EventDelivery::Event(event) = replay.try_next() else {
+            panic!("late observer must retain every serviceable semantic cursor");
+        };
+        assert_eq!(event.cursor.get(), consumed.get() + 1);
+        consumed = event.cursor;
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    fixture.runtime.shutdown().await.unwrap();
+    inner.drain_projection().await.unwrap();
+}
+
 fn fold_captured_snapshot_fact(
     snapshot: &mut super::super::snapshot::RuntimeClientSnapshot,
     event: &RuntimeClientEvent,
@@ -4954,7 +5513,7 @@ fn fold_captured_snapshot_fact(
             evicted_message_id,
             ..
         } => {
-            snapshot.message_descriptors.clone_from(head);
+            snapshot.message_descriptors = head.iter().cloned().collect();
             if let Some(id) = evicted_message_id {
                 snapshot.messages.retain(|message| message.id() != id);
             }
@@ -4986,13 +5545,16 @@ fn fold_captured_snapshot_fact(
         } => {
             snapshot.context.projection_head.clone_from(projection_head);
             snapshot.transcript.clone_from(transcript);
-            snapshot.trace.clone_from(trace);
+            if let Some(trace) = trace {
+                snapshot.trace.clone_from(trace);
+            }
             snapshot.context.occupancy.clone_from(occupancy);
             snapshot.todos.clone_from(todos);
         }
         RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
             snapshot.clone_from(&checkpoint.snapshot);
         }
+        RuntimeClientEvent::TraceChanged => {} // Independent read domain.
         _ => panic!("unexpected captured-cut fact"),
     }
 }
@@ -5037,8 +5599,13 @@ async fn captured_snapshot_excludes_later_durable_messages_and_replay_converges(
             Ok(super::super::projection::ReadDomainValues {
                 projection_head: candidate.snapshot.context.projection_head.clone(),
                 transcript: candidate.snapshot.transcript.clone(),
+                transcript_rows:
+                    crate::observation::transcript::PreparedTranscriptHead::from_entries(
+                        &candidate.snapshot.conversation_id,
+                        &candidate.snapshot.transcript.entries
+                    ),
                 occupancy: candidate.snapshot.context.occupancy.clone(),
-                trace: candidate.snapshot.trace.clone(),
+                trace: Some(candidate.snapshot.trace.clone()),
                 trace_total: 0,
             }),
             true
@@ -5058,7 +5625,7 @@ async fn captured_snapshot_excludes_later_durable_messages_and_replay_converges(
         };
         assert_eq!(event.cursor.get(), through.get() + 1);
         through = event.cursor;
-        for fact in event.event.facts() {
+        for fact in complete_transition(&event.event).facts() {
             fold_captured_snapshot_fact(&mut replayed, fact);
         }
     }
@@ -5102,13 +5669,13 @@ async fn captured_pending_body_survives_later_edit_removal_and_commit() {
     let candidate = inner.snapshot_candidate().unwrap();
     let frozen = candidate.snapshot.clone();
     {
-        let expected = crate::durable::inbox::PendingInboundRef {
+        let expected = crate::durable::PendingInboundRef {
             sequence,
             revision: 0,
         };
         store.edit_pending(&expected, "later edit").unwrap();
         store
-            .remove_pending(&crate::durable::inbox::PendingInboundRef {
+            .remove_pending(&crate::durable::PendingInboundRef {
                 revision: 1,
                 ..expected
             })
@@ -5164,6 +5731,11 @@ async fn blocked_read_materialization_does_not_own_shutdown_or_projection_drain(
         reader.park_presentation_read_until_cancelled(entered);
         Ok(())
     }));
+    // This fixture explicitly observes a physical read to test its lifetime.
+    inner
+        .lock_state()
+        .projection
+        .request_read_domains_for_test();
     inner.pending.push(ConversationObservation::Event {
         attempt_id: AttemptId::new("read-cut"),
         event: RuntimeEvent::TurnStarted,
@@ -5203,6 +5775,11 @@ async fn projection_drain_retry_retains_the_original_worker_after_waiter_cancell
         release_rx.recv().unwrap();
         Ok(())
     }));
+    // This fixture explicitly observes a physical read to test its lifetime.
+    inner
+        .lock_state()
+        .projection
+        .request_read_domains_for_test();
     inner.pending.push(ConversationObservation::Event {
         attempt_id: AttemptId::new("cancelled-join-waiter"),
         event: RuntimeEvent::TurnStarted,
@@ -5260,6 +5837,11 @@ async fn failed_projection_worker_keeps_its_physical_read(abort: bool) {
         release_rx.recv().unwrap();
         Ok(())
     }));
+    // This fixture explicitly observes a physical read to test its lifetime.
+    inner
+        .lock_state()
+        .projection
+        .request_read_domains_for_test();
     inner.pending.push(ConversationObservation::Event {
         attempt_id: AttemptId::new("failed-worker-read"),
         event: RuntimeEvent::TurnStarted,
@@ -5429,7 +6011,10 @@ async fn snapshot_cursor_race_snapshot_wins() {
         .await
         .expect("snapshot task")
         .expect("snapshot");
-    assert!(snapshot.inbound.pending.is_empty());
+    assert_eq!(
+        snapshot.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
     submit_task.await.expect("submit task");
     admission_gate.wait_entered();
 
@@ -5497,7 +6082,10 @@ async fn snapshot_cursor_race_publish_wins() {
     await_fixture_activation(&fixture.host).await;
     // Baseline: an idle host at some cursor C.
     let (before, cursor) = checkpoint_state(&fixture.host);
-    assert!(before.inbound.pending.is_empty());
+    assert_eq!(
+        before.inbound.pending,
+        [] as [crate::runtime_client::snapshot::InboundItemView; 0]
+    );
 
     // Submit; the admission parks at the runtime gate before committing.
     admission_gate.arm();
@@ -5939,7 +6527,7 @@ async fn job_list_preserves_domain_bound_order_and_omission_metadata() {
             .take(MAX_JOB_LIST_LIMIT)
             .collect::<Vec<_>>()
     );
-    receive_until(&subscription, |event| event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::JobUpdated { job, .. } if Some(&job.job_id) == ids.last() && job.state == crate::tools::background::BackgroundLifecycle::Succeeded))).await;
+    receive_until(&subscription, |event| complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::JobUpdated { job, .. } if Some(&job.job_id) == ids.last() && job.state == crate::tools::background::BackgroundLifecycle::Succeeded))).await;
     let RuntimeClientResult::DomainPage { page } = attachment.job_list().unwrap() else {
         panic!("bounded jobs page");
     };
@@ -6085,7 +6673,7 @@ async fn agent_status_projection_shares_one_composition() {
     .await;
     let facts: Vec<_> = events
         .iter()
-        .flat_map(|event| event.event.facts())
+        .flat_map(|event| complete_transition(&event.event).facts())
         .collect();
     let status_index = facts
         .iter()
@@ -6564,6 +7152,7 @@ async fn enqueue_racing_settlement_admits_exactly_one_next_attempt() {
         )),
         "the racing inbound was consumed exactly once by the next attempt"
     );
+    fixture.host.projection_settled().await;
     let (snapshot, _) = fixture
         .host
         .checkpoint()
@@ -6920,6 +7509,7 @@ async fn host_fixture_probe_with_native_tools(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -7018,6 +7608,7 @@ async fn host_fixture_probe_with_runtime_gate(
             model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(crate::context::SystemClock),
                 policy: crate::context::SessionContextPolicy {
                     reserve_tokens: 0,
                     keep_recent_tokens: 0,
@@ -7138,6 +7729,7 @@ async fn runtime_only_fixture(
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -7371,7 +7963,7 @@ async fn attachments_remain_dynamic_after_activation() {
     // Wait for a real in-flight streaming fact through the client
     // projection, then detach mid-attempt.
     receive_until(&subscription, |event| {
-        event.event.facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
+        complete_transition(&event.event).facts().iter().any(|fact| matches!(fact, RuntimeClientEvent::BlockContentAdvanced { kind, .. } if kind == "text"))
     })
     .await;
     first.detach();
@@ -7554,6 +8146,7 @@ fn claim_config(fixture: &OwnershipFixture) -> RuntimeConversationConfig {
         model_timeout_policy: crate::model::ModelTimeoutPolicy::default(),
         tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
         context: ConversationContextConfig {
+            status_clock: std::sync::Arc::new(crate::context::SystemClock),
             policy: crate::context::SessionContextPolicy {
                 reserve_tokens: 0,
                 keep_recent_tokens: 0,
@@ -8359,4 +8952,8 @@ async fn failed_host_construction_releases_the_client_binding() {
         !fixture.runtime.capability().is_runtime_client_bound(),
         "the capability binding was released"
     );
+}
+
+mod trace_demand_recovery_tests {
+    include!("trace_demand_recovery_tests.rs");
 }

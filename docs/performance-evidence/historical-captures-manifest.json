@@ -1,0 +1,70 @@
+{
+  "schema": 1,
+  "scope": "Historical capture versions not present in the current-tree Drive manifest; includes local diagnostic histories. No runtime benchmark rerun.",
+  "files": [
+    {
+      "oid": "cbe552ab0c7019f3f83a11aa1b93749a6fb93737",
+      "bytes": 19450824,
+      "path": "docs/pi-durable-cost-model/evidence/fresh-source-20261020/browser/pr485-browser-source-evidence.tar.xz",
+      "archive_member": "objects/cbe552ab0c7019f3f83a11aa1b93749a6fb93737/docs/pi-durable-cost-model/evidence/fresh-source-20261020/browser/pr485-browser-source-evidence.tar.xz",
+      "sha256": "221a57db606c4a72645a74be999ec95d3ad97e91f4412ee5295148c4929ffc3d"
+    },
+    {
+      "oid": "f6c3ea8a0b0d84773282607ccef103d7a721eca7",
+      "bytes": 10068648,
+      "path": "docs/pi-durable-cost-model/evidence/fresh-source-20261020/diagnostic-followup/pr485-diagnostic-followup-20261020.tar.xz",
+      "archive_member": "objects/f6c3ea8a0b0d84773282607ccef103d7a721eca7/docs/pi-durable-cost-model/evidence/fresh-source-20261020/diagnostic-followup/pr485-diagnostic-followup-20261020.tar.xz",
+      "sha256": "dd3bb52bf54afdd7dc8b1591c89782269dff45a114cb5cac63a53ca845788993"
+    },
+    {
+      "oid": "119324aa8e70d32ffa3b2b42d66aae46ea18bb17",
+      "bytes": 448404,
+      "path": "docs/pi-durable-cost-model/evidence/fresh-source-20261020/minimal-attribution/pr485-minimal-attribution-20261020.tar.xz",
+      "archive_member": "objects/119324aa8e70d32ffa3b2b42d66aae46ea18bb17/docs/pi-durable-cost-model/evidence/fresh-source-20261020/minimal-attribution/pr485-minimal-attribution-20261020.tar.xz",
+      "sha256": "b8b94193dc5efe4964120634965031c2c669fd199aa30b6c5bea5b0146d8f345"
+    },
+    {
+      "oid": "fed3d4f15428c6a6a55a171413b3e1ab1a672aed",
+      "bytes": 3784576,
+      "path": "docs/pi-durable-cost-model/evidence/fresh-source-20261020/pr485-native-source-evidence.tar.xz",
+      "archive_member": "objects/fed3d4f15428c6a6a55a171413b3e1ab1a672aed/docs/pi-durable-cost-model/evidence/fresh-source-20261020/pr485-native-source-evidence.tar.xz",
+      "sha256": "d5c97d7a22079d7b6c75a301347673da83db5dafae008c75e7248544a0853a1b"
+    },
+    {
+      "oid": "18bbb565e5e26d26b0929f45e40ff2f0f490b6a2",
+      "bytes": 7501220,
+      "path": "docs/issue-481/evidence/final-structural.tar.xz",
+      "archive_member": "objects/18bbb565e5e26d26b0929f45e40ff2f0f490b6a2/docs/issue-481/evidence/final-structural.tar.xz",
+      "sha256": "8b996abf2b3b0f60ab8d791b7fe5526f2c2fc5fd871be364523e3c958b507415"
+    },
+    {
+      "oid": "1648daf6699f25da930f6bb3365a3d7282523db8",
+      "bytes": 4898956,
+      "path": "docs/issue-481/evidence/metadata-stage.tar.xz",
+      "archive_member": "objects/1648daf6699f25da930f6bb3365a3d7282523db8/docs/issue-481/evidence/metadata-stage.tar.xz",
+      "sha256": "855e2a318edf6b2cd4c2c3bf2e2f28c986cbe29f035eb2f6761730cfa661c689"
+    },
+    {
+      "oid": "7de34335aaa6f8ca7c0b7bd36ca22711fe37b09b",
+      "bytes": 21645214,
+      "path": "docs/issue-481/evidence/baseline.tar.gz",
+      "archive_member": "objects/7de34335aaa6f8ca7c0b7bd36ca22711fe37b09b/docs/issue-481/evidence/baseline.tar.gz",
+      "sha256": "221acd7ff85d76040a88cb8b10861a5e318fa06f3eeb2a9ae3b3d5b3a1925914"
+    },
+    {
+      "oid": "c1e4179b3e028e8370b7b888fc0ea660c001ff02",
+      "bytes": 6752804,
+      "path": "docs/issue-480/evidence/fair-provider/raw-evidence.tar.gz",
+      "archive_member": "objects/c1e4179b3e028e8370b7b888fc0ea660c001ff02/docs/issue-480/evidence/fair-provider/raw-evidence.tar.gz",
+      "sha256": "939c13289792c759bc45f40dd351528a675fcd5509c5d6e56cba6c53ce4b3be3"
+    }
+  ],
+  "archive": {
+    "name": "rustx-historical-performance-captures-20261112.tar",
+    "bytes": 74567680,
+    "sha256": "4687c8c13b2f8697b4d93a9e358a0422aa996bc485ad7fdc749265918f79800c",
+    "file_id": "1sM04BJdfryQ6zdXBepp5zbBwHg2e0pfu",
+    "url": "https://drive.google.com/file/d/1sM04BJdfryQ6zdXBepp5zbBwHg2e0pfu/view?usp=drivesdk",
+    "download_verified": true
+  }
+}

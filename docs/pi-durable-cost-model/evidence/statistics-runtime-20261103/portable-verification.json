@@ -1,0 +1,8 @@
+{
+  "accepted": true,
+  "archive_sha256": "e7385339cc7d9c465a073705b5c2d346fb39f243ae63bb137f62920367b150c3",
+  "verified_members": 1276,
+  "explanation_and_both_candidate_counter_replays_equal_retained": true,
+  "all_four_wal_summaries_reparsed": true,
+  "scope": "All members verified, then read-only explanation, WAL and both counter audits recomputed. No products/builds/network/current source/absent binaries executed or freshly verified; binary identities are retained build records."
+}

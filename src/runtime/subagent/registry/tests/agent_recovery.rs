@@ -1,7 +1,7 @@
 use super::*;
+use crate::durable::ConversationInboundCapability;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
-use crate::durable::inbox::ConversationInboundCapability;
 use crate::runtime::ToolCallId;
 
 #[tokio::test]
@@ -23,12 +23,16 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
     // allocation fact must still prevent reuse in the parent's ordinal domain.
     let recovered = SubagentRegistry::new(plane.registry.config.clone());
     recovered.restore_agents(plane.store.as_ref()).unwrap();
-    assert!(recovered.all_snapshots().is_empty());
-    assert!(
-        recovered
-            .list_agents(MAX_AGENT_LIST_LIMIT)
-            .agents
-            .is_empty()
+    assert_eq!(
+        recovered.all_snapshots(),
+        [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+    );
+    assert_eq!(
+        recovered.list_agents(MAX_AGENT_LIST_LIMIT).agents,
+        [] as [(
+            crate::runtime::subagent::registry::agents::AgentSnapshot,
+            crate::runtime::subagent::registry::observation::SubagentSnapshot
+        ); 0]
     );
     assert_eq!(recovered.state.lock().unwrap().next_ordinal, 2);
     assert!(
@@ -51,7 +55,10 @@ async fn initial_uncommitted_physical_authority_consumes_activation_identity_on_
     );
     recovered.wait_recovery_reconciliation().await;
     assert!(!recovered.owns_idle_work());
-    assert!(recovered.unproven_settlements().is_empty());
+    assert_eq!(
+        recovered.unproven_settlements(),
+        [] as [crate::runtime::identity::SubagentId; 0]
+    );
     assert_eq!(recovered.with_goal_idle(|| true), Some(true));
     let version = *recovered.state_version.borrow();
     recovered.reconcile_recovered_settlements();
@@ -520,7 +527,10 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             // Join the existing recovery owner; never require its next Try probe
             // to win against a concurrent fork inheriting a CLOEXEC descriptor.
             recovered.wait_recovery_reconciliation().await;
-            assert!(recovered.unproven_settlements().is_empty());
+            assert_eq!(
+                recovered.unproven_settlements(),
+                [] as [crate::runtime::identity::SubagentId; 0]
+            );
             {
                 let state = recovered.state.lock().unwrap();
                 assert!(state.recovery_inflight.is_empty());
@@ -564,7 +574,10 @@ async fn agent411_resume_reservation_recovery_requires_rollback_containment_proo
             config.mailbox = ConversationInboundMailbox::over_store(reopened_store.clone());
             let reopened = SubagentRegistry::new(config);
             reopened.restore_agents(reopened_store.as_ref()).unwrap();
-            assert!(reopened.unproven_settlements().is_empty());
+            assert_eq!(
+                reopened.unproven_settlements(),
+                [] as [crate::runtime::identity::SubagentId; 0]
+            );
             assert_eq!(reopened.with_goal_idle(|| true), Some(true));
             let agent = reopened.agent_snapshot(&admitted.child_agent_id).unwrap();
             assert_eq!(agent.state, AgentState::Inactive);
@@ -633,17 +646,27 @@ async fn interrupted_authority_publication_reopens_without_logical_facts() {
             recovered.restore_agents(store.as_ref()).unwrap();
             recovered.wait_recovery_reconciliation().await;
             assert_eq!(recovered.state.lock().unwrap().next_ordinal, 2);
-            assert!(
-                recovered
-                    .list_agents(MAX_AGENT_LIST_LIMIT)
-                    .agents
-                    .is_empty()
+            assert_eq!(
+                recovered.list_agents(MAX_AGENT_LIST_LIMIT).agents,
+                [] as [(
+                    crate::runtime::subagent::registry::agents::AgentSnapshot,
+                    crate::runtime::subagent::registry::observation::SubagentSnapshot
+                ); 0]
             );
-            assert!(recovered.all_snapshots().is_empty());
+            assert_eq!(
+                recovered.all_snapshots(),
+                [] as [crate::runtime::subagent::registry::observation::SubagentSnapshot; 0]
+            );
             assert!(!recovered.owns_idle_work());
-            assert!(recovered.unproven_settlements().is_empty());
+            assert_eq!(
+                recovered.unproven_settlements(),
+                [] as [crate::runtime::identity::SubagentId; 0]
+            );
             assert_eq!(recovered.with_goal_idle(|| true), Some(true));
-            assert!(store.read_events(None, 128).unwrap().events.is_empty());
+            assert_eq!(
+                store.read_events(None, 128).unwrap().events,
+                [] as [crate::events::types::RuntimeEventEnvelope; 0]
+            );
             let version = *recovered.state_version.borrow();
             recovered.reconcile_recovered_settlements();
             assert_eq!(*recovered.state_version.borrow(), version);
@@ -820,7 +843,10 @@ async fn published_initialization_error_retains_live_registry_obligation_until_e
         plane.registry.unproven_settlements(),
         vec![activation.clone()]
     );
-    assert!(events(&plane).is_empty());
+    assert_eq!(
+        events(&plane),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
     let reopened = SubagentRegistry::new(plane.registry.config.clone());
     reopened.restore_agents(plane.store.as_ref()).unwrap();
     assert_eq!(reopened.unproven_settlements(), vec![activation]);
@@ -830,7 +856,10 @@ async fn published_initialization_error_retains_live_registry_obligation_until_e
     reopened.wait_recovery_reconciliation().await;
     assert_eq!(plane.registry.with_goal_idle(|| true), Some(true));
     assert_eq!(reopened.with_goal_idle(|| true), Some(true));
-    assert!(events(&plane).is_empty());
+    assert_eq!(
+        events(&plane),
+        [] as [crate::events::types::RuntimeEvent; 0]
+    );
 }
 
 fn quiescent_child_incarnation(
@@ -1051,7 +1080,10 @@ async fn pre_reserved_wait_settles_independently_of_another_agents_recovery() {
     drop(x_lock);
     release.send(()).unwrap();
     registry.wait_recovery_reconciliation().await;
-    assert!(registry.unproven_settlements().is_empty());
+    assert_eq!(
+        registry.unproven_settlements(),
+        [] as [crate::runtime::identity::SubagentId; 0]
+    );
     assert_eq!(registry.with_goal_idle(|| true), Some(true));
 }
 
@@ -1121,4 +1153,104 @@ async fn t15_t20_recovered_agent_installs_its_selected_source_before_any_publica
     );
     assert_eq!(plane.store.observation_read_cut().unwrap(), original_cut);
     assert_eq!(plane.store.read_events(None, 32).unwrap(), original_journal);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn indexed_restoration_checks_selected_metadata_and_preserves_journal_order() {
+    use crate::durable::{CanonicalStore, ConversationStoreError, presentation::all_facts};
+    use rusqlite::Connection;
+
+    let plane = plane_with_storage(4, true);
+    plane.store.initialize(&[]).unwrap();
+    for index in 0..3 {
+        crate::durable::sqlite::append_completed_turns(&plane.store, index * 2, 1, false);
+        let child = stage_exit0(&plane);
+        let accepted = start(&plane, &spec(&format!("indexed child {index}"))).await;
+        child
+            .complete(ChildResultStatus::Succeeded, Some("done"))
+            .await;
+        plane
+            .registry
+            .wait_until_settled(&accepted.subagent_id)
+            .await
+            .unwrap();
+        crate::durable::sqlite::append_completed_turns(&plane.store, index * 2 + 1, 1, true);
+    }
+
+    let kinds = super::super::agents::SUBAGENT_LIFECYCLE_KINDS;
+    let indexed = all_facts(plane.store.as_ref(), kinds).unwrap();
+    let mut cursor = None;
+    let mut full = Vec::new();
+    loop {
+        let page = plane.store.read_events(cursor, 7).unwrap();
+        if page.events.is_empty() {
+            break;
+        }
+        cursor = page.next_sequence;
+        full.extend(page.events.into_iter().filter(|event| {
+            let value = serde_json::to_value(&event.event).unwrap();
+            kinds.contains(&value["type"].as_str().unwrap())
+        }));
+    }
+    assert!(indexed.len() >= 6);
+    assert_eq!(indexed, full);
+    let expected = recovered_registry(&plane).all_snapshots();
+    assert_eq!(expected.len(), 3);
+    assert_eq!(recovered_registry(&plane).all_snapshots(), expected);
+
+    let db = Connection::open(plane.dir.path().join("parent.sqlite")).unwrap();
+    db.pragma_update(None, "foreign_keys", false).unwrap();
+    let sequence = indexed
+        .iter()
+        .find(|event| {
+            matches!(
+                event.event,
+                crate::events::types::RuntimeEvent::SubagentOwnershipCommitted { .. }
+            )
+        })
+        .unwrap()
+        .sequence;
+    for (column, replacement) in [
+        ("sequence", "sequence + 1000000"),
+        ("event_id", "'tampered-event'"),
+        ("schema_version", "2"),
+        ("conversation_id", "'tampered-conversation'"),
+        ("attempt_id", "'tampered-attempt'"),
+        ("turn_id", "'tampered-turn'"),
+    ] {
+        let original: rusqlite::types::Value = db
+            .query_row(
+                &format!("SELECT {column} FROM events WHERE sequence = ?1"),
+                [sequence],
+                |row| row.get(0),
+            )
+            .unwrap();
+        db.execute(
+            &format!("UPDATE events SET {column} = {replacement} WHERE sequence = ?1"),
+            [sequence],
+        )
+        .unwrap();
+        let old_error = plane.store.read_events(None, 10000).unwrap_err();
+        let restored = SubagentRegistry::new(plane.registry.config.clone());
+        let new_error = restored.restore_agents(plane.store.as_ref()).unwrap_err();
+        assert!(
+            matches!(old_error, ConversationStoreError::InvalidReference(_)),
+            "{column}: {old_error:?}"
+        );
+        assert!(
+            matches!(new_error, ConversationStoreError::InvalidReference(_)),
+            "{column}: {new_error:?}"
+        );
+        let changed_sequence = if column == "sequence" {
+            sequence + 1_000_000
+        } else {
+            sequence
+        };
+        db.execute(
+            &format!("UPDATE events SET {column} = ?1 WHERE sequence = ?2"),
+            rusqlite::params![original, changed_sequence],
+        )
+        .unwrap();
+    }
+    assert_eq!(recovered_registry(&plane).all_snapshots(), expected);
 }

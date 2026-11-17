@@ -767,6 +767,9 @@ pub struct PreparedInvocation {
 #[derive(Default)]
 pub struct ToolRegistry {
     entries: Vec<ToolRegistration>,
+    /// Compiled model definitions captured with registration. Clones share this
+    /// vector until a later registration copies it.
+    model_definitions: Arc<Vec<ModelToolDefinition>>,
     by_id: HashMap<ToolId, usize>,
     by_name: HashMap<String, usize>,
 }
@@ -784,6 +787,7 @@ impl Clone for ToolRegistry {
     fn clone(&self) -> Self {
         Self {
             entries: self.entries.clone(),
+            model_definitions: Arc::clone(&self.model_definitions),
             by_id: self.by_id.clone(),
             by_name: self.by_name.clone(),
         }
@@ -865,6 +869,27 @@ impl ToolRegistration {
             resource_permissions,
             resource_permission_targets,
         }
+    }
+
+    /// Selection may replace the schema owner before publication. Recompile
+    /// only when that owner changed; an unchanged Arc keeps the captured contract.
+    pub(crate) fn bind_schema(&mut self) {
+        if self
+            .contract
+            .as_ref()
+            .is_some_and(|contract| contract.definition == self.definition)
+        {
+            return;
+        }
+        let Ok((model, validator)) = compile_tool_contract(&self.definition) else {
+            self.contract = None;
+            return;
+        };
+        self.contract = Some(Arc::new(CompiledToolContract {
+            definition: self.definition.clone(),
+            model,
+            validator,
+        }));
     }
 
     pub(crate) fn foreground(&self) -> crate::tools::deadline::ForegroundPolicy {
@@ -984,6 +1009,7 @@ impl ToolRegistry {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
+            model_definitions: Arc::new(Vec::new()),
             by_id: HashMap::new(),
             by_name: HashMap::new(),
         }
@@ -1138,6 +1164,7 @@ impl ToolRegistry {
         self.by_id.insert(definition.id.clone(), self.entries.len());
         self.by_name
             .insert(definition.name.clone(), self.entries.len());
+        let model = contract.model.clone();
         self.entries.push(ToolRegistration {
             contract: Some(contract),
             foreground,
@@ -1147,6 +1174,7 @@ impl ToolRegistry {
             resource_permissions,
             resource_permission_targets,
         });
+        Arc::make_mut(&mut self.model_definitions).push(model);
         Ok(())
     }
 
@@ -1245,17 +1273,13 @@ impl ToolRegistry {
     /// Panics if an internal registry entry lacks its registered contract.
     #[must_use]
     pub fn model_definitions(&self) -> Vec<ModelToolDefinition> {
-        self.entries
-            .iter()
-            .map(|entry| {
-                entry
-                    .contract
-                    .as_ref()
-                    .expect("registry entries hold compiled contracts")
-                    .model
-                    .clone()
-            })
-            .collect()
+        self.model_definition_refs().to_vec()
+    }
+
+    /// Borrow the compiled definitions. Observation and request assembly share
+    /// the schema bodies instead of compiling them again.
+    pub(crate) fn model_definition_refs(&self) -> &[ModelToolDefinition] {
+        &self.model_definitions
     }
 
     /// The number of registered tools.
@@ -1470,7 +1494,7 @@ mod tests {
             id: ToolId::new(id),
             name: name.to_owned(),
             description: String::new(),
-            input_schema: schema,
+            input_schema: Arc::new(schema),
             execution_policy: execution,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
@@ -1796,9 +1820,11 @@ mod tests {
                     envelope["execution_mode"] = json!("foreground");
                 }
                 assert!(
-                    jsonschema::Validator::new(&registry.model_definitions()[0].input_schema)
-                        .unwrap()
-                        .is_valid(&envelope)
+                    crate::tools::schema::build_validator(
+                        &registry.model_definitions()[0].input_schema
+                    )
+                    .unwrap()
+                    .is_valid(&envelope)
                 );
                 let mut request = call("x", "x", json!({}));
                 request.arguments = envelope;
@@ -1979,7 +2005,7 @@ mod tests {
         let PreflightOutcome::Rejected { error, .. } = outcome else {
             panic!("expected rejection");
         };
-        assert!(!error.is_empty());
+        assert_ne!(error, "");
         let missing = registry
             .preflight(&call("tool-read", "read", json!({})))
             .expect("preflight outcome");
@@ -2062,7 +2088,7 @@ mod tests {
             ),
         )
         .expect("register");
-        assert_eq!(registry.definitions()[0].input_schema, schema);
+        assert_eq!(&*registry.definitions()[0].input_schema, &schema);
         let compiled = registry.model_definitions()[0].input_schema.clone();
         assert!(
             compiled["properties"]["execution_mode"].is_object(),
@@ -2073,8 +2099,8 @@ mod tests {
             "the retired reserved selector is gone from the compiled schema"
         );
         assert_eq!(
-            registry.definitions()[0].input_schema,
-            schema,
+            &*registry.definitions()[0].input_schema,
+            &schema,
             "the canonical schema stays verbatim"
         );
     }

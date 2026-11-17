@@ -27,15 +27,15 @@
 //! Issue #61 extracted the conversation runtime coordinator
 //! ([`ConversationRuntime`](crate::runtime::conversation_runtime::ConversationRuntime))
 //! from this boundary: the coordinator owns conversation execution/admission
-//! authority, and [`RuntimeClientHost`](host::RuntimeClientHost) is the
+//! authority, and [`RuntimeClientHost`] is the
 //! projection + control + attachment adapter over it. A conversation runs
 //! the exact same admission/execution path with zero Runtime Client
 //! attachments.
 //!
 //! The internal [`RuntimeEvent`](crate::events::types::RuntimeEvent)
 //! vocabulary is an execution-fact vocabulary, **not** the wire contract.
-//! [`RuntimeClientEvent`](event::RuntimeClientEvent) and
-//! [`RuntimeClientSnapshot`](snapshot::RuntimeClientSnapshot) are
+//! [`RuntimeClientEvent`] and
+//! [`RuntimeClientSnapshot`] are
 //! explicit runtime-owned projection types with their own versioning,
 //! lifecycle semantics, and cursor domain. Issue #36 binds stdio JSONL and
 //! WebSocket to the App Server endpoint that reuses these projection owners;
@@ -46,18 +46,18 @@
 //!
 //! # Ownership summary
 //!
-//! - [`RuntimeClientEndpoint`](endpoint::RuntimeClientEndpoint) is the
+//! - [`RuntimeClientEndpoint`] is the
 //!   semantic protocol entry point: it dispatches every Runtime Client request,
 //!   `initialize` included, so a transport stays a framing adapter and
 //!   never owns negotiation or attachment admission.
-//! - [`RuntimeClientHost`](host::RuntimeClientHost) is the projection +
+//! - [`RuntimeClientHost`] is the projection +
 //!   control + attachment adapter over the conversation runtime: it owns
 //!   the projection (snapshot read model, cursor allocation, bounded
 //!   replay, subscribers), one control attachment plus read-only
 //!   observation attachments, and
 //!   protocol adaptation. `AgentExecution` remains the attempt settlement
 //!   authority and the conversation runtime remains the admission owner.
-//! - [`RuntimeClientProjection`](projection::RuntimeClientProjection) is
+//! - `RuntimeClientProjection` is
 //!   the one linearization owner of the externally visible read model,
 //!   cursor allocation, event publication, bounded replay, and
 //!   subscribers.
@@ -103,6 +103,7 @@ mod agent_trace;
 pub mod attachment;
 pub(crate) mod auxiliary;
 pub mod checkpoint;
+pub mod delta;
 pub(crate) mod domain;
 pub mod endpoint;
 pub mod event;

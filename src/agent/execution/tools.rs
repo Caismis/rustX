@@ -18,7 +18,7 @@ use crate::runtime::identity::{AttemptId, MessageId, ToolCallId, ToolId};
 use crate::runtime::interaction::InteractionFailure;
 use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
-use crate::tools::deadline::ToolProgressCapability;
+use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{
     PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
 };
@@ -68,6 +68,7 @@ struct CallSlot {
     /// The canonical registry-resolved typed origin of the tool.
     origin: ToolOrigin,
     prepared: Option<PreparedInvocation>,
+    command_environment: Option<ToolEnvironment>,
     result: Option<ToolExecutionResult>,
     /// The authoritative per-call executor-start frontier. Once true, this
     /// call can never receive a `BeforeStart` cancellation result.
@@ -79,21 +80,12 @@ struct CallSlot {
     execution_facts: Vec<RuntimeEvent>,
 }
 
-/// The immutable facts of one settled call of a structurally settled batch.
-///
-/// These are copies of exactly what was committed as canonical history, kept
-/// in canonical model call order. They are the only input the tool-result
-/// observation pass receives, so an observer can neither reach the live call
-/// slot nor influence the committed result.
+/// Observation-only metadata for one call in an already settled batch.
+/// The result body is borrowed from the committed Ledger during observation.
 pub(super) struct SettledCall {
-    batch_position: usize,
-    call_id: ToolCallId,
-    tool_id: ToolId,
+    message_id: MessageId,
     origin: ToolOrigin,
-    /// The immutable invocation facts, absent exactly when preflight rejected
-    /// the call before invocation resolution.
     invocation: Option<ObservedToolInvocation>,
-    result: ToolExecutionResult,
 }
 
 /// One deterministic scheduling phase of a tool-call batch.
@@ -351,7 +343,7 @@ impl AgentExecution<'_> {
     /// uncommitted dispatches roll back, and the complete batch commits in
     /// call order.
     ///
-    /// The returned [`SettledCall`] values are immutable copies of exactly
+    /// The returned [`SettledCall`] values identify exactly
     /// the committed facts, in canonical call order. They are the only input
     /// of the tool-result observation pass, which runs strictly after this
     /// function returns and therefore cannot influence structural settlement.
@@ -378,7 +370,7 @@ impl AgentExecution<'_> {
     /// batch mutating a list it cannot publish.
     pub(super) async fn execute_tools(
         &mut self,
-        calls: &[ToolCall],
+        calls: Vec<ToolCall>,
         occurrences: Vec<crate::message::types::ToolCallOccurrenceRef>,
         preflight: Vec<PreflightOutcome>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
@@ -413,15 +405,16 @@ impl AgentExecution<'_> {
     #[allow(clippy::too_many_lines)] // one coherent scheduling/commit pipeline
     async fn execute_tools_staged(
         &mut self,
-        calls: &[ToolCall],
+        calls: Vec<ToolCall>,
         occurrences: Vec<crate::message::types::ToolCallOccurrenceRef>,
         preflight: Vec<PreflightOutcome>,
         todos: Option<crate::tools::todo::TodoBatch>,
     ) -> Result<Vec<SettledCall>, CanonicalCommitError> {
+        assert_eq!(calls.len(), occurrences.len());
+        assert_eq!(calls.len(), preflight.len());
         let todo_writer = todos.as_ref().map(crate::tools::todo::TodoBatch::writer);
         let mut slots: Vec<CallSlot> = calls
-            .iter()
-            .cloned()
+            .into_iter()
             .zip(preflight)
             .map(|(call, outcome)| match outcome {
                 PreflightOutcome::Ready(prepared) => CallSlot {
@@ -429,6 +422,7 @@ impl AgentExecution<'_> {
                     tool_id: prepared.invocation.tool_id.clone(),
                     origin: prepared.origin.clone(),
                     prepared: Some(prepared),
+                    command_environment: None,
                     result: None,
                     executor_started: false,
                     execution_facts: Vec::new(),
@@ -442,12 +436,15 @@ impl AgentExecution<'_> {
                     tool_id,
                     origin,
                     prepared: None,
+                    command_environment: None,
                     result: Some(failed_result(&error)),
                     executor_started: false,
                     execution_facts: Vec::new(),
                 },
             })
             .collect();
+        // Freeze each native Bash slot before any sibling authorization starts.
+        self.freeze_bash_environments(&mut slots);
         // Issue #544: authorize each prepared invocation independently.
         // Allowed work may start without waiting for unrelated Ask/Review
         // siblings. Denied/cancelled slots settle their own result only.
@@ -561,13 +558,13 @@ impl AgentExecution<'_> {
                                             .prepared
                                             .as_ref()
                                             .expect("unsettled slots are preflighted");
+                                        let environment = self.invocation_environment(&slots[slot_index]);
                                         futures.push(Box::pin(self.run_single_call(
                                             slot_index,
-                                            prepared.invocation.clone(),
-                                            prepared.progress_capability,
-                                            prepared.mutation_target.clone(),
+                                            prepared.clone(),
                                             todo_writer.clone(),
                                             occurrences[slot_index].clone(),
+                                            environment,
                                         )));
                                     }
                                     Err(error) => {
@@ -732,27 +729,16 @@ impl AgentExecution<'_> {
                 }
             }
         }
-        // Canonical batch commit in original model call order. Each call's
-        // retained execution facts (progress observations, then the deadline
-        // intent and cancellation/settlement control-plane facts when a
-        // non-physical winner drove a settlement phase) precede their
-        // completion event; the completion events themselves are committed
-        // in canonical order regardless of physical completion order.
-        //
-        // The **structural settlement point of the whole batch** is the one
-        // atomic `commit_tool_result_batch` call: either every logical call
-        // of the committed Assistant tool-call message owns exactly one
-        // canonical `ToolMessage` (in original model call order) or none of
-        // them becomes canonical. A durable failure of one member can never
-        // leave a partial batch behind. The settled facts collected here are
-        // immutable copies of exactly what was committed, and they are the
-        // only input of the observation pass.
+        // Completion facts and the canonical batch retain the same immutable
+        // result, but keep their original commit boundaries and call order.
+        let observe =
+            !self.lifecycle.tool_result_observers().is_empty() && !self.cancellation.is_cancelled();
         let mut blocks = Vec::with_capacity(slots.len());
-        let mut result_slots = Vec::with_capacity(slots.len());
-        for (batch_position, slot) in slots.iter().enumerate() {
-            let result = slot.result.clone().expect("every call slot settles");
-            for event in &slot.execution_facts {
-                self.emit(event.clone());
+        let mut settled = Vec::new();
+        for (slot, occurrence) in slots.into_iter().zip(occurrences) {
+            let result = std::sync::Arc::new(slot.result.expect("every call slot settles"));
+            for event in slot.execution_facts {
+                self.emit(event);
                 if let Some(error) = self.durable_failure_commit_error() {
                     return Err(error);
                 }
@@ -767,35 +753,33 @@ impl AgentExecution<'_> {
                     return Err(error);
                 }
             }
-            let block = MessageBlock::Tool(ToolMessageBlock {
-                id: MessageId::new(format!(
-                    "{}-tool-{}-{}",
-                    self.request.attempt_id,
-                    self.turn,
-                    occurrences[batch_position].block_index.get()
-                )),
-                occurrence: occurrences[batch_position].clone(),
-                tool_call_id: slot.call.id.clone(),
-                tool_id: slot.tool_id.clone(),
-                result: result.clone(),
-            });
-            blocks.push(block);
-            result_slots.push((batch_position, slot, result));
+            let id = MessageId::new(format!(
+                "{}-tool-{}-{}",
+                self.request.attempt_id,
+                self.turn,
+                occurrence.block_index.get()
+            ));
+            if observe {
+                settled.push(SettledCall {
+                    message_id: id.clone(),
+                    invocation: slot.prepared.map(|prepared| ObservedToolInvocation {
+                        tool_id: slot.tool_id.clone(),
+                        origin: slot.origin.clone(),
+                        mode: prepared.invocation.mode,
+                        arguments: prepared.invocation.arguments,
+                    }),
+                    origin: slot.origin,
+                });
+            }
+            blocks.push(MessageBlock::Tool(ToolMessageBlock {
+                id,
+                occurrence,
+                tool_call_id: slot.call.id,
+                tool_id: slot.tool_id,
+                result,
+            }));
         }
-        let batch_anchor = self.commit_tool_result_batch(&blocks)?;
-        // The batch is durable, so the snapshots its `todo` results carry
-        // are durable: this is the one point where the conversation's list
-        // may move, and it moves to exactly what these committed blocks
-        // published — never to a stage this batch did not write.
-        //
-        // Settling is the whole decision: the batch installs what its own
-        // committed results published, or moves nothing when they published
-        // none. There is no third outcome to branch on and no failure to
-        // report — a batch that reaches here still holds the list it opened,
-        // which is what makes `open_batch`'s exclusivity worth having.
-        if let Some(todos) = todos {
-            todos.settle(&blocks);
-        }
+        let batch_anchor = self.commit_tool_result_batch(blocks, todos)?;
         // The complete canonical ToolResult batch, not an individual tool
         // completion, establishes one attempt-local PostToolBatch
         // opportunity for the next primary step that already exists.
@@ -814,30 +798,6 @@ impl AgentExecution<'_> {
         // preparation. The marker is deliberately process-local; this hook
         // proves recovery does not synthesize it from durable tool history.
         crate::runtime::process_death::reach("after:post_tool_batch_marker");
-        let settled = result_slots
-            .into_iter()
-            .map(|(batch_position, slot, result)| SettledCall {
-                batch_position,
-                call_id: slot.call.id.clone(),
-                tool_id: slot.tool_id.clone(),
-                origin: slot.origin.clone(),
-                // The invocation facts are copied from the one
-                // `PreparedInvocation` that executed, and the canonical
-                // identity/origin are the slot's, so no second stored identity
-                // can disagree with the registry. A preflight-rejected call
-                // never resolved an invocation and exposes none.
-                invocation: slot
-                    .prepared
-                    .as_ref()
-                    .map(|prepared| ObservedToolInvocation {
-                        tool_id: slot.tool_id.clone(),
-                        origin: slot.origin.clone(),
-                        mode: prepared.invocation.mode,
-                        arguments: prepared.invocation.arguments.clone(),
-                    }),
-                result,
-            })
-            .collect();
         self.emit(RuntimeEvent::TurnCompleted);
         if let Some(error) = self.durable_failure_commit_error() {
             return Err(error);
@@ -889,11 +849,11 @@ impl AgentExecution<'_> {
         &mut self,
         settled: &[SettledCall],
     ) -> Result<(), Terminal> {
-        let observers = self.lifecycle.tool_result_observers().to_vec();
-        if observers.is_empty() {
+        if settled.is_empty() {
             return Ok(());
         }
-        match self.observe_settled_batch(&observers, settled).await {
+        let observers = self.lifecycle.tool_result_observers();
+        match self.observe_settled_batch(observers, settled).await {
             Ok(staged) => {
                 self.deferred_context.extend(staged);
                 Ok(())
@@ -933,7 +893,12 @@ impl AgentExecution<'_> {
     ) -> Result<Vec<DeferredContextProposal>, Terminal> {
         let already_staged = self.deferred_context.len();
         let mut staged: Vec<DeferredContextProposal> = Vec::new();
-        for call in settled {
+        for (batch_position, call) in settled.iter().enumerate() {
+            let Some(MessageBlock::Tool(committed)) =
+                self.conversation.ledger().get(&call.message_id)
+            else {
+                unreachable!("observation batch identifies an installed tool result");
+            };
             for registered in observers {
                 if self.cancellation.is_cancelled() {
                     return Err(self.cancelled_terminal());
@@ -942,12 +907,12 @@ impl AgentExecution<'_> {
                     attempt_id: &self.request.attempt_id,
                     conversation_id: &self.request.conversation_id,
                     turn: self.turn,
-                    batch_position: call.batch_position,
-                    call_id: &call.call_id,
-                    tool_id: &call.tool_id,
+                    batch_position,
+                    call_id: &committed.tool_call_id,
+                    tool_id: &committed.tool_id,
                     origin: &call.origin,
                     invocation: call.invocation.as_ref(),
-                    result: &call.result,
+                    result: &committed.result,
                 };
                 let observed = registered
                     .observer()
@@ -977,7 +942,7 @@ impl AgentExecution<'_> {
                          above the bounded proposal limit {MAX_PROPOSALS_PER_CONTRIBUTOR}",
                         registered.producer(),
                         proposals.len(),
-                        call.call_id
+                        committed.tool_call_id
                     )));
                 }
                 if already_staged + staged.len() + proposals.len() > MAX_DEFERRED_CONTEXT_PROPOSALS
@@ -994,7 +959,7 @@ impl AgentExecution<'_> {
                             "deferred-context producer {:?} proposed invalid context for \
                              call {}: {error}",
                             registered.producer(),
-                            call.call_id
+                            committed.tool_call_id
                         ))
                     })?;
                     staged.push(DeferredContextProposal {
@@ -1008,6 +973,31 @@ impl AgentExecution<'_> {
             }
         }
         Ok(staged)
+    }
+
+    fn freeze_bash_environments(&self, slots: &mut [CallSlot]) {
+        for slot in slots {
+            if slot.result.is_some() {
+                continue;
+            }
+            let Some(prepared) = slot.prepared.as_ref() else {
+                continue;
+            };
+            if prepared.invocation.tool_name == crate::tools::native::BASH_TOOL_NAME
+                && matches!(slot.origin, ToolOrigin::Builtin)
+            {
+                slot.command_environment = Some(crate::tools::execution_environment::freeze_bash(
+                    self.capability.snapshot().effective_environment(),
+                    self.tool_runtime.workspace(),
+                ));
+            }
+        }
+    }
+
+    fn invocation_environment(&self, slot: &CallSlot) -> ToolEnvironment {
+        slot.command_environment
+            .clone()
+            .unwrap_or_else(|| self.capability.snapshot().effective_environment().clone())
     }
 
     /// Runs one logical tool call of the batch.
@@ -1025,29 +1015,24 @@ impl AgentExecution<'_> {
     async fn run_single_call(
         &self,
         call_index: usize,
-        invocation: ToolInvocation,
-        progress_capability: ToolProgressCapability,
-        bound_mutation: Option<crate::tools::native::support::BoundMutationTarget>,
+        prepared: PreparedInvocation,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: crate::message::types::ToolCallOccurrenceRef,
+        environment: ToolEnvironment,
     ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
-        let (result, facts) = match invocation.mode {
+        let (result, facts) = match prepared.invocation.mode {
             ToolInvocationMode::Foreground => {
-                self.run_foreground(
-                    &invocation,
-                    progress_capability,
-                    bound_mutation,
-                    todos,
-                    &occurrence,
-                )
-                .await
+                self.run_foreground(&prepared, todos, &occurrence, environment)
+                    .await
             }
             // A detached execution outlives this batch, so it is handed no
             // task-list authority: nothing it does can land in the snapshot
             // this batch is about to commit.
-            ToolInvocationMode::Background => {
-                (self.dispatch_background(&invocation).await, Vec::new())
-            }
+            ToolInvocationMode::Background => (
+                self.dispatch_background(&prepared.invocation, environment)
+                    .await,
+                Vec::new(),
+            ),
         };
         (call_index, result, facts)
     }
@@ -1115,13 +1100,14 @@ impl AgentExecution<'_> {
     #[allow(clippy::too_many_lines)] // Caller context and canonical fact projection stay together.
     async fn run_foreground(
         &self,
-        invocation: &ToolInvocation,
-        progress_capability: ToolProgressCapability,
-        bound_mutation: Option<crate::tools::native::support::BoundMutationTarget>,
+        prepared: &PreparedInvocation,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: &crate::message::types::ToolCallOccurrenceRef,
+        environment: ToolEnvironment,
     ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
         use crate::tools::invocation::InvocationFact;
+        let invocation = &prepared.invocation;
+        let progress_capability = prepared.progress_capability;
         let call_id = invocation
             .id
             .canonical_call_id()
@@ -1142,9 +1128,9 @@ impl AgentExecution<'_> {
             &progress,
             self.tool_runtime.artifacts(),
             self.tool_runtime.tool_output(),
-            self.capability.snapshot().effective_environment(),
+            &environment,
         );
-        context.bound_mutation = bound_mutation;
+        context.bound_mutation = prepared.mutation_target.clone();
         let context = match self.lifecycle.native_questionnaire_requester(
             self.request.attempt_id.clone(),
             execution_cancellation,
@@ -1285,14 +1271,14 @@ impl AgentExecution<'_> {
     /// accepted result exactly when conversation ownership commits. A
     /// rolled-back dispatch produces a cancelled result slot for the
     /// originating attempt, never a detached execution.
-    async fn dispatch_background(&self, invocation: &ToolInvocation) -> ToolExecutionResult {
+    async fn dispatch_background(
+        &self,
+        invocation: &ToolInvocation,
+        environment: ToolEnvironment,
+    ) -> ToolExecutionResult {
         let executor = self.tool_registry().executor(&invocation.tool_id);
-        // The attempt's effective ToolEnvironment is captured at prepare
-        // time, before the background ownership commit: the detached
-        // execution retains exactly this immutable environment for its
-        // whole lifetime, even after this attempt terminates and later
-        // revisions activate.
-        let environment = self.capability.snapshot().effective_environment().clone();
+        // Native Bash retains the environment frozen before approval; other
+        // tools retain the admitted capability snapshot's environment.
         let Some(mcp_leases) = self.capability.mcp_leases() else {
             return failed_result("the admitted MCP generation is already physically retired");
         };

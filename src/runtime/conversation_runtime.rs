@@ -1,5 +1,8 @@
 //! The conversation runtime coordinator (Issue #61): the semantic owner of
-//! conversation coordination for one conversation.
+//! conversation coordination for one conversation — session model state,
+//! attempt admission, the current-attempt slot, between-attempt current
+//! Surface state, durable request-history reads, the shared lifecycle/drain
+//! authority, and settlement handoff through quiescence.
 //!
 //! [`ConversationRuntime`] owns the semantic conversation/runtime state that
 //! used to live inside the old Runtime Client host:
@@ -22,17 +25,17 @@
 //! attempt settlement handoff back into conversation state
 //! ```
 //!
-//! The Runtime Client (see `crate::runtime_client`) is a projection + control
-//! + attachment adapter over this coordinator. It observes runtime
+//! The Runtime Client (see `crate::runtime_client`) is a projection, control,
+//! and attachment adapter over this coordinator. It observes runtime
 //! observations and forwards control requests; it never owns the semantic
 //! state above.
 //!
 //! # The one admission owner
 //!
 //! Any producer may publish ordinary inbound work through the conversation
-//! inbound boundary (the [`ConversationInboundMailbox`](crate::runtime::inbound::ConversationInboundMailbox)
+//! inbound boundary (the [`ConversationInboundMailbox`]
 //! of the owned tool runtime). Only [`ConversationRuntime`] admits the next
-//! [`AgentExecution`](crate::agent::AgentExecution):
+//! [`AgentExecution`]:
 //!
 //! ```text
 //! producer publishes ordinary inbound
@@ -137,7 +140,7 @@
 //! # One lifecycle authority
 //!
 //! The conversation has exactly **one** authoritative lifecycle state:
-//! the [`ConversationLifecycle`](crate::runtime::types::ConversationLifecycle)
+//! the [`ConversationLifecycle`]
 //! composed by the runtime and shared with every runtime-owned semantic
 //! boundary — the inbound mailbox (runtime ownership is the lifecycle
 //! handle; the mailbox keeps no activation flag), the background registry
@@ -217,9 +220,9 @@
 //! # Observation bridge
 //!
 //! The coordinator publishes every semantically meaningful transition as a
-//! runtime-owned [`ConversationObservation`](crate::runtime::observation::ConversationObservation)
+//! runtime-owned `ConversationObservation`
 //! into the runtime-owned observation fan-out. The Runtime Client projection
-//! owns the primary [`PendingObservations`](crate::runtime::observation::PendingObservations)
+//! owns the primary `PendingObservations`
 //! queue and folds it under its own synchronization boundary, translating the
 //! semantic observations into its snapshot/cursor read model (see
 //! `RuntimeClientProjection`), so snapshot/cursor reads remain linearizable.
@@ -231,7 +234,7 @@
 //!
 //! # The bootstrap cut
 //!
-//! [`ConversationRuntime::install_observation_bridge`] is the one runtime
+//! `ConversationRuntime::install_observation_bridge` is the one runtime
 //! handshake a Runtime Client adapter uses at construction. It runs
 //! entirely under the one coordinator lock, refuses an already-activated
 //! runtime under that same lock, installs the observation fan-out and every
@@ -351,9 +354,12 @@ mod attempt;
 pub mod auxiliary;
 mod bootstrap;
 mod child;
+#[cfg(test)]
+mod cold_attach_work_tests;
 mod compaction;
 mod configuration;
 mod controls;
+mod conversation_slot;
 mod drain;
 mod durability;
 mod history;
@@ -626,6 +632,9 @@ impl std::error::Error for ConversationRuntimeError {}
 /// attempt's immutable model snapshot. No window captured at process start
 /// can survive a session model change.
 pub struct ConversationContextConfig {
+    /// Clock for Agent Status engines materialized from accepted configuration.
+    /// This is separate from runtime event timestamps and monotonic deadlines.
+    pub status_clock: Arc<dyn crate::context::AgentStatusClock>,
     /// The current runtime context policy captured by this composition.
     pub policy: SessionContextPolicy,
     /// The deterministic token estimator.
@@ -706,7 +715,7 @@ pub struct RuntimeConversationConfig {
 /// cancellation trigger the attempt task runs against so that
 /// `cancel_current_attempt` can request cancellation. It does **not** own a
 /// second cancellation state machine and never decides a terminal outcome;
-/// [`AgentExecution`] remains the attempt execution/terminal authority.
+/// [`AgentExecution`](crate::agent::AgentExecution) remains the attempt execution/terminal authority.
 struct CurrentAttempt {
     configuration: AdmittedConfiguration,
     /// The attempt identity.
@@ -807,10 +816,11 @@ struct CoordinatorState {
     /// **only between attempts**.
     ///
     /// Ownership is structural, not conventional: admission moves the state
-    /// out (`take`), so while an attempt runs this slot is `None` and the
+    /// out (`lend`), so while an attempt runs this slot is `Lent` and the
     /// coordinator physically cannot mutate a competing copy. Settlement
-    /// moves the authoritative state back in.
-    conversation: Option<ConversationState>,
+    /// moves the authoritative state back in. A reopened conversation starts
+    /// `Durable` and hydrates its active working set on first use.
+    conversation: conversation_slot::ConversationSlot,
     /// The current attempt slot (None = idle).
     current_attempt: Option<CurrentAttempt>,
     scheduled: Option<scheduled::CurrentScheduled>,
@@ -1153,6 +1163,27 @@ impl ConversationRuntime {
         &self.inner.tool_runtime
     }
 
+    /// Cache reclamation is advisory: no shutdown claim, durable probe or wait.
+    pub(crate) fn reclaim_idle_store_cache(&self) -> bool {
+        let Ok(state) = self.inner.state.try_lock() else {
+            return false;
+        };
+        if self
+            .inner
+            .idle_epoch_probed(&state, admission::IdleProbe::InMemory)
+            .is_err()
+        {
+            return false;
+        }
+        match self.inner.tool_runtime.durable_store().reclaim_idle_cache() {
+            Ok(reclaimed) => reclaimed,
+            Err(error) => {
+                tracing::warn!(%error, "idle store cache maintenance failed");
+                false
+            }
+        }
+    }
+
     /// Context inputs projected from one immutable published generation.
     /// Admitted attempts retain their own captured resources and engine state.
     #[must_use]
@@ -1160,6 +1191,7 @@ impl ConversationRuntime {
         let resources = self.runtime_resources();
         let configuration = resources.configuration();
         ConversationContextConfig {
+            status_clock: Arc::clone(&self.inner.context.status_clock),
             policy: configuration.map_or(self.inner.context.policy, |g| g.config.context_policy()),
             estimator: Arc::clone(&self.inner.context.estimator),
             status_engine: configuration.map_or_else(
@@ -1173,7 +1205,7 @@ impl ConversationRuntime {
                 |g| {
                     g.config
                         .extension_composition()
-                        .agent_status_engine(Arc::new(crate::context::SystemClock))
+                        .agent_status_engine(Arc::clone(&self.inner.context.status_clock))
                 },
             ),
         }

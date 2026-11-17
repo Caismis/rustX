@@ -501,7 +501,6 @@ impl McpServerRuntime {
 
     /// Installs the test-only close synchronization/fault seam.
     #[cfg(test)]
-    #[allow(dead_code)]
     pub(crate) fn install_close_probe(&self, probe: Arc<test_sync::CloseProbe>) {
         assert!(
             self.close_probe.set(probe).is_ok(),

@@ -16,7 +16,10 @@ fn acceptance_and_adoption_share_durable_identity() {
     let accepted = store.accept_inbound(draft("hello")).unwrap();
     let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
     assert_eq!(adopted.items.len(), 1);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
 }
 
@@ -41,7 +44,10 @@ fn acceptance_watermark_is_monotonic_across_adoption() {
 
     let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
     assert_eq!(adopted.items.len(), 1);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert!(
         store.has_accepted_inbound().unwrap(),
         "adoption cannot rewind the acceptance fact"
@@ -74,13 +80,19 @@ fn inbound_adoption_fault_keeps_pending_and_surface_atomic() {
     let store = store();
     store.arm_fail_next_accept_commit();
     assert!(store.accept_inbound(draft("not committed")).is_err());
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
 
     let accepted = store.accept_inbound(draft("pending")).unwrap();
     store.arm_fail_next_adopt_commit();
     assert!(store.adopt_pending_batch(accepted.sequence, None,).is_err());
     assert_eq!(store.load_pending().unwrap().len(), 1);
-    assert!(store.load_canonical().unwrap().is_empty());
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [crate::message::types::MessageBlock; 0]
+    );
     assert_eq!(
         store.load_head().unwrap().revision,
         SurfaceRevision::INITIAL
@@ -88,7 +100,10 @@ fn inbound_adoption_fault_keeps_pending_and_surface_atomic() {
 
     let adopted = store.adopt_pending_batch(accepted.sequence, None).unwrap();
     assert_eq!(adopted.items.len(), 1);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(store.load_head().unwrap().active_message_ids.len(), 1);
 }
 
@@ -100,7 +115,7 @@ fn t14_t15_t20_pending_native_receipt_refills_head_without_a_body_mirror() {
     let mut accepted = Vec::new();
     for index in 0..73 {
         let item = store
-            .accept_inbound(crate::durable::inbox::InboundDraft {
+            .accept_inbound(crate::durable::InboundDraft {
                 message_id: None,
                 source: crate::message::types::UserSource::Human,
                 kind: crate::message::types::InboundKind::Message,
@@ -130,12 +145,12 @@ fn t14_t15_t20_pending_native_receipt_refills_head_without_a_body_mirror() {
     }
     let first = &accepted[0];
     let removed = store
-        .remove_pending(&crate::durable::inbox::PendingInboundRef {
+        .remove_pending(&crate::durable::PendingInboundRef {
             sequence: first.sequence,
             revision: 0,
         })
         .unwrap();
-    let crate::durable::inbox::PendingMutationOutcome::Applied {
+    let crate::durable::PendingMutationOutcome::Applied {
         pending_observation: Some(receipt),
         ..
     } = removed
@@ -187,7 +202,7 @@ fn t14_t20_goal_receipt_owns_pending_and_journal_atomically() {
     let accepted = store
         .accept_goal_round(
             &goal.reference,
-            crate::durable::inbox::InboundDraft {
+            crate::durable::InboundDraft {
                 message_id: None,
                 source: crate::message::types::UserSource::Runtime,
                 kind: crate::message::types::InboundKind::GoalContinuation(goal.reference.clone()),
@@ -252,6 +267,9 @@ fn active_steering_adopts_exact_rows_and_keeps_interleaved_queue_pending() {
     let next = store.adopt_pending_batch(queued.sequence, None).unwrap();
     assert_eq!(next.items.len(), 1);
     assert_eq!(next.items[0].sequence, queued.sequence);
-    assert!(store.load_pending().unwrap().is_empty());
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [crate::durable::inbox::PendingInboundItem; 0]
+    );
     assert_eq!(store.load_canonical().unwrap().len(), 3);
 }

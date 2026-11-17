@@ -626,7 +626,7 @@ fn tool_results(
         .messages()
         .into_iter()
         .filter_map(|message| match message {
-            MessageBlock::Tool(tool) => Some(tool.result),
+            MessageBlock::Tool(tool) => Some(std::sync::Arc::unwrap_or_clone(tool.result)),
             _ => None,
         })
         .collect()
@@ -2417,7 +2417,10 @@ async fn failed_refresh_preserves_a_ready_empty_catalog_and_its_owner() {
     capability.coordinator.commit(candidate).unwrap();
     let before = capability.coordinator.current_snapshot();
     let source = rustx::capabilities::ToolSourceId::Mcp(capability.server_id.clone());
-    assert!(published_mcp_tools(&before, &capability.server_id).is_empty());
+    assert_eq!(
+        published_mcp_tools(&before, &capability.server_id),
+        [] as [std::string::String; 0]
+    );
     assert_eq!(
         capability.coordinator.availability().get(&source),
         Some(&rustx::capabilities::CapabilitySourceState::Ready)

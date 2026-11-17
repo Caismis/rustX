@@ -1,0 +1,29 @@
+{
+  "archive_sha256": "180512e71fc21011d09abc2b8231be661fc19ae86594d72a140de5c30fd2bffc",
+  "files": {
+    "original-incomplete.patch": {
+      "bytes": 7536,
+      "sha256": "3dce4532e3c78e12697ff2fdb16441c67a2fa66e3611c5366e6eb050317dd3e8"
+    },
+    "corrected.patch": {
+      "bytes": 7843,
+      "sha256": "4dcca6d8bc6e584fb813a884b43a2d99c68c3081771183c788ca0e9028d9c14b"
+    },
+    "validation.json": {
+      "bytes": 1576,
+      "sha256": "f810264dea07f7b6f6c5823530b39ef0204f7eff6599d4f8458b51d48603ccf3"
+    },
+    "state-preview.log": {
+      "bytes": 16502,
+      "sha256": "811a27cb58ff2031b0cb02d20bd42b07819922862ecb3caebc0d231ec01a1fe1"
+    },
+    "read-layout.log": {
+      "bytes": 3659,
+      "sha256": "352f5b977fc79dd1e553e43e1dc1b3aac7e3591f81e527feb38394ea3ffbbaff"
+    },
+    "run-validation.py": {
+      "bytes": 2713,
+      "sha256": "2ecbe65787b3016d9750b66defad921817573ce68de29373465f7699de3c2075"
+    }
+  }
+}

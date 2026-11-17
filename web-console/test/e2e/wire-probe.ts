@@ -1,7 +1,8 @@
 import type { Page } from '@playwright/test';
-import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, TraceDetail } from '../../../protocol/app-server/v78';
+import type { AttachmentTarget, CheckpointPage, EffectiveFieldRef, MethodResult, Notification, TraceDetail } from '../../../protocol/app-server/v80';
 import { domainOriginalValue } from '../../../protocol/app-server/domain-observation';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
+import { checkpointSnapshot, foldRuntimeEvent } from '../../../protocol/app-server/projection';
 import { METHOD_POLICY, requestLane, type MethodName } from '../../../protocol/app-server/method-policy';
 import { RpcFailure } from '../../src/client/errors';
 
@@ -10,7 +11,10 @@ type NativeReadResult<M extends NativeRead> = Extract<MethodResult, { type: M ex
 
 /** Observe the real socket; hold replies or lose a committed acknowledgement.
  * No snapshots, notifications, or semantic results are manufactured here. */
-export async function wireProbe(page: Page) {
+export async function wireProbe(page: Page, observer?: {
+  notification: (notification: Notification) => void;
+  retired: () => void;
+}) {
   const requests: { id: string | number; method: string; params: any }[] = [];
   const responses: { id: string | number; method: string; result: any }[] = [];
   const requestTimes = new Map<string | number, number>();
@@ -58,6 +62,7 @@ export async function wireProbe(page: Page) {
       if (id) { activeRead = id; server.send(reads.get(id)!.message); }
     };
     const retire = () => {
+      const firstRetirement = !retired;
       retired = true;
       for (const read of reads.values()) read.reject(new Error('Native read transport retired.'));
       reads.clear();
@@ -65,6 +70,7 @@ export async function wireProbe(page: Page) {
       methods.clear(); attaching.clear(); nodeReads.clear();
       for (const observation of attachments.values()) for (const waiter of observation.waiters) waiter.reject(new Error('Attached-target transport retired.'));
       attachments.clear();
+      if (firstRetirement) observer?.retired();
     };
     currentAttachedTarget = sessionId => {
       if (retired) return Promise.reject(new Error('Attached target requires the current browser transport.'));
@@ -137,6 +143,7 @@ export async function wireProbe(page: Page) {
       const deliver = () => {
         if (retired) return;
         socket.send(message);
+        if (response.method) observer?.notification(response);
         const observation = attachedSession ? attachments.get(attachedSession) : undefined;
         // A late held ACK still reaches the real browser, but only the newest
         // request of this Session may satisfy its current-target barrier.
@@ -183,6 +190,27 @@ export async function wireProbe(page: Page) {
     });
   });
   return { requests, responses, notifications, requestTimes,
+    /** Fold only the current checkpoint's real registration, including typed
+     * patches. Missing or duplicate cursors are fixture failures, not repaired
+     * with history pages or another registration's replay. */
+    projection(target: AttachmentTarget) {
+      const newest = [...responses].reverse();
+      const checkpoint = newest.find(row => row.method === 'session/checkpoint'
+        && sameTarget(requests.find(request => request.id === row.id)?.params.target, target))?.result.checkpoint;
+      if (!checkpoint) return undefined;
+      const registration = newest.find(row => row.result?.type === 'subscribed'
+        && sameTarget(row.result.target, target) && row.result.after_cursor === checkpoint.cursor)?.result;
+      if (!registration) return undefined;
+      let snapshot = checkpointSnapshot(checkpoint), cursor = BigInt(checkpoint.cursor);
+      for (const note of notifications) {
+        if (note.method !== 'session/event' || !sameTarget(note.params.target, target)
+          || note.params.registration_id !== registration.registration_id) continue;
+        if (BigInt(note.params.cursor) !== cursor + 1n) throw Error('Native projection probe cursor is not contiguous.');
+        snapshot = foldRuntimeEvent(snapshot, note.params.event);
+        cursor++;
+      }
+      return snapshot;
+    },
     /** A real Attach ACK delivered on the current physical browser transport.
      * Historical responses remain available for assertions and request counts.
      * Held/lost replies and replies from retired sockets cannot satisfy this barrier. */

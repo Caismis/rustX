@@ -103,21 +103,22 @@ pub(crate) fn rewrite(
 ) -> io::Result<()> {
     let (header, end) = verified_prefix(path, signal).map_err(io::Error::other)?;
     let yaml = &header[3..header.len() - 3];
-    let mut fields: serde_yaml::Mapping = serde_yaml::from_slice(yaml).map_err(io::Error::other)?;
+    let mut fields: serde_yaml_ng::Mapping =
+        serde_yaml_ng::from_slice(yaml).map_err(io::Error::other)?;
     fields.insert("name".into(), name.into());
     if copy {
         let metadata = fields
             .entry("metadata".into())
-            .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+            .or_insert_with(|| serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new()));
         if !metadata.is_mapping() {
-            *metadata = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+            *metadata = serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new());
         }
         metadata
             .as_mapping_mut()
             .expect("metadata is a mapping")
             .insert(DEFAULT_DISABLED_KEY.into(), true.into());
     }
-    let yaml = serde_yaml::to_string(&fields).map_err(io::Error::other)?;
+    let yaml = serde_yaml_ng::to_string(&fields).map_err(io::Error::other)?;
     if yaml.len() + 7 > MAX_FRONTMATTER_BYTES {
         return Err(io::Error::other("Skill frontmatter exceeds 2 MiB"));
     }

@@ -1,0 +1,142 @@
+{
+  "head": "b82cfe2cc93f356a221db07e2ee337a462cf32a2",
+  "commands": [
+    {
+      "name": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "unit-build",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--all-features",
+        "--lib",
+        "--no-run",
+        "--message-format=json"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "observation_source_read_tests",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "observation_source_read_tests",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "publication_header::tests",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "publication_header::tests",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "message_keyed_block_layout",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "message_keyed_block_layout",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "debug-bins",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--all-features",
+        "--bins",
+        "--message-format=json"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "observation",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "observation::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "runtime_client",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "runtime_client::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "durable-sqlite",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "durable::sqlite::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "agent-execution",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "agent::execution::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "app_server-schema",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "app_server::schema::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "app_server-wire",
+      "command": [
+        "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+        "app_server::wire::",
+        "--test-threads=8"
+      ],
+      "exit": 0
+    },
+    {
+      "name": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "--all-targets",
+        "--all-features",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exit": 0
+    }
+  ],
+  "patch_sha256": "85e1b0dd7888d951ec33d61ed646e39fd58d68afca416135cbdf91bfa7fa1dce",
+  "unit_binary": {
+    "path": "/home/capi/.cache/rustx-pr485-main-integration-target/debug/deps/rustx-13633ab001b2165b",
+    "sha256": "01a44b4b5ae58a77babb624fc87c53f2c3c79088680a557244786383c0052f37"
+  },
+  "verified_unchanged_patch": true
+}

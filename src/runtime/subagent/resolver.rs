@@ -138,8 +138,6 @@ pub struct ResolvedSubagentSkill {
     pub provenance: crate::skills::SkillProvenance,
     /// Normalized frontmatter definition version, independent of resource bytes.
     pub binding: SkillBinding,
-    /// Normalized dependency declarations of this frozen definition.
-    pub dependencies: crate::skills::DependencyManifest,
     /// Frozen model-visible metadata, including the actual SKILL.md location.
     pub catalog_entry: SkillCatalogEntry,
 }
@@ -1069,8 +1067,7 @@ fn freeze_tool(
 ///
 /// - the immutable `SkillId` + `SkillVersionId` binding of the exact package
 ///   this generation admitted, independent of runtime resource edits;
-/// - model-visible catalog metadata and effective source/location;
-/// - normalized declared dependencies for selected environment preparation.
+/// - model-visible catalog metadata and effective source/location.
 ///
 /// A `SKILL.md` body and its supporting resources are deliberately absent:
 /// rustX progressive disclosure is preserved, so a selected Skill's content
@@ -1115,7 +1112,6 @@ fn resolve_skills(
                 skill_id: package.id().clone(),
                 version_id: package.version_id().clone(),
             },
-            dependencies: package.dependencies().clone(),
             catalog_entry: catalog_entry.clone(),
         });
     }
@@ -1314,15 +1310,14 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
                     .materialization
                     .sources
                     .get(source_id)
-                    .map(|binding| {
+                    .map_or_default(|binding| {
                         binding
                             .tool_permissions
                             .get(name)
                             .copied()
                             .or(binding.permissions)
                             .unwrap_or_default()
-                    })
-                    .unwrap_or_default();
+                    });
                 field(
                     &mut hasher,
                     "tool.permissions",
@@ -1339,14 +1334,8 @@ fn compute_profile_digest(framing: &ProfileFraming<'_>) -> SubagentExecutionProf
             // Effective source is execution binding; shadow diagnostics are inert.
             provenance,
             binding,
-            dependencies,
             catalog_entry,
         } = skill;
-        field(
-            &mut hasher,
-            "skill.dependencies",
-            &serde_json::to_string(dependencies).expect("frozen dependencies serialize"),
-        );
         field(&mut hasher, "skill.id", binding.skill_id.as_str());
         field(&mut hasher, "skill.version_id", binding.version_id.as_str());
         let crate::skills::SkillCatalogEntry {
@@ -1709,7 +1698,8 @@ mod tests {
             id: ToolId::new(format!("tool-{name}-{origin:?}")),
             name: name.to_owned(),
             description: format!("{name} tool"),
-            input_schema: serde_json::json!({"type": "object", "additionalProperties": false}),
+            input_schema: serde_json::json!({"type": "object", "additionalProperties": false})
+                .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             replay_policy: ToolReplayPolicy::Never,
             origin,
@@ -2042,7 +2032,10 @@ mod tests {
             let frozen =
                 super::FrozenAgentComposition::freeze(&definition, &profile, &skills, &configured)
                     .unwrap();
-            assert!(frozen.tools.is_empty());
+            assert_eq!(
+                frozen.tools,
+                [] as [crate::runtime::subagent::resolver::ResolvedSubagentTool; 0]
+            );
             assert_eq!(frozen.resource_sources, [source.clone()].into());
             assert_eq!(
                 frozen.materialization.sources,
@@ -2728,7 +2721,8 @@ mod tests {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"]
-            }),
+            })
+            .into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,
@@ -2773,7 +2767,8 @@ mod tests {
             "type": "object",
             "properties": {"path": {"type": "string"}, "limit": {"type": "number"}},
             "required": ["path"]
-        });
+        })
+        .into();
         variants.push(spec_with_builtin(reschematized));
 
         let mut backgrounded = base.clone();
@@ -2842,9 +2837,9 @@ mod tests {
         );
 
         let mut first = frozen_builtin_definition();
-        first.input_schema = forwards;
+        first.input_schema = forwards.into();
         let mut second = frozen_builtin_definition();
-        second.input_schema = backwards;
+        second.input_schema = backwards.into();
         assert_eq!(
             spec_with_builtin(first).profile_digest(),
             spec_with_builtin(second).profile_digest(),
@@ -2854,9 +2849,9 @@ mod tests {
         // Array order, by contrast, is semantic in JSON Schema and is never
         // sorted away.
         let mut ascending = frozen_builtin_definition();
-        ascending.input_schema = serde_json::json!({"required": ["a", "b"]});
+        ascending.input_schema = serde_json::json!({"required": ["a", "b"]}).into();
         let mut descending = frozen_builtin_definition();
-        descending.input_schema = serde_json::json!({"required": ["b", "a"]});
+        descending.input_schema = serde_json::json!({"required": ["b", "a"]}).into();
         assert_ne!(
             spec_with_builtin(ascending).profile_digest(),
             spec_with_builtin(descending).profile_digest(),
@@ -2881,7 +2876,7 @@ mod tests {
             id: ToolId::new("mcp-github-get_issue"),
             name: "get_issue".to_owned(),
             description: "Reads one issue.".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Mcp {
@@ -3161,7 +3156,6 @@ mod tests {
                     skill_id: SkillId::new("code-review"),
                     version_id: SkillVersionId::new("sha256:abc"),
                 },
-                dependencies: crate::skills::DependencyManifest::default(),
                 catalog_entry: crate::skills::SkillCatalogEntry {
                     name: "code-review".to_owned(),
                     description: description.to_owned(),
@@ -3190,13 +3184,6 @@ mod tests {
         let mut renamed = base.clone();
         renamed.skills[0].catalog_entry.name = "review".to_owned();
         assert_ne!(base.profile_digest(), renamed.profile_digest());
-
-        let mut dependencies = base.clone();
-        dependencies.skills[0]
-            .dependencies
-            .python
-            .insert("example".into(), "1.0".into());
-        assert_ne!(base.profile_digest(), dependencies.profile_digest());
 
         let mut reversioned = base.clone();
         reversioned.skills[0].binding.version_id = SkillVersionId::new("sha256:def");

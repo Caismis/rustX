@@ -122,11 +122,9 @@ fn clone_and_fork_with_empty_destinations_are_still_resume_visible() {
     // The fork destination is genuinely empty — initial Surface, no
     // canonical message, no Pending Inbound — and used anyway.
     let fork_store = store_for(&catalog, &fork_id, &fork_conversation);
-    assert!(
-        fork_store
-            .load_canonical()
-            .expect("fork canonical")
-            .is_empty()
+    assert_eq!(
+        fork_store.load_canonical().expect("fork canonical"),
+        [] as [crate::message::types::MessageBlock; 0]
     );
     assert_eq!(
         fork_store.load_head().expect("fork head").revision,
@@ -191,7 +189,8 @@ fn lineage_product_paths_preserve_reused_provider_ids_without_compaction() {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         })
     };
     let history = vec![
@@ -311,7 +310,7 @@ fn lineage_product_paths_preserve_reused_provider_ids_without_compaction() {
                                 && result.occurrence.block_index == tool.block_index
                         })
                         .expect("indexed result has its exact canonical owner after reopen");
-                    assert_eq!(tool.result.as_ref(), Some(&canonical_result.result));
+                    assert_eq!(tool.result.as_ref(), Some(canonical_result.result.as_ref()));
                     assert_eq!(tool.call.id, ToolCallId::new("call-1"));
                     observed += 1;
                 }
@@ -412,19 +411,19 @@ fn clone_uses_exact_revision_and_isolates_execution_identity_domains() {
         .expect("cloned tool result");
     assert_eq!(result.tool_call_id, call.id);
 
-    assert!(
+    assert_eq!(
         destination_store
             .read_events(None, 64)
             .expect("destination events")
-            .events
-            .is_empty()
+            .events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
-    assert!(
+    assert_eq!(
         destination_store
             .read_request_snapshots(None, 64)
             .expect("destination request snapshots")
-            .snapshots
-            .is_empty()
+            .snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
 
     let destination = catalog
@@ -529,19 +528,16 @@ fn clone_preserves_todo_state_but_starts_a_fresh_execution_epoch() {
             .unwrap()
             .is_none()
     );
-    assert!(
-        destination_store
-            .read_events(None, 64)
-            .unwrap()
-            .events
-            .is_empty()
+    assert_eq!(
+        destination_store.read_events(None, 64).unwrap().events,
+        [] as [crate::events::types::RuntimeEventEnvelope; 0]
     );
-    assert!(
+    assert_eq!(
         destination_store
             .read_request_snapshots(None, 64)
             .unwrap()
-            .snapshots
-            .is_empty()
+            .snapshots,
+        [] as [crate::model::snapshot::RequestSnapshot; 0]
     );
 }
 

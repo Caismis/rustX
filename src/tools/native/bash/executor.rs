@@ -538,12 +538,22 @@ async fn run_bash_unix(
     // supervised command runner; this tool owns the capture and the
     // canonical result formatting.
     let runner_control = control.map(|control| control.runner.clone());
+    let command_environment = match crate::tools::execution_environment::command_entries(
+        context.environment,
+        context.workspace,
+    ) {
+        Ok(entries) => entries,
+        Err(message) => {
+            return match background_output {
+                Some(established) => failed_with_complete_empty_output(message, established),
+                None => failed_result(message),
+            };
+        }
+    };
     let spec = SupervisedCommandSpec {
         command: command.to_owned(),
         cwd: context.workspace.root().to_path_buf(),
-        command_environment: context
-            .environment
-            .child_environment(context.workspace.root()),
+        command_environment,
         timeout,
         cancellation: context.cancellation.child_signal(),
     };

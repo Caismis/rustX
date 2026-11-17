@@ -348,7 +348,7 @@ async fn cold_load_preserves_unknown_external_tool_outcome_without_replay() {
         f.manager.unload(&id).await.unwrap();
         assert_eq!(current.historical_canonical_history().unwrap(), history);
         assert_eq!(events(&current).iter().filter(|e| matches!(e, RuntimeEvent::ToolExecutionStarted { .. })).count(), 1);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         assert!(!f.workspaces[0].join("must-not-exist").exists());
         f.close().await;
     }).await;
@@ -411,7 +411,7 @@ async fn host_drain_and_native_activation_have_both_initialization_winners() {
                     &access.database_path,
                 )
                 .unwrap();
-                crate::durable::inbox::InboxStore::accept_inbound(
+                crate::durable::InboxStore::accept_inbound(
                     &store,
                     crate::durable::InboundDraft {
                         message_id: None,
@@ -434,7 +434,7 @@ async fn host_drain_and_native_activation_have_both_initialization_winners() {
             }
             let loading = f.load(0);
             gate_entered(&activation).await;
-            assert!(f.provider.request_bodies().is_empty());
+            assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             if cut < 2 {
                 let native = {
                     let registry = f.manager.registry.0.lock().unwrap();
@@ -457,8 +457,8 @@ async fn host_drain_and_native_activation_have_both_initialization_winners() {
                     loading.await.unwrap(),
                     Err(RuntimeManagerError::LoadingCancelled)
                 ));
-                assert!(draining.await.unwrap().is_empty());
-                assert!(f.provider.request_bodies().is_empty());
+                assert_eq!(draining.await.unwrap(), [] as [std::string::String; 0]);
+                assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
             } else {
                 drop(release);
                 loading.await.unwrap().unwrap();
@@ -468,7 +468,7 @@ async fn host_drain_and_native_activation_have_both_initialization_winners() {
                 let host = f.host.clone();
                 let draining = tokio::spawn(async move { host.drain().await });
                 f.gates[1].release();
-                assert!(draining.await.unwrap().is_empty());
+                assert_eq!(draining.await.unwrap(), [] as [std::string::String; 0]);
                 assert_eq!(f.provider.request_bodies().len(), 1);
             }
             assert!(f.manager.is_empty());
@@ -499,7 +499,7 @@ async fn archive_after_identity_resolution_fences_the_registered_execution_owner
         assert_eq!(probe.acquisitions.load(Ordering::SeqCst), 1);
         assert_eq!(probe.compositions.load(Ordering::SeqCst), 0);
         assert_eq!(f.manager.residency(&id), ResidencyState::Unloaded);
-        assert!(f.provider.request_bodies().is_empty());
+        assert_eq!(f.provider.request_bodies(), [] as [std::string::String; 0]);
         // Archive remains readable; only execution admission is fenced.
         let access = f
             .manager

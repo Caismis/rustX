@@ -83,7 +83,7 @@ async fn headless_interactions_broadcast_survive_disconnect_and_select_one_respo
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts() {
-    use crate::durable::inbox::{PendingInboundRef, PendingMutationOutcome as Outcome};
+    use crate::durable::{PendingInboundRef, PendingMutationOutcome as Outcome};
     bounded(async {
         let f = Fixture::new().await;
         let connection = AppServerConnection::new(f.host.clone());
@@ -272,7 +272,7 @@ async fn exact_pending_mutations_are_routed_cas_bound_and_do_not_cancel_attempts
             panic!("snapshot")
         };
         let snapshot = Box::new(checkpoint_12.snapshot);
-        assert!(snapshot.inbound.pending.is_empty());
+        assert_eq!(snapshot.inbound.pending, [] as [crate::runtime_client::snapshot::InboundItemView; 0]);
         assert!(
             f.manager
                 .load(&a.session_id, None)

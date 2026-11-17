@@ -114,6 +114,60 @@ pub(crate) fn write_runtime_config_with_goal(root: &Path) {
     );
 }
 
+/// Writes one project Workflow definition, its workflow-only reviewer profile,
+/// and the canonical external `ProviderEmulator` model catalog into `rustx.toml`.
+pub(crate) fn write_emulator_workflow_config(
+    lab: &Lab,
+    openai_base_url: &str,
+    id: &str,
+    yaml: &str,
+) {
+    let workflows = lab.workspace().join(".agents/workflows");
+    std::fs::create_dir_all(&workflows).expect("workflows directory");
+    std::fs::write(workflows.join(format!("{id}.yaml")), yaml).expect("write workflow yaml");
+    let reviewer_dir = lab.workspace().join(".agents/agents/reviewer");
+    std::fs::create_dir_all(&reviewer_dir).expect("reviewer profile directory");
+    std::fs::write(
+        lab.workspace().join(".agents/agents/reviewer.toml"),
+        "description = \"The Workflow-only reviewer.\"\ninstructions = \"Review requests carefully.\\n\"\n",
+    )
+    .expect("reviewer profile toml");
+    let mut document: serde_json::Value =
+        rustx::toml_authoring::parse(runtime_json(false, false).as_bytes()).unwrap();
+    document["providers"] = serde_json::json!({
+        "emulator": {
+            "protocol": "openai_chat_completions",
+            "base_url": openai_base_url,
+            "api_key": "issue552-secret"
+        }
+    });
+    document["models"] = serde_json::json!({
+        "emulator/workflow-model": {
+            "provider": "emulator",
+            "id": "workflow-model",
+            "context_window": 128_000,
+            "max_output_tokens": 1024,
+            "capabilities": {
+                "input_modalities": ["text"],
+                "output_modalities": ["text"]
+            },
+            "compat": { "chat_reasoning_replay": "omit" }
+        }
+    });
+    document["agent"]["model"]["model"] = serde_json::json!("emulator/workflow-model");
+    document["agent"]["tools"]["builtin"] = serde_json::json!(["read"]);
+    document["agent"]["agents"] = serde_json::json!([]);
+    document["agent"]["workflows"] = serde_json::json!([]);
+    crate::launch_fixture::write_document(
+        &lab.root().join("rustx.toml"),
+        &toml::to_string_pretty(&document).unwrap(),
+    );
+    crate::launch_fixture::write_document(
+        &lab.workspace().join("rustx.toml"),
+        &format!("approval_mode = \"full_access\"\n[agent]\nworkflows = [\"{id}\"]\n"),
+    );
+}
+
 /// One temporary lab: the complete on-disk world of one conformance case.
 pub(crate) struct Lab {
     dir: tempfile::TempDir,

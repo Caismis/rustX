@@ -8,9 +8,8 @@
 //! the attempt's lifetime.
 //!
 //! M1 establishes the boundary with the smallest typed representation
-//! needed; capability mutation, Skill environment preparation, and external MCP/Python
-//! binding provenance are runtime-owned. No TypeScript/control-plane model is
-//! imported.
+//! needed; capability mutation and external MCP/Python binding provenance are
+//! runtime-owned. No TypeScript/control-plane model is imported.
 
 use serde::{Deserialize, Serialize};
 

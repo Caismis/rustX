@@ -394,7 +394,7 @@ pub async fn stdio_subscription_change_retires_buffered_notifications(detach: bo
         // No response is outstanding. These bytes are a real notification
         // already written before the next request; leave it unread so that
         // request's ordinary demultiplexer must buffer it before its response.
-        assert!(!driver.from_session.fill_buf().await.unwrap().is_empty());
+        assert_ne!(driver.from_session.fill_buf().await.unwrap(), [] as [u8; 0]);
         snapshot(&mut driver, 5).await;
         let buffered = driver
             .buffered_events
@@ -729,9 +729,13 @@ pub async fn receive_until(
                 expected,
                 "one subscription observes strictly contiguous cursors"
             );
-            match &event.event {
+            match event.event.as_ref() {
                 RuntimeClientEvent::ProjectionTransition { metadata, .. } => {
                     assert_eq!(metadata.read_cut.revision, event.cursor.get());
+                }
+                RuntimeClientEvent::ProjectionDelta { metadata, .. } => {
+                    assert_eq!(metadata.read_cut.revision, event.cursor.get());
+                    assert_eq!(metadata.base_cursor.get() + 1, event.cursor.get());
                 }
                 RuntimeClientEvent::CheckpointAdvanced { checkpoint, .. } => {
                     assert_eq!(checkpoint.cursor, event.cursor);
@@ -773,7 +777,9 @@ async fn receive_read_domain_suffix(
             .iter()
             .all(|event| event.event.facts().iter().any(|fact| matches!(
                 fact,
-                RuntimeClientEvent::TraceChanged | RuntimeClientEvent::ReadDomainsUpdated { .. }
+                RuntimeClientEvent::TraceChanged
+                    | RuntimeClientEvent::ReadDomainsUpdated { .. }
+                    | RuntimeClientEvent::ReadDomainsPatched { .. }
             )))
     );
 }
@@ -874,7 +880,7 @@ pub async fn unsupported_protocol_version_is_typed(factory: &dyn DriverFactory) 
         .await;
     let mut driver = connect(&fixture, factory);
 
-    // v73 cannot decode the new closed ModelCapabilities view. Reject it
+    // v76 cannot decode the new closed ModelCapabilities view. Reject it
     // before any checkpoint or model catalog can cross this connection.
     let old = driver
         .request(RuntimeClientRequest::Initialize {
@@ -1133,7 +1139,9 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
             FakeStep::ParkUntilReleased(release_rx),
             FakeStep::Emit(ModelEvent::TextDelta {
                 block_index: ContentBlockIndex::new(0),
-                text: "done".to_owned(),
+                // Deterministic pressure makes this a streaming scenario even when
+                // a short final answer uses only its canonical notification.
+                text: ".".repeat(65_536),
             }),
             FakeStep::Emit(ModelEvent::Completed {
                 finish_reason: ModelFinishReason::Stop,
@@ -1586,9 +1594,9 @@ pub async fn before_start_cancellation_repairs_runtime_client(factory: &dyn Driv
     );
     assert_eq!(
         foreground[0].committed_result.as_ref(),
-        Some(&tool_message.result)
+        Some(tool_message.result.as_ref())
     );
-    assert_eq!(&tool_message.result, settlements[0].1);
+    assert_eq!(tool_message.result.as_ref(), settlements[0].1);
     assert_eq!(Some(&attempt_id), attempt.attempt_id.as_ref());
     assert!(calls.borrow().is_empty(), "the executor was never invoked");
 }
@@ -2075,7 +2083,7 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
         !status.sections.is_empty(),
         "the structured sections are projected, not only the rendering"
     );
-    assert!(!status.rendered.is_empty());
+    assert_ne!(status.rendered, "");
 
     // Placement is a runtime fact, published once with the opportunity that
     // established it, not something a client derives from arrival order. This
@@ -2100,7 +2108,10 @@ pub async fn agent_status_is_runtime_owned(factory: &dyn DriverFactory) {
     // The snapshot carries the same composed observation, in the same
     // bounded window a subscriber folded.
     let (snapshot, _) = snapshot_of(&mut *driver, 4).await;
-    assert_eq!(snapshot.statuses.as_slice(), std::slice::from_ref(status));
+    assert_eq!(
+        snapshot.statuses.as_slice(),
+        std::slice::from_ref(status.as_ref())
+    );
     assert!(snapshot.messages.iter().any(|message| {
         matches!(
             message,
@@ -2444,7 +2455,10 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
         .await;
     let mut driver = connect(&fixture, factory);
     let (initial, initial_cursor) = initialize(&mut *driver, 1).await;
-    assert!(initial.messages.is_empty());
+    assert_eq!(
+        initial.messages,
+        [] as [crate::message::types::MessageBlock; 0]
+    );
 
     submit(&mut *driver, 2, "hello").await;
     await_model_parked(&fixture.model).await;
@@ -2467,7 +2481,10 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
             .any(|fact| matches!(fact, RuntimeClientEvent::AttemptSettled { .. }))
     })
     .await;
-    assert!(!events.is_empty());
+    assert_ne!(
+        events,
+        [] as [crate::runtime_client::types::RuntimeClientProtocolEvent; 0]
+    );
 
     let (settled, settled_cursor) = snapshot_of(&mut *driver, 5).await;
     receive_read_domain_suffix(

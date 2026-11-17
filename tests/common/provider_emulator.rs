@@ -240,7 +240,7 @@ impl ProviderEmulator {
             "{}/__control/observations/await?kind={kind}&timeoutMs={}{}",
             self.base_url(),
             AWAIT_TIMEOUT.as_millis(),
-            name.map(|name| format!("&name={name}")).unwrap_or_default(),
+            name.map_or_default(|name| format!("&name={name}")),
         );
         let response = self.client.get(&url).send().await.expect("control request");
         let status = response.status();
@@ -248,7 +248,7 @@ impl ProviderEmulator {
         assert!(
             status.is_success(),
             "the provider never reached {kind}{}: {body}\n{}",
-            name.map(|name| format!(" ({name})")).unwrap_or_default(),
+            name.map_or_default(|name| format!(" ({name})")),
             self.diagnostics()
         );
         body
@@ -343,6 +343,16 @@ impl ProviderEmulator {
             status.status,
             self.diagnostics()
         );
+    }
+
+    /// Terminates and reaps an interrupted provider process without asserting
+    /// scenario completion, used when a crash test `SIGKILL`s the runtime
+    /// mid-scenario.
+    pub async fn abort(mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.start_kill();
+            let _ = tokio::time::timeout(Duration::from_secs(5), child.wait()).await;
+        }
     }
 }
 

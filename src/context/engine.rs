@@ -669,21 +669,14 @@ impl ContextEngine {
         if !request.messages.has_media() {
             return input;
         }
-        let costs: std::collections::BTreeMap<_, _> = request
-            .images
-            .iter()
-            .map(|(id, bytes)| {
-                (
-                    id.clone(),
-                    crate::model::images::measure_png(bytes)
-                        .ok()
-                        .map(crate::model::images::ImageMeasurement::input_tokens),
-                )
-            })
-            .collect();
         input.saturating_add(crate::model::media::image_cost_input(
             &request.messages,
-            |id| costs.get(id).copied().flatten(),
+            |id| {
+                request
+                    .images
+                    .get(id)
+                    .and_then(crate::model::images::FrozenImage::input_tokens)
+            },
         ))
     }
 

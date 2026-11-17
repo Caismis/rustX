@@ -373,7 +373,8 @@ fn tool_block(id: &str) -> MessageBlock {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 
@@ -638,7 +639,10 @@ fn a_seeded_lineage_retains_projection_dependencies_after_source_deletion() {
         source_id
     );
     destination.projected_history().unwrap();
-    assert!(destination.read_events(None, 64).unwrap().events.is_empty());
+    assert_eq!(
+        destination.read_events(None, 64).unwrap().events,
+        [] as [rustx::events::RuntimeEventEnvelope; 0]
+    );
     drop(destination);
     let reopened = SqliteConversationStore::open(destination_id, &destination_path).unwrap();
     reopened.initialize(seed.canonical()).unwrap();
@@ -1006,8 +1010,8 @@ fn recovery_safety_fails_closed_on_incomplete_or_compacted_prefixes() {
 // Forced concurrent claim/mutation writer orders live in
 // durable::sqlite::inbox::tests::pending_transaction; these public-contract tests
 // require no test hooks. No mailbox, transport, or browser mutex is involved.
-fn pending_ref(item: &AcceptedInbound) -> rustx::durable::inbox::PendingInboundRef {
-    rustx::durable::inbox::PendingInboundRef {
+fn pending_ref(item: &AcceptedInbound) -> rustx::durable::PendingInboundRef {
+    rustx::durable::PendingInboundRef {
         sequence: item.sequence,
         revision: 0,
     }
@@ -1015,7 +1019,7 @@ fn pending_ref(item: &AcceptedInbound) -> rustx::durable::inbox::PendingInboundR
 
 #[test]
 fn mutation_edit_before_claim_uses_committed_content_and_exact_obligation() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     let (store, _) = file_store();
     let accepted = store.accept_inbound(human("old")).unwrap();
     let selection = store.select_pending_batch().unwrap().unwrap();
@@ -1038,7 +1042,7 @@ fn mutation_edit_before_claim_uses_committed_content_and_exact_obligation() {
 
 #[test]
 fn mutation_claim_before_edit_or_remove_is_permanently_stale() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     let (store, _) = file_store();
     let accepted = store.accept_inbound(human("original")).unwrap();
     store.adopt_pending_batch(accepted.sequence, None).unwrap();
@@ -1056,7 +1060,7 @@ fn mutation_claim_before_edit_or_remove_is_permanently_stale() {
 
 #[test]
 fn mutation_remove_after_selection_excludes_obligation_and_transcript() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     let (store, _) = file_store();
     let removed = store.accept_inbound(human("remove")).unwrap();
     let retained = store.accept_inbound(human("retain")).unwrap();
@@ -1082,28 +1086,34 @@ fn mutation_remove_entire_selection_claims_nothing_and_creates_no_obligation() {
     let accepted = store.accept_inbound(human("remove")).unwrap();
     let selection = store.select_pending_batch().unwrap().unwrap();
     store.remove_pending(&pending_ref(&accepted)).unwrap();
-    assert!(
+    assert_eq!(
         store
             .adopt_pending_batch(selection.watermark, None)
             .unwrap()
-            .items
-            .is_empty()
+            .items,
+        [] as [rustx::durable::PendingInboundItem; 0]
     );
-    assert!(store.read_events(None, 64).unwrap().events.is_empty());
-    assert!(store.load_canonical().unwrap().is_empty());
-    assert!(store.load_pending().unwrap().is_empty());
-    assert!(
-        store
-            .load_transcript_page(None, 64)
-            .unwrap()
-            .entries
-            .is_empty()
+    assert_eq!(
+        store.read_events(None, 64).unwrap().events,
+        [] as [rustx::events::RuntimeEventEnvelope; 0]
+    );
+    assert_eq!(
+        store.load_canonical().unwrap(),
+        [] as [rustx::message::MessageBlock; 0]
+    );
+    assert_eq!(
+        store.load_pending().unwrap(),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
+    assert_eq!(
+        store.load_transcript_page(None, 64).unwrap().entries,
+        [] as [rustx::durable::TranscriptEntry; 0]
     );
 }
 
 #[test]
 fn mutation_competing_edits_have_one_cas_winner_across_connections() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     let (store, path) = file_store();
     let accepted = store.accept_inbound(human("old")).unwrap();
     let barrier = Arc::new(std::sync::Barrier::new(3));
@@ -1147,7 +1157,7 @@ fn mutation_competing_edits_have_one_cas_winner_across_connections() {
 
 #[test]
 fn mutation_edit_remove_and_duplicate_remove_obey_cas_order() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     for edit_first in [true, false] {
         let (store, _) = file_store();
         let accepted = store.accept_inbound(human("old")).unwrap();
@@ -1158,7 +1168,7 @@ fn mutation_edit_remove_and_duplicate_remove_obey_cas_order() {
                 Ok(Outcome::Applied { .. })
             ));
             assert_eq!(store.remove_pending(&expected), Ok(Outcome::Conflict));
-            let updated = rustx::durable::inbox::PendingInboundRef {
+            let updated = rustx::durable::PendingInboundRef {
                 revision: 1,
                 ..expected.clone()
             };
@@ -1194,7 +1204,7 @@ fn mutation_edit_remove_and_duplicate_remove_obey_cas_order() {
 
 #[test]
 fn mutation_response_loss_and_reopen_expose_exact_committed_outcome() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     let (store, path) = file_store();
     let edited = store.accept_inbound(human("old")).unwrap();
     let removed = store.accept_inbound(human("gone")).unwrap();
@@ -1241,7 +1251,7 @@ fn mutation_failed_sql_transaction_changes_neither_payload_nor_revision() {
 
 #[test]
 fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     let (store, _) = file_store();
     let other = SqliteConversationStore::in_memory(ConversationId::new(
         "conv_d9298a10-d1b0-7358-87dc-4bd85dac641b",
@@ -1289,13 +1299,16 @@ fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
         other.remove_pending(&pending_ref(&other_accepted)),
         Ok(Outcome::Applied { .. })
     ));
-    assert!(other.load_pending().unwrap().is_empty());
+    assert_eq!(
+        other.load_pending().unwrap(),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
     assert_eq!(store.load_pending().unwrap()[0].message, accepted.message);
 }
 
 #[test]
 fn mutation_concurrent_edit_remove_and_two_removes_have_one_winner() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     for edit in [true, false] {
         let (store, path) = file_store();
         let accepted = store.accept_inbound(human("old")).unwrap();
@@ -1341,7 +1354,7 @@ fn mutation_concurrent_edit_remove_and_two_removes_have_one_winner() {
 
 #[test]
 fn mutation_uploaded_reference_is_never_flattened_by_text_edit() {
-    use rustx::durable::inbox::PendingMutationOutcome as Outcome;
+    use rustx::durable::PendingMutationOutcome as Outcome;
     let (store, _) = file_store();
     let mut draft = human("keep upload");
     draft.content.push(UserContentBlock::UploadedFile(

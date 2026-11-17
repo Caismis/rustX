@@ -1076,7 +1076,10 @@ async fn t04_large_canonical_source_has_bounded_stdio_initialize_and_checkpoint(
     else {
         panic!("independent bounded checkpoint");
     };
-    assert!(!checkpoint.snapshot.message_descriptors.is_empty());
+    assert_ne!(
+        checkpoint.snapshot.message_descriptors,
+        [] as [std::sync::Arc<crate::observation::transcript::RuntimeClientMessageDescriptor>; 0]
+    );
     let frontier = checkpoint
         .collections
         .iter()
@@ -1479,11 +1482,19 @@ async fn a_broken_output_pipe_detaches_without_retrying() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn detach_keeps_the_byte_stream_open() {
     let host = idle_host("conv_6c2736e7-af9c-7f31-899e-f7c0303b484c").await;
+    host.projection_settled().await;
+    let cursor = host.checkpoint().expect("settled startup cut").cursor;
+    // Subscribe at the joined startup cut. Replaying activation from zero
+    // would race a legitimate notification against the following detach.
+    let subscribe = format!(
+        "{{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":{}}}\n",
+        cursor.get()
+    );
     let outcome = run_session(
         host.endpoint(),
         &[
             &initialize_record(1),
-            b"{\"method\":\"subscribe_events\",\"id\":2,\"after_cursor\":0}\n",
+            subscribe.as_bytes(),
             b"{\"method\":\"detach\",\"id\":3}\n",
             b"{\"method\":\"checkpoint_get\",\"id\":4}\n",
             &initialize_record(5),
@@ -1617,15 +1628,15 @@ async fn shutdown_does_not_close_the_transport() {
 
     // This idle shutdown has no attempt to cancel, so canonical history is
     // untouched.
-    assert!(
+    assert_eq!(
         fixture
             .host
             .checkpoint()
             .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
             .expect("snapshot")
             .0
-            .messages
-            .is_empty()
+            .messages,
+        [] as [crate::message::types::MessageBlock; 0]
     );
 }
 

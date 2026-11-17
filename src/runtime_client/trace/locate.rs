@@ -25,7 +25,51 @@ pub struct TraceToolLocation {
     pub page: TracePage,
 }
 
+/// A native history window containing one exact Workflow run's admitted start.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TraceWorkflowLocation {
+    pub record_id: String,
+    pub page: TracePage,
+}
+
 impl TraceProjection<'_> {
+    pub(crate) fn locate_workflow_at(
+        &self,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+        cut: &crate::durable::observation::ObservationReadCut,
+    ) -> Result<Option<TraceWorkflowLocation>, ConversationStoreError> {
+        if cut != self.cut()? {
+            return Err(ConversationStoreError::InvalidReference(
+                "Workflow locator requires the captured source cut".into(),
+            ));
+        }
+        let Some(sequence) = self
+            .store
+            .observation_workflow_trace_sequence(cut, run_id)?
+        else {
+            return Ok(None);
+        };
+        let record_id = TraceCursor::at(sequence).0;
+        let end = TraceCursor::at(sequence.checked_add(1).ok_or_else(|| {
+            ConversationStoreError::InvalidReference("Trace cursor exhausted".into())
+        })?);
+        let page = self.page(Some(&end), TRACE_PAGE_LIMIT)?;
+        if !page.records.iter().any(|record| record.id == record_id) {
+            return Err(ConversationStoreError::InvalidReference(
+                "original Workflow Trace record is unavailable".into(),
+            ));
+        }
+        Ok(Some(TraceWorkflowLocation { record_id, page }))
+    }
+
+    pub(crate) fn locate_workflow(
+        &self,
+        run_id: &crate::runtime::workflow::WorkflowRunId,
+    ) -> Result<Option<TraceWorkflowLocation>, ConversationStoreError> {
+        self.locate_workflow_at(run_id, self.cut()?)
+    }
+
     /// Resolves an exact occurrence against a durable source-owned read cut.
     /// # Errors
     /// A modified locator or unavailable read cut is an explicit source error.

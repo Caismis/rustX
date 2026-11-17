@@ -1,6 +1,6 @@
 use super::*;
 
-fn git_files(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
+pub(super) fn git_files(root: &Path) -> BTreeMap<PathBuf, Option<Vec<u8>>> {
     fn visit(root: &Path, directory: &Path, files: &mut BTreeMap<PathBuf, Option<Vec<u8>>>) {
         for entry in fs::read_dir(directory).unwrap() {
             let entry = entry.unwrap();
@@ -53,7 +53,7 @@ async fn change(
     (summary.files[index].clone(), comparison)
 }
 
-async fn text_change(
+pub(super) async fn text_change(
     store: &ChangesStore,
     attempt: &str,
     path: &str,
@@ -95,6 +95,24 @@ async fn baseline_and_final_snapshots_never_execute_hooks_or_required_filters() 
         "hooks/post-index-change",
         &format!("printf ran >> {}", shell_path(&hook_marker)),
     );
+    let monitor = program(
+        root,
+        "fsmonitor",
+        &format!(
+            "printf ran >> {}",
+            shell_path(&root.join(".git/fsmonitor-ran"))
+        ),
+    );
+    git(root, &["config", "core.fsmonitor", &shell_path(&monitor)]);
+    let external = program(
+        root,
+        "external-diff",
+        &format!(
+            "printf ran >> {}",
+            shell_path(&root.join(".git/external-diff-ran"))
+        ),
+    );
+    git(root, &["config", "diff.external", &shell_path(&external)]);
     let clean = program(
         root,
         "clean-filter",
@@ -162,6 +180,8 @@ async fn baseline_and_final_snapshots_never_execute_hooks_or_required_filters() 
     assert!(!hook_marker.exists());
     assert!(!root.join(".git/clean-ran").exists());
     assert!(!root.join(".git/process-ran").exists());
+    assert!(!root.join(".git/fsmonitor-ran").exists());
+    assert!(!root.join(".git/external-diff-ran").exists());
 }
 
 #[cfg(unix)]
@@ -224,7 +244,7 @@ async fn raw_endpoints_preserve_text_and_binary_for_native_and_shell_equivalent_
 
 #[cfg(unix)]
 #[tokio::test]
-async fn encoding_attributes_and_diff_drivers_cannot_transform_observed_endpoints() {
+async fn built_in_attributes_normalize_snapshots_without_running_diff_drivers() {
     let directory = repository();
     let root = directory.path();
     let external = tempdir();
@@ -283,19 +303,28 @@ async fn encoding_attributes_and_diff_drivers_cannot_transform_observed_endpoint
         store.summary(&AttemptId::new("attributes")).unwrap().total,
         6
     );
-    for name in ["global.txt", "local.txt", "converted.txt"] {
+    for name in ["global.txt", "converted.txt"] {
         text_change(&store, "attributes", name, "before\n", "after\n", (1, 1)).await;
     }
     text_change(
         &store,
         "attributes",
         "crlf.txt",
-        "keep\r\nbefore\r\n",
-        "keep\r\nafter\r\n",
+        "keep\nbefore\n",
+        "keep\nafter\n",
         (1, 1),
     )
     .await;
-    for name in ["encoded.txt", "forced.bin"] {
+    text_change(
+        &store,
+        "attributes",
+        "encoded.txt",
+        "old\n",
+        "new\n",
+        (1, 1),
+    )
+    .await;
+    for name in ["local.txt", "forced.bin"] {
         binary_change(&store, "attributes", name).await;
     }
     assert_eq!(git_files(root), metadata);
@@ -413,7 +442,7 @@ async fn removing_a_nested_repository_and_its_index_entry_records_the_gitlink_de
         let metadata = git_files(root);
         record.finish().await;
         let completed = store
-            .0
+            .records
             .lock()
             .unwrap()
             .get("remove-nested")
@@ -429,17 +458,19 @@ async fn removing_a_nested_repository_and_its_index_entry_records_the_gitlink_de
             (0, 1)
         );
         let (before, after) = completed.trees.as_ref().unwrap();
-        let initial = git(
-            record.directory.path(),
+        let initial = snapshot_git(
+            root,
+            record.directory.get().unwrap().path(),
             &["ls-tree", "-z", before, "--", "nested"],
         );
         assert!(initial.starts_with("160000 commit "));
-        assert!(
-            git(
-                record.directory.path(),
+        assert_eq!(
+            snapshot_git(
+                root,
+                record.directory.get().unwrap().path(),
                 &["ls-tree", "-z", after, "--", "nested"]
-            )
-            .is_empty()
+            ),
+            ""
         );
         assert_eq!(git_files(root), metadata);
     }
@@ -472,8 +503,16 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
             };
             let metadata = git_files(root);
             record.finish().await;
+            if symbolic {
+                assert!(
+                    store.summary(&AttemptId::new("replace-nested")).is_none(),
+                    "Git check-ignore rejects the captured path beyond the replacement symlink"
+                );
+                assert_eq!(git_files(root), metadata);
+                continue;
+            }
             let completed = store
-                .0
+                .records
                 .lock()
                 .unwrap()
                 .get("replace-nested")
@@ -486,14 +525,16 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
             assert_eq!(completed.summary.files[0].display, "nested");
             let (before, after) = completed.trees.as_ref().unwrap();
             assert!(
-                git(
-                    record.directory.path(),
+                snapshot_git(
+                    root,
+                    record.directory.get().unwrap().path(),
                     &["ls-tree", "-z", before, "--", "nested"]
                 )
                 .starts_with("160000 commit ")
             );
-            let final_entry = git(
-                record.directory.path(),
+            let final_entry = snapshot_git(
+                root,
+                record.directory.get().unwrap().path(),
                 &["ls-tree", "-z", after, "--", "nested"],
             );
             assert!(
@@ -513,4 +554,87 @@ async fn replacing_a_nested_repository_samples_the_actual_file_or_symlink_endpoi
             assert_eq!(git_files(root), metadata);
         }
     }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn imported_clean_filter_stat_cache_cannot_supply_the_before_image() {
+    let directory = repository();
+    let root = directory.path();
+    let marker = root.join(".git/filter-ran");
+    let filter = program(
+        root,
+        "tracked-clean-filter",
+        &format!(
+            "printf ran >> {}\nsed 's/original/FILTERED/g'",
+            shell_path(&marker)
+        ),
+    );
+    git(
+        root,
+        &["config", "filter.tracked.clean", &shell_path(&filter)],
+    );
+    git(root, &["config", "filter.tracked.required", "true"]);
+    fs::write(
+        root.join(".gitattributes"),
+        "native.txt filter=tracked\nshell.txt filter=tracked\n",
+    )
+    .unwrap();
+    for name in ["native.txt", "shell.txt"] {
+        let path = root.join(name);
+        fs::write(&path, "original before\n").unwrap();
+        // An old mtime before git add makes this a non-racy stat-cache hit,
+        // without sleeping or modifying the working file after it is staged.
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(
+                std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_600_000_000),
+            ))
+            .unwrap();
+    }
+    git(root, &["add", "."]);
+    assert!(
+        marker.exists(),
+        "the real index must contain filtered blobs"
+    );
+    for name in ["native.txt", "shell.txt"] {
+        assert_eq!(
+            git(root, &["show", &format!(":{name}")]),
+            "FILTERED before\n"
+        );
+    }
+    fs::remove_file(&marker).unwrap();
+    // A second add hits the valid cached stat instead of invoking the filter.
+    git(root, &["add", "."]);
+    assert!(!marker.exists(), "fixture must exercise a valid stat cache");
+    // Missing imported entries are removed by the ordinary snapshot add;
+    // normalization must not make an already deleted file an error.
+    fs::remove_file(root.join("tracked.txt")).unwrap();
+    let metadata = git_files(root);
+    let store = Arc::default();
+    let record = start(root, &store, "tracked-filter");
+    record.before_tools().await;
+    record.capture(&root.join("native.txt"));
+    for name in ["native.txt", "shell.txt"] {
+        fs::write(root.join(name), "original after\n").unwrap();
+    }
+    record.finish().await;
+    for name in ["native.txt", "shell.txt"] {
+        text_change(
+            &store,
+            "tracked-filter",
+            name,
+            "original before\n",
+            "original after\n",
+            (1, 1),
+        )
+        .await;
+    }
+    assert_eq!(git_files(root), metadata);
+    assert!(
+        !marker.exists(),
+        "neither private snapshot may execute the filter"
+    );
 }

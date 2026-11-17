@@ -1,0 +1,159 @@
+{
+  "scope": "Byte-identical archived paired summaries; no remeasurement. Original ordered evidence retained.",
+  "readable_inputs": {
+    "runtime-summary.json": {
+      "bytes": 93819,
+      "sha256": "f97229505f5978fd59c9ebd18d747f6eb9d0784932d90669d51214c1987c0ba2"
+    },
+    "runtime-uncertainty.json": {
+      "bytes": 7852,
+      "sha256": "9aff9ff651f7a672682a1134c40741ca1a0b42ab2f3145c9cf0287f681e972f4"
+    }
+  },
+  "raw_samples": {
+    "pi-parity-small-nav-measurements/runtime/0-cancel-after.json": {
+      "bytes": 126615,
+      "sha256": "42556968c602891cde369b7d42ee56bceb304501d33e3aaf70581d8bf0f274a0"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-cancel-before.json": {
+      "bytes": 126615,
+      "sha256": "7a38de5713bb6ab7883205355bb48d39dec2bba18770bc8b5f0cab398586d4b2"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-large-after.json": {
+      "bytes": 159590,
+      "sha256": "5faf1bf85e7a6aaef8be518b4276d2841e4e1ad71053f0992455079fa5711226"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-large-before.json": {
+      "bytes": 159590,
+      "sha256": "84ea7ad26993a502e4f01f0624c3b701fb1a31dd22f06f48da4a58ccfaa0068d"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-short-large-after.json": {
+      "bytes": 24784226,
+      "sha256": "c5257850a97818b97a0b8c95fc9ec2312b6af38aff7a41d65219616a69ed6932"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-short-large-before.json": {
+      "bytes": 24784227,
+      "sha256": "91b36af7bc1785a64f468fb62ccab8087e58635e163f4c40275e58e5906ac6e5"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-short-small-after.json": {
+      "bytes": 6687147,
+      "sha256": "c895c7086e4005b635d1cbd6e2ee38eaf5a8faf83a6c94d20dc6603e6b304bdc"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-short-small-before.json": {
+      "bytes": 6687163,
+      "sha256": "69e5aa0c8b4cb74887f7b658c83869af57070b718595cb148465099a572a9e69"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-stream-after.json": {
+      "bytes": 129147,
+      "sha256": "ece4b323b4c7b24f02a02a176b4c0b6d3d37ad528845038054bf310a3d1745c9"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-stream-before.json": {
+      "bytes": 129147,
+      "sha256": "871b919a7ad442596b1a10f9138bd8ddd81a60ceb9ef8ed0a81532a0c0b41af0"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-tool-after.json": {
+      "bytes": 233406,
+      "sha256": "3d2fb3dea0dfb7fac8ad5ee23f27d777dca843e5a106657e62bec7dde3b2ccd4"
+    },
+    "pi-parity-small-nav-measurements/runtime/0-tool-before.json": {
+      "bytes": 233399,
+      "sha256": "c78f5ccbd920cad03a99fe72f81b55c0e37dabb2efdc6e0f731025699a96be5a"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-cancel-after.json": {
+      "bytes": 126622,
+      "sha256": "700ffb7502b6a5055e089aee40185b110889598b6bbd759fc23c2f6ab9f18ed1"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-cancel-before.json": {
+      "bytes": 126615,
+      "sha256": "e4b691ae3fbd498676fd640c618163e8a1fc9b2627fd295a05dc8c870cb10ca6"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-large-after.json": {
+      "bytes": 159589,
+      "sha256": "150d633fb7ff6fd25c71f500ebb1e70a3ffccf028e52a8007554b659ebc53b43"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-large-before.json": {
+      "bytes": 159590,
+      "sha256": "11fa57083b78a63652e2c853ad57f31ba68ace8004b7567f34e80357e34a303a"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-short-large-after.json": {
+      "bytes": 24784217,
+      "sha256": "972e8a33f3ddf565bea5e7d6ab892dcc939610a8b89c4074e0650803e1bd12fc"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-short-large-before.json": {
+      "bytes": 24784222,
+      "sha256": "949a62029cb187a407a2b229bc135463ca5887de4b7943e88dd71d30b747368e"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-short-small-after.json": {
+      "bytes": 6687156,
+      "sha256": "5cc2892047ec88605ce872192cb62687435999f6ea15dab1cc4ea4bf1d5c578b"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-short-small-before.json": {
+      "bytes": 6687157,
+      "sha256": "217ac5893d230be0590755090a38e35d574f8b0bb05fa9578cadbea8370a1d2e"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-stream-after.json": {
+      "bytes": 129156,
+      "sha256": "64d6ef1e6a6b29f02d2f5505d924d53fbcac06fb6d36ccb566aa6adbff4a8ce8"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-stream-before.json": {
+      "bytes": 129147,
+      "sha256": "8adccf35ba9c3b45976c6d9f5ea70878b2e35e0a3a5f8a5c032350c162a6c891"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-tool-after.json": {
+      "bytes": 233398,
+      "sha256": "77b6eb8a0d80c40c501e5f8bc37c43c5e9a677420941599ca1b913f9662c71db"
+    },
+    "pi-parity-small-nav-measurements/runtime/1-tool-before.json": {
+      "bytes": 233398,
+      "sha256": "76a5133141a23136b5039d63f8ab81ecbb68455496376ff2bd22d13a94f23b7b"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-cancel-after.json": {
+      "bytes": 126615,
+      "sha256": "05ddeaba8eba848c22097c8a8295a27ac9c8dcefe74b84a3f73f320d42bc0ae6"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-cancel-before.json": {
+      "bytes": 126614,
+      "sha256": "dd7cb109a53add7011facb3b0a58250a3c75a76276090fb6c46278a7c6d96c69"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-large-after.json": {
+      "bytes": 159589,
+      "sha256": "cb6ff72fe1f370bd8e121644e63d8c185f0ecd7c585a2cef8daf5af524a9d42b"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-large-before.json": {
+      "bytes": 159589,
+      "sha256": "df6eef29995356f23439124e7bbe3c265765403c59c0d76c800fa72e9e5fdca5"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-short-large-after.json": {
+      "bytes": 24783980,
+      "sha256": "9ed2f62bd671918e9cb71aff2d513cf21c288e83c39863a634db602a68317ed9"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-short-large-before.json": {
+      "bytes": 24784230,
+      "sha256": "b11feb345d9074035b86b82cfa164e5ad22a57f66c56b6e496c559cb1b62a0aa"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-short-small-after.json": {
+      "bytes": 6687149,
+      "sha256": "4a767c12181e772911aea7b52db8a4fa876f25d313686176c9d64fee218db0d3"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-short-small-before.json": {
+      "bytes": 6687161,
+      "sha256": "568b72a3c44e8a7f7e07ef54daa7eb96e59994a6821d273c82a80556de6177be"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-stream-after.json": {
+      "bytes": 129147,
+      "sha256": "ca1beaac6c3c5fa9c8a5f1be37d8d28587cc0d015c7ca8222486dc58407d4ec4"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-stream-before.json": {
+      "bytes": 129138,
+      "sha256": "4d677b32751137804a904e53b87ba2f8395b2690f6d9a80661bdcd1a529cfec1"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-tool-after.json": {
+      "bytes": 233407,
+      "sha256": "5614202e33026bc5e04ef32b4e85314ea9b90dbd4d94d74047c2fe27f61c6c7b"
+    },
+    "pi-parity-small-nav-measurements/runtime/2-tool-before.json": {
+      "bytes": 233407,
+      "sha256": "e3910a040212c2946d25ad82b8d73e0f0f34dd4a61b8f875321f278335ca5260"
+    }
+  }
+}

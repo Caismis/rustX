@@ -1515,7 +1515,10 @@ fn empty_auxiliary_audit_reports_zero_not_the_journal_frontier() {
     assert_eq!(store.auxiliary_audit_total(cut).unwrap(), 0);
     let page = store.read_auxiliary_audit(cut, None, 32).unwrap();
     assert_eq!(page.total, 0);
-    assert!(page.records.is_empty());
+    assert_eq!(
+        page.records,
+        [] as [crate::model::auxiliary::AuxiliaryAuditRecord; 0]
+    );
     assert_eq!(page.next_offset, None);
 }
 
@@ -1528,7 +1531,7 @@ fn optional_observation_capture_failure_preserves_authoritative_audit() {
         .unwrap()
         .execute_batch(
             "CREATE TEMP TRIGGER fail_optional_observation
-             BEFORE INSERT ON event_observation_readiness
+             BEFORE UPDATE OF observation_witness ON main.events
              BEGIN SELECT RAISE(ABORT,'optional observation failure'); END;",
         )
         .unwrap();
@@ -1566,7 +1569,7 @@ fn optional_observation_capture_failure_preserves_authoritative_audit() {
         .lock()
         .unwrap()
         .query_row(
-            "SELECT observation_readiness_missing FROM events WHERE sequence=?1",
+            "SELECT observation_unavailable FROM events WHERE sequence=?1",
             [i64::try_from(call.event.sequence).unwrap()],
             |row| row.get(0),
         )
@@ -1594,7 +1597,7 @@ fn auxiliary_completion_never_establishes_primary_p_marker() {
             .lock()
             .unwrap()
             .query_row(
-                "SELECT completed_sequence FROM request_snapshots WHERE request_id=?1",
+                "SELECT completed_sequence FROM request_snapshots WHERE started_sequence=(SELECT start_sequence FROM request_owners WHERE request_id=?1)",
                 [snapshot.request_id.as_str()],
                 |row| row.get(0),
             )
@@ -1995,11 +1998,11 @@ mod call_request_lookup {
             expected
         );
         for cut in [before_call, before_request] {
-            assert!(
+            assert_eq!(
                 store
                     .read_auxiliary_call_requests(&call_id, cut, None, 32)
-                    .unwrap()
-                    .is_empty()
+                    .unwrap(),
+                [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
             );
         }
 
@@ -2050,17 +2053,17 @@ mod call_request_lookup {
                 .unwrap(),
             expected
         );
-        assert!(
+        assert_eq!(
             store
                 .read_auxiliary_call_requests(&call_id, current, Some(receipt.event.sequence), 1)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
-        assert!(
+        assert_eq!(
             store
                 .read_auxiliary_call_requests(&AuxiliaryCallId::generate(), current, None, 1)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
         for cursor in [
             0,
@@ -2223,11 +2226,11 @@ mod call_request_lookup {
                 .unwrap(),
             vec![started.request]
         );
-        assert!(
+        assert_eq!(
             store
                 .read_auxiliary_call_requests(&call_id, cut, Some(started.event.sequence), 1)
-                .unwrap()
-                .is_empty()
+                .unwrap(),
+            [] as [crate::model::auxiliary::AuxiliaryRequestAudit; 0]
         );
         let connection = store.lock().unwrap();
         let selected_steps = |sql: &str| {
@@ -2240,7 +2243,7 @@ mod call_request_lookup {
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
-            assert!(rows.is_empty());
+            assert_eq!(rows, [] as [i64; 0]);
             assert_eq!(statement.get_status(rusqlite::StatementStatus::Sort), 0);
             statement.get_status(rusqlite::StatementStatus::VmStep)
         };

@@ -221,11 +221,11 @@ fn editable_root(package: &SkillPackage, root: &Path, collection: &Path) -> bool
         && root.starts_with(collection)
 }
 
-fn document(bytes: Option<&[u8]>) -> Option<serde_yaml::Mapping> {
+fn document(bytes: Option<&[u8]>) -> Option<serde_yaml_ng::Mapping> {
     let Some(bytes) = bytes else {
-        return Some(serde_yaml::Mapping::new());
+        return Some(serde_yaml_ng::Mapping::new());
     };
-    let value: serde_yaml::Mapping = serde_yaml::from_slice(bytes).ok()?;
+    let value: serde_yaml_ng::Mapping = serde_yaml_ng::from_slice(bytes).ok()?;
     if value
         .get(INTERFACE)
         .is_some_and(|value| !value.is_mapping())
@@ -251,7 +251,7 @@ pub(super) fn read_display(package: &SkillPackage, collection: &Path) -> Option<
     let document = document(bytes.as_deref())?;
     let interface = document
         .get(INTERFACE)
-        .and_then(serde_yaml::Value::as_mapping);
+        .and_then(serde_yaml_ng::Value::as_mapping);
     let get = |(key, limit)| {
         let value = interface?.get(key)?.as_str()?.trim();
         (!value.is_empty() && value.len() <= limit).then(|| value.to_owned())
@@ -297,7 +297,7 @@ fn candidate(
     let mut document = document(original).ok_or(SettingsError::Invalid)?;
     let interface = document
         .entry(INTERFACE.into())
-        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()))
+        .or_insert_with(|| serde_yaml_ng::Value::Mapping(serde_yaml_ng::Mapping::new()))
         .as_mapping_mut()
         .ok_or(SettingsError::Invalid)?;
     for ((key, limit), value) in FIELDS.into_iter().zip([
@@ -321,7 +321,7 @@ fn candidate(
             interface.remove(key);
         }
     }
-    let bytes = serde_yaml::to_string(&document)
+    let bytes = serde_yaml_ng::to_string(&document)
         .map_err(|_| SettingsError::Invalid)?
         .into_bytes();
     if bytes.len() as u64 > MAX_METADATA_BYTES {

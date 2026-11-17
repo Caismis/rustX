@@ -190,7 +190,7 @@ fn commit_recovery_tool_repair(
         id: message_id.clone(),
         tool_call_id: ToolCallId::new(call_id),
         tool_id: ToolId::new("tool-a"),
-        result,
+        result: result.into(),
     });
     let event = envelope(
         &format!("recovery-tool-committed:{message_id}"),
@@ -464,7 +464,10 @@ fn crash_after_adoption_keeps_the_user_message_canonical_exactly_once() {
     assert!(report.reconciliation().is_empty());
 
     let store = durable.open();
-    assert!(store.load_pending().expect("pending").is_empty());
+    assert_eq!(
+        store.load_pending().expect("pending"),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
     let canonical = store.load_canonical().expect("canonical");
     let occurrences = canonical
         .iter()
@@ -554,7 +557,10 @@ fn crash_before_request_start_is_class_b_and_permits_continuation() {
     assert_eq!(terminal_count(&events, &attempt), 1);
     // The already-canonical user turn is intact and was not re-adopted.
     assert_eq!(store.load_canonical().expect("canonical").len(), 1);
-    assert!(store.load_pending().expect("pending").is_empty());
+    assert_eq!(
+        store.load_pending().expect("pending"),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
 }
 
 /// The answer obligation survives the recovery terminal that recovery itself
@@ -662,7 +668,10 @@ fn the_answer_obligation_survives_a_chain_of_recovery_terminals() {
     // The turn was never re-adopted, never duplicated, and never answered.
     let store = durable.open();
     assert_eq!(store.load_canonical().expect("canonical").len(), 1);
-    assert!(store.load_pending().expect("pending").is_empty());
+    assert_eq!(
+        store.load_pending().expect("pending"),
+        [] as [rustx::durable::PendingInboundItem; 0]
+    );
     let events = all_events(&store);
     assert!(
         !events
@@ -1600,7 +1609,7 @@ fn mixed_sibling_batch_is_recovered_only_from_durable_evidence() {
                 RuntimeEvent::ToolExecutionCompleted {
                     tool_call_id: ToolCallId::new("call-b"),
                     tool_id: ToolId::new("tool-a"),
-                    result: success_result("durably known output"),
+                    result: success_result("durably known output").into(),
                 },
             ))
             .expect("tool completed");
@@ -1659,8 +1668,8 @@ fn mixed_sibling_batch_is_recovered_only_from_durable_evidence() {
         })
         .expect("call-b");
     assert_eq!(
-        known,
-        success_result("durably known output"),
+        known.as_ref(),
+        &success_result("durably known output"),
         "the durable result is used verbatim, never re-derived"
     );
     let active_ids = store.load_head().expect("head").active_message_ids;
@@ -1768,7 +1777,7 @@ fn known_foreground_tool_result_is_recovered_verbatim_and_never_replayed() {
                 RuntimeEvent::ToolExecutionCompleted {
                     tool_call_id: ToolCallId::new("call-1"),
                     tool_id: ToolId::new("tool-a"),
-                    result: exact.clone(),
+                    result: exact.clone().into(),
                 },
             ))
             .expect("tool completed");
@@ -1818,7 +1827,11 @@ fn known_foreground_tool_result_is_recovered_verbatim_and_never_replayed() {
             _ => None,
         })
         .expect("the missing sibling is canonical after recovery");
-    assert_eq!(repaired, exact, "the durable result is used verbatim");
+    assert_eq!(
+        repaired.as_ref(),
+        &exact,
+        "the durable result is used verbatim"
+    );
     assert_eq!(repaired.duration_ms, 7, "the durable duration is preserved");
     assert!(
         !repaired.content.is_empty(),
@@ -2073,7 +2086,7 @@ fn second_crash_after_known_outcome_repair_preserves_external_start() {
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-a"),
-                result: exact.clone(),
+                result: exact.clone().into(),
             },
         ]
         .into_iter()
@@ -2137,7 +2150,11 @@ fn second_crash_after_known_outcome_repair_preserves_external_start() {
             _ => None,
         })
         .expect("the repair result");
-    assert_eq!(repaired, exact, "the exact durable result is preserved");
+    assert_eq!(
+        repaired.as_ref(),
+        &exact,
+        "the exact durable result is preserved"
+    );
     assert_eq!(
         all_events(&store)
             .iter()
@@ -2227,7 +2244,7 @@ fn recovery_repairs_exact_occurrences_when_provider_ids_repeat_on_the_surface() 
         results[0].occurrence.assistant_message_id,
         MessageId::new("assistant-A")
     );
-    assert_eq!(results[0].result, success_result("old-result"));
+    assert_eq!(results[0].result.as_ref(), &success_result("old-result"));
     assert_eq!(
         results[1].occurrence.assistant_message_id,
         MessageId::new("assistant-B")
@@ -2244,6 +2261,49 @@ fn recovery_repairs_exact_occurrences_when_provider_ids_repeat_on_the_surface() 
     );
     // Validate repaired canonical occurrences through the production typed compiler.
     store.projected_history().unwrap();
+}
+
+#[test]
+fn recovery_preserves_surface_order_for_multiple_unsettled_assistants() {
+    let durable = Durable::new();
+    {
+        let store = durable.open();
+        store
+            .initialize(&[
+                assistant_with_calls("z-first", &["first-call"]),
+                assistant_with_calls("a-second", &["second-call"]),
+            ])
+            .unwrap();
+    }
+    let store = durable.open();
+    let report = recover(&store, &FixedClock).unwrap();
+    assert_eq!(
+        report.reconciliation().repaired_tool_results,
+        vec![
+            ToolCallId::new("first-call"),
+            ToolCallId::new("second-call")
+        ]
+    );
+    let repaired: Vec<_> = store
+        .load_canonical()
+        .unwrap()
+        .into_iter()
+        .filter_map(|message| match message {
+            MessageBlock::Tool(tool) => Some(tool.occurrence.assistant_message_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        repaired,
+        vec![MessageId::new("z-first"), MessageId::new("a-second")]
+    );
+    assert_eq!(
+        recover(&store, &FixedClock)
+            .unwrap()
+            .reconciliation()
+            .repaired_tool_results,
+        [] as [rustx::runtime::ToolCallId; 0]
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -2630,7 +2690,7 @@ fn repeated_restarts_settle_once_and_then_change_nothing() {
             report.attempt_class(),
             &AttemptRecoveryClass::AlreadyTerminal
         );
-        assert!(report.background_classes().is_empty());
+        assert_eq!(report.background_classes(), []);
         let store = durable.open();
         assert_eq!(all_events(&store), settled.0, "events unchanged");
         assert_eq!(store.load_pending().expect("pending"), settled.1);
@@ -2792,9 +2852,9 @@ fn the_recovery_fold_retains_only_unresolved_work() {
     let evidence = RecoveryEvidence::reconstruct(&store).expect("evidence");
     let plan = RecoveryPlan::classify(&evidence);
     assert_eq!(plan.attempt_class(), &AttemptRecoveryClass::AlreadyTerminal);
-    assert!(plan.background_classes().is_empty());
-    assert!(evidence.active_messages().is_empty());
-    assert!(evidence.pending_inbound().is_empty());
+    assert_eq!(plan.background_classes(), []);
+    assert_eq!(evidence.tool_repair_messages(), []);
+    assert_eq!(evidence.pending_inbound(), []);
     assert_eq!(evidence.next_attempt_ordinal(), 40);
     // 160 durable events and 40 request snapshots are behind this fold; the
     // classification carries none of them.
@@ -2887,7 +2947,7 @@ fn a_long_settled_attempt_retains_bounded_repair_evidence() {
                     RuntimeEvent::ToolExecutionCompleted {
                         tool_call_id: call_id.clone(),
                         tool_id: ToolId::new("tool-a"),
-                        result: success_result(&format!("exact-{call}")),
+                        result: success_result(&format!("exact-{call}")).into(),
                     },
                 ))
                 .expect("tool completed");
@@ -2902,7 +2962,7 @@ fn a_long_settled_attempt_retains_bounded_repair_evidence() {
                         id: tool_message_id.clone(),
                         tool_call_id: call_id.clone(),
                         tool_id: ToolId::new("tool-a"),
-                        result: success_result(&format!("exact-{call}")),
+                        result: success_result(&format!("exact-{call}")).into(),
                     })],
                     &[envelope(
                         &format!("tool-committed-{call}"),
@@ -3029,7 +3089,7 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
             RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: ToolCallId::new("call-a"),
                 tool_id: ToolId::new("tool-a"),
-                result: exact_a.clone(),
+                result: exact_a.clone().into(),
             },
         ]
         .into_iter()
@@ -3055,7 +3115,7 @@ fn a_mixed_unresolved_batch_keeps_unknown_dominance_after_repair() {
                     id: tool_message_a.clone(),
                     tool_call_id: ToolCallId::new("call-a"),
                     tool_id: ToolId::new("tool-a"),
-                    result: exact_a,
+                    result: exact_a.into(),
                 })],
                 &[envelope(
                     "call-a-committed",
@@ -3483,7 +3543,7 @@ fn nonterminal_workflow_child_is_settled_without_parent_notification() {
     );
 
     let report = recover_reopened(&durable);
-    assert!(report.subagent_classes().is_empty());
+    assert_eq!(report.subagent_classes(), []);
     assert!(report.reconciliation().is_empty());
 }
 
@@ -3511,7 +3571,7 @@ fn a_durably_settled_subagent_needs_no_recovery() {
     }
 
     let report = recover_reopened(&durable);
-    assert!(report.subagent_classes().is_empty());
+    assert_eq!(report.subagent_classes(), []);
     assert!(report.reconciliation().is_empty());
     assert_eq!(
         report.highest_subagent_ordinal(),

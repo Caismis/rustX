@@ -224,7 +224,7 @@ mod tests {
         )];
         let metadata = retired_span_metadata(&retired);
         assert_eq!(metadata.read_files(), &["/inside".to_owned()]);
-        assert!(metadata.modified_files().is_empty());
+        assert_eq!(metadata.modified_files(), [] as [String; 0]);
         drop(outside);
     }
 

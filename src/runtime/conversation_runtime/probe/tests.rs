@@ -1,5 +1,38 @@
 use crate::runtime::conversation_runtime::test_support::*;
 
+#[tokio::test]
+async fn gate_async_waiters_cancel_and_observe_both_entry_orders() {
+    let gate = Arc::new(crate::runtime::conversation_runtime::Gate::default());
+    let release = gate.arm_scoped();
+    let mut cancelled = Box::pin(gate.wait_entered_async());
+    assert!(futures_util::poll!(&mut cancelled).is_pending());
+    drop(cancelled);
+    let mut first = Box::pin(gate.wait_entered_async());
+    let mut second = Box::pin(gate.wait_entered_async());
+    assert!(futures_util::poll!(&mut first).is_pending());
+    assert!(futures_util::poll!(&mut second).is_pending());
+    let worker_gate = gate.clone();
+    let worker = tokio::task::spawn_blocking(move || worker_gate.enter());
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        first.await;
+        second.await;
+    })
+    .await
+    .expect("all registered gate waiters observe entry");
+    // Entry before registration must not need another notification.
+    let mut late = Box::pin(gate.wait_entered_async());
+    assert!(futures_util::poll!(&mut late).is_ready());
+    drop(release);
+    worker.await.unwrap();
+
+    let release = gate.arm_scoped();
+    let mut never_entered = Box::pin(gate.wait_entered_async());
+    assert!(futures_util::poll!(&mut never_entered).is_pending());
+    drop(never_entered);
+    drop(release);
+    // No detached blocking waiter can keep this executor alive on teardown.
+}
+
 /// A wake from the admission task enters Tokio's private LIFO slot.
 /// A synchronous probe must hand that core off before parking, otherwise
 /// even a ready projection peer cannot run until the test releases it.

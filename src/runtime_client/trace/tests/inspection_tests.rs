@@ -37,12 +37,13 @@ fn tool_fixture_in(
         id: ToolId::new("tool-bash"),
         name: "original frozen tool".into(),
         description: "original schema description".into(),
-        input_schema: serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}}),
+        input_schema:
+            serde_json::json!({"type":"object","properties":{"command":{"type":"string"}}}).into(),
     };
     if giant {
         definition.description = "original description水🙂".repeat(20_000);
         definition.input_schema =
-            serde_json::json!({"original":"schema\n水🙂".repeat(20_000),"exact":u64::MAX});
+            serde_json::json!({"original":"schema\n水🙂".repeat(20_000),"exact":u64::MAX}).into();
     }
     let frozen = request_with_tools(store.as_ref(), 0, Some(vec![definition]));
     let mut call = bash_call("original-inspection-call");
@@ -110,7 +111,10 @@ fn t08_t14_tool_schema_unavailable_preserves_own_lifecycle_and_original_fields()
         }
     ));
     assert_eq!(after.record, before.record);
-    assert!(!after.record.tool.as_ref().unwrap().fields.is_empty());
+    assert_ne!(
+        after.record.tool.as_ref().unwrap().fields,
+        [] as [crate::observation::trace::types::TraceFieldSource; 0]
+    );
     assert_eq!(
         store.observation_read_cut().unwrap(),
         cut.source_cut.clone().unwrap()
@@ -223,7 +227,7 @@ fn selected_content_bytes(
             .unwrap();
         let (rows, read) = SqliteConversationStore::content_read_work();
         assert!(rows <= 2 && read <= 65_536);
-        assert_eq!(chunk.content_ref, binding.content_ref);
+        assert_eq!(chunk.content_ref, (binding.content_ref).as_ref().clone());
         assert_eq!(chunk.offset, offset);
         assert_eq!(chunk.readable_end, binding.content_ref.readable_end);
         let part = base64::engine::general_purpose::STANDARD
@@ -331,12 +335,12 @@ fn original_text_block(
     let metadata = item
         .content
         .iter()
-        .find(|binding| binding.path == ["value"])
+        .find(|binding| binding.path.as_ref() == ["value"])
         .unwrap();
     let payload = item
         .content
         .iter()
-        .find(|binding| binding.path == ["value", "text"])
+        .find(|binding| binding.path.as_ref() == ["value", "text"])
         .unwrap();
     assert_eq!(
         payload.content_ref.representation,
@@ -496,7 +500,7 @@ fn t08_t14_t19_tool_inspection_keeps_c_without_j_and_old_cut_after_terminal() {
             occurrence: ToolCallOccurrenceRef::new(proposal, ContentBlockIndex::new(0)),
             tool_call_id: call.id.clone(),
             tool_id: call.tool_id.clone(),
-            result: result.clone(),
+            result: result.clone().into(),
         }))
         .unwrap();
     let after = TraceProjection::new(store.as_ref())
@@ -536,7 +540,7 @@ fn t08_t14_t19_tool_inspection_keeps_c_without_j_and_old_cut_after_terminal() {
         E::ToolExecutionCompleted {
             tool_call_id: call.id,
             tool_id: call.tool_id,
-            result: result.clone(),
+            result: result.clone().into(),
         },
         5,
     );
@@ -777,4 +781,67 @@ fn t11_t19_trace_and_journal_sources_keep_native_sequence_above_safe_byte_coordi
         .is_err(),
         "byte coordinates retain their independent safe bound"
     );
+}
+
+#[test]
+fn workflow_start_detail_exposes_typed_run_identity_even_when_native_id_is_omitted() {
+    let conversation = ConversationId::generate();
+    let store = store(conversation.as_str());
+    let mut run = crate::runtime::workflow::test_instance("escaped_only", "start")
+        .block
+        .run;
+    run.conversation_id = conversation;
+    run.origin = crate::runtime::workflow::WorkflowRunOrigin::Tool {
+        attempt_id: AttemptId::new("att-\"\\".to_owned() + &"a".repeat(520)),
+    };
+    run.invocation = 9_007_199_254_740_993;
+    assert!(
+        serde_json::to_vec(&run).unwrap().len()
+            > crate::runtime_client::trace::bounds::TRACE_IDENTITY_BYTES,
+        "test fixture must exceed generic 512B TraceRecord native_id bound"
+    );
+    let workflow_id = crate::runtime::workflow::WorkflowId::parse("escaped_only").unwrap();
+    let started = store
+        .publish_workflow_start(
+            event(
+                &store,
+                E::WorkflowStarted {
+                    tool_call_id: None,
+                    workflow_id: workflow_id.clone(),
+                    run_id: run.clone(),
+                },
+                0,
+            ),
+            &crate::runtime::workflow::snapshot::test_run_snapshot(workflow_id.clone()),
+        )
+        .unwrap();
+    let cut = TraceProjection::new(&store).unwrap().history_cut().unwrap();
+    let record_id = format!("trace:{}", started.sequence);
+    let page =
+        crate::runtime_client::trace_observation::history_detail(&store, &cut, &record_id).unwrap();
+    let head: TraceInspectionHead =
+        decode_domain_value(page.items[0].value.clone().unwrap()).unwrap();
+    assert!(
+        head.record.native_id.is_none(),
+        "generic 512B display native_id bound remains enforced"
+    );
+    assert!(head.record.has_detail);
+    let domain = format!("trace.records.{}.workflow.nodes", started.sequence);
+    let collection = head
+        .record
+        .collections
+        .iter()
+        .find(|frontier| frontier.domain == domain)
+        .expect("workflow nodes collection frontier");
+    assert_eq!(collection.total, 0);
+    assert!(collection.next_offset.is_none());
+    let TraceInspectionContent::Workflow {
+        run_id: detail_run_id,
+        workflow_id: detail_workflow_id,
+    } = head.content
+    else {
+        panic!("expected Workflow inspection detail");
+    };
+    assert_eq!(detail_run_id, run);
+    assert_eq!(detail_workflow_id, workflow_id);
 }

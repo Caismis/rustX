@@ -286,7 +286,10 @@ use crate::runtime::interaction::{InteractionRef, InteractionResponse};
 /// Session configuration change transcript items and Trace records. Version
 /// 82 added optional, Model-owned reasoning Profile order to full catalog
 /// metadata; selection ordinals and frozen invocation snapshots are unchanged.
-pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
+/// Version 85 combines shared-control errors and bounded Trace refresh progress.
+/// Version 86 carries cursor-relative typed projection list edits.
+/// Version 87 combines that delivery with main's auxiliary and permission vocabulary.
+pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 87;
 
 /// The external cursor of the Runtime Client observation stream.
 ///
@@ -296,7 +299,7 @@ pub const RUNTIME_CLIENT_PROTOCOL_VERSION: u16 = 85;
 ///
 /// - monotonic within the Runtime Client observation stream;
 /// - **not** an alias of `u64`;
-/// - **not** the mailbox [`InboundSequence`](crate::runtime::inbound::InboundSequence);
+/// - **not** the mailbox [`InboundSequence`];
 /// - **not** [`RuntimeEventEnvelope::sequence`](crate::events::types::RuntimeEventEnvelope);
 /// - **not** any future Event Journal sequence;
 /// - owned by the runtime observation stream, so it survives attachment
@@ -504,6 +507,11 @@ pub enum RuntimeClientRequest {
         offset: u64,
         limit: usize,
     },
+    WorkflowTraceNode {
+        id: RequestId,
+        cut: crate::observation::cut::CheckpointReadCut,
+        instance: crate::runtime::workflow::WorkflowNodeInstance,
+    },
     CheckpointValueRead {
         id: RequestId,
         cut: crate::observation::cut::CheckpointReadCut,
@@ -626,6 +634,15 @@ pub enum RuntimeClientRequest {
         id: RequestId,
         locator: super::trace::TraceToolLocator,
     },
+    TraceLocateWorkflow {
+        id: RequestId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
+    AgentTraceLocateWorkflow {
+        id: RequestId,
+        agent_id: crate::runtime::identity::AgentId,
+        run_id: crate::runtime::workflow::WorkflowRunId,
+    },
     AgentTraceLocateTool {
         id: RequestId,
         agent_id: crate::runtime::identity::AgentId,
@@ -674,6 +691,7 @@ impl RuntimeClientRequest {
             | Self::ObserveEvents { id, .. }
             | Self::ContentRead { id, .. }
             | Self::CheckpointPageGet { id, .. }
+            | Self::WorkflowTraceNode { id, .. }
             | Self::CheckpointValueRead { id, .. }
             | Self::InteractionPageGet { id, .. }
             | Self::InteractionValueRead { id, .. }
@@ -698,6 +716,8 @@ impl RuntimeClientRequest {
             | Self::AgentTrace { id, .. }
             | Self::AgentTraceDetail { id, .. }
             | Self::TraceLocateTool { id, .. }
+            | Self::TraceLocateWorkflow { id, .. }
+            | Self::AgentTraceLocateWorkflow { id, .. }
             | Self::AgentTraceLocateTool { id, .. }
             | Self::AgentTranscript { id, .. }
             | Self::AgentTurns { id, .. }
@@ -720,6 +740,7 @@ impl RuntimeClientRequest {
             Self::ObserveEvents { .. } => "observe_events",
             Self::ContentRead { .. } => "content_read",
             Self::CheckpointPageGet { .. } => "checkpoint_page_get",
+            Self::WorkflowTraceNode { .. } => "workflow_trace_node",
             Self::CheckpointValueRead { .. } => "checkpoint_value_read",
             Self::InteractionPageGet { .. } => "interaction_page_get",
             Self::InteractionValueRead { .. } => "interaction_value_read",
@@ -744,6 +765,8 @@ impl RuntimeClientRequest {
             Self::AgentTrace { .. } => "agent_trace",
             Self::AgentTraceDetail { .. } => "agent_trace_detail",
             Self::TraceLocateTool { .. } => "trace_locate_tool",
+            Self::TraceLocateWorkflow { .. } => "trace_locate_workflow",
+            Self::AgentTraceLocateWorkflow { .. } => "agent_trace_locate_workflow",
             Self::AgentTraceLocateTool { .. } => "agent_trace_locate_tool",
             Self::AgentTranscript { .. } => "agent_transcript",
             Self::AgentTurns { .. } => "agent_turns",
@@ -759,8 +782,10 @@ impl RuntimeClientRequest {
             Self::CheckpointGet { .. }
                 | Self::TracePageGet { .. }
                 | Self::CheckpointPageGet { .. }
+                | Self::WorkflowTraceNode { .. }
                 | Self::CheckpointValueRead { .. }
                 | Self::TraceLocateTool { .. }
+                | Self::TraceLocateWorkflow { .. }
                 | Self::InteractionPageGet { .. }
                 | Self::InteractionValueRead { .. }
                 | Self::ContentRead { .. }
@@ -776,6 +801,8 @@ impl RuntimeClientRequest {
         matches!(
             self,
             Self::TraceLocateTool { .. }
+                | Self::TraceLocateWorkflow { .. }
+                | Self::AgentTraceLocateWorkflow { .. }
                 | Self::InteractionPageGet { .. }
                 | Self::InteractionValueRead { .. }
                 | Self::AgentStatistics { .. }
@@ -898,9 +925,14 @@ pub enum RuntimeClientResult {
     /// Bounded read-only Trace page of summary records.
     TracePage {
         page: crate::observation::trace::TracePage,
+        /// Complete input prefix examined, including missing and duplicate interests.
+        refreshed: usize,
     },
     TraceToolLocation {
         location: Option<super::trace::TraceToolLocation>,
+    },
+    TraceWorkflowLocation {
+        location: Option<super::trace::TraceWorkflowLocation>,
     },
     TranscriptWindow {
         window: Box<super::snapshot::ConversationWindow>,
@@ -917,6 +949,9 @@ pub enum RuntimeClientResult {
     },
     CheckpointPage {
         page: super::checkpoint::CheckpointPage,
+    },
+    WorkflowTraceNode {
+        node: Option<crate::durable::observation::WorkflowTraceNode>,
     },
     DomainPage {
         page: super::checkpoint::CheckpointPage,
@@ -952,11 +987,8 @@ pub enum RuntimeClientResult {
         after_cursor: RuntimeClientCursor,
     },
     /// `capability_get` succeeded: the active capability projection.
-
     /// `model_catalog_get` succeeded: the safe selectable-model view.
-
     /// `model_get` succeeded: the authoritative session model state.
-
     /// Standalone model selection committed; durable Sessions use their native Session owner.
     ///
     /// This finite receipt confirms commitment. Read the current model through
@@ -1233,11 +1265,11 @@ pub struct RuntimeClientProtocolEvent {
     /// The cursor this event was published at.
     pub cursor: RuntimeClientCursor,
     /// The typed external event payload.
-    pub event: RuntimeClientEvent,
+    pub event: std::sync::Arc<RuntimeClientEvent>,
 }
 
 // Re-exported for use by the public protocol docs.
-pub use super::snapshot::{RuntimeClientAgent, RuntimeClientJob};
+pub use crate::runtime_client::snapshot::{RuntimeClientAgent, RuntimeClientJob};
 
 #[cfg(test)]
 mod tests {
@@ -1378,7 +1410,7 @@ mod tests {
     #[test]
     fn protocol_version_is_independent_from_event_schema_version() {
         let _ = EVENT_SCHEMA_VERSION;
-        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 85);
+        assert_eq!(RUNTIME_CLIENT_PROTOCOL_VERSION, 87);
         // Structural independence: no Runtime Client protocol type carries
         // a `schema_version` field, and serialized requests never embed it.
         let request = RuntimeClientRequest::Initialize {
@@ -1539,7 +1571,8 @@ mod tests {
                 attempt_id: AttemptId::new("attempt-1"),
                 model: Some(Box::new(attempt_model_view("acme/model-a"))),
                 execution_settings: None,
-            },
+            }
+            .into(),
         };
         let value = serde_json::to_value(&notification).expect("serialize");
         assert!(value.get("id").is_none());

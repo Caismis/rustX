@@ -5,18 +5,18 @@
 //! status source — and is read unchanged by every adapter. These are finite
 //! read descriptors, never execution, settlement, or recovery authority:
 //!
-//! - [`bounded`] and [`preflight`] bound encoded display values by their
-//!   selected budget, independent of source size; [`structural_json`] is
+//! - [`bounded`] and `preflight` bound encoded display values by their
+//!   selected budget, independent of source size; `structural_json` is
 //!   the source-owned JSON encoding of typed native domains;
 //! - [`content`] and [`cut`] are the exact byte locators, content
 //!   references, read cuts and collection frontiers of one observation;
-//! - [`capture`] copies finite descriptors under a byte budget;
+//! - `capture` copies finite descriptors under a byte budget;
 //! - the descriptor modules ([`transcript`], [`tool`], [`interaction`],
 //!   [`status`], [`turn`], [`statistics`], [`occupancy`], [`delivery`],
 //!   [`goal`], [`head`], [`failure`], [`trace`]) are the shared finite
 //!   vocabulary persisted in derived read layouts and published to clients;
 //! - the read sources ([`capability_source`], [`resource_source`],
-//!   [`workflow_source`]) borrow one immutable native generation and prepare
+//!   `workflow_source`) borrow one immutable native generation and prepare
 //!   its bounded display head once, shared by every consumer.
 //!
 //! The Runtime Client owns projection linearization, checkpoint and page
@@ -44,3 +44,5 @@ pub mod trace;
 pub mod transcript;
 pub mod turn;
 pub(crate) mod workflow_source;
+
+pub mod metadata;

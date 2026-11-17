@@ -226,7 +226,7 @@ impl std::fmt::Debug for McpConnection {
 
 impl McpConnection {
     /// Test construction seam for a connection before its first transport.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "mcp-fixture"))]
     pub(crate) fn lazy(
         server_id: McpServerId,
         binding: McpServerBinding,

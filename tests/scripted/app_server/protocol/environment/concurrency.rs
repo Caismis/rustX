@@ -102,7 +102,10 @@ pub(crate) async fn watch_terminal_order() {
     assert_eq!(fixture.host.file_observers().available_permits(), 32);
     assert_eq!(fixture.manager.diagnostics().loaded, 0);
     connection.close();
-    assert!(bounded(fixture.host.drain()).await.is_empty());
+    assert_eq!(
+        bounded(fixture.host.drain()).await,
+        [] as [std::string::String; 0]
+    );
 }
 
 pub(crate) async fn revocation_before_start() {
@@ -202,7 +205,10 @@ pub(crate) async fn revocation_before_start() {
                 assert_eq!(*operations.borrow(), 0);
                 assert_eq!(fixture.manager.diagnostics().loaded, 0);
                 connection.close();
-                assert!(bounded(fixture.host.drain()).await.is_empty());
+                assert_eq!(
+                    bounded(fixture.host.drain()).await,
+                    [] as [std::string::String; 0]
+                );
             }
         }
     }
@@ -285,6 +291,9 @@ pub(crate) async fn watch_immediate_successor() {
         assert_eq!(capacity.available_permits(), 32);
         assert_eq!(fixture.manager.diagnostics().loaded, 0);
         connection.close();
-        assert!(bounded(fixture.host.drain()).await.is_empty());
+        assert_eq!(
+            bounded(fixture.host.drain()).await,
+            [] as [std::string::String; 0]
+        );
     }
 }

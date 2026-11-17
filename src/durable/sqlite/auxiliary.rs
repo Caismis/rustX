@@ -2,7 +2,6 @@
 //! index writes, commits, confirmations, and bounded audit reads. Every
 //! helper runs inside the transaction its caller opened; this module root
 //! names the shared vocabulary its children use.
-#![allow(clippy::too_many_lines, clippy::type_complexity)]
 
 use std::collections::BTreeSet;
 
@@ -81,7 +80,9 @@ pub(in crate::durable::sqlite) use audit::install_after_request_row_read_hook;
 pub(in crate::durable::sqlite) use authority::{
     validate_call_event_tx, validate_request_start_event_tx, validate_request_terminal_event_tx,
 };
-pub(in crate::durable::sqlite) use index::{index_event_tx, load_request_owner_tx};
+pub(in crate::durable::sqlite) use index::{
+    index_event_tx, insert_owner_tx, load_request_owner_tx,
+};
 pub(in crate::durable::sqlite) use retry::validate_retry_event_tx;
 pub(in crate::durable::sqlite) use schema::{create_schema, verify_schema};
 

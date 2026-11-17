@@ -115,7 +115,10 @@ async fn classifier_uses_one_auxiliary_call_and_only_the_validated_class_path() 
         let runtime = workflow_runtime(&plane);
         let run = start(&runtime, context, workflow_cancellation().1);
         let request = entry(&mut entries).await;
-        assert!(request.request.tools.is_empty());
+        assert_eq!(
+            request.request.tools,
+            [] as [crate::tools::types::ModelToolDefinition; 0]
+        );
         request.release.send(()).unwrap();
         let result = run.await.unwrap();
         if let Some(expected) = expected {
@@ -236,7 +239,10 @@ impl ModelAdapter for Adapter {
         ModelProtocol::OpenAiChatCompletions
     }
     fn stream(&self, request: ModelRequest, _: CancellationSignal) -> ModelStream {
-        assert!(request.tools.is_empty());
+        assert_eq!(
+            request.tools,
+            [] as [crate::tools::types::ModelToolDefinition; 0]
+        );
         assert!(request.continuation.is_none() && request.continuation_source.is_none());
         let ordinal = self
             .attempts

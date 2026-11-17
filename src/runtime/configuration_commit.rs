@@ -353,10 +353,9 @@ impl ConfigurationChange {
         if old_model.view() != new_model.view() || !same_invocations(before, after) {
             domains.push(ConfigurationDomain::Model);
         }
-        // Every Root Tool runs in the whole effective environment: the
-        // authorized entries and the shared Skill Python/Node environments,
-        // whose content-addressed roots change with their dependencies. It is
-        // execution policy; the fact never carries it.
+        // Every Root Tool runs in the effective authorized environment.
+        // Changing it is execution policy; the fact never carries the values.
+        // Skills do not contribute environment entries.
         if old_configuration.map(|c| c.1) != new_configuration.map(|c| c.1)
             || old.capability().effective_environment() != new.capability().effective_environment()
         {
@@ -387,7 +386,7 @@ impl ConfigurationChange {
 #[derive(Debug, PartialEq, serde::Serialize)]
 struct ToolEntry {
     definition: crate::tools::types::ToolDefinition,
-    model_input_schema: serde_json::Value,
+    model_input_schema: std::sync::Arc<serde_json::Value>,
     /// Compared whole, retained only as `server_binding_digest`.
     #[serde(skip)]
     binding: Option<crate::tools::mcp::McpServerBinding>,

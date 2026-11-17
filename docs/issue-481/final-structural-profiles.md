@@ -99,6 +99,8 @@ product counters and is included in complete controller wall instead.
 
 Reproduce with `profiling/run.py`, `profiling/syscalls.py`, `profile-source.py`
 and `profile-footprints.py` as recorded in the archive's command/status files.
-The [compact archive](evidence/final-structural.tar.xz) and
+The [compact archive](https://drive.google.com/file/d/1MwzfQqRWY1d3m69vaDg65BBHHcFXDlQ5/view?usp=drivesdk "Original file: docs/issue-481/evidence/final-structural.tar.xz") and
 [per-file manifest](evidence/final-structural.tar.manifest.json) retain full raw
 profiles, trace joins, controls, sample outcomes, footprints and analysis scripts.
+
+Detailed evidence links open the containing Drive bundle. See [download and checksum instructions](../performance-evidence/README.md) for original member paths and byte-level verification.

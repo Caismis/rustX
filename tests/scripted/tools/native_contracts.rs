@@ -704,7 +704,7 @@ async fn exact_selection_reaches_provider_requests_and_domain_skill_projection()
         let mut child = rustx::tools::executor::ToolRegistry::new();
         rustx::tools::native::register_subagent_child_tools(&mut child, &[frozen_read]).unwrap();
         assert_eq!(child.names(), ["read"]);
-        assert!(!snapshot.model_skill_entries().is_empty());
+        assert_ne!(snapshot.model_skill_entries(), []);
         assert!(
             child
                 .preflight(&ToolCall {
@@ -876,7 +876,10 @@ async fn filtered_calls_cannot_recover_available_native_or_generated_dispatchers
             }
         );
         assert_eq!(model.requests().len(), 1, "no automatic replay");
-        assert!(model.requests()[0].tools.is_empty());
+        assert_eq!(
+            model.requests()[0].tools,
+            [] as [crate::tools::types::ModelToolDefinition; 0]
+        );
         assert!(
             !audit
                 .event_history
@@ -1345,12 +1348,12 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
         let attempt = request.attempt_id.clone();
         let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
         let mut policy = support::default_execution_policy();
-        policy.workspace_changes = crate::workspace_changes::ChangeRecording::start(
+        policy.workspace_changes = Some(crate::workspace_changes::ChangeRecording::start(
             attempt.clone(),
             fixture.runtime.workspace().root().to_owned(),
             Arc::clone(&fixture.runtime.workspace_changes),
             cancellation.signal().child(),
-        );
+        ));
         let changes = policy.workspace_changes.clone().unwrap();
         let settled = AgentExecution::new(
             request,

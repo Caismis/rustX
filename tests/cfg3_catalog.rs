@@ -297,12 +297,9 @@ async fn unused_invalid_resource_collections_warn_without_blocking_unrelated_sta
             !inspection.resource_diagnostics.is_empty() || !inspection.skill_diagnostics.is_empty(),
             "{family}"
         );
-        assert!(
-            resources
-                .capability()
-                .tool_registry()
-                .definitions()
-                .is_empty()
+        assert_eq!(
+            resources.capability().tool_registry().definitions(),
+            [] as [rustx::tools::ToolDefinition; 0]
         );
         product.shutdown().await.unwrap();
     }
@@ -385,7 +382,7 @@ fn root_defaults_grant_no_native_tools_skills_or_plugins() {
     let (host, request) = sources(root.path(), &format!("{PROVIDER}{MODEL}{ROOT}"), "");
     let resolved = analyze(&request, &host).unwrap();
     let agent = &resolved.config().agent;
-    assert!(agent.tools.builtin.is_empty());
+    assert_eq!(agent.tools.builtin, [] as [std::string::String; 0]);
     assert!(agent.tools.sources.is_empty());
     assert!(agent.skills.is_none());
     assert!(!agent.extensions.todo.enabled);
@@ -769,7 +766,10 @@ fn malformed_workspace_skill_leaves_the_valid_user_definition_available() {
         outcome.packages[0].source(),
         rustx::skills::SkillSource::User
     );
-    assert!(!outcome.diagnostics.is_empty());
+    assert_ne!(
+        outcome.diagnostics,
+        [] as [rustx::skills::SkillDiagnostic; 0]
+    );
     assert!(
         analyze(&request, &host).is_ok(),
         "unused invalid package does not block startup"
@@ -798,7 +798,7 @@ fn skill_prompt_exposes_escaped_instruction_paths() {
     );
     assert!(prompt.contains("Review &lt;code&gt; &amp; tests"));
     assert!(prompt.contains("Use bash to load"));
-    assert!(render_skill_catalog(&[], SkillReadTool::Read).is_empty());
+    assert_eq!(render_skill_catalog(&[], SkillReadTool::Read), "");
 }
 
 #[test]
@@ -940,14 +940,14 @@ async fn malformed_workspace_mcp_reserves_shadow_and_unused_definition_warns() {
             .await
             .unwrap();
         core.runtime().activate();
-        assert!(
-            !rustx::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
+        assert_ne!(
+            rustx::local_runtime::configuration::settings::EffectiveConfiguration::adopted(
                 core.runtime()
             )
             .unwrap()
             .resources
-            .resource_diagnostics
-            .is_empty()
+            .resource_diagnostics,
+            [] as [rustx::runtime::capability_inspection::ResourceDiagnostic; 0]
         );
         core.shutdown().await.unwrap();
         std::fs::write(
@@ -1044,7 +1044,7 @@ fn agent_permission_projection_uses_native_resolution_and_source_cas() {
             mutation.clone(),
         )
         .unwrap();
-    assert!(!committed_revision.is_empty());
+    assert_ne!(committed_revision, "");
     assert_eq!(
         owner
             .read_source_settings(&rustx_target(&input.cwd))

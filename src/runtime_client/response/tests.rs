@@ -111,7 +111,8 @@ fn canonical_result(store: &dyn ConversationStore, attempt: &str, owner: &str, f
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             }),
             event(
                 store,
@@ -437,7 +438,10 @@ fn one_attempt_many_requests_has_one_exact_tail_and_missing_buckets_stay_absent(
     canonical_result(&store, "a", "intermediate", false);
     request(&store, "a", 1, Some(usage(None)));
     assistant(&store, "a", "closing");
-    assert!(tails(&page(&store, None, 64)).is_empty());
+    assert_eq!(
+        tails(&page(&store, None, 64)),
+        [] as [&crate::observation::turn::CompletedResponseView; 0]
+    );
     assert!(!is_completed_response(&store, &MessageId::new("closing")).unwrap());
     finish(&store, "a");
     let result = page(&store, None, 64);
@@ -534,10 +538,13 @@ fn published_read_cut_does_not_observe_a_later_completion() {
     finish(&store, "a");
     let mut old = page(&store, None, 64);
     for entry in &mut old.entries {
-        entry.completed_response = None;
+        std::sync::Arc::make_mut(entry).completed_response = None;
     }
     native_oracle_decorate_through(&store, &mut old, through).unwrap();
-    assert!(tails(&old).is_empty());
+    assert_eq!(
+        tails(&old),
+        [] as [&crate::observation::turn::CompletedResponseView; 0]
+    );
     assert_eq!(tails(&page(&store, None, 64)).len(), 1);
 }
 
@@ -563,7 +570,10 @@ fn interrupted_output_and_incomplete_usage_never_claim_completion_or_zero() {
             attempt_id: AttemptId::new("a"),
         },
     );
-    assert!(tails(&page(&store, None, 64)).is_empty());
+    assert_eq!(
+        tails(&page(&store, None, 64)),
+        [] as [&crate::observation::turn::CompletedResponseView; 0]
+    );
     append(
         &store,
         "b",
@@ -945,7 +955,7 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
                 .all(|member| member.cursor != entry.cursor)
         );
         assert_eq!(members.entries[0].cursor, turn.control_cursor);
-        expected = page(&store, None, 64).entries;
+        expected = page(&store, None, 64).entries.into_owned();
     }
     // A later successful Attempt and a new running Attempt cannot rewrite history.
     assistant(&store, "later", "later-response");
@@ -974,7 +984,7 @@ fn terminal_turns_survive_reconstruction_later_attempts_and_paging() {
             }
         }
         paged.reverse();
-        assert_eq!(paged, full.entries);
+        assert_eq!(paged, *full.entries);
     }
     // Repeated resubscription reads are identical, with no live Attempt involved.
     assert_eq!(full, page(&reopened, None, 64));
@@ -1034,7 +1044,8 @@ fn process_content(store: &dyn ConversationStore, attempt: &str) {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         }))
         .unwrap();
     assistant(store, attempt, &format!("{attempt}-intermediate"));
@@ -1526,11 +1537,11 @@ fn occupancy_reopens_and_inherits_without_local_requests_or_events() {
         expected
     );
     assert_eq!(child.presentation_frontier().unwrap(), 0);
-    assert!(
+    assert_eq!(
         child
             .transcript_attempts(&[MessageId::new("response")], 0)
-            .unwrap()
-            .is_empty()
+            .unwrap(),
+        [] as [crate::runtime::identity::AttemptId; 0]
     );
     let selected_window = child
         .read_window_headers(&crate::durable::reading::ConversationWindowAt::Latest, 8)
@@ -1653,7 +1664,10 @@ fn window_decoration_empty_human_only_and_before_local_ownership_remain_exact() 
         super::decorate_window(&store, &mut historical, 0),
         Err(crate::durable::ConversationStoreError::InvalidReference(_))
     ));
-    assert!(tails(&old_window).is_empty());
+    assert_eq!(
+        tails(&old_window),
+        [] as [&crate::observation::turn::CompletedResponseView; 0]
+    );
     assert!(
         old_window
             .entries
