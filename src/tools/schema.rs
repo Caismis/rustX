@@ -174,8 +174,8 @@ pub(crate) fn compile_tool_contract(
         uri.push('_');
     }
     let input_schema = json!({
-        "$schema":"http://json-schema.org/draft-07/schema#", "$id":uri,
-        "type":"object", "definitions":business.resources,
+        "$schema":business.dialect, "$id":uri,
+        "type":"object", "$defs":business.resources,
         "properties":properties, "required":required, "additionalProperties":false
     });
     build_validator(&input_schema)

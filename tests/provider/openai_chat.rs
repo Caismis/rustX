@@ -30,6 +30,40 @@ fn request_with_tools(prompt: &str) -> ModelRequest {
     request
 }
 
+#[tokio::test]
+async fn compiled_tools_send_local_defs_references_to_kimi() {
+    let server = crate::common::FixtureServer::start(|_attempt, _head| {
+        sse_fixture("openai_chat", "plain_text.sse")
+    })
+    .await;
+    let mut request = simple_request(
+        ModelProtocol::OpenAiChatCompletions,
+        "kimi-k3",
+        "Read a file",
+    );
+    request.tools = vec![model_selectable_tool("read_file", "tool-read")];
+    let events = collect_events(&adapter(&server), request).await;
+    assert_normal_completion(&events);
+    let bodies = server.request_bodies();
+    assert_eq!(bodies.len(), 1);
+    let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    let parameters = &body["tools"][0]["function"]["parameters"];
+    let reference = parameters["properties"]["arguments"]["$ref"]
+        .as_str()
+        .unwrap();
+    assert!(reference.starts_with("#/$defs/"), "{reference}");
+    assert_eq!(
+        parameters.pointer(&reference[1..]).unwrap()["type"],
+        "object"
+    );
+    assert!(parameters.get("definitions").is_none());
+    assert!(!parameters.to_string().contains("json-schema:///"));
+    assert_eq!(
+        parameters["required"],
+        serde_json::json!(["arguments", "execution_mode"])
+    );
+}
+
 /// A request for a model that declares the Qwen in-band tool dialect.
 fn qwen_request(prompt: &str, expose_tools: bool) -> ModelRequest {
     let mut request = simple_request(ModelProtocol::OpenAiChatCompletions, "Qwen/Qwen3", prompt);

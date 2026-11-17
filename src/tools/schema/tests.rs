@@ -17,6 +17,47 @@ fn definition(policy: ToolExecutionPolicy, schema: Value) -> ToolDefinition {
 }
 
 #[test]
+fn static_tool_references_use_root_defs_for_provider_requests() {
+    let canonical = json!({
+        "$id": "https://example.test/tool",
+        "type": "object",
+        "properties": {
+            "child": {"$ref": "#"},
+            "value": {"$ref": "#/$defs/value"},
+            "literal": {"const": {"$ref": "https://example.test/tool"}},
+        },
+        "$defs": {"value": {"type": "integer"}},
+        "additionalProperties": false,
+    });
+    let model = compile_model_definition(&definition(
+        ToolExecutionPolicy::ModelSelectable,
+        canonical.clone(),
+    ))
+    .unwrap();
+    let reference = model.input_schema["properties"]["arguments"]["$ref"]
+        .as_str()
+        .unwrap();
+    assert!(reference.starts_with("#/$defs/"), "{reference}");
+    let root = model.input_schema.pointer(&reference[1..]).unwrap();
+    assert_eq!(root["type"], "object");
+    let child_ref = root["properties"]["child"]["$ref"].as_str().unwrap();
+    assert!(child_ref.starts_with("#/$defs/"));
+    assert_eq!(
+        model.input_schema.pointer(&child_ref[1..]).unwrap()["$ref"],
+        reference
+    );
+    let value_ref = root["properties"]["value"]["$ref"].as_str().unwrap();
+    assert!(value_ref.starts_with("#/$defs/"));
+    assert!(model.input_schema.pointer(&value_ref[1..]).is_some());
+    let literal_ref = root["properties"]["literal"]["$ref"].as_str().unwrap();
+    assert_eq!(
+        model.input_schema.pointer(&literal_ref[1..]).unwrap()["const"],
+        canonical["properties"]["literal"]["const"]
+    );
+    assert!(model.input_schema.get("definitions").is_none());
+}
+
+#[test]
 fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
     let cases = [
         json!({"type":"object","enum":[{}]}),

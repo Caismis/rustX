@@ -96,8 +96,8 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
         let parameters = function["parameters"].as_object().expect("tool parameters");
         assert_eq!(
             parameters.get("$schema").and_then(Value::as_str),
-            Some("http://json-schema.org/draft-07/schema#"),
-            "tool {name} must declare Draft-07 envelope schema"
+            Some("https://json-schema.org/draft/2020-12/schema"),
+            "tool {name} must declare its business schema dialect"
         );
         assert_eq!(
             parameters.get("$id").and_then(Value::as_str),
@@ -116,12 +116,12 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
         );
 
         let definitions = parameters
-            .get("definitions")
+            .get("$defs")
             .and_then(Value::as_object)
             .expect("bundled business definitions");
         assert!(
-            definitions.contains_key("json-schema:///"),
-            "tool {name} missing closed business resource"
+            definitions.contains_key("schema0"),
+            "tool {name} missing local business definition"
         );
 
         let properties = parameters
@@ -130,7 +130,7 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
             .expect("envelope properties");
         assert_eq!(
             properties.get("arguments"),
-            Some(&json!({"$ref": "json-schema:///"})),
+            Some(&json!({"$ref": "#/$defs/schema0"})),
             "tool {name} must reference bundled business schema via arguments"
         );
         assert!(
