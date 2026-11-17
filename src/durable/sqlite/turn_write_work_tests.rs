@@ -102,14 +102,15 @@ fn report(tool: bool, phases: &BTreeMap<(&'static str, String), PhaseWork>) {
 /// Set `RUSTX_TURN_WORK` to print the per-phase, per-statement breakdown.
 #[test]
 fn warmed_turn_write_work_is_fixed() {
-    // Schema 114 includes exact adoption provenance in the recovery frontier
-    // and Workflow agent-node indexing. Keep the integrated statement/page
-    // baseline exact rather than hiding these costs behind a tolerance.
+    // Schema 115 adds the sparse Compaction Call lookup index, costing eight
+    // VM steps per native INSERT (six text / twelve tool), while
+    // calls, prepares, commits, WAL frames and index entries stay unchanged.
+    // Keep the integrated baseline exact, with no tolerance.
     let expected = [
         TurnWork {
             calls: 622,
             prepares: 18,
-            steps: 20_491,
+            steps: 20_539,
             commits: 7,
             wal_frames: 260,
             event_index_entries: 58,
@@ -117,7 +118,7 @@ fn warmed_turn_write_work_is_fixed() {
         TurnWork {
             calls: 1393,
             prepares: 38,
-            steps: 45_410,
+            steps: 45_506,
             commits: 13,
             wal_frames: 555,
             event_index_entries: 112,

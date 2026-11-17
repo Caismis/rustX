@@ -683,7 +683,7 @@ impl RuntimeClientProjection {
                     });
                 }
                 vec![RuntimeClientEvent::ContextCompactionOperationUpdated {
-                    context: self.snapshot.context.owned(),
+                    context: Box::new(self.snapshot.context.owned()),
                 }]
             }
             RuntimeEvent::CompactionStarted { operation_id, mode } => {
@@ -737,7 +737,7 @@ impl RuntimeClientProjection {
                 progress.source_ranges.clone_from(source_ranges);
                 progress.generation.clone_from(generation);
                 vec![RuntimeClientEvent::ContextCompactionProgressed {
-                    context: self.snapshot.context.owned(),
+                    context: Box::new(self.snapshot.context.owned()),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
@@ -755,7 +755,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionSkipped {
-                    context: self.snapshot.context.owned(),
+                    context: Box::new(self.snapshot.context.owned()),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
@@ -773,7 +773,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionCancelled {
-                    context: self.snapshot.context.owned(),
+                    context: Box::new(self.snapshot.context.owned()),
                     attempt_id: attempt_id.cloned(),
                 }]
             }

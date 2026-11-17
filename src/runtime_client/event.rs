@@ -228,7 +228,9 @@ pub enum RuntimeClientEvent {
         transcript_cursor: RuntimeClientTranscriptCursor,
     },
     /// An asynchronous compaction operation changed its bounded status.
-    ContextCompactionOperationUpdated { context: RuntimeClientContextView },
+    ContextCompactionOperationUpdated {
+        context: Box<RuntimeClientContextView>,
+    },
     /// A context compaction operation began.
     ContextCompactionStarted {
         /// Authoritative context state at this lifecycle boundary.
@@ -240,19 +242,19 @@ pub enum RuntimeClientEvent {
     },
     /// A validated compaction fragment was accepted; no checkpoint is committed.
     ContextCompactionProgressed {
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attempt_id: Option<AttemptId>,
     },
     /// Native compaction cancellation, distinct from summary failure.
     ContextCompactionCancelled {
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attempt_id: Option<AttemptId>,
     },
     /// Native compaction found no eligible history; no checkpoint was committed.
     ContextCompactionSkipped {
-        context: RuntimeClientContextView,
+        context: Box<RuntimeClientContextView>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         attempt_id: Option<AttemptId>,
     },
