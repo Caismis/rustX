@@ -356,11 +356,27 @@ fn publish(
 }
 
 fn stage_name_is(parent: &SourceDirectory, name: &OsStr, identity: (u64, u64)) -> bool {
+    // `O_DIRECTORY | O_NOFOLLOW` rejects a symlink without following it.
+    // The stored identity comes from `std` metadata, whose `dev`/`ino` are
+    // already normalized; rustix `st_dev` is `i32` on Darwin and must not be
+    // compared with that tuple directly.
+    let Ok(opened) = rustix::fs::openat(parent.descriptor(), name, OWNED_DIRECTORY, Mode::empty())
+    else {
+        return false;
+    };
     let Ok(listed) = rustix::fs::statat(parent.descriptor(), name, AtFlags::SYMLINK_NOFOLLOW)
     else {
         return false;
     };
-    FileType::from_raw_mode(listed.st_mode).is_dir() && (listed.st_dev, listed.st_ino) == identity
+    let Ok(current) = rustix::fs::fstat(&opened) else {
+        return false;
+    };
+    if (listed.st_dev, listed.st_ino) != (current.st_dev, current.st_ino) {
+        return false;
+    }
+    File::from(opened)
+        .metadata()
+        .is_ok_and(|metadata| (metadata.dev(), metadata.ino()) == identity)
 }
 
 /// First remove the directory from discovery with a same-parent rename.
