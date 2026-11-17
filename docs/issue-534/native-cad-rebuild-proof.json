@@ -1,0 +1,21 @@
+{
+  "baseCommit": "9e7fc5462e9539d921fd9891e3b8fa0c3100c23e",
+  "identicalTestSha256": "cf5ee793c968087677dba6a4e610d47601020e64e997af00ae98698fc7fd8e6c",
+  "oldRecipeSha256": "67db35dc1c25ee515ad8768f081d8d5d8497cf7e5118c228fe4068c8f3514c59",
+  "fixedRecipeSha256": "8b1128e737ec7948aebe64d5fbe2751257add1bb26412f343632606b061c1c76",
+  "red": {
+    "log": "/tmp/pr556-native-rebuild-guard-red.log",
+    "passed": 3,
+    "failed": [
+      "importer staged",
+      "occt staged"
+    ],
+    "failure": "old recipe reaches build sentinel73 instead of rejecting1"
+  },
+  "green": {
+    "log": "/tmp/pr556-native-rebuild-guard-green.log",
+    "passed": 5,
+    "failed": 0
+  },
+  "inputAuditSha256": "5e5d2ce8f42504120568fae5621a537a6057f70ebf306aff0941a78b273b8635"
+}

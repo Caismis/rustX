@@ -11,8 +11,8 @@ emcc --version | head -1 | grep -F '3.1.69' >/dev/null || { echo 'Emscripten 3.1
 if [[ -n ${4:-} ]]; then
     [[ $(git -C "$4" rev-parse HEAD) = c2148e54b456b571238d35cac037d304053d64b2 ]]
     [[ $(git -C "$4/occt" rev-parse HEAD) = d2abb6d844231cb8f29be6894440874a4700e4a5 ]]
-    git -C "$4" diff --quiet
-    git -C "$4/occt" diff --quiet
+    git -C "$4" diff --quiet HEAD --
+    git -C "$4/occt" diff --quiet HEAD --
     mkdir -p "$target"
     cp -a -- "$4/CMakeLists.txt" "$4/occt-import-js" "$target/"
     ln -s -- "$4/occt" "$target/occt"

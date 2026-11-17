@@ -31,6 +31,7 @@ boundaries and do not generalize STL throughput to other parsers.
 | Focused source operations | 156 tests passed, including late successful-open cancellation and immediate owner reuse |
 | Geometry/source/cache regressions | 147 tests passed before final full-suite acceptance |
 | Native adapters/LOD and GLB backing | 68 focused tests passed; final full suite includes them |
+| Rebuild checkout review regressions | Five real-Git cases passed; identical tests reject the original recipe's staged-change behavior |
 | Actual native product adapter | Five workloads passed, including genuine 200 MB input and 1,001,600-triangle output |
 | Additional old/new native equivalence | 14 imports passed strict JSON, numeric-bit and metadata comparisons |
 | Final progressive CAD browser cases | Four passed, including unchanged natural 96-part import and gesture-held final adoption |
@@ -114,3 +115,11 @@ The larger issue's 200 ms first-complete-model and 50 ms maximum-interaction
 budgets remain unverified. Dense B-spline coarse work still has no measured
 first-complete benefit; O3 payload/memory costs and short-run variability remain
 visible in the native report.
+
+The later [staged-checkout review finding](https://github.com/Caismis/rustX/pull/556#issuecomment-6940915651)
+is fixed in the rebuild recipe and covered by five additional real-Git cases.
+The runtime recipe hash/source offer is refreshed; compiled code and geometry
+are unchanged. The [native follow-up](../issue-534/native-cad-validation.md#review-follow-up-local-source-checkout-guard)
+retains baseline failure, corrected success and an independent audit of all four
+build input trees. The full local 5,057-case run above precedes this recipe-only
+follow-up; final-head FULL CI repeats the complete suite including its new tests.

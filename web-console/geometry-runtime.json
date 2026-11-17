@@ -15,7 +15,7 @@
     "src/native-profile.hpp": "f4a1a1a1363663518e74cef3fa32e8c72baed385984f0cea7c1c5663026ff553"
   },
   "buildRecipeSha256": {
-    "rebuild.sh": "67db35dc1c25ee515ad8768f081d8d5d8497cf7e5118c228fe4068c8f3514c59",
+    "rebuild.sh": "8b1128e737ec7948aebe64d5fbe2751257add1bb26412f343632606b061c1c76",
     "configure-build.py": "2bfcfbefc52db3d9316581d3607eb1ec2efcb0a4daad4a0bb77dac2b2f2f5356",
     "audit-build.py": "8861c97be35c2791a171b177ecaa6395659ec8b8b669812cfe3096596a4574b8"
   },

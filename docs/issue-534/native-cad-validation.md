@@ -282,3 +282,34 @@ rejected by native producer admission, matching existing client admission.
 No cross-close geometry cache was added. Existing residency admits at most two
 mounted visible/parked owners, preserves the same canvas/scene/source across
 tab reselection, and retires them on real scope/lifetime changes.
+
+## Review follow-up: local source checkout guard
+
+The local-checkout rebuild path now checks both index and worktree against
+`HEAD` for the pinned importer and OCCT repositories. The former worktree/index
+comparison accepted staged changes. Five network-free integration cases use
+real Git repositories and real staged/unstaged changes, including an importer
+source that the offered overrides do not replace. Only the production commit
+identity probes and compiler/build entry are stubbed; the clean case reaches
+actual source copying/configuration, while dirty cases cannot create a target.
+
+The identical test against the original recipe fails exactly the staged
+importer and staged OCCT cases; the corrected recipe passes all five. The
+[proof manifest](native-cad-rebuild-proof.json),
+[original-recipe failure](native-cad-rebuild-guard-red.log) and
+[corrected-recipe result](native-cad-rebuild-guard-green.log) are retained.
+The combined native/regression selection passes 73 cases, TypeScript passes,
+and the runtime/source-offer audit passes. The recipe hash is updated together;
+native C++ and the distributed JS/WASM hashes are unchanged.
+
+An [independent current-input audit](native-cad-upstream-input-audit.json) checks
+all 125 tracked importer files and 35,508 tracked OCCT files and both indexes
+against their pins. The 136 raw checkout differences are exclusively files with
+declared `eol=crlf`; applying that declared normalization exactly reproduces
+their pinned blobs. No other file mismatch is accepted. Each of the four actual
+build trees has the same eight non-overridden importer files, the nine exact
+offered overrides, the expected flags-only CMake transformation, and 4,775 known
+compile inputs; every saved build fingerprint agrees with its source hashes.
+Their shared OCCT source resolves to the audited pinned checkout. This is a
+current filesystem/index audit, not a retroactive execution trace or evidence
+that the review finding changed the committed binary.
