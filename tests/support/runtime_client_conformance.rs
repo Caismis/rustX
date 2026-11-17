@@ -71,6 +71,7 @@ use rustx::tools::types::{
 };
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 
+use super::audit::assert_permission_reminder;
 use super::fake::{FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, success_result};
 use crate::scripted_suites::common;
 
@@ -1027,7 +1028,10 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
     })
     .await;
     let event_cursor = events.last().expect("at least one event").cursor;
-    let (_, settled_cursor) = snapshot_of(&mut *driver, 30).await;
+    let (settled_snapshot, settled_cursor) = snapshot_of(&mut *driver, 30).await;
+    let reminder_id = assert_permission_reminder(&settled_snapshot.messages)
+        .id
+        .clone();
     receive_read_domain_suffix(&mut *driver, event_cursor, settled_cursor).await;
 
     let response = driver
@@ -1062,9 +1066,14 @@ pub async fn detach_then_reinitialize(factory: &dyn DriverFactory) {
     receive_read_domain_suffix(&mut *driver, settled_cursor, reattached).await;
     assert_eq!(
         snapshot.messages.len(),
-        3,
+        4,
         "the settled attempt and canonical history survived detach"
     );
+    assert_eq!(
+        assert_permission_reminder(&snapshot.messages).id,
+        reminder_id
+    );
+    assert_eq!(snapshot.messages, settled_snapshot.messages);
 }
 
 /// A successful `shutdown` is semantic shutdown, not detach and not
@@ -1230,7 +1239,12 @@ pub async fn submission_acceptance_is_not_settlement(factory: &dyn DriverFactory
         snapshot_cursor,
     )
     .await;
-    assert_eq!(snapshot.messages.len(), 3);
+    assert_eq!(snapshot.messages.len(), 4);
+    let reminder = assert_permission_reminder(&snapshot.messages);
+    assert!(fixture.model.requests()[0].messages.iter().any(|message| {
+        matches!(message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user))
+            if user.id == reminder.id)
+    }));
     assert!(matches!(
         snapshot.attempt.expect("attempt").phase,
         rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
@@ -2467,7 +2481,8 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
     // through its cursor: the inbound message is already committed.
     let (mid, mid_cursor) = snapshot_of(&mut *driver, 3).await;
     assert!(mid_cursor > initial_cursor);
-    assert_eq!(mid.messages.len(), 2);
+    assert_eq!(mid.messages.len(), 3);
+    let reminder_id = assert_permission_reminder(&mid.messages).id.clone();
 
     // Subscribing after that cursor observes only later events, with no gap
     // and no replay of what the snapshot already contains.
@@ -2493,7 +2508,11 @@ pub async fn snapshot_and_cursor_linearize(factory: &dyn DriverFactory) {
         settled_cursor,
     )
     .await;
-    assert_eq!(settled.messages.len(), 3);
+    assert_eq!(settled.messages.len(), 4);
+    assert_eq!(
+        assert_permission_reminder(&settled.messages).id,
+        reminder_id
+    );
 }
 
 /// An unserviceable cursor fails with the typed `resync_required`, a fresh
@@ -2550,9 +2569,14 @@ pub async fn resync_required_and_snapshot_repair(factory: &dyn DriverFactory) {
     let (repaired, repaired_cursor) = snapshot_of(&mut *driver, 4).await;
     assert_eq!(
         repaired.messages.len(),
-        2,
-        "the inbound message and admitted Agent Status fact committed"
+        3,
+        "the inbound message, Agent Status and permission reminder committed"
     );
+    let reminder = assert_permission_reminder(&repaired.messages);
+    assert!(fixture.model.requests()[0].messages.iter().any(|message| {
+        matches!(message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user))
+            if user.id == reminder.id)
+    }));
     subscribe(&mut *driver, 5, repaired_cursor).await;
 
     // Continuing from the repaired cursor is contiguous: one further

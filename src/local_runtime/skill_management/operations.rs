@@ -18,6 +18,9 @@ use std::io::{self, Write};
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+mod tests;
+
 const MAX_ENTRIES: usize = 4096;
 const MAX_BYTES: u64 = 256 * 1024 * 1024;
 const PACKAGE: &str = "package";
@@ -481,9 +484,22 @@ impl UserConfigManager {
                     .ok_or(SettingsError::Invalid)?
                     .agent
                     .and_then(|agent| agent.skills);
-                if selection.is_some_and(|selection| {
-                    selection.names().iter().any(|selected| selected == name)
-                }) {
+                let (agents, _) = crate::local_runtime::agent_resources::load_authorized(
+                    target.workspace(),
+                    &self.resource_root(&SourceTarget::User).join("agents"),
+                )
+                .map_err(|_| SettingsError::Invalid)?;
+                // Exact selectors explicitly enable a package, including a
+                // copy whose default is disabled. Check named Agents as well
+                // as the root before introducing a formerly missing identity.
+                let named_selected = agents
+                    .definitions()
+                    .any(|agent| agent.skills().iter().any(|selected| selected == name));
+                if named_selected
+                    || selection.is_some_and(|selection| {
+                        selection.names().iter().any(|selected| selected == name)
+                    })
+                {
                     return Err(SettingsError::TransferRejected(
                         TransferRejection::NameEnabled,
                     ));

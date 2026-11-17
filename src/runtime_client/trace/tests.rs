@@ -5330,6 +5330,14 @@ fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bod
     completion(&store, &frozen, None, None, 2);
     append(
         &store,
+        E::ToolCallRequested {
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+        },
+        2,
+    );
+    append(
+        &store,
         E::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("workflow-call"),
             tool_id: ToolId::new("tool-workflow-test_flow"),
@@ -5393,6 +5401,10 @@ fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bod
     let nodes = store
         .observation_workflow_nodes(&current, root.position.sequence().unwrap(), 0, 32)
         .unwrap();
+    assert_eq!(
+        nodes.parent_sequence,
+        Some(call.position.sequence().unwrap())
+    );
     let Some(TraceFieldSource::Value { domain, path, .. }) = &nodes.nodes[0].input else {
         panic!("original input selector")
     };
