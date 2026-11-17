@@ -400,7 +400,11 @@ impl Census {
                     size_of_val(call.as_ref()),
                 );
             }
-            RuntimeClientEvent::ContextCompactionStarted { context, .. }
+            RuntimeClientEvent::ContextCompactionOperationUpdated { context, .. }
+            | RuntimeClientEvent::ContextCompactionProgressed { context, .. }
+            | RuntimeClientEvent::ContextCompactionCancelled { context, .. }
+            | RuntimeClientEvent::ContextCompactionSkipped { context, .. }
+            | RuntimeClientEvent::ContextCompactionStarted { context, .. }
             | RuntimeClientEvent::ContextCompactionFailed { context, .. }
             | RuntimeClientEvent::ContextCompacted { context, .. } => {
                 self.owner(
@@ -536,19 +540,72 @@ mod tests {
 
     #[test]
     fn event_payload_boxes_are_included_and_shared_visits_do_not_duplicate_them() {
-        let event = RuntimeClientEvent::ContextCompactionStarted {
-            context: Box::default(),
-            attempt_id: None,
-        };
-        let mut census = Census::default();
-        census.event(&event);
-        census.event(&event);
-        let allocation = &census.allocations["context_event_boxes"];
-        assert_eq!(allocation.owners, 1);
-        assert_eq!(
-            allocation.known_requested_bytes,
-            size_of::<crate::runtime_client::snapshot::RuntimeClientContextView>()
-        );
-        assert_eq!(census.counts["variant_ContextCompactionStarted"], 2);
+        let cases = [
+            (
+                "variant_ContextCompactionStarted",
+                RuntimeClientEvent::ContextCompactionStarted {
+                    context: Box::default(),
+                    attempt_id: None,
+                },
+            ),
+            (
+                "variant_ContextCompactionFailed",
+                RuntimeClientEvent::ContextCompactionFailed {
+                    context: Box::default(),
+                    attempt_id: None,
+                    error: String::new(),
+                },
+            ),
+            (
+                "variant_ContextCompacted",
+                RuntimeClientEvent::ContextCompacted {
+                    context: Box::default(),
+                    attempt_id: None,
+                },
+            ),
+            (
+                "variant_ContextCompactionOperationUpdated",
+                RuntimeClientEvent::ContextCompactionOperationUpdated {
+                    context: Box::default(),
+                },
+            ),
+            (
+                "variant_ContextCompactionProgressed",
+                RuntimeClientEvent::ContextCompactionProgressed {
+                    context: Box::default(),
+                    attempt_id: None,
+                },
+            ),
+            (
+                "variant_ContextCompactionCancelled",
+                RuntimeClientEvent::ContextCompactionCancelled {
+                    context: Box::default(),
+                    attempt_id: None,
+                },
+            ),
+            (
+                "variant_ContextCompactionSkipped",
+                RuntimeClientEvent::ContextCompactionSkipped {
+                    context: Box::default(),
+                    attempt_id: None,
+                },
+            ),
+        ];
+        for (variant, event) in &cases {
+            let mut census = Census::default();
+            census.event(event);
+            census.event(event);
+            let allocation = census
+                .allocations
+                .get("context_event_boxes")
+                .unwrap_or_else(|| panic!("{variant} context box was not counted"));
+            assert_eq!(allocation.owners, 1, "{variant}");
+            assert_eq!(
+                allocation.known_requested_bytes,
+                size_of::<crate::runtime_client::snapshot::RuntimeClientContextView>(),
+                "{variant}"
+            );
+            assert_eq!(census.counts[*variant], 2, "{variant}");
+        }
     }
 }
