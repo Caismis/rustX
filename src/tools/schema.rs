@@ -154,7 +154,7 @@ pub(crate) fn compile_tool_contract(
     validate_root_shape(&definition.input_schema)?;
     let business = envelope::compile_business_resources(&definition.input_schema)?;
     let mut properties = json!({
-        "arguments": {"$ref": business.root_uri},
+        "arguments": business.schema,
         ELEVATION_REASON_FIELD: {"type": ["string", "null"], "maxLength": ELEVATION_REASON_MAX_UTF8_BYTES, "description": ELEVATION_REASON_DESCRIPTION}
     });
     let mut required = vec![json!(ARGUMENTS_FIELD)];
@@ -173,11 +173,18 @@ pub(crate) fn compile_tool_contract(
     while business.resources.get(&uri).is_some() {
         uri.push('_');
     }
-    let input_schema = json!({
+    let mut input_schema = json!({
         "$schema":business.dialect, "$id":uri,
-        "type":"object", "$defs":business.resources,
+        "type":"object",
         "properties":properties, "required":required, "additionalProperties":false
     });
+    if business
+        .resources
+        .as_object()
+        .is_some_and(|resources| !resources.is_empty())
+    {
+        input_schema["$defs"] = business.resources;
+    }
     build_validator(&input_schema)
         .map_err(|error| SchemaError::InvalidSchema(error.to_string()))?;
     Ok((

@@ -31,7 +31,7 @@ fn request_with_tools(prompt: &str) -> ModelRequest {
 }
 
 #[tokio::test]
-async fn compiled_tools_send_local_defs_references_to_kimi() {
+async fn compiled_kimi_tools_inline_single_use_business_objects() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_chat", "plain_text.sse")
     })
@@ -41,27 +41,24 @@ async fn compiled_tools_send_local_defs_references_to_kimi() {
         "kimi-k3",
         "Read a file",
     );
-    request.tools = vec![model_selectable_tool("read_file", "tool-read")];
+    let tool = rustx::tools::native::todo_tool_definition();
+    request.tools = vec![rustx::tools::schema::compile_model_definition(&tool).unwrap()];
     let events = collect_events(&adapter(&server), request).await;
     assert_normal_completion(&events);
     let bodies = server.request_bodies();
     assert_eq!(bodies.len(), 1);
     let body: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
     let parameters = &body["tools"][0]["function"]["parameters"];
-    let reference = parameters["properties"]["arguments"]["$ref"]
-        .as_str()
-        .unwrap();
-    assert!(reference.starts_with("#/$defs/"), "{reference}");
+    let arguments = &parameters["properties"]["arguments"];
+    assert_eq!(arguments["type"], "object");
     assert_eq!(
-        parameters.pointer(&reference[1..]).unwrap()["type"],
-        "object"
+        arguments["properties"]["metadata"]["additionalProperties"],
+        true
     );
+    assert!(parameters.get("$defs").is_none());
     assert!(parameters.get("definitions").is_none());
     assert!(!parameters.to_string().contains("json-schema:///"));
-    assert_eq!(
-        parameters["required"],
-        serde_json::json!(["arguments", "execution_mode"])
-    );
+    assert_eq!(parameters["required"], serde_json::json!(["arguments"]));
 }
 
 /// A request for a model that declares the Qwen in-band tool dialect.

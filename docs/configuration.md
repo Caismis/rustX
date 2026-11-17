@@ -219,6 +219,10 @@ are projected into user messages after the complete consecutive tool-result
 group, keeping the original image order. Responses function tools explicitly
 use `strict: false` so the provider cannot silently change optional parameters
 or open objects in the authored schema.
+The compiled invocation envelope keeps single-use business schemas inline;
+only shared or recursive references retain root `$defs`. This preserves
+free-form JSON metadata without introducing unnecessary reference boundaries
+that MFJS services can reject. Canonical business validation is unchanged.
 
 Anthropic endpoints accept either an API root or a root ending in `/v1`, and
 send both `x-api-key` and Bearer authentication for compatible services. Native

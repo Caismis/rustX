@@ -7,7 +7,7 @@
 //! - Core system prompt: `src/context/system_prompt.rs` (`DEFAULT_SYSTEM_PROMPT`)
 //! - Full-access reminder: `src/runtime/permission/reminder.rs`
 //! - Provider replay binding: `SHA256(provider_bytes || 0x00 || endpoint_bytes)`
-//! - Tool invocation envelope: `urn:rustx:invocation` Draft-07 (`src/tools/schema.rs`,
+//! - Tool invocation envelope: `urn:rustx:invocation` (`src/tools/schema.rs`,
 //!   `src/tools/native/{read,write,edit,glob,grep,bash,todo}`)
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -120,13 +120,9 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
             "tool {name} envelope must forbid unknown outer properties"
         );
 
-        let definitions = parameters
-            .get("$defs")
-            .and_then(Value::as_object)
-            .expect("bundled business definitions");
         assert!(
-            definitions.contains_key("schema0"),
-            "tool {name} missing local business definition"
+            !parameters.contains_key("$defs"),
+            "tool {name} has no shared or recursive schemas"
         );
 
         let properties = parameters
@@ -134,9 +130,8 @@ fn assert_tool_envelope_contract(tools: &[Value]) {
             .and_then(Value::as_object)
             .expect("envelope properties");
         assert_eq!(
-            properties.get("arguments"),
-            Some(&json!({"$ref": "#/$defs/schema0"})),
-            "tool {name} must reference bundled business schema via arguments"
+            properties["arguments"]["type"], "object",
+            "tool {name} must inline the business object inside arguments"
         );
         assert!(
             properties.contains_key("elevation_reason"),

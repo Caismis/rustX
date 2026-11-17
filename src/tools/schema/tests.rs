@@ -42,19 +42,65 @@ fn static_tool_references_use_root_defs_for_provider_requests() {
     assert_eq!(root["type"], "object");
     let child_ref = root["properties"]["child"]["$ref"].as_str().unwrap();
     assert!(child_ref.starts_with("#/$defs/"));
+    assert_eq!(child_ref, reference);
+    assert_eq!(root["properties"]["value"]["type"], "integer");
     assert_eq!(
-        model.input_schema.pointer(&child_ref[1..]).unwrap()["$ref"],
-        reference
-    );
-    let value_ref = root["properties"]["value"]["$ref"].as_str().unwrap();
-    assert!(value_ref.starts_with("#/$defs/"));
-    assert!(model.input_schema.pointer(&value_ref[1..]).is_some());
-    let literal_ref = root["properties"]["literal"]["$ref"].as_str().unwrap();
-    assert_eq!(
-        model.input_schema.pointer(&literal_ref[1..]).unwrap()["const"],
+        root["properties"]["literal"]["const"],
         canonical["properties"]["literal"]["const"]
     );
     assert!(model.input_schema.get("definitions").is_none());
+}
+
+#[test]
+fn single_use_open_objects_stay_inline_and_preserve_arbitrary_json() {
+    let canonical = json!({
+        "type":"object", "additionalProperties":false,
+        "properties": {
+            "action":{"type":"string", "enum":["create","list"]},
+            "metadata":{"type":"object", "additionalProperties":true},
+        }, "required":["action"],
+    });
+    let compiled = compile_model_definition(&definition(
+        ToolExecutionPolicy::ForegroundOnly,
+        canonical.clone(),
+    ))
+    .unwrap();
+    assert_eq!(compiled.input_schema["properties"]["arguments"], canonical);
+    assert!(compiled.input_schema.get("$defs").is_none());
+    let validator = build_validator(&compiled.input_schema).unwrap();
+    for metadata in [
+        json!({}),
+        json!({"nested":{"list":[1,null,true,"x",{}]}}),
+        json!({"$ref":"literal instance data"}),
+    ] {
+        assert!(validator.is_valid(&json!({"arguments":{"action":"create", "metadata":metadata}})));
+    }
+    assert!(
+        !validator.is_valid(&json!({"arguments":{"action":"create", "metadata":"not an object"}}))
+    );
+}
+
+#[test]
+fn shared_schemas_remain_shared_instead_of_expanding_a_dag() {
+    let canonical = json!({
+        "type":"object", "properties":{
+            "left":{"$ref":"#/$defs/shared"},
+            "right":{"$ref":"#/$defs/shared"},
+        },
+        "$defs":{"shared":{"type":"object", "properties":{"value":{"type":"string"}}}},
+    });
+    let compiled =
+        compile_model_definition(&definition(ToolExecutionPolicy::ForegroundOnly, canonical))
+            .unwrap();
+    let root = &compiled.input_schema["properties"]["arguments"];
+    assert_eq!(root["type"], "object");
+    let reference = root["properties"]["left"]["$ref"].as_str().unwrap();
+    assert_eq!(root["properties"]["right"]["$ref"], reference);
+    assert_eq!(compiled.input_schema["$defs"].as_object().unwrap().len(), 1);
+    assert_eq!(
+        compiled.input_schema.pointer(&reference[1..]).unwrap()["properties"]["value"]["type"],
+        "string"
+    );
 }
 
 #[test]

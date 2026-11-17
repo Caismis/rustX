@@ -9,9 +9,11 @@ use serde_json::{Map, Value, json};
 
 use super::{SchemaError, build_validator};
 
+mod compact;
+
 /// A canonical validator and its closed model-facing resource graph.
 pub(super) struct CompiledBusiness {
-    pub root_uri: String,
+    pub schema: Value,
     pub resources: Value,
     pub dialect: &'static str,
     pub validator: jsonschema::Validator,
@@ -20,7 +22,7 @@ pub(super) struct CompiledBusiness {
 /// Validate the owner-supplied business document and freeze its bundled resources.
 ///
 /// The caller places `resources` in the envelope's root `$defs` object and
-/// references `root_uri` from `arguments`. Business validation uses the returned
+/// places `schema` inside `arguments`. Business validation uses the returned
 /// unchanged canonical validator. Both use only resource bytes supplied in the
 /// document. Missing resources fail without file or network access, including
 /// during registration; URI contents cannot grant host resource authority.
@@ -53,9 +55,9 @@ pub(super) fn compile_business_resources(
     };
     graph.ensure_resource(&resolver)?;
     graph.close_dynamic_anchors()?;
-    let (root_uri, resources, dialect) = graph.finish(&root_uri)?;
+    let (schema, resources, dialect) = graph.finish(&root_uri)?;
     Ok(CompiledBusiness {
-        root_uri,
+        schema,
         resources,
         dialect,
         validator,
@@ -329,7 +331,7 @@ impl<'a> ResourceGraph<'a> {
         })
     }
 
-    fn finish(self, root_uri: &str) -> Result<(String, Value, &'static str), SchemaError> {
+    fn finish(self, root_uri: &str) -> Result<(Value, Value, &'static str), SchemaError> {
         let root = self
             .resources
             .get(root_uri)
@@ -358,11 +360,12 @@ impl<'a> ResourceGraph<'a> {
                     definitions.insert(name.clone(), local_schema(node, root.draft, &references)?);
                 }
             }
-            return Ok((
-                format!("#/$defs/{root_name}"),
-                Value::Object(definitions),
-                dialect_uri(root.draft)?,
-            ));
+            let (schema, definitions) = compact::inline_single_use(
+                &json!({"$ref": format!("#/$defs/{root_name}")}),
+                &definitions,
+                root.draft,
+            )?;
+            return Ok((schema, Value::Object(definitions), dialect_uri(root.draft)?));
         }
         // Resource boundaries retain dynamic scope and mixed-dialect assertions.
         let mut resources = Map::new();
@@ -406,7 +409,7 @@ impl<'a> ResourceGraph<'a> {
             resources.insert(uri, resource);
         }
         Ok((
-            root_uri.to_owned(),
+            json!({"$ref": root_uri}),
             Value::Object(resources),
             dialect_uri(Draft::Draft202012)?,
         ))
@@ -544,7 +547,7 @@ mod tests {
             "$defs": business.resources,
             "type": "object",
             "properties": {
-                "arguments": {"$ref": business.root_uri},
+                "arguments": business.schema,
                 "elevation_reason": {"type": ["string", "null"]},
             },
             "required": ["arguments"],
