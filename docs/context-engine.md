@@ -302,8 +302,9 @@ reproducibility are different capabilities.
 ## Native reasoning and continuation
 
 Chat Completions retains configured reasoning replay semantics. Anthropic requires
-complete signed/redacted thinking units; Responses requires complete accepted
-native encrypted output bundles and valid stored coverage. Adapters never invent
+complete original thinking/redacted units, including compatible APIs' unsigned
+thinking; Responses requires complete accepted native output bundles (encrypted
+or plaintext reasoning) or valid stored coverage. Adapters never invent
 signatures, encrypted state, reasoning items or protocol dialects.
 
 Continuation names the actual accepted Assistant output of the prior actual

@@ -60,7 +60,12 @@ pub(super) fn expected_replay_binding(provider: &str, endpoint: &str) -> String 
 }
 
 fn text(role: &str, value: &str) -> Value {
-    json!({"role":role,"content":[{"type":"text","text":value}],"tool_calls":null})
+    let content = if role == "assistant" {
+        json!(value)
+    } else {
+        json!([{"type":"text","text":value}])
+    };
+    json!({"role":role,"content":content,"tool_calls":null})
 }
 
 fn expected_system_prompt(index: usize) -> String {
@@ -192,11 +197,11 @@ pub(super) fn expected_body(case: &str, index: usize) -> Value {
             messages.push(text("user", &format!("benchmark turn {:04}", turn + 1)));
         }
     } else if case == "tool" && index == 1 {
-        messages.push(json!({"role":"assistant","content":[],"tool_calls":[{
+        messages.push(json!({"role":"assistant","content":"","tool_calls":[{
             "type":"function","id":"benchmark-read","function":{"name":"read",
             "arguments":{"arguments":{"path":"<WORKSPACE>/note.txt"}}}}]}));
         messages.push(json!({"role":"tool","tool_call_id":"benchmark-read",
-            "content":[{"type":"text","text":NOTE}],"tool_calls":null}));
+            "content":NOTE,"tool_calls":null}));
     } else {
         assert_eq!(index, 0);
     }
@@ -230,7 +235,7 @@ fn normalize(body: &Value, workspace: &str, dynamic: bool) -> Value {
             }
             continue;
         }
-        for block in message["content"].as_array_mut().unwrap() {
+        for block in message["content"].as_array_mut().into_iter().flatten() {
             if let Some(value) = block["text"].as_str()
                 && value.starts_with(TIME_PREFIX)
                 && dynamic
@@ -341,6 +346,7 @@ pub(super) fn reconstructed_body(request: &Value, provider: &str, endpoint: &str
                                 other => panic!("unexpected assistant block {other}"),
                             }
                         }
+                        let content: String = content.iter().map(|part| part["text"].as_str().unwrap()).collect();
                         json!({"role":"assistant","content":content,
                         "tool_calls":if calls.is_empty() { Value::Null } else { json!(calls) }})
                     }
@@ -348,8 +354,10 @@ pub(super) fn reconstructed_body(request: &Value, provider: &str, endpoint: &str
                         assert_eq!(message["tool_id"], "tool-read");
                         assert_eq!(message["result"]["status"], json!({"type":"success"}));
                         assert_eq!(message["result"]["artifacts"], json!([]));
+                        let content = message["result"]["content"].as_array().unwrap().iter()
+                            .map(|part| part["text"].as_str().unwrap()).collect::<Vec<_>>().join("\n");
                         json!({"role":"tool","tool_call_id":message["tool_call_id"],
-                        "content":message["result"]["content"],"tool_calls":null})
+                        "content":content,"tool_calls":null})
                     }
                     other => panic!("unexpected semantic role {other}"),
                 }
@@ -766,7 +774,11 @@ mod tests {
 
         for index in [1, 2, 3] {
             let mut bad = good.clone();
-            bad["messages"][index]["content"][0]["text"] = json!("different frozen input");
+            if bad["messages"][index]["content"].is_string() {
+                bad["messages"][index]["content"] = json!("different frozen input");
+            } else {
+                bad["messages"][index]["content"][0]["text"] = json!("different frozen input");
+            }
             assert!(
                 std::panic::catch_unwind(|| {
                     assert_bodies("short-large", 64, FIXTURE_WORKSPACE, &good, &bad)

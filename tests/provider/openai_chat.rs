@@ -1432,7 +1432,8 @@ async fn tool_then_consecutive_inbound_users_translate_in_order() {
         "list_directory"
     );
     assert_eq!(messages[1]["role"], "tool");
-    assert_eq!(messages[1]["content"][0]["text"], "listed");
+    assert_eq!(messages[0]["content"], "");
+    assert_eq!(messages[1]["content"], "listed");
     assert_eq!(messages[2]["role"], "user");
     assert_eq!(messages[2]["content"][0]["text"], "A");
     assert_eq!(messages[3]["role"], "user");
