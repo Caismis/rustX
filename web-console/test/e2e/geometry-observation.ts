@@ -9,7 +9,7 @@ export async function instrument(page: Page) {
     const importTimings: { startedAt: number; completedAt: number; elapsedMs: number; profile: unknown }[] = [];
     const previews: {elapsedMs:number;meshes:{triangles:number;error:number;bytes:number}[]}[]=[];
     const lods:{level:number;meshNames:string[];root:unknown;triangles:number;ms:number;at:number}[]=[];
-    const modelFrames:{ms:number;triangles:number;width:number;height:number;completeness:string|undefined;lod:string|undefined}[]=[];
+    const modelFrames:{ms:number;triangles:number;width:number;height:number;completeness:string|undefined;lod:string|undefined;quality:string|undefined}[]=[];
     for (const method of ['drawArrays', 'drawElements'] as const) {
       const original = WebGL2RenderingContext.prototype[method];
       Object.defineProperty(WebGL2RenderingContext.prototype, method, { value: function (this: WebGL2RenderingContext, ...args: unknown[]) {
@@ -17,7 +17,7 @@ export async function instrument(page: Page) {
         if (args[0] === this.TRIANGLES) {
           drawing.modelCalls++;
           drawing.frameTriangles += Number(args[method === 'drawArrays' ? 2 : 1]) / 3;
-          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; if(modelFrames.length<1024)modelFrames.push({ms:performance.now(),triangles:drawing.lastModelTriangles,width:this.canvas.width,height:this.canvas.height,completeness:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryCompleteness:undefined,lod:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryLod:undefined}); document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
+          if (!drawing.scheduled) { drawing.scheduled = true; queueMicrotask(() => { drawing.scheduled = false; drawing.lastModelTriangles = drawing.frameTriangles; drawing.frameTriangles = 0; if(modelFrames.length<1024)modelFrames.push({ms:performance.now(),triangles:drawing.lastModelTriangles,width:this.canvas.width,height:this.canvas.height,completeness:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryCompleteness:undefined,lod:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryLod:undefined,quality:this.canvas instanceof HTMLCanvasElement?this.canvas.dataset.geometryQuality:undefined}); document.dispatchEvent(new CustomEvent('geometry-test-model-submitted', { detail: this.canvas })); }); }
         }
         return result;
       } });

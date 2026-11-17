@@ -123,3 +123,56 @@ are unchanged. The [native follow-up](../issue-534/native-cad-validation.md#revi
 retains baseline failure, corrected success and an independent audit of all four
 build input trees. The full local 5,057-case run above precedes this recipe-only
 follow-up; final-head FULL CI repeats the complete suite including its new tests.
+
+
+## Native parser investigation and natural LOD follow-up
+
+The completed [FULL run on ce828](https://github.com/Caismis/rustX/actions/runs/44037588332)
+passed the Linux contracts/boundaries, default/all-feature lint and rustdoc,
+protocol/TUI, both macOS lanes, Web/Host (5,062 passed, four skipped), and browser
+shards 1/2. Shard 3 failed the natural 96-part coarse-before-final assertion;
+browser coverage and merge verification consequently failed closed. This is not
+a green final-head run.
+
+Its [raw observation](progressive-follow-up/ci-ce828-natural.json) contains a
+complete native coarse model, followed about 146 ms later by final output, but
+no coarse triangle submission. Product refinement may skip an unpainted tier
+when the final model supersedes it. The test now checks the complete native
+96-part tier and exact original model/frames without requiring that superseded
+tier to paint. It independently checks GPU fences for every tier actually
+submitted. Renderer scheduling and product policy are unchanged.
+
+A new unheld analytic 100-sphere case retains the strict coarse-before-final
+presentation requirement, complete names/hierarchy, 23,400 coarse and 500,800
+original final triangles, one context and zero resources after retirement.
+All coarse frames and every complete-quality full frame require their entire
+corresponding triangle counts. The first full frame also requires all original
+triangles. Existing interactive-quality complete-surface representations are
+recorded separately and do not prove original final tessellation; their
+correctness remains covered by the dedicated display-quality tests.
+
+The first new 200-sphere workload exceeded the unchanged five-second readiness
+assertion; [that failure](progressive-follow-up/local-200-timeout.json) is retained.
+The 100-sphere attempt then exposed the overly broad all-full-frame count check:
+an existing interactive-quality frame had fewer triangles while first/settled
+original frames were exact. [That failure](progressive-follow-up/local-100-quality-assertion.json)
+is retained too. Passive frame telemetry now includes quality so the assertion
+matches the existing rendering contract. No readiness/test deadline, renderer,
+held-message behavior or controlled-test assertion was relaxed.
+
+The [final five-case local run](progressive-follow-up/local-five-passed.json)
+passed all five cases in 26.19 seconds, with no skip/retry; TypeScript and the
+four test/fixture files' whitespace check passed. The three controlled-delivery
+test bodies are byte-identical. The [natural high-output observation](progressive-follow-up/local-100-natural.json)
+records coarse GPU/frame opportunity at 1312.6/1340.2 ms, before final at
+3486.5/3492.6 ms; the original complete-quality settled frame is at 4020.3 ms.
+[Retirement](progressive-follow-up/local-100-retirement.json) is all zero. These
+installed-Chrome/SwiftShader measurements are supplementary functional evidence;
+new-head pinned CI remains required.
+
+The separate [STEP parser experiments](../issue-534/step-parser-experiments/report.md)
+record 90 profiles-off ordinary timing rows and 136 targeted semantic reads.
+The generated valid 200 MB B-spline benchmark benefits from bulk lexer input;
+per-record tails address an independently measured quadratic wide-list cost.
+CPU/allocator diagnostics, memory costs and scope limitations are retained.
+Those experimental parser changes are not present in the shipped JS/WASM.

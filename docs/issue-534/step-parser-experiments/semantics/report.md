@@ -1,0 +1,38 @@
+All four pinned OCCT 7.6.1 diagnostic variants—original, tail pointer only, non-interactive bulk lexer only, and combined—produced identical results across 34 configurations and 136 independent parse-only reads. Compared fields include ReadStream status, complete raw-record/parameter dual 64-bit rolling digests, actual final entity count and entity-type order digest, bounded canonical captures, and stream flags. This establishes agreement on this corpus, not complete ISO 10303 correctness. No timing or performance conclusion comes from these instrumented reads.
+
+Everything resides under `/tmp/pr556-step-semantics`. The build reuses the original O3 link order of 4,775 objects, replaces two observation units, adds a temporary helper, and combines the existing tail-pointer and lexer candidate objects in four ways. It does not change the repository, pinned inputs, or production exports. The isolated `DiagnosticParseOnly` export accepts a JS-owned Uint8Array and copies at most 16 MiB byte by byte into a C++ vector. It does not borrow the WASM heap as its input.
+
+The conversion instrumentation observes the actual `GetRecordDescription/GetArgDescription` traversal. The raw digest includes each record number, identifier, type, has-arguments boolean, and every argument's enum, full raw value, byte length, and order, with explicit record-end markers. The two 64-bit rolling states are diagnostic fingerprints, not cryptographic equality proofs. Canonical captures provide inspectable records and arguments, bounded to 64 records / 32,768 bytes / 256 bytes per value. `canonicalTruncated=true` identifies incomplete captures, which can be a bounded string prefix rather than valid JSON. Digests still include complete values beyond these capture limits.
+
+The authoritative entity evidence is a direct post-ReadStream traversal of actual `model.Value(1..NbEntities)`: `entityCount`, complete `modelEntityDigest`, and the first 64 entity-type names. A separate LoadModel observation insertion also matched a neighboring commented example, producing duplicate observations. Interpreted results explicitly rename the raw C++ `entityLoadCount` field to `entityLoadObservations`; it is not an entity count and is not divided by two. This duplication does not affect raw-parameter digests or the independent final-model digest. `raw-results.ndjson` preserves the original, unrenamed C++ returns and the diagnostic source remains inspectable.
+
+| Input | Records | Arguments | Actual entities | All four variants |
+|---|---:|---:|---:|---|
+| Cube / CRLF / no final newline / trailing space | 570 | 1389 | 350 | Done, identical |
+| Nested lists | 13 | 26 | 3 | Done, identical |
+| Empty/nested/typed lists | 19 | 44 | 2 | Done, identical |
+| Recognized complex typed entity | 12 | 21 | 2 | Done, identical |
+| Error recovery | 13 | 28 | 3 | Done, identical |
+| 10,000 ordered integers | 11 | 10020 | 2 | Done, identical |
+| Valid long comment/string across 8192-byte refills | 12 | 24 | 2 | Done, identical |
+| Scope / scope export | 13 / 14 | 22 / 24 | 2 | Done, identical |
+| Malformed arguments | 570 | 1391 | 350 | Done, identical |
+| Malformed header | 2 | 5 | 0 | Done, identical; no positive inference from an empty model |
+| Empty / truncated header / truncated model / inherited nominal buffer-boundary input | 0 | 0 | 0 | RetFail, identical |
+
+These 18 input files are supplemented by eight bounded EOF configurations and eight actual stream-error configurations, giving 34 configurations × four variants = 136 reads. Explicit canonical assertions additionally check empty/nested subrecord structure, typed LENGTH_MEASURE(1.25), ordered misc/void/enum/ident/text/integer/real raw values, complex-entity component order, and preservation of the valid later `#3` entity with its `'after'` argument following an erroneous record. The recovery case has 13 records, 28 arguments, and three actual entities: its evidence is nonempty. The original parser's recovery behavior is preserved, including `(1,,3)` becoming raw `(integer '1', misc '1', integer '13')`; agreement does not imply that this recovery matches user intent. Unknown TEST_ENTITY cases exercise raw parsing and unknown-entity preservation, not full schema validity.
+
+The successful dedicated refill input is 24,314 bytes. Its comment occupies `[306,12010)` and its quoted string `[12026,24217)`, with a full raw string length of 12,191 bytes including a newline and doubled single quotes. The comment and string cross the 8192 and 16384 refill offsets respectively; a valid CARTESIAN_POINT follows them. Each token remains below the original lexer's 16,384-byte REJECT buffer limit. The inherited file named `valid-buffer-boundary.step` is instead rejected by all four variants: it is 31,779 bytes, SHA-256 `cb7ec1d378ce5a5ad6db98d3e6f8d46da5b7ed2be7df604e989ad29fe0eac97a`, and its HEADER begins at offset 16,402. The earlier native correctness file also records success=false for that exact input. Its empty result is rejection-agreement evidence, not successful cross-buffer semantic coverage. Earlier oversized-token exploratory smoke logs are not included in the final result set.
+
+For actual stream errors, a custom streambuf throws `std::ios_base::failure` at a selected byte offset; a paired run returns ordinary EOF at the same offset. All eight actual errors reached the injection (`faultTriggered=true`) and returned `IFSelect_RetFail=3`. The scanner-owned yyin reports bad=true/fail=true/eof=false; the caller's separate istream reports false/false/false. OCCT maps Flex YY_FATAL_ERROR to Standard_Failure::Raise at lex.step.cxx:663, and the existing read path converts the failure to RetFail without an exception escaping the probe. No error handling was overridden and no candidate behavior was changed.
+
+| Paired input / stop offset | Ordinary EOF | Actual stream error | Four variants |
+|---|---|---|---|
+| 430-byte nested input, 0 / 306 / 343 | RetFail, zero records/entities | RetFail, injection reached, scanner bad/fail=true | Identical |
+| 430-byte nested input, complete end 430 | Done, 13 records / 3 entities | RetFail, injection reached, scanner bad/fail=true | Identical |
+| 24,314-byte long input, 8192 / 16384 / 24294 | RetFail, zero records/entities | RetFail, injection reached, scanner bad/fail=true | Identical |
+| 24,314-byte long input, complete end 24314 | Done, 12 records / 2 entities | RetFail, injection reached, scanner bad/fail=true | Identical |
+
+Parser rejection happens before conversion, so those rows contain seed raw digests and empty canonical arrays. They establish rejection agreement only. Final scanner flags after successful ordinary EOF are all false, reflecting the lexer's internal read/reset state; neither caller flags nor final EOF flags alone establish whether the stream end was encountered. Successful complete inputs versus faultTriggered/RetFail provide the direct distinction here.
+
+Inspect `summary.json` for counts and assertions; `results.json` for interpreted results; `raw-results.ndjson` for all 136 original returns; `cases-manifest.json` for the 18 input hashes; `source-provenance.json` for original complete-source hashes and refill offsets; `build-evidence.json` for compile/link arguments and final diagnostic source/object hashes; and `semantic-diagnostic-source.patch`, the self-written helper, generator, runner, and logs for reproducibility. The public package contains minimal upstream patches, never full upstream C++ sources or WASM binaries. It includes no wide 4×N scaling-model runs; those remain in the separate profiling/count experiment. All build/test processes have finished and the CPU window has been released.

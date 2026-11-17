@@ -1,0 +1,32 @@
+[
+  {
+    "rows": 4,
+    "width": 2048,
+    "degreeU": 3,
+    "degreeV": 3,
+    "referencedControlPoles": 8192,
+    "inputBytes": 1071421,
+    "sha256": "1ff9eded73ffd63a2ddf86abeef7620654312d5e800cc7f46e1eca8f5332d21b",
+    "generationSeconds": 0.23825823799415957
+  },
+  {
+    "rows": 4,
+    "width": 4096,
+    "degreeU": 3,
+    "degreeV": 3,
+    "referencedControlPoles": 16384,
+    "inputBytes": 2168041,
+    "sha256": "73f5c02c9ff9a42ab7daffbc42dfc5d6f25147184a18e31bbc7610c4059542d8",
+    "generationSeconds": 0.28332484400016256
+  },
+  {
+    "rows": 4,
+    "width": 8192,
+    "degreeU": 3,
+    "degreeV": 3,
+    "referencedControlPoles": 32768,
+    "inputBytes": 4353859,
+    "sha256": "a55257a6eb9e2661fe3cbaae143fa8ff1d5f8d6717b0dcf8b39a7d2574fa590e",
+    "generationSeconds": 0.49892460099363234
+  }
+]

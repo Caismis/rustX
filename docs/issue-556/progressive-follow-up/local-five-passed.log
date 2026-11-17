@@ -1,0 +1,18 @@
+[WebServer] (node:680951) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:681215) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 5 tests using 1 worker
+
+(node:681294) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer]
+[WebServer] A PostCSS plugin did not pass the `from` option to `postcss.parse`. This may cause imported assets to be incorrectly transformed. If you've recently added a PostCSS plugin that raised this warning, please contact the package author to fix the issue.
+  ✓  1 test/e2e/geometry-progressive.spec.ts:57:34 › an ordinary unheld 96-part CAD import preserves the complete model and may skip an unpainted LOD (3.3s)
+  ✓  2 test/e2e/geometry-progressive.spec.ts:57:34 › an unheld high-output 100-sphere STEP import presents a complete LOD before the full model (5.4s)
+  ✓  3 test/e2e/geometry-progressive.spec.ts:125:1 › whole-model CAD tessellation refines coarse to full through one focused renderer (5.0s)
+  ✓  4 test/e2e/geometry-progressive.spec.ts:160:1 › whole-model adoption preserves focus on external controls (2.5s)
+  ✓  5 test/e2e/geometry-progressive.spec.ts:166:1 › retirement destroys LOD graphics and fences native tiers and final results held in transit (2.8s)
+
+  5 passed (26.2s)

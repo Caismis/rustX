@@ -313,3 +313,7 @@ compile inputs; every saved build fingerprint agrees with its source hashes.
 Their shared OCCT source resolves to the audited pinned checkout. This is a
 current filesystem/index audit, not a retroactive execution trace or evidence
 that the review finding changed the committed binary.
+
+## STEP parser experiments
+
+The archived STEP parser experiments are diagnostic only and did not enter the production runtime. The bulk lexer path measured a 51.8% reduction; the tail-list change measured 4.8% with an RSS cost. The combined-over-lexer 15.85% result comes from one generated valid B-spline benchmark and does not generalize. All profiles-off ordinary timing results are reported separately from diagnostic runs. See the [full report](step-parser-experiments/report.md), [compact summary](step-parser-experiments/summary.compact.json), and [reproduction notes](step-parser-experiments/REPRODUCE.md); the full original conclusions are in the native report.

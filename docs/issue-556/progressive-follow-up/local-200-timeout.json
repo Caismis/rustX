@@ -1,0 +1,106 @@
+{
+  "scope": "Installed Chrome functional diagnostic; original five-second expect limit and 120-second test deadline unchanged",
+  "result": {
+    "exitCode": 1,
+    "stats": {
+      "startTime": "2026-11-17T09:00:29.679Z",
+      "duration": 32811.289000000004,
+      "expected": 4,
+      "skipped": 0,
+      "unexpected": 1,
+      "flaky": 0
+    },
+    "tests": [
+      {
+        "title": "an ordinary unheld 96-part CAD import preserves the complete model and may skip an unpainted LOD",
+        "results": [
+          {
+            "status": "passed",
+            "durationMs": 6809,
+            "retry": 0,
+            "error": null
+          }
+        ]
+      },
+      {
+        "title": "an unheld high-output 200-sphere STEP import presents a complete LOD before the full model",
+        "results": [
+          {
+            "status": "failed",
+            "durationMs": 6983,
+            "retry": 0,
+            "error": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mlocator\u001b[39m\u001b[2m).\u001b[22mtoBeVisible\u001b[2m(\u001b[22m\u001b[2m)\u001b[22m failed\n\nLocator: locator('[data-geometry-completeness=\"complete\"][data-geometry-lod=\"full\"]')\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n\u001b[2m  - Expect \"toBeVisible\" locator('[data-geometry-completeness=\"complete\"][data-geometry-lod=\"full\"]') with timeout 5000ms\u001b[22m\n\u001b[2m  - waiting for locator('[data-geometry-completeness=\"complete\"][data-geometry-lod=\"full\"]')\u001b[22m\n"
+          }
+        ]
+      },
+      {
+        "title": "whole-model CAD tessellation refines coarse to full through one focused renderer",
+        "results": [
+          {
+            "status": "passed",
+            "durationMs": 4353,
+            "retry": 0,
+            "error": null
+          }
+        ]
+      },
+      {
+        "title": "whole-model adoption preserves focus on external controls",
+        "results": [
+          {
+            "status": "passed",
+            "durationMs": 1973,
+            "retry": 0,
+            "error": null
+          }
+        ]
+      },
+      {
+        "title": "retirement destroys LOD graphics and fences native tiers and final results held in transit",
+        "results": [
+          {
+            "status": "passed",
+            "durationMs": 2011,
+            "retry": 0,
+            "error": null
+          }
+        ]
+      }
+    ]
+  },
+  "commands": {
+    "browser": "RUSTX_BROWSER_WS_ENDPOINT=<existing Chrome5277> RUSTX_E2E_PREVIEW_PORT=5183 RUSTX_E2E_FIXTURE_PORT=5184 RUSTX_BROWSER_FUNCTIONAL_RUN=progressive-five-reviewed node node_modules/@playwright/test/cli.js test --config /tmp/pr556-progressive-playwright.config.mts test/e2e/geometry-progressive.spec.ts",
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
+    "diff": "git diff --check"
+  },
+  "checks": {
+    "typecheckExitCode": 0,
+    "diffCheckExitCode": 0,
+    "controlledSuffixByteIdentical": true
+  },
+  "highOutputFailure": {
+    "stage": "complete/full canvas visibility",
+    "waitStartBrowserTraceMs": 25804763.929,
+    "waitEndBrowserTraceMs": 25809765.767,
+    "elapsedMs": 5001.838,
+    "snapshotBrowserTraceMs": 25809767.844,
+    "snapshotCanvas": {
+      "completeness": "preview",
+      "lod": "coarse",
+      "quality": "preview",
+      "width": 1440,
+      "height": 654
+    },
+    "cleanupClickStartBrowserTraceMs": 25809770.856,
+    "cleanupClickEndBrowserTraceMs": 25809802.893,
+    "resourcesZeroObservedBrowserTraceMs": 25809806.491,
+    "nativeArrivalAndGpuTimes": null,
+    "missingTelemetryReason": "Read after final readiness was not reached; trace records API/DOM/screencast, not Worker payloads or application globals. Cleanup aborted the unfinished import after five seconds."
+  },
+  "retainedOriginalCiFailure": {
+    "run": 44037588332,
+    "job": 133886717551,
+    "sha256": "2ef13415514e77d00adf01168422d43bd0cd016430477cbad4a3d44f756128a4",
+    "interpretation": "No coarse submission; unconditional requirement conflicted with allowed unpainted-tier skipping. Distinct from historical observer tie."
+  }
+}

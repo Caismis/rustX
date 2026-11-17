@@ -1,0 +1,189 @@
+{
+  "scope": "Installed Chrome157 functional diagnostic; not pinned-CI performance certification",
+  "exitCode": 0,
+  "stats": {
+    "startTime": "2026-11-17T09:11:39.560Z",
+    "duration": 26191.295000000002,
+    "expected": 5,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "tests": [
+    {
+      "title": "an ordinary unheld 96-part CAD import preserves the complete model and may skip an unpainted LOD",
+      "results": [
+        {
+          "status": "passed",
+          "durationMs": 3346,
+          "retry": 0
+        }
+      ]
+    },
+    {
+      "title": "an unheld high-output 100-sphere STEP import presents a complete LOD before the full model",
+      "results": [
+        {
+          "status": "passed",
+          "durationMs": 5383,
+          "retry": 0
+        }
+      ]
+    },
+    {
+      "title": "whole-model CAD tessellation refines coarse to full through one focused renderer",
+      "results": [
+        {
+          "status": "passed",
+          "durationMs": 4986,
+          "retry": 0
+        }
+      ]
+    },
+    {
+      "title": "whole-model adoption preserves focus on external controls",
+      "results": [
+        {
+          "status": "passed",
+          "durationMs": 2543,
+          "retry": 0
+        }
+      ]
+    },
+    {
+      "title": "retirement destroys LOD graphics and fences native tiers and final results held in transit",
+      "results": [
+        {
+          "status": "passed",
+          "durationMs": 2826,
+          "retry": 0
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "typecheckExitCode": 0,
+    "diffCheckExitCode": 0,
+    "controlledThreeTestSuffixByteIdentical": true,
+    "expectTimeoutMsUnchanged": 5000,
+    "testTimeoutMsUnchanged": 120000,
+    "rendererOrProductChanges": false
+  },
+  "commands": {
+    "cwd": "/tmp/rustx-pr556/web-console",
+    "browser": "RUSTX_BROWSER_WS_ENDPOINT=<existing installed-Chrome endpoint> RUSTX_E2E_PREVIEW_PORT=5183 RUSTX_E2E_FIXTURE_PORT=5184 RUSTX_BROWSER_FUNCTIONAL_RUN=progressive-five-quality-final node node_modules/@playwright/test/cli.js test --config /tmp/pr556-progressive-playwright.config.mts test/e2e/geometry-progressive.spec.ts",
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
+    "diff": "git diff --check",
+    "fixtureGeneration": "UV_CACHE_DIR=/tmp/pr556-uv uv run --offline --no-project --with cadquery-ocp-novtk==7.9.3.1.1 python web-console/test/fixtures/geometry/generate-mesh-step.py --parts 100 --output web-console/test/fixtures/geometry/curved-100.step"
+  },
+  "fileSha256": {
+    "web-console/test/e2e/geometry-progressive.spec.ts": "19940d0791d7b1d3ef855d17ede54336cc121912636362d2e1fbec8fbf721c2b",
+    "web-console/test/e2e/geometry-observation.ts": "c1134daed68b5ad0aca2a68cb3aac5d7d7679ff92913c0eb21761402b8263829",
+    "web-console/test/fixtures/geometry/README.md": "ab5a26642e393e1f8c17fbb4cac2e6939081a4894dfb08446d572f9d52db0dfd",
+    "web-console/test/fixtures/geometry/curved-100.step": "dfd0e23a4e55789c7a77bede9c7706ca97632de3f11d7f963d70e2d104645cfa"
+  },
+  "highOutput": {
+    "fixture": "curved-100.step",
+    "sourceBytes": 201056,
+    "nativeTierLevel": 0,
+    "nativeCoarseTriangles": 23400,
+    "canonicalFinalTriangles": 500800,
+    "occurrences": 100,
+    "authoredNames": "Curved part 000 through Curved part 099",
+    "nativeAndFinalHierarchyEqual": true,
+    "allCountsAndNamesAssertionsPassed": true,
+    "timesAfterClickMs": {
+      "coarseTierMessageReceived": 1092.6000000089407,
+      "workerFinalMessageReceived": 3200.1000000089407,
+      "coarse": {
+        "submission": 1177.4000000059605,
+        "gpu": 1312.6000000089407,
+        "opportunity": 1340.2000000029802
+      },
+      "firstFullGpuReady": 3486.5,
+      "firstFullOpportunity": 3492.6000000089407,
+      "submittedFrames": [
+        {
+          "ms": 1177.2000000029802,
+          "triangles": 23400,
+          "width": 720,
+          "height": 327,
+          "completeness": "preview",
+          "lod": "coarse",
+          "quality": "preview"
+        },
+        {
+          "ms": 1310.0,
+          "triangles": 23400,
+          "width": 1440,
+          "height": 654,
+          "completeness": "preview",
+          "lod": "coarse",
+          "quality": "preview"
+        },
+        {
+          "ms": 3265.2999999970198,
+          "triangles": 500800,
+          "width": 720,
+          "height": 327,
+          "completeness": "complete",
+          "lod": "full",
+          "quality": "interactive"
+        },
+        {
+          "ms": 3865.7999999970198,
+          "triangles": 334492,
+          "width": 720,
+          "height": 327,
+          "completeness": "complete",
+          "lod": "full",
+          "quality": "interactive"
+        },
+        {
+          "ms": 4020.2999999970198,
+          "triangles": 500800,
+          "width": 1440,
+          "height": 654,
+          "completeness": "complete",
+          "lod": "full",
+          "quality": "complete"
+        }
+      ]
+    },
+    "strictCoarseGpuAndOpportunityBeforeFull": true,
+    "createdContexts": 1,
+    "liveResources": {
+      "workers": 0,
+      "contexts": 1,
+      "buffers": 236,
+      "textures": 5,
+      "urls": 0
+    },
+    "retirement": {
+      "workers": 0,
+      "contexts": 0,
+      "buffers": 0,
+      "textures": 0,
+      "urls": 0
+    }
+  },
+  "contractAndFailureHistory": [
+    {
+      "run": 44037588332,
+      "job": 133886717551,
+      "commitPrefix": "ce828",
+      "evidence": "/tmp/pr556-ci-final-shard3/natural-unheld-CAD-LOD.json",
+      "sha256": "2ef13415514e77d00adf01168422d43bd0cd016430477cbad4a3d44f756128a4",
+      "interpretation": "Original96case required coarse-before-full unconditionally, contradicting allowed unpainted-tier skipping; no coarse submission occurred. Historical baseline observer tie is a different event and is not its cause. Explicit96policy now permits that skip; strict natural purpose is retained by the genuine high-output100case."
+    },
+    {
+      "report": "/tmp/pr556-browser-functional/progressive-five-reviewed/report.json",
+      "outcome": "200-sphere fixture:4passed/1failed; unchanged five-second full visibility assertion expired while real coarse remained shown; strict cleanup zeroed allresources. Main selected a smaller genuine100-sphere high-output model instead of extending deadlines."
+    },
+    {
+      "report": "/tmp/pr556-browser-functional/progressive-five-100-final/report.json",
+      "outcome": "100-sphere first attempt:4passed/1failed; full readiness and coarse-before-full succeeded; new blanket full-frame triangle assertion rejected an existing interactive complete-surface representation334492triangles. First/settled original frames both500800. Main approved passive quality accounting, leaving original/coarse counts strict."
+    }
+  ],
+  "qualityAccounting": "Every coarse/provisional frame must be preview quality and contain the entire native coarse tier. First full frame and all complete-quality frames must have canonical full triangle count; at least one complete-quality original frame is required. Interactive full-model frames retain only0<triangles<=full and are not authoritative original-tessellation proof; this test does not claim per-mesh validation of motion representations."
+}

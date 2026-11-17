@@ -1,0 +1,14 @@
+--- pinned/lex.step.cxx
++++ candidate/lex.step.cxx
+@@ -654,6 +654,11 @@
+ # undef YY_DECL
+ #endif
+ #define YY_DECL int step::scanner::lex (step::parser::semantic_type* /*yylval*/)
++
++// Official OCCT 0033350 input-mode fix; keep grammar and allocator unchanged.
++#ifdef YY_INTERACTIVE
++#undef YY_INTERACTIVE
++#endif
+ 
+ typedef step::parser::token token;
+ 

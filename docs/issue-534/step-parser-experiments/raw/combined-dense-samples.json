@@ -1,0 +1,355 @@
+{
+  "scope": "Native CPU/OS measurements, not browser display or integrated-GPU certification",
+  "environment": {
+    "timestampUTC": "2026-11-17T08:38:40.099Z",
+    "platform": "linux",
+    "arch": "x64",
+    "node": "v24.21.0",
+    "v8": "13.6.233.17-node.53",
+    "cpuModel": "Intel(R) Core(TM) i9-14900K",
+    "logicalCpus": 32,
+    "totalMemoryBytes": 134667956224
+  },
+  "runtimeAssets": [
+    {
+      "path": "/tmp/pr556-step-lexer-only/build/Release",
+      "js": {
+        "bytes": 97218,
+        "gzipBytes": 26960,
+        "sha256": "4d94a94bdd52d550326d44a2d6fbb7ce2d91e78d888cf9da263084b8dc420796"
+      },
+      "wasm": {
+        "bytes": 12134779,
+        "gzipBytes": 3985390,
+        "sha256": "0c7fbaad0ae9ed296856793c935031b69983c4124906ead2cde3e803416f1c27"
+      }
+    },
+    {
+      "path": "/tmp/pr556-step-experiments/combined/build/Release",
+      "js": {
+        "bytes": 97218,
+        "gzipBytes": 26960,
+        "sha256": "4d94a94bdd52d550326d44a2d6fbb7ce2d91e78d888cf9da263084b8dc420796"
+      },
+      "wasm": {
+        "bytes": 12134922,
+        "gzipBytes": 3985388,
+        "sha256": "47d49d779631a6aa515920aa1f1f03bd9d5c5209aa69327c94b41296e2cbce9c"
+      }
+    }
+  ],
+  "samples": [
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 1,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 26.52807899999999,
+      "initializeMs": 43.616776000000016,
+      "freshInstanceInitializeMs": 13.80021099999999,
+      "freshInstanceReadMs": 13694.002754000001,
+      "coldCodeToFinalMs": 13737.619530000002,
+      "cachedModuleToFinalMs": 13707.802965,
+      "coarseMs": 11948.545569,
+      "spans": [],
+      "profilingEnabled": false,
+      "importCpuUserMs": 14707.511,
+      "importCpuSystemMs": 426.987,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1325703168,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 287637504,
+        "heapTotal": 12189696,
+        "heapUsed": 6961144,
+        "external": 245423353,
+        "arrayBuffers": 213043400
+      },
+      "processAfter": {
+        "rss": 1325703168,
+        "heapTotal": 10297344,
+        "heapUsed": 6791248,
+        "external": 1068210335,
+        "arrayBuffers": 12292682
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 4,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        }
+      ],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    },
+    {
+      "run": 0,
+      "runtime": "/tmp/pr556-step-experiments/combined/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 1,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 31.318164999999993,
+      "initializeMs": 51.09794200000002,
+      "freshInstanceInitializeMs": 16.12579800000003,
+      "freshInstanceReadMs": 11537.887867,
+      "coldCodeToFinalMs": 11588.985809,
+      "cachedModuleToFinalMs": 11554.013664999999,
+      "coarseMs": 9878.098235,
+      "spans": [],
+      "profilingEnabled": false,
+      "importCpuUserMs": 12507.431,
+      "importCpuSystemMs": 441.604,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1230426112,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 288161792,
+        "heapTotal": 12189696,
+        "heapUsed": 6961328,
+        "external": 245423496,
+        "arrayBuffers": 213043543
+      },
+      "processAfter": {
+        "rss": 1230426112,
+        "heapTotal": 10297344,
+        "heapUsed": 6791432,
+        "external": 1085053230,
+        "arrayBuffers": 12292825
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 4,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        }
+      ],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    },
+    {
+      "run": 1,
+      "runtime": "/tmp/pr556-step-experiments/combined/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 1,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 26.027052999999995,
+      "initializeMs": 42.31051399999998,
+      "freshInstanceInitializeMs": 13.08138200000002,
+      "freshInstanceReadMs": 11659.243894,
+      "coldCodeToFinalMs": 11701.554408,
+      "cachedModuleToFinalMs": 11672.325276,
+      "coarseMs": 9923.384343,
+      "spans": [],
+      "profilingEnabled": false,
+      "importCpuUserMs": 12619.242,
+      "importCpuSystemMs": 444.724,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1288040448,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 287453184,
+        "heapTotal": 12189696,
+        "heapUsed": 6961328,
+        "external": 245423496,
+        "arrayBuffers": 213043543
+      },
+      "processAfter": {
+        "rss": 1288040448,
+        "heapTotal": 10297344,
+        "heapUsed": 6780320,
+        "external": 1085053230,
+        "arrayBuffers": 12292825
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 4,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        }
+      ],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    },
+    {
+      "run": 1,
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 1,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 24.579275999999993,
+      "initializeMs": 41.79342300000002,
+      "freshInstanceInitializeMs": 14.102210000000014,
+      "freshInstanceReadMs": 13724.264116,
+      "coldCodeToFinalMs": 13766.057539,
+      "cachedModuleToFinalMs": 13738.366326,
+      "coarseMs": 11996.640199000001,
+      "spans": [],
+      "profilingEnabled": false,
+      "importCpuUserMs": 14717.548,
+      "importCpuSystemMs": 437.624,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1360351232,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 287031296,
+        "heapTotal": 12189696,
+        "heapUsed": 6961088,
+        "external": 245423353,
+        "arrayBuffers": 213043400
+      },
+      "processAfter": {
+        "rss": 1360351232,
+        "heapTotal": 10297344,
+        "heapUsed": 6780080,
+        "external": 1068210335,
+        "arrayBuffers": 12292682
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 4,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        }
+      ],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    },
+    {
+      "run": 2,
+      "runtime": "/tmp/pr556-step-lexer-only/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 1,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 25.447542999999996,
+      "initializeMs": 41.99566399999998,
+      "freshInstanceInitializeMs": 13.41677100000004,
+      "freshInstanceReadMs": 13711.529284,
+      "coldCodeToFinalMs": 13753.524948,
+      "cachedModuleToFinalMs": 13724.946055,
+      "coarseMs": 12025.951983,
+      "spans": [],
+      "profilingEnabled": false,
+      "importCpuUserMs": 14674.328,
+      "importCpuSystemMs": 423.289,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1309569024,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 288301056,
+        "heapTotal": 12189696,
+        "heapUsed": 6961160,
+        "external": 245423353,
+        "arrayBuffers": 213043400
+      },
+      "processAfter": {
+        "rss": 1309569024,
+        "heapTotal": 10297344,
+        "heapUsed": 6791264,
+        "external": 1068210335,
+        "arrayBuffers": 12292682
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 4,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        }
+      ],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    },
+    {
+      "run": 2,
+      "runtime": "/tmp/pr556-step-experiments/combined/build/Release",
+      "fixture": "/tmp/pr556-large-bspline.step",
+      "tiers": 1,
+      "sourceBytes": 200761966,
+      "sourceSha256": "4224184f6684d1ec99bd7ea0c6b9887f9dd568813c5946207aa96ab6f812cce3",
+      "compileMs": 25.644256000000013,
+      "initializeMs": 44.73309600000002,
+      "freshInstanceInitializeMs": 15.57680300000004,
+      "freshInstanceReadMs": 11385.201532000001,
+      "coldCodeToFinalMs": 11429.934628,
+      "cachedModuleToFinalMs": 11400.778335,
+      "coarseMs": 9681.780424,
+      "spans": [],
+      "profilingEnabled": false,
+      "importCpuUserMs": 12312.728,
+      "importCpuSystemMs": 471.605,
+      "ownedSourceReleased": true,
+      "peakRssBytes": 1375203328,
+      "peakRssScope": "OS process high-water: fixture load, Node/V8, compile/init, one fresh WASM instance and JS-owned raw output; before final digest serialization",
+      "processBefore": {
+        "rss": 287940608,
+        "heapTotal": 12189696,
+        "heapUsed": 6961328,
+        "external": 245423496,
+        "arrayBuffers": 213043543
+      },
+      "processAfter": {
+        "rss": 1375203328,
+        "heapTotal": 10035200,
+        "heapUsed": 6780320,
+        "external": 1085053230,
+        "arrayBuffers": 12292825
+      },
+      "meshes": 1,
+      "triangles": 216,
+      "numericPayloadBytes": 10848,
+      "rawTypedBufferBytes": 10848,
+      "typedRawOutput": true,
+      "optional": [
+        {
+          "level": 0,
+          "triangles": 4,
+          "meshes": 1,
+          "hierarchyDigest": "25f505cb67003449d11bd5cb8a4f2b128a6ccf2e2a1500d2d7ec307504396c94"
+        }
+      ],
+      "finalDigest": "a1e7120c9308fd27343a8efa2f34c242f558569c279fb7841e432d373bc89686",
+      "finalNumericBitsDigest": "0058c806cfe70654795ab155611c74abd0fd508b1041133f923d72645b55f960",
+      "finalMetadataDigest": "9b733e6ee003822ddc0e6db797b3f5cbae04c25622f6954385d2fa8bca0c27ef"
+    }
+  ]
+}

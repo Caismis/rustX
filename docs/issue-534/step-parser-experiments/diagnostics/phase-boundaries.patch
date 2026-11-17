@@ -1,0 +1,207 @@
+--- pinned/StepFile/StepFile_Read.cxx
++++ diagnostic/StepFile/StepFile_Read.cxx
+@@ -1,3 +1,4 @@
++#include "StepDiagnostic.hxx"
+ // Created on: 1991-08-30
+ // Created by: Christian CAILLET
+ // Copyright (c) 1991-1999 Matra Datavision
+@@ -72,6 +73,7 @@
+                                        const Handle(StepData_FileRecognizer)& theRecogHeader,
+                                        const Handle(StepData_FileRecognizer)& theRecogData)
+ {
++  StepDiagnostic::Span _total(StepDiagnostic::FileRead);
+   // if stream is not provided, open file stream here
+   std::istream *aStreamPtr = theIStream;
+   std::ifstream aFileStream;
+@@ -101,7 +103,7 @@
+     step::scanner aScanner(&aFileDataModel, aStreamPtr);
+     aScanner.yyrestart(aStreamPtr);
+     step::parser aParser(&aScanner);
+-    aLetat = aParser.parse();
++{ StepDiagnostic::Span _diag(StepDiagnostic::ScannerParser); aLetat = aParser.parse(); }
+     if (aLetat != 0) {
+       StepFile_Interrupt(aFileDataModel.GetLastError(), Standard_True);
+       return 1;
+@@ -121,8 +123,10 @@
+ 
+   Standard_Integer nbhead, nbrec, nbpar;
+   aFileDataModel.GetFileNbR (&nbhead,&nbrec,&nbpar);  // renvoi par lex/yacc
+-  Handle(StepData_StepReaderData) undirec =
+-    new StepData_StepReaderData(nbhead,nbrec,nbpar, theStepModel->SourceCodePage());  // creation tableau de records
++  StepDiagnostic::Counts(nbhead,nbrec,nbpar);
++  Handle(StepData_StepReaderData) undirec;
++  { StepDiagnostic::Span _diag(StepDiagnostic::RecordAllocation); undirec = new StepData_StepReaderData(nbhead,nbrec,nbpar, theStepModel->SourceCodePage()); }  // creation tableau de records
++  { StepDiagnostic::Span _diag(StepDiagnostic::RecordConversion);
+   for ( Standard_Integer nr = 1; nr <= nbrec; nr ++) {
+     int nbarg; char* ident; char* typrec = 0;
+     aFileDataModel.GetRecordDescription(&ident, &typrec, &nbarg);
+@@ -138,6 +142,7 @@
+     aFileDataModel.NextRecord();
+   }
+ 
++  }
+   aFileDataModel.ErrorHandle(undirec->GlobalCheck());
+   Standard_Integer anFailsCount = undirec->GlobalCheck()->NbFails();
+   if (anFailsCount > 0)
+@@ -146,7 +151,7 @@
+       << anFailsCount << " ****";
+   }
+ 
+-  aFileDataModel.ClearRecorder(1);
++{ StepDiagnostic::Span _diag(StepDiagnostic::RawRecorderCleanup); aFileDataModel.ClearRecorder(1); }
+ 
+   sout << "      ... Step File loaded  ...\n";
+   sout << "   " << undirec->NbRecords() << " records (entities,sub-lists,scopes), " << nbpar << " parameters";
+@@ -160,8 +165,8 @@
+   StepData_StepReaderTool readtool (undirec, theProtocol);
+   readtool.SetErrorHandle (Standard_True);
+ 
+-  readtool.PrepareHeader(theRecogHeader);  // Header. reco nul -> pour Protocol
+-  readtool.Prepare(theRecogData);          // Data.   reco nul -> pour Protocol
++{ StepDiagnostic::Span _diag(StepDiagnostic::PrepareHeader); readtool.PrepareHeader(theRecogHeader); }  // Header. reco nul -> pour Protocol
++{ StepDiagnostic::Span _diag(StepDiagnostic::PrepareData); readtool.Prepare(theRecogData); }          // Data.   reco nul -> pour Protocol
+ 
+   sout << "      ... Parameters prepared ...\n";
+ 
+@@ -169,7 +174,9 @@
+   c.Show(sout);
+ #endif
+ 
+-  readtool.LoadModel(theStepModel);
++{ StepDiagnostic::Span _diag(StepDiagnostic::LoadModel); readtool.LoadModel(theStepModel); }
++  StepDiagnostic::Counts(nbhead,nbrec,nbpar,theStepModel->NbEntities());
++  { StepDiagnostic::Span _diag(StepDiagnostic::ReaderCleanup);
+   if (theStepModel->Protocol().IsNull()) theStepModel->SetProtocol (theProtocol);
+   aFileDataModel.ClearRecorder(2);
+   anFailsCount = undirec->GlobalCheck()->NbFails() - anFailsCount;
+@@ -181,6 +188,7 @@
+ 
+   readtool.Clear();
+   undirec.Nullify();
++  }
+ 
+   sout << "      ...   Objects analysed  ...\n";
+   Standard_Integer n = theStepModel->NbEntities();
+--- pinned/StepData/StepData_StepReaderTool.cxx
++++ diagnostic/StepData/StepData_StepReaderTool.cxx
+@@ -1,3 +1,4 @@
++#include "StepDiagnostic.hxx"
+ // Copyright (c) 1999-2014 OPEN CASCADE SAS
+ //
+ // This file is part of Open CASCADE Technology software library.
+@@ -94,8 +95,8 @@
+   if (erh) {
+     try {
+       OCC_CATCH_SIGNALS
+-      stepdat->SetEntityNumbers(optim);
+-      SetEntities();
++      { StepDiagnostic::Span _diag(StepDiagnostic::SetEntityNumbers); stepdat->SetEntityNumbers(optim); }
++      { StepDiagnostic::Span _diag(StepDiagnostic::SetEntities); SetEntities(); }
+     }
+     catch(Standard_Failure const& anException) {
+       Message_Messenger::StreamBuffer sout = Message::SendInfo();
+@@ -105,8 +106,8 @@
+     }
+   }
+   else {
+-    stepdat->SetEntityNumbers(optim);
+-    SetEntities();
++    { StepDiagnostic::Span _diag(StepDiagnostic::SetEntityNumbers); stepdat->SetEntityNumbers(optim); }
++    { StepDiagnostic::Span _diag(StepDiagnostic::SetEntities); SetEntities(); }
+   }
+ }
+ 
+--- pinned/IFSelect/IFSelect_WorkSession.cxx
++++ diagnostic/IFSelect/IFSelect_WorkSession.cxx
+@@ -1,3 +1,4 @@
++#include "StepDiagnostic.hxx"
+ // Copyright (c) 1999-2014 OPEN CASCADE SAS
+ //
+ // This file is part of Open CASCADE Technology software library.
+@@ -185,6 +186,7 @@
+     (const Handle(Interface_InterfaceModel)& model,
+      const Standard_Boolean clearpointed)
+ {
++  StepDiagnostic::Span _diag(StepDiagnostic::SessionSetModel);
+   if (myModel != model)
+     theloaded.Clear();
+   myModel = model;
+@@ -242,13 +244,15 @@
+ IFSelect_ReturnStatus  IFSelect_WorkSession::ReadStream(const Standard_CString theName,
+                                                         std::istream& theIStream)
+ {
++  StepDiagnostic::ReadGuard _read;
+   if (thelibrary.IsNull()) return IFSelect_RetVoid;
+   if (theprotocol.IsNull()) return IFSelect_RetVoid;
+   Handle(Interface_InterfaceModel) model;
+   IFSelect_ReturnStatus status = IFSelect_RetVoid;
+   try {
+     OCC_CATCH_SIGNALS
+-    Standard_Integer stat = thelibrary->ReadStream(theName, theIStream, model, theprotocol);
++    Standard_Integer stat;
++    { StepDiagnostic::Span _diag(StepDiagnostic::LibraryReadStream); stat = thelibrary->ReadStream(theName, theIStream, model, theprotocol); }
+     if (stat == 0) status = IFSelect_RetDone;
+     else if (stat < 0) status = IFSelect_RetError;
+     else status = IFSelect_RetFail;
+@@ -456,6 +460,7 @@
+ Standard_Boolean  IFSelect_WorkSession::ComputeGraph
+   (const Standard_Boolean enforce)
+ {
++  StepDiagnostic::Span _diag(StepDiagnostic::SessionComputeGraph);
+   if (theprotocol.IsNull()) return Standard_False;
+   if (myModel.IsNull()) return Standard_False;
+   if (enforce) thegraph.Nullify();
+@@ -465,7 +470,7 @@
+   }
+   if (myModel->NbEntities() == 0) return Standard_False;
+   //  Il faut calculer le graphe pour de bon
+-  thegraph = new Interface_HGraph (myModel,themodelstat);
++{ StepDiagnostic::Span _diag(StepDiagnostic::GraphConstruct); thegraph = new Interface_HGraph (myModel,themodelstat); }
+   Standard_Integer nb = myModel->NbEntities();
+   if(themodelstat)
+   {
+@@ -475,11 +480,12 @@
+     bm.AddFlag();
+     bm.SetFlagName (Flag_Incorrect,"Incorrect");
+   }
+-  ComputeCheck();
++{ StepDiagnostic::Span _diag(StepDiagnostic::GraphCheck); ComputeCheck(); }
+   thecheckdone = Standard_True;
+   if(themodelstat)
+   {
+     //  Calcul des categories, a present memorisees dans le modele
++    StepDiagnostic::Span _category(StepDiagnostic::GraphCategories);
+     Interface_Category categ(thegtool);
+     Interface_ShareTool sht(thegraph);
+     Standard_Integer i =1;
+--- pinned/Interface/Interface_FileReaderTool.cxx
++++ diagnostic/Interface/Interface_FileReaderTool.cxx
+@@ -1,3 +1,4 @@
++#include "StepDiagnostic.hxx"
+ // Copyright (c) 1999-2014 OPEN CASCADE SAS
+ //
+ // This file is part of Open CASCADE Technology software library.
+@@ -351,6 +352,7 @@
+   Standard_Integer num, num0 = thereader->FindNextRecord(0);
+   num = num0;
+ 
++  { StepDiagnostic::Span _diag(StepDiagnostic::EntityLoadLoop);
+   while (num > 0) {
+     Standard_Integer ierr = 0;  // erreur sur analyse d une entite
+     Handle(Standard_Transient) anent;
+@@ -475,6 +477,7 @@
+     }    // -----  fin complete du try/catch
+   }      // -----  fin du while
+ 
++  }
+ //  ..        Ajout des Reports, silya
+   if (!thereports.IsNull()) {
+     if (thetrace > 0) 
+@@ -498,6 +501,7 @@
+     }
+   }
+ 
++  StepDiagnostic::Span _end(StepDiagnostic::EndRead);
+ //   Conclusion : peut ne rien faire : selon necessite
+   if (theerrhand) {
+     try {

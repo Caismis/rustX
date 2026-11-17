@@ -1,0 +1,106 @@
+--- pinned/StepFile_ReadData.cxx
++++ candidate/StepFile_ReadData.cxx
+@@ -109,7 +109,7 @@
+ 
+ public:
+ 
+-  Record() :myNext(NULL), myFirst(NULL), myIdent(NULL), myType(NULL) {}
++  Record() :myNext(NULL), myFirst(NULL), myLast(NULL), myIdent(NULL), myType(NULL) {}
+ 
+   ~Record() {}
+ 
+@@ -117,6 +117,7 @@
+ 
+   Record* myNext;    //!< Next record in the list
+   Argument* myFirst; //!< First argument in the record
++  Argument* myLast;  //!< Last argument in the record
+   char* myIdent;     //!< Record identifier (Example: "#12345") or scope-end
+   char* myType;      //!< Type of the record
+ };
+@@ -280,6 +281,7 @@
+   GetResultText(&myCurRec->myIdent);
+   myCurRec->myNext = NULL;
+   myCurRec->myFirst = NULL;
++  myCurRec->myLast = NULL;
+   myYaRec = 1;
+ }
+ 
+@@ -296,6 +298,7 @@
+     myCurRec->myIdent = TextValue::IdZero;
+     myCurRec->myNext = NULL;
+     myCurRec->myFirst = NULL;
++    myCurRec->myLast = NULL;
+   }
+   GetResultText(&myCurRec->myType);
+   myYaRec = myNumSub = 0;
+@@ -330,6 +333,7 @@
+     myCurrType = TextValue::SubList;
+     aSubRec->myNext = myCurRec;
+     aSubRec->myFirst = NULL;
++    aSubRec->myLast = NULL;
+     myCurRec = aSubRec;
+   }
+   myErrorArg = Standard_False; // Reset error arguments mode
+@@ -367,13 +371,18 @@
+   if (myCurRec->myFirst == NULL)
+   {
+     myCurRec->myFirst = aNewArg;
++    myCurRec->myLast = aNewArg;
++  }
++  else if (myCurRec->myLast == NULL)
++  {
++    myCurRec->myFirst->myNext = aNewArg;
++    myCurRec->myLast = aNewArg;
+   }
+   else
+   {
+-    Argument* aNextArg = myCurRec->myFirst;
+-    while (aNextArg->myNext != NULL)
+-      aNextArg = aNextArg->myNext;
++    Argument* aNextArg = myCurRec->myLast;
+     aNextArg->myNext = aNewArg;
++    myCurRec->myLast = aNewArg;
+   }
+   aNewArg->myNext = NULL;
+ }
+@@ -395,9 +404,7 @@
+     return;
+   }
+ 
+-  Argument* aCurrArg = myCurRec->myFirst;
+-  while (aCurrArg->myNext != NULL)
+-    aCurrArg = aCurrArg->myNext;
++  Argument* aCurrArg = myCurRec->myLast;
+ 
+   GetResultText(&aCurrArg->myValue);
+ }
+@@ -419,6 +426,7 @@
+   aRecord->myIdent = TextValue::Scope;
+   aRecord->myType = TextValue::Nil;
+   aRecord->myFirst = NULL;
++  aRecord->myLast = NULL;
+   AddNewRecord(aRecord);
+ }
+ 
+@@ -437,6 +445,7 @@
+   aRecord->myIdent = TextValue::Scope;
+   aRecord->myType = TextValue::Nil;
+   aRecord->myFirst = NULL;
++  aRecord->myLast = NULL;
+ 
+   if (mySubArg[0] == '$')
+   {
+--- pinned/lex.step.cxx
++++ candidate/lex.step.cxx
+@@ -654,6 +654,11 @@
+ # undef YY_DECL
+ #endif
+ #define YY_DECL int step::scanner::lex (step::parser::semantic_type* /*yylval*/)
++
++// Official OCCT 0033350 input-mode fix; keep grammar and allocator unchanged.
++#ifdef YY_INTERACTIVE
++#undef YY_INTERACTIVE
++#endif
+ 
+ typedef step::parser::token token;
+ 

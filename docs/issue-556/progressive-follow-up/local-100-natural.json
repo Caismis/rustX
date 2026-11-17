@@ -1,0 +1,2150 @@
+{
+  "fixture": "curved-100.step",
+  "expectedOccurrences": 100,
+  "policy": "display-before-full",
+  "nativeTiers": [
+    {
+      "level": 0,
+      "meshNames": [
+        "Curved part 000",
+        "Curved part 001",
+        "Curved part 002",
+        "Curved part 003",
+        "Curved part 004",
+        "Curved part 005",
+        "Curved part 006",
+        "Curved part 007",
+        "Curved part 008",
+        "Curved part 009",
+        "Curved part 010",
+        "Curved part 011",
+        "Curved part 012",
+        "Curved part 013",
+        "Curved part 014",
+        "Curved part 015",
+        "Curved part 016",
+        "Curved part 017",
+        "Curved part 018",
+        "Curved part 019",
+        "Curved part 020",
+        "Curved part 021",
+        "Curved part 022",
+        "Curved part 023",
+        "Curved part 024",
+        "Curved part 025",
+        "Curved part 026",
+        "Curved part 027",
+        "Curved part 028",
+        "Curved part 029",
+        "Curved part 030",
+        "Curved part 031",
+        "Curved part 032",
+        "Curved part 033",
+        "Curved part 034",
+        "Curved part 035",
+        "Curved part 036",
+        "Curved part 037",
+        "Curved part 038",
+        "Curved part 039",
+        "Curved part 040",
+        "Curved part 041",
+        "Curved part 042",
+        "Curved part 043",
+        "Curved part 044",
+        "Curved part 045",
+        "Curved part 046",
+        "Curved part 047",
+        "Curved part 048",
+        "Curved part 049",
+        "Curved part 050",
+        "Curved part 051",
+        "Curved part 052",
+        "Curved part 053",
+        "Curved part 054",
+        "Curved part 055",
+        "Curved part 056",
+        "Curved part 057",
+        "Curved part 058",
+        "Curved part 059",
+        "Curved part 060",
+        "Curved part 061",
+        "Curved part 062",
+        "Curved part 063",
+        "Curved part 064",
+        "Curved part 065",
+        "Curved part 066",
+        "Curved part 067",
+        "Curved part 068",
+        "Curved part 069",
+        "Curved part 070",
+        "Curved part 071",
+        "Curved part 072",
+        "Curved part 073",
+        "Curved part 074",
+        "Curved part 075",
+        "Curved part 076",
+        "Curved part 077",
+        "Curved part 078",
+        "Curved part 079",
+        "Curved part 080",
+        "Curved part 081",
+        "Curved part 082",
+        "Curved part 083",
+        "Curved part 084",
+        "Curved part 085",
+        "Curved part 086",
+        "Curved part 087",
+        "Curved part 088",
+        "Curved part 089",
+        "Curved part 090",
+        "Curved part 091",
+        "Curved part 092",
+        "Curved part 093",
+        "Curved part 094",
+        "Curved part 095",
+        "Curved part 096",
+        "Curved part 097",
+        "Curved part 098",
+        "Curved part 099"
+      ],
+      "root": {
+        "name": "",
+        "meshes": [],
+        "children": [
+          {
+            "name": "Curved part 000",
+            "meshes": [
+              0
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 001",
+            "meshes": [
+              1
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 002",
+            "meshes": [
+              2
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 003",
+            "meshes": [
+              3
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 004",
+            "meshes": [
+              4
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 005",
+            "meshes": [
+              5
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 006",
+            "meshes": [
+              6
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 007",
+            "meshes": [
+              7
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 008",
+            "meshes": [
+              8
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 009",
+            "meshes": [
+              9
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 010",
+            "meshes": [
+              10
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 011",
+            "meshes": [
+              11
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 012",
+            "meshes": [
+              12
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 013",
+            "meshes": [
+              13
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 014",
+            "meshes": [
+              14
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 015",
+            "meshes": [
+              15
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 016",
+            "meshes": [
+              16
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 017",
+            "meshes": [
+              17
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 018",
+            "meshes": [
+              18
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 019",
+            "meshes": [
+              19
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 020",
+            "meshes": [
+              20
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 021",
+            "meshes": [
+              21
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 022",
+            "meshes": [
+              22
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 023",
+            "meshes": [
+              23
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 024",
+            "meshes": [
+              24
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 025",
+            "meshes": [
+              25
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 026",
+            "meshes": [
+              26
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 027",
+            "meshes": [
+              27
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 028",
+            "meshes": [
+              28
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 029",
+            "meshes": [
+              29
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 030",
+            "meshes": [
+              30
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 031",
+            "meshes": [
+              31
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 032",
+            "meshes": [
+              32
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 033",
+            "meshes": [
+              33
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 034",
+            "meshes": [
+              34
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 035",
+            "meshes": [
+              35
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 036",
+            "meshes": [
+              36
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 037",
+            "meshes": [
+              37
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 038",
+            "meshes": [
+              38
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 039",
+            "meshes": [
+              39
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 040",
+            "meshes": [
+              40
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 041",
+            "meshes": [
+              41
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 042",
+            "meshes": [
+              42
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 043",
+            "meshes": [
+              43
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 044",
+            "meshes": [
+              44
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 045",
+            "meshes": [
+              45
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 046",
+            "meshes": [
+              46
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 047",
+            "meshes": [
+              47
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 048",
+            "meshes": [
+              48
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 049",
+            "meshes": [
+              49
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 050",
+            "meshes": [
+              50
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 051",
+            "meshes": [
+              51
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 052",
+            "meshes": [
+              52
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 053",
+            "meshes": [
+              53
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 054",
+            "meshes": [
+              54
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 055",
+            "meshes": [
+              55
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 056",
+            "meshes": [
+              56
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 057",
+            "meshes": [
+              57
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 058",
+            "meshes": [
+              58
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 059",
+            "meshes": [
+              59
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 060",
+            "meshes": [
+              60
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 061",
+            "meshes": [
+              61
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 062",
+            "meshes": [
+              62
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 063",
+            "meshes": [
+              63
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 064",
+            "meshes": [
+              64
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 065",
+            "meshes": [
+              65
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 066",
+            "meshes": [
+              66
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 067",
+            "meshes": [
+              67
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 068",
+            "meshes": [
+              68
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 069",
+            "meshes": [
+              69
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 070",
+            "meshes": [
+              70
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 071",
+            "meshes": [
+              71
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 072",
+            "meshes": [
+              72
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 073",
+            "meshes": [
+              73
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 074",
+            "meshes": [
+              74
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 075",
+            "meshes": [
+              75
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 076",
+            "meshes": [
+              76
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 077",
+            "meshes": [
+              77
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 078",
+            "meshes": [
+              78
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 079",
+            "meshes": [
+              79
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 080",
+            "meshes": [
+              80
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 081",
+            "meshes": [
+              81
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 082",
+            "meshes": [
+              82
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 083",
+            "meshes": [
+              83
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 084",
+            "meshes": [
+              84
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 085",
+            "meshes": [
+              85
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 086",
+            "meshes": [
+              86
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 087",
+            "meshes": [
+              87
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 088",
+            "meshes": [
+              88
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 089",
+            "meshes": [
+              89
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 090",
+            "meshes": [
+              90
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 091",
+            "meshes": [
+              91
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 092",
+            "meshes": [
+              92
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 093",
+            "meshes": [
+              93
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 094",
+            "meshes": [
+              94
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 095",
+            "meshes": [
+              95
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 096",
+            "meshes": [
+              96
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 097",
+            "meshes": [
+              97
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 098",
+            "meshes": [
+              98
+            ],
+            "children": []
+          },
+          {
+            "name": "Curved part 099",
+            "meshes": [
+              99
+            ],
+            "children": []
+          }
+        ]
+      },
+      "triangles": 23400,
+      "ms": 804.4000000059605,
+      "at": 1873.4000000059605
+    }
+  ],
+  "latency": {
+    "start": 780.7999999970198,
+    "first": 3492.6000000089407,
+    "firstGpuReady": 3486.5,
+    "lodFirst": 1340.2000000029802,
+    "lodGpuReady": 1312.6000000089407,
+    "lodSamples": [],
+    "lodStages": {
+      "coarse": {
+        "submission": 1177.4000000059605,
+        "gpu": 1312.6000000089407,
+        "opportunity": 1340.2000000029802
+      }
+    },
+    "firstModel": 1340.2000000029802,
+    "firstModelGpuReady": 1312.6000000089407,
+    "pending": 0,
+    "cancelled": 0,
+    "samples": [],
+    "gpuSamples": [],
+    "stages": []
+  },
+  "frames": [
+    {
+      "ms": 1958,
+      "triangles": 23400,
+      "width": 720,
+      "height": 327,
+      "completeness": "preview",
+      "lod": "coarse",
+      "quality": "preview"
+    },
+    {
+      "ms": 2090.7999999970198,
+      "triangles": 23400,
+      "width": 1440,
+      "height": 654,
+      "completeness": "preview",
+      "lod": "coarse",
+      "quality": "preview"
+    },
+    {
+      "ms": 4046.0999999940395,
+      "triangles": 500800,
+      "width": 720,
+      "height": 327,
+      "completeness": "complete",
+      "lod": "full",
+      "quality": "interactive"
+    },
+    {
+      "ms": 4646.5999999940395,
+      "triangles": 334492,
+      "width": 720,
+      "height": 327,
+      "completeness": "complete",
+      "lod": "full",
+      "quality": "interactive"
+    },
+    {
+      "ms": 4801.0999999940395,
+      "triangles": 500800,
+      "width": 1440,
+      "height": 654,
+      "completeness": "complete",
+      "lod": "full",
+      "quality": "complete"
+    }
+  ],
+  "imports": [
+    [
+      {
+        "name": "Curved part 000",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 001",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 002",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 003",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 004",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 005",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 006",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 007",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 008",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 009",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 010",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 011",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 012",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 013",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 014",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 015",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 016",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 017",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 018",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 019",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 020",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 021",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 022",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 023",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 024",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 025",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 026",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 027",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 028",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 029",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 030",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 031",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 032",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 033",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 034",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 035",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 036",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 037",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 038",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 039",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 040",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 041",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 042",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 043",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 044",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 045",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 046",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 047",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 048",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 049",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 050",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 051",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 052",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 053",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 054",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 055",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 056",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 057",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 058",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 059",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 060",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 061",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 062",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 063",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 064",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 065",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 066",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 067",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 068",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 069",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 070",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 071",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 072",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 073",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 074",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 075",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 076",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 077",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 078",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 079",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 080",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 081",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 082",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 083",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 084",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 085",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 086",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 087",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 088",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 089",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 090",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 091",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 092",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 093",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 094",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 095",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 096",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 097",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 098",
+        "vertices": 2542,
+        "triangles": 5008
+      },
+      {
+        "name": "Curved part 099",
+        "vertices": 2542,
+        "triangles": 5008
+      }
+    ]
+  ],
+  "roots": [
+    {
+      "name": "",
+      "meshes": [],
+      "children": [
+        {
+          "name": "Curved part 000",
+          "meshes": [
+            0
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 001",
+          "meshes": [
+            1
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 002",
+          "meshes": [
+            2
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 003",
+          "meshes": [
+            3
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 004",
+          "meshes": [
+            4
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 005",
+          "meshes": [
+            5
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 006",
+          "meshes": [
+            6
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 007",
+          "meshes": [
+            7
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 008",
+          "meshes": [
+            8
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 009",
+          "meshes": [
+            9
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 010",
+          "meshes": [
+            10
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 011",
+          "meshes": [
+            11
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 012",
+          "meshes": [
+            12
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 013",
+          "meshes": [
+            13
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 014",
+          "meshes": [
+            14
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 015",
+          "meshes": [
+            15
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 016",
+          "meshes": [
+            16
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 017",
+          "meshes": [
+            17
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 018",
+          "meshes": [
+            18
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 019",
+          "meshes": [
+            19
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 020",
+          "meshes": [
+            20
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 021",
+          "meshes": [
+            21
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 022",
+          "meshes": [
+            22
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 023",
+          "meshes": [
+            23
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 024",
+          "meshes": [
+            24
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 025",
+          "meshes": [
+            25
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 026",
+          "meshes": [
+            26
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 027",
+          "meshes": [
+            27
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 028",
+          "meshes": [
+            28
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 029",
+          "meshes": [
+            29
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 030",
+          "meshes": [
+            30
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 031",
+          "meshes": [
+            31
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 032",
+          "meshes": [
+            32
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 033",
+          "meshes": [
+            33
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 034",
+          "meshes": [
+            34
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 035",
+          "meshes": [
+            35
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 036",
+          "meshes": [
+            36
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 037",
+          "meshes": [
+            37
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 038",
+          "meshes": [
+            38
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 039",
+          "meshes": [
+            39
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 040",
+          "meshes": [
+            40
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 041",
+          "meshes": [
+            41
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 042",
+          "meshes": [
+            42
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 043",
+          "meshes": [
+            43
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 044",
+          "meshes": [
+            44
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 045",
+          "meshes": [
+            45
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 046",
+          "meshes": [
+            46
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 047",
+          "meshes": [
+            47
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 048",
+          "meshes": [
+            48
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 049",
+          "meshes": [
+            49
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 050",
+          "meshes": [
+            50
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 051",
+          "meshes": [
+            51
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 052",
+          "meshes": [
+            52
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 053",
+          "meshes": [
+            53
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 054",
+          "meshes": [
+            54
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 055",
+          "meshes": [
+            55
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 056",
+          "meshes": [
+            56
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 057",
+          "meshes": [
+            57
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 058",
+          "meshes": [
+            58
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 059",
+          "meshes": [
+            59
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 060",
+          "meshes": [
+            60
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 061",
+          "meshes": [
+            61
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 062",
+          "meshes": [
+            62
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 063",
+          "meshes": [
+            63
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 064",
+          "meshes": [
+            64
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 065",
+          "meshes": [
+            65
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 066",
+          "meshes": [
+            66
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 067",
+          "meshes": [
+            67
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 068",
+          "meshes": [
+            68
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 069",
+          "meshes": [
+            69
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 070",
+          "meshes": [
+            70
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 071",
+          "meshes": [
+            71
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 072",
+          "meshes": [
+            72
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 073",
+          "meshes": [
+            73
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 074",
+          "meshes": [
+            74
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 075",
+          "meshes": [
+            75
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 076",
+          "meshes": [
+            76
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 077",
+          "meshes": [
+            77
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 078",
+          "meshes": [
+            78
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 079",
+          "meshes": [
+            79
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 080",
+          "meshes": [
+            80
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 081",
+          "meshes": [
+            81
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 082",
+          "meshes": [
+            82
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 083",
+          "meshes": [
+            83
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 084",
+          "meshes": [
+            84
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 085",
+          "meshes": [
+            85
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 086",
+          "meshes": [
+            86
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 087",
+          "meshes": [
+            87
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 088",
+          "meshes": [
+            88
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 089",
+          "meshes": [
+            89
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 090",
+          "meshes": [
+            90
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 091",
+          "meshes": [
+            91
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 092",
+          "meshes": [
+            92
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 093",
+          "meshes": [
+            93
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 094",
+          "meshes": [
+            94
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 095",
+          "meshes": [
+            95
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 096",
+          "meshes": [
+            96
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 097",
+          "meshes": [
+            97
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 098",
+          "meshes": [
+            98
+          ],
+          "children": []
+        },
+        {
+          "name": "Curved part 099",
+          "meshes": [
+            99
+          ],
+          "children": []
+        }
+      ]
+    }
+  ],
+  "importTimings": [
+    {
+      "startedAt": 1069,
+      "completedAt": 3980.9000000059605,
+      "elapsedMs": 2911.9000000059605,
+      "profile": {
+        "importMs": 2703.0999999940395,
+        "prepareMs": 5.700000002980232,
+        "stages": [
+          {
+            "stage": "initializing",
+            "ms": 0.09999999403953552
+          },
+          {
+            "stage": "importing",
+            "ms": 9.299999997019768
+          },
+          {
+            "stage": "preparing",
+            "ms": 2672
+          }
+        ],
+        "cad": [
+          {
+            "name": "geometry:cad-initialize",
+            "ms": 9.200000002980232
+          },
+          {
+            "name": "geometry:cad-read",
+            "ms": 2662.6000000089407
+          },
+          {
+            "name": "geometry:cad-convert",
+            "ms": 31
+          }
+        ]
+      }
+    }
+  ],
+  "createdContexts": 1,
+  "resources": {
+    "workers": 0,
+    "contexts": 1,
+    "buffers": 236,
+    "textures": 5,
+    "urls": 0
+  },
+  "method": "Natural unheld import with normal observation only: no Worker-message interception, delayed delivery, synthetic stages or triangle sampling. Native arrival, actual submitted LOD frames, GPU fences and frame opportunities are recorded independently. Observer settlement after final readiness does not hold back the final model. Original-tessellation triangle-count proof uses the first full frame and complete-quality frames; interactive frames are not authoritative final-quality proof."
+}

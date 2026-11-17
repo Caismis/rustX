@@ -1,0 +1,45 @@
+[
+  {
+    "path": "ci-ce828-natural.json",
+    "bytes": 20261,
+    "sha256": "2ef13415514e77d00adf01168422d43bd0cd016430477cbad4a3d44f756128a4"
+  },
+  {
+    "path": "local-100-natural.json",
+    "bytes": 44648,
+    "sha256": "08ca195ebea6fdfce4b384e6f5b4b4b7ff0913c17d8e708f4f9beac18198dbcc"
+  },
+  {
+    "path": "local-100-quality-assertion.json",
+    "bytes": 3073,
+    "sha256": "761062e746db534e5a1016b5a14f2884b13facbf12086314a844f5b9d83d5917"
+  },
+  {
+    "path": "local-100-retirement.json",
+    "bytes": 60,
+    "sha256": "3a95ca439678b2375c163cd272db2a2759fc7d57ee85fbe2e7f714c23584f955"
+  },
+  {
+    "path": "local-200-timeout.json",
+    "bytes": 4083,
+    "sha256": "5b2f411a1027c8f3f8d09065d212805f95802f322a47c3f415f10308142d6229"
+  },
+  {
+    "path": "local-96-natural.json",
+    "bytes": 21034,
+    "sha256": "389a5473eb815af40c650b7e593ea1ffcb16070b71fcde126d455847aa583f51"
+  },
+  {
+    "path": "local-five-passed.json",
+    "bytes": 7219,
+    "sha256": "2a44dbd6857afa52cdd358e4c577d6e714e0b66e9487e980fb660486918deb4a"
+  },
+  {
+    "path": "local-five-passed.log",
+    "bytes": 1608,
+    "sha256": "24ffe6d3c6375222544d558faf5fbd25bcc3064dd286f12934388dace9a0384a",
+    "sourceBytes": 1609,
+    "sourceSha256": "ba1be44053cacedf6443f6932081e8283da552c227fecbac00945bd8e6ba70a9",
+    "normalization": "Repository log copy removes trailing whitespace; original retained at /tmp/pr556-browser-progressive-five-quality-final.log."
+  }
+]
