@@ -1,6 +1,6 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
 import { useEffect, useId, useRef } from 'react';
-import type { NamedAgentProfileDocument, SourceSettings } from '../../../../../protocol/app-server/v81';
+import type { NamedAgentProfileDocument, SourceSettings } from '../../../../../protocol/app-server/v82';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
 import { Button } from '../../../presentation/primitives/Button';

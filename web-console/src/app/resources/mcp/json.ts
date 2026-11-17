@@ -1,4 +1,4 @@
-import type { McpWrite } from '../../../../../protocol/app-server/v81';
+import type { McpWrite } from '../../../../../protocol/app-server/v82';
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 const PERMISSION_VALUES = new Set(['default', 'allow', 'ask', 'deny']);
 

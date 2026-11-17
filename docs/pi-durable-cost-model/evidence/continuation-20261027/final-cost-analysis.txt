@@ -1,0 +1,99 @@
+Final retained D cost analysis; 2026-10-27. No new products, builds, or timing runs.
+
+Inputs:
+  Pi: /home/capi/.cache/rustx-pr485-next/final-cohorts/pi-recomputed.json; SHA256 7a44dd50ba93d8aa271703bd8c8692d03626f87c3048dfacfcd03d7597cb634a
+  Append: /home/capi/.cache/rustx-pr485-next/final-cohorts/append-audit.json; SHA256 ad5aa917c777c6fe080cea22c515e34d3b259f7d612ce85ffee817e7d66e5366
+  Analysis script SHA256 4271834b81ae2a9e38bbc327a0ae1627eede03b54082e27037bbf0859b149f4d
+  Pi strict identity verified: 72 accepted products, 846 checked paired request comparisons.
+  Append actual binary files and recorded identities verified: 48 accepted products.
+  Candidate D: source e8d6380fa6ea0724b752970473d093c629cb8a63; src d6d193e07b16db0ab9b1ce646a254a1c1674c80e; binary 8ec26a4a08bde085f46ee40159d3870f7ead675bec39f42cb4f3e55df1d1d233.
+  Measurement harness after E revert: 6e1ca189abfa9879fe87d2e4ecd053530434a491. Append baseline B binary f80f3b7ba0f2be6035c7459c87cf04e69ec596e64ccba0d72d43ddce7d8ebdb3.
+  This review recomputed every Pi and append pair/median from retained per-product audited values. It did not independently rerun the semantic oracles or product executions.
+
+Interpretation:
+  Lower ratios mean lower measured cost. Pi tables are D/Pi; append tables are D/B. Every median is the median of three matched ratios, not a ratio of unpaired medians.
+  Warm runtime means short-small (8 seeded turns + 32 measured) or short-large (64 + 32), using a local deterministic provider. It does not predict real-model network/inference latency.
+  CPU is self user+system time from 100-Hz /proc counters. Complete self CPU includes startup, harness, verification, and cleanup. Process write_bytes is not logical persisted size or physical-device I/O. Memory is sampled, not peak.
+  Rust/Pi core histories were compared, but full tool request envelopes differ (Rust seven native tools, Pi four); there is no claim of an identical product capability surface.
+
+Warm D/Pi ranges (four mode/history groups):
+  mean_turn_ms: paired-median range 7.702053–11.929524; all 12 raw pair ratios 7.456180–23.098429.
+  turn_cpu_ms_per_turn: paired-median range 4.478261–9.217391; all 12 raw pair ratios 3.958333–9.809524.
+  through_cleanup_self_cpu_ms: paired-median range 1.978947–5.431507; all 12 raw pair ratios 1.831579–5.840278.
+  through_cleanup_process_write_mib: paired-median range 8.372799–9.304381; all 12 raw pair ratios 8.371479–9.311901.
+  lifecycle_ms: paired-median range 4.227356–7.702019; all 12 raw pair ratios 3.882981–14.481739.
+  max_sampled_anon_pss_mib: paired-median range 1.150753–1.306521; all 12 raw pair ratios 1.146457–1.348015.
+
+All six runtime cases, both observer modes; D/Pi paired medians:
+| Mode | Case | Turn wall | Turn CPU | Complete self CPU | Complete writes | Lifecycle wall | Sample anon PSS |
+|---|---|---:|---:|---:|---:|---:|---:|
+| no-live | short-small | 8.180670 | 4.478261 | 1.978947 | 8.372799 | 4.227356 | 1.150753 |
+| no-live | short-large | 7.702053 | 4.850000 | 3.828571 | 9.304381 | 6.306700 | 1.271029 |
+| no-live | stream | 0.920928 | 0.250000 | 0.241071 | 5.018182 | 0.964724 | 0.881170 |
+| no-live | large | 0.500733 | 0.454545 | 0.271186 | 6.098837 | 1.210206 | 1.083785 |
+| no-live | tool | 0.625199 | 0.538462 | 0.327869 | 6.000000 | 1.252677 | 0.946667 |
+| no-live | cancel | 0.441717 | 0.400000 | 0.266667 | 6.025157 | 1.244279 | 0.941157 |
+| live | short-small | 11.860671 | 7.740741 | 3.060000 | 8.386884 | 5.278196 | 1.203543 |
+| live | short-large | 11.929524 | 9.217391 | 5.431507 | 9.299304 | 7.702019 | 1.306521 |
+| live | stream | 0.921214 | 0.323077 | 0.286957 | 5.018182 | 0.974333 | 0.860846 |
+| live | large | 0.515635 | 0.500000 | 0.283333 | 6.098837 | 1.203459 | 1.102684 |
+| live | tool | 0.629511 | 0.571429 | 0.327869 | 6.000000 | 1.228507 | 0.964253 |
+| live | cancel | 0.458294 | 0.416667 | 0.300000 | 6.025157 | 1.257096 | 0.942637 |
+
+Warm absolute observed turn wall ranges (milliseconds; all three products, kept separate by engine):
+  no-live/short-small: D 27.517–33.347; Pi 3.627–3.845; ratios [8.180670, 7.456180, 8.672280].
+  no-live/short-large: D 28.216–31.254; Pi 3.663–3.972; ratios [7.702053, 7.594315, 7.867659].
+  live/short-small: D 46.152–51.348; Pi 3.904–4.381; ratios [10.533358, 13.151410, 11.860671].
+  live/short-large: D 44.670–91.947; Pi 3.981–4.270; ratios [11.929524, 10.485637, 23.098429].
+
+Runtime adverse observations and limits:
+  All four warm groups are slower and consume more turn CPU, complete CPU, writes, and sampled anon PSS in all three D/Pi pairs. The remaining warm gap is therefore not explained away by one outlier.
+  live/short-large pair 2 is additionally adverse: D 91.946906 ms/turn versus Pi 3.980656 (23.098429x); lifecycle D 12808.953 ms versus Pi 884.490 (14.481739x). D complete CPU is 8410 ms, versus 7920–7930 in the other D pairs. The wide wall result remains included; raw counters do not establish its external cause.
+  D single-turn large/tool/cancel turn wall is faster in all pairs, but their complete lifecycle wall is slower in all pairs in both observer modes. A favorable turn-only result is not overall lifecycle parity.
+  Stream wall medians favor D (~0.921x). live stream pair 2 is slightly adverse (1.001669x turn wall; 1.066214x lifecycle), retained. Stream waits on provider pacing; do not interpret its small wall ratio as proportional runtime-efficiency gain.
+  Writes remain higher than Pi in every runtime pair (roughly 4.885–9.312x overall); the warm groups remain 8.371–9.312x. No rejected E write reduction is credited to final D.
+
+Append D/B: 8 complete mode/history cells; paired medians:
+  Append warm reuses the store. Append cold reopens before each operation; this is not OS page-cache eviction. append_ns covers append_canonical only; phase counters include reopen and sampling. Complete lifecycle also includes seeding, verification, and cleanup.
+| Mode | Seed history | Mean append wall | Phase CPU / append | Lifecycle CPU | Lifecycle writes | Lifecycle wall | Sample anon PSS |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| warm | 0 | 0.888681 | 0.666667 | 0.750000 | 1.000000 | 0.844869 | 1.000804 |
+| warm | 64 | 0.991067 | 1.000000 | 1.000000 | 1.000000 | 0.980624 | 1.000000 |
+| warm | 512 | 0.929073 | 1.000000 | 0.976744 | 1.000000 | 0.984987 | 1.000000 |
+| warm | 2048 | 0.977729 | 1.000000 | 1.000000 | 1.000000 | 0.979972 | 0.999382 |
+| cold | 0 | 0.974847 | 1.000000 | 1.000000 | 1.000000 | 0.975694 | 1.000000 |
+| cold | 64 | 0.976765 | 1.000000 | 0.952381 | 1.000000 | 0.951069 | 1.000000 |
+| cold | 512 | 0.999063 | 1.000000 | 0.982759 | 1.000000 | 0.984435 | 1.000000 |
+| cold | 2048 | 0.962482 | 0.909091 | 0.982301 | 1.000000 | 0.989816 | 1.000601 |
+
+All append wall pairs and adverse-cell details:
+  warm/0: D/B wall [0.888681, 0.653654, 1.034316]; median 0.888681. wall improves in 2/3; pair 2 wall +3.43% and lifecycle +8.24%. CPU brackets are only 20–50 ms total.
+  warm/64: D/B wall [0.974943, 0.991067, 0.993639]; median 0.991067. wall improves 3/3, but pair 1 lifecycle CPU 80→90 ms (+12.5%) and wall +7.00%.
+  warm/512: D/B wall [1.002756, 0.906965, 0.929073]; median 0.929073. wall improves 2/3; pair 0 +0.276%. Pair 0 phase CPU 10→20 ms (2x at 10-ms tick resolution); lifecycle CPU does not increase.
+  warm/2048: D/B wall [0.977729, 1.035657, 0.975835]; median 0.977729. wall improves 2/3; pair 1 +3.57%, phase CPU 40→50 ms (+25%). Lifecycle CPU/wall do not regress.
+  cold/0: D/B wall [0.762348, 0.981880, 0.974847]; median 0.974847. wall improves 3/3; individual-operation sampled CPU rises in all three pairs, detailed below. Phase and lifecycle CPU medians are both 1.0.
+  cold/64: D/B wall [0.990607, 0.976765, 0.974488]; median 0.976765. wall improves 3/3; pair 0 phase CPU 150→160 ms (+6.67%) and operation CPU 0.625→0.9375 ms/append. Complete CPU/wall do not increase.
+  cold/512: D/B wall [1.042635, 0.979587, 0.999063]; median 0.999063. wall improves 2/3; pair 0 +4.26%, lifecycle wall +0.768%. Pair 1 phase CPU 170→180 ms. Sampled total PSS/RSS rise 3/3; anon PSS does not.
+  cold/2048: D/B wall [0.068573, 0.962482, 0.966861]; median 0.962482. wall improves 3/3, with a strongly favorable baseline outlier retained. Pair 2 sampled operation CPU rises 1.25→2.1875 ms (+75%) despite lower phase and full CPU.
+
+All three-pair append cost regressions (deduplicated aliases):
+  cold/0 cold_operation_cpu_ms_per_append: B [0.625000, 0.937500, 0.000000]; D [1.875000, 1.250000, 0.312500]; ratios [3.000000, 1.333333, unavailable].
+  cold/512 max_sampled_pss_mib: B [26.508789, 26.633789, 26.508789]; D [26.973633, 27.004883, 27.192383]; ratios [1.017535, 1.013933, 1.025787].
+  cold/512 max_sampled_rss_mib: B [28.507812, 28.632812, 28.507812]; D [29.000000, 29.003906, 29.187500]; ratios [1.017265, 1.012960, 1.023842].
+  cold/0 operation CPU is 3/3 higher in absolute values, while its third ratio is undefined (0→0.3125 ms). The reported available-only median 2.166667 uses two ratios and MUST NOT be presented as a complete three-pair estimate.
+  Each cold operation counter is rounded at 10 ms and includes sampling overhead. Summing 32 separate brackets amplifies quantization; 0 is not evidence of CPU-free append. The adverse reading is preserved, while phase/full CPU is reported separately.
+  cold/512 total PSS increases 1.39–2.58%, RSS 1.30–2.38%, all three pairs. The corresponding all-observed maxima equal the lifecycle maxima; they are duplicate observations, not extra independent regressions. No all-three increase in anon PSS.
+  There is no append group with 3/3 higher mean wall, phase CPU, complete CPU, complete writes, or lifecycle wall. This does not establish population nonregression with only three pairs.
+  All eight complete-write paired medians are exactly 1.0. All pairs are equal except warm/512 pair 1: 141.640625→141.605469 MiB (0.999752x). No material append-write reduction is supported.
+
+Extreme append raw point, retained even though it favors D:
+  append-cold/0-2048-before.json (B): mean append 40.230442 ms; 32 calls span 12.981640–79.393294 ms; complete lifecycle 9366.559 ms, CPU 2660 ms.
+  Matched 0-2048-after.json (D): mean append 2.758703 ms; 32 calls span 2.482112–4.262764 ms; lifecycle 4616.359 ms, CPU 2380 ms.
+  Ratio pair 0: append wall 0.068573, lifecycle wall 0.492855. Remaining append ratios are 0.962482 and 0.966861; the complete median is 0.962482. Do not describe the exceptional pair as a representative 93% speedup.
+  Raw phase wall B→D: seed 5838.238→4337.452 ms; append/reopen phase 3466.986→269.443 ms; close 45.122→2.103 ms. Phase self CPU: seed 2240→2160 ms, append/reopen 410→210 ms.
+  Full wall difference is 4750.200 ms but self CPU difference only 280 ms; writes are identical at 581.222656 MiB. Both pair-0 products have much longer seeding wall than later pairs. No measured diagnosis identifies scheduling, filesystem, or another root cause.
+
+Conclusion supported by this evidence:
+  Retained D remains materially behind Pi in repeated warm-turn latency, CPU, and writes. Some one-turn scenarios and stream CPU favor D, but this is not overall Pi performance parity.
+  D/B append medians are mildly favorable or equal and writes effectively unchanged. Preserve the coarse cold/0 CPU and cold/512 total-memory regressions and the favorable cold/2048 extreme. The evidence does not justify attributing these changes separately to readiness coalescing or counting.
+  E is rejected and none of its gains are included here. DeepSeek is analyzed separately under its distinct SDK/close/verification boundaries; no cross-product overall-durability rank is inferred from these Pi/append results.

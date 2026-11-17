@@ -2,8 +2,8 @@ import { test, expect, type Page, type TestInfo } from '@playwright/test';
 import { startDogfood } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, closeSessionView } from './shell-actions';
-import { recoveredThreadStatusReads, supersededHistoryReads, type RequestTiming, type ThreadStatusTiming } from '../session-latency';
-import type { ThreadStatusEntry } from '../../../protocol/app-server/v81';
+import { recoveredThreadStatusReads, supersededHistoryReads, supersededTraceReads, type RequestTiming, type ThreadStatusTiming } from '../session-latency';
+import type { ThreadStatusEntry } from '../../../protocol/app-server/v82';
 
 type HttpTiming = { path: string; start: number; end?: number };
 type Mark = { kind: 'click' | 'selected' | 'phase'; name: string; time: number };
@@ -115,9 +115,9 @@ async function observeLatency(page: Page) {
       }
       send(data: Parameters<WebSocket['send']>[0]) {
         if (typeof data === 'string') {
-          const call = JSON.parse(data) as { id?: unknown; method?: string; params?: { session_id?: string; node_id?: string; threadId?: string; target?: Record<string, unknown>; at?: { type?: string } } };
+          const call = JSON.parse(data) as { id?: unknown; method?: string; params?: { session_id?: string; node_id?: string; threadId?: string; before?: string | null; target?: Record<string, unknown>; at?: { type?: string } } };
           if (call.id !== undefined && call.method) {
-            const row: RequestTiming = { method: call.method, start: performance.now(), connection: this.connection, threadId: call.params?.threadId, historyAt: call.method === 'session/history' ? call.params?.at?.type : undefined, sessionId: call.params?.session_id, nodeId: call.params?.node_id, target: attachmentIdentity(call.params?.target) };
+            const row: RequestTiming = { method: call.method, start: performance.now(), connection: this.connection, threadId: call.params?.threadId, traceBefore: call.method === 'session/trace' ? call.params?.before : undefined, historyAt: call.method === 'session/history' ? call.params?.at?.type : undefined, sessionId: call.params?.session_id, nodeId: call.params?.node_id, target: attachmentIdentity(call.params?.target) };
             evidence.rpc.push(row); this.calls.set(call.id, row);
           }
         }
@@ -152,8 +152,9 @@ async function report(page: Page, info: TestInfo) {
   }
   // Preserve every rejection. A cold preview needs its exact live handoff;
   // unavailable status capture needs a strong read or newer native notification.
+  // A superseded Trace head needs a later successful read of that same claim.
   // Unrelated reads and every required operation must still succeed.
-  const recovered = new Set([...supersededHistoryReads(evidence.rpc), ...recoveredThreadStatusReads(evidence.rpc, evidence.statuses)]);
+  const recovered = new Set([...supersededHistoryReads(evidence.rpc), ...supersededTraceReads(evidence.rpc), ...recoveredThreadStatusReads(evidence.rpc, evidence.statuses)]);
   expect(evidence.rpc.filter(row => row.error !== undefined && !recovered.has(row))).toEqual([]);
   return evidence;
 }

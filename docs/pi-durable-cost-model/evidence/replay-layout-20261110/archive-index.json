@@ -1,0 +1,22 @@
+{
+  "root": "/home/capi/.cache/rustx-pr485-replay-layout-20261110",
+  "scope": "Both archives retain every raw measurement/per-turn/process counter/provider request, adverse and failed result, compiler/preflight monitor, build/helper identity, verification record and backup hash. Full includes every one of 2080 consistent native backups. Portable includes first/last representative DBs, not every image. Product ELF/dependency trees and private/live runtime/workspace roots are excluded; originals remain locally. Census requested allocations and ordinary PSS/CPU/writes remain separate.",
+  "archives": {
+    "full": {
+      "path": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/packed/replay-layout-full.tar.xz",
+      "bytes": 195049076,
+      "sha256": "4d1a0400d54594d7f3912e4a40d0faf713bb924a41ea2d989f9745df905f93a9",
+      "manifest": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/packed/replay-layout-full.tar.manifest.json",
+      "files": 2855,
+      "verified": true
+    },
+    "portable": {
+      "path": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/packed/replay-layout-portable.tar.xz",
+      "bytes": 15675792,
+      "sha256": "c7045b2eb9e75d8a81fde17cad658bb4f155822f221f77d46713789da368930b",
+      "manifest": "/home/capi/.cache/rustx-pr485-replay-layout-20261110/packed/replay-layout-portable.tar.manifest.json",
+      "files": 829,
+      "verified": true
+    }
+  }
+}

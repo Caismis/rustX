@@ -1,14 +1,14 @@
 //! Indexed format-shape checks: opening a Store never walks all request bodies.
-use super::{Connection, ConversationStoreError, OptionalExtension, storage};
+use super::{Connection, ConversationStoreError, OptionalExtension};
 
 const NAME: &str = "events_invalid_request_owner_idx";
 // json_quote preserves JSON objects and safely quotes scalar owner corruption.
 // Removing exactly the allowed keys avoids subqueries in a partial-index predicate.
-const INVALID: &str = r"json_extract(event_json,'$.event.type') IN
+const INVALID: &str = r"event_kind IN
  ('model_request_started','model_request_completed','model_request_failed')
  AND NOT COALESCE((
  json_type(event_json,'$.event.owner')='object' AND (
-  (json_extract(event_json,'$.event.owner.type')='agent'
+  (event_owner_kind='agent'
    AND json_type(event_json,'$.event.owner.identity')='object'
    AND json_remove(json_quote(json_extract(event_json,'$.event.owner')),'$.type','$.identity')='{}'
    AND json_remove(json_quote(json_extract(event_json,'$.event.owner.identity')),'$.attempt_id','$.turn','$.retry_number')='{}'
@@ -17,7 +17,7 @@ const INVALID: &str = r"json_extract(event_json,'$.event.type') IN
    AND json_type(event_json,'$.event.owner.identity.retry_number')='integer'
    AND json_extract(event_json,'$.event.owner.identity.retry_number') BETWEEN 0 AND 4294967295)
   OR
-  (json_extract(event_json,'$.event.owner.type')='auxiliary'
+  (event_owner_kind='auxiliary'
    AND json_remove(json_quote(json_extract(event_json,'$.event.owner')),'$.type','$.call_id','$.ordinal')='{}'
    AND json_type(event_json,'$.event.owner.call_id')='text'
    AND json_type(event_json,'$.event.owner.ordinal')='integer'
@@ -29,9 +29,12 @@ fn definition() -> String {
 }
 
 pub(super) fn create_schema(connection: &Connection) -> Result<(), ConversationStoreError> {
-    connection
-        .execute_batch(&definition())
-        .map_err(|error| storage(format!("create request owner shape index: {error}")))
+    connection.execute_batch(&definition()).map_err(|error| {
+        crate::durable::sqlite::sqlite_error(
+            &error,
+            format!("create request owner shape index: {error}"),
+        )
+    })
 }
 
 fn query() -> String {
@@ -49,7 +52,7 @@ pub(super) fn verify(connection: &Connection) -> Result<(), ConversationStoreErr
     let definition: Option<Option<String>> = connection.query_row(
         "SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name=?1",
         [NAME], |row| row.get(0),
-    ).optional().map_err(|error| storage(format!("request owner index schema: {error}")))?;
+    ).optional().map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("request owner index schema: {error}")))?;
     let Some(definition) = definition.flatten() else {
         return Err(ConversationStoreError::IncompatibleSchema(
             "missing request owner shape index".into(),
@@ -62,7 +65,12 @@ pub(super) fn verify(connection: &Connection) -> Result<(), ConversationStoreErr
     }
     let invalid: bool = connection
         .query_row(&query(), [], |row| row.get(0))
-        .map_err(|error| storage(format!("request owner shape lookup: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("request owner shape lookup: {error}"),
+            )
+        })?;
     if invalid {
         return Err(ConversationStoreError::IncompatibleSchema(
             "request facts require explicit typed ownership".into(),
@@ -81,7 +89,7 @@ mod tests {
         let connection = Connection::open_in_memory().unwrap();
         connection
             .execute_batch(
-                "CREATE TABLE events(sequence INTEGER PRIMARY KEY,event_json TEXT NOT NULL)",
+                "CREATE TABLE events(sequence INTEGER PRIMARY KEY,event_json TEXT NOT NULL,event_kind GENERATED ALWAYS AS (json_extract(event_json,'$.event.type')) STORED,event_owner_kind GENERATED ALWAYS AS (json_extract(event_json,'$.event.owner.type')) VIRTUAL)",
             )
             .unwrap();
         create_schema(&connection).unwrap();

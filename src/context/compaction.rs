@@ -146,6 +146,7 @@ impl FrozenConstraints {
 struct CapturedSource {
     history: crate::durable::projection::HistoricalModelInput,
     cut: super::resources::ResourceReadCut,
+    historical_items: Vec<CheckpointItem>,
     previous: Option<crate::durable::projection::ProjectionCheckpoint>,
     retired_count: usize,
     attribution: CompactionAttribution,
@@ -480,6 +481,9 @@ pub(crate) async fn capture_compaction(
             "compaction capture is not a consistent complete historical boundary".into(),
         ));
     }
+    let historical_items = history
+        .checkpoint_items(previous.as_ref())
+        .map_err(resource_failure)?;
     let complete = super::engine::assemble_context_input(
         &history.messages,
         constraints.staged_request_context,
@@ -541,7 +545,7 @@ pub(crate) async fn capture_compaction(
     // the provider rather than generating a candidate we cannot commit.
     let mut refs = std::collections::BTreeSet::new();
     let mut retained_refs = 0usize;
-    for (index, item) in history.items.iter().enumerate() {
+    for (index, item) in historical_items.iter().enumerate() {
         if index < retired_count {
             match &item.message {
                 crate::context::checkpoint::CheckpointMessage::Original(r) => {
@@ -585,6 +589,7 @@ pub(crate) async fn capture_compaction(
         source: CapturedSource {
             history,
             cut,
+            historical_items,
             previous,
             retired_count,
             attribution,
@@ -938,7 +943,7 @@ pub(crate) async fn generate_compaction(
             call_sources: Vec::new(),
             result_call: None,
         }];
-        for mut item in history.items.iter().skip(retired_count).cloned() {
+        for mut item in source.historical_items.iter().skip(retired_count).cloned() {
             if let Some(call) = &mut item.result_call {
                 call.message.checkpoint_id = checkpoint_id.clone();
                 call.message.item_index = call
@@ -1128,11 +1133,14 @@ pub(crate) fn commit_compaction(
         let current = store.projected_history().map_err(|e| e.to_string())?;
         let messages: Vec<_> = current
             .messages
-            .into_iter()
-            .filter_map(|m| m.as_canonical().cloned())
+            .shared_iter()
+            .filter(|m| m.as_canonical().is_some())
             .collect();
-        let ids = messages.iter().map(|m| m.id().clone()).collect();
-        ConversationState::from_durable_head(
+        let ids = messages
+            .iter()
+            .map(|m| m.canonical_id().expect("canonical Ledger body").clone())
+            .collect();
+        ConversationState::from_shared_durable_head(
             messages,
             ids,
             crate::conversation::SurfaceRevision::new(current.cut.ledger.0),

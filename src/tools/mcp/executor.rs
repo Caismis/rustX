@@ -265,7 +265,7 @@ pub fn definitions(
                 id,
                 name: tool.name.clone(),
                 description: tool.description,
-                input_schema: tool.input_schema,
+                input_schema: tool.input_schema.into(),
                 execution_policy: policy.execution,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {
@@ -304,7 +304,7 @@ pub(crate) fn definitions_owned(
                 id,
                 name: tool.name.clone(),
                 description: tool.description,
-                input_schema: tool.input_schema,
+                input_schema: tool.input_schema.into(),
                 execution_policy: policy.execution,
                 replay_policy: ToolReplayPolicy::Never,
                 origin: ToolOrigin::Mcp {

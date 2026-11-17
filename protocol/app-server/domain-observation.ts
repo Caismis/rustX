@@ -1,4 +1,5 @@
-import type { CheckpointPage, CheckpointPageItem, CheckpointValueChunk } from './v81.ts';
+import { checkpointReadCutKey } from './content-identity.ts';
+import type { CheckpointPage, CheckpointPageItem, CheckpointValueChunk } from './v82.ts';
 /** Typed u64 quantities arrive as decimal strings. Opaque integers that cannot
  * survive JavaScript parsing stay in the original byte view and cannot be edited
  * through a rounded object. No scalar coercion changes their source semantics. */
@@ -21,7 +22,7 @@ async function originalValue(page: CheckpointPage, item: CheckpointPageItem, rea
   while (total === undefined || offset < total) {
     const chunk = await read.value(page, item, offset);
     if (!read.current()) throw new Error('Domain observation was replaced.');
-    if (JSON.stringify(chunk.cut) !== JSON.stringify(page.read_cut) || chunk.domain !== page.domain || chunk.item_offset !== Number(item.offset) || chunk.path.length !== 0 || chunk.offset !== offset || !Number.isSafeInteger(chunk.readable_end) || loaded + chunk.readable_end > 16 * 1024 * 1024 || (total !== undefined && total !== chunk.readable_end)) throw new Error('Domain range identity or frontier mismatch.');
+    if (checkpointReadCutKey(chunk.cut) !== checkpointReadCutKey(page.read_cut) || chunk.domain !== page.domain || chunk.item_offset !== Number(item.offset) || chunk.path.length !== 0 || chunk.offset !== offset || !Number.isSafeInteger(chunk.readable_end) || loaded + chunk.readable_end > 16 * 1024 * 1024 || (total !== undefined && total !== chunk.readable_end)) throw new Error('Domain range identity or frontier mismatch.');
     if(chunk.representation!=='utf8_text'&&chunk.representation!=='canonical_json_v1'||representation!==undefined&&representation!==chunk.representation)throw new Error('Domain representation changed.');
     representation=chunk.representation;
     const end = chunk.readable_end as number; total = end;

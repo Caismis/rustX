@@ -3,6 +3,7 @@
 use super::Entry;
 use super::Flight;
 use super::SessionRuntimeManager;
+use super::release_allocator_pages;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
@@ -153,11 +154,19 @@ impl SessionRuntimeManager {
                 .collect()
         };
         let now = self.clock.now_millis();
+        let mut reclaimed = false;
         for resident in candidates {
             let activity = resident.activity.load(Ordering::Relaxed);
             let Some(native) = resident.shutdown_runtime() else {
                 continue;
             };
+            reclaimed |= native.reclaim_idle_store_cache();
+            // An attached runtime cannot unload. Avoid durable idle probes that
+            // would warm its SQLite cache once per second merely to reject it.
+            if resident.external.load(Ordering::Relaxed) != 0 {
+                *resident.idle.lock().expect("idle mutex") = None;
+                continue;
+            }
             let epoch = native.idle_epoch().ok();
             #[cfg(test)]
             self.probe(&resident.identity.conversation)
@@ -206,6 +215,9 @@ impl SessionRuntimeManager {
             #[cfg(test)]
             self.probe(&id).idle_after_claim.enter();
             self.spawn_unload(id, resident, flight, None);
+        }
+        if reclaimed {
+            release_allocator_pages();
         }
     }
 }

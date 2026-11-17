@@ -1,7 +1,7 @@
 import { test, expect, type Locator } from '@playwright/test';
 import { readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, expectSettled, choose } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -89,9 +89,9 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     expect(deliveryRead).toBeDefined();
     const admission = await page.evaluate(({ endpoint, token, read, cwd }) => new Promise<{ deliveryAccess?: boolean; removedMethod?: number; copiedTarget?: string; ownDelivery?: any }>((resolve, reject) => {
       const observed: { deliveryAccess?: boolean; removedMethod?: number; copiedTarget?: string; ownDelivery?: any } = {};
-      const socket = new WebSocket(endpoint, ['rustx.app-server.v81', `rustx-token.${btoa(token!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
+      const socket = new WebSocket(endpoint, ['rustx.app-server.v82', `rustx-token.${btoa(token!).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}`]);
       socket.onerror = () => reject(new Error('Browser ordinary connection failed'));
-      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 81, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
+      socket.onopen = () => socket.send(JSON.stringify({ jsonrpc: '2.0', id: 4191, method: 'initialize', params: { protocol_version: 82, client: { name: 'rustx-product-host-file-read', version: '1' }, presentation: { images: true, questionnaires: true, reviews: true } } }));
       socket.onmessage = event => {
         const reply = JSON.parse(event.data);
         if (reply.id === 4191) {
@@ -190,7 +190,7 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     expect((await fixture.control('requests')).requests).toHaveLength(modelRequests);
     expect(wire.requests.filter(request => request.method === 'inbound/queue')).toHaveLength(1);
     expect(errors).toEqual([]); passed = true;
-  } finally { await fixture.stop(passed); }
+  } finally { await stopDogfoodPage(page, fixture, passed); }
 });
 
 test('managed Artifact Markdown/text/code previews download original bytes through artifact/read', async ({ page }, testInfo) => {

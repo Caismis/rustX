@@ -132,16 +132,16 @@ test('native child live cuts, independent title, active and file-only resume upl
       &&JSON.stringify(note.params.target)===JSON.stringify(parentTarget)).flatMap(note=>transitionFacts(note.params.event));
     const parentAttempt=rootFacts().find(fact=>fact.type==='attempt_started');
     if(!parentAttempt||parentAttempt.type!=='attempt_started')throw new Error('Original Parent Attempt was not observed.');
-    // Final C text and AttemptSettled precede the native completed-process page.
-    // Reveal its disclosure only once that original membership is published.
-    await expect.poll(()=>rootFacts().some(fact=>{
-      const transcript=fact.type==='read_domains_updated'?fact.transcript:fact.type==='checkpoint_advanced'?fact.checkpoint.snapshot.transcript:undefined;
-      return transcript?.entries?.some(entry=>{
+    // Returning from the child installs a new checkpoint and registration.
+    // Fold its exact contiguous stream: completed membership may arrive as a
+    // typed patch rather than a full read_domains_updated transcript.
+    await expect.poll(()=>{
+      return wire.projection(parentTarget)?.transcript.entries?.some(entry=>{
         const process=entry.turn_process;
         return process!=null&&process.conversation_id===parentTarget.conversation_id
           &&process.attempt_id===parentAttempt.attempt_id&&process.outcome==='completed';
       });
-    })).toBe(true);
+    }).toBe(true);
     const parentProcess = page.locator('[data-turn-process][aria-expanded]:visible').last();
     await expect(parentProcess).toHaveAttribute('data-turn-process',JSON.stringify([parentTarget.conversation_id,parentAttempt.attempt_id]));
     if (await parentProcess.getAttribute('aria-expanded') === 'false') await parentProcess.click();

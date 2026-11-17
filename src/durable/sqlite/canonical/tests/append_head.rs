@@ -17,7 +17,7 @@ fn append_frontier_matches_materialized_head_with_sparse_positions() {
     let connection = store.conn.lock().unwrap();
     connection.execute_batch("PRAGMA foreign_keys=OFF; UPDATE message_ledger SET position=7 WHERE position=2; PRAGMA foreign_keys=ON").unwrap();
     connection
-        .execute("UPDATE surface_head SET revision=7", [])
+        .execute("UPDATE rustx_store SET surface_revision=7", [])
         .unwrap();
     let full = load_head(&connection).unwrap();
     assert_eq!(
@@ -54,7 +54,7 @@ fn append_frontier_rejects_corrupt_identity_bytes_and_rolls_back() {
         }
         assert!(store.append_canonical(&user_message("b", "B")).is_err());
         let connection = store.conn.lock().unwrap();
-        let counts: (i64,i64,i64) = connection.query_row("SELECT (SELECT count(*) FROM message_ledger),(SELECT count(*) FROM surface_ops),(SELECT revision FROM surface_head)", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
+        let counts: (i64,i64,i64) = connection.query_row("SELECT (SELECT count(*) FROM message_ledger),(SELECT count(*) FROM surface_ops),(SELECT surface_revision FROM rustx_store)", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).unwrap();
         assert_eq!(counts, (1, 1, 1));
     }
 }
@@ -65,7 +65,7 @@ fn append_frontier_retains_exact_working_set_boundary() {
     store.initialize(&[]).unwrap();
     {
         let connection = store.conn.lock().unwrap();
-        connection.execute_batch("WITH RECURSIVE ids(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM ids WHERE n<8192) INSERT INTO message_ledger(position,message_id,message_json) SELECT n,printf('id-%d',n),'{}' FROM ids; UPDATE surface_head SET revision=8192").unwrap();
+        connection.execute_batch("WITH RECURSIVE ids(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM ids WHERE n<8192) INSERT INTO message_ledger(position,message_id,message_json) SELECT n,printf('id-%d',n),'{}' FROM ids; UPDATE rustx_store SET surface_revision=8192").unwrap();
         assert_eq!(
             load_head(&connection).unwrap().active_message_ids.len(),
             8192
@@ -87,7 +87,7 @@ fn append_frontier_retains_exact_working_set_boundary() {
     assert!(!ledger_message_exists(&connection, &MessageId::new("excess")).unwrap());
     assert_eq!(
         connection
-            .query_row("SELECT revision FROM surface_head", [], |r| r
+            .query_row("SELECT surface_revision FROM rustx_store", [], |r| r
                 .get::<_, i64>(0))
             .unwrap(),
         8193
@@ -101,7 +101,7 @@ fn append_frontier_retains_inconsistent_revision_rejection() {
     {
         let connection = store.conn.lock().unwrap();
         connection
-            .execute("UPDATE surface_head SET revision=2", [])
+            .execute("UPDATE rustx_store SET surface_revision=2", [])
             .unwrap();
         assert!(load_head(&connection).is_err());
         assert!(append_head(&connection).is_err());
@@ -111,7 +111,7 @@ fn append_frontier_retains_inconsistent_revision_rejection() {
 }
 
 #[test]
-fn current_gate_rejects_retired_surface_head_layout() {
+fn current_gate_rejects_missing_surface_revision() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("retired.sqlite");
     let id = ConversationId::generate();
@@ -122,13 +122,13 @@ fn current_gate_rejects_retired_surface_head_layout() {
             .lock()
             .unwrap()
             .execute(
-                "ALTER TABLE surface_head ADD COLUMN active_json TEXT NOT NULL DEFAULT '[]'",
+                "ALTER TABLE rustx_store RENAME COLUMN surface_revision TO retired_surface_revision",
                 [],
             )
             .unwrap();
     }
     assert!(
-        matches!(SqliteConversationStore::open_existing(id, &path), Err(ConversationStoreError::IncompatibleSchema(detail)) if detail.contains("retired active_json"))
+        matches!(SqliteConversationStore::open_existing(id, &path), Err(ConversationStoreError::IncompatibleSchema(detail)) if detail.contains("rustx_store"))
     );
 }
 
@@ -185,6 +185,99 @@ fn append_certificate_tracks_identity_mutation_and_ignores_derived_columns() {
     assert_eq!(append_validation::take_work(), (1, 0));
     assert!(!store.conn.append_validation.has_certificate());
     assert!(load_head(&store.conn.lock().unwrap()).is_err());
+}
+
+#[test]
+fn partial_surface_head_is_rejected_without_repair() {
+    for assignment in [
+        "surface_revision=NULL",
+        "surface_compaction_generation=NULL",
+    ] {
+        let store = store();
+        store.initialize(&[user_message("existing", "X")]).unwrap();
+        store.conn.lock().unwrap().execute_batch(&format!(
+            "PRAGMA ignore_check_constraints=ON; UPDATE rustx_store SET {assignment} WHERE id=1; PRAGMA ignore_check_constraints=OFF"
+        )).unwrap();
+        assert!(store.load_head().is_err());
+        assert!(store.append_canonical(&user_message("a", "A")).is_err());
+        let connection = store.conn.lock().unwrap();
+        assert!(reading::cut(&connection, &store.conversation_id).is_err());
+        assert!(
+            observation::surface_boundaries(
+                &connection,
+                crate::conversation::SurfaceRevision::new(0),
+                0,
+                1,
+            )
+            .is_err()
+        );
+        let incomplete: bool = connection.query_row(
+            "SELECT (surface_revision IS NULL)!=(surface_compaction_generation IS NULL) FROM rustx_store WHERE id=1",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert!(incomplete, "corrupt head was silently repaired");
+    }
+}
+
+#[test]
+fn empty_surface_readers_accept_both_initialization_states() {
+    for initialized in [false, true] {
+        let store = store();
+        if initialized {
+            store.initialize(&[]).unwrap();
+        }
+        let connection = store.conn.lock().unwrap();
+        assert_eq!(
+            reading::cut(&connection, &store.conversation_id)
+                .unwrap()
+                .surface_revision
+                .get(),
+            0
+        );
+        assert_eq!(
+            observation::surface_boundaries(
+                &connection,
+                crate::conversation::SurfaceRevision::new(0),
+                0,
+                1,
+            )
+            .unwrap()
+            .total,
+            0
+        );
+    }
+}
+
+#[test]
+fn append_certificate_tracks_surface_columns_on_the_store_root() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store.append_canonical(&user_message("a", "A")).unwrap();
+    append_validation::take_work();
+    store.conn.lock().unwrap().execute(
+        "UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1", [],
+    ).unwrap();
+    store.append_canonical(&user_message("b", "B")).unwrap();
+    assert_eq!(append_validation::take_work(), (0, 1));
+    store.conn.lock().unwrap().execute_batch(
+        "UPDATE rustx_store SET surface_compaction_generation=1 WHERE id=1;          UPDATE rustx_store SET surface_compaction_generation=0 WHERE id=1",
+    ).unwrap();
+    store.append_canonical(&user_message("c", "C")).unwrap();
+    assert_eq!(append_validation::take_work(), (1, 0));
+}
+
+#[test]
+fn journal_frontier_updates_preserve_append_certificate() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store.append_canonical(&user_message("a", "A")).unwrap();
+    append_validation::take_work();
+    crate::durable::sqlite::tests::observation_response_tests::response_start(
+        &store,
+        "certificate",
+    );
+    store.append_canonical(&user_message("b", "B")).unwrap();
+    assert_eq!(append_validation::take_work(), (0, 1));
 }
 
 #[test]
@@ -397,7 +490,7 @@ fn append_certificate_does_not_certify_trigger_replacement() {
     store.initialize(&[]).unwrap();
     store.append_canonical(&user_message("a", "A")).unwrap();
     let mut connection = store.conn.lock().unwrap();
-    connection.execute_batch("PRAGMA foreign_keys=OFF; CREATE TEMP TRIGGER replace_certificate_identity BEFORE INSERT ON main.message_ledger WHEN new.message_id='b' BEGIN INSERT INTO message_ledger(position,message_id,message_json) VALUES(new.position,CAST(x'ff' AS TEXT),new.message_json); SELECT RAISE(IGNORE); END").unwrap();
+    connection.execute_batch("PRAGMA foreign_keys=OFF; CREATE TEMP TRIGGER replace_certificate_identity BEFORE INSERT ON main.message_ledger WHEN new.message_id='b' BEGIN UPDATE message_ledger SET message_id=CAST(x'ff' AS TEXT) WHERE message_id='a'; INSERT INTO message_ledger(position,message_id,message_json) VALUES(new.position,new.message_id,new.message_json); SELECT RAISE(IGNORE); END").unwrap();
     append_validation::take_work();
     let mut validation = append_validation::Batch::begin(&store.conn.append_validation);
     let transaction = connection
@@ -414,4 +507,111 @@ fn append_certificate_does_not_certify_trigger_replacement() {
     drop(connection);
     assert!(store.append_canonical(&user_message("c", "C")).is_err());
     assert_eq!(append_validation::take_work(), (2, 0));
+}
+
+#[test]
+fn read_only_rollback_preserves_committed_append_proof_but_write_rollback_fences_it() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store
+        .append_canonical(&user_message("before-read", "A"))
+        .unwrap();
+    append_validation::take_work();
+    for i in 0..3 {
+        {
+            let connection = store.lock().unwrap();
+            let transaction = connection.unchecked_transaction().unwrap();
+            let count: u64 = transaction
+                .query_row("SELECT count(*) FROM message_ledger", [], |row| row.get(0))
+                .unwrap();
+            assert_eq!(count, i + 1);
+            // Native readers drop their read transaction, which runs ROLLBACK.
+        }
+        store
+            .append_canonical(&user_message(&format!("after-read-{i}"), "B"))
+            .unwrap();
+    }
+    assert_eq!(append_validation::take_work(), (0, 3));
+    {
+        let connection = store.lock().unwrap();
+        let transaction = connection.unchecked_transaction().unwrap();
+        let mut batch = append_validation::Batch::begin(&store.conn.append_validation);
+        batch
+            .append(&transaction, &user_message("not-committed", "ghost"), None)
+            .unwrap();
+        transaction.rollback().unwrap();
+        // Even an accidental publication after rollback cannot seat the batch.
+        batch.committed(&connection);
+    }
+    append_validation::take_work();
+    store
+        .append_canonical(&user_message("after-write-rollback", "C"))
+        .unwrap();
+    assert_eq!(append_validation::take_work(), (1, 0));
+    assert_eq!(store.load_head().unwrap().active_message_ids.len(), 5);
+}
+
+fn identity_frontier(store: &SqliteConversationStore) -> (i64, i64) {
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT canonical_identity_through,canonical_identity_count FROM rustx_store WHERE id=1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap()
+}
+
+#[test]
+fn the_identity_frontier_advances_with_each_validated_append() {
+    let store = store();
+    store
+        .initialize(&[user_message("a", "A"), user_message("b", "B")])
+        .unwrap();
+    // Seeded identities are validated by the first native append.
+    store.append_canonical(&user_message("c", "C")).unwrap();
+    assert_eq!(identity_frontier(&store), (3, 3));
+    store.append_canonical(&user_message("d", "D")).unwrap();
+    assert_eq!(identity_frontier(&store), (4, 4));
+    // An identity over the bound is admitted but never covered: the next
+    // validation still reaches and rejects it.
+    store
+        .append_canonical(&user_message(&"x".repeat(4097), "oversized"))
+        .unwrap();
+    assert_eq!(identity_frontier(&store), (4, 4));
+    assert!(store.validate_head().is_err());
+}
+
+#[test]
+fn an_identity_frontier_that_disagrees_with_the_ledger_fails_closed() {
+    let store = store();
+    store.initialize(&[]).unwrap();
+    store.append_canonical(&user_message("a", "A")).unwrap();
+    store.append_canonical(&user_message("b", "B")).unwrap();
+    store.validate_head().unwrap();
+    // A frontier ahead of the Ledger is rejected.
+    store
+        .conn
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE rustx_store SET canonical_identity_through=9,canonical_identity_count=2 WHERE id=1",
+            [],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.validate_head(),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
+    // An anchor at a missing Ledger position is equally rejected.
+    {
+        let connection = store.conn.lock().unwrap();
+        connection.execute_batch("PRAGMA foreign_keys=OFF; UPDATE message_ledger SET position=5 WHERE position=2; UPDATE rustx_store SET surface_revision=5,canonical_identity_through=2,canonical_identity_count=2; PRAGMA foreign_keys=ON").unwrap();
+    }
+    assert!(matches!(
+        store.validate_head(),
+        Err(ConversationStoreError::InvalidReference(_))
+    ));
 }

@@ -837,6 +837,8 @@ impl LocalConversationCore {
                 model_timeout_policy: spec.model_timeout_policy,
                 tool_deadline_policy: spec.tool_deadline_policy,
                 context: ConversationContextConfig {
+                    status_clock: Arc::clone(&dependencies.status_clock),
+
                     estimator: Arc::clone(&dependencies.estimator),
                     // The child materializes exactly the extension composition
                     // its invoking generation froze into `ResolvedSubagentSpec`
@@ -845,7 +847,7 @@ impl LocalConversationCore {
                     status_engine: spec
                         .resolved
                         .extensions
-                        .agent_status_engine(Arc::new(crate::context::SystemClock)),
+                        .agent_status_engine(Arc::clone(&dependencies.status_clock)),
                 },
                 tool_runtime: tool_runtime.clone(),
                 capability: capability.clone(),

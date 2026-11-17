@@ -16,11 +16,13 @@ use crate::context::resources::{JournalFrontier, LedgerFrontier, ResourceLimits}
 use crate::durable::projection::{
     ProjectionCheckpoint, ProjectionCommitInput, ProjectionCommitReceipt, ProjectionOwner,
 };
+use crate::durable::sqlite::statements::FixedStatements;
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::runtime::identity::{
     AttemptId, CheckpointId, CompactionOperationId, ConversationId, EventId,
 };
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 
 fn invalid(message: impl Into<String>) -> ConversationStoreError {
     ConversationStoreError::InvalidReference(message.into())
@@ -29,16 +31,47 @@ fn digest(bytes: &str) -> String {
     format!("{:x}", Sha256::digest(bytes.as_bytes()))
 }
 
+// One seek per closed lifecycle kind, including the no-match case. A backwards
+// Journal scan is unbounded after a long non-lifecycle tail (or an empty owner).
+pub(super) const OWNER_KIND_SQL: &str = concat!(
+    "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",
+    crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+    "=?1 ORDER BY sequence DESC LIMIT 1"
+);
+
 pub(super) fn owner(
     connection: &Connection,
     expected: Option<&AttemptId>,
 ) -> Result<ProjectionOwner, ConversationStoreError> {
-    let last: Option<(i64, String)> = connection.query_row(
-        "SELECT sequence,event_json FROM events WHERE json_extract(event_json,'$.event.type') IN ('attempt_started','attempt_completed','attempt_failed','attempt_cancelled','attempt_timed_out','attempt_limit_exceeded') ORDER BY sequence DESC LIMIT 1", [], |row| Ok((row.get(0)?, row.get(1)?)))
-        .optional().map_err(|e| storage(e.to_string()))?;
+    let mut last: Option<i64> = None;
+    let mut statement = connection
+        .prepare_cached(OWNER_KIND_SQL)
+        .map_err(|e| storage(e.to_string()))?;
+    for kind in [
+        "attempt_started",
+        "attempt_completed",
+        "attempt_failed",
+        "attempt_cancelled",
+        "attempt_timed_out",
+        "attempt_limit_exceeded",
+    ] {
+        let candidate: Option<i64> = statement
+            .query_row([super::event_kind_key::parameter(kind)], |row| row.get(0))
+            .optional()
+            .map_err(|e| storage(e.to_string()))?;
+        last = last.max(candidate);
+    }
     let (transition_sequence, active) = match last {
         None => (0, None),
-        Some((sequence, json)) => {
+        Some(sequence) => {
+            // Read only the winner's body; old terminal diagnostics may be large.
+            let json: String = connection
+                .query_row_cached(
+                    "SELECT event_json FROM events WHERE sequence=?1",
+                    [sequence],
+                    |row| row.get(0),
+                )
+                .map_err(|e| storage(e.to_string()))?;
             let event: RuntimeEventEnvelope = decode(&json, "projection execution fence")?;
             let active = match event.event {
                 RuntimeEvent::AttemptStarted { attempt_id } => Some(attempt_id),
@@ -234,7 +267,7 @@ fn inherited_count_digest(history: &str, count: u64) -> String {
     ))
 }
 fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreError> {
-    let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row(
+    let row: Option<(Option<String>,u64,Option<String>)> = connection.query_row_cached(
         "SELECT CASE WHEN octet_length(history_digest)=64 THEN history_digest END,projection_count,CASE WHEN octet_length(projection_digest)=64 THEN projection_digest END FROM bootstrap_identity WHERE id=1", [],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)),
     ).optional().map_err(|e| sqlite_error(&e, e.to_string()))?;
@@ -254,13 +287,16 @@ fn inherited_count(connection: &Connection) -> Result<u64, ConversationStoreErro
 const COMPLETION_FIELDS: &str = "CASE WHEN typeof(json_extract(event_json,'$.schema_version'))='integer' THEN json_extract(event_json,'$.schema_version') END,CASE WHEN typeof(json_extract(event_json,'$.conversation_id'))='text' AND octet_length(json_extract(event_json,'$.conversation_id'))<=128 THEN json_extract(event_json,'$.conversation_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.activation_id'))='integer' THEN json_extract(event_json,'$.event.activation_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.checkpoint_id'))='text' AND octet_length(json_extract(event_json,'$.event.checkpoint_id'))<=1024 THEN json_extract(event_json,'$.event.checkpoint_id') END,CASE WHEN typeof(json_extract(event_json,'$.event.generation'))='integer' THEN json_extract(event_json,'$.event.generation') END";
 pub(super) fn completion_index_sql() -> String {
     format!(
-        "CREATE INDEX events_projection_completion_idx ON events(sequence,{COMPLETION_FIELDS}) WHERE json_extract(event_json,'$.event.type')='compaction_completed'"
+        "CREATE INDEX events_projection_completion_idx ON events(sequence,{COMPLETION_FIELDS}) WHERE event_kind='compaction_completed'"
     )
 }
-pub(super) fn completion_query() -> String {
-    format!(
-        "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE json_extract(event_json,'$.event.type')='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
-    )
+pub(super) fn completion_query() -> &'static str {
+    static QUERY: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        format!(
+            "SELECT sequence,{COMPLETION_FIELDS} FROM events INDEXED BY events_projection_completion_idx WHERE event_kind='compaction_completed' AND sequence<=?1 ORDER BY sequence DESC LIMIT 1"
+        )
+    });
+    &QUERY
 }
 struct CompletionEvidence {
     sequence: u64,
@@ -282,7 +318,7 @@ fn completion_at(
 ) -> Result<Option<CompletionEvidence>, ConversationStoreError> {
     type Row = (u64, u16, Option<String>, u64, Option<String>, u64);
     let row: Option<Row> = connection
-        .query_row(&completion_query(), [seq_to_i64(through)?], |row| {
+        .query_row_cached(completion_query(), [seq_to_i64(through)?], |row| {
             Ok((
                 row.get(0)?,
                 row.get(1)?,
@@ -305,7 +341,7 @@ fn completion_at(
                 work.set((rows + 1, bytes + scope.len() + checkpoint.len() + 32));
             });
             let local: bool = connection
-                .query_row(
+                .query_row_cached(
                     "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
                     [scope.as_str()],
                     |row| row.get(0),
@@ -336,8 +372,64 @@ fn completion_at(
 /// The Journal and immutable installation count anchor visibility independently
 /// of selector columns. Neither query reads future activation payloads.
 fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, ConversationStoreError> {
+    journal_frontier_from_completion(connection, through, completion_at(connection, through)?)
+}
+
+/// The current append has not inserted its native row yet. Its typed completion
+/// replaces only that self-row extraction; all persisted activation, inherited
+/// installation and successor authority checks remain identical.
+pub(super) fn pending_completion_head_id(
+    connection: &Connection,
+    event: &RuntimeEventEnvelope,
+) -> Result<u64, ConversationStoreError> {
+    let RuntimeEvent::CompactionCompleted {
+        activation_id,
+        checkpoint_id,
+        generation,
+        ..
+    } = &event.event
+    else {
+        return Err(invalid("not a projection completion fact"));
+    };
+    let local: bool = connection
+        .query_row_cached(
+            "SELECT conversation_id=?1 FROM rustx_store WHERE id=1",
+            [event.conversation_id.as_str()],
+            |row| row.get(0),
+        )
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    if !local
+        || event.conversation_id.as_str().len() > 128
+        || checkpoint_id.as_str().len() > 1024
+        || event.schema_version != EVENT_SCHEMA_VERSION
+        || activation_id.0 != *generation
+        || activation_id.0 == 0
+    {
+        return Err(invalid(
+            "foreign or incompatible projection completion fact",
+        ));
+    }
+    journal_frontier_from_completion(
+        connection,
+        event.sequence,
+        Some(CompletionEvidence {
+            sequence: event.sequence,
+            schema_version: event.schema_version,
+            conversation_id: event.conversation_id.clone(),
+            activation_id: *activation_id,
+            checkpoint_id: checkpoint_id.clone(),
+            generation: *generation,
+        }),
+    )
+}
+
+fn journal_frontier_from_completion(
+    connection: &Connection,
+    through: u64,
+    completion: Option<CompletionEvidence>,
+) -> Result<u64, ConversationStoreError> {
     let inherited = inherited_count(connection)?;
-    let id = if let Some(event) = completion_at(connection, through)? {
+    let id = if let Some(event) = completion {
         let activation_id = event.activation_id;
         let checkpoint_id = event.checkpoint_id;
         if activation_id.0 <= inherited || event.sequence > through {
@@ -366,7 +458,7 @@ fn journal_frontier(connection: &Connection, through: u64) -> Result<u64, Conver
         }
     }
     let last: u64 = connection
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(activation),0) FROM projection_activations",
             [],
             |r| r.get(0),
@@ -543,7 +635,7 @@ pub(super) fn head(
     connection: &Connection,
 ) -> Result<Option<ProjectionCheckpoint>, ConversationStoreError> {
     let n: Option<i64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),
@@ -569,7 +661,7 @@ pub(super) fn current_checkpoint_id(
     connection: &Connection,
 ) -> Result<Option<CheckpointId>, ConversationStoreError> {
     let selected: Option<u64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),
@@ -771,7 +863,7 @@ pub(super) fn restart_evidence(
     operation: &CompactionOperationId,
 ) -> Result<crate::durable::projection::CompactionRestartEvidence, ConversationStoreError> {
     let accepted: Option<Option<u64>> = connection.query_row(
-        "SELECT CASE WHEN typeof(json_extract(event_json,'$.event.accepted_fragments'))='integer' THEN json_extract(event_json,'$.event.accepted_fragments') END FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_chunk_accepted' ORDER BY sequence DESC LIMIT 1",
+        "SELECT CASE WHEN typeof(json_extract(event_json,'$.event.accepted_fragments'))='integer' THEN json_extract(event_json,'$.event.accepted_fragments') END FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_chunk_accepted' ORDER BY sequence DESC LIMIT 1",
         [operation.as_str()], |row| row.get(0),
     ).optional().map_err(|error| storage(error.to_string()))?;
     let accepted_fragments = match accepted {
@@ -782,7 +874,7 @@ pub(super) fn restart_evidence(
         _ => return Err(invalid("invalid durable compaction fragment count")),
     };
     let completed: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE json_extract(event_json,'$.event.operation_id')=?1 AND json_extract(event_json,'$.event.type')='compaction_completed')",
+        "SELECT EXISTS(SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx WHERE event_operation_id=?1 AND event_kind='compaction_completed')",
         [operation.as_str()], |row| row.get(0),
     ).map_err(|error| storage(error.to_string()))?;
     let stored: Option<Option<String>> = connection.query_row(
@@ -976,19 +1068,20 @@ fn activation_coordinates(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let ledger = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT coalesce(max(position),0) FROM message_ledger",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     Ok((nonnegative(sequence, "completion sequence")? + 1, ledger))
 }
 
 #[allow(clippy::too_many_lines)] // Validate and commit one atomic projection transaction.
 pub(super) fn commit(
+    guard: &super::event_insert::Guard,
     transaction: &Transaction<'_>,
     scope: &ConversationId,
     input: ProjectionCommitInput,
@@ -1073,7 +1166,7 @@ pub(super) fn commit(
         &fingerprint,
         &activation,
     )?;
-    let completed = super::journal::persist_event_tx(transaction, scope, event)?.event;
+    let completed = super::journal::persist_event_tx(guard, transaction, scope, event)?.event;
     if completed.sequence != activation.origin.completed_journal.0 {
         return Err(invalid("completion Journal coordinate mismatch"));
     }
@@ -1133,7 +1226,7 @@ pub(super) fn auxiliary_history(
     let pending: Option<u64> = connection.query_row(
         "SELECT MIN(m.position) FROM canonical_tool_calls c INDEXED BY canonical_tool_calls_pending JOIN message_ledger m ON m.message_id=c.assistant_message_id WHERE c.result_message_id IS NULL AND m.position>?1 AND m.position<=?2",
         params![seq_to_i64(base.0)?, seq_to_i64(cut.ledger.0)?], |row| row.get(0),
-    ).map_err(|error| storage(error.to_string()))?;
+    ).map_err(|error| crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if let Some(pending) = pending {
         cut.ledger = LedgerFrontier(
             pending
@@ -1154,7 +1247,7 @@ fn selected_history_cut(
     let epoch = owner.capture(connection)?;
     let published = journal_frontier(connection, i64::MAX as u64)?;
     let selected: Option<u64> = connection
-        .query_row(
+        .query_row_cached(
             "SELECT activation FROM projection_head WHERE id=1",
             [],
             |r| r.get(0),
@@ -1180,15 +1273,23 @@ fn selected_history_cut(
         })
         .map(|(_, h)| h.clone());
     let mut result = if let Some(mut history) = cached {
-        append_history_delta(connection, scope, cut, &mut history)?;
+        append_history_delta(connection, scope, cut, &mut history, &owner.bodies)?;
         history
     } else {
-        compile_history(connection, scope, cut, head(connection)?.as_ref())?
+        compile_history_with_bodies(
+            connection,
+            scope,
+            cut,
+            head(connection)?.as_ref(),
+            Some(&owner.bodies),
+        )?
     };
     result
         .input_manifest
         .certify_selection(owner.id, epoch, result.cut.clone());
-    result.messages = result.input_manifest.messages();
+    result.messages = result
+        .input_manifest
+        .messages_with_preparation(&result.messages);
     owner
         .frontier
         .store(cut.ledger.0, std::sync::atomic::Ordering::Release);
@@ -1207,12 +1308,14 @@ type PendingTailCalls = std::collections::BTreeMap<
         crate::model::projected::CanonicalMessageRef,
         crate::runtime::identity::ToolCallId,
         crate::runtime::identity::ToolId,
+        Arc<Vec<[u8; 32]>>,
     ),
 >;
 fn append_history_message(
     scope: &ConversationId,
     history: &mut crate::durable::projection::HistoricalModelInput,
     pending: &mut PendingTailCalls,
+    bodies: &crate::conversation::bodies::CanonicalBodies,
     message: crate::message::types::MessageBlock,
 ) -> Result<(), ConversationStoreError> {
     use crate::model::projected::FrozenModelInput;
@@ -1220,19 +1323,22 @@ fn append_history_message(
         .map_err(|_| invalid("request occurrence overflow"))?;
     history.input_manifest = history
         .input_manifest
-        .append(scope, &crate::model::ModelInputMessage::Canonical(message));
+        .append_shared(scope, bodies.share(message));
     let FrozenModelInput::Original(reference) = history.input_manifest.get(index as usize).unwrap()
     else {
         unreachable!()
     };
     let reference = reference.clone();
-    let selected_messages = history.input_manifest.messages();
+    let selected_messages = history
+        .input_manifest
+        .messages_with_preparation(&history.messages);
     let value = &selected_messages[index as usize];
     let crate::model::ModelInputMessage::Canonical(message) = value else {
         unreachable!()
     };
     match message {
         crate::message::types::MessageBlock::Assistant(assistant) => {
+            let origins = crate::model::occurrence::native_origins(&value.view());
             for (block, content) in assistant.content.iter().enumerate() {
                 if let crate::message::types::AssistantContentBlock::ToolCall(call) = content {
                     let block = u32::try_from(block)
@@ -1249,13 +1355,14 @@ fn append_history_message(
                             reference.clone(),
                             call.id.clone(),
                             call.tool_id.clone(),
+                            Arc::clone(&origins),
                         ),
                     );
                 }
             }
         }
         crate::message::types::MessageBlock::Tool(result) => {
-            let (call_message, call_block, assistant, wire_id, tool_id) = pending
+            let (call_message, call_block, assistant, wire_id, tool_id, native_origins) = pending
                 .remove(&result.occurrence)
                 .ok_or_else(|| invalid("orphan canonical Tail ToolResult"))?;
             if result.tool_call_id != wire_id || result.tool_id != tool_id {
@@ -1272,21 +1379,15 @@ fn append_history_message(
                         assistant,
                         block: result.occurrence.block_index,
                     },
-                    wire_id: crate::model::occurrence::ProviderWireCorrelationId(
+                    wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                         wire_id.to_string(),
-                    ),
+                    )),
+                    native_origins,
                 },
             );
         }
         crate::message::types::MessageBlock::User(_) => {}
     }
-    history
-        .items
-        .push_back(crate::context::checkpoint::CheckpointItem {
-            message: CheckpointMessage::Original(reference),
-            call_sources: Vec::new(),
-            result_call: None,
-        });
     Ok(())
 }
 
@@ -1295,6 +1396,7 @@ fn append_history_delta(
     scope: &ConversationId,
     cut: &crate::context::resources::ResourceReadCut,
     history: &mut crate::durable::projection::HistoricalModelInput,
+    bodies: &crate::conversation::bodies::CanonicalBodies,
 ) -> Result<(), ConversationStoreError> {
     let mut after = history.cut.ledger;
     let mut pending = std::collections::BTreeMap::new();
@@ -1320,7 +1422,7 @@ fn append_history_delta(
             return Err(invalid("historical Tail materialization exceeds bound"));
         }
         for (position, message) in page.rows {
-            append_history_message(scope, history, &mut pending, message)?;
+            append_history_message(scope, history, &mut pending, bodies, message)?;
             after = LedgerFrontier(position);
         }
     }
@@ -1330,7 +1432,9 @@ fn append_history_delta(
         ));
     }
     history.cut.ledger = cut.ledger;
-    history.messages = history.input_manifest.messages();
+    history.messages = history
+        .input_manifest
+        .messages_with_preparation(&history.messages);
     Ok(())
 }
 
@@ -1391,13 +1495,21 @@ fn compile_history(
     read_cut: &crate::context::resources::ResourceReadCut,
     checkpoint: Option<&ProjectionCheckpoint>,
 ) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
+    compile_history_with_bodies(connection, scope, read_cut, checkpoint, None)
+}
+
+#[allow(clippy::too_many_lines)]
+fn compile_history_with_bodies(
+    connection: &Connection,
+    scope: &ConversationId,
+    read_cut: &crate::context::resources::ResourceReadCut,
+    checkpoint: Option<&ProjectionCheckpoint>,
+    bodies: Option<&crate::conversation::bodies::CanonicalBodies>,
+) -> Result<crate::durable::projection::HistoricalModelInput, ConversationStoreError> {
     use crate::durable::projection::{HistoricalModelInput, RequestHistoryCut};
     let mut messages = Vec::new();
     let mut tool_associations = Vec::new();
     let mut pending_tail = std::collections::BTreeMap::new();
-    let mut items = checkpoint
-        .as_ref()
-        .map_or_else(Vec::new, |p| p.candidate.items.clone());
     let base = checkpoint
         .as_ref()
         .map_or(LedgerFrontier(0), |p| p.candidate.base_frontier);
@@ -1415,6 +1527,7 @@ fn compile_history(
             .map_err(|e| e.to_string())
         })
         .map_err(invalid)?;
+        let mut origins = std::collections::HashMap::new();
         for tool in &compiled.tools {
             let item = &checkpoint.candidate.items[tool.call.message.item_index as usize];
             let assistant = match &item.message {
@@ -1435,8 +1548,17 @@ fn compile_history(
                     assistant,
                     block: tool.canonical_source.block_index,
                 },
-                wire_id: crate::model::occurrence::ProviderWireCorrelationId(
+                wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                     tool.wire_id.to_string(),
+                )),
+                native_origins: Arc::clone(
+                    origins
+                        .entry(tool.call.message.item_index)
+                        .or_insert_with(|| {
+                            crate::model::occurrence::native_origins(
+                                &compiled.messages[tool.call.message.item_index as usize].view(),
+                            )
+                        }),
                 ),
             });
         }
@@ -1472,6 +1594,9 @@ fn compile_history(
                 .map_err(|_| invalid("request occurrence overflow"))?;
             match &message {
                 crate::message::types::MessageBlock::Assistant(assistant) => {
+                    let origins = crate::model::occurrence::native_origins(
+                        &crate::model::projected::ModelMessageView::from(&message),
+                    );
                     for (block, content) in assistant.content.iter().enumerate() {
                         if let crate::message::types::AssistantContentBlock::ToolCall(call) =
                             content
@@ -1492,15 +1617,17 @@ fn compile_history(
                                     ),
                                     call.id.clone(),
                                     call.tool_id.clone(),
+                                    Arc::clone(&origins),
                                 ),
                             );
                         }
                     }
                 }
                 crate::message::types::MessageBlock::Tool(result) => {
-                    let (call_message, call_block, assistant, wire_id, tool_id) = pending_tail
-                        .remove(&result.occurrence)
-                        .ok_or_else(|| invalid("orphan canonical Tail ToolResult"))?;
+                    let (call_message, call_block, assistant, wire_id, tool_id, native_origins) =
+                        pending_tail
+                            .remove(&result.occurrence)
+                            .ok_or_else(|| invalid("orphan canonical Tail ToolResult"))?;
                     if result.tool_call_id != wire_id || result.tool_id != tool_id {
                         return Err(invalid(
                             "Tail ToolResult disagrees with physical call occurrence",
@@ -1514,21 +1641,15 @@ fn compile_history(
                             assistant,
                             block: result.occurrence.block_index,
                         },
-                        wire_id: crate::model::occurrence::ProviderWireCorrelationId(
+                        wire_id: Some(crate::model::occurrence::ProviderWireCorrelationId(
                             wire_id.to_string(),
-                        ),
+                        )),
+                        native_origins,
                     });
                 }
                 crate::message::types::MessageBlock::User(_) => {}
             }
             after = LedgerFrontier(position);
-            items.push(crate::context::checkpoint::CheckpointItem {
-                message: CheckpointMessage::Original(
-                    crate::model::projected::CanonicalMessageRef::of(scope, &message),
-                ),
-                call_sources: Vec::new(),
-                result_call: None,
-            });
             messages.push(message.into());
         }
     }
@@ -1537,7 +1658,17 @@ fn compile_history(
             "canonical Tail ends inside an incomplete Tool batch",
         ));
     }
-    let input_manifest = crate::model::SelectedInputManifest::from_messages(scope, &messages);
+    let mut input_manifest =
+        crate::model::SelectedInputManifest::from_messages(scope, std::iter::empty());
+    for message in messages {
+        let actual = match (message, bodies) {
+            (crate::model::ModelInputMessage::Canonical(message), Some(bodies)) => {
+                bodies.share(message)
+            }
+            (message, _) => Arc::new(message),
+        };
+        input_manifest = input_manifest.append_shared(scope, actual);
+    }
     Ok(HistoricalModelInput {
         tool_associations: tool_associations.into_iter().collect(),
         cut: RequestHistoryCut {
@@ -1552,7 +1683,7 @@ fn compile_history(
         },
         messages: input_manifest.messages(),
         input_manifest,
-        items: items.into_iter().collect(),
+        checkpoint_fingerprint: checkpoint.map(|p| Arc::from(p.fingerprint.as_str())),
         materialized_bytes: bytes,
     })
 }
@@ -1998,7 +2129,7 @@ pub(super) fn observation_head_id(
 pub(super) fn verify_completion_index(
     connection: &Connection,
 ) -> Result<(), ConversationStoreError> {
-    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name='events_projection_completion_idx'",[],|row|row.get(0)).optional().map_err(|error|storage(error.to_string()))?;
+    let sql:Option<Option<String>>=connection.query_row("SELECT CASE WHEN octet_length(sql)<=8192 THEN sql END FROM sqlite_schema WHERE type='index' AND name='events_projection_completion_idx'",[],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if sql.flatten().as_deref() != Some(completion_index_sql().as_str()) {
         return Err(ConversationStoreError::IncompatibleSchema(
             "invalid original projection completion index".into(),

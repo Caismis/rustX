@@ -399,6 +399,7 @@ impl RuntimeClientFixtureBuilder {
             model_timeout_policy: rustx::model::ModelTimeoutPolicy::default(),
             tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
             context: ConversationContextConfig {
+                status_clock: std::sync::Arc::new(rustx::context::SystemClock),
                 estimator,
                 status_engine: Some(self.status_engine),
             },

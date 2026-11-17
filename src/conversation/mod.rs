@@ -10,6 +10,7 @@
 //! attempts and `AgentExecution` owns it while running. It caches retained Original
 //! facts, never gives Derived projected content a canonical `MessageId`.
 
+pub mod bodies;
 pub mod ledger;
 pub mod selection;
 pub mod surface;
@@ -62,6 +63,22 @@ impl From<LedgerError> for ConversationError {
 impl From<SurfaceError> for ConversationError {
     fn from(error: SurfaceError) -> Self {
         Self::Surface(error)
+    }
+}
+
+/// An owned canonical batch validated against the same conversation head.
+pub(crate) struct PreparedCanonicalBatch(Vec<MessageBlock>);
+
+impl PreparedCanonicalBatch {
+    pub(crate) fn messages(&self) -> &[MessageBlock] {
+        &self.0
+    }
+
+    pub(crate) fn into_commits(self) -> impl Iterator<Item = PreparedCanonicalCommit> {
+        self.0.into_iter().map(|message| PreparedCanonicalCommit {
+            id: message.id().clone(),
+            message,
+        })
     }
 }
 
@@ -267,15 +284,33 @@ impl ConversationState {
         revision: SurfaceRevision,
         compaction_generation: u64,
     ) -> Result<Self, ConversationError> {
+        Self::from_shared_durable_head(
+            messages.into_iter().map(|m| Arc::new(m.into())),
+            active_ids,
+            revision,
+            compaction_generation,
+        )
+    }
+
+    pub(crate) fn from_shared_durable_head(
+        messages: impl IntoIterator<Item = Arc<crate::model::ModelInputMessage>>,
+        active_ids: Vec<MessageId>,
+        revision: SurfaceRevision,
+        compaction_generation: u64,
+    ) -> Result<Self, ConversationError> {
         let mut ledger = MessageLedger::new();
-        for message in messages {
+        for shared in messages {
+            let message = shared.as_canonical().expect("canonical Ledger body");
             if ledger
                 .get(message.id())
-                .is_some_and(|existing| existing == &message)
+                .is_some_and(|existing| existing == message)
             {
                 continue;
             }
-            ledger.append(message)?;
+            if ledger.contains(message.id()) {
+                return Err(LedgerError::DuplicateMessageId(message.id().clone()).into());
+            }
+            ledger.append_shared_after_validation(shared);
         }
         let mut active_ids = active_ids;
         let mut seen = BTreeSet::new();
@@ -296,6 +331,11 @@ impl ConversationState {
                 compaction_generation,
             ),
         })
+    }
+
+    /// Bind native immutable bodies to the session's shared allocation registry.
+    pub(crate) fn bind_bodies(&mut self, bodies: Arc<bodies::CanonicalBodies>) {
+        self.ledger.bind_bodies(bodies);
     }
 
     /// The immutable hot Message Ledger read model. Retired durable records
@@ -346,21 +386,22 @@ impl ConversationState {
     /// Returns [`ConversationError::Ledger`] for a duplicate `MessageId` and
     /// [`ConversationError::Surface`] when the identity is already active.
     pub fn commit(&mut self, message: MessageBlock) -> Result<MessageId, ConversationError> {
-        let id = self.validate_commit(&message)?;
-        Ok(self.install_prepared(PreparedCanonicalCommit { id, message }))
+        let prepared = self.prepare_owned_commit(message)?;
+        Ok(self.install_prepared(prepared))
     }
 
-    fn validate_commit(&self, message: &MessageBlock) -> Result<MessageId, ConversationError> {
-        let id = message_id_of(message);
-        if self.surface.is_active(&id) {
-            return Err(ConversationError::Surface(SurfaceError::AlreadyActive(id)));
-        }
-        if self.ledger.contains(&id) {
-            return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
-                id,
+    fn validate_commit(&self, id: &MessageId) -> Result<(), ConversationError> {
+        if self.surface.is_active(id) {
+            return Err(ConversationError::Surface(SurfaceError::AlreadyActive(
+                id.clone(),
             )));
         }
-        Ok(id)
+        if self.ledger.contains(id) {
+            return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
+                id.clone(),
+            )));
+        }
+        Ok(())
     }
 
     /// Validates that `message` can be committed without mutating anything,
@@ -382,11 +423,38 @@ impl ConversationState {
         &self,
         message: &MessageBlock,
     ) -> Result<PreparedCanonicalCommit, ConversationError> {
-        let id = self.validate_commit(message)?;
+        let id = message.id();
+        self.validate_commit(id)?;
         Ok(PreparedCanonicalCommit {
-            id,
+            id: id.clone(),
             message: message.clone(),
         })
+    }
+
+    /// Validate and retain an already-owned message for durable commit.
+    pub(crate) fn prepare_owned_commit(
+        &self,
+        message: MessageBlock,
+    ) -> Result<PreparedCanonicalCommit, ConversationError> {
+        self.validate_commit(message.id())?;
+        let id = message.id().clone();
+        Ok(PreparedCanonicalCommit { id, message })
+    }
+
+    pub(crate) fn prepare_owned_batch(
+        &self,
+        messages: Vec<MessageBlock>,
+    ) -> Result<PreparedCanonicalBatch, ConversationError> {
+        let mut ids = std::collections::HashSet::with_capacity(messages.len());
+        for message in &messages {
+            self.validate_commit(message.id())?;
+            if !ids.insert(message.id()) {
+                return Err(ConversationError::Ledger(LedgerError::DuplicateMessageId(
+                    message.id().clone(),
+                )));
+            }
+        }
+        Ok(PreparedCanonicalBatch(messages))
     }
 
     /// Installs a commit whose exact message was already validated by
@@ -536,6 +604,54 @@ mod tests {
         assert!(state.commit(message.clone()).is_err());
         assert_eq!(state.active_messages().unwrap(), [message]);
     }
+    #[test]
+    fn owned_assistant_commit_moves_the_original_text_and_reasoning_into_the_ledger() {
+        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock, ReasoningBlock};
+
+        fn owners(message: &MessageBlock) -> [*const u8; 2] {
+            let MessageBlock::Assistant(message) = message else {
+                panic!("Assistant message");
+            };
+            let [
+                AssistantContentBlock::Text(text),
+                AssistantContentBlock::Reasoning(reasoning),
+            ] = message.content.as_slice()
+            else {
+                panic!("text and reasoning");
+            };
+            [
+                text.text.as_ptr(),
+                reasoning.text.as_ref().unwrap().as_ptr(),
+            ]
+        }
+
+        let mut state = ConversationState::new();
+        let message = MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("assistant"),
+            content: vec![
+                AssistantContentBlock::Text(TextBlock {
+                    text: "text".repeat(32_768),
+                }),
+                AssistantContentBlock::Reasoning(ReasoningBlock {
+                    origin: None,
+                    text: Some("reasoning".repeat(16_384)),
+                    provider_state: None,
+                }),
+            ],
+        });
+        let original = owners(&message);
+        let prepared = state.prepare_owned_commit(message).unwrap();
+        assert_eq!(owners(prepared.message()), original);
+        assert!(state.ledger().get(prepared.message_id()).is_none());
+        let id = state.install_prepared(prepared);
+        let committed = state.ledger().get(&id).unwrap();
+        assert_eq!(owners(committed), original);
+        assert!(std::ptr::eq(
+            state.freeze_active_surface().messages.get(&id).unwrap(),
+            committed
+        ));
+    }
+
     #[test]
     fn equal_content_preserves_distinct_canonical_identities() {
         let state =

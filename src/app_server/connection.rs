@@ -298,10 +298,11 @@ impl Reply {
         if let Some(registration) = &self.registration {
             let record =
                 super::transport::serialize_record(&self.response).expect("bounded direct receipt");
-            if let super::registration::Acceptance::Accepted(record, ()) =
+            if let super::registration::Acceptance::Accepted(replacement, ()) =
                 registration.hand_off(&record, |_| std::task::Poll::Ready(Ok(())))
             {
-                return serde_json::from_str(&record).expect("bounded receipt");
+                return serde_json::from_str(replacement.as_deref().unwrap_or(&record))
+                    .expect("bounded receipt");
             }
         }
         match &self.publication {

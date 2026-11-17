@@ -167,7 +167,7 @@ impl AppServerConnection {
     pub(crate) fn next_source_repair(&self) -> Option<NotificationMethod> {
         use crate::local_runtime::configuration::repair::{SourceChange, SourceKey};
         use crate::local_runtime::configuration::settings::SourceTarget;
-        // A v81 notice reaches only a connection that negotiated v81.
+        // A v82 notice reaches only a connection that negotiated v82.
         if self.initialized.lock().expect("initialize mutex").is_none() {
             return None;
         }
@@ -541,7 +541,7 @@ impl AppServerConnection {
                     registration_id,
                     target,
                     cursor: event.cursor,
-                    event: Box::new(event.event),
+                    event: event.event,
                 }
             }
             RoutedDelivery::Projection(EventDelivery::Unavailable { message }) => {

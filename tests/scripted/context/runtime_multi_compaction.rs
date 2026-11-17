@@ -509,7 +509,7 @@ fn assert_reminder_activation_refresh(before: &RequestSnapshot, after: &RequestS
 
 fn anthropic_state(signature: &str) -> ProviderContinuationState {
     ProviderContinuationState::Anthropic(AnthropicContinuation {
-        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": signature}),
+        opaque: serde_json::json!({"type":"thinking", "thinking":"native reasoning", "signature": signature}).into(),
     })
 }
 

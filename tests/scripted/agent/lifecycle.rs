@@ -2517,7 +2517,8 @@ async fn invalid_preflight_never_reaches_pre_tool_policy() {
             "type": "object",
             "required": ["path"],
             "properties": {"path": {"type": "string"}}
-        }),
+        })
+        .into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
@@ -2573,7 +2574,8 @@ async fn observer_sees_the_exact_committed_result_and_changes_nothing() {
         assert_eq!(&observation.call_id, &message.tool_call_id);
         assert_eq!(&observation.tool_id, &message.tool_id);
         assert_eq!(
-            &observation.result, &message.result,
+            &observation.result,
+            message.result.as_ref(),
             "the observed result is the committed result"
         );
         assert_eq!(observation.origin, ToolOrigin::Builtin);

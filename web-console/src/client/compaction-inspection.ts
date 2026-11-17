@@ -1,4 +1,4 @@
-import type { CheckpointPage, CheckpointReadCut, TraceInspectionCompactionCall, TraceInspectionCompactionCalls } from '../../../protocol/app-server/v81';
+import type { CheckpointPage, CheckpointReadCut, TraceInspectionCompactionCall, TraceInspectionCompactionCalls } from '../../../protocol/app-server/v82';
 import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
 
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);

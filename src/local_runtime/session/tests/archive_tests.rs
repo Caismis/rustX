@@ -652,7 +652,7 @@ async fn archive_keeps_valid_auxiliary_audit_when_optional_request_source_is_abs
         .unwrap()
         .execute_batch(
             "CREATE TRIGGER omit_optional_request_source
-             BEFORE INSERT ON request_observation_fields
+             BEFORE INSERT ON request_source_roots
              BEGIN SELECT RAISE(FAIL,'optional request source absent'); END;",
         )
         .unwrap();
@@ -662,11 +662,9 @@ async fn archive_keeps_valid_auxiliary_audit_when_optional_request_source_is_abs
     let optional_rows: u64 =
         rusqlite::Connection::open(catalog.database_path(&session, store.conversation_id()))
             .unwrap()
-            .query_row(
-                "SELECT count(*) FROM request_observation_fields",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT count(*) FROM request_source_roots", [], |row| {
+                row.get(0)
+            })
             .unwrap();
     assert_eq!(optional_rows, 0);
     let files = decode(
@@ -1067,7 +1065,7 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
     let private = |secret: &str| {
         Some(ProviderContinuationState::Anthropic(
             AnthropicContinuation {
-                opaque: serde_json::json!(secret),
+                opaque: serde_json::json!(secret).into(),
             },
         ))
     };
@@ -1430,10 +1428,10 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
     let MessageBlock::Tool(tool) = &mut history[2] else {
         panic!("Tool fixture")
     };
-    tool.result.status = ToolExecutionStatus::Failed {
+    std::sync::Arc::make_mut(&mut tool.result).status = ToolExecutionStatus::Failed {
         error: authored.into(),
     };
-    tool.result.content = vec![ToolResultContent::Text(TextBlock {
+    std::sync::Arc::make_mut(&mut tool.result).content = vec![ToolResultContent::Text(TextBlock {
         text: authored.into(),
     })];
     let canonical_tool = serde_json::to_value(&history[2]).unwrap();
@@ -1489,7 +1487,8 @@ async fn archive_tool_status_diagnostics_are_excluded_but_canonical_tool_history
                         truncation: None,
                         workflow: None,
                         managed_output: None,
-                    },
+                    }
+                    .into(),
                 },
                 _ => unreachable!(),
             };
@@ -1573,7 +1572,7 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
     let MessageBlock::Tool(tool) = &mut history[2] else {
         panic!("Tool fixture")
     };
-    tool.result.managed_output = Some(Box::new(partial.clone()));
+    std::sync::Arc::make_mut(&mut tool.result).managed_output = Some(Box::new(partial.clone()));
     let original_result = tool.result.clone();
     let canonical_tool = serde_json::to_value(&history[2]).unwrap();
     let (directory, catalog, _) = open_catalog();
@@ -1590,7 +1589,7 @@ async fn archive_managed_output_projects_journal_but_preserves_canonical_tool() 
     ];
     for (index, continuation) in continuations.into_iter().enumerate() {
         let mut result = original_result.clone();
-        result.managed_output = Some(Box::new(continuation));
+        std::sync::Arc::make_mut(&mut result).managed_output = Some(Box::new(continuation));
         store
             .append_event(RuntimeEventEnvelope {
                 tool_occurrence: None,
@@ -1928,7 +1927,7 @@ async fn lossy_archive_reports_missing_old_encrypted_input_without_invalidating_
             text: None,
             provider_state: Some(crate::runtime::continuation::ProviderContinuationState::OpenAiResponses(
                 crate::runtime::continuation::OpenAiResponsesContinuation::Stateless {
-                    items: vec![serde_json::json!({"type":"reasoning", "id":"rs-old", "encrypted_content":"OLD_ENCRYPTED_INPUT_BYTES"})],
+                    items: vec![serde_json::json!({"type":"reasoning", "id":"rs-old", "encrypted_content":"OLD_ENCRYPTED_INPUT_BYTES"})].into(),
                 },
             )),
         })],

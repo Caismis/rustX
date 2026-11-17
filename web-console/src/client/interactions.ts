@@ -1,10 +1,11 @@
 import type { ServerCallbacks } from '../../../protocol/app-server/callbacks';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
+import { checkpointReadCutKey } from '../../../protocol/app-server/content-identity';
 import { interactionBody, readInteractionBody } from '../../../protocol/app-server/interaction';
 import { observationCheckpoint } from '../../../protocol/app-server/projection';
 import { OutcomeUncertain } from './errors';
 import { interactionKey, type ClientView, type ConnectionRequest, type SessionView } from './contracts';
-import type { AttachmentTarget, CheckpointReadCut, InteractionRef, InteractionResponse, RuntimeClientInteractionHeader } from '../../../protocol/app-server/v81';
+import type { AttachmentTarget, CheckpointReadCut, InteractionRef, InteractionResponse, RuntimeClientInteractionHeader } from '../../../protocol/app-server/v82';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { SessionReads } from './session-reads';
 
@@ -60,7 +61,7 @@ export class Interactions {
     if(!Number.isSafeInteger(item_offset)||item_offset<0)throw new Error("Invalid native interaction source offset.");
     const current=()=>ownsView()&&observation.current()&&!!this.port.state().views[id]&&this.interactionCutCurrent(this.port.state().views[id],cut)&&this.pendingInteractions(id)[index]?.request_id===header.request_id;
     const {chunk}=await this.port.request({method:'conversation/checkpointValueRead',params:{target:observation.target,agent_id:null,cut,domain:'pending_interactions',item_offset,path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,current);
-    if(!current()||JSON.stringify(chunk.cut)!==JSON.stringify(cut)||chunk.domain!=='pending_interactions'||chunk.item_offset!==item_offset||JSON.stringify(chunk.path)!==JSON.stringify(path)||chunk.offset!==offset)throw new Error('Interaction range identity changed.');
+    if(!current()||checkpointReadCutKey(chunk.cut)!==checkpointReadCutKey(cut)||chunk.domain!=='pending_interactions'||chunk.item_offset!==item_offset||JSON.stringify(chunk.path)!==JSON.stringify(path)||chunk.offset!==offset)throw new Error('Interaction range identity changed.');
     if(chunk.bytes_base64.length>87_384 || chunk.bytes_base64.length%4!==0 || chunk.bytes_base64.length/4*3-(chunk.bytes_base64.endsWith('==')?2:chunk.bytes_base64.endsWith('=')?1:0)>65_536)throw new Error('Encoded native range exceeds the decoded byte bound.');
     const bytes=Uint8Array.from(atob(chunk.bytes_base64),value=>value.charCodeAt(0));
     if(bytes.length>65536||!Number.isSafeInteger(chunk.readable_end)||offset+bytes.length>chunk.readable_end||offset<chunk.readable_end&&!bytes.length||(chunk.next_offset??null)!==(offset+bytes.length<chunk.readable_end?offset+bytes.length:null))throw new Error('Interaction range failed to advance exactly.');

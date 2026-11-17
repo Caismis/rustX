@@ -10,7 +10,7 @@ import type {
   WorkflowState,
   WorkflowTraceNode,
   WorkflowWait,
-} from '../../../../../protocol/app-server/v81';
+} from '../../../../../protocol/app-server/v82';
 import type { BlockPath } from '../document/model';
 import type { SceneNode } from '../ui/editor/scene';
 import {

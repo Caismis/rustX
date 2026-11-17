@@ -1179,7 +1179,8 @@ def ping() -> str:
                 description: "An unrelated native capability.".to_owned(),
                 input_schema: serde_json::json!({
                     "type": "object", "properties": {}, "additionalProperties": false
-                }),
+                })
+                .into(),
                 execution_policy: rustx::tools::types::ToolExecutionPolicy::ForegroundOnly,
                 replay_policy: rustx::tools::types::ToolReplayPolicy::Never,
                 origin: ToolOrigin::Builtin,

@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import type { CheckpointPage, CheckpointReadCut, TraceInspectionCompactionCall, TraceInspectionCompactionCalls } from '../../protocol/app-server/v81';
+import type { CheckpointPage, CheckpointReadCut, TraceInspectionCompactionCall, TraceInspectionCompactionCalls } from '../../protocol/app-server/v82';
 import { CompactionInspection } from '../src/app/trajectory/CompactionInspection';
 import { compactionPageOffset, compactionRequestsPage } from '../src/client/compaction-inspection';
 import type { TraceFieldReader } from '../src/client/trace';

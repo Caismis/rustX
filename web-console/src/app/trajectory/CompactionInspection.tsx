@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointReadCut, TraceInspectionCompactionCall, TraceInspectionCompactionCalls, RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v81';
+import type { CheckpointReadCut, TraceInspectionCompactionCall, TraceInspectionCompactionCalls, RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v82';
 import { checkpointReadCutKey } from '../../../../protocol/app-server/content-identity';
 import { compactionCallsPage, compactionPageOffset, compactionRequestsPage, type CompactionPhysicalRequest } from '../../client/compaction-inspection';
 import { traceReaderScope, type TraceFieldReader } from '../../client/trace';

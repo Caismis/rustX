@@ -48,8 +48,11 @@ impl SessionRuntimeManager {
             .lock()
             .expect("catalog observer test gate")
             .clone();
+        // Tuple fields drop in order: release the runtime before the admission
+        // can wake drain. Keep them together even if this future is never polled.
+        let retained = (runtime, admission);
         Some(async move {
-            let _admission = admission;
+            let (runtime, _admission) = &retained;
             #[cfg(test)]
             if let Some(gate) = start_gate {
                 tokio::task::block_in_place(|| gate.enter());

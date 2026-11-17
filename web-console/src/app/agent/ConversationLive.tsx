@@ -22,7 +22,7 @@ import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
 import type { ResponseAction } from '../commands/native';
-import type { CompletedResponseView } from '../../../../protocol/app-server/v81';
+import type { CompletedResponseView } from '../../../../protocol/app-server/v82';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
 import { responseRetryReady, type ResponseRetry } from './response-retry';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
@@ -108,10 +108,12 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const keepCompactions = mode === 'chat' && !scope?.selected && readingOwner.wanted && !!view && !view.retrying && !view.readingPreview;
   const checkpoints = useCompactionHistory(client, sessionId, keepCompactions && !readingPending, { owner: presentationOwner, keep: keepCompactions });
   const content = useMemo(() => [...view?.content ?? [], ...(view?.publicationHeads ?? []).flatMap(head => head.content)], [view?.content, view?.publicationHeads]);
+  const initialTrace = mode === 'trajectory' ? view?.trace : undefined;
   useEffect(() => {
     if (!view?.readable || view.retrying || view.readingPreview || scope?.selected) return;
     void (mode === 'chat' ? client.loadInitialHistory(view.id) : client.loadInitialTrace(view.id)).catch(() => {});
-  }, [client, mode, view?.id, view?.target?.attachment_id, view?.readable, view?.retrying, view?.readingPreview, scope?.selected]);
+  }, [client, mode, view?.id, view?.target?.attachment_id, view?.readable, view?.retrying, view?.readingPreview, scope?.selected,
+    initialTrace?.epoch, initialTrace?.page.next_cursor, initialTrace?.loading, initialTrace?.error]);
   const liveReadable = view ? (view.readingPreview || !view.target ? true : view.readable) : !!tracePreview;
   const wrapCanvas = (contentNode: ReactNode) => (
     <ConversationRunCanvasHost

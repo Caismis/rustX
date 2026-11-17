@@ -158,7 +158,7 @@ impl RuntimeClientProjection {
         usage: Option<&crate::model::ModelUsage>,
     ) -> Vec<RuntimeClientEvent> {
         if let Some(usage) = usage
-            && let Some(attempt) = &mut self.snapshot.attempt
+            && let Some(attempt) = self.snapshot.attempt.as_mut()
             && attempt.attempt_id.as_ref() == Some(attempt_id)
         {
             attempt.last_usage = Some(usage.clone());
@@ -292,7 +292,7 @@ impl RuntimeClientProjection {
             metadata_ref,
             tool_call_id,
             tool_id,
-            result,
+            result: Box::new(result),
             result_source,
             result_metadata_ref,
         }]
@@ -344,7 +344,7 @@ impl RuntimeClientProjection {
             RuntimeEvent::AttemptStarted { .. } => {
                 let model = self.frozen_attempt_model(attempt_id);
                 let execution_settings = self.frozen_execution_settings(attempt_id);
-                self.snapshot.attempt = Some(RuntimeClientAttempt {
+                self.snapshot.attempt = (Some(RuntimeClientAttempt {
                     attempt_id: Some(attempt_id.clone()),
                     attempt_id_source: None,
                     phase: RuntimeClientAttemptPhase::Running,
@@ -354,7 +354,8 @@ impl RuntimeClientProjection {
                     foreground: Vec::new(),
                     model: model.clone(),
                     execution_settings: execution_settings.clone(),
-                });
+                }))
+                .into();
                 // The Agent Status window is deliberately untouched: a status
                 // composed by an earlier attempt is a historical fact of this
                 // conversation, not attempt-scoped live state, so a new
@@ -397,7 +398,7 @@ impl RuntimeClientProjection {
                 },
             ),
             RuntimeEvent::TurnStarted => {
-                if let Some(attempt) = &mut self.snapshot.attempt
+                if let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(attempt_id)
                 {
                     attempt.turn = attempt.turn.saturating_add(1);
@@ -431,7 +432,7 @@ impl RuntimeClientProjection {
                 tool_call_id,
                 tool_id,
             } => {
-                if let Some(attempt) = &mut self.snapshot.attempt
+                if let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(attempt_id)
                     && let Some(slot) = foreground_slot_for_event(
                         &mut attempt.foreground,
@@ -462,7 +463,7 @@ impl RuntimeClientProjection {
                 if execution_id.is_some() {
                     return Vec::new();
                 }
-                if let Some(attempt) = &mut self.snapshot.attempt
+                if let Some(attempt) = self.snapshot.attempt.as_mut()
                     && attempt.attempt_id.as_ref() == Some(attempt_id)
                     && let Some(slot) = foreground_slot_for_event(
                         &mut attempt.foreground,
@@ -501,7 +502,7 @@ impl RuntimeClientProjection {
                 tool_id,
                 result,
             } => {
-                if self.settle_foreground(attempt_id, tool_call_id, None, result.clone())
+                if self.settle_foreground(attempt_id, tool_call_id, None, result)
                     == ForegroundSettlement::AlreadySettled
                 {
                     return Vec::new();
@@ -514,7 +515,7 @@ impl RuntimeClientProjection {
                     metadata_ref: self.tool_display_metadata(),
                     tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
                     tool_id: crate::observation::tool::inline_tool_id(tool_id),
-                    result: result.clone(),
+                    result: Box::new(result.as_ref().clone()),
                 }]
             }
             RuntimeEvent::ToolExecutionFailed {
@@ -535,7 +536,7 @@ impl RuntimeClientProjection {
                     workflow: None,
                     managed_output: None,
                 };
-                if self.settle_foreground(attempt_id, tool_call_id, None, result.clone())
+                if self.settle_foreground(attempt_id, tool_call_id, None, &result)
                     == ForegroundSettlement::AlreadySettled
                 {
                     return Vec::new();
@@ -548,7 +549,7 @@ impl RuntimeClientProjection {
                     metadata_ref: self.tool_display_metadata(),
                     tool_call_id: crate::observation::tool::inline_call_id(tool_call_id),
                     tool_id: crate::observation::tool::inline_tool_id(tool_id),
-                    result,
+                    result: Box::new(result),
                 }]
             }
             RuntimeEvent::CompactionStarted { .. }
@@ -682,7 +683,7 @@ impl RuntimeClientProjection {
                     });
                 }
                 vec![RuntimeClientEvent::ContextCompactionOperationUpdated {
-                    context: self.snapshot.context.clone(),
+                    context: self.snapshot.context.owned(),
                 }]
             }
             RuntimeEvent::CompactionStarted { operation_id, mode } => {
@@ -710,7 +711,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = true;
                 vec![RuntimeClientEvent::ContextCompactionStarted {
-                    context: self.snapshot.context.clone(),
+                    context: Box::new(self.snapshot.context.owned()),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
@@ -720,10 +721,11 @@ impl RuntimeClientProjection {
                 source_ranges,
                 generation,
             } => {
-                let Some(progress) = &mut self.snapshot.context.compaction_progress else {
+                let context = &mut *self.snapshot.context;
+                let Some(progress) = &mut context.compaction_progress else {
                     return Vec::new();
                 };
-                if !self.snapshot.context.compaction_in_progress
+                if !context.compaction_in_progress
                     || &progress.operation_id != operation_id
                     || *accepted_fragments != progress.accepted_fragments.saturating_add(1)
                     || *accepted_fragments > 256
@@ -735,7 +737,7 @@ impl RuntimeClientProjection {
                 progress.source_ranges.clone_from(source_ranges);
                 progress.generation.clone_from(generation);
                 vec![RuntimeClientEvent::ContextCompactionProgressed {
-                    context: self.snapshot.context.clone(),
+                    context: self.snapshot.context.owned(),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
@@ -753,7 +755,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionSkipped {
-                    context: self.snapshot.context.clone(),
+                    context: self.snapshot.context.owned(),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
@@ -771,7 +773,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = None;
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionCancelled {
-                    context: self.snapshot.context.clone(),
+                    context: self.snapshot.context.owned(),
                     attempt_id: attempt_id.cloned(),
                 }]
             }
@@ -792,7 +794,7 @@ impl RuntimeClientProjection {
                 self.snapshot.context.compaction_error = Some(error.clone());
                 self.snapshot.context.compaction_in_progress = false;
                 vec![RuntimeClientEvent::ContextCompactionFailed {
-                    context: self.snapshot.context.clone(),
+                    context: Box::new(self.snapshot.context.owned()),
                     attempt_id: attempt_id.cloned(),
                     error: error.clone(),
                 }]
@@ -868,7 +870,7 @@ impl RuntimeClientProjection {
         self.snapshot.context.latest_compaction = Some(compaction.clone());
         vec![RuntimeClientEvent::ContextCompacted {
             attempt_id: attempt_id.cloned(),
-            context: self.snapshot.context.clone(),
+            context: Box::new(self.snapshot.context.owned()),
         }]
     }
 
@@ -879,7 +881,7 @@ impl RuntimeClientProjection {
         attempt_id: &AttemptId,
         outcome: RuntimeClientOutcome,
     ) -> Vec<RuntimeClientEvent> {
-        if let Some(attempt) = &mut self.snapshot.attempt
+        if let Some(attempt) = self.snapshot.attempt.as_mut()
             && attempt.attempt_id.as_ref() == Some(attempt_id)
         {
             attempt.phase = RuntimeClientAttemptPhase::Settled {
@@ -904,7 +906,7 @@ impl RuntimeClientProjection {
             .is_none_or(|attempt| attempt.attempt_id.as_ref() != Some(attempt_id))
         {
             let model = self.frozen_attempt_model(attempt_id);
-            self.snapshot.attempt = Some(RuntimeClientAttempt {
+            self.snapshot.attempt = (Some(RuntimeClientAttempt {
                 attempt_id: Some(attempt_id.clone()),
                 attempt_id_source: None,
                 phase: RuntimeClientAttemptPhase::Running,
@@ -914,7 +916,8 @@ impl RuntimeClientProjection {
                 foreground: Vec::new(),
                 model,
                 execution_settings: None,
-            });
+            }))
+            .into();
         }
     }
 
@@ -932,7 +935,7 @@ impl RuntimeClientProjection {
             .attempt
             .as_ref()
             .filter(|attempt| attempt.attempt_id.as_ref() == Some(attempt_id))
-            .and_then(|attempt| attempt.execution_settings.clone())
+            .and_then(|attempt| attempt.execution_settings.owned())
     }
 
     pub(super) fn frozen_attempt_model(
@@ -945,13 +948,13 @@ impl RuntimeClientProjection {
             .as_ref()
             .filter(|attempt| attempt.attempt_id.as_ref() == Some(attempt_id))
         {
-            Some(attempt) => attempt.model.clone(),
+            Some(attempt) => attempt.model.owned(),
             None => None,
         }
     }
 
     pub(super) fn install_todo_head(&mut self, todos: &crate::durable::NativeTodoObservation) {
-        self.snapshot.todos = Some(todos.snapshot.clone());
+        self.snapshot.todos = (Some(todos.snapshot.clone())).into();
         self.source_frontiers.insert(
             "todos.tasks".into(),
             crate::observation::cut::CollectionFrontier {

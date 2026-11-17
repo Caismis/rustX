@@ -5,7 +5,8 @@ import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
-import type { CompletedResponseView, RuntimeClientEvent } from '../../../protocol/app-server/v81';
+import { transitionFacts } from '../../../protocol/app-server/projection';
+import type { CompletedResponseView, RuntimeClientEvent } from '../../../protocol/app-server/v82';
 
 for (const [width, zh] of [[1440, false], [390, true]] as const) {
   test(`message Retry removes the old reply immediately and keeps a resident reading surface ${width}`, async ({ page }) => {
@@ -25,13 +26,12 @@ for (const [width, zh] of [[1440, false], [390, true]] as const) {
         const events = wire.notifications.flatMap(row => {
           if (row.method !== 'session/event' || !sameTarget(row.params.target, target)) return [];
           const event = row.params.event as RuntimeClientEvent;
-          return event.type === 'projection_transition' ? event.events : [];
+          return transitionFacts(event);
         }).reverse();
         const attempt = events.find(event => event.type === 'attempt_settled' && event.attempt_id !== previousAttempt);
         if (attempt?.type !== 'attempt_settled') return false;
         attemptId = attempt.attempt_id;
-        response = events.filter(event => event.type === 'read_domains_updated')
-          .flatMap(event => event.transcript?.entries ?? []).find(entry =>
+        response = wire.projection(target)?.transcript.entries?.find(entry =>
             entry.completed_response?.origin.conversation_id === target.conversation_id
             && entry.completed_response?.origin.attempt_id === attemptId)?.completed_response ?? undefined;
         return !!response;

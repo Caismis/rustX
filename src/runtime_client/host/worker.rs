@@ -175,8 +175,13 @@ impl ClientInner {
                     Ok(super::super::projection::ReadDomainValues {
                         projection_head: candidate.snapshot.context.projection_head.clone(),
                         transcript: candidate.snapshot.transcript.clone(),
+                        transcript_rows:
+                            crate::observation::transcript::PreparedTranscriptHead::from_entries(
+                                &candidate.snapshot.conversation_id,
+                                &candidate.snapshot.transcript.entries,
+                            ),
                         occupancy: candidate.snapshot.context.occupancy.clone(),
-                        trace: candidate.snapshot.trace.clone(),
+                        trace: Some(candidate.snapshot.trace.clone()),
                         trace_total,
                     }),
                     true,
@@ -286,11 +291,14 @@ impl ClientInner {
                     {
                         None
                     } else {
-                        guard.projection.read_domain_candidate()
+                        guard
+                            .projection
+                            .read_domain_candidate()
+                            .map(|cut| (cut, guard.projection.read_supersession()))
                     }
                 };
                 if reading.is_none()
-                    && let Some(cut) = cut
+                    && let Some((cut, supersession)) = cut
                 {
                     #[cfg(test)]
                     publication_gate.worker_stage("spawn_read");
@@ -317,7 +325,7 @@ impl ClientInner {
                         }
                         #[cfg(test)]
                         read_diagnostic.read_stage("source", &cut);
-                        let domains = cut.read(store.as_ref());
+                        let domains = cut.read_live(store.as_ref(), &supersession);
                         #[cfg(test)]
                         read_diagnostic.read_stage("completed", &cut);
                         (cut, domains)

@@ -2,8 +2,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { AppServerHost } from '../../../tui/src/app-server/host';
-import type { SessionModelConfig } from '../../../protocol/app-server/v81';
-import { startDogfood } from './dogfood-server';
+import type { SessionModelConfig } from '../../../protocol/app-server/v82';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -143,7 +143,7 @@ max_output_tokens = { mode = "limit", tokens = 333 }
       expect(errors).toEqual([]);
     } finally {
       await remote?.shutdown();
-      const report = await fixture.stop(false);
+      const report = await stopDogfoodPage(page, fixture, false);
       expect(report.requestCount).toBe(0);
     }
   });
@@ -240,7 +240,7 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
       expect(low.max_tokens ?? low.max_completion_tokens).toBe(1024);
       expect(errors).toEqual([]);
       passed = true;
-    } finally { await fixture.stop(passed); }
+    } finally { await stopDogfoodPage(page, fixture, passed); }
   });
 }
 
@@ -291,7 +291,7 @@ for (const width of [1440, 390]) for (const deferred of [false, true]) test(`a d
     expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(1);
     await page.screenshot({ path: `/tmp/rustx-model-confirmed-${width}-${deferred ? 'deferred' : 'inline'}.png` });
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
-  } finally { await remote?.shutdown(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+  } finally { await remote?.shutdown(); const report = await stopDogfoodPage(page, fixture, false); expect(report.requestCount).toBe(0); }
 });
 
 for (const width of [1440, 390]) test(`a different model preserves auxiliary policies after native confirmation and reload (${width})`, async ({ page }) => {
@@ -351,7 +351,7 @@ max_output_tokens = { mode = "limit", tokens = ${auxiliary!.max_output_tokens} }
     expect((await remote.readSettings(id)).settings.model).toEqual({ ...expected, requestParams: {} });
     expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(1);
     await expect(page.locator('vite-error-overlay')).toHaveCount(0); expect(errors).toEqual([]);
-  } finally { await remote?.shutdown(); const report = await fixture.stop(false); expect(report.requestCount).toBe(0); }
+  } finally { await remote?.shutdown(); const report = await stopDogfoodPage(page, fixture, false); expect(report.requestCount).toBe(0); }
 });
 
 for (const width of [1440, 390]) test(`switching A → B → A restores each Session model without opening its picker (${width})`, async ({page}) => {
@@ -388,5 +388,5 @@ for (const width of [1440, 390]) test(`switching A → B → A restores each Ses
     expect((await wire.attachedTarget(ids[0])).attachment_id).toBe((await wire.attachedTarget(ids[1])).attachment_id);
     expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(0);
     expect(errors).toEqual([]);
-  } finally { await native?.shutdown(); await fixture.stop(false); }
+  } finally { await native?.shutdown(); await stopDogfoodPage(page, fixture, false); }
 });

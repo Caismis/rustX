@@ -23,7 +23,7 @@ use crate::model::adapter::proposal::{accept_tool_call_arguments, resolve_tool_i
 use crate::model::adapter::traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
-use crate::model::adapter::validation::{ValidatedTools, validate_request};
+use crate::model::adapter::validation::{PreparedModelRequest, ValidatedTools, prepare_request};
 use crate::model::error::{
     ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
 };
@@ -36,8 +36,8 @@ use crate::tools::types::ToolCallStart;
 
 use super::config::AnthropicAdapterConfig;
 use super::mapping::{
-    is_native_format_rejection, is_refusal, map_finish_reason, normalize_http_error_for_format,
-    normalize_usage, stream_retry_disposition, translate_request,
+    invalid_request, is_native_format_rejection, is_refusal, map_finish_reason,
+    normalize_http_error_for_format, normalize_usage, stream_retry_disposition,
 };
 use super::wire::{WireEvent, WireUsage, parse_event};
 
@@ -80,7 +80,7 @@ impl AnthropicMessagesAdapter {
             api_key,
             api_base,
             anthropic_version,
-            http_client: http_client.unwrap_or_default(),
+            http_client: http_client.unwrap_or_else(super::super::transport::default_client),
         }
     }
 }
@@ -91,26 +91,32 @@ impl ModelAdapter for AnthropicMessagesAdapter {
     }
 
     fn stream(&self, request: ModelRequest, cancellation: CancellationSignal) -> ModelStream {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile =
-            crate::model::adapter::profile::RequestScope::new(self.protocol(), "dispatch");
-        let validated = match validate_request(&request, self.protocol()) {
-            Ok(validated) => validated,
-            Err(error) => return model_stream_of_failure(error),
-        };
-        let wire_request = match translate_request(&request, &validated) {
-            Ok(translated) => translated,
-            Err(error) => return model_stream_of_failure(error),
-        };
+        match prepare_request(request, self.protocol()) {
+            Ok(prepared) => self.stream_prepared(prepared, cancellation),
+            Err(error) => model_stream_of_failure(error),
+        }
+    }
+
+    fn stream_prepared(
+        &self,
+        request: PreparedModelRequest,
+        cancellation: CancellationSignal,
+    ) -> ModelStream {
+        let PreparedModelRequest {
+            input, body, tools, ..
+        } = request;
+        if input.protocol() != self.protocol() {
+            return model_stream_of_failure(invalid_request("prepared request protocol mismatch"));
+        }
         let state = AnthropicPhase::Preparing {
             api_key: self.api_key.clone(),
             url: format!("{}/v1/messages", self.api_base),
             anthropic_version: self.anthropic_version.clone(),
             http_client: self.http_client.clone(),
-            response_byte_limit: request.response_byte_limit,
-            wire_request: crate::model::adapter::provider_request(wire_request),
-            normalizer: AnthropicStreamNormalizer::new(validated).with_native_format(
-                request
+            response_byte_limit: input.response_byte_limit,
+            wire_request: body,
+            normalizer: AnthropicStreamNormalizer::new(tools).with_native_format(
+                input
                     .response_schema
                     .as_ref()
                     .is_some_and(crate::model::structured::PreparedResponseSchema::is_native),
@@ -176,7 +182,7 @@ async fn anthropic_phase_next(phase: AnthropicPhase) -> Option<(ModelStreamItem,
                 &url,
                 &anthropic_version,
                 &http_client,
-                &wire_request,
+                wire_request,
                 response_byte_limit,
                 normalizer.native_format,
                 cancellation.clone(),
@@ -246,7 +252,7 @@ async fn open_stream(
     url: &str,
     anthropic_version: &str,
     http_client: &reqwest::Client,
-    wire_request: &crate::model::adapter::ProviderRequest,
+    wire_request: bytes::Bytes,
     response_byte_limit: Option<usize>,
     native_format: bool,
     cancellation: CancellationSignal,
@@ -259,7 +265,7 @@ async fn open_stream(
         )
         .header("x-api-key", api_key)
         .header("anthropic-version", anthropic_version)
-        .json(wire_request)
+        .body(wire_request)
         .send();
     let response = tokio::select! {
         response = send => response,
@@ -415,7 +421,7 @@ enum AnthropicPhase {
         anthropic_version: String,
         http_client: reqwest::Client,
         response_byte_limit: Option<usize>,
-        wire_request: crate::model::adapter::ProviderRequest,
+        wire_request: bytes::Bytes,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -425,7 +431,7 @@ enum AnthropicPhase {
         anthropic_version: String,
         http_client: reqwest::Client,
         response_byte_limit: Option<usize>,
-        wire_request: crate::model::adapter::ProviderRequest,
+        wire_request: bytes::Bytes,
         normalizer: AnthropicStreamNormalizer,
         cancellation: CancellationSignal,
     },
@@ -491,8 +497,8 @@ enum AnthropicBlockState {
 /// Normalizes the Anthropic stream into canonical events.
 #[derive(Debug)]
 struct AnthropicStreamNormalizer {
+    tools: std::sync::Arc<ValidatedTools>,
     native_format: bool,
-    tools: ValidatedTools,
     blocks: BlockAllocator<AnthropicBlockKey>,
     block_states: BTreeMap<u32, AnthropicBlockState>,
     message_start_usage: Option<WireUsage>,
@@ -505,7 +511,7 @@ struct AnthropicStreamNormalizer {
 }
 
 impl AnthropicStreamNormalizer {
-    fn new(tools: ValidatedTools) -> Self {
+    fn new(tools: std::sync::Arc<ValidatedTools>) -> Self {
         Self {
             native_format: false,
             tools,
@@ -1017,7 +1023,9 @@ impl AnthropicStreamNormalizer {
                 });
                 Ok(vec![ModelEvent::ContinuationState {
                     block_index: *canonical_index,
-                    state: ProviderContinuationState::Anthropic(AnthropicContinuation { opaque }),
+                    state: ProviderContinuationState::Anthropic(AnthropicContinuation {
+                        opaque: opaque.into(),
+                    }),
                 }])
             }
             AnthropicBlockState::RedactedThinking {
@@ -1038,7 +1046,9 @@ impl AnthropicStreamNormalizer {
                 });
                 Ok(vec![ModelEvent::ContinuationState {
                     block_index: *canonical_index,
-                    state: ProviderContinuationState::Anthropic(AnthropicContinuation { opaque }),
+                    state: ProviderContinuationState::Anthropic(AnthropicContinuation {
+                        opaque: opaque.into(),
+                    }),
                 }])
             }
             AnthropicBlockState::ToolUse {
@@ -1254,7 +1264,8 @@ mod native_format_error_tests {
                     &request,
                     ModelProtocol::AnthropicMessages,
                 )
-                .unwrap(),
+                .unwrap()
+                .into(),
             )
             .with_native_format(enabled)
         };

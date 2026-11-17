@@ -1,9 +1,9 @@
 //! Positive successful-C delivery descriptors and selected original metadata.
 use super::RuntimeClientError;
-use super::checkpoint::{CheckpointValueChunk, CheckpointValueRepresentation};
 use crate::durable::ConversationStore;
 use crate::observation::content::CanonicalContentLocator;
 use crate::observation::cut::CheckpointReadCut;
+use crate::runtime_client::checkpoint::{CheckpointValueChunk, CheckpointValueRepresentation};
 pub(crate) fn selection(domain: &str) -> Option<(u64, Option<u64>)> {
     if domain.len() > 256 {
         return None;

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v81';
+import type { CheckpointPage, TraceArtifact, TraceContentBlock, TraceInspectionHead, TraceToolDefinition, TraceToolResult, TraceToolSource, TraceText, UserSource } from '../../../../protocol/app-server/v82';
 import { traceFields } from '../../../../protocol/app-server/trace-identity';
 import { readRequestField, readTraceBlocks, readTraceMessages, readTraceSource, traceProgram } from '../../client/trace-content';
 import { traceReaderScope, type TraceFieldReader } from '../../client/trace';

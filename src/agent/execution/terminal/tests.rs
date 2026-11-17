@@ -35,6 +35,9 @@ async fn terminal_event_append_failure_never_fabricates_terminal_fact() {
         ))
         .expect("in-memory store"),
     );
+    // The final answer is one atomic transaction on this branch. Reject that
+    // transaction and its subsequent honest failure terminal independently.
+    store.arm_fail_next_terminal_event();
     store.arm_fail_next_terminal_event();
     let tool_runtime = tool_runtime_with_store(
         "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
@@ -59,12 +62,7 @@ async fn terminal_event_append_failure_never_fabricates_terminal_fact() {
 
     let result = execution.run().await;
 
-    assert!(matches!(
-        result.outcome,
-        AttemptOutcome::Completed {
-            finish_reason: ModelFinishReason::Stop
-        }
-    ));
+    assert!(matches!(result.outcome, AttemptOutcome::Failed { .. }));
     assert_eq!(
         result.durable_failure_kind,
         Some(super::DurableFailureKind::EventJournal)
@@ -115,5 +113,5 @@ async fn terminal_event_append_failure_never_fabricates_terminal_fact() {
         )),
         "the failed terminal transaction leaves no durable terminal fact"
     );
-    assert_eq!(store.terminal_event_attempts(), 1);
+    assert_eq!(store.terminal_event_attempts(), 2);
 }

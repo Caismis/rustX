@@ -26,12 +26,210 @@ fn connection() -> Connection {
     create_schema(&connection).unwrap();
     connection
 }
+
+#[test]
+fn native_preupdate_identity_uses_logical_ordinals_across_virtual_columns() {
+    let mut connection = connection();
+    connection.execute_batch(
+        "CREATE TABLE events(observation INTEGER,observation_hole INTEGER GENERATED ALWAYS AS (observation IS NULL) VIRTUAL,sequence INTEGER PRIMARY KEY,event_id TEXT,event_json TEXT);
+         INSERT INTO events(observation,sequence,event_id,event_json) VALUES(1,1,'event-original','original');",
+    ).unwrap();
+    let owner = Owner::install(
+        &connection,
+        super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
+    owner.journal_frontier.store(1, Ordering::Release);
+    let original = owner.epoch.load(Ordering::Acquire);
+    connection
+        .execute("UPDATE events SET observation=NULL", [])
+        .unwrap();
+    assert_eq!(
+        owner.epoch.load(Ordering::Acquire),
+        original,
+        "changing only derived evidence must not discard native request ownership"
+    );
+    connection
+        .execute("UPDATE events SET event_json='changed native body'", [])
+        .unwrap();
+    assert_eq!(
+        owner.epoch.load(Ordering::Acquire),
+        original + 1,
+        "the actual native body after virtual columns must still invalidate"
+    );
+    connection
+        .execute("UPDATE events SET event_id='changed-identity'", [])
+        .unwrap();
+    assert_eq!(owner.epoch.load(Ordering::Acquire), original + 2);
+    {
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute("UPDATE events SET event_json='rolled-back native body'", [])
+            .unwrap();
+    }
+    assert_eq!(
+        owner.epoch.load(Ordering::Acquire),
+        original + 3,
+        "rollback cannot resurrect a proof observed before a native mutation"
+    );
+    let stored: String = connection
+        .query_row("SELECT event_json FROM events", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(stored, "changed native body");
+}
+
+fn cached_shape_fixture(capacity: usize) -> (Connection, super::NodeRef, super::NodeRef) {
+    let mut connection = connection();
+    let owner = Owner::install(
+        &connection,
+        super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
+    let scope = ConversationId::generate();
+    let mut roots = Vec::new();
+    for messages in [vec![message(1)], vec![message(1), message(2)]] {
+        let input = SelectedInputManifest::from_messages(&scope, &messages);
+        let transaction = connection.transaction().unwrap();
+        let selection = persist(&transaction, &input, &owner).unwrap();
+        roots.push(selection.root.unwrap());
+        transaction.commit().unwrap();
+        selection.commit(&owner);
+    }
+    connection.set_prepared_statement_cache_capacity(capacity);
+    (connection, roots[0], roots[1])
+}
+
+#[test]
+fn native_shape_statement_reuses_preparation_and_rebinds_leaf_and_branch_ids() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{Arc, atomic::AtomicUsize};
+    for capacity in [0, 16, 64] {
+        let (connection, leaf, branch) = cached_shape_fixture(capacity);
+        let prepares = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&prepares);
+        connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "native_input_nodes",
+                        column_name: "item_digest",
+                        ..
+                    }
+                ) {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+        super::take_node_read_work();
+        assert!(matches!(
+            super::node(&connection, &leaf).unwrap().kind,
+            super::NodeKind::Leaf { .. }
+        ));
+        assert_eq!(super::take_node_read_work(), (0, 1));
+        assert!(prepares.swap(0, Ordering::SeqCst) > 0);
+        assert!(matches!(
+            super::node(&connection, &branch).unwrap().kind,
+            super::NodeKind::Branch { .. }
+        ));
+        assert_eq!(
+            super::take_node_read_work(),
+            (2, 1),
+            "one combined node read plus the two current child headers"
+        );
+        let repeated = prepares.swap(0, Ordering::SeqCst);
+        if capacity == 0 {
+            assert!(repeated > 0);
+        } else {
+            assert_eq!(
+                repeated, 0,
+                "shape lookup must reuse SQL, not its prior row"
+            );
+        }
+        assert!(matches!(
+            super::node(&connection, &leaf).unwrap().kind,
+            super::NodeKind::Leaf { .. }
+        ));
+    }
+}
+
+#[test]
+fn warmed_native_shape_reads_reject_changed_leaf_and_branch_evidence() {
+    for capacity in [0, 16] {
+        let (connection, leaf, branch) = cached_shape_fixture(capacity);
+        for (node, column) in [(leaf, "item_digest"), (branch, "left_digest")] {
+            super::node(&connection, &node).unwrap();
+            let original: Vec<u8> = connection
+                .query_row(
+                    &format!("SELECT {column} FROM native_input_nodes WHERE id=?1"),
+                    [node.id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            connection
+                .execute(
+                    &format!("UPDATE native_input_nodes SET {column}=zeroblob(32) WHERE id=?1"),
+                    [node.id],
+                )
+                .unwrap();
+            assert!(super::node(&connection, &node).is_err());
+            connection
+                .execute(
+                    &format!("UPDATE native_input_nodes SET {column}=?2 WHERE id=?1"),
+                    rusqlite::params![node.id, original],
+                )
+                .unwrap();
+            super::node(&connection, &node).unwrap();
+        }
+    }
+}
+
+#[test]
+fn warmed_native_shape_statement_obeys_later_read_authorization() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    for capacity in [0, 16] {
+        let (connection, leaf, branch) = cached_shape_fixture(capacity);
+        super::node(&connection, &leaf).unwrap();
+        super::node(&connection, &branch).unwrap();
+        connection
+            .authorizer(Some(|context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "native_input_nodes",
+                        column_name: "item_digest",
+                        ..
+                    }
+                ) {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .unwrap();
+        assert!(super::node(&connection, &branch).is_err());
+        connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+            .unwrap();
+        super::node(&connection, &branch).unwrap();
+    }
+}
 #[test]
 fn native_manifest_rollback_never_certifies_absent_or_reused_row_ids() {
     let mut connection = connection();
     let owner = Owner::install(
         &connection,
         super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let scope = ConversationId::generate();
@@ -71,6 +269,9 @@ fn native_manifest_append_persists_only_delta_paths_and_retains_old_roots() {
     let owner = Owner::install(
         &connection,
         super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let scope = ConversationId::generate();
@@ -110,6 +311,9 @@ fn native_mutation_certificate_covers_trigger_replace_delete_and_external_commit
     let owner = Owner::install(
         &connection,
         super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     owner.frontier.store(1, Ordering::Release);
@@ -149,6 +353,9 @@ fn native_selected_leaf_corruption_and_logical_byte_limit_are_explicit() {
     let owner = Owner::install(
         &connection,
         super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let selected = SelectedInputManifest::from_messages(&ConversationId::generate(), &[message(1)]);
@@ -165,7 +372,7 @@ fn native_selected_leaf_corruption_and_logical_byte_limit_are_explicit() {
     assert!(load_bounded(&connection, Some(root), exact.len() - 1).is_err());
     connection
         .execute(
-            "UPDATE native_input_nodes SET item_json='null' WHERE id=?1",
+            "UPDATE native_input_items SET item_json='null' WHERE id=(SELECT item_id FROM native_input_nodes WHERE id=?1)",
             [root.id],
         )
         .unwrap();
@@ -200,6 +407,9 @@ fn native_journal_certificate_distinguishes_new_append_from_old_fact_or_auxiliar
     let owner = Owner::install(
         &connection,
         super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     owner.journal_frontier.store(1, Ordering::Release);
@@ -239,6 +449,9 @@ fn actual_only_model_input_is_rejected_before_native_sql_persistence() {
     let owner = Owner::install(
         &connection,
         super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let input: crate::model::SelectedModelInput = vec![message(1)].into();
@@ -267,6 +480,9 @@ fn wal_external_invalidation_tracks_the_pinned_snapshot() {
     let owner = Owner::install(
         &connection,
         super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
     )
     .unwrap();
     let before = owner.capture(&connection).unwrap();
@@ -289,4 +505,163 @@ fn wal_external_invalidation_tracks_the_pinned_snapshot() {
             .unwrap(),
         2
     );
+}
+
+#[test]
+fn bounded_manifest_load_verifies_each_leaf_once_and_preserves_the_exact_budget() {
+    let (mut connection, leaf, _) = cached_shape_fixture(64);
+    let transaction = connection.transaction().unwrap();
+    let length: usize = transaction
+        .query_row(
+            "SELECT octet_length(i.item_json) FROM native_input_items i JOIN native_input_nodes n ON n.item_id=i.id WHERE n.id=?1",
+            [leaf.id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    super::take_node_read_work();
+    assert_eq!(
+        load_bounded(&transaction, Some(leaf), length + 2)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(super::take_node_read_work(), (0, 1));
+    assert!(load_bounded(&transaction, Some(leaf), length + 1).is_err());
+    assert_eq!(super::take_node_read_work(), (0, 1));
+}
+
+#[test]
+fn append_write_cost_by_history() {
+    let mut connection = connection();
+    let owner = Owner::uninstalled();
+    let scope = ConversationId::generate();
+    let message = message(0);
+    let mut input = SelectedInputManifest::default();
+    let mut saved = Vec::new();
+    for history in 0..=4096 {
+        if [8, 64, 512, 4096].contains(&history) {
+            let before: (u64, u64) = connection.query_row(
+                "SELECT (SELECT count(*) FROM native_input_nodes)+(SELECT count(*) FROM native_input_items),(SELECT coalesce(sum(payload),0) FROM dbstat WHERE name IN ('native_input_nodes','native_input_items'))", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+            let next = input.append(&scope, &message);
+            let transaction = connection.transaction().unwrap();
+            let selection = persist(&transaction, &next, &owner).unwrap();
+            let root = selection.root;
+            transaction.commit().unwrap();
+            selection.commit(&owner);
+            let after: (u64, u64) = connection.query_row(
+                "SELECT (SELECT count(*) FROM native_input_nodes)+(SELECT count(*) FROM native_input_items),(SELECT coalesce(sum(payload),0) FROM dbstat WHERE name IN ('native_input_nodes','native_input_items'))", [], |r| Ok((r.get(0)?,r.get(1)?))).unwrap();
+            eprintln!(
+                "APPEND_COST H={history} rows={} bytes={}",
+                after.0 - before.0,
+                after.1 - before.1
+            );
+            assert_eq!(load(&connection, root).unwrap(), next);
+            saved.push((root, next));
+        }
+        let before_changes = connection.total_changes();
+        let transaction = connection.transaction().unwrap();
+        input = input.append(&scope, &message);
+        let selection = persist(&transaction, &input, &owner).unwrap();
+        transaction.commit().unwrap();
+        selection.commit(&owner);
+        assert!(
+            connection.total_changes() - before_changes <= 5,
+            "H={history}"
+        );
+    }
+    for (root, expected) in saved {
+        assert_eq!(load(&connection, root).unwrap(), expected);
+    }
+}
+
+#[test]
+fn colocated_source_mutation_preserves_native_seats_but_native_mutation_revokes_them() {
+    let mut connection = connection();
+    let owner = Owner::install(
+        &connection,
+        super::super::append_validation::Owner::uninstalled(),
+        super::super::observation_response::Owner::uninstalled(),
+        super::super::observation_statistics::FoldCache::uninstalled(),
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .unwrap();
+    let scope = ConversationId::generate();
+    let input = SelectedInputManifest::from_messages(&scope, &[message(1)]);
+    let transaction = connection.transaction().unwrap();
+    let selection = persist(&transaction, &input, &owner).unwrap();
+    let root = selection.root.unwrap();
+    transaction.commit().unwrap();
+    selection.commit(&owner);
+    let epoch = owner.epoch.load(Ordering::Acquire);
+    connection.execute("UPDATE native_input_nodes SET source_native_digest=zeroblob(32),source_hash=zeroblob(32),source_metadata=x'7b' WHERE id=?1", [root.id]).unwrap();
+    assert_eq!(owner.epoch.load(Ordering::Acquire), epoch);
+    assert_eq!(load(&connection, Some(root)).unwrap(), input);
+    let changes = connection.total_changes();
+    assert_eq!(
+        persist(&connection, &input, &owner).unwrap().root,
+        Some(root)
+    );
+    assert_eq!(connection.total_changes(), changes);
+    connection
+        .execute(
+            "UPDATE native_input_items SET item_json='null' WHERE id=(SELECT item_id FROM native_input_nodes WHERE id=?1)",
+            [root.id],
+        )
+        .unwrap();
+    assert!(owner.epoch.load(Ordering::Acquire) > epoch);
+    assert!(load(&connection, Some(root)).is_err());
+}
+
+#[test]
+fn frozen_body_insert_preserves_cancellation_and_rolls_back() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::{Arc, atomic::AtomicBool};
+
+    let mut connection = connection();
+    let input = SelectedInputManifest::from_messages(&ConversationId::generate(), &[message(1)]);
+    let owner = Owner::uninstalled();
+    let interrupt = Arc::new(AtomicBool::new(false));
+    let armed = interrupt.clone();
+    connection
+        .authorizer(Some(move |context: AuthContext<'_>| {
+            if matches!(
+                context.action,
+                AuthAction::Insert {
+                    table_name: "native_input_items"
+                }
+            ) {
+                armed.store(true, Ordering::SeqCst);
+            }
+            Authorization::Allow
+        }))
+        .unwrap();
+    connection
+        .progress_handler(1, Some(move || interrupt.swap(false, Ordering::SeqCst)))
+        .unwrap();
+    {
+        let transaction = connection.transaction().unwrap();
+        let result = persist(&transaction, &input, &owner);
+        assert!(
+            matches!(result, Err(ConversationStoreError::OperationCancelled)),
+            "{result:?}"
+        );
+    }
+    connection
+        .progress_handler(0, None::<fn() -> bool>)
+        .unwrap();
+    connection
+        .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+        .unwrap();
+    for table in ["native_input_items", "native_input_nodes"] {
+        let count: u64 = connection
+            .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0);
+    }
+    let transaction = connection.transaction().unwrap();
+    let selected = persist(&transaction, &input, &owner).unwrap();
+    let root = selected.root;
+    transaction.commit().unwrap();
+    selected.commit(&owner);
+    assert_eq!(load(&connection, root).unwrap(), input);
 }

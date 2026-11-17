@@ -355,10 +355,13 @@ mod attempt;
 pub mod auxiliary;
 mod bootstrap;
 mod child;
+#[cfg(test)]
+mod cold_attach_work_tests;
 mod compaction;
 mod compaction_observation;
 mod configuration;
 mod controls;
+mod conversation_slot;
 mod drain;
 mod durability;
 mod history;
@@ -631,6 +634,9 @@ impl std::error::Error for ConversationRuntimeError {}
 /// attempt's immutable model snapshot. No window captured at process start
 /// can survive a session model change.
 pub struct ConversationContextConfig {
+    /// Clock for Agent Status engines materialized from accepted configuration.
+    /// This is separate from runtime event timestamps and monotonic deadlines.
+    pub status_clock: Arc<dyn crate::context::AgentStatusClock>,
     /// The deterministic token estimator.
     pub estimator: Arc<dyn TokenEstimator>,
     /// The launch-scoped Agent Status engine template, present exactly when
@@ -810,10 +816,11 @@ struct CoordinatorState {
     /// **only between attempts**.
     ///
     /// Ownership is structural, not conventional: admission moves the state
-    /// out (`take`), so while an attempt runs this slot is `None` and the
+    /// out (`lend`), so while an attempt runs this slot is `Lent` and the
     /// coordinator physically cannot mutate a competing copy. Settlement
-    /// moves the authoritative state back in.
-    conversation: Option<ConversationState>,
+    /// moves the authoritative state back in. A reopened conversation starts
+    /// `Durable` and hydrates its active working set on first use.
+    conversation: conversation_slot::ConversationSlot,
     /// The current attempt slot (None = idle).
     current_attempt: Option<CurrentAttempt>,
     scheduled: Option<scheduled::CurrentScheduled>,
@@ -1157,6 +1164,27 @@ impl ConversationRuntime {
         &self.inner.tool_runtime
     }
 
+    /// Cache reclamation is advisory: no shutdown claim, durable probe or wait.
+    pub(crate) fn reclaim_idle_store_cache(&self) -> bool {
+        let Ok(state) = self.inner.state.try_lock() else {
+            return false;
+        };
+        if self
+            .inner
+            .idle_epoch_probed(&state, admission::IdleProbe::InMemory)
+            .is_err()
+        {
+            return false;
+        }
+        match self.inner.tool_runtime.durable_store().reclaim_idle_cache() {
+            Ok(reclaimed) => reclaimed,
+            Err(error) => {
+                tracing::warn!(%error, "idle store cache maintenance failed");
+                false
+            }
+        }
+    }
+
     /// Context inputs projected from one immutable published generation.
     /// Admitted attempts retain their own captured resources and engine state.
     #[must_use]
@@ -1164,6 +1192,8 @@ impl ConversationRuntime {
         let resources = self.runtime_resources();
         let configuration = resources.configuration();
         ConversationContextConfig {
+            status_clock: Arc::clone(&self.inner.context.status_clock),
+
             estimator: Arc::clone(&self.inner.context.estimator),
             status_engine: configuration.map_or_else(
                 || {
@@ -1176,7 +1206,7 @@ impl ConversationRuntime {
                 |g| {
                     g.config
                         .extension_composition()
-                        .agent_status_engine(Arc::new(crate::context::SystemClock))
+                        .agent_status_engine(Arc::clone(&self.inner.context.status_clock))
                 },
             ),
         }

@@ -318,6 +318,7 @@ impl AgentStatusClock for FixedStatusClock {
 /// replaying the same provider-neutral request semantics.
 #[tokio::test]
 async fn transient_retry_uses_shared_identity_and_frozen_request() {
+    crate::model::adapter::validation::take_preparation_work();
     let model = fake_model(vec![
         vec![
             FakeStep::Emit(ModelEvent::Started),
@@ -348,6 +349,10 @@ async fn transient_retry_uses_shared_identity_and_frozen_request() {
     )
     .await;
     let audit = finish_execution(execution, &tool_runtime, &publication).await;
+    assert_eq!(
+        crate::model::adapter::validation::take_preparation_work(),
+        (1, 1)
+    );
 
     assert!(matches!(
         audit.outcome,

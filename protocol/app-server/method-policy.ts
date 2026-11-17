@@ -21,7 +21,7 @@
  *
  * Pure and browser-safe: generated types only.
  */
-import type { Request1 } from './v81.ts';
+import type { Request1 } from './v82.ts';
 
 export type MethodName = Request1['method'];
 export type MethodEffect = 'read' | 'side_effecting' | 'connection_local';
@@ -111,7 +111,10 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/effectiveConfiguration': { effect: 'read' },
   'session/effectiveConfigurationValueRead': { effect: 'read' },
   'session/effectiveConfigurationPage': { effect: 'read' },
-  'configuration/sourceWrite': { effect: 'side_effecting' },
+  // Native owns the atomic source write and the following consumer-state
+  // capture. A large source or retained consumer set can outlive an RPC clock;
+  // expiring that clock cannot cancel publication and discards its receipt.
+  'configuration/sourceWrite': { effect: 'side_effecting', unbounded: true },
   // Exact scoped Workflow file reads and offline candidate checks: they
   // execute, prepare and write nothing (Issue #491).
   'workflow/list': { effect: 'read' },

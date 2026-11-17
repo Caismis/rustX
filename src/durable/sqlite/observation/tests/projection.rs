@@ -12,7 +12,7 @@ use crate::runtime::identity::{AttemptId, ConversationId};
 use chrono::Utc;
 use rusqlite::Connection;
 
-pub(super) fn observation_projection_input(
+pub(in crate::durable::sqlite) fn observation_projection_input(
     store: &SqliteConversationStore,
     id: &str,
 ) -> crate::durable::projection::ProjectionCommitInput {
@@ -32,7 +32,7 @@ pub(super) fn observation_projection_input(
     ));
     input
 }
-pub(super) fn projection_receipt_witness(
+pub(in crate::durable::sqlite) fn projection_receipt_witness(
     receipt: &crate::durable::projection::ProjectionCommitReceipt,
 ) -> &crate::durable::observation::ObservationEventWitness {
     let batch = receipt.completed.observation.as_ref().unwrap();
@@ -45,7 +45,7 @@ pub(super) fn projection_receipt_witness(
     assert_eq!(witness.sequence, receipt.completed.sequence);
     witness
 }
-pub(super) fn assert_projection_receipt_head(
+pub(in crate::durable::sqlite) fn assert_projection_receipt_head(
     receipt: &crate::durable::projection::ProjectionCommitReceipt,
 ) {
     let witness = projection_receipt_witness(receipt);
@@ -200,7 +200,7 @@ fn inherited_compaction_marker_uses_the_destination_transcript_boundary() {
         .unwrap();
     assert_eq!(head.transcript_anchor.get(), 1);
 }
-pub(super) fn deny_projection_body(
+pub(in crate::durable::sqlite) fn deny_projection_body(
     context: rusqlite::hooks::AuthContext<'_>,
 ) -> rusqlite::hooks::Authorization {
     use rusqlite::hooks::{AuthAction, Authorization};
@@ -216,7 +216,7 @@ pub(super) fn deny_projection_body(
         _ => Authorization::Allow,
     }
 }
-pub(super) fn assert_completion_covering_work(connection: &Connection) {
+pub(in crate::durable::sqlite) fn assert_completion_covering_work(connection: &Connection) {
     let root: i64 = connection
         .query_row(
             "SELECT rootpage FROM sqlite_schema WHERE name='events'",
@@ -506,7 +506,7 @@ fn t10_t19_projection_publication_evidence_fault_preserves_confirmed_native_rece
     assert!(recovered.completed.observation.is_some());
 }
 
-pub(super) fn original_provenance_fixture() -> (
+pub(in crate::durable::sqlite) fn original_provenance_fixture() -> (
     SqliteConversationStore,
     crate::durable::projection::ProjectionCommitReceipt,
 ) {
@@ -529,7 +529,7 @@ pub(super) fn original_provenance_fixture() -> (
         .unwrap();
     (store, receipt)
 }
-pub(super) fn collect_provenance_windows(
+pub(in crate::durable::sqlite) fn collect_provenance_windows(
     mut read: impl FnMut(
         u64,
     ) -> Result<

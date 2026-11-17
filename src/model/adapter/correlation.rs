@@ -2,74 +2,53 @@
 use crate::model::types::ModelProtocol;
 use serde_json::Value;
 
-/// Apply the same coordinate plan recorded in the frozen request associations.
-/// Native output labels are reserved before generic historical calls are named.
-pub(crate) fn encode(
-    value: &mut Value,
-    request: &crate::model::ModelRequest,
-) -> Result<(), String> {
-    let labels = request_labels(request)?;
-    let stored_boundary = if is_stored(request) {
-        request.continuation_boundary()?
-    } else {
-        None
-    };
-    let labels = labels
-        .into_iter()
-        .filter(|((message, _), _)| stored_boundary != Some(*message as usize))
-        .map(|(_, label)| label)
-        .collect::<Vec<_>>();
-    encode_with_labels(value, request.protocol(), &labels).map_err(str::to_owned)
-}
+mod plan;
+pub(crate) use plan::Plan;
 
-fn encode_with_labels(
-    value: &mut Value,
-    protocol: ModelProtocol,
-    labels: &[String],
+/// Apply the validated request labels directly to typed wire correlation fields.
+#[cfg(test)]
+pub(super) fn encode_fields<S: AsRef<str>>(
+    labels: impl IntoIterator<Item = S>,
+    mut visit: impl FnMut(&mut dyn FnMut(bool, &mut Value)),
 ) -> Result<(), &'static str> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::WireCorrelation,
     );
-    let mut raw = Vec::new();
-    let mut pending_ids = std::collections::BTreeSet::new();
+    let mut labels = labels.into_iter();
+    let mut pending = std::collections::BTreeMap::new();
     let mut invalid = None;
-    // Wire strings cannot identify which of two unresolved occurrences owns
-    // a result. Reject before editing the detached wire object, not after an
-    // overwritten association has reached the provider or frozen metadata.
-    visit(value, protocol, |call, id| {
-        let source = id.as_str().unwrap_or_default();
+    let mut missing_label = false;
+    // This wire tree is detached. A failed validation discards it before I/O.
+    visit(&mut |call, id| {
+        #[cfg(feature = "issue-387-profile")]
+        crate::model::adapter::profile::wire_field();
+        let source = id.as_str().unwrap_or_default().to_owned();
         if source.is_empty() {
             invalid = Some("empty provider wire correlation ID");
         }
         if call {
-            if !pending_ids.insert(source.to_owned()) {
+            let label = labels.next().map_or_else(
+                || {
+                    missing_label = true;
+                    source.clone()
+                },
+                |label| label.as_ref().to_owned(),
+            );
+            if pending.insert(source, label.clone()).is_some() {
                 invalid = Some("ambiguous unresolved provider wire correlation ID");
             }
-            raw.push(source.to_owned());
-        } else {
-            pending_ids.remove(source);
-        }
-    });
-    if let Some(error) = invalid {
-        return Err(error);
-    }
-    if raw.len() != labels.len() {
-        return Err("wire call count differs from request correlation plan");
-    }
-    let mut ordinal = 0;
-    let mut pending = std::collections::BTreeMap::new();
-    visit(value, protocol, |call, id| {
-        let source = id.as_str().unwrap_or_default().to_owned();
-        if call {
-            let label = labels[ordinal].clone();
-            ordinal += 1;
-            pending.insert(source, label.clone());
             *id = Value::String(label);
         } else if let Some(label) = pending.remove(&source) {
             *id = Value::String(label);
         }
     });
+    if let Some(error) = invalid {
+        return Err(error);
+    }
+    if missing_label || labels.next().is_some() {
+        return Err("wire call count differs from request correlation plan");
+    }
     Ok(())
 }
 /// Explicit labels for each transmitted canonical `ToolCall` coordinate. Stored
@@ -77,80 +56,30 @@ fn encode_with_labels(
 pub(crate) fn request_labels(
     request: &crate::model::ModelRequest,
 ) -> Result<std::collections::BTreeMap<(u32, u32), String>, String> {
-    use crate::message::types::AssistantContentBlock;
-    use crate::model::projected::ModelMessageView;
-    use crate::runtime::continuation::{OpenAiResponsesContinuation, ProviderContinuationState};
+    request_labels_at(request, request.continuation_boundary()?)
+}
+
+pub(crate) fn request_labels_at(
+    request: &crate::model::ModelRequest,
+    boundary: Option<usize>,
+) -> Result<std::collections::BTreeMap<(u32, u32), String>, String> {
+    request_plan(request, boundary).map(|plan| plan.coordinates())
+}
+
+pub(super) fn request_plan(
+    request: &crate::model::ModelRequest,
+    boundary: Option<usize>,
+) -> Result<Plan, String> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::RequestCorrelation,
     );
-    let boundary = request.continuation_boundary()?;
-    let stored = is_stored(request);
-    let start = if stored {
-        boundary.ok_or("stored continuation lacks accepted output")?
-    } else {
-        0
-    };
-    let origin = request.invocation.replay_origin();
-    let mut calls = Vec::new();
-    for message in request
+    let mut cache = request
         .messages
-        .tool_indices()
-        .into_iter()
-        .filter(|index| *index >= start)
-    {
-        #[cfg(feature = "issue-387-profile")]
-        crate::model::adapter::profile::item(message);
-        if let ModelMessageView::Assistant(content) = request.messages[message].view() {
-            let native = request.protocol() == ModelProtocol::OpenAiResponses && (
-                (stored && Some(message) == boundary) || content.iter().any(|block| matches!(block,
-                    AssistantContentBlock::Reasoning(reasoning) if reasoning.belongs_to(origin.as_ref())
-                        && matches!(reasoning.provider_state, Some(ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless { .. })))
-                ))
-            );
-            for (block, item) in content.iter().enumerate() {
-                #[cfg(feature = "issue-387-profile")]
-                crate::model::adapter::profile::block();
-                if let AssistantContentBlock::ToolCall(call) = item {
-                    if call.id.as_str().is_empty() {
-                        return Err("empty provider wire correlation ID".into());
-                    }
-                    calls.push((
-                        (
-                            u32::try_from(message)
-                                .map_err(|_| "request message coordinate overflow")?,
-                            u32::try_from(block)
-                                .map_err(|_| "request block coordinate overflow")?,
-                        ),
-                        call.id.to_string(),
-                        native,
-                    ));
-                }
-            }
-        }
-    }
-    // The allocator preserves the last occurrence of an ID. Give native calls
-    // that priority regardless of their chronological position in the history.
-    let order = (0..calls.len())
-        .filter(|i| !calls[*i].2)
-        .chain((0..calls.len()).filter(|i| calls[*i].2))
-        .collect::<Vec<_>>();
-    let labels = wire_labels(
-        &order
-            .iter()
-            .map(|i| calls[*i].1.clone())
-            .collect::<Vec<_>>(),
-        request.protocol(),
-    );
-    let mut mapped = std::collections::BTreeMap::new();
-    for (index, label) in order.into_iter().zip(labels) {
-        let (coordinate, raw, native) = &calls[index];
-        if *native && &label != raw {
-            return Err("native output has conflicting or invalid wire correlation IDs".into());
-        }
-        mapped.insert(*coordinate, label);
-    }
-    Ok(mapped)
+        .preparation()
+        .lock()
+        .expect("input preparation cache");
+    plan::prepare(&mut cache, request, boundary)
 }
 
 fn is_stored(request: &crate::model::ModelRequest) -> bool {
@@ -165,21 +94,23 @@ fn is_stored(request: &crate::model::ModelRequest) -> bool {
         )
 }
 
-fn wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
-    use sha2::{Digest, Sha256};
-    let mut labels = crate::model::occurrence::wire_labels(raw);
+fn valid_wire_id(id: &str, protocol: ModelProtocol) -> bool {
     let limit = if protocol == ModelProtocol::OpenAiChatCompletions {
         40
     } else {
         64
     };
-    let valid = |id: &str| {
-        !id.is_empty()
-            && id.len() <= limit
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
-    };
+    !id.is_empty()
+        && id.len() <= limit
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+
+pub(crate) fn wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
+    use sha2::{Digest, Sha256};
+    let mut labels = crate::model::occurrence::wire_labels(raw);
+    let valid = |id: &str| valid_wire_id(id, protocol);
     let mut occupied = labels
         .iter()
         .filter(|id| valid(id))
@@ -205,12 +136,17 @@ fn wire_labels(raw: &[String], protocol: ModelProtocol) -> Vec<String> {
     labels
 }
 
+#[cfg(test)]
+fn encode_with_labels(
+    value: &mut Value,
+    protocol: ModelProtocol,
+    labels: &[String],
+) -> Result<(), &'static str> {
+    encode_fields(labels, |field| visit(value, protocol, field))
+}
+
+#[cfg(test)]
 fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool, &mut Value)) {
-    #[cfg(feature = "issue-387-profile")]
-    let mut field = |call, id: &mut Value| {
-        crate::model::adapter::profile::wire_field();
-        field(call, id);
-    };
     match protocol {
         ModelProtocol::OpenAiChatCompletions => {
             if let Some(messages) = value["messages"].as_array_mut() {
@@ -235,11 +171,7 @@ fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool,
                     crate::model::adapter::profile::wire_item();
                     if let Some(blocks) = message["content"].as_array_mut() {
                         for block in blocks {
-                            match block["type"].as_str() {
-                                Some("tool_use") => field(true, &mut block["id"]),
-                                Some("tool_result") => field(false, &mut block["tool_use_id"]),
-                                _ => {}
-                            }
+                            visit_anthropic_block(block, &mut field);
                         }
                     }
                 }
@@ -258,6 +190,14 @@ fn visit(value: &mut Value, protocol: ModelProtocol, mut field: impl FnMut(bool,
                 }
             }
         }
+    }
+}
+
+pub(super) fn visit_anthropic_block(block: &mut Value, mut field: impl FnMut(bool, &mut Value)) {
+    match block["type"].as_str() {
+        Some("tool_use") => field(true, &mut block["id"]),
+        Some("tool_result") => field(false, &mut block["tool_use_id"]),
+        _ => {}
     }
 }
 #[cfg(test)]

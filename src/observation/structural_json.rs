@@ -7,14 +7,21 @@ use serde::ser::{
 };
 use serde_json::Value;
 
+pub(crate) mod plan;
+#[cfg(test)]
+mod plan_tests;
+use plan::{Unsigned, View, WireNumber};
+
 #[cfg(test)]
 thread_local! {
     static LOOKUP_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
     static PROPERTY_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    static LEGACY_PLAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LEGACY_PROPERTY_LOOKUP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static STRING_KEY_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static GENERIC_KEY_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static MAP_KEY_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static TAG_VALUE_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 #[cfg(test)]
 fn lookup_work() -> (usize, usize) {
@@ -47,6 +54,7 @@ fn resolve<'a>(schema: &'a Value, root: &'a Value) -> &'a Value {
     }
     schema
 }
+#[cfg(test)]
 fn child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'a Value {
     if schema.is_null() {
         return schema;
@@ -70,6 +78,7 @@ fn child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'a Value
     }
     branch_child(schema, root, key)
 }
+#[cfg(test)]
 fn branch_child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'a Value {
     if schema.is_null() {
         return schema;
@@ -86,6 +95,7 @@ fn branch_child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'
     }
     &Value::Null
 }
+#[cfg(test)]
 fn element<'a>(schema: &'a Value, root: &'a Value, index: usize) -> &'a Value {
     let schema = resolve(schema, root);
     schema["prefixItems"]
@@ -107,26 +117,90 @@ fn selected_schema<'a>(root: &'a Value, path: &[String]) -> &'a Value {
     schema
 }
 
-pub(crate) struct Encoded<'a, T: ?Sized> {
+#[cfg(test)]
+pub(crate) struct BorrowedEncoded<'a, T: ?Sized> {
     pub value: &'a T,
     pub schema: &'a Value,
     pub root: &'a Value,
 }
-impl<T: Serialize + ?Sized> Serialize for Encoded<'_, T> {
+#[cfg(test)]
+impl<T: Serialize + ?Sized> Serialize for BorrowedEncoded<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Keep the concrete Encoded callback type, including for a Null schema:
-        // preflight distinguishes opaque JSON by the callback's concrete type.
+        #[cfg(test)]
+        if LEGACY_PLAN.with(std::cell::Cell::get) {
+            return self.value.serialize(Encoder {
+                serializer,
+                wire: false,
+                schema: View::Interpreted {
+                    schema: self.schema,
+                    root: self.root,
+                },
+            });
+        }
+        let plan = plan::Plan::new(self.schema, self.root);
+        self.value.serialize(Encoder {
+            serializer,
+            wire: false,
+            schema: plan.root(),
+        })
+    }
+}
+// Recursive callbacks carry the already selected plan node. They never reacquire
+// a schema cache or interpret the JSON schema again.
+struct ValueAt<'a, T: ?Sized> {
+    value: &'a T,
+    schema: View<'a>,
+    wire: bool,
+}
+impl<T: Serialize + ?Sized> Serialize for ValueAt<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         self.value.serialize(Encoder {
             serializer,
             schema: self.schema,
-            root: self.root,
+            wire: self.wire,
         })
     }
 }
 struct Encoder<'a, S> {
     serializer: S,
-    schema: &'a Value,
-    root: &'a Value,
+    schema: View<'a>,
+    wire: bool,
+}
+/// Encode App Server's closed, Rust-derived envelopes directly. Native admission
+/// remains owned by that protocol; its flattened enum tags precede their payload.
+/// This mode preserves its untagged scalar and tuple rules independently of
+/// source-domain encoding.
+pub(crate) fn serialize_wire<T: Serialize + ?Sized, S: serde::Serializer>(
+    value: &T,
+    plan: &plan::Plan,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    value.serialize(Encoder {
+        serializer,
+        schema: plan.root(),
+        wire: true,
+    })
+}
+
+// serde_json formats an integer into its stack buffer; the longest u64 has
+// twenty digits. Keep serialize_str so every serializer sees the same value.
+fn serialize_decimal<S: serde::Serializer>(value: u64, serializer: S) -> Result<S::Ok, S::Error> {
+    let mut bytes = [0; 20];
+    let mut remaining = &mut bytes[..];
+    serde_json::to_writer(&mut remaining, &value).expect("u64 fits in twenty JSON bytes");
+    let written = 20 - remaining.len();
+    let text = std::str::from_utf8(&bytes[..written]).expect("JSON integer is ASCII");
+    serializer.serialize_str(text)
+}
+
+fn serialize_wire_number<S: serde::Serializer>(
+    value: WireNumber,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match value {
+        WireNumber::Native(value) => value.serialize(serializer),
+        WireNumber::Decimal(value) => serialize_decimal(value, serializer),
+    }
 }
 macro_rules! scalar {
     ($($method:ident($ty:ty)),*) => {$ (fn $method(self, value: $ty) -> Result<Self::Ok, Self::Error> { self.serializer.$method(value) })*};
@@ -143,27 +217,69 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
     type SerializeStructVariant = Mapping<'a, S::SerializeStructVariant>;
     scalar!(
         serialize_bool(bool),
-        serialize_i8(i8),
-        serialize_i16(i16),
-        serialize_i32(i32),
-        serialize_u8(u8),
-        serialize_u16(u16),
-        serialize_u32(u32),
-        serialize_f32(f32),
         serialize_f64(f64),
         serialize_char(char),
         serialize_str(&str),
         serialize_bytes(&[u8])
     );
-    fn serialize_i64(self, value: i64) -> Result<S::Ok, S::Error> {
-        if self.schema.is_null() {
-            return self.serializer.serialize_i64(value);
+    fn serialize_i8(self, value: i8) -> Result<S::Ok, S::Error> {
+        if self.wire {
+            self.serialize_i64(i64::from(value))
+        } else {
+            self.serializer.serialize_i8(value)
         }
-        if matches!(
-            resolve(self.schema, self.root)["format"].as_str(),
-            Some("int" | "int64")
-        ) && value.unsigned_abs() > 9_007_199_254_740_991
-        {
+    }
+    fn serialize_i16(self, value: i16) -> Result<S::Ok, S::Error> {
+        if self.wire {
+            self.serialize_i64(i64::from(value))
+        } else {
+            self.serializer.serialize_i16(value)
+        }
+    }
+    fn serialize_i32(self, value: i32) -> Result<S::Ok, S::Error> {
+        if self.wire {
+            self.serialize_i64(i64::from(value))
+        } else {
+            self.serializer.serialize_i32(value)
+        }
+    }
+    fn serialize_u8(self, value: u8) -> Result<S::Ok, S::Error> {
+        if self.wire {
+            self.serialize_u64(u64::from(value))
+        } else {
+            self.serializer.serialize_u8(value)
+        }
+    }
+    fn serialize_u16(self, value: u16) -> Result<S::Ok, S::Error> {
+        if self.wire {
+            self.serialize_u64(u64::from(value))
+        } else {
+            self.serializer.serialize_u16(value)
+        }
+    }
+    fn serialize_u32(self, value: u32) -> Result<S::Ok, S::Error> {
+        if self.wire {
+            self.serialize_u64(u64::from(value))
+        } else {
+            self.serializer.serialize_u32(value)
+        }
+    }
+    fn serialize_f32(self, value: f32) -> Result<S::Ok, S::Error> {
+        if self.wire {
+            self.serializer.serialize_f64(f64::from(value))
+        } else {
+            self.serializer.serialize_f32(value)
+        }
+    }
+    fn serialize_i64(self, value: i64) -> Result<S::Ok, S::Error> {
+        if self.wire {
+            let value = self
+                .schema
+                .wire_number(WireNumber::Native(Value::from(value)))
+                .map_err(serde::ser::Error::custom)?;
+            return serialize_wire_number(value, self.serializer);
+        }
+        if self.schema.signed_safe() && value.unsigned_abs() > 9_007_199_254_740_991 {
             return Err(serde::ser::Error::custom(
                 "native quantity exceeds safe JSON integer range",
             ));
@@ -171,35 +287,29 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
         self.serializer.serialize_i64(value)
     }
     fn serialize_u64(self, value: u64) -> Result<S::Ok, S::Error> {
-        if self.schema.is_null() {
-            return self.serializer.serialize_u64(value);
+        if self.wire {
+            let value = self
+                .schema
+                .wire_number(WireNumber::Native(Value::from(value)))
+                .map_err(serde::ser::Error::custom)?;
+            return serialize_wire_number(value, self.serializer);
         }
-        let schema = resolve(self.schema, self.root);
-        if schema["format"] == "uint64"
-            && schema["maximum"]
-                .as_f64()
-                .is_none_or(|maximum| maximum > 9_007_199_254_740_991.0)
-        {
-            self.serializer.serialize_str(&value.to_string())
-        } else {
-            if matches!(schema["format"].as_str(), Some("uint" | "uint64"))
-                && value > 9_007_199_254_740_991
-            {
-                return Err(serde::ser::Error::custom(
-                    "native quantity exceeds safe JSON integer range",
-                ));
-            }
-            self.serializer.serialize_u64(value)
+        match self.schema.unsigned() {
+            Unsigned::Decimal => serialize_decimal(value, self.serializer),
+            Unsigned::Safe if value > 9_007_199_254_740_991 => Err(serde::ser::Error::custom(
+                "native quantity exceeds safe JSON integer range",
+            )),
+            _ => self.serializer.serialize_u64(value),
         }
     }
     fn serialize_none(self) -> Result<S::Ok, S::Error> {
         self.serializer.serialize_none()
     }
     fn serialize_some<T: Serialize + ?Sized>(self, value: &T) -> Result<S::Ok, S::Error> {
-        self.serializer.serialize_some(&Encoded {
+        self.serializer.serialize_some(&ValueAt {
             value,
             schema: self.schema,
-            root: self.root,
+            wire: self.wire,
         })
     }
     fn serialize_unit(self) -> Result<S::Ok, S::Error> {
@@ -223,10 +333,10 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
     ) -> Result<S::Ok, S::Error> {
         self.serializer.serialize_newtype_struct(
             name,
-            &Encoded {
+            &ValueAt {
                 value,
                 schema: self.schema,
-                root: self.root,
+                wire: self.wire,
             },
         )
     }
@@ -241,10 +351,10 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
             name,
             index,
             variant,
-            &Encoded {
+            &ValueAt {
                 value,
-                schema: child(self.schema, self.root, Some(variant)),
-                root: self.root,
+                schema: self.schema.child(Some(variant)),
+                wire: self.wire,
             },
         )
     }
@@ -252,14 +362,14 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
         Ok(Sequence::new(
             self.serializer.serialize_seq(len)?,
             self.schema,
-            self.root,
+            self.wire,
         ))
     }
     fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, S::Error> {
         Ok(Sequence::new(
             self.serializer.serialize_tuple(len)?,
             self.schema,
-            self.root,
+            self.wire,
         ))
     }
     fn serialize_tuple_struct(
@@ -270,7 +380,7 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
         Ok(Sequence::new(
             self.serializer.serialize_tuple_struct(name, len)?,
             self.schema,
-            self.root,
+            self.wire,
         ))
     }
     fn serialize_tuple_variant(
@@ -283,15 +393,19 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
         Ok(Sequence::new(
             self.serializer
                 .serialize_tuple_variant(name, index, variant, len)?,
-            self.schema,
-            self.root,
+            if self.wire {
+                self.schema.child(Some(variant))
+            } else {
+                self.schema
+            },
+            self.wire,
         ))
     }
     fn serialize_map(self, len: Option<usize>) -> Result<Self::SerializeMap, S::Error> {
         Ok(Mapping::new(
             self.serializer.serialize_map(len)?,
             self.schema,
-            self.root,
+            self.wire,
         ))
     }
     fn serialize_struct(
@@ -302,7 +416,7 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
         Ok(Mapping::new(
             self.serializer.serialize_struct(name, len)?,
             self.schema,
-            self.root,
+            self.wire,
         ))
     }
     fn serialize_struct_variant(
@@ -315,42 +429,24 @@ impl<'a, S: serde::Serializer> serde::Serializer for Encoder<'a, S> {
         Ok(Mapping::new(
             self.serializer
                 .serialize_struct_variant(name, index, variant, len)?,
-            child(self.schema, self.root, Some(variant)),
-            self.root,
+            self.schema.child(Some(variant)),
+            self.wire,
         ))
     }
 }
 struct Sequence<'a, S> {
     inner: S,
-    schema: &'a Value,
-    items: Option<&'a Value>,
-    prefix: Option<&'a [Value]>,
-    root: &'a Value,
+    schema: View<'a>,
     index: usize,
+    wire: bool,
 }
 impl<'a, S> Sequence<'a, S> {
-    fn new(inner: S, schema: &'a Value, root: &'a Value) -> Self {
-        let schema = resolve(schema, root);
-        if schema.is_null() {
-            return Self {
-                inner,
-                schema,
-                items: Some(schema),
-                prefix: None,
-                root,
-                index: 0,
-            };
-        }
+    fn new(inner: S, schema: View<'a>, wire: bool) -> Self {
         Self {
             inner,
             schema,
-            items: schema.get("items"),
-            prefix: schema
-                .get("prefixItems")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice),
-            root,
             index: 0,
+            wire,
         }
     }
 }
@@ -360,16 +456,16 @@ macro_rules! sequence {
             type Ok = S::Ok;
             type Error = S::Error;
             fn $method<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Self::Error> {
-                let schema = self
-                    .prefix
-                    .and_then(|items| items.get(self.index))
-                    .or(self.items)
-                    .unwrap_or_else(|| branch_child(self.schema, self.root, None));
+                let schema = if self.wire {
+                    self.schema.wire_element()
+                } else {
+                    self.schema.element(self.index)
+                };
                 self.index += 1;
-                self.inner.$method(&Encoded {
+                self.inner.$method(&ValueAt {
                     value,
                     schema,
-                    root: self.root,
+                    wire: self.wire,
                 })
             }
             fn end(self) -> Result<Self::Ok, Self::Error> {
@@ -393,8 +489,31 @@ macro_rules! string_key_reject {
 // Only built-in strings use this probe; every custom/numeric key retains the
 // original finite serializer, including its callback count and error behavior.
 struct StringKey;
-impl serde::Serializer for StringKey {
-    type Ok = Option<String>;
+trait StringProbe {
+    type Output;
+    fn capture(self, value: &str) -> Self::Output;
+}
+impl StringProbe for StringKey {
+    type Output = Option<String>;
+    fn capture(self, value: &str) -> Self::Output {
+        if value.len() > 256 {
+            return None;
+        }
+        let mut remaining = 256_usize;
+        for byte in value.bytes() {
+            let bytes = match byte {
+                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
+                0..=0x1f => 6,
+                _ => 1,
+            };
+            remaining = remaining.checked_sub(bytes)?;
+        }
+        Some(value.to_owned())
+    }
+}
+struct StringSerializer<P>(P);
+impl<P: StringProbe> serde::Serializer for StringSerializer<P> {
+    type Ok = P::Output;
     type Error = serde::de::value::Error;
     type SerializeSeq = serde::ser::Impossible<Self::Ok, Self::Error>;
     type SerializeTuple = Self::SerializeSeq;
@@ -404,22 +523,7 @@ impl serde::Serializer for StringKey {
     type SerializeStruct = Self::SerializeSeq;
     type SerializeStructVariant = Self::SerializeSeq;
     fn serialize_str(self, value: &str) -> Result<Self::Ok, Self::Error> {
-        if value.len() > 256 {
-            return Ok(None);
-        }
-        let mut remaining = 256_usize;
-        for byte in value.bytes() {
-            let bytes = match byte {
-                b'"' | b'\\' | b'\x08' | b'\x0c' | b'\n' | b'\r' | b'\t' => 2,
-                0..=0x1f => 6,
-                _ => 1,
-            };
-            let Some(left) = remaining.checked_sub(bytes) else {
-                return Ok(None);
-            };
-            remaining = left;
-        }
-        Ok(Some(value.to_owned()))
+        Ok(self.0.capture(value))
     }
     string_key_reject! {
         serialize_bool(value: bool) -> Ok;
@@ -485,7 +589,7 @@ fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
     if builtin_string {
         #[cfg(test)]
         STRING_KEY_WORK.with(|work| work.set(work.get() + 1));
-        if let Ok(value) = key.serialize(StringKey) {
+        if let Ok(value) = key.serialize(StringSerializer(StringKey)) {
             return value;
         }
     }
@@ -500,90 +604,83 @@ fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
         })
 }
 
+struct WireTag<'a, 'k> {
+    schema: View<'a>,
+    key: &'k str,
+}
+impl<'a> StringProbe for WireTag<'a, '_> {
+    type Output = Option<View<'a>>;
+    fn capture(self, value: &str) -> Self::Output {
+        self.schema.wire_variant_str(self.key, value)
+    }
+}
+
 struct Mapping<'a, S> {
     inner: S,
-    schema: &'a Value,
-    root: &'a Value,
+    schema: View<'a>,
     key: Option<String>,
-    properties: Option<&'a serde_json::Map<String, Value>>,
-    ordered_properties: Option<serde_json::map::Iter<'a>>,
-    additional: Option<&'a Value>,
-    variants: [Option<&'a [Value]>; 2],
+    ordered_next: usize,
+    wire: bool,
 }
 impl<'a, S> Mapping<'a, S> {
-    fn new(inner: S, schema: &'a Value, root: &'a Value) -> Self {
-        let mut mapping = Self {
+    fn new(inner: S, schema: View<'a>, wire: bool) -> Self {
+        Self {
             inner,
             schema,
-            root,
             key: None,
-            properties: None,
-            ordered_properties: None,
-            additional: None,
-            variants: [None, None],
-        };
-        mapping.select_schema(schema);
-        mapping
+            ordered_next: 0,
+            wire,
+        }
     }
-    fn select_schema(&mut self, schema: &'a Value) {
-        self.schema = resolve(schema, self.root);
-        if self.schema.is_null() {
-            self.properties = None;
-            self.ordered_properties = None;
-            self.additional = None;
-            self.variants = [None, None];
+    fn wire_tag<T: Serialize + ?Sized>(&mut self, key: &str, value: &T) {
+        if !self.schema.has_wire_tag(key) {
             return;
         }
-        self.properties = self.schema.get("properties").and_then(Value::as_object);
-        self.ordered_properties = self.properties.map(serde_json::Map::iter);
-        self.additional = self
-            .schema
-            .get("additionalProperties")
-            .filter(|value| value.is_object());
-        self.variants = [
-            self.schema
-                .get("oneOf")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice),
-            self.schema
-                .get("anyOf")
-                .and_then(Value::as_array)
-                .map(Vec::as_slice),
-        ];
+        if matches!(
+            std::any::type_name::<T>().trim_start_matches('&'),
+            "str" | "alloc::string::String"
+        ) {
+            if let Ok(Some(branch)) = value.serialize(StringSerializer(WireTag {
+                schema: self.schema,
+                key,
+            })) {
+                self.select_schema(branch);
+            }
+            return;
+        }
+        if let Ok(value) = serde_json::to_value(value)
+            && let Some(branch) = self.schema.wire_variant(key, &value)
+        {
+            self.select_schema(branch);
+        }
     }
-    fn field(&self, key: &str) -> &'a Value {
+    fn select_schema(&mut self, schema: View<'a>) {
+        self.schema = schema;
+        self.ordered_next = 0;
+    }
+    fn field(&self, key: &str) -> View<'a> {
         #[cfg(test)]
         PROPERTY_WORK.with(|work| {
             let (ordered, fallback) = work.get();
             work.set((ordered, fallback + 1));
         });
-        if self.schema.is_null() {
-            return self.schema;
-        }
-        self.properties
-            .and_then(|fields| fields.get(key))
-            .or(self.additional)
-            .unwrap_or_else(|| branch_child(self.schema, self.root, Some(key)))
+        self.schema.child(Some(key))
     }
-    fn struct_field(&mut self, key: &str) -> &'a Value {
+    fn struct_field(&mut self, key: &str) -> View<'a> {
         #[cfg(test)]
         if LEGACY_PROPERTY_LOOKUP.with(std::cell::Cell::get) {
             return self.field(key);
         }
-        // Generated schemas and native structs normally share declaration
-        // order. Skipped fields consume only borrowed schema entries. Custom
-        // or reordered serializers retain the exact keyed lookup on a miss.
-        if let Some((_, schema)) = self
-            .ordered_properties
-            .as_mut()
-            .and_then(|fields| fields.find(|(name, _)| name.as_str() == key))
-        {
-            #[cfg(test)]
-            PROPERTY_WORK.with(|work| {
-                let (ordered, fallback) = work.get();
-                work.set((ordered + 1, fallback));
-            });
-            return schema;
+        while let Some((name, schema)) = self.schema.property(self.ordered_next) {
+            self.ordered_next += 1;
+            if name == key {
+                #[cfg(test)]
+                PROPERTY_WORK.with(|work| {
+                    let (ordered, fallback) = work.get();
+                    work.set((ordered + 1, fallback));
+                });
+                return schema;
+            }
         }
         self.field(key)
     }
@@ -605,11 +702,17 @@ impl<S: SerializeMap> SerializeMap for Mapping<'_, S> {
         self.inner.serialize_key(key)
     }
     fn serialize_value<T: Serialize + ?Sized>(&mut self, value: &T) -> Result<(), Self::Error> {
+        if self.wire
+            && let Some(key) = self.key.take()
+        {
+            self.wire_tag(&key, value);
+            self.key = Some(key);
+        }
         let schema = self.field(self.key.as_deref().unwrap_or(""));
-        self.inner.serialize_value(&Encoded {
+        self.inner.serialize_value(&ValueAt {
             value,
             schema,
-            root: self.root,
+            wire: self.wire,
         })
     }
     fn end(self) -> Result<Self::Ok, Self::Error> {
@@ -626,12 +729,37 @@ macro_rules! mapping {
                 key: &'static str,
                 value: &T,
             ) -> Result<(), Self::Error> {
-                for branches in self.variants.into_iter().flatten() {
-                    for branch in branches {
-                        if let Some(expected) =
-                            resolve(branch, self.root)["properties"][key].get("const")
-                        {
-                            if serde_json::to_value(value).ok().as_ref() == Some(expected) {
+                // Keep oneOf followed by anyOf, and the original first matching
+                // branch in each group. Constants retain their serde callbacks.
+                if self.wire {
+                    self.wire_tag(key, value);
+                }
+                let before = self.schema;
+                let builtin_tag = matches!(
+                    std::any::type_name::<T>().trim_start_matches('&'),
+                    "str" | "alloc::string::String"
+                );
+                #[cfg(test)]
+                let builtin_tag = builtin_tag && !LEGACY_PLAN.with(std::cell::Cell::get);
+                // Generated enum tags are immutable built-in strings. Custom
+                // callbacks retain their original per-candidate invocation.
+                let mut tag = None;
+                for kind in 0..if self.wire { 0 } else { 2 } {
+                    let mut index = 0;
+                    while let Some(branch) = before.branch(kind, index) {
+                        index += 1;
+                        if let Some(expected) = branch.tag(key) {
+                            let encode = || {
+                                #[cfg(test)]
+                                TAG_VALUE_WORK.with(|work| work.set(work.get() + 1));
+                                serde_json::to_value(value).ok()
+                            };
+                            let matches = if builtin_tag {
+                                tag.get_or_insert_with(encode).as_ref() == Some(expected)
+                            } else {
+                                encode().as_ref() == Some(expected)
+                            };
+                            if matches {
                                 self.select_schema(branch);
                                 break;
                             }
@@ -641,10 +769,10 @@ macro_rules! mapping {
                 let schema = self.struct_field(key);
                 self.inner.serialize_field(
                     key,
-                    &Encoded {
+                    &ValueAt {
                         value,
                         schema,
-                        root: self.root,
+                        wire: self.wire,
                     },
                 )
             }
@@ -656,87 +784,133 @@ macro_rules! mapping {
 }
 mapping!(SerializeStruct);
 mapping!(SerializeStructVariant);
-/// Immutable schemas depend only on their compile-time DTO type. Sharing them
-/// avoids repeating the schema graph walk for every indexed Source field.
-/// The vocabulary is finite monomorphized DTOs, never client-controlled keys.
-pub(crate) fn root<T: schemars::JsonSchema>() -> std::sync::Arc<Value> {
-    static SCHEMAS: std::sync::LazyLock<
-        std::sync::Mutex<std::collections::BTreeMap<&'static str, std::sync::Arc<Value>>>,
-    > = std::sync::LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
-    let identity = std::any::type_name::<T>();
-    if let Some(schema) = SCHEMAS
+/// Runtime codecs retain only their compact immutable plan. The complete schema
+/// is generated from the same `JsonSchema` implementation on demand and released.
+#[derive(Default)]
+struct SchemaOwner {
+    plan: std::sync::OnceLock<std::sync::Arc<plan::Plan>>,
+    #[cfg(test)]
+    plan_builds: std::sync::atomic::AtomicUsize,
+}
+#[derive(Default)]
+struct SchemaCache {
+    roots: std::collections::BTreeMap<&'static str, std::sync::Arc<SchemaOwner>>,
+}
+static SCHEMAS: std::sync::LazyLock<std::sync::Mutex<SchemaCache>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(SchemaCache::default()));
+
+fn cached_codec<T>(create: impl FnOnce() -> plan::Plan) -> std::sync::Arc<plan::Plan> {
+    let owner = SCHEMAS
         .lock()
-        .expect("native schemas")
-        .get(identity)
-        .cloned()
-    {
-        return schema;
-    }
-    // Generate outside the cache boundary: a custom schema may request another
-    // native type, and independent first encodes must not hold an owner lock.
-    let schema = std::sync::Arc::new(
-        serde_json::to_value(schemars::schema_for!(T)).expect("native structural schema"),
-    );
-    SCHEMAS
-        .lock()
-        .expect("native schemas")
-        .entry(identity)
-        .or_insert(schema)
+        .expect("native codecs")
+        .roots
+        .entry(std::any::type_name::<T>())
+        .or_insert_with(|| {
+            std::sync::Arc::new(SchemaOwner {
+                plan: std::sync::OnceLock::new(),
+                #[cfg(test)]
+                plan_builds: std::sync::atomic::AtomicUsize::new(0),
+            })
+        })
+        .clone();
+    owner
+        .plan
+        .get_or_init(|| {
+            #[cfg(test)]
+            owner
+                .plan_builds
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            std::sync::Arc::new(create())
+        })
         .clone()
+}
+
+pub(crate) fn codec<T: schemars::JsonSchema>() -> std::sync::Arc<plan::Plan> {
+    cached_codec::<T>(|| {
+        let schema =
+            serde_json::to_value(schemars::schema_for!(T)).expect("native structural schema");
+        plan::Plan::new(&schema, &schema)
+    })
+}
+pub(crate) fn codec_from_bytes<T: schemars::JsonSchema>(
+    bytes: &[u8],
+) -> std::sync::Arc<plan::Plan> {
+    cached_codec::<T>(|| plan::Plan::from_bytes(bytes))
+}
+
+#[cfg(test)]
+pub(crate) fn schema_root<T: schemars::JsonSchema>() -> std::sync::Arc<Value> {
+    std::sync::Arc::new(
+        serde_json::to_value(schemars::schema_for!(T)).expect("native structural schema"),
+    )
+}
+
+pub(crate) fn root<T: schemars::JsonSchema>() -> std::sync::Arc<plan::Plan> {
+    codec::<T>()
+}
+
+/// A selected codec root; its stable node IDs belong to the same immutable plan.
+pub(crate) struct Encoded<'a, T: ?Sized> {
+    pub value: &'a T,
+    pub schema: &'a plan::Plan,
+    pub root: &'a plan::Plan,
+}
+impl<T: Serialize + ?Sized> Serialize for Encoded<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        debug_assert!(std::ptr::eq(self.schema, self.root));
+        self.value.serialize(Encoder {
+            serializer,
+            wire: false,
+            schema: self.schema.root(),
+        })
+    }
+}
+
+struct TypedEncoded<'a, T: ?Sized> {
+    value: &'a T,
+    plan: std::sync::Arc<plan::Plan>,
+}
+impl<T: Serialize + ?Sized> Serialize for TypedEncoded<'_, T> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.value.serialize(Encoder {
+            serializer,
+            wire: false,
+            schema: self.plan.root(),
+        })
+    }
+}
+pub(crate) fn encoded<T: Serialize + schemars::JsonSchema>(value: &T) -> impl Serialize + '_ {
+    TypedEncoded {
+        value,
+        plan: codec::<T>(),
+    }
 }
 pub(crate) fn to_writer<T: Serialize + schemars::JsonSchema, W: std::io::Write>(
     writer: W,
     value: &T,
 ) -> serde_json::Result<()> {
-    let root = root::<T>();
-    serde_json::to_writer(
-        writer,
-        &Encoded {
-            value,
-            schema: &root,
-            root: &root,
-        },
-    )
+    serde_json::to_writer(writer, &encoded(value))
 }
 
 pub(crate) fn decode<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
     mut value: Value,
 ) -> serde_json::Result<T> {
-    fn visit(value: &mut Value, schema: &Value, root: &Value) {
-        let mut schema = resolve(schema, root);
-        for keyword in ["oneOf", "anyOf"] {
-            if let Some(branches) = schema[keyword].as_array() {
-                for branch in branches {
-                    let candidate = resolve(branch, root);
-                    if let Some(properties) = candidate["properties"].as_object() {
-                        let tagged: Vec<_> = properties
-                            .iter()
-                            .filter_map(|(key, property)| {
-                                property.get("const").map(|expected| (key, expected))
-                            })
-                            .collect();
-                        if !tagged.is_empty()
-                            && tagged
-                                .iter()
-                                .all(|(key, expected)| value.get(*key) == Some(*expected))
-                        {
-                            schema = candidate;
-                            break;
-                        }
-                    }
+    fn visit(value: &mut Value, mut schema: View<'_>) {
+        for kind in 0..2 {
+            let mut index = 0;
+            while let Some(branch) = schema.branch(kind, index) {
+                index += 1;
+                if branch.matches_tagged(value) {
+                    schema = branch;
+                    break;
                 }
             }
         }
-        if schema["format"] == "uint64"
-            && schema["maximum"]
-                .as_f64()
-                .is_none_or(|maximum| maximum > 9_007_199_254_740_991.0)
-        {
-            if let Some(number) = value.as_str().and_then(|value| {
-                value
-                    .parse::<u64>()
+        if schema.unsigned() == Unsigned::Decimal {
+            if let Some(number) = value.as_str().and_then(|text| {
+                text.parse::<u64>()
                     .ok()
-                    .filter(|number| number.to_string() == value)
+                    .filter(|number| number.to_string() == text)
             }) {
                 *value = Value::from(number);
             }
@@ -745,19 +919,19 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
         match value {
             Value::Object(fields) => {
                 for (key, value) in fields {
-                    visit(value, child(schema, root, Some(key)), root);
+                    visit(value, schema.child(Some(key)));
                 }
             }
             Value::Array(items) => {
                 for (index, value) in items.iter_mut().enumerate() {
-                    visit(value, element(schema, root, index), root);
+                    visit(value, schema.element(index));
                 }
             }
             _ => {}
         }
     }
-    let root = root::<T>();
-    visit(&mut value, &root, &root);
+    let plan = codec::<T>();
+    visit(&mut value, plan.root());
     serde_json::from_value(value)
 }
 
@@ -765,25 +939,39 @@ pub(crate) fn decode<T: serde::de::DeserializeOwned + schemars::JsonSchema>(
 mod tests {
     use super::*;
 
+    #[test]
+    fn decimal_integers_use_string_callbacks_at_u64_boundaries() {
+        for value in [0, 9, 10, 9_007_199_254_740_993, u64::MAX] {
+            assert_eq!(
+                serialize_decimal(value, StringSerializer(StringKey)).unwrap(),
+                Some(value.to_string())
+            );
+        }
+    }
+
     type PropertyEncoding = (
         Result<Vec<u8>, String>,
         Vec<(Option<bool>, Option<Vec<u8>>)>,
     );
-    fn property_encoding<T: Serialize>(
+    pub(super) fn property_encoding<T: Serialize>(
         value: &T,
         schema: &Value,
         legacy: bool,
     ) -> PropertyEncoding {
-        struct Reset(bool);
+        struct Reset(bool, bool);
         impl Drop for Reset {
             fn drop(&mut self) {
                 LEGACY_PROPERTY_LOOKUP.with(|mode| mode.set(self.0));
+                LEGACY_PLAN.with(|mode| mode.set(self.1));
             }
         }
-        let _reset = Reset(LEGACY_PROPERTY_LOOKUP.with(|mode| mode.replace(legacy)));
+        let _reset = Reset(
+            LEGACY_PROPERTY_LOOKUP.with(|mode| mode.replace(legacy)),
+            LEGACY_PLAN.with(|mode| mode.replace(legacy)),
+        );
         PROPERTY_WORK.with(|work| work.set((0, 0)));
         MAP_KEY_WORK.with(|work| work.set(0));
-        let encoded = Encoded {
+        let encoded = BorrowedEncoded {
             value,
             schema,
             root: schema,
@@ -821,7 +1009,7 @@ mod tests {
             .read_cut
             .domain_revisions
             .insert("trace".into(), u64::MAX);
-        let schema = root::<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>();
+        let schema = schema_root::<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>();
         let expected = property_encoding(&checkpoint, &schema, true);
         let (_, old_fallbacks) = PROPERTY_WORK.with(std::cell::Cell::get);
         let actual = property_encoding(&checkpoint, &schema, false);
@@ -872,7 +1060,7 @@ mod tests {
             "native coordinate validation remains active"
         );
         assert_eq!(property_encoding(&Custom, &schema, false), expected);
-        let schema = root::<Tagged>();
+        let schema = schema_root::<Tagged>();
         for source in [
             Tagged::Record {
                 sequence: u64::MAX,
@@ -1027,7 +1215,7 @@ mod tests {
         );
         assert_eq!(
             crate::observation::preflight::bounded_fit(
-                &Encoded {
+                &BorrowedEncoded {
                     value: &unsafe_opaque,
                     schema: &Value::Null,
                     root: &Value::Null,
@@ -1052,7 +1240,7 @@ mod tests {
         ] {
             let expected = serde_json::to_vec(&source).unwrap();
             lookup_work();
-            let actual = serde_json::to_vec(&Encoded {
+            let actual = serde_json::to_vec(&BorrowedEncoded {
                 value: &source,
                 schema: &Value::Null,
                 root: &Value::Null,
@@ -1065,7 +1253,7 @@ mod tests {
             lookup_work();
             assert_eq!(
                 crate::observation::preflight::bounded_fit(
-                    &Encoded {
+                    &BorrowedEncoded {
                         value: &source,
                         schema: &Value::Null,
                         root: &Value::Null,
@@ -1114,16 +1302,17 @@ mod tests {
                 "row/fields": {"type": "object", "properties": properties}}
         });
         let expected = serde_json::to_vec(&rows).unwrap();
+        let plan = plan::Plan::new(&schema, &schema);
         lookup_work();
-        let actual = serde_json::to_vec(&Encoded {
+        let actual = serde_json::to_vec(&ValueAt {
             value: &rows,
-            schema: &schema,
-            root: &schema,
+            schema: plan.root(),
+            wire: false,
         })
         .unwrap();
-        // One array resolution and three real reference-chain nodes per row;
-        // the eight individual fields never re-resolve the parent or array.
-        assert_eq!(lookup_work(), (1 + 3 * rows.len(), 0));
+        // The plan resolves the reference chain once, independent of both row
+        // count and field count; serializing values performs no JSON lookup.
+        assert_eq!(lookup_work(), (0, 0));
         assert_eq!(actual, expected);
     }
 
@@ -1134,17 +1323,18 @@ mod tests {
             "allOf": [{"items": {"format": "uint64"}}]
         });
         let source = ("first", "second");
+        let plan = plan::Plan::new(&schema, &schema);
         lookup_work();
-        let encoded = serde_json::to_vec(&Encoded {
+        let encoded = serde_json::to_vec(&ValueAt {
             value: &source,
-            schema: &schema,
-            root: &schema,
+            schema: plan.root(),
+            wire: false,
         })
         .unwrap();
-        assert_eq!(lookup_work(), (1, 0));
+        assert_eq!(lookup_work(), (0, 0));
         assert_eq!(encoded, serde_json::to_vec(&source).unwrap());
         let source = ("first", "second", u64::MAX);
-        let encoded = serde_json::to_value(Encoded {
+        let encoded = serde_json::to_value(BorrowedEncoded {
             value: &source,
             schema: &schema,
             root: &schema,
@@ -1176,7 +1366,7 @@ mod tests {
                 sequence: u64::MAX,
                 opaque: serde_json::json!({"exact": u64::MAX}),
             };
-            let encoded = serde_json::to_value(Encoded {
+            let encoded = serde_json::to_value(BorrowedEncoded {
                 value: &source,
                 schema: &schema,
                 root: &schema,
@@ -1190,7 +1380,7 @@ mod tests {
                 label: "water 水\n\"".into(),
             };
             assert_eq!(
-                serde_json::to_value(Encoded {
+                serde_json::to_value(BorrowedEncoded {
                     value: &source,
                     schema: &schema,
                     root: &schema
@@ -1203,7 +1393,7 @@ mod tests {
         let schema = serde_json::json!({"prefixItems": [
             {"format": "uint64"}, {"allOf": [{"items": {"format": "uint64"}}]}
         ]});
-        let encoded = serde_json::to_value(Encoded {
+        let encoded = serde_json::to_value(BorrowedEncoded {
             value: &source,
             schema: &schema,
             root: &schema,
@@ -1216,7 +1406,7 @@ mod tests {
         let source = std::collections::BTreeMap::from([("original", u64::MAX)]);
         let schema = serde_json::json!({"additionalProperties": {"format": "uint64"}});
         assert_eq!(
-            serde_json::to_value(Encoded {
+            serde_json::to_value(BorrowedEncoded {
                 value: &source,
                 schema: &schema,
                 root: &schema
@@ -1270,11 +1460,10 @@ mod tests {
         opaque: Value,
     }
     #[test]
-    fn t20_native_structural_schema_is_shared_by_type_without_source_data() {
-        let first = root::<SignedDomain>();
-        let second = root::<SignedDomain>();
+    fn t20_native_numeric_plan_is_shared_by_type_without_source_data() {
+        let first = codec::<SignedDomain>();
+        let second = codec::<SignedDomain>();
         assert!(std::sync::Arc::ptr_eq(&first, &second));
-        assert!(first.get("$defs").is_some() || first.get("properties").is_some());
     }
     #[test]
     fn t11_signed_native_quantities_match_wire_safe_integer_contract() {
@@ -1341,12 +1530,12 @@ mod tests {
         assert_eq!(encoded["rows"][0]["quantity"], 65_536);
         assert_eq!(encoded["request_params"]["opaque"], u64::MAX);
         assert_eq!(encoded["indexed"][1]["bytes"], u64::MAX.to_string());
-        let root = root::<NativeDomain>();
+        let root = schema_root::<NativeDomain>();
         let path = vec!["rows".into(), "0".into(), "bytes".into()];
         let mut selected = Vec::new();
         serde_json::to_writer(
             &mut selected,
-            &Encoded {
+            &BorrowedEncoded {
                 value: &source.rows[0].bytes,
                 schema: selected_schema(&root, &path),
                 root: &root,

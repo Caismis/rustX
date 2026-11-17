@@ -37,9 +37,9 @@ pub struct AgentStatusView {
     /// the stable identity of the composition: observing the same
     /// `status_message_id` twice describes one composition, never two.
     pub status_message_id: Option<MessageId>,
-    pub source_locator: Option<super::content::CanonicalContentLocator>,
+    pub source_locator: Option<crate::observation::content::CanonicalContentLocator>,
     pub request_id: Option<crate::runtime::identity::RequestId>,
-    pub rendered_ref: Option<super::content::ContentRef>,
+    pub rendered_ref: Option<crate::observation::content::ContentRef>,
     /// The delivery opportunities that made this generation eligible, each
     /// carrying its own placement fact.
     ///
@@ -154,9 +154,9 @@ pub struct AgentStatusOpportunityView {
 pub struct FreshInboundOpportunityView {
     /// The inbound message that made status generation eligible.
     pub target_message_id: Option<MessageId>,
-    pub target_locator: Option<super::content::CanonicalContentLocator>,
+    pub target_locator: Option<crate::observation::content::CanonicalContentLocator>,
     pub transcript_anchor: Option<RuntimeClientTranscriptCursor>,
-    pub target_metadata_ref: Option<super::content::ContentRef>,
+    pub target_metadata_ref: Option<crate::observation::content::ContentRef>,
 }
 /// The external view of one `PostToolBatch` status opportunity.
 ///

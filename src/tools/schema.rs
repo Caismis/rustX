@@ -5,6 +5,8 @@
 
 mod envelope;
 
+use std::sync::Arc;
+
 use crate::tools::types::{
     ModelToolDefinition, ToolDefinition, ToolExecutionPolicy, ToolInvocationMode,
 };
@@ -183,7 +185,7 @@ pub(crate) fn compile_tool_contract(
             id: definition.id.clone(),
             name: definition.name.clone(),
             description,
-            input_schema,
+            input_schema: Arc::new(input_schema),
         },
         business.validator,
     ))

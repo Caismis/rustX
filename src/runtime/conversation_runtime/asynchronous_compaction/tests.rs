@@ -8,7 +8,7 @@ use crate::runtime::conversation_runtime::test_support::*;
 
 async fn start_background(runtime: &ConversationRuntime) -> CompactionAdmission {
     let (context, revision, tools, prompt) = {
-        let state = runtime.inner.lock_state();
+        let mut state = runtime.inner.lock_state();
         let model = state.model.snapshot().unwrap();
         let resources = state.resources.clone();
         let context = runtime
@@ -28,7 +28,12 @@ async fn start_background(runtime: &ConversationRuntime) -> CompactionAdmission 
             .unwrap();
         (
             context,
-            state.conversation.as_ref().unwrap().revision(),
+            state
+                .conversation
+                .hydrate(runtime.inner.store.as_ref())
+                .unwrap()
+                .unwrap()
+                .revision(),
             resources.capability().tool_registry().model_definitions(),
             render_effective_system_prompt(&sections),
         )
@@ -759,7 +764,13 @@ async fn accepted_ready_result_can_install_after_original_scope_deadline() {
             model,
             resources.capability().tool_registry().model_definitions(),
             render_effective_system_prompt(&sections),
-            state.conversation.take().unwrap(),
+            {
+                state
+                    .conversation
+                    .hydrate(runtime.inner.store.as_ref())
+                    .unwrap();
+                state.conversation.lend().unwrap()
+            },
         )
     };
     context.summarizer = Arc::new(FakeContextSummarizer::new(vec![FakeSummaryStep::Return(
@@ -855,7 +866,11 @@ async fn accepted_ready_result_can_install_after_original_scope_deadline() {
     )
     .unwrap();
     assert!(matches!(result, ActivationOutcome::Committed(_)));
-    runtime.inner.lock_state().conversation = Some(conversation);
+    runtime
+        .inner
+        .lock_state()
+        .conversation
+        .restore(conversation);
     runtime
         .inner
         .publish_compaction_status(CompactionOperationStatus {
@@ -1146,7 +1161,7 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
     .await;
     runtime.activate();
     let (context, revision, tools, prompt) = {
-        let state = runtime.inner.lock_state();
+        let mut state = runtime.inner.lock_state();
         let model = state.model.snapshot().unwrap();
         let resources = state.resources.clone();
         let context = runtime
@@ -1166,7 +1181,12 @@ async fn detached_waiter_preserves_ready_identity_and_shutdown_joins() {
             .unwrap();
         (
             context,
-            state.conversation.as_ref().unwrap().revision(),
+            state
+                .conversation
+                .hydrate(runtime.inner.store.as_ref())
+                .unwrap()
+                .unwrap()
+                .revision(),
             resources.capability().tool_registry().model_definitions(),
             render_effective_system_prompt(&sections),
         )

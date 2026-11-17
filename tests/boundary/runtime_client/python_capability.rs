@@ -44,7 +44,7 @@ async fn capability_projection_covers_native_python_and_skills() {
             id: ToolId::new("tool-ls"),
             name: "ls".to_owned(),
             description: "list files".to_owned(),
-            input_schema: serde_json::json!({"type": "object"}),
+            input_schema: serde_json::json!({"type": "object"}).into(),
             execution_policy: ToolExecutionPolicy::ForegroundOnly,
             replay_policy: ToolReplayPolicy::Never,
             origin: ToolOrigin::Builtin,

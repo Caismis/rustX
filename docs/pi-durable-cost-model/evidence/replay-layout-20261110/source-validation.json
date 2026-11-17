@@ -1,0 +1,14 @@
+{
+  "head": "86bf61a3050dbf85818386d7242d141c59785439",
+  "rust_tree": "42fe0c56decf66012cd4320784ba5e9967124c40",
+  "source_and_helpers_unchanged": true,
+  "working_tree_clean_through_all_measurements": true,
+  "all_products_terminal": true,
+  "native_backup_audit_counts": {
+    "diagnostic": 256,
+    "memory_including_excluded_pair": 1280,
+    "fixed_and_rotating": 512,
+    "deep": 32
+  },
+  "total_verified_native_backups": 2080
+}

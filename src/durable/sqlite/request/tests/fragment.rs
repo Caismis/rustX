@@ -79,7 +79,7 @@ pub(super) fn fragment_snapshot(
 }
 pub(super) fn source_row_counts(store: &SqliteConversationStore) -> (u64, u64, u64) {
     let connection = store.lock().unwrap();
-    connection.query_row("SELECT (SELECT count(*) FROM request_source_pages),(SELECT count(*) FROM request_source_nodes),(SELECT count(*) FROM request_source_roots)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap()
+    connection.query_row("SELECT (SELECT count(*) FROM request_source_pages),(SELECT count(*) FROM native_input_nodes WHERE source_metadata IS NOT NULL),(SELECT count(*) FROM request_source_roots)",[],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap()
 }
 pub(super) fn assert_composed_work(work: observation_request::composed::Work) {
     assert!(
@@ -139,7 +139,7 @@ pub(super) fn assert_fragment_oracle(
     for (path, start, end, children, header) in &fields {
         let actual = observation_request::field_from(
             &connection,
-            "request_observation_fields",
+            "request_source_roots",
             &sequence.to_string(),
             path,
         )
@@ -373,7 +373,7 @@ pub(super) fn assert_uncaptured_fragment_header_failure(
         .lock()
         .unwrap()
         .query_row(
-            "SELECT ledger_position,header_json FROM observation_headers ORDER BY ledger_position DESC LIMIT 1",
+            "SELECT ledger_position,header_json FROM transcript_entries ORDER BY ledger_position DESC LIMIT 1",
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -382,7 +382,7 @@ pub(super) fn assert_uncaptured_fragment_header_failure(
         .lock()
         .unwrap()
         .execute(
-            "UPDATE observation_headers SET header_json=X'7b' WHERE ledger_position=?1",
+            "UPDATE transcript_entries SET header_json=X'7b' WHERE ledger_position=?1",
             [position],
         )
         .unwrap();
@@ -411,7 +411,7 @@ pub(super) fn assert_uncaptured_fragment_header_failure(
         .lock()
         .unwrap()
         .execute(
-            "UPDATE observation_headers SET header_json=?1 WHERE ledger_position=?2",
+            "UPDATE transcript_entries SET header_json=?1 WHERE ledger_position=?2",
             params![header, position],
         )
         .unwrap();
@@ -560,7 +560,7 @@ pub(super) fn assert_reading_fragment_source(
         for field in page.fields {
             let (start, end, _, _) = observation_request::field_from(
                 &connection,
-                "request_observation_fields",
+                "request_source_roots",
                 &sequence.to_string(),
                 &field.path,
             )

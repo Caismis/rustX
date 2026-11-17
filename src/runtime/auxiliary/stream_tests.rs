@@ -302,7 +302,7 @@ fn continuation_is_validated_then_discarded_without_losing_ordered_text() {
         &event(ModelEvent::ContinuationState {
             block_index: ContentBlockIndex::new(1),
             state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"signature": "private-continuation"}),
+                opaque: serde_json::json!({"signature": "private-continuation"}).into(),
             }),
         }),
         102,
@@ -338,7 +338,7 @@ fn malformed_envelopes_are_absorbing_and_cannot_add_evidence() {
         event(ModelEvent::ContinuationState {
             block_index: ContentBlockIndex::new(0),
             state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({}),
+                opaque: serde_json::json!({}).into(),
             }),
         }),
     ] {
@@ -995,7 +995,7 @@ fn malformed_block_kind_does_not_poison_trusted_evidence_with_its_tail() {
         event(ModelEvent::ContinuationState {
             block_index: ContentBlockIndex::new(0),
             state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"signature": "foreign-continuation"}),
+                opaque: serde_json::json!({"signature": "foreign-continuation"}).into(),
             }),
         }),
         text(u32::MAX, "sparse allocation attack"),
@@ -1042,7 +1042,7 @@ fn generation_progress_changes_liveness_without_inventing_output_timing() {
         &event(ModelEvent::ContinuationState {
             block_index: ContentBlockIndex::new(0),
             state: ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"signature": "must-not-leak"}),
+                opaque: serde_json::json!({"signature": "must-not-leak"}).into(),
             }),
         }),
         157,

@@ -3594,7 +3594,7 @@ body
                                 )),
                                 name: (*name).into(),
                                 description: (*name).into(),
-                                input_schema: serde_json::json!({"type":"object"}),
+                                input_schema: serde_json::json!({"type":"object"}).into(),
                                 execution_policy: ToolExecutionPolicy::ForegroundOnly,
                                 replay_policy: ToolReplayPolicy::Never,
                                 origin: match &source {

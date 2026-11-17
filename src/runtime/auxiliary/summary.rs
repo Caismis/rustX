@@ -305,6 +305,7 @@ impl PreparedSummary for Prepared {
                 .submit(FrozenCall {
                     start,
                     request,
+                    provider_body_limit: None,
                     invocation,
                     timeout: self.timeout,
                     resource_revision: self.resource_revision,

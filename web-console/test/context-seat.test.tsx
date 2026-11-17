@@ -4,7 +4,7 @@ import { afterEach, beforeEach, expect, it } from 'vitest';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { ContextSeat } from '../src/app/agent/ContextSeat';
 import { Server, snapshot, projectionHead } from './fixture';
-import type { CompactionOperationPhase, RuntimeClientContextView, RuntimeClientCompactionOperation } from '../../protocol/app-server/v81';
+import type { CompactionOperationPhase, RuntimeClientContextView, RuntimeClientCompactionOperation } from '../../protocol/app-server/v82';
 let server: Server;
 beforeEach(async () => { server = new Server(); await server.attached('A'); });
 afterEach(() => { cleanup(); server.client.disconnect(); });

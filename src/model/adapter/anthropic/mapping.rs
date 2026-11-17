@@ -1,17 +1,17 @@
 //! Anthropic Messages normalization: errors, usage, finish reasons, and
 //! provider-neutral request translation.
 
+use std::borrow::Cow;
+
 use reqwest::{StatusCode, header::HeaderMap};
 
 use crate::message::types::{AssistantContentBlock, UserContentBlock};
-use crate::model::adapter::validation::ValidatedTools;
 use crate::model::error::{
     ModelError, ModelErrorKind, ModelRetryDisposition, is_context_window_error,
 };
 use crate::model::finish::ModelFinishReason;
-use crate::model::invocation::finalize_provider_request;
 use crate::model::projected::ModelMessageView;
-use crate::model::types::{ModelProtocol, ModelUsage, UsageDetails};
+use crate::model::types::{ModelUsage, UsageDetails};
 use crate::runtime::continuation::{AnthropicContinuation, ProviderContinuationState};
 
 use super::wire::WireUsage;
@@ -352,141 +352,488 @@ fn parse_error_body(body: &[u8]) -> (Option<String>, Option<String>, Option<Stri
     (provider_code, provider_type, message)
 }
 
-/// The runtime-owned structural part of the request body sent to
-/// `/v1/messages`.
-///
-/// Only fields rustX owns semantically appear here. Provider sampling and
-/// reasoning fields (`thinking`, `output_config`, `temperature`, …) are
-/// *not* modelled: they arrive as the request's opaque effective
-/// `requestParams` and are shallow-overlaid onto the serialized object.
-#[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct WireRequest {
-    pub model: String,
-    pub max_tokens: u32,
-    pub messages: Vec<WireRequestMessage>,
+/// Serialize borrowed text, tools, and opaque parameters directly into the body.
+/// Tool correlations are resolved on the translated blocks before serialization.
+#[derive(serde::Serialize)]
+pub(crate) struct WireRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    messages: WireMessages<'a>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub system: Option<Vec<WireTextBlock>>,
+    system: Option<[WireTextBlock<'a>; 1]>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tools: Option<Vec<WireTool>>,
-    pub stream: bool,
+    tools: Option<std::sync::Arc<serde_json::value::RawValue>>,
+    stream: bool,
+    #[serde(flatten)]
+    params: Cow<'a, crate::model::invocation::RequestParams>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct WireRequestMessage {
-    pub role: &'static str,
-    pub content: Vec<serde_json::Value>,
+#[derive(serde::Serialize)]
+struct WireRequestMessage<'a> {
+    role: &'static str,
+    content: Vec<WireBlock<'a>>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct WireTextBlock {
-    pub r#type: &'static str,
-    pub text: String,
+#[derive(serde::Serialize)]
+#[serde(untagged)]
+enum WireBlock<'a> {
+    Text(WireTextBlock<'a>),
+    OpaqueThinking(&'a serde_json::Value),
+    Native(serde_json::Value),
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub(crate) struct WireTool {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub input_schema: serde_json::Value,
+#[derive(serde::Serialize)]
+struct WireTextBlock<'a> {
+    r#type: &'static str,
+    text: Cow<'a, str>,
 }
 
-/// Translates a provider-neutral request into the final Anthropic request JSON.
-///
-/// Canonical translation produces the typed runtime-owned [`WireRequest`];
-/// it is then serialized to a JSON object and shallow-overlaid with the
-/// request's effective opaque `requestParams` under the protected-key
-/// contract. Reasoning parameters remain exactly as configured. An explicitly
-/// structured request adds only `output_config.format`, preserving configured
-/// siblings such as effort.
-pub(crate) fn translate_request(
-    request: &crate::model::types::ModelRequest,
-    tools: &ValidatedTools,
-) -> Result<serde_json::Value, ModelError> {
+#[derive(serde::Serialize)]
+struct WireTool<'a> {
+    name: &'a str,
+    description: &'a str,
+    input_schema: &'a serde_json::Value,
+}
+
+#[derive(Clone)]
+enum EncodedFrame {
+    Message(std::sync::Arc<serde_json::value::RawValue>),
+    Tools(imbl::Vector<Option<std::sync::Arc<serde_json::value::RawValue>>>),
+}
+impl serde::Serialize for EncodedFrame {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Message(raw) => raw.serialize(serializer),
+            Self::Tools(blocks) => {
+                struct Blocks<'a>(
+                    &'a imbl::Vector<Option<std::sync::Arc<serde_json::value::RawValue>>>,
+                );
+                impl serde::Serialize for Blocks<'_> {
+                    fn serialize<S: serde::Serializer>(
+                        &self,
+                        serializer: S,
+                    ) -> Result<S::Ok, S::Error> {
+                        serializer.collect_seq(self.0.iter().flatten())
+                    }
+                }
+                #[derive(serde::Serialize)]
+                struct Tools<'a> {
+                    role: &'static str,
+                    content: Blocks<'a>,
+                }
+                Tools {
+                    role: "user",
+                    content: Blocks(blocks),
+                }
+                .serialize(serializer)
+            }
+        }
+    }
+}
+#[derive(Default)]
+pub(crate) struct AnthropicPrefix {
+    prefix: crate::model::adapter::cache::Prefix,
+    epoch: u64,
+    origin: Option<crate::model::replay::ReplayOrigin>,
+    images: crate::model::images::ResolvedImages,
+    frames: imbl::OrdMap<usize, EncodedFrame>,
+    tools: imbl::HashMap<usize, (usize, usize)>,
+    last_tool: Option<usize>,
+    bytes: usize,
+}
+enum WireMessages<'a> {
+    Cached {
+        frames: imbl::OrdMap<usize, EncodedFrame>,
+        bytes: usize,
+        _lifetime: std::marker::PhantomData<&'a ()>,
+    },
+    #[cfg(test)]
+    Uncached(Vec<WireRequestMessage<'a>>),
+}
+impl serde::Serialize for WireMessages<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Cached { frames, .. } => serializer.collect_seq(frames.values()),
+            #[cfg(test)]
+            Self::Uncached(messages) => messages.serialize(serializer),
+        }
+    }
+}
+impl WireRequest<'_> {
+    pub(crate) fn capacity_hint(&self) -> usize {
+        match &self.messages {
+            WireMessages::Cached { frames, bytes, .. } => bytes
+                .saturating_add(frames.len().saturating_mul(32))
+                .saturating_add(self.tools.as_ref().map_or(0, |raw| raw.get().len()))
+                .saturating_add(1024),
+            #[cfg(test)]
+            WireMessages::Uncached(_) => 128,
+        }
+    }
+}
+enum Piece<'a> {
+    Message(Option<WireRequestMessage<'a>>),
+    Tool(WireBlock<'a>),
+}
+struct StagedMessages<'a> {
+    prefix: AnthropicPrefix,
+    pieces: std::collections::BTreeMap<usize, Piece<'a>>,
+}
+
+#[cfg(test)]
+pub(crate) fn translate_request<'a>(
+    request: &'a crate::model::ModelRequest,
+    tools: &crate::model::adapter::validation::ValidatedTools,
+) -> Result<WireRequest<'a>, ModelError> {
+    translate_request_with_limit(request, tools, None)
+}
+
+pub(crate) fn translate_request_with_limit<'a>(
+    request: &'a crate::model::ModelRequest,
+    tools: &crate::model::adapter::validation::ValidatedTools,
+    limit: Option<usize>,
+) -> Result<WireRequest<'a>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
-    construct_request(request, tools)
-}
-
-fn construct_request(
-    request: &crate::model::ModelRequest,
-    tools: &ValidatedTools,
-) -> Result<serde_json::Value, ModelError> {
-    let (system, messages) = translate_messages(request, tools)?;
-
-    let tools = translate_tools(&request.tools);
-
-    let wire = WireRequest {
-        model: request.model().to_owned(),
+    let staged = stage_messages(request, tools)?;
+    let params = crate::model::adapter::structured::request_params(request)?;
+    let catalog = tools.encoded_tools(
+        crate::model::ModelProtocol::AnthropicMessages,
+        limit,
+        &request.tools,
+        || translate_tools(&request.tools),
+    )?;
+    let input_limit = limit
+        .map(|limit| {
+            limit
+                .checked_sub(catalog.as_ref().map_or(0, |raw| raw.get().len()))
+                .ok_or_else(crate::model::adapter::validation::wire_budget_error)
+        })
+        .transpose()?;
+    let messages = finish_messages(request, tools, staged, input_limit)?;
+    Ok(WireRequest {
+        model: request.model(),
         max_tokens: request.max_output_tokens(),
         messages,
-        system: (!system.is_empty()).then_some(system),
-        tools: (!tools.is_empty()).then_some(tools),
+        system: (!request.effective_system_prompt.is_empty()).then(|| {
+            [WireTextBlock {
+                r#type: "text",
+                text: Cow::Borrowed(&request.effective_system_prompt),
+            }]
+        }),
+        tools: catalog,
         stream: true,
-    };
-    let mut value = {
-        #[cfg(feature = "issue-387-profile")]
-        let _profile = crate::model::adapter::profile::phase(
-            crate::model::adapter::profile::Phase::TypedToValue,
-        );
-        serde_json::to_value(&wire)
+        params,
+    })
+}
+
+fn stage_messages<'a>(
+    request: &'a crate::model::ModelRequest,
+    tools: &crate::model::adapter::validation::ValidatedTools,
+) -> Result<StagedMessages<'a>, ModelError> {
+    let origin = request.invocation.replay_origin();
+    let prefix = request
+        .messages
+        .preparation()
+        .lock()
+        .expect("input preparation cache")
+        .anthropic
+        .take()
+        .filter(|prefix| {
+            prefix.epoch == tools.correlation.epoch
+                && prefix.origin == origin
+                && prefix.images == request.images
+                && prefix.prefix.matches(&request.messages)
+        })
+        .unwrap_or_else(|| AnthropicPrefix {
+            epoch: tools.correlation.epoch,
+            origin: origin.clone(),
+            images: request.images.clone(),
+            ..AnthropicPrefix::default()
+        });
+    if let Some(boundary) = tools
+        .continuation_boundary
+        .filter(|boundary| *boundary < prefix.prefix.len())
+        && let Some(ProviderContinuationState::Anthropic(continuation)) = &request.continuation
+        && let ModelMessageView::Assistant(assistant) = request.messages[boundary].view()
+    {
+        translate_assistant_content(assistant, Some(continuation), true, origin.as_ref())?;
     }
-    .map_err(|error| ModelError {
-        kind: ModelErrorKind::InvalidRequest,
-        message: format!("failed to serialize the Anthropic request: {error}"),
-        retry_disposition: crate::model::error::ModelRetryDisposition::Never,
-        retry_after_ms: None,
-        provider_code: None,
-        context_overflow: None,
-        malformed_tool_proposal: None,
-        timeout_phase: None,
-        generation: None,
-    })?;
-    crate::model::adapter::correlation::encode(&mut value, request)
-        .map_err(|error| invalid_request(&error))?;
+    let mut dirty = tools.correlation.dirty.clone();
+    for index in prefix.prefix.len()..request.messages.len() {
+        dirty.insert(index);
+    }
+    let mut pieces = std::collections::BTreeMap::new();
+    for index in dirty {
+        pieces.insert(
+            index,
+            translate_piece(request, tools, index, origin.as_ref())?,
+        );
+    }
+    if prefix.frames.is_empty()
+        && pieces
+            .values()
+            .all(|piece| matches!(piece, Piece::Message(None)))
+    {
+        return Err(invalid_request(
+            "an Anthropic Messages request requires at least one message",
+        ));
+    }
+    tools.correlation.validate_wire().map_err(invalid_request)?;
+    for (&index, piece) in &mut pieces {
+        tools
+            .correlation
+            .encode_message_fields(index, &request.messages[index], |field| match piece {
+                Piece::Message(Some(message)) => {
+                    for block in &mut message.content {
+                        if let WireBlock::Native(value) = block {
+                            crate::model::adapter::correlation::visit_anthropic_block(
+                                value,
+                                &mut *field,
+                            );
+                        }
+                    }
+                }
+                Piece::Tool(WireBlock::Native(value)) => {
+                    crate::model::adapter::correlation::visit_anthropic_block(value, &mut *field);
+                }
+                _ => {}
+            })
+            .map_err(invalid_request)?;
+    }
+    Ok(StagedMessages { prefix, pieces })
+}
+
+fn translate_piece<'a>(
+    request: &'a crate::model::ModelRequest,
+    tools: &crate::model::adapter::validation::ValidatedTools,
+    index: usize,
+    origin: Option<&crate::model::replay::ReplayOrigin>,
+) -> Result<Piece<'a>, ModelError> {
+    Ok(match request.messages[index].view() {
+        ModelMessageView::User(user) => Piece::Message(Some(WireRequestMessage {
+            role: "user",
+            content: translate_user_content(user, &request.images)?,
+        })),
+        ModelMessageView::Assistant(assistant) => {
+            let continuation = match &request.continuation {
+                Some(ProviderContinuationState::Anthropic(state)) => Some(state),
+                _ => None,
+            };
+            let content = translate_assistant_content(
+                assistant,
+                continuation,
+                tools.continuation_boundary == Some(index),
+                origin,
+            )?;
+            Piece::Message((!content.is_empty()).then_some(WireRequestMessage {
+                role: "assistant",
+                content,
+            }))
+        }
+        ModelMessageView::Tool(id, result) => Piece::Tool(WireBlock::Native(
+            translate_tool_result(id, result, &request.images)?,
+        )),
+        ModelMessageView::RequestOnly(context) => Piece::Message(Some(WireRequestMessage {
+            role: if context.is_assistant() {
+                "assistant"
+            } else {
+                "user"
+            },
+            content: vec![WireBlock::Text(WireTextBlock {
+                r#type: "text",
+                text: Cow::Owned(context.render()),
+            })],
+        })),
+    })
+}
+
+impl AnthropicPrefix {
+    fn remove(&mut self, index: usize, piece: &Piece<'_>) {
+        if matches!(piece, Piece::Tool(_)) {
+            if let Some(&(group, offset)) = self.tools.get(&index)
+                && let Some(EncodedFrame::Tools(blocks)) = self.frames.get_mut(&group)
+                && let Some(raw) = blocks[offset].take()
+            {
+                self.bytes -= raw.get().len();
+            }
+        } else if let Some(EncodedFrame::Message(raw)) = self.frames.remove(&index) {
+            self.bytes -= raw.get().len();
+        }
+    }
+    fn insert(
+        &mut self,
+        index: usize,
+        raw: Option<std::sync::Arc<serde_json::value::RawValue>>,
+        tool: bool,
+        new: bool,
+    ) {
+        if let Some(raw) = &raw {
+            self.bytes += raw.get().len();
+        }
+        if tool {
+            let raw = raw.expect("encoded Tool block");
+            let (group, offset) = if new {
+                let group = self.last_tool.unwrap_or(index);
+                if !self.frames.contains_key(&group) {
+                    self.frames
+                        .insert(group, EncodedFrame::Tools(imbl::Vector::new()));
+                }
+                let Some(EncodedFrame::Tools(blocks)) = self.frames.get_mut(&group) else {
+                    unreachable!("Tool group")
+                };
+                let offset = blocks.len();
+                blocks.push_back(None);
+                self.tools.insert(index, (group, offset));
+                self.last_tool = Some(group);
+                (group, offset)
+            } else {
+                *self.tools.get(&index).expect("cached Tool placement")
+            };
+            let Some(EncodedFrame::Tools(blocks)) = self.frames.get_mut(&group) else {
+                unreachable!("Tool group")
+            };
+            blocks.set(offset, Some(raw));
+        } else {
+            if let Some(raw) = raw {
+                self.frames.insert(index, EncodedFrame::Message(raw));
+            }
+            if new {
+                self.last_tool = None;
+            }
+        }
+    }
+}
+
+fn finish_messages<'a>(
+    request: &crate::model::ModelRequest,
+    tools: &crate::model::adapter::validation::ValidatedTools,
+    staged: StagedMessages<'a>,
+    limit: Option<usize>,
+) -> Result<WireMessages<'a>, ModelError> {
+    let StagedMessages { mut prefix, pieces } = staged;
+    let start = prefix.prefix.len();
+    for (&index, piece) in &pieces {
+        prefix.remove(index, piece);
+    }
+    if limit.is_some_and(|limit| prefix.bytes > limit) {
+        return Err(crate::model::adapter::validation::wire_budget_error());
+    }
+    for (index, piece) in pieces {
+        let remaining = limit.map(|limit| limit - prefix.bytes);
+        let (raw, tool) = match piece {
+            Piece::Message(message) => (
+                message
+                    .as_ref()
+                    .map(|message| crate::model::adapter::cache::encode_raw(message, remaining))
+                    .transpose()?,
+                false,
+            ),
+            Piece::Tool(block) => (
+                Some(crate::model::adapter::cache::encode_raw(&block, remaining)?),
+                true,
+            ),
+        };
+        #[cfg(test)]
+        crate::model::adapter::cache::work(|work| {
+            work.encoded_items += 1;
+            work.encoded_bytes += raw.as_ref().map_or(0, |raw| raw.get().len());
+        });
+        prefix.insert(index, raw, tool, index >= start);
+    }
+    prefix.prefix = crate::model::adapter::cache::Prefix::capture(&request.messages);
+    let messages = WireMessages::Cached {
+        frames: prefix.frames.clone(),
+        bytes: prefix.bytes,
+        _lifetime: std::marker::PhantomData,
+    };
+    let mut cache = request
+        .messages
+        .preparation()
+        .lock()
+        .expect("input preparation cache");
+    if let Some(current) = cache.correlation.as_mut().filter(|current| {
+        current.epoch == tools.correlation.epoch && current.matches(&request.messages)
+    }) {
+        current.dirty.clear();
+        cache.anthropic = Some(prefix);
+    }
+    Ok(messages)
+}
+
+#[cfg(test)]
+pub(crate) fn uncached_request<'a>(
+    request: &'a crate::model::types::ModelRequest,
+    tools: &crate::model::adapter::validation::ValidatedTools,
+) -> Result<WireRequest<'a>, ModelError> {
+    #[cfg(feature = "issue-387-profile")]
+    let _profile =
+        crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::Translate);
+    let mut messages = translate_messages(request, tools.continuation_boundary)?;
+    crate::model::adapter::correlation::encode_fields(tools.correlation.transmitted(), |field| {
+        for message in &mut messages {
+            #[cfg(feature = "issue-387-profile")]
+            crate::model::adapter::profile::wire_item();
+            for block in &mut message.content {
+                if let WireBlock::Native(block) = block {
+                    crate::model::adapter::correlation::visit_anthropic_block(block, &mut *field);
+                }
+            }
+        }
+    })
+    .map_err(invalid_request)?;
+
+    // Only the parameter overlay needs an object. The protected-key check
+    // guarantees that flattening it cannot replace any structural field.
     #[cfg(feature = "issue-387-profile")]
     let _profile =
         crate::model::adapter::profile::phase(crate::model::adapter::profile::Phase::FinalParams);
-    let value = finalize_provider_request(
-        value,
-        request.request_params(),
-        ModelProtocol::AnthropicMessages,
-    )?;
-    crate::model::adapter::structured::finalize_request(value, request)
+    let params = crate::model::adapter::structured::request_params(request)?;
+    Ok(WireRequest {
+        model: request.model(),
+        max_tokens: request.max_output_tokens(),
+        messages: WireMessages::Uncached(messages),
+        system: (!request.effective_system_prompt.is_empty()).then(|| {
+            [WireTextBlock {
+                r#type: "text",
+                text: Cow::Borrowed(&request.effective_system_prompt),
+            }]
+        }),
+        tools: tools.encoded_tools(
+            crate::model::ModelProtocol::AnthropicMessages,
+            None,
+            &request.tools,
+            || translate_tools(&request.tools),
+        )?,
+        stream: true,
+        params,
+    })
 }
 
-fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<WireTool> {
+fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<WireTool<'_>> {
     tools
         .iter()
         .map(|tool| WireTool {
-            name: tool.name.clone(),
-            description: Some(tool.description.clone()),
-            input_schema: tool.input_schema.clone(),
+            name: &tool.name,
+            description: &tool.description,
+            input_schema: &tool.input_schema,
         })
         .collect()
 }
 
-/// Translates the canonical message list into Anthropic wire messages and
-/// system blocks.
+/// Translates the canonical message list into Anthropic wire messages.
+#[cfg(test)]
 fn translate_messages(
     request: &crate::model::types::ModelRequest,
-    tools: &ValidatedTools,
-) -> Result<(Vec<WireTextBlock>, Vec<WireRequestMessage>), ModelError> {
+    continuation_boundary: Option<usize>,
+) -> Result<Vec<WireRequestMessage<'_>>, ModelError> {
     #[cfg(feature = "issue-387-profile")]
     let _profile = crate::model::adapter::profile::phase(
         crate::model::adapter::profile::Phase::TranslateMessages,
     );
-    let system: Vec<WireTextBlock> = if request.effective_system_prompt.is_empty() {
-        Vec::new()
-    } else {
-        vec![WireTextBlock {
-            r#type: "text",
-            text: request.effective_system_prompt.clone(),
-        }]
-    };
-    let mut messages: Vec<WireRequestMessage> = Vec::new();
-    let mut pending_tool_results: Vec<serde_json::Value> = Vec::new();
+    let mut messages = Vec::with_capacity(request.messages.len());
+    let mut pending_tool_results = Vec::new();
 
     let continuation = match &request.continuation {
         Some(ProviderContinuationState::Anthropic(continuation)) => Some(continuation),
@@ -507,15 +854,10 @@ fn translate_messages(
             }
             ModelMessageView::Assistant(assistant) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
-                let is_continuation_output = request
-                    .continuation_boundary()
-                    .map_err(|error| unsupported(&error))?
-                    == Some(position);
                 let content = translate_assistant_content(
                     assistant,
-                    tools,
                     continuation,
-                    is_continuation_output,
+                    continuation_boundary == Some(position),
                     request.invocation.replay_origin().as_ref(),
                 )?;
                 if !content.is_empty() {
@@ -526,11 +868,11 @@ fn translate_messages(
                 }
             }
             ModelMessageView::Tool(tool_call_id, result) => {
-                pending_tool_results.push(translate_tool_result(
+                pending_tool_results.push(WireBlock::Native(translate_tool_result(
                     tool_call_id,
                     result,
                     &request.images,
-                )?);
+                )?));
             }
             ModelMessageView::RequestOnly(carryover) => {
                 flush_tool_results(&mut pending_tool_results, &mut messages);
@@ -540,9 +882,9 @@ fn translate_messages(
                     } else {
                         "user"
                     },
-                    content: vec![serde_json::json!({
-                        "type": "text",
-                        "text": carryover.render(),
+                    content: vec![WireBlock::Text(WireTextBlock {
+                        r#type: "text",
+                        text: Cow::Owned(carryover.render()),
                     })],
                 });
             }
@@ -563,26 +905,26 @@ fn translate_messages(
             generation: None,
         });
     }
-    Ok((system, messages))
+    Ok(messages)
 }
 
-fn translate_user_content(
-    user: &[UserContentBlock],
+fn translate_user_content<'a>(
+    user: &'a [UserContentBlock],
     images: &crate::model::images::ResolvedImages,
-) -> Result<Vec<serde_json::Value>, ModelError> {
+) -> Result<Vec<WireBlock<'a>>, ModelError> {
     let mut content = Vec::new();
     for user_content in user {
         #[cfg(feature = "issue-387-profile")]
         crate::model::adapter::profile::block();
         match user_content {
             UserContentBlock::Text(text) => {
-                content.push(serde_json::json!({
-                    "type": "text",
-                    "text": text.text,
+                content.push(WireBlock::Text(WireTextBlock {
+                    r#type: "text",
+                    text: Cow::Borrowed(&text.text),
                 }));
             }
             UserContentBlock::Image(image) => {
-                content.push(image_block(image, images)?);
+                content.push(WireBlock::Native(image_block(image, images)?));
             }
             UserContentBlock::UploadedFile(_) | UserContentBlock::File(_) => {
                 return Err(unsupported(
@@ -597,16 +939,15 @@ fn translate_user_content(
 /// Translates one canonical Assistant message into Anthropic assistant
 /// content blocks.
 ///
-/// Same-owner thinking is replayed from its complete native state. Other
-/// models' readable reasoning and refusals become ordinary assistant text;
-/// foreign opaque state is omitted and signatures are never fabricated.
-fn translate_assistant_content(
-    assistant: &[crate::message::types::AssistantContentBlock],
-    _tools: &ValidatedTools,
+/// Previous thinking blocks are replayed from their rustX-owned opaque
+/// provider state; a signed thinking block is never reconstructed from
+/// canonical text alone and no signature is ever fabricated.
+fn translate_assistant_content<'a>(
+    assistant: &'a [crate::message::types::AssistantContentBlock],
     continuation: Option<&AnthropicContinuation>,
     is_continuation_output: bool,
     origin: Option<&crate::model::replay::ReplayOrigin>,
-) -> Result<Vec<serde_json::Value>, ModelError> {
+) -> Result<Vec<WireBlock<'a>>, ModelError> {
     let mut content = Vec::new();
     let mut reasoning_seen = false;
     let last_reasoning_position = assistant
@@ -615,9 +956,9 @@ fn translate_assistant_content(
     for (position, block) in assistant.iter().enumerate() {
         match block {
             AssistantContentBlock::Text(text) => {
-                content.push(serde_json::json!({
-                    "type": "text",
-                    "text": text.text,
+                content.push(WireBlock::Text(WireTextBlock {
+                    r#type: "text",
+                    text: Cow::Borrowed(&text.text),
                 }));
             }
             AssistantContentBlock::Reasoning(reasoning) => {
@@ -629,7 +970,10 @@ fn translate_assistant_content(
                         .as_deref()
                         .filter(|text| !text.trim().is_empty())
                     {
-                        content.push(serde_json::json!({"type":"text", "text":text}));
+                        content.push(WireBlock::Text(WireTextBlock {
+                            r#type: "text",
+                            text: Cow::Borrowed(text),
+                        }));
                     }
                     continue;
                 }
@@ -654,18 +998,21 @@ fn translate_assistant_content(
                     }
                 };
                 validate_thinking_unit(reasoning, state)?;
-                content.push(state.opaque.clone());
+                content.push(WireBlock::OpaqueThinking(&state.opaque));
             }
             AssistantContentBlock::ToolCall(call) => {
-                content.push(serde_json::json!({
+                content.push(WireBlock::Native(serde_json::json!({
                     "type": "tool_use",
                     "id": call.id,
                     "name": call.name,
                     "input": call.arguments,
-                }));
+                })));
             }
             AssistantContentBlock::Refusal(refusal) => {
-                content.push(serde_json::json!({"type":"text", "text":refusal.text}));
+                content.push(WireBlock::Text(WireTextBlock {
+                    r#type: "text",
+                    text: Cow::Borrowed(&refusal.text),
+                }));
             }
             AssistantContentBlock::Image(_) => {
                 return Err(unsupported(
@@ -751,18 +1098,19 @@ fn image_block(
     let bytes = images
         .get(&image.artifact_id)
         .ok_or_else(|| unsupported("unresolved image artifact"))?;
-    crate::model::images::validate_png(bytes).map_err(|error| unsupported(&error))?;
+    bytes.measurement().map_err(|error| unsupported(&error))?;
     Ok(
-        serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(bytes) } }),
+        serde_json::json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": base64::engine::general_purpose::STANDARD.encode(bytes.as_bytes()) } }),
     )
 }
 
 /// Anthropic requires `tool_result` blocks to form one user message directly
 /// after the assistant message; consecutive canonical tool results merge into
 /// a single provider user message.
-fn flush_tool_results(
-    pending: &mut Vec<serde_json::Value>,
-    messages: &mut Vec<WireRequestMessage>,
+#[cfg(test)]
+fn flush_tool_results<'a>(
+    pending: &mut Vec<WireBlock<'a>>,
+    messages: &mut Vec<WireRequestMessage<'a>>,
 ) {
     if pending.is_empty() {
         return;
@@ -774,7 +1122,7 @@ fn flush_tool_results(
     });
 }
 
-fn invalid_request(message: &str) -> ModelError {
+pub(super) fn invalid_request(message: &str) -> ModelError {
     ModelError {
         kind: ModelErrorKind::InvalidRequest,
         message: message.to_owned(),
@@ -847,14 +1195,15 @@ mod questionnaire_schema_tests {
                 }
             }
         });
-        let encoded = translate_tools(&[ModelToolDefinition {
+        let tools = [ModelToolDefinition {
             id: crate::runtime::identity::ToolId::new("tool-ask-user"),
             name: "ask_user".to_owned(),
             description: "structured questionnaire".to_owned(),
-            input_schema: schema.clone(),
-        }]);
+            input_schema: schema.clone().into(),
+        }];
+        let encoded = translate_tools(&tools);
         assert_eq!(encoded[0].name, "ask_user");
-        assert_eq!(encoded[0].input_schema, schema);
+        assert_eq!(encoded[0].input_schema, &schema);
     }
 }
 
@@ -1017,7 +1366,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let encoded = translate_tool_result(
             &message.tool_call_id,
@@ -1067,7 +1417,8 @@ mod tests {
                     truncation: None,
                     workflow: None,
                     managed_output: None,
-                },
+                }
+                .into(),
             };
             let encoded = translate_tool_result(
                 &message.tool_call_id,
@@ -1119,7 +1470,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         };
         let encoded = translate_tool_result(
             &message.tool_call_id,
@@ -1362,5 +1714,31 @@ mod tests {
         assert_eq!(combined.input_tokens, Some(14));
         assert_eq!(combined.output_tokens, Some(0));
         assert_eq!(combined.total_tokens, Some(14));
+    }
+}
+
+#[cfg(test)]
+mod prefix_publication_tests {
+    use super::*;
+    use crate::model::adapter::cache::tests::{append, oracle, prepared, request};
+
+    #[test]
+    fn late_old_preparation_cannot_replace_current_prefix() {
+        let mut current = request();
+        current.invocation.protocol = crate::model::ModelProtocol::AnthropicMessages;
+        append(&mut current, 0, true, true);
+        let old = current.clone();
+        assert_eq!(prepared(&old), oracle(&old));
+        let tools =
+            crate::model::adapter::validation::validate_request(&old, old.protocol()).unwrap();
+        // Pause the old request after it has taken its immutable cached prefix.
+        let staged = stage_messages(&old, &tools).unwrap();
+        append(&mut current, 1, true, true);
+        let expected = oracle(&current);
+        assert_eq!(prepared(&current), expected);
+        // Complete the old preparation after the new one has published its
+        // prefix and consumed the old call/result's relabeling work.
+        finish_messages(&old, &tools, staged, None).unwrap();
+        assert_eq!(prepared(&current), expected);
     }
 }

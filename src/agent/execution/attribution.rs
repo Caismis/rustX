@@ -14,11 +14,10 @@ pub(crate) enum Phase {
     ContextProjection,
     Source,
     SourceCapture,
-    SourceAuthenticate,
+    SourceLookup,
     SourceLeaf,
     SourceScalar,
-    SourcePaths,
-    SourceLength,
+    SourceGeometry,
     ContextObserve,
     ContextMeasure,
     InputAssembly,
@@ -30,7 +29,7 @@ pub(crate) struct PhaseProfile {
     pub(crate) total_us: u128,
 }
 
-/// Inclusive actual Source I/O. Authenticate and leaf work are subsets of request work.
+/// Inclusive actual Source I/O. Lookup and leaf work are subsets of request work.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct SourceWork {
     pub(crate) samples: u64,
@@ -63,7 +62,7 @@ impl SourceWork {
 #[derive(Clone, Copy)]
 pub(crate) enum SourceScope {
     Request,
-    Authenticate,
+    Lookup,
     Leaf,
 }
 #[derive(Clone, Copy, Debug, Default)]
@@ -128,16 +127,15 @@ pub(crate) struct AgentRequestProfile {
     pub(crate) context_projection: PhaseProfile,
     pub(crate) source: PhaseProfile,
     pub(crate) source_capture: PhaseProfile,
-    pub(crate) source_authenticate: PhaseProfile,
+    pub(crate) source_lookup: PhaseProfile,
     pub(crate) source_leaf: PhaseProfile,
     pub(crate) source_scalar: PhaseProfile,
-    pub(crate) source_paths: PhaseProfile,
-    pub(crate) source_length: PhaseProfile,
+    pub(crate) source_geometry: PhaseProfile,
     pub(crate) context_observe: PhaseProfile,
     pub(crate) context_measure: PhaseProfile,
     pub(crate) input_assembly: PhaseProfile,
     pub(crate) source_work: SourceWork,
-    pub(crate) source_auth_work: SourceWork,
+    pub(crate) source_lookup_work: SourceWork,
     pub(crate) source_leaf_work: SourceWork,
     pub(crate) context_work: ContextWork,
     pub(crate) native_work: NativeWork,
@@ -156,7 +154,7 @@ pub(crate) fn record_source(scope: SourceScope, work: SourceWork) {
     let mut profile = active.lock().unwrap();
     match scope {
         SourceScope::Request => &mut profile.source_work,
-        SourceScope::Authenticate => &mut profile.source_auth_work,
+        SourceScope::Lookup => &mut profile.source_lookup_work,
         SourceScope::Leaf => &mut profile.source_leaf_work,
     }
     .add(work);
@@ -239,11 +237,10 @@ impl Drop for Timer {
             Phase::ContextProjection => &mut profile.context_projection,
             Phase::Source => &mut profile.source,
             Phase::SourceCapture => &mut profile.source_capture,
-            Phase::SourceAuthenticate => &mut profile.source_authenticate,
+            Phase::SourceLookup => &mut profile.source_lookup,
             Phase::SourceLeaf => &mut profile.source_leaf,
             Phase::SourceScalar => &mut profile.source_scalar,
-            Phase::SourcePaths => &mut profile.source_paths,
-            Phase::SourceLength => &mut profile.source_length,
+            Phase::SourceGeometry => &mut profile.source_geometry,
             Phase::ContextObserve => &mut profile.context_observe,
             Phase::ContextMeasure => &mut profile.context_measure,
             Phase::InputAssembly => &mut profile.input_assembly,

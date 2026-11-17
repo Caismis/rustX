@@ -1,4 +1,5 @@
-//! Persistent native ordered input. A leaf is an occurrence, not an identity set.
+//! Persistent ordered input using a skew-binary append forest.
+//! A leaf is an occurrence, not an identity set.
 use std::ops::{Index, IndexMut};
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -133,6 +134,8 @@ pub(crate) struct InputNode {
     pub actual: Option<Arc<ModelInputMessage>>,
     pub count: usize,
     pub height: u8,
+    // A complete skew tree has 2^k-1 occurrences; other nodes link the forest.
+    skew: bool,
     pub frozen_count: usize,
     metrics: OnceLock<InputMetrics>,
     pub digest: OnceLock<[u8; 32]>,
@@ -160,6 +163,7 @@ impl Clone for InputNode {
             actual: self.actual.clone(),
             count: self.count,
             height: self.height,
+            skew: self.skew,
             frozen_count: self.frozen_count,
             metrics: OnceLock::new(),
             digest: OnceLock::new(),
@@ -301,6 +305,7 @@ fn prefix_equal(
     current: Option<&Arc<InputNode>>,
     measured: Option<&Arc<InputNode>>,
     count: usize,
+    owners_only: bool,
 ) -> bool {
     if count == 0 {
         return true;
@@ -326,7 +331,7 @@ fn prefix_equal(
         }
         if x.count == 1 && y.count == 1 {
             #[cfg(any(test, feature = "issue-387-profile"))]
-            {
+            if !owners_only {
                 record_actual_visit();
                 record_actual_visit();
             }
@@ -335,7 +340,8 @@ fn prefix_equal(
                 let (nodes, leaves) = work.get();
                 work.set((nodes, leaves + 1));
             });
-            if !matches!((&x.actual,&y.actual),(Some(a),Some(b)) if a==b) {
+            if !matches!((&x.actual,&y.actual),(Some(a),Some(b)) if if owners_only { Arc::ptr_eq(a,b) } else { a==b })
+            {
                 return false;
             }
             remaining -= 1;
@@ -377,6 +383,7 @@ impl InputNode {
             actual: Some(Arc::new(value)),
             count: 1,
             height: 1,
+            skew: true,
             frozen_count: 0,
             metrics: OnceLock::new(),
             digest: OnceLock::new(),
@@ -396,6 +403,7 @@ impl InputNode {
             actual,
             count: 1,
             height: 1,
+            skew: true,
             frozen_count: 1,
             metrics: OnceLock::new(),
             digest: OnceLock::new(),
@@ -409,6 +417,9 @@ impl InputNode {
         Arc::new(Self {
             count: left.count + right.count,
             height: 1 + left.height.max(right.height),
+            skew: right.count == 1
+                && matches!(&left.kind, InputNodeKind::Branch { left: a, right: b }
+                    if a.skew && b.skew && a.count == b.count),
             frozen_count: left.frozen_count + right.frozen_count,
             metrics: OnceLock::new(),
             kind: InputNodeKind::Branch { left, right },
@@ -417,6 +428,31 @@ impl InputNode {
             budget: OnceLock::new(),
             stored: Mutex::new(None),
         })
+    }
+    /// Reverse of Okasaki's skew-binary cons: at most one carry, hence at
+    /// most three new branches, even when every historical root is retained.
+    /// The binary encoding preserves the existing ordered occurrence reader.
+    fn append(root: Arc<Self>, leaf: Arc<Self>) -> Arc<Self> {
+        if !root.skew
+            && let InputNodeKind::Branch { left, right } = &root.kind
+            && right.skew
+        {
+            if left.skew && left.count == right.count {
+                return Self::branch(root, leaf);
+            }
+            if !left.skew
+                && let InputNodeKind::Branch {
+                    left: rest,
+                    right: previous,
+                } = &left.kind
+                && previous.skew
+                && previous.count == right.count
+            {
+                let tree = Self::branch(Self::branch(previous.clone(), right.clone()), leaf);
+                return Self::branch(rest.clone(), tree);
+            }
+        }
+        Self::branch(root, leaf)
     }
     fn join(left: Arc<Self>, right: Arc<Self>) -> Arc<Self> {
         if left.height > right.height + 1 {
@@ -564,7 +600,7 @@ pub(crate) struct SelectionOrigin {
 pub(crate) enum SelectionEdit {
     Append { index: usize, node: Arc<InputNode> },
 }
-/// Exact ordered frozen native input with path-copying append/edit operations.
+/// Exact ordered frozen input with constant-allocation append and persistent edits.
 /// Serialization retains the original logical flat-array representation.
 #[derive(Debug, Clone, Default)]
 pub struct SelectedInputManifest {
@@ -604,25 +640,34 @@ impl SelectedInputManifest {
     /// Appends one actual occurrence, retaining the certified unfinished SHA prefix.
     #[must_use]
     pub fn append(&self, scope: &ConversationId, message: &ModelInputMessage) -> Self {
+        self.append_shared(scope, Arc::new(message.clone()))
+    }
+    /// Append a lease on one immutable body, without copying its content.
+    #[must_use]
+    pub(crate) fn append_shared(
+        &self,
+        scope: &ConversationId,
+        message: Arc<ModelInputMessage>,
+    ) -> Self {
         let mut selected = self.clone();
-        if !admit_change(self, message, None) || self.len() >= 8192 {
+        if !admit_change(self, &message, None) || self.len() >= 8192 {
             selected.invalid_budget = true;
             return selected;
         }
-        let leaf = InputNode::leaf(freeze(scope, message), Some(Arc::new(message.clone())));
+        selected.semantic.clone_from(&self.semantic);
+        if let Some(sha) = &mut selected.semantic {
+            super::types::append_semantic_message(sha, &message);
+        }
+        let leaf = InputNode::leaf(freeze(scope, &message), Some(message));
         selected.root = Some(self.root.as_ref().map_or_else(
             || leaf.clone(),
-            |root| InputNode::join(root.clone(), leaf.clone()),
+            |root| InputNode::append(root.clone(), leaf.clone()),
         ));
         if selected.origin.is_some() {
             selected.edits.push_back(SelectionEdit::Append {
                 index: self.len(),
                 node: leaf,
             });
-        }
-        selected.semantic.clone_from(&self.semantic);
-        if let Some(sha) = &mut selected.semantic {
-            super::types::append_semantic_message(sha, message);
         }
         selected
     }
@@ -717,11 +762,10 @@ impl SelectedInputManifest {
     /// Appends a frozen occurrence without a producer semantic certificate.
     pub fn push(&mut self, item: FrozenModelInput) {
         let leaf = InputNode::leaf(item, None);
-        self.root = Some(
-            self.root
-                .take()
-                .map_or_else(|| leaf.clone(), |root| InputNode::join(root, leaf.clone())),
-        );
+        self.root = Some(self.root.take().map_or_else(
+            || leaf.clone(),
+            |root| InputNode::append(root, leaf.clone()),
+        ));
         self.semantic = None;
         self.origin = None;
         self.edits.clear();
@@ -828,6 +872,23 @@ fn set_actual(node: &mut Arc<InputNode>, index: usize, value: Arc<ModelInputMess
         }
     }
 }
+#[cfg(test)]
+fn shared_actual(node: &InputNode, index: usize) -> Arc<ModelInputMessage> {
+    match &node.kind {
+        InputNodeKind::Leaf(_) => Arc::clone(
+            node.actual
+                .as_ref()
+                .expect("materialized native selected input"),
+        ),
+        InputNodeKind::Branch { left, right } => {
+            if index < left.count {
+                shared_actual(left, index)
+            } else {
+                shared_actual(right, index - left.count)
+            }
+        }
+    }
+}
 fn actual(node: &InputNode, index: usize) -> &ModelInputMessage {
     match &node.kind {
         InputNodeKind::Leaf(_) => {
@@ -850,13 +911,48 @@ fn actual(node: &InputNode, index: usize) -> &ModelInputMessage {
 /// Cold provider requests may own actual-only leaves; native persistence requires
 /// their explicit scoped freeze before accepting them as immutable evidence.
 #[derive(Debug, Clone, Default)]
-pub struct SelectedModelInput(pub(crate) SelectedInputManifest);
+pub struct SelectedModelInput(
+    pub(crate) SelectedInputManifest,
+    Arc<Mutex<super::adapter::cache::RequestCache>>,
+);
 impl PartialEq for SelectedModelInput {
     fn eq(&self, other: &Self) -> bool {
         self.same_input(other)
     }
 }
 impl SelectedModelInput {
+    pub(crate) fn preparation(&self) -> &Arc<Mutex<super::adapter::cache::RequestCache>> {
+        &self.1
+    }
+
+    /// Lease one exact actual allocation from this immutable selection.
+    #[cfg(test)]
+    pub(crate) fn shared(&self, index: usize) -> Arc<ModelInputMessage> {
+        assert!(index < self.len(), "native input index");
+        shared_actual(self.0.root.as_ref().expect("nonempty input"), index)
+    }
+    /// Lease an ordered native input page without a keyed tree walk per item.
+    pub(crate) fn shared_iter(&self) -> impl Iterator<Item = Arc<ModelInputMessage>> + '_ {
+        let mut pending = self.0.root.iter().map(Arc::as_ref).collect::<Vec<_>>();
+        std::iter::from_fn(move || {
+            loop {
+                let node = pending.pop()?;
+                match &node.kind {
+                    InputNodeKind::Leaf(_) => {
+                        return Some(Arc::clone(
+                            node.actual
+                                .as_ref()
+                                .expect("materialized native selected input"),
+                        ));
+                    }
+                    InputNodeKind::Branch { left, right } => {
+                        pending.push(right);
+                        pending.push(left);
+                    }
+                }
+            }
+        })
+    }
     /// Original ranks that contain media, skipping immutable media-free subtrees.
     #[must_use]
     pub(crate) fn media_indices(&self) -> Vec<usize> {
@@ -884,25 +980,6 @@ impl SelectedModelInput {
             .root
             .as_ref()
             .is_some_and(|node| node_metrics(node).tool_relationships > 0)
-    }
-    pub(crate) fn tool_indices(&self) -> Vec<usize> {
-        fn visit(node: &InputNode, base: usize, output: &mut Vec<usize>) {
-            if node_metrics(node).tool_relationships == 0 {
-                return;
-            }
-            match &node.kind {
-                InputNodeKind::Leaf(_) => output.push(base),
-                InputNodeKind::Branch { left, right } => {
-                    visit(left, base, output);
-                    visit(right, base + left.count, output);
-                }
-            }
-        }
-        let mut output = Vec::new();
-        if let Some(root) = &self.0.root {
-            visit(root, 0, &mut output);
-        }
-        output
     }
     /// Native relationship validation survives only a certified unchanged prefix
     /// followed by the actual producer's new canonical Context messages.
@@ -944,7 +1021,10 @@ impl SelectedModelInput {
         }
         SelectedInputManifest {
             root: self.0.root.as_ref().map(|node| bind(node, scope)),
-            ..SelectedInputManifest::default()
+            semantic: None,
+            invalid_budget: false,
+            origin: None,
+            edits: imbl::Vector::new(),
         }
     }
     /// Borrows ordered model-visible values without copying bodies.
@@ -1009,12 +1089,10 @@ impl SelectedModelInput {
     /// Appends an actual value, without manufacturing frozen provenance.
     pub fn push(&mut self, value: ModelInputMessage) {
         let leaf = InputNode::actual_leaf(value);
-        self.0.root = Some(
-            self.0
-                .root
-                .take()
-                .map_or_else(|| leaf.clone(), |root| InputNode::join(root, leaf.clone())),
-        );
+        self.0.root = Some(self.0.root.take().map_or_else(
+            || leaf.clone(),
+            |root| InputNode::append(root, leaf.clone()),
+        ));
         self.0.semantic = None;
         self.0.origin = None;
         self.0.edits.clear();
@@ -1067,7 +1145,7 @@ impl SelectedModelInput {
     pub fn semantic_fingerprint(&self) -> String {
         self.0
             .semantic_digest()
-            .unwrap_or_else(|| super::types::semantic_messages_fingerprint(self))
+            .unwrap_or_else(|| super::adapter::cache::prefix_fingerprint(self, self.len()))
     }
     /// Exact same ordered actual input, skipping shared immutable subtrees.
     #[must_use]
@@ -1078,7 +1156,18 @@ impl SelectedModelInput {
     #[must_use]
     pub fn covers_prefix(&self, other: &Self) -> bool {
         other.len() <= self.len()
-            && prefix_equal(self.0.root.as_ref(), other.0.root.as_ref(), other.len())
+            && prefix_equal(
+                self.0.root.as_ref(),
+                other.0.root.as_ref(),
+                other.len(),
+                false,
+            )
+    }
+    /// Wire certificates require shared immutable owners. Value equality alone
+    /// does not distinguish JSON numbers such as -0.0 and 0.0.
+    pub(crate) fn shares_prefix(&self, root: Option<&Arc<InputNode>>) -> bool {
+        let count = root.map_or(0, |node| node.count);
+        count <= self.len() && prefix_equal(self.0.root.as_ref(), root, count, true)
     }
     /// Borrows a persistent selected interval.
     /// # Panics
@@ -1089,14 +1178,20 @@ impl SelectedModelInput {
             range.start <= range.end && range.end <= self.len(),
             "model input range bounds"
         );
-        Self(SelectedInputManifest {
-            root: self
-                .0
-                .root
-                .as_ref()
-                .and_then(|node| select_range(node, range.start, range.end)),
-            ..SelectedInputManifest::default()
-        })
+        Self(
+            SelectedInputManifest {
+                root: self
+                    .0
+                    .root
+                    .as_ref()
+                    .and_then(|node| select_range(node, range.start, range.end)),
+                semantic: None,
+                invalid_budget: false,
+                origin: None,
+                edits: imbl::Vector::new(),
+            },
+            self.1.clone(),
+        )
     }
     /// Exact model-visible JSON array bytes, without constructing the array.
     #[must_use]
@@ -1160,7 +1255,14 @@ impl SelectedInputManifest {
     /// Shares the actual selected values with their exact frozen provenance.
     #[must_use]
     pub(crate) fn messages(&self) -> SelectedModelInput {
-        SelectedModelInput(self.clone())
+        SelectedModelInput(self.clone(), Arc::default())
+    }
+    /// Keep active execution caches out of frozen manifest/snapshot owners.
+    pub(crate) fn messages_with_preparation(
+        &self,
+        previous: &SelectedModelInput,
+    ) -> SelectedModelInput {
+        SelectedModelInput(self.clone(), previous.1.clone())
     }
 }
 impl IndexMut<usize> for SelectedModelInput {
@@ -1219,6 +1321,26 @@ impl<'a> Iterator for ModelManifestIter<'a> {
         let value = next_model_leaf(&mut self.pending, self.reverse)?;
         self.remaining -= 1;
         Some(value)
+    }
+    fn nth(&mut self, mut n: usize) -> Option<Self::Item> {
+        if n >= self.remaining {
+            self.remaining = 0;
+            return None;
+        }
+        self.remaining -= n;
+        while n != 0 {
+            let node = self.pending.pop().expect("remaining model input");
+            if node.count <= n {
+                n -= node.count;
+            } else if let InputNodeKind::Branch { left, right } = &node.kind {
+                if self.reverse {
+                    self.pending.extend([left.as_ref(), right.as_ref()]);
+                } else {
+                    self.pending.extend([right.as_ref(), left.as_ref()]);
+                }
+            }
+        }
+        self.next()
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         (self.remaining, Some(self.remaining))

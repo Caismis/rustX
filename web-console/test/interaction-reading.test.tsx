@@ -1,12 +1,42 @@
 import { useSyncExternalStore } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
-import type { CheckpointReadCut, InteractionKind, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v81';
+import type { CheckpointReadCut, InteractionKind, Request, RoutedInteraction, RuntimeClientInteractionHeader } from '../../protocol/app-server/v82';
 import { Interactions } from '../src/app/agent/Interactions';
 import { Server, checkpoint, interaction } from './fixture';
 
 let server:Server|undefined;
 afterEach(()=>{cleanup();server?.client.disconnect();});
+
+it.each(['reordered', 'revision', 'through', 'activation', 'domain', 'collection'] as const)(
+  'interaction ranges compare exact cut fields independently of property order: %s', async change => {
+    const current = server = new Server();
+    current.snapshots.get('A')!.pending_interactions = [interaction('approval')];
+    const reverse = (value: unknown): unknown => Array.isArray(value) ? value.map(reverse)
+      : value !== null && typeof value === 'object' ? Object.fromEntries(Object.entries(value).reverse().map(([key, item]) => [key, reverse(item)])) : value;
+    current.handlers.set('conversation/checkpointValueRead', request => {
+      if (request.method !== 'conversation/checkpointValueRead') throw Error('Expected interaction range.');
+      const cut = reverse(request.params.cut) as CheckpointReadCut;
+      expect(JSON.stringify(cut)).not.toBe(JSON.stringify(request.params.cut));
+      if (change === 'revision') cut.revision = '999';
+      if (change === 'through') cut.through = '999';
+      if (change === 'activation') cut.activation_id = 'foreign-activation';
+      if (change === 'domain') cut.domain_revisions = { ...cut.domain_revisions, pending_interactions: '999' };
+      if (change === 'collection') cut.collection_cuts = { ...cut.collection_cuts, pending_primary: { generation: '999', total: 1 } };
+      return { type: 'checkpoint_value_chunk', chunk: { cut, domain: 'pending_interactions', item_offset: request.params.item_offset,
+        path: request.params.path, offset: 0, readable_end: 2, bytes_base64: 'e30=', next_offset: null, representation: 'canonical_json_v1' } };
+    });
+    await current.attached('A');
+    const reading = current.client.interactionValueChunk('A', 0, ['request', 'kind', 'arguments'], 0, () => true);
+    if (change === 'reordered') {
+      const chunk = await reading;
+      expect([...chunk.bytes]).toEqual([123, 125]);
+      expect(chunk.readableEnd).toBe(2);
+      expect(chunk.next).toBeUndefined();
+    } else await expect(reading).rejects.toThrow('Interaction range identity changed.');
+    expect(current.replies).toHaveLength(0);
+  },
+);
 
 it.each([false, true])('approval exposes Deny and Allow once without an extra cancellation action (bounded: %s)', async bounded => {
   const current = server = new Server(), original = interaction('approval');

@@ -2,8 +2,8 @@
 //! capability materialization, preparation cancellation and parent loss.
 
 use crate::durable::CanonicalStore;
+use crate::durable::ConversationInboundCapability;
 use crate::durable::JournalStore;
-use crate::durable::inbox::ConversationInboundCapability;
 use std::sync::Arc;
 
 use super::super::{ChildPreparation, LocalConversationCore, LocalRuntimeDependencies};
@@ -460,7 +460,8 @@ fn todo_result_message(
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     })
 }
 
@@ -1339,7 +1340,7 @@ async fn frozen_fixture_tool(
         id: ToolId::new(format!("mcp:{server_id}:{name}")),
         name: tool.name,
         description: tool.description,
-        input_schema: tool.input_schema,
+        input_schema: tool.input_schema.into(),
         execution_policy: binding.policy.execution,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
@@ -1499,7 +1500,7 @@ async fn a_missing_mcp_definition_fails_before_the_child_is_ready() {
         id: ToolId::new("mcp:gamma:gamma_absent"),
         name: "gamma_absent".to_owned(),
         description: "a tool the server does not publish".to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
@@ -1551,7 +1552,7 @@ async fn an_unreachable_required_mcp_server_fails_child_composition() {
         id: ToolId::new("tool-get-issue"),
         name: "get_issue".to_owned(),
         description: "issue".to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {
@@ -1610,7 +1611,7 @@ async fn a_missing_frozen_mcp_binding_is_never_rediscovered() {
         id: ToolId::new("tool-get-issue"),
         name: "get_issue".to_owned(),
         description: "issue".to_owned(),
-        input_schema: serde_json::json!({"type": "object"}),
+        input_schema: serde_json::json!({"type": "object"}).into(),
         execution_policy: ToolExecutionPolicy::ForegroundOnly,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Mcp {

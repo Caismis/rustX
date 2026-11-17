@@ -154,7 +154,7 @@ fn terminal_blocks(
 fn success_terminal_notice(
     record: &SubagentRecord,
     candidate: &TerminalCandidate,
-) -> Option<crate::durable::inbox::InboundDraft> {
+) -> Option<crate::durable::InboundDraft> {
     (candidate.state == TerminalState::Succeeded).then(|| {
         super::super::terminal_notice(
             &record.child_agent_id,
@@ -553,8 +553,8 @@ impl SubagentRegistry {
         enum Append {
             Normal(
                 Box<(
-                    Option<crate::durable::inbox::InboundDraft>,
-                    crate::durable::inbox::InboundDraft,
+                    Option<crate::durable::InboundDraft>,
+                    crate::durable::InboundDraft,
                     crate::events::types::RuntimeEventEnvelope,
                 )>,
             ),

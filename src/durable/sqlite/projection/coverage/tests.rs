@@ -66,7 +66,13 @@ fn candidate(store: &SqliteConversationStore, record: &PrefixCoverage) -> Checkp
         result_call: None,
     };
     let mut items = vec![summary];
-    items.extend(history.items.iter().skip(count).cloned());
+    items.extend(
+        history
+            .checkpoint_items(None)
+            .unwrap()
+            .into_iter()
+            .skip(count),
+    );
     CheckpointCandidate {
         checkpoint_id: CheckpointId::new("coverage-new"),
         expected_head: None,

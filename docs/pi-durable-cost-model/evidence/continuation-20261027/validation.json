@@ -1,0 +1,215 @@
+{
+  "recorded_utc": "2026-10-27T00:35:51.287656+00:00",
+  "retained_source": "e8d6380fa6ea0724b752970473d093c629cb8a63",
+  "restoration_commit": "6e1ca189abfa9879fe87d2e4ecd053530434a491",
+  "retained_tree": "d6d193e07b16db0ab9b1ce646a254a1c1674c80e",
+  "full_tree_restoration_check": "git diff --exit-code e8d6380fa HEAD; exit 0 before documentation edits",
+  "test_cohorts": [
+    {
+      "cohort": "check2",
+      "tests": [
+        {
+          "log": "check2/tests-client.stdout",
+          "status": "ok",
+          "passed": 528,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "log": "check2/tests-content.stdout",
+          "status": "ok",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "check2/tests-conversation-runtime.stdout",
+          "status": "ok",
+          "passed": 94,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "check2/tests-durable.stdout",
+          "status": "ok",
+          "passed": 147,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "check2/tests-process.stdout",
+          "status": "ok",
+          "passed": 62,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "check2/tests-read-layout.stdout",
+          "status": "ok",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "check2/tests-sqlite.stdout",
+          "status": "ok",
+          "passed": 428,
+          "failed": 0,
+          "ignored": 0
+        }
+      ],
+      "passed": 1312,
+      "ignored": 1
+    },
+    {
+      "cohort": "candidate-e-check2",
+      "tests": [
+        {
+          "log": "candidate-e-check2/tests-client.stdout",
+          "status": "ok",
+          "passed": 528,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "log": "candidate-e-check2/tests-content.stdout",
+          "status": "ok",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-check2/tests-conversation-runtime.stdout",
+          "status": "ok",
+          "passed": 94,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-check2/tests-durable.stdout",
+          "status": "ok",
+          "passed": 147,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-check2/tests-process.stdout",
+          "status": "ok",
+          "passed": 62,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-check2/tests-read-layout.stdout",
+          "status": "ok",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-check2/tests-sqlite.stdout",
+          "status": "ok",
+          "passed": 435,
+          "failed": 0,
+          "ignored": 1
+        }
+      ],
+      "passed": 1319,
+      "ignored": 2
+    },
+    {
+      "cohort": "candidate-e-optimized-check4",
+      "tests": [
+        {
+          "log": "candidate-e-optimized-check4/client.stdout",
+          "status": "ok",
+          "passed": 525,
+          "failed": 0,
+          "ignored": 1
+        },
+        {
+          "log": "candidate-e-optimized-check4/content.stdout",
+          "status": "ok",
+          "passed": 27,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-optimized-check4/conversation-runtime.stdout",
+          "status": "ok",
+          "passed": 90,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-optimized-check4/read-layout.stdout",
+          "status": "ok",
+          "passed": 26,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-optimized-check4/reader.stdout",
+          "status": "ok",
+          "passed": 1,
+          "failed": 0,
+          "ignored": 0
+        },
+        {
+          "log": "candidate-e-optimized-check4/sqlite.stdout",
+          "status": "ok",
+          "passed": 434,
+          "failed": 0,
+          "ignored": 1
+        }
+      ],
+      "passed": 1103,
+      "ignored": 2
+    }
+  ],
+  "test_build_scopes": {
+    "check2": "D correctness; all features, release dependencies and root opt-level=0. Declaration placement Clippy cleanup followed; ordinary release D identity separately recorded.",
+    "candidate-e-check2": "E correctness before final lint cleanup; all features, root opt-level=0; rejected source, not delivered.",
+    "candidate-e-optimized-check4": "Final E ordinary opt-level=3 libtest after lint fixes, 5 groups and ignored Reader diagnostic. Both companion executables preserved; E later rejected."
+  },
+  "clippy": {
+    "D": "clippy-final2.stderr",
+    "E": "candidate-e-clippy-final2.stderr",
+    "command": "cargo clippy --release --locked --all-targets --all-features -- -D warnings",
+    "both_passed": true
+  },
+  "harness": {
+    "deepseek_tests": 22,
+    "existing_python_tests": 48,
+    "deepseek_log_node_syntax_check": "passed during setup",
+    "logs": [
+      "deepseek-tests-final.stderr",
+      "harness-tests-final.stderr"
+    ]
+  },
+  "format": "final-format.stderr; passed after restoration",
+  "failed_attempts_preserved": [
+    "candidate-e-check",
+    "candidate-e-check2/clippy.stderr",
+    "candidate-e-clippy-final.stderr",
+    "candidate-e-optimized-check",
+    "candidate-e-optimized-check2",
+    "candidate-e-optimized-check3"
+  ],
+  "test_environment_resolution": "python-capability-diagnosis.txt; omitted copied bash+interactive supervisors, original and repaired copies passed real uv/FastMCP boundary tests. Temporary functional-test overlap never entered performance samples.",
+  "formal_products": {
+    "D_vs_B": 72,
+    "E_vs_D_rejected": 72,
+    "D_vs_Pi": 72,
+    "B_vs_D_append": 48,
+    "three_engine": 36,
+    "total": 300
+  },
+  "not_run": [
+    "full repository CI",
+    "full browser E2E",
+    "new UI suites in this continuation",
+    "main merge"
+  ],
+  "historical_UI_checks": "Previous B report records web/TUI tests; no new UI changes or rerun claimed."
+}

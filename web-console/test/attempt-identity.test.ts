@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import type { AttemptIdentitySource, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v81';
+import type { AttemptIdentitySource, RuntimeClientTranscriptEntry, TurnProcessView } from '../../protocol/app-server/v82';
 import { attemptIdentitySourceKey, attemptOwnerKey } from '../../protocol/app-server/attempt-identity';
 import { turnProcesses } from '../src/bindings/turn-process';
 import { turnPresentation } from '../src/bindings/turn-presentation';

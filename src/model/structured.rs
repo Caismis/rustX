@@ -97,7 +97,7 @@ impl ResponseSchema {
         }
         jsonschema::validator_for(&schema).map_err(|error| {
             invalid(
-                &format!("response_schema.schema{}", error.instance_path),
+                &format!("response_schema.schema{}", error.instance_path()),
                 "invalid JSON Schema syntax",
             )
         })?;

@@ -3,7 +3,7 @@ import type {
   CheckpointReadCut,
   WorkflowFileDocument,
   WorkflowRunId,
-} from '../../../../../protocol/app-server/v81';
+} from '../../../../../protocol/app-server/v82';
 import { workflowKey } from '../../../bindings/workflow-children';
 import { RequestNotDispatched, RpcFailure } from '../../../client/errors';
 import { organizeDocument } from '../ui/editor/layout';

@@ -1,19 +1,13 @@
 import assert from 'node:assert/strict';
 const prefix='<system-reminder>\nTimezone: UTC\nCurrent time: ';
 const suffix='\n</system-reminder>';
+export const MODEL_TIME='2026-10-19 00:00:00';
 const note='deterministic-note-payload-6d41';
 export function normalized(body,workspace,dynamic=false) {
   body=structuredClone(body);
   for(const m of body.messages) {
     m.content=typeof m.content==='string'?[{type:'text',text:m.content}]:m.content??[];
     m.tool_calls??=null;
-    for(const b of m.content) if(dynamic && b.type==='text' && b.text.startsWith(prefix)) {
-      const stamp=b.text.slice(prefix.length,-suffix.length);
-      assert(b.text.endsWith(suffix));
-      assert(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d$/.test(stamp));
-      assert.equal(new Date(stamp.replace(' ','T')+'Z').toISOString().slice(0,19).replace('T',' '),stamp);
-      b.text=prefix+'<TIME>'+suffix;
-    }
     for(const call of m.tool_calls??[]) {
       call.function.arguments=typeof call.function.arguments==='string'?JSON.parse(call.function.arguments):call.function.arguments;
       if(dynamic && call.function.arguments.path===workspace+'/note.txt') call.function.arguments.path='<WORKSPACE>/note.txt';
@@ -23,7 +17,7 @@ export function normalized(body,workspace,dynamic=false) {
 }
 const text=(role,value)=>({role,content:[{type:'text',text:value}],tool_calls:null});
 export function expected(caseName,index,tools) {
-  const messages=[text('user','benchmark turn 0000'),text('user',prefix+'<TIME>'+suffix)];
+  const messages=[text('user','benchmark turn 0000'),text('user',prefix+MODEL_TIME+suffix)];
   if(caseName.startsWith('short-')) for(let i=0;i<index;i++) messages.push(text('assistant',`reply ${String(i).padStart(4,'0')}`),text('user',`benchmark turn ${String(i+1).padStart(4,'0')}`));
   else if(caseName==='tool' && index===1) messages.push({role:'assistant',content:[],tool_calls:[{type:'function',id:'benchmark-read',function:{name:'read',arguments:{path:'<WORKSPACE>/note.txt'}}}]},{...text('tool',note),tool_call_id:'benchmark-read'});
   else assert.equal(index,0);

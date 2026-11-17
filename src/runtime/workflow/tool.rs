@@ -36,7 +36,7 @@ pub(super) fn eligible(definition: &ToolDefinition) -> bool {
 pub struct WorkflowToolChoice {
     pub name: String,
     pub description: String,
-    pub input_schema: Value,
+    pub input_schema: std::sync::Arc<Value>,
     /// The fixed result a node of this Tool commits.
     pub result: WorkflowToolResult,
 }

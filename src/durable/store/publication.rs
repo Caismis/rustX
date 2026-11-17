@@ -1,5 +1,6 @@
 //! Store contract for the durable publication plane (Issue #108).
 
+use crate::durable::{CommittedModelTurn, ModelTurnSettlement};
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::MessageBlock;
 use crate::publication::{
@@ -64,15 +65,27 @@ pub trait PublicationStore: Send + Sync + 'static {
         &self,
         start: &PublicationStreamStart,
     ) -> Result<(), ConversationStoreError>;
+
+    // ---------------------------------------------------------------------
+    // The durable publication plane (Issue #108, FND-03).
+    //
+    // Publication durability is a plane of its own, separate from provider
+    // outcome (P) and canonical conversation acceptance (C). The store is the
+    // authority for the ordering `C => U => P` and for the rule that a stream
+    // settles exactly once; the Agent Loop may not be the only thing keeping
+    // an impossible combination out of durable state.
+    // ---------------------------------------------------------------------
+
     /// Stages publication frames durably, before any of them is released.
     ///
-    /// This is the non-terminal staging commit. Frames must belong to one
-    /// open, unsettled stream and must continue its sequence without a gap or
-    /// a repeat. A stream that already committed U accepts no further frames.
+    /// The first write admits the exact frozen request generation atomically
+    /// with its frames. Frames must belong to one unsettled stream and must
+    /// continue its sequence without a gap or a repeat. A stream that already committed U accepts no further frames.
     /// The finite receipts are constructed inside this transaction and returned
     /// only after commit; display publication requires no subsequent store read.
     fn stage_publication_frames(
         &self,
+        start: &PublicationStreamStart,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError>;
     /// Commits **U**: the final publication frame(s) and the publication
@@ -90,9 +103,18 @@ pub trait PublicationStore: Send + Sync + 'static {
     /// must already be durable.
     fn commit_publication_terminal(
         &self,
-        stream_id: &PublicationStreamId,
+        start: &PublicationStreamStart,
         frames: &[PublicationFrame],
     ) -> Result<Vec<crate::publication::PublicationFrameReceipt>, ConversationStoreError>;
+    /// Atomically accepts ordinary model output, including provider completion,
+    /// final frames and canonical acceptance. No-tool output also commits its
+    /// finite inbox adoption or empty-inbox Attempt completion in this boundary.
+    /// No prior provider completion is accepted by this operation.
+    fn settle_model_turn(
+        &self,
+        settlement: ModelTurnSettlement<'_>,
+    ) -> Result<CommittedModelTurn, ConversationStoreError>;
+
     /// Commits **C** for a published stream as one compound transition.
     ///
     /// The transition validates that the exact stream is publication-complete
@@ -101,6 +123,7 @@ pub trait PublicationStore: Send + Sync + 'static {
     /// clears the stream's publication staging — all in one transaction. The
     /// store rejects C without U, and rejects C for a stream that already
     /// settled as an audit.
+    /// Workflow-owned preparation retains its separate owner boundary.
     fn commit_canonical_publication(
         &self,
         stream_id: &PublicationStreamId,
@@ -118,7 +141,7 @@ pub trait PublicationStore: Send + Sync + 'static {
     /// acceptance of that stream.
     fn terminalize_publication_audit(
         &self,
-        stream_id: &PublicationStreamId,
+        start: &PublicationStreamStart,
         timestamp: DateTime<Utc>,
     ) -> Result<(PublicationAudit, PublicationAuditReceipt), ConversationStoreError>;
     /// Loads every publication stream that has not settled, for recovery

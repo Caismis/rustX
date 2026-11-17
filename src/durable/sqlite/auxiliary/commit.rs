@@ -62,6 +62,7 @@ impl SqliteConversationStore {
         self.commit_auxiliary_call_start_bound(start, timestamp, None)
     }
 
+    #[allow(clippy::too_many_lines)] // Keep idempotent replay and the atomic fresh-start transaction together.
     pub(super) fn commit_auxiliary_call_start_bound(
         &self,
         start: &AuxiliaryCallStart,
@@ -144,7 +145,12 @@ impl SqliteConversationStore {
                     selected_message_ids: start.selected_message_ids.clone(),
                 },
             };
-            let persisted = persist_event_tx(transaction, &self.conversation_id, event)?;
+            let persisted = persist_event_tx(
+                &self.conn.event_guard,
+                transaction,
+                &self.conversation_id,
+                event,
+            )?;
             if let Some(source) = source {
                 super::title::associate(transaction, &self.conversation_id, start, source)?;
             }
@@ -287,7 +293,12 @@ impl SqliteConversationStore {
                     model: start.model.clone(),
                 },
             };
-            let persisted = persist_event_tx(transaction, &self.conversation_id, event)?;
+            let persisted = persist_event_tx(
+                &self.conn.event_guard,
+                transaction,
+                &self.conversation_id,
+                event,
+            )?;
             transaction
                 .execute(
                     "INSERT INTO auxiliary_requests(
@@ -410,10 +421,18 @@ impl SqliteConversationStore {
                     "auxiliary request {request_id} has a partial settlement"
                 )));
             }
-            let persisted_request =
-                persist_event_tx(transaction, &self.conversation_id, request_terminal)?;
-            let persisted_call =
-                persist_event_tx(transaction, &self.conversation_id, call_settled)?;
+            let persisted_request = persist_event_tx(
+                &self.conn.event_guard,
+                transaction,
+                &self.conversation_id,
+                request_terminal,
+            )?;
+            let persisted_call = persist_event_tx(
+                &self.conn.event_guard,
+                transaction,
+                &self.conversation_id,
+                call_settled,
+            )?;
             let cut = AuxiliaryAuditCut {
                 journal: persisted_call.event.sequence,
             };
@@ -515,7 +534,12 @@ impl SqliteConversationStore {
                     call_settled: stored,
                 });
             }
-            let persisted = persist_event_tx(transaction, &self.conversation_id, call_settled)?;
+            let persisted = persist_event_tx(
+                &self.conn.event_guard,
+                transaction,
+                &self.conversation_id,
+                call_settled,
+            )?;
 
             let cut = AuxiliaryAuditCut {
                 journal: persisted.event.sequence,

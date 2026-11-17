@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession, choose, connectionAction } from './shell-actions';
 import { openQuestionnaire } from './source-reading';
@@ -227,6 +227,6 @@ for (const [locale, theme] of [['en', 'light'], ['zh', 'dark']] as const) {
         body: JSON.stringify({ ...fixture.diagnostics(), report }), contentType: 'application/json',
       });
       throw error;
-    } finally { await fixture.stop(passed); }
+    } finally { await stopDogfoodPage(page, fixture, passed); }
   });
 }

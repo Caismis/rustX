@@ -204,10 +204,9 @@ impl AgentExecution<'_> {
         snapshot.identity.retry_number = request_ordinal;
         snapshot.request_id = snapshot.identity.request_id();
         snapshot.provisional_message_id = snapshot.identity.provisional_message_id();
-        for association in &mut snapshot.tool_associations {
-            association.call.message.request_id = snapshot.request_id.clone();
-            association.result.request_id = snapshot.request_id.clone();
-        }
+        snapshot
+            .tool_associations
+            .rebind_request(&snapshot.request_id);
         // A genuine new request introduces no context; same-request recovery
         // retains the original snapshot in the durable start authority.
         snapshot.request_context_ids.clear();
@@ -341,9 +340,9 @@ impl AgentExecution<'_> {
             .as_ref()
             .map(|input| {
                 (
-                    input.request.tools.clone(),
+                    input.request.input().tools.clone(),
                     input.estimated_input,
-                    input.request.clone(),
+                    input.request.input().clone(),
                 )
             })
             .ok_or_else(|| {

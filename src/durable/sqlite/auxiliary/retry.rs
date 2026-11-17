@@ -96,7 +96,7 @@ fn receipt(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let Some(sequence) = sequence else {
         return Ok(None);
     };
@@ -161,8 +161,18 @@ impl SqliteConversationStore {
             if let Some(existing) = receipt(transaction, &self.conversation_id, terminal, retry)? {
                 return Ok(existing);
             }
-            persist_event_tx(transaction, &self.conversation_id, terminal.clone())?;
-            persist_event_tx(transaction, &self.conversation_id, retry.clone())?;
+            persist_event_tx(
+                &self.conn.event_guard,
+                transaction,
+                &self.conversation_id,
+                terminal.clone(),
+            )?;
+            persist_event_tx(
+                &self.conn.event_guard,
+                transaction,
+                &self.conversation_id,
+                retry.clone(),
+            )?;
             let mut result = receipt(transaction, &self.conversation_id, terminal, retry)?
                 .ok_or_else(|| storage("committed retry receipt missing"))?;
             result.disposition = AuxiliaryCommitDisposition::NewlyCommitted;
@@ -177,7 +187,7 @@ impl SqliteConversationStore {
         let mut connection = self.lock()?;
         let transaction = connection
             .transaction()
-            .map_err(|error| storage(error.to_string()))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         Ok(
             receipt(&transaction, &self.conversation_id, terminal, retry)?.map_or(
                 AuxiliaryCommitConfirmation::Unknown,
@@ -201,7 +211,7 @@ pub(super) fn request_evidence(
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(error.to_string()))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let Some(sequence) = sequence else {
         return Ok(None);
     };
@@ -237,14 +247,14 @@ pub(super) fn validate_call_only(
     let last: Option<(String,u32)> = connection.query_row(
         "SELECT request_id,ordinal FROM auxiliary_requests WHERE call_id=?1 ORDER BY ordinal DESC LIMIT 1",
         [call_id.as_str()],|row|Ok((row.get(0)?,row.get(1)?)),
-    ).optional().map_err(|error|storage(error.to_string()))?;
+    ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let Some((request_id, ordinal)) = last else {
         return Ok(());
     };
     let scheduled:Option<u64>=connection.query_row(
         "SELECT sequence FROM auxiliary_retries WHERE call_id=?1 AND request_id=?2 AND next_ordinal=?3",
         params![call_id.as_str(),request_id,ordinal+1],|row|row.get(0),
-    ).optional().map_err(|error|storage(error.to_string()))?;
+    ).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     if outcome == AuxiliaryCallOutcome::Completed
         || scheduled
             .is_none_or(|scheduled| settled_sequence.is_some_and(|terminal| scheduled >= terminal))

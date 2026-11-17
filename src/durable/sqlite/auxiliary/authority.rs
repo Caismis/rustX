@@ -79,8 +79,8 @@ pub(super) fn require_compaction_operation_through(
         .query_row(
             "SELECT EXISTS(
                SELECT 1 FROM events INDEXED BY events_compaction_operation_kind_idx
-               WHERE json_extract(event_json,'$.event.operation_id')=?1
-                 AND json_extract(event_json,'$.event.type') IN
+               WHERE event_operation_id=?1
+                 AND event_kind IN
                      ('compaction_started','compaction_completed','compaction_failed')
                  AND sequence<=?2
              )",
@@ -110,7 +110,7 @@ fn validate_preceding_call(
 ) -> Result<(), ConversationStoreError> {
     use rusqlite::OptionalExtension;
     let latest: Option<String> = connection.query_row(
-        "SELECT json_extract(event_json,'$.event.call_id') FROM events INDEXED BY events_auxiliary_compaction_kind_idx WHERE json_extract(event_json,'$.event.business_source.operation_id')=?1 AND json_extract(event_json,'$.event.type')='auxiliary_call_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
+        "SELECT json_extract(event_json,'$.event.call_id') FROM events INDEXED BY events_auxiliary_compaction_kind_idx WHERE json_extract(event_json,'$.event.business_source.operation_id')=?1 AND event_kind='auxiliary_call_started' AND sequence<=?2 ORDER BY sequence DESC LIMIT 1",
         params![operation.as_str(), seq_to_i64(through_journal)?], |row| row.get(0),
     ).optional().map_err(|error| sqlite_error(&error, error.to_string()))?;
     match (latest, preceding) {

@@ -238,6 +238,7 @@ async fn generate(
     let submitted = prepared.reservation.submit(FrozenCall {
         start,
         request,
+        provider_body_limit: None,
         invocation: prepared.invocation,
         timeout: prepared.timeout,
         resource_revision: prepared.resource_revision,

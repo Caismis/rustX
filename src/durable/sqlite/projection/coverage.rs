@@ -48,7 +48,7 @@ fn complete_boundary(
     count: usize,
 ) -> Result<(), ConversationStoreError> {
     if count == 0
-        || count > history.items.len()
+        || count > history.messages.len()
         || history.tool_associations.iter().any(|association| {
             ((association.call_message as usize) < count)
                 != ((association.result_message as usize) < count)
@@ -163,7 +163,8 @@ fn validate_current_suffix(
         })?;
     let current_history = compile_history(connection, scope, &candidate.read_cut, current)?;
     complete_boundary(&current_history, offset)?;
-    if candidate.items.len() != 1 + current_history.items.len() - offset {
+    let current_items = current_history.checkpoint_items(current)?;
+    if candidate.items.len() != 1 + current_items.len() - offset {
         return Err(invalid(
             "native coverage candidate omits or duplicates retained history",
         ));
@@ -172,7 +173,7 @@ fn validate_current_suffix(
         .items
         .iter()
         .skip(1)
-        .zip(current_history.items.iter().skip(offset))
+        .zip(current_items.iter().skip(offset))
     {
         let mut expected = existing.clone();
         if let Some(call) = &mut expected.result_call {

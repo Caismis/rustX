@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { startDogfood } from './dogfood-server';
+import { startDogfood, stopDogfoodPage } from './dogfood-server';
 import { routeWorkspaceHost } from './workspace-host';
 import { choose, connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
@@ -124,6 +124,6 @@ for (const [width, locale, theme] of [[1440, 'en', 'light'], [390, 'zh', 'dark']
     } catch (error) {
       await test.info().attach('native-stop-observations', { body: JSON.stringify({ errors, responses: wire.responses.slice(-12), notifications: wire.notifications.slice(-12) }), contentType: 'application/json' });
       throw error;
-    } finally { await fixture.stop(passed); }
+    } finally { await stopDogfoodPage(page, fixture, passed); }
   });
 }

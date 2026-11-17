@@ -8,7 +8,6 @@ use std::collections::BTreeMap;
 use std::io::{self, Write};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::checkpoint::SummaryGenerationRef;
 use super::error::{ContextError, ContextErrorKind};
@@ -340,14 +339,11 @@ impl ChunkPlan {
                 "unbound source planning cannot authorize prefix retirement",
             )
         })?;
-        let mut digest = Sha256::new();
+        let mut digest = crate::model::projected::DigestWriter::default();
         let mut rendered_bytes = 0_u64;
         for (index, source) in self.sources.iter().enumerate() {
-            serde_json::to_writer(
-                crate::model::projected::DigestWriter(&mut digest),
-                &(index, &source.role, &source.text),
-            )
-            .map_err(|_| failure(ContextErrorKind::Internal, "frozen source digest failed"))?;
+            serde_json::to_writer(&mut digest, &(index, &source.role, &source.text))
+                .map_err(|_| failure(ContextErrorKind::Internal, "frozen source digest failed"))?;
             rendered_bytes = rendered_bytes.saturating_add(source.text.len() as u64);
         }
         Ok(CompletedSourceCoverage {
@@ -355,7 +351,7 @@ impl ChunkPlan {
                 failure(ContextErrorKind::Internal, "captured source count overflow")
             })?,
             rendered_bytes,
-            rendered_digest: format!("{:x}", digest.finalize()),
+            rendered_digest: format!("{:x}", digest.finish().1),
             capture_digest: capture_digest.clone(),
         })
     }
@@ -799,7 +795,8 @@ mod tests {
                 truncation: None,
                 workflow: None,
                 managed_output: None,
-            },
+            }
+            .into(),
         });
         let messages = input(vec![user("first"), assistant, tool, user("last")]);
         let mut plan = ChunkPlan::new(&messages, 4).unwrap();
@@ -907,17 +904,13 @@ mod tests {
                 .map(|source| source.text.len() as u64)
                 .sum::<u64>()
         );
-        let mut digest = Sha256::new();
+        let mut digest = crate::model::projected::DigestWriter::default();
         for (index, source) in plan.sources.iter().enumerate() {
-            serde_json::to_writer(
-                crate::model::projected::DigestWriter(&mut digest),
-                &(index, &source.role, &source.text),
-            )
-            .unwrap();
+            serde_json::to_writer(&mut digest, &(index, &source.role, &source.text)).unwrap();
         }
         assert_eq!(
             witness.rendered_digest(),
-            format!("{:x}", digest.finalize())
+            format!("{:x}", digest.finish().1)
         );
     }
 

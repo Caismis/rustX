@@ -260,8 +260,14 @@ mod scale {
         assert_eq!(execution_cost(&connection, &occupancy(cut)).0, 1);
         assert_eq!(execution_cost(&connection, &message(cut)).0, 1);
         for predicate in [
-            "json_extract(event_json, '$.event.type') = 'model_request_completed' AND json_type(event_json, '$.event.usage') = 'object'",
-            "json_extract(event_json, '$.event.type') = 'assistant_message_committed' AND json_extract(event_json, '$.event.message_id') = 'target'",
+            concat!(
+                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+                " = x'0005' AND json_type(event_json, '$.event.usage') = 'object'"
+            ),
+            concat!(
+                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+                " = x'0006' AND event_message_id = 'target'"
+            ),
         ] {
             let mut statement = connection.prepare(&format!("SELECT event_json FROM events INDEXED BY events_kind_idx WHERE {predicate} ORDER BY sequence DESC LIMIT 1")).unwrap();
             let rows = statement
@@ -286,7 +292,10 @@ fn indexed_occupancy_propagates_missing_and_corrupt_evidence() {
     store
         .lock()
         .unwrap()
-        .execute("UPDATE request_snapshots SET snapshot_json='{}'", [])
+        .execute(
+            "UPDATE request_snapshot_payloads SET snapshot_json='{}'",
+            [],
+        )
         .unwrap();
     assert!(crate::context::occupancy::read(&store, event.sequence).is_err());
     store
@@ -317,7 +326,7 @@ pub(super) fn attempt_lookup_cost(connection: &Connection, id: &str, through: u6
             |row| row.get(3),
         )
         .unwrap();
-    assert!(plan.contains("SEARCH events USING INDEX events_message_id_kind_idx (<expr>=? AND <expr>=? AND sequence<?)"), "{plan}");
+    assert!(plan.contains("SEARCH events USING INDEX events_message_id_kind_idx (event_message_id=? AND event_kind=? AND rowid<?)"), "{plan}");
     println!("{plan}");
     let mut statement = connection.prepare(TRANSCRIPT_ATTEMPTS_SQL).unwrap();
     let results = statement
@@ -850,7 +859,8 @@ pub(super) fn response_seed(count: usize) -> LineageSeed {
             truncation: None,
             workflow: None,
             managed_output: None,
-        },
+        }
+        .into(),
     });
     canonical.splice(
         1..1,
@@ -1102,7 +1112,7 @@ fn inherited_provenance_bootstrap_failures_roll_back_every_native_authority() {
         for table in [
             "message_ledger",
             "surface_ops",
-            "transcript_order",
+            "transcript_entries",
             "bootstrap_identity",
             "inherited_turn_provenance",
             "inherited_response_provenance",
@@ -1492,7 +1502,7 @@ fn inherited_provenance_schema_requires_native_indexes_and_rejects_schema_54() {
         SqliteConversationStore::open_existing(id, &path),
         Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 54,
-            expected: SQLITE_SCHEMA_VERSION
+            expected: crate::durable::sqlite::SQLITE_SCHEMA_VERSION
         })
     ));
 }
@@ -1504,7 +1514,7 @@ pub(super) fn materialized_member_process(
     id: &str,
 ) -> Result<Option<crate::observation::turn::TurnProcessView>, ConversationStoreError> {
     let transcript: u64 = store.lock().unwrap().query_row(
-        "SELECT position FROM transcript_order WHERE reference_kind='message' AND reference_id=?1",
+        "SELECT position FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",
         [id], |row| row.get(0),
     ).unwrap();
     let cut = store.observation_read_cut()?;
@@ -1975,7 +1985,7 @@ fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without
     let store = SqliteConversationStore::in_memory(ConversationId::generate()).unwrap();
     store.initialize_lineage(&seed).unwrap();
     let transcript: u64 = store.lock().unwrap().query_row(
-        "SELECT position FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id='8'",
+        "SELECT position FROM transcript_entries WHERE native_reference_kind='inherited_turn' AND native_reference_id='8'",
         [], |row| row.get(0),
     ).unwrap();
     let cut = store.observation_read_cut().unwrap();
@@ -2024,7 +2034,7 @@ fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without
         .lock()
         .unwrap()
         .execute(
-            "UPDATE transcript_order SET reference_id='0' WHERE position=?1",
+            "UPDATE transcript_entries SET native_reference_id='0' WHERE position=?1",
             [transcript],
         )
         .unwrap();
@@ -2038,7 +2048,7 @@ fn inherited_terminal_only_transcript_seats_resolve_finite_native_owners_without
         .lock()
         .unwrap()
         .execute(
-            "UPDATE transcript_order SET reference_id='8' WHERE position=?1",
+            "UPDATE transcript_entries SET native_reference_id='8' WHERE position=?1",
             [transcript],
         )
         .unwrap();
@@ -2145,7 +2155,7 @@ fn turn_directory_mixed_terminal_and_local_turns_reuse_exact_validated_navigatio
     let frontier = store.presentation_frontier().unwrap();
     store.conversation_turns(0, 64).unwrap();
     assert_eq!(store.presentation_frontier().unwrap(), frontier);
-    store.lock().unwrap().execute("DELETE FROM transcript_order WHERE reference_kind='inherited_turn' AND reference_id='8'",[]).unwrap();
+    store.lock().unwrap().execute("DELETE FROM transcript_entries WHERE native_reference_kind='inherited_turn' AND native_reference_id='8'",[]).unwrap();
     assert!(store.conversation_turns(8, 1).is_err());
     assert!(store.load_inherited_turns().is_err());
 }
@@ -2356,4 +2366,175 @@ fn inherited_turn_reverse_membership_seeks_only_the_selected_ordinal() {
         costs.push(instructions);
     }
     assert!(costs.iter().all(|cost| *cost == costs[0]), "{costs:?}");
+}
+
+#[test]
+fn historical_fact_cuts_reuse_plans_without_changing_rows_or_scan_work() {
+    use rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG;
+    let store = store();
+    let first = terminal(&store, 0, true);
+    let last = terminal(&store, 1, true);
+    let connection = store.lock().unwrap();
+    assert!(connection.db_config(SQLITE_DBCONFIG_ENABLE_QPSG).unwrap());
+    let cuts = [0, first.sequence, last.sequence, first.sequence, 0];
+    let mut controls = Vec::new();
+    for stable in [false, true] {
+        connection
+            .set_db_config(SQLITE_DBCONFIG_ENABLE_QPSG, stable)
+            .unwrap();
+        let (sql, _) = presentation_statements(&query(
+            FactScope::All,
+            vec!["model_request_completed"],
+            last.sequence,
+        ))
+        .unwrap()
+        .remove(0);
+        let mut statement = connection.prepare(&sql).unwrap();
+        let mut results = Vec::new();
+        for through in cuts {
+            let (_, values) = presentation_statements(&query(
+                FactScope::All,
+                vec!["model_request_completed"],
+                through,
+            ))
+            .unwrap()
+            .remove(0);
+            let rows = statement
+                .query_map(rusqlite::params_from_iter(values), |row| {
+                    row.get::<_, String>(6)
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            results.push(rows);
+        }
+        assert_eq!(statement.get_status(StatementStatus::FullscanStep), 0);
+        assert_eq!(statement.get_status(StatementStatus::Sort), 0);
+        if stable {
+            assert_eq!(statement.get_status(StatementStatus::RePrepare), 0);
+            assert_eq!(results, controls);
+        } else {
+            assert!(statement.get_status(StatementStatus::RePrepare) > 0);
+            assert_eq!(results[0], [] as [std::string::String; 0]);
+            assert_eq!(results[1].len(), 1);
+            assert_eq!(results[2].len(), 1);
+            assert_ne!(results[1], results[2]);
+            controls = results;
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // The linear fixture checks reuse, old cuts, and independent readiness failures.
+fn native_metadata_cached_statements_keep_historical_cuts_and_readiness_errors() {
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+    use std::sync::atomic::AtomicUsize;
+
+    for capacity in [0, 16, 64] {
+        let store = store();
+        store.initialize(&[]).unwrap();
+        let started = |name: &str| {
+            let attempt = AttemptId::new(name);
+            store
+                .append_event(envelope(
+                    store.conversation_id(),
+                    name,
+                    Some(attempt.clone()),
+                    RuntimeEvent::AttemptStarted {
+                        attempt_id: attempt,
+                    },
+                ))
+                .unwrap()
+                .sequence
+        };
+        let first = started("cache-first");
+        let last = started("cache-last");
+        let connection = store.lock().unwrap();
+        connection.set_prepared_statement_cache_capacity(capacity);
+        let prepares = Arc::new(AtomicUsize::new(0));
+        let count = prepares.clone();
+        connection
+            .authorizer(Some(move |context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "events",
+                        column_name: "observation_trace_total"
+                            | "observation_trace_required"
+                            | "observation_readiness_missing"
+                    } | AuthAction::Read {
+                        table_name: "event_observation_readiness",
+                        column_name: "ready"
+                    }
+                ) {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+                Authorization::Allow
+            }))
+            .unwrap();
+        assert_eq!(
+            crate::durable::sqlite::observation_statistics::trace_total(&connection, first)
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            crate::durable::sqlite::observation_readiness::frontier(&connection, 0, first).unwrap(),
+            0
+        );
+        assert!(prepares.swap(0, Ordering::SeqCst) > 0);
+        // Rebinding the retained statements reads the requested native cut,
+        // rather than retaining the first result or first parameter values.
+        assert_eq!(
+            crate::durable::sqlite::observation_statistics::trace_total(&connection, last).unwrap(),
+            2
+        );
+        assert_eq!(
+            crate::durable::sqlite::observation_readiness::frontier(&connection, 0, last).unwrap(),
+            0
+        );
+        let repeated = prepares.swap(0, Ordering::SeqCst);
+        if capacity == 0 {
+            assert!(repeated > 0);
+        } else {
+            assert_eq!(
+                repeated, 0,
+                "fixed native metadata SQL must reuse preparation"
+            );
+        }
+        crate::durable::sqlite::observation_readiness::mark(&connection, first, first).unwrap();
+        assert_eq!(
+            crate::durable::sqlite::observation_readiness::frontier(&connection, 0, last).unwrap(),
+            first
+        );
+        assert_eq!(
+            crate::durable::sqlite::observation_statistics::trace_total(&connection, first)
+                .unwrap(),
+            1
+        );
+        crate::durable::sqlite::observation_readiness::mark(&connection, last, last).unwrap();
+        assert_eq!(
+            crate::durable::sqlite::observation_readiness::frontier(&connection, 0, last).unwrap(),
+            last
+        );
+        // SQLite invalidates a prepared statement when its authorizer changes.
+        // Warming a statement must never bypass a later injected read error.
+        connection
+            .authorizer(Some(|context: AuthContext<'_>| {
+                if matches!(
+                    context.action,
+                    AuthAction::Read {
+                        table_name: "events",
+                        column_name: "observation_trace_total",
+                    }
+                ) {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }))
+            .unwrap();
+        assert!(
+            crate::durable::sqlite::observation_statistics::trace_total(&connection, last).is_err()
+        );
+    }
 }

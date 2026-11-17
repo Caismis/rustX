@@ -374,6 +374,10 @@ async fn review_with_auxiliary(
     let mut join = match reservation.with_consumer(consumer).submit(FrozenCall {
         start,
         request,
+        // The 8 KiB budget bounds business arguments only. The prepared prompt
+        // also carries the task and native facts, so the provider body stays
+        // uncapped here, matching other internal auxiliary callers.
+        provider_body_limit: None,
         invocation: reviewer.invocation.clone(),
         timeout: reviewer.timeout,
         resource_revision: reviewer.resource_revision,
@@ -608,6 +612,50 @@ mod tests {
         };
         let err = complete_review_arguments(&view).expect_err("budget");
         assert!(err.contains("incomplete input cannot authorize"));
+    }
+
+    #[test]
+    fn near_budget_arguments_and_task_still_prepare() {
+        let conversation_id = crate::runtime::identity::ConversationId::new(
+            "conv_6ae353db-f482-746d-8f8d-b42ad2fef7a7",
+        );
+        let attempt_id = crate::runtime::identity::AttemptId::new("attempt_review_near");
+        let invocation_id = crate::tools::types::ToolInvocationId::Agent {
+            call_id: crate::runtime::identity::ToolCallId::new("call_review_near"),
+        };
+        let tool_id = crate::runtime::identity::ToolId::new("tool-bash");
+        let origin = crate::tools::types::ToolOrigin::Builtin;
+        let arguments = serde_json::json!({ "command": "x".repeat(REVIEW_ARGUMENTS_BUDGET - 16) });
+        let task = crate::runtime::permission::PermissionTaskEvidence::canonical(
+            &crate::message::MessageBlock::User(crate::message::UserMessageBlock {
+                id: crate::runtime::identity::MessageId::new("near-budget-task"),
+                source: crate::message::UserSource::Human,
+                kind: crate::message::InboundKind::Message,
+                timestamp: None,
+                content: vec![crate::message::UserContentBlock::Text(
+                    crate::message::content::TextBlock {
+                        text: "Review this exact command".into(),
+                    },
+                )],
+            }),
+        )
+        .unwrap();
+        let mut view = review_view(
+            &conversation_id,
+            &attempt_id,
+            &invocation_id,
+            &tool_id,
+            &origin,
+            "bash",
+            &arguments,
+            None,
+        );
+        view.task = Some(&task);
+        let prompt = complete_review_prompt(&view, "review").expect("legal near-budget review");
+        assert!(prompt.len() > REVIEW_ARGUMENTS_BUDGET);
+        assert!(prompt.len() <= 32_768);
+        assert!(prompt.contains("near-budget-task"));
+        assert!(complete_review_arguments(&view).is_ok());
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -1,0 +1,80 @@
+[
+  {
+    "label": "standalone-terminal",
+    "command": [
+      "/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9",
+      "runtime::conversation_runtime::tests::terminal_event_durable_failure_degrades_without_fabricated_terminal",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "passed": 1,
+    "seconds": 0.26479157699941425
+  },
+  {
+    "label": "atomic-terminal",
+    "command": [
+      "/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9",
+      "runtime::conversation_runtime::tests::atomic_terminal_durable_failure_rolls_back_and_degrades",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "passed": 1,
+    "seconds": 0.2669483619974926
+  },
+  {
+    "label": "host-capture",
+    "command": [
+      "/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9",
+      "runtime_client::host::tests::incremental_projection_independent_snapshot_capture",
+      "--exact",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "passed": 1,
+    "seconds": 1.276153744001931
+  },
+  {
+    "label": "native-final",
+    "command": [
+      "/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9",
+      "durable::sqlite::tests::final_settlement_tests::",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "passed": 5,
+    "seconds": 0.2650217039990821
+  },
+  {
+    "label": "publication",
+    "command": [
+      "/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9",
+      "scripted_suites::agent::publication::",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "passed": 14,
+    "seconds": 0.616232795000542
+  },
+  {
+    "label": "projection",
+    "command": [
+      "/workspace/issue-481-target-debug/debug/deps/rustx-460b6025aaec8ce9",
+      "runtime_client::projection::",
+      "--nocapture"
+    ],
+    "exit": 0,
+    "passed": 82,
+    "seconds": 19.475222485001723
+  },
+  {
+    "label": "fresh-typescript-fold",
+    "command": [
+      "node",
+      "/workspace/issue-481-evidence/ci-final-diagnosis/check-fresh-capture.mjs",
+      "/workspace/issue-481-evidence/ci-final-diagnosis/fresh-native-capture.json"
+    ],
+    "exit": 0
+  }
+]

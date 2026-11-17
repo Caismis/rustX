@@ -963,7 +963,7 @@ mod tests {
             &event(RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
-                result: tool_result(),
+                result: tool_result().into(),
             }),
         );
         assert_ignored(
@@ -1052,7 +1052,7 @@ mod tests {
             &event(RuntimeEvent::ToolExecutionCompleted {
                 tool_call_id: ToolCallId::new("call-1"),
                 tool_id: ToolId::new("tool-bash"),
-                result: tool_result(),
+                result: tool_result().into(),
             }),
         );
         assert_eq!(
@@ -1394,7 +1394,7 @@ mod tests {
         event(RuntimeEvent::ToolExecutionCompleted {
             tool_call_id: ToolCallId::new(call),
             tool_id: ToolId::new("tool-bash"),
-            result: tool_result(),
+            result: tool_result().into(),
         })
     }
 

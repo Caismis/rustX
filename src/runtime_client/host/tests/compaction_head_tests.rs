@@ -224,7 +224,10 @@ async fn completed_turn(fixture: &HostFixture, subscription: &EventSubscription)
         ))
         .unwrap();
     receive_until(subscription, |event| {
-        matches!(event.event, RuntimeClientEvent::AttemptSettled { .. })
+        matches!(
+            event.event.as_ref(),
+            RuntimeClientEvent::AttemptSettled { .. }
+        )
     })
     .await;
     tokio::time::timeout(STREAM_LIVENESS_GUARD, async {
@@ -335,7 +338,9 @@ async fn assert_compacted_replay(
         };
         assert_eq!(record.cursor.get(), cursor.get() + 1);
         cursor = record.cursor;
-        let RuntimeClientEvent::ProjectionTransition { metadata, .. } = &record.event else {
+        let RuntimeClientEvent::ProjectionTransition { metadata, .. } =
+            complete_transition(&record.event)
+        else {
             panic!("one complete publication record");
         };
         assert_eq!(metadata.read_cut.revision, record.cursor.get());

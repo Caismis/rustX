@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { MODEL_TIME } from './pi-oracle.mjs';
 import { comparePayloads } from './compare-http.mjs';
 
 const CORE_GUIDANCE = 'You are an expert coding assistant operating inside rustX.';
@@ -30,6 +31,8 @@ function makeTools() {
 
 function makeShortOrCancelRecord(caseName, workspace, promptCwd, timestamp, guidance = CORE_GUIDANCE, extraBody = {}) {
   return {
+    workload_version: 3,
+    model_time: MODEL_TIME,
     measurement_version: 3,
     case: caseName,
     workspace,
@@ -69,6 +72,8 @@ function makeShortOrCancelRecord(caseName, workspace, promptCwd, timestamp, guid
 
 function makeToolPairRecord(workspace, timestamp, toolCallArgs, promptCwd = workspace, guidance = CORE_GUIDANCE, extraBody = {}) {
   return {
+    workload_version: 3,
+    model_time: MODEL_TIME,
     measurement_version: 3,
     case: 'tool',
     workspace,
@@ -157,13 +162,13 @@ test('same-engine comparator accepts short-small and cancel without Read across 
       caseName,
       '/tmp/before-run/workspace',
       '/tmp/before-run/workspace',
-      '2026-11-15 05:07:20',
+      MODEL_TIME,
     );
     const after = makeShortOrCancelRecord(
       caseName,
       '/tmp/after-run/workspace',
       '/tmp/after-run/workspace',
-      '2026-11-15 06:08:21',
+      MODEL_TIME,
     );
     const result = comparePayloads(before, after);
     assert.equal(result.case, caseName);
@@ -173,10 +178,10 @@ test('same-engine comparator accepts short-small and cancel without Read across 
 });
 
 test('same-engine comparator accepts nested arguments.path and distinct declared workspaces on tool case', () => {
-  const before = makeToolPairRecord('/tmp/before-run/workspace', '2026-11-15 05:07:20', {
+  const before = makeToolPairRecord('/tmp/before-run/workspace', MODEL_TIME, {
     arguments: { path: '/tmp/before-run/workspace/note.txt' },
   });
-  const after = makeToolPairRecord('/tmp/after-run/workspace', '2026-11-15 06:08:21', {
+  const after = makeToolPairRecord('/tmp/after-run/workspace', MODEL_TIME, {
     arguments: { path: '/tmp/after-run/workspace/note.txt' },
   });
   const result = comparePayloads(before, after);
@@ -191,12 +196,12 @@ test('same-engine comparator rejects wrong CWD relative to declared workspace ev
     ['/tmp/run-a/workspace', '/tmp/wrong-cwd/workspace'],
     ['/tmp/run-a/workspace', '/tmp/run-a/workspace/nested'],
   ]) {
-    const before = makeShortOrCancelRecord('cancel', declared, promptCwd, '2026-11-15 05:07:20');
+    const before = makeShortOrCancelRecord('cancel', declared, promptCwd, MODEL_TIME);
     const after = makeShortOrCancelRecord(
       'cancel',
       '/tmp/run-b/workspace',
       promptCwd,
-      '2026-11-15 05:07:20',
+      MODEL_TIME,
     );
     assert.throws(() => comparePayloads(before, after), /workspace cwd|section boundary/);
   }
@@ -207,19 +212,19 @@ test('same-engine comparator rejects missing workspace field and missing CWD lin
     'short-small',
     '/tmp/run-a/workspace',
     '/tmp/run-a/workspace',
-    '2026-11-15 05:07:20',
+    MODEL_TIME,
   );
   delete noWorkspace.workspace;
   const good = makeShortOrCancelRecord(
     'short-small',
     '/tmp/run-b/workspace',
     '/tmp/run-b/workspace',
-    '2026-11-15 05:07:20',
+    MODEL_TIME,
   );
   assert.throws(() => comparePayloads(noWorkspace, good), /missing immutable fixture workspace/);
 
-  const noCwdLeft = makeShortOrCancelRecord('cancel', '/tmp/a/workspace', null, '2026-11-15 05:07:20');
-  const noCwdRight = makeShortOrCancelRecord('cancel', '/tmp/b/workspace', null, '2026-11-15 05:07:20');
+  const noCwdLeft = makeShortOrCancelRecord('cancel', '/tmp/a/workspace', null, MODEL_TIME);
+  const noCwdRight = makeShortOrCancelRecord('cancel', '/tmp/b/workspace', null, MODEL_TIME);
   assert.throws(() => comparePayloads(noCwdLeft, noCwdRight), /missing exact workspace cwd/);
 });
 
@@ -228,34 +233,34 @@ test('same-engine comparator rejects changed system guidance', () => {
     'short-small',
     '/tmp/before-run/workspace',
     '/tmp/before-run/workspace',
-    '2026-11-15 05:07:20',
+    MODEL_TIME,
     CORE_GUIDANCE,
   );
   const after = makeShortOrCancelRecord(
     'short-small',
     '/tmp/after-run/workspace',
     '/tmp/after-run/workspace',
-    '2026-11-15 05:07:20',
+    MODEL_TIME,
     'Altered system guidance instruction.',
   );
   assert.throws(() => comparePayloads(before, after));
 });
 
 test('same-engine comparator rejects flat legacy read arguments without envelope', () => {
-  const before = makeToolPairRecord('/tmp/before-run/workspace', '2026-11-15 05:07:20', {
+  const before = makeToolPairRecord('/tmp/before-run/workspace', MODEL_TIME, {
     path: '/tmp/before-run/workspace/note.txt',
   });
-  const after = makeToolPairRecord('/tmp/after-run/workspace', '2026-11-15 05:07:20', {
+  const after = makeToolPairRecord('/tmp/after-run/workspace', MODEL_TIME, {
     path: '/tmp/after-run/workspace/note.txt',
   });
   assert.throws(() => comparePayloads(before, after), /invocation arguments envelope/);
 });
 
 test('same-engine comparator rejects changed semantic envelope metadata', () => {
-  const before = makeToolPairRecord('/tmp/before-run/workspace', '2026-11-15 05:07:20', {
+  const before = makeToolPairRecord('/tmp/before-run/workspace', MODEL_TIME, {
     arguments: { path: '/tmp/before-run/workspace/note.txt' },
   });
-  const after = makeToolPairRecord('/tmp/after-run/workspace', '2026-11-15 05:07:20', {
+  const after = makeToolPairRecord('/tmp/after-run/workspace', MODEL_TIME, {
     arguments: { path: '/tmp/after-run/workspace/note.txt' },
     elevation_reason: 'explicit escalation',
   });
@@ -263,12 +268,12 @@ test('same-engine comparator rejects changed semantic envelope metadata', () => 
 });
 
 test('same-engine comparator rejects unknown extra request fields and changed tool schemas', () => {
-  const before = makeToolPairRecord('/tmp/before-run/workspace', '2026-11-15 05:07:20', {
+  const before = makeToolPairRecord('/tmp/before-run/workspace', MODEL_TIME, {
     arguments: { path: '/tmp/before-run/workspace/note.txt' },
   });
   const afterUnknown = makeToolPairRecord(
     '/tmp/after-run/workspace',
-    '2026-11-15 05:07:20',
+    MODEL_TIME,
     { arguments: { path: '/tmp/after-run/workspace/note.txt' } },
     '/tmp/after-run/workspace',
     CORE_GUIDANCE,
@@ -276,7 +281,7 @@ test('same-engine comparator rejects unknown extra request fields and changed to
   );
   assert.throws(() => comparePayloads(before, afterUnknown));
 
-  const afterToolDrift = makeToolPairRecord('/tmp/after-run/workspace', '2026-11-15 05:07:20', {
+  const afterToolDrift = makeToolPairRecord('/tmp/after-run/workspace', MODEL_TIME, {
     arguments: { path: '/tmp/after-run/workspace/note.txt' },
   });
   afterToolDrift.wire_requests[0].body.tools[0].function.parameters.additionalProperties = true;
@@ -284,11 +289,50 @@ test('same-engine comparator rejects unknown extra request fields and changed to
 });
 
 test('same-engine comparator rejects outside-fixture read path even when both sides agree', () => {
-  const before = makeToolPairRecord('/tmp/before-run/workspace', '2026-11-15 05:07:20', {
+  const before = makeToolPairRecord('/tmp/before-run/workspace', MODEL_TIME, {
     arguments: { path: '/etc/passwd' },
   });
-  const after = makeToolPairRecord('/tmp/after-run/workspace', '2026-11-15 05:07:20', {
+  const after = makeToolPairRecord('/tmp/after-run/workspace', MODEL_TIME, {
     arguments: { path: '/etc/passwd' },
   });
   assert.throws(() => comparePayloads(before, after), /read tool path must target declared fixture workspace/);
+});
+
+test('comparator rejects a wrong fixed clock even when both sides agree', () => {
+  const before = makeShortOrCancelRecord('cancel', '/tmp/before-run/workspace', '/tmp/before-run/workspace', '2026-10-19 00:00:01');
+  const after = makeShortOrCancelRecord('cancel', '/tmp/after-run/workspace', '/tmp/after-run/workspace', '2026-10-19 00:00:01');
+  assert.throws(() => comparePayloads(before, after), /fixed fixture clock/);
+});
+
+test('comparator rejects wrong workload version and model_time identity', () => {
+  const before = makeShortOrCancelRecord('short-small', '/tmp/before-run/workspace', '/tmp/before-run/workspace', MODEL_TIME);
+  const after = makeShortOrCancelRecord('short-small', '/tmp/after-run/workspace', '/tmp/after-run/workspace', MODEL_TIME);
+  before.workload_version = 2;
+  assert.throws(() => comparePayloads(before, after), /workload_version/);
+  before.workload_version = 3;
+  after.model_time = '2026-10-19 00:00:01';
+  assert.throws(() => comparePayloads(before, after), /model_time/);
+});
+
+test('comparator rejects unknown, unpaired, and inconsistent observer modes', () => {
+  const left = makeShortOrCancelRecord('cancel', '/tmp/before-run/workspace', '/tmp/before-run/workspace', MODEL_TIME);
+  const right = makeShortOrCancelRecord('cancel', '/tmp/after-run/workspace', '/tmp/after-run/workspace', MODEL_TIME);
+  left.observer_mode = 'background';
+  assert.throws(() => comparePayloads(left, right), /not allowed/);
+
+  left.observer_mode = 'live-subscriber';
+  right.observer_mode = 'no-live-subscriber';
+  left.samples = [{observer_mode: 'live-subscriber'}];
+  right.samples = [{observer_mode: 'no-live-subscriber'}];
+  assert.throws(() => comparePayloads(left, right), /paired observer mode/);
+
+  right.observer_mode = 'live-subscriber';
+  right.samples = [{observer_mode: 'native-workflow'}];
+  assert.throws(() => comparePayloads(left, right), /per-turn observer mode/);
+
+  right.samples = [{observer_mode: 'live-subscriber'}];
+  const matched = comparePayloads(left, right);
+  assert.equal(matched.observer_mode, 'live-subscriber');
+  assert.equal(matched.model_time, MODEL_TIME);
+  assert.equal(matched.workload_version, 3);
 });

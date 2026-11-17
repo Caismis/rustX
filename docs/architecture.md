@@ -250,7 +250,16 @@ to another owner. The default estimator caches exact model-visible JSON byte
 lengths and rounds the complete aggregate once. Arbitrary estimators retain their
 complete-input contract; additivity is never assumed.
 
-The current SQLite development schema is 90, defined by `SQLITE_SCHEMA_VERSION`. Version 89 combines model-derived compaction progress and chunk causality with `workflow_definition_snapshots`, `workflow_snapshot_chunks`, and `workflow_run_snapshots`. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests, an explicit owner on every model-request start, and atomic run-start immutable definition snapshots. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Older schemas are refused without migration.
+Native publication progress is scoped to the writer connection's TEMP epoch.
+Committed evidence can leave pending event and transcript holes until the
+publication owner releases them. Release removes the exact holes after
+validating the durable cut. Direct delivery also records disjoint event ranges
+for replay suppression. Adjacent direct positions coalesce, and deletion of a
+native row splits its range within the same transaction. Reopen or epoch
+replacement establishes the committed baseline and retires process-local
+direct evidence.
+
+The current SQLite development schema is 115, defined by `SQLITE_SCHEMA_VERSION`. Version 115 combines independent Compaction operations and authenticated prefix coverage with main's bounded storage layout. Version 114 adds admission-bound Workflow run snapshots (`workflow_definition_snapshots`, `workflow_snapshot_chunks`, and `workflow_run_snapshots`) and the generated workflow-agent node index. It requires independently durable typed checkpoints, historical activations/head, idempotent compaction receipts, exact request manifests, an explicit owner on every model-request start, and atomic run-start immutable definition snapshots. Authenticated Source pages use the versioned bounded binary codec; small fact spools have byte/count bounds and spill to disk. Source child indexes retain bounded paths to the existing field Fact instead of duplicating its payload; original bytes and capture witnesses remain unchanged. Version 83 added original Workflow node input/output Journal facts and their data-node kinds; version 84 requires exact Workflow run/instance indexes so terminal and missing-I/O reads do not scan unrelated history. Schema 99 scopes the Agent request kind index to Agent-owned facts. Schema 100 adds shared-control inbox semantics to that layout. Schema 101 uses 8 KiB physical segments for live suffixes and their copy-through audit and raw argument representations. The public 64 KiB range bound remains in place. Schema 102 narrows auxiliary event indexes and removes the unused broad Trace-kind index. Schema 105 keeps the independent native and observation global kind indexes but stores compact typed keys for common lifecycle kinds; public kinds and all scoped query indexes remain unchanged. Schema 112 uses 512-byte pages, places the Surface head and recovery and identity frontiers in the store root, orders Content frontier keys by source coordinate and uses a partial index for Goal cleanup. Schema 113 shares typed native event keys across sparse indexes and gives canonical Tool lookup an independent native Ledger position. Older schemas are refused without migration.
 
 Version 79 adds the `WorkflowNodeWaiting` Journal vocabulary: native node identity,
 wait reason and an optional reserved Auxiliary Call identity. A confirmed append
@@ -261,6 +270,11 @@ introduced the native JSON Schema capability and prepared response-schema fields
 in frozen request fingerprints, including ordinary text requests.
 
 `ModelRequestStarted.owner` is the authoritative request-to-owner fact. Agent starts retain native Snapshot/Context authority; auxiliary starts require an active Call with bounded source metadata. Mandatory derived owner and Call indexes are committed with their original facts. Terminals must match that ownership. Auxiliary facts never acquire Agent P/U/C authority. See [Auxiliary request facts and inspection](auxiliary-execution.md) for the semantic transitions, bounded readers, uncertainty and source-audit lifetime.
+
+Auxiliary preparation belongs to the admitted native Call worker. The adapter
+owns the provider encoding, which the worker shares across ordinary retries
+under the same capacity permit. Each retry uses a fresh durable RequestStart.
+Workflow's translated-size check before capacity admission retains only a count.
 
 Auxiliary storage admits bounded consumer-defined purpose, activation cause and
 opaque business references without importing consumers or dispatching by purpose.
@@ -335,9 +349,9 @@ enforcement, and the explicit bounded writer busy handler. A successful SQLite
 commit is the local publication and process-crash durability linearization point.
 Committed facts survive process termination while the OS/filesystem remains healthy.
 Power loss or OS failure may lose recent transactions; there is no promised time
-window or per-commit stable-media guarantee. P, U and C still commit independently.
+window or per-commit stable-media guarantee. Ordinary accepted model output commits P, U and C together, including its no-tool inbox/terminal boundary.
 Known write/commit failures remain errors. SQLite owns WAL/SHM recovery and the
-1,000-page automatic checkpoint; no per-turn forced checkpoint is added.
+7,825-frame automatic checkpoint (approximately 4 MiB including frame headers); no per-turn forced checkpoint is added. SQLite uses a suggested page-cache size of approximately 2,000 KiB, not a hard memory limit; in-memory databases retain their contents in memory.
 See [the durability audit](issue-480/durability.md) for connection and lifetime rules.
 
 Version 9 froze the durable **answer obligation** (Issue #111): adoption
@@ -358,17 +372,16 @@ The physical tables are deliberately semantic rather than generic:
 
 | Table | Purpose and constraints |
 | --- | --- |
-| `rustx_store` | One-row conversation binding, schema version, durable next `InboundSequence` / Event Journal / transcript position counters, the Todo-specific logical-primary-start progress sequence, and the pending unresolved-output `PublicationStreamId` pointer. |
+| `rustx_store` | One-row conversation binding, schema version, durable next `InboundSequence` / Event Journal / transcript position counters, the Todo-specific logical-primary-start progress sequence, and the pending unresolved-output `PublicationStreamId` pointer, and the nullable canonical Surface revision and compaction generation. |
 | `pending_inbound` | Pending deliveries keyed by `InboundSequence`, with unique `MessageId`, serialized User body, and optional correlation. |
 | `inbound_correlation` | Exactly-once correlation mapping to the accepted sequence and unique `MessageId`. |
 | `message_ledger` | Append-only canonical bodies keyed by commit `position` and unique `MessageId`. |
 | `bootstrap_identity` | Immutable initial-history count and digest, including an explicit empty bootstrap. |
 | `surface_ops` | Canonical `Append` bookkeeping only. No replacement operation exists. |
-| `surface_head` | Ordinary canonical cache metadata; historical context is compiled from the projection head and bounded post-base Tail. |
 | `projection_checkpoints` | Immutable typed candidate bodies, candidate fingerprints and independently validated trusted summary metadata. |
 | `projection_activations` / `projection_head` | Ordered historical installations, separate source origins/destination installations, and current head. |
 | `compaction_operations` | Stable OperationId + candidate fingerprint and immutable commit receipt. |
-| `context_checkpoints` | Current structural/index checkpoint matching `surface_head`; it is not message history. |
+| `context_checkpoints` | Current structural/index checkpoint matching the Surface head in `rustx_store`; it is not message history. |
 | `request_snapshots` | One immutable non-history snapshot per `RequestId`, its frozen provisional Assistant identity, Surface revision, committed start sequence, and optional request-only carryover source/representation/anchor. |
 | `events` | Append-only typed envelopes keyed by per-conversation Event Journal sequence and unique `EventId`. |
 | `contribution_emission_heads` | One materialized latest-emission record per `(producer identity, semantic key)`, including the store-assigned logical-step origin, maintained only by the combined model-turn-start transaction. |
@@ -568,6 +581,8 @@ Only after Loaded and its receipt are visible does the owned future begin
 consuming catalog revisions; a losing initialization drops the inert future.
 The observer therefore remains counted for drain without acquiring a new
 active preparation admission after callers can enter compaction or an Attempt.
+Its retained runtime is released before its lifecycle admission wakes drain,
+including when the inert observer is cancelled before its first poll.
 
 DurabilityGate keeps a short state mutex and an owned ownership permission.
 A failure request immediately closes later admission without parking the
@@ -1890,6 +1905,9 @@ tools/workspace_python.rs  One Workspace `.venv`: reuse a valid environment,
                            registration or model turns; process/host drain owns
                            cancellation and joins; original root identity and
                            input generation fence execution and Ready
+                           In child processes, this drain precedes control
+                           dispatcher shutdown so settled probe anchors can
+                           still release through the reliable parent channel.
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            background executions (lifecycle state machine,
                            dispatch ownership commit, cancel-vs-complete
@@ -1995,7 +2013,7 @@ model/adapter/traits.rs    ModelAdapter runtime-owned interface, ModelStream,
 model/adapter/validation.rs    deterministic local capability validation
 model/adapter/block_index.rs   provider-key to ContentBlockIndex allocator
 model/adapter/openai/     OpenAI Chat Completions and Responses adapters
-                           (async-openai, custom no-retry HTTP service)
+                           (borrowed wire views, single-attempt HTTP transport)
 model/adapter/anthropic/  Anthropic Messages adapter (direct HTTP/SSE,
                            no Anthropic SDK)
 ```
@@ -2288,9 +2306,23 @@ deterministic scheduling phases (sequential barriers, parallel groups)
 The loop owns execution semantics, message assembly, tool execution,
 continuation state, cancellation observation, and runtime-event emission.
 The durable Event Journal owns historical execution facts; the observer is
-only the live projection seam. Adapters own provider protocol translation only; the validating
-[`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
-[`ToolExecutor`] implementations and never falls back id-first.
+only the live projection seam. Adapters own provider protocol translation.
+The validating [`ToolRegistry`] pairs canonical [`ToolDefinition`] values with
+[`ToolExecutor`] implementations and resolves the frozen tool identity.
+Registration validates and retains one compiled business-argument validator
+for that immutable schema and tool identity. Policy-only selection shares the
+validator while checking the effective policy separately. Replacement schema
+owners compile independently. Frozen executors and capability catalogs retain
+their validator until the last registration owner is dropped.
+
+The Agent Loop transfers the frozen logical input to adapter preparation before
+the request-start commit. The adapter returns immutable transport bytes and
+validated tool identities owned by that input. Dispatch starts only after
+the existing commit evidence is accepted. An ordinary retry shares the same
+bytes and input under a fresh committed start. The loop releases the prepared
+owner when the logical request finishes or is abandoned. The bytes are
+process-local and never serve as canonical or durable evidence.
+
 Continuation state propagates losslessly without fabrication, cancellation
 always settles as a terminal cancellation candidate, and a normally settled
 attempt commits exactly one terminal `RuntimeEvent`. A failed terminal append
@@ -3699,25 +3731,19 @@ before that commit preserves the pointer. Transient retries reuse the frozen
 snapshot semantics; overflow only moves the request-only value down its
 full → reduced → metadata-only → omitted ladder.
 
-#### OpenAI adapters (async-openai)
+#### OpenAI adapters
 
-Both OpenAI adapters use the `async-openai` crate for typed request types,
-the SDK client plumbing, and SSE stream consumption. Two properties are
-enforced by construction:
+Chat Completions and Responses serialize separate borrowed wire views. Plain
+text, tool schemas and ordinary opaque parameters are borrowed through final
+encoding. Responses also borrows validated native replay items and verifies
+their visible content and call identities without reconstructing them.
+Native structured output prepares the owned format overlay. Images and nested
+tool-argument strings still require their protocol encodings.
 
-- Automatic retry is bypassed. The SDK's default executor wraps the plain
-  transport in `OpenAIRetryLayer`; the adapters install a rustX-owned custom
-  HTTP service (`NoRetryService`) that executes exactly one `reqwest` request
-  per call and performs no retry. One adapter invocation is exactly one
-  provider request attempt.
-- The Chat Completions response stream and the entire Responses protocol use
-  the SDK's BYOT (bring-your-own-type) facility as raw JSON, so unknown
-  finish reasons, unknown event fields, and future item shapes are tolerated,
-  and preserved Responses continuation items round-trip losslessly.
-
-The no-retry service also captures the provider HTTP status, `Retry-After`
-header, and error payload at the transport boundary, because the SDK's typed
-error drops response headers.
+The transport sends one encoded body through the shared reqwest client. The
+Agent Loop owns retries. The transport preserves HTTP status, Retry-After and
+error payload before normalization, and polls SSE as raw JSON so additional
+fields and unknown finish reasons still reach the provider-specific adapter.
 
 Provider context-window failures are normalized through one shared semantic
 classifier across OpenAI and Anthropic HTTP/SSE paths. It accepts both the
@@ -4896,7 +4922,7 @@ canonical runtime state / internal RuntimeEvent
  RuntimeClientEvent / RuntimeClientSnapshot
                 |
                 v
-       App Server protocol v81
+       App Server protocol v82
 ```
 
 The governing invariant is that all authoritative execution and
@@ -4912,19 +4938,19 @@ JSONL and WebSocket in #36 bind App Server, including its standalone process ent
 point. Neither binding owns domain semantics. The existing `src/protocol` boundary remains the compiled
 `RuntimeManifest` protocol; it is not a frontend protocol.
 
-The current internal envelope is Runtime Client v88. Full Model catalog views
+The current internal envelope is Runtime Client v89. Full Model catalog views
 carry optional Model-owned reasoning Profile order; selection ordinals and frozen
 invocation snapshots are unchanged. It also distinguishes incomplete historical
 Workflow nodes from proven current activity. It retains Workflow
 data-node observation kinds and the removal of speculative cached-Connecting
-source state; App Server v81 records first-submission intent
+source state; App Server v82 records first-submission intent
 before MCP-dependent loading and attachment. Successful adopted-source runtime
 readiness publishes under native admission ownership, independently of authored
 configuration adoption.
 
 The following version history describes the Runtime Client envelope contract.
 Since #428 no process exposes it as a client protocol: `rustx-tui` and the Web
-console speak App Server v81, the only external product control protocol, and
+console speak App Server v82, the only external product control protocol, and
 `src/runtime_client` is the internal projection foundation App Server reuses.
 The envelopes remain the typed request surface of one native host and the wire
 of a running child's read-only live inspection socket. App Server clients never
@@ -5676,6 +5702,11 @@ transcript or execution-history authority.
   frontiers and deferred content evidence. A subscription after C observes
   every subsequently published display transition or fails explicitly with
   `resync_required`. Loading deferred bytes does not advance Applied.   This holds
+  across typed delta reconstruction: clients compare read evidence by its exact
+  native fields and map entries, independent of JSON property ordering.
+  Scope, cursor, frontier, domain revisions and collection generations remain
+  part of that identity; equivalent wire ordering cannot invalidate a range.
+  The cursor invariant holds
   by construction (one boundary), not by luck. At bootstrap the same
   invariant holds at cursor 0: the seed is installed as snapshot state,
   never replayed through `apply`, so no pre-existing runtime fact
@@ -6370,45 +6401,46 @@ canonical conversation acceptance. It exists to hold one user-facing contract:
 > No semantic output is released to a user-facing Runtime Client before rustX
 > has durably committed that publication.
 
-### 6.1.1 Three linearization points
+### 6.1.1 Atomic ordinary final settlement
 
-Any request that emits user-facing model output has three distinct commit
-points, owned by three distinct planes:
+Provider outcome (P), final publication frames and terminal marker (U), and
+canonical Assistant acceptance (C) remain distinct typed facts. Ordinary accepted
+model output commits all three in one native SQLite transaction. For a no-tool
+answer it also commits TurnCompleted and either adoption of the finite selected
+inbox batch or AttemptCompleted when that inbox is empty. Tool output commits
+P/U/C before Tool Plane intent or effects; tool execution/result settlement stays
+with its existing owner.
 
-```text
-P — Provider outcome         ModelRequestCompleted durable   (Event Journal)
-U — Publication outcome      final frame + terminal marker   (publication plane)
-C — Conversation acceptance  canonical Assistant durable     (Message Ledger)
-```
+The durable implication remains `C => U => P`. A crash inside any part of ordinary
+final settlement rolls back all final facts, leaving only previously committed
+partial frames. After commit, all accepted final facts survive healthy-OS process
+termination, even if the observer has received none of them. Provider, canonical, turn and terminal/adoption notifications follow commit
+in that order. The complete accepted output is published by its canonical
+receipt. Final staging frames are consumed inside this commit and their live
+prefix receipts are not released after their backing disappears. Previously
+published partial frames retain the normal live-to-canonical transition.
+No whole-request or external-effect atomicity is claimed.
 
-The required commit ordering is:
+The existing mailbox publication mutex fences selection, native adoption or
+empty-inbox completion, and ordered notifications. A later acceptance cannot
+overtake publication of the committed terminal. Selected inbound identities,
+order, transcript cursors and revisions retain their native authorities. An
+unexpected nonempty inbox at an empty boundary refuses the whole transaction.
 
-```text
-P < U < C
-```
+Native validation still checks the exact frozen request, its started envelope,
+stream generation, provider completion owner, provisional Assistant identity,
+canonical event and tool proposal ownership. Repeated settlement and foreign
+terminal envelopes fail before commit. Append-validation certificates are seated
+only after the outer commit succeeds; optional inspection remains fail-open.
 
-and the durable store — not only Agent Loop control flow — enforces the
-implication:
-
-```text
-C => U => P
-```
-
-The store proves this chain on every dependent transition. U and C reload and
-decode the exact Request Snapshot, verify its durable `ModelRequestStarted`
-envelope, and re-check the successful `ModelRequestCompleted` fact for that
-same request. C additionally requires the frozen provisional Assistant
-`MessageId`, an `AssistantMessageCommitted` event whose conversation,
-attempt, and turn envelope equal the stream, and an event payload naming that
-same message. These checks happen before the compound transaction can change
-the Ledger, Surface, Journal, staging, proposal, or settlement state.
-
-P and U are deliberately never combined into one transaction. "The provider
-finished" and "rustX committed this output for release" are different facts,
-and a crash between them must stay distinguishable. Likewise
-`ModelRequestCompleted` is never merged with the Assistant commit: provider
-completion remains an external execution fact even when canonicalization later
-fails.
+Workflow output retains its cross-owner preparation protocol: provider and
+publication facts precede the Workflow owner's submission. Ordinary output
+rejected before canonical acceptance also retains provider/publication/audit
+settlement; it cannot enter the accepted-output transaction or authorize tools.
+These are explicit ownership paths, not old-layout readers or compatibility
+fallbacks. Their P-only and U-only recovery cuts remain tested with a rejected
+unknown-tool proposal. Current development gate 75 rejects older layouts without
+migration; there is no new event wire format or persistence queue.
 
 ### 6.1.2 Pipeline
 
@@ -6417,15 +6449,20 @@ Provider chunk size is not the publication unit:
 ```text
 Provider ModelStreamItem::Event canonical delta
   -> in-memory assembler            (canonical message assembly)
-  -> bounded publication coalescer  (bytes / latency / structure / terminal)
+  -> bounded publication coalescer  (pressure / latency / terminal)
   -> typed publication frame
   -> durable publication staging
   -> user-facing release
 ```
 
 The coalescer (`src/publication/coalescer.rs`) flushes on a bounded
-deterministic policy: a maximum byte threshold, a structural boundary (a
-tool-call proposal start or completion), or the stream terminal. When the
+deterministic policy: a 100 ms oldest-payload timer, 64 KiB of conservative
+payload weight, 128 nonmergeable frames, or the stream terminal. Structural
+tool transitions retain separate ordered frames but do not force a transaction.
+Tool identities and completed arguments count toward pressure; argument counting
+stops at the byte budget without allocating an encoded copy. A single oversized
+provider payload can exceed the limit and flushes immediately. These pressure
+flushes are an explicit difference from Pi Durable's timer-only cadence. When the
 first payload enters an empty buffer, it owns one absolute monotonic deadline
 `oldest_pending_time + max_latency`; later canonical provider events never reset it. The
 coalescer owns that deadline and asks the runtime monotonic clock for the
@@ -6436,12 +6473,14 @@ tests install a manually advanced clock; no wall-clock sleep decides a flush.
 ### 6.1.3 The U transaction
 
 There is deliberately no "write the final frame, publish, then mark the stream
-complete" sequence to crash inside. When P has committed and provider
-completion is structurally accepted, the remaining publication payload and the
-publication terminal marker commit in **one** transaction; only then is the
-final buffered payload released. When no payload remains, a terminal-only
-frame still carries the terminal transition, so nothing visible is delayed
-that does not exist.
+complete" sequence to crash inside. The remaining publication payload and terminal marker commit together. For
+ordinary accepted output this is the final settlement transaction described
+above; the prepared Workflow/rejected-output path requires its provider fact
+first. Ordinary accepted output releases the complete canonical receipt after
+commit; its final staging references have been consumed and are not published.
+Prepared Workflow/rejected output releases its committed staging receipts. When
+no payload remains, a terminal-only frame still carries the native terminal
+transition.
 
 ### 6.1.4 Three mutually exclusive settlements
 
@@ -6726,9 +6765,30 @@ durable facts
 ```
 
 - **Reconstruct** reads the durable Surface head and its active bodies,
-  Pending Inbound, and a paged fold of the Event Journal. It commits nothing,
+  Pending Inbound, and the store-root recovery frontier. It commits nothing,
   invokes no provider or tool, fabricates no observation, and executes no
-  context contributor.
+  context contributor. The frontier is `rustx_store.recovery_frontier`, a JSON
+  blob advanced in the same transaction as the Journal fact it covers. NULL is
+  the empty frontier. Unknown fields are refused. Reopen folds only Journal
+  rows after the frontier's `through` sequence; it does not rescan history to
+  rediscover the latest primary request or the continuation task. Two optional
+  pointers name one Journal row each, and recovery authenticates that row
+  before use. `primary` holds `{id, at}` for the latest Agent
+  `ModelRequestStarted`: its exact request identity and Journal sequence.
+  Recovery compares both with the named row and its Agent request owner.
+  `task` is the unresolved adoption task, `{id, kind, at}`:
+  `kind` is `human` or `delegated`, and `at` is the `InboundTurnAdopted`
+  sequence. The latest Human in the adopted batch wins. The first delegated
+  input is kept only while no task is selected. A notice-only batch does not
+  clear it. The pointer is cleared only when the obligation is consumed.
+  Recovery also checks the named canonical message provenance. A pointer
+  outside the authenticated fold, or a named row that is not the expected fact,
+  fails closed. This is not a second history. Schema 114 remains the only
+  accepted store; there is no reader for an older frontier.
+  Permission recovery reads the latest primary request's authenticated frozen
+  metadata and the current projection checkpoint. It does not materialize the
+  selected manifest or projected conversation merely to compare activation IDs.
+  Full request/history consumers retain their own complete read validation.
 - **Classify** is a pure function of that evidence. It never depends on
   wall-clock timing, current provider availability, current plugin/config
   state, whether a Runtime Client is attached, or a random retry decision.
@@ -6745,7 +6805,8 @@ Startup may consume only rustX-owned durable authority:
 | Message Ledger (keyed reads) | active message bodies, canonical structure |
 | Pending Inbound Inbox | accepted-but-unadopted work |
 | Request Snapshots | exact historical request reconstruction |
-| Event Journal (paged fold) | attempt/turn/model/tool/background lifecycle |
+| Event Journal | authority for every frontier pointer and for facts after `through` |
+| `rustx_store.recovery_frontier` | bounded open-work fold, `primary`, and `task` |
 | Publication streams (unsettled rows + staged frames) | publication settlement classification (FND-03) |
 
 Historical truth is never reconstructed from a Runtime Client snapshot or
@@ -7162,6 +7223,16 @@ settlement, cancellation or recovery. Its dedicated Trace cursor and newest
 snapshot window remain separate from canonical messages, transcript paging and
 live observation cursors.
 
+The live read-domain worker enriches bounded Session domains without reading
+the deep Trace page. A Session-only `read_domains_updated` carries a null Trace
+value and preserves the previously issued Trace cut and its Source pins.
+`trace_changed` independently announces Trace work. A replacement carrying an older Trace cut requests a separate repair without cancelling pending Trace readers. Explicit checkpoint and Trace
+reads still materialize their captured published native cut; a cached Trace head
+at an older cut cannot satisfy that current checkpoint. Browser Session updates
+also preserve pending Trace page/detail work unless a supplied Trace head owns
+the new cut. Runtime Client 73 / App Server 51 advance every reader together.
+Native commits, publication cadence, recovery and persistence layouts are unchanged.
+
 See [Session-owned workspace uploads](session-uploads.md) for receipt admission, model paths, fork copies and durable cleanup.
 
 ### Pending inbound mutation and committed claim receipts
@@ -7243,7 +7314,7 @@ facts do not manufacture transcript completion facts.
 The TUI has one disposable child page, fenced by parent attachment epoch and
 child selection/read generation. Reconnect reconstructs from current authority;
 Esc closes presentation without runtime mutation. Child HITL remains routed to
-the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-observation-v50).
+the existing root interaction owner. See [the protocol](app-server-protocol.md#read-only-native-agent-observation-v52).
 
 ## Image Tool and Bash presentation (#412)
 
@@ -7469,7 +7540,7 @@ See [Model contracts and examples](workflow-programs.md#direct-model-nodes-issue
 
 ## Scheduler product projection
 
-App Server v81 provides a bounded, read-only task catalog over the existing
+App Server v82 provides a bounded, read-only task catalog over the existing
 Session catalog and exact-node schedule readers. Keyset traversal, instruction
 search and unavailable-source reporting stay native; the browser does not walk
 Session trees or load runtimes to discover tasks. A coalesced native watch hint
@@ -7559,7 +7630,7 @@ a smaller 512 KiB byte ceiling. Graph, value, presentation and run protections
 remain separate. Counting/bounded serialization stops before oversized encoded
 buffers grow; an expanded-JSON-footprint preflight protects typed YAML allocation.
 
-App Server v81 carries Workflow document references, not inline documents.
+App Server v82 carries Workflow document references, not inline documents.
 Connection-owned anonymous scratch receives/serves 64 KiB chunks and verifies
 length, SHA-256 and the native document before use. Content uses the same
 lossless numeric/unique-field codec; a 32 MiB encoded allowance preserves the
@@ -7650,7 +7721,7 @@ metadata and journals gain no execution flags. Status watches retain scalars and
 weak owners; addressed reads capture bounded native facts outside the residency
 registry lock, then validate the exact resident allocation before publication.
 A per-process revision orders snapshots and lightweight notifications without
-transcript attachment. See [status derivation and publication](app-server/shared-control.md#thread-runtime-status-v80-amendment).
+transcript attachment. See [status derivation and publication](app-server/shared-control.md#thread-runtime-status-v82-amendment).
 
 ## Admission-bound Workflow run definition snapshots (Issue #552)
 

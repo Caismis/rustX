@@ -7,13 +7,9 @@ discovery, or capability selection.
 
 ## Protocol regeneration note
 
-`protocol/app-server/v81.ts` is generated from Rust schemars. Only the
-`ApprovalMode` type alias and the inline `effective_approval_mode` union were
-string-replaced to `plan | automatic | full_access` so WebUI/TUI typecheck
-against the new vocabulary. Regenerate `v79.ts` / `v81.schema.json` from the
-Rust `ExecutionPermissionMode` (exported as `ApprovalMode`) to refresh the
-surrounding doc comments and any other generated ApprovalMode descriptions.
-Do not hand-edit the rest of that generated file.
+`protocol/app-server/v82.ts` and `v82.schema.json` are generated from Rust
+schemars. Regenerate both artifacts from `ExecutionPermissionMode` (exported as
+`ApprovalMode`) with the protocol generator; do not hand-edit generated files.
 
 ## Modes
 

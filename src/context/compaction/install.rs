@@ -88,7 +88,10 @@ pub(crate) fn preview_generated(
     let Some(retained_offset) = coverage.retained_offset(head_view) else {
         return Ok(ActivationPreview::Incomparable);
     };
-    if retained_offset > history.items.len() {
+    let historical_items = history
+        .checkpoint_items(head.as_ref())
+        .map_err(resource_failure)?;
+    if retained_offset > historical_items.len() {
         return Ok(ActivationPreview::Incomparable);
     }
     let checkpoint_id =
@@ -98,7 +101,7 @@ pub(crate) fn preview_generated(
         call_sources: Vec::new(),
         result_call: None,
     }];
-    for mut item in history.items.iter().skip(retained_offset).cloned() {
+    for mut item in historical_items.into_iter().skip(retained_offset) {
         if let Some(call) = &mut item.result_call {
             let Some(index) = call
                 .message

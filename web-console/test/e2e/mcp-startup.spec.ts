@@ -84,11 +84,18 @@ test('Workspace revocation after the first-Send receipt preserves creation and r
     await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token);
     await chooseWorkspace(page, 'Workspace A');
+    await startupWait(() => gate.reached, cancellation.signal);
+    expect(gate.counts).toMatchObject({ processes: 1, initializations: 1, lists: 1 });
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill('refused submission');
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.held()).toBe(1);
-    // Keep the MCP document and peer valid behind the replacement. Only fresh
-    // Product Host authorization prevents native initialization of this cwd.
+    // The creation receipt can arrive before native claims the prepared
+    // source. Wait for the draft slot to transfer its still-held permit.
+    // Revocation then tests browser admission after the startup owner transfers.
+    await expect.poll(async () =>
+      (await activeNative.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.mcp_drafts,
+    ).toMatchObject({ pending: 0, prepared: 0, failed: 0, cancelling: 0, source_capacity_used: 1 });
+    // Keep the MCP document and pending peer behind the replacement.
     const moved = join(fixture.directory, 'replaced-workspace');
     renameSync(fixture.workspaceA, moved);
     symlinkSync(moved, fixture.workspaceA);

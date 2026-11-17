@@ -260,6 +260,10 @@ pub async fn run_subagent_child() -> i32 {
             3
         }
     };
+    // Process-owned Python probes can outlive the conversation's semantic
+    // result. Their physical settlement must release nested anchors while
+    // the parent control writer is still alive, before its final queue drain.
+    crate::tools::workspace_python::shutdown().await;
     dispatcher.shutdown().await;
     code
 }
@@ -1551,6 +1555,8 @@ pub(crate) mod tests {
                 tool_deadline_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(
                 ),
                 context: ConversationContextConfig {
+                    status_clock: std::sync::Arc::new(crate::context::SystemClock),
+
                     estimator: Arc::new(DefaultTokenEstimator),
                     status_engine: Some(AgentStatusEngine::default()),
                 },

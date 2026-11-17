@@ -1,0 +1,86 @@
+text    1-32   CPU   12.500 ms wall   11.981 ms RSS   104.10 MiB PSS   101.91 MiB wchar    533.09 KiB write    546.25 KiB DB     1.98 WAL   2.13 MiB
+text   33-64   CPU   13.438 ms wall   13.985 ms RSS   108.53 MiB PSS   106.30 MiB wchar    627.13 KiB write    659.38 KiB DB     3.51 WAL   2.13 MiB
+text   65-96   CPU   12.500 ms wall   14.304 ms RSS   114.18 MiB PSS   111.95 MiB wchar    676.06 KiB write    726.62 KiB DB     5.11 WAL   2.13 MiB
+text   97-128  CPU   12.500 ms wall   12.834 ms RSS   116.65 MiB PSS   114.42 MiB wchar    751.77 KiB write    824.38 KiB DB     6.86 WAL   2.13 MiB
+text  129-160  CPU   14.375 ms wall   14.688 ms RSS   108.37 MiB PSS   106.14 MiB wchar    763.43 KiB write    827.50 KiB DB     8.60 WAL   2.13 MiB
+text  161-192  CPU   12.500 ms wall   12.777 ms RSS   113.57 MiB PSS   111.33 MiB wchar    771.46 KiB write    847.25 KiB DB    10.28 WAL   2.13 MiB
+text  193-224  CPU   12.812 ms wall   13.940 ms RSS   116.74 MiB PSS   114.51 MiB wchar    767.24 KiB write    833.50 KiB DB    11.83 WAL   2.16 MiB
+text  225-256  CPU   13.125 ms wall   13.157 ms RSS   118.41 MiB PSS   116.18 MiB wchar    783.26 KiB write    853.62 KiB DB    13.30 WAL   2.16 MiB
+text  257-288  CPU   13.438 ms wall   15.229 ms RSS   118.78 MiB PSS   116.55 MiB wchar    799.32 KiB write    882.62 KiB DB    14.99 WAL   2.17 MiB
+text  289-320  CPU   14.688 ms wall   15.697 ms RSS   119.33 MiB PSS   117.10 MiB wchar    820.08 KiB write    906.62 KiB DB    16.62 WAL   2.17 MiB
+text  321-352  CPU   15.312 ms wall   16.080 ms RSS   120.79 MiB PSS   118.56 MiB wchar    799.51 KiB write    870.00 KiB DB    18.10 WAL   2.17 MiB
+text  353-384  CPU   15.000 ms wall   15.590 ms RSS   121.44 MiB PSS   119.21 MiB wchar    832.78 KiB write    913.38 KiB DB    19.74 WAL   2.17 MiB
+text  385-416  CPU   15.625 ms wall   16.742 ms RSS   121.68 MiB PSS   119.44 MiB wchar    852.32 KiB write    924.50 KiB DB    21.36 WAL   2.17 MiB
+text  417-448  CPU   15.312 ms wall   15.449 ms RSS   122.18 MiB PSS   119.95 MiB wchar    817.29 KiB write    870.25 KiB DB    22.86 WAL   2.17 MiB
+text  449-480  CPU   15.312 ms wall   15.752 ms RSS   122.66 MiB PSS   120.43 MiB wchar    856.19 KiB write    924.88 KiB DB    24.52 WAL   2.17 MiB
+text  481-512  CPU   16.250 ms wall   16.146 ms RSS   122.92 MiB PSS   120.69 MiB wchar    821.57 KiB write    872.00 KiB DB    25.99 WAL   2.17 MiB
+tool    1-32   CPU  495.938 ms wall  530.385 ms RSS   138.51 MiB PSS   136.29 MiB wchar 520330.46 KiB write 523162.12 KiB DB     4.37 WAL   2.14 MiB
+tool   33-64   CPU  498.438 ms wall  541.261 ms RSS   140.08 MiB PSS   137.85 MiB wchar 520747.76 KiB write 523646.25 KiB DB     9.20 WAL   2.17 MiB
+tool   65-96   CPU  495.000 ms wall  543.684 ms RSS   145.71 MiB PSS   143.49 MiB wchar 521061.27 KiB write 524007.50 KiB DB    15.31 WAL   2.23 MiB
+Traceback (most recent call last):
+  File "/usr/lib/python3.12/asyncio/runners.py", line 118, in run
+    return self._loop.run_until_complete(task)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/base_events.py", line 687, in run_until_complete
+    return future.result()
+           ^^^^^^^^^^^^^^^
+  File "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/turn-growth.py", line 374, in main
+    'scope': 'Only server PID utime+stime, /proc/io, RSS/PSS. Fake provider and driver are siblings. '
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/turn-growth.py", line 254, in scenario
+    os.kill(server.pid, signal.SIGUSR2)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/queues.py", line 158, in get
+    await getter
+asyncio.exceptions.CancelledError
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/turn-growth.py", line 400, in <module>
+    args = parser.parse_args()
+    ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 194, in run
+    return runner.run(main)
+           ^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/runners.py", line 123, in run
+    raise KeyboardInterrupt()
+KeyboardInterrupt
+Task exception was never retrieved
+future: <Task finished name='Task-39' coro=<Client.read() done, defined at /home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/app-server-capacity.py:100> exception=ConnectionClosedError(None, None, None)>
+Traceback (most recent call last):
+  File "/usr/lib/python3/dist-packages/websockets/legacy/protocol.py", line 968, in transfer_data
+    message = await self.read_message()
+              ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/websockets/legacy/protocol.py", line 1038, in read_message
+    frame = await self.read_data_frame(max_size=self.max_size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/websockets/legacy/protocol.py", line 1113, in read_data_frame
+    frame = await self.read_frame(max_size)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/websockets/legacy/protocol.py", line 1170, in read_frame
+    frame = await Frame.read(
+            ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/websockets/legacy/framing.py", line 69, in read
+    data = await reader(2)
+           ^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.12/asyncio/streams.py", line 750, in readexactly
+    raise exceptions.IncompleteReadError(incomplete, n)
+asyncio.exceptions.IncompleteReadError: 0 bytes read on a total of 2 expected bytes
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/home/capi/.codex/worktrees/pr485-main-reconciliation/rustX/benchmarks/runtime/app-server-capacity.py", line 103, in read
+    async for raw in self.ws:
+  File "/usr/lib/python3/dist-packages/websockets/legacy/protocol.py", line 497, in __aiter__
+    yield await self.recv()
+          ^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3/dist-packages/websockets/legacy/protocol.py", line 568, in recv
+    await self.ensure_open()
+  File "/usr/lib/python3/dist-packages/websockets/legacy/protocol.py", line 944, in ensure_open
+    raise self.connection_closed_exc()
+websockets.exceptions.ConnectionClosedError: no close frame received or sent

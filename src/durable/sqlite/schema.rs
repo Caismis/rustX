@@ -4,7 +4,11 @@
 //! creates the development schema only for a new file; there is no migration
 //! or legacy reader.
 
+use super::{ConnectionSlot, event_insert};
+use super::{observation_readiness, observation_response, observation_statistics};
+use crate::durable::sqlite::statements::FixedStatements;
 use std::sync::atomic::AtomicU64;
+use std::sync::atomic::Ordering;
 #[cfg(test)]
 mod open_benchmark;
 #[cfg(test)]
@@ -17,7 +21,9 @@ use crate::events::RuntimeEventEnvelope;
 use crate::model::ModelRequestOwner;
 use crate::runtime::RequestId;
 use rusqlite::OptionalExtension;
+pub(super) mod events;
 pub(super) mod shape;
+pub(super) mod store_root;
 
 use self::shape::verify_schema_shape;
 use super::{
@@ -55,20 +61,53 @@ pub(super) fn register_integrity_function(
         .map_err(|e| storage(e.to_string()))
 }
 
+fn register_native_functions(connection: &Connection) -> Result<(), ConversationStoreError> {
+    use rusqlite::functions::FunctionFlags;
+    connection
+        .create_scalar_function(
+            "rustx_content_digest",
+            1,
+            FunctionFlags::SQLITE_UTF8
+                | FunctionFlags::SQLITE_DETERMINISTIC
+                | FunctionFlags::SQLITE_INNOCUOUS,
+            |context| {
+                use sha2::{Digest, Sha256};
+                let bytes = context
+                    .get_raw(0)
+                    .as_str()
+                    .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+                Ok(format!("{:x}", Sha256::digest(bytes.as_bytes())))
+            },
+        )
+        .map_err(|e| storage(e.to_string()))?;
+    content::register_tail_function(connection)
+}
+
+const SQLITE_PAGE_SIZE: i64 = 512;
+
 pub(super) fn configure_connection(
     connection: &mut Connection,
     in_memory: bool,
 ) -> Result<(), ConversationStoreError> {
-    register_integrity_function(connection)?;
+    register_native_functions(connection)?;
     connection
-        .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
-        .map_err(|error| storage(format!("configure SQLite: {error}")))?;
+        .execute_batch(
+            "PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL; PRAGMA page_size = 512; PRAGMA cache_size = -2000; PRAGMA wal_autocheckpoint = 7825;",
+        )
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("configure SQLite: {error}"))
+        })?;
     writer_busy_policy(connection)
         .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
     if !in_memory {
         let mode: String = connection
             .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
-            .map_err(|error| storage(format!("configure SQLite journal: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("configure SQLite journal: {error}"),
+                )
+            })?;
         if mode != "wal" {
             return Err(storage(format!("SQLite refused WAL journal mode: {mode}")));
         }
@@ -81,12 +120,14 @@ pub(super) fn validate_existing_identity(
     conversation_id: &ConversationId,
 ) -> Result<(), ConversationStoreError> {
     let stored: String = connection
-        .query_row(
+        .query_row_cached(
             "SELECT conversation_id FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("read existing identity: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("read existing identity: {error}"))
+        })?;
     if stored != conversation_id.as_str() {
         return Err(ConversationStoreError::ConversationIdMismatch {
             stored: ConversationId::parse(stored).map_err(storage)?,
@@ -104,7 +145,9 @@ pub(super) fn reject_legacy_schema(connection: &Connection) -> Result<(), Conver
             |row| row.get(0),
         )
         .optional()
-        .map_err(|error| storage(format!("probe schema: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("probe schema: {error}"))
+        })?;
     if legacy.is_some() {
         return Err(ConversationStoreError::SchemaVersionMismatch {
             stored: 0,
@@ -119,7 +162,7 @@ pub(super) fn reject_legacy_schema(connection: &Connection) -> Result<(), Conver
                 |row| row.get(0),
             )
             .optional()
-            .map_err(|error| storage(format!("probe partial schema: {error}")))?;
+            .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("probe partial schema: {error}")))?;
         if let Some(table) = unrelated {
             return Err(ConversationStoreError::IncompatibleSchema(format!(
                 "database contains table {table} but no rustx_store schema root"
@@ -139,7 +182,9 @@ pub(super) fn has_table(
             [table],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("probe table {table}: {error}")))
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("probe table {table}: {error}"))
+        })
 }
 
 pub(super) fn validate_existing_schema(
@@ -151,12 +196,25 @@ pub(super) fn validate_existing_schema(
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("read existing schema version: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("read existing schema version: {error}"),
+            )
+        })?;
     if version != SQLITE_SCHEMA_VERSION {
         return Err(ConversationStoreError::SchemaVersionMismatch {
             stored: version,
             expected: SQLITE_SCHEMA_VERSION,
         });
+    }
+    let page_size: i64 = connection
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .map_err(|error| storage(format!("read SQLite page size: {error}")))?;
+    if page_size != SQLITE_PAGE_SIZE {
+        return Err(ConversationStoreError::IncompatibleSchema(format!(
+            "SQLite page size {page_size} does not match {SQLITE_PAGE_SIZE}"
+        )));
     }
     verify_schema_shape(connection)
 }
@@ -165,7 +223,7 @@ pub(super) fn validate_existing_schema(
 // continues to own the usage payload and the compaction's explicit absence.
 // A primary terminal qualifies only with an actual input measurement, including
 // zero. Output-only Usage must preserve the previous reading before LIMIT.
-pub(super) const CONTEXT_READING_PREDICATE: &str = "json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')";
+pub(super) const CONTEXT_READING_PREDICATE: &str = "event_kind = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND event_owner_kind = 'agent')";
 
 #[derive(Clone, Copy)]
 pub(super) enum PrimaryRequestFactKind {
@@ -253,7 +311,12 @@ pub(super) fn validate_primary_request_owner_fact(
             },
         )
         .optional()
-        .map_err(|error| storage(format!("primary request owner lookup: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("primary request owner lookup: {error}"),
+            )
+        })?;
     let Some((
         owner_kind,
         attempt_id,
@@ -319,25 +382,31 @@ pub(super) fn presentation_statements(
     ];
     let scope = match &query.scope {
         FactScope::All => String::new(),
-        FactScope::AgentRequest => {
-            " AND json_extract(event_json, '$.event.owner.type') = 'agent'".to_owned()
-        }
+        FactScope::AgentRequest => " AND event_owner_kind = 'agent'".to_owned(),
         FactScope::ContextReading => format!(" AND ({CONTEXT_READING_PREDICATE}) = 1"),
         FactScope::Compaction(operation) => {
             values.push(Value::Text(operation.to_string()));
-            format!(
-                " AND json_extract(event_json, '$.event.operation_id') = ?{}",
-                values.len()
-            )
+            format!(" AND event_operation_id = ?{}", values.len())
         }
         FactScope::Step(attempt, turn) => {
             values.push(Value::Text(attempt.to_string()));
             values.push(Value::Text(turn.to_string()));
-            " AND attempt_id = ?3 AND turn_id = ?4".to_owned()
+            concat!(
+                " AND attempt_key = ",
+                crate::durable::sqlite::event_owner_key::attempt_parameter!("?3"),
+                " AND turn_key = (",
+                crate::durable::sqlite::event_owner_key::turn!("?4"),
+                ")"
+            )
+            .to_owned()
         }
         FactScope::Attempt(attempt) => {
             values.push(Value::Text(attempt.to_string()));
-            " AND attempt_id = ?3".to_owned()
+            concat!(
+                " AND attempt_key = ",
+                crate::durable::sqlite::event_owner_key::attempt_parameter!("?3")
+            )
+            .to_owned()
         }
         FactScope::ToolCall {
             call_id,
@@ -354,17 +423,24 @@ pub(super) fn presentation_statements(
                 turn.as_ref()
                     .map_or(Value::Null, |id| Value::Text(id.to_string())),
             );
-            " AND json_extract(event_json, '$.event.tool_call_id') = ?3 AND attempt_id IS ?4 AND turn_id IS ?5".to_owned()
+            concat!(
+                " AND event_tool_call_id = ?3 AND attempt_key IS ",
+                crate::durable::sqlite::event_owner_key::attempt_parameter!("?4"),
+                " AND turn_key IS (",
+                crate::durable::sqlite::event_owner_key::turn!("?5"),
+                ")"
+            )
+            .to_owned()
         }
         other => {
             let (field, value) = match other {
-                FactScope::Request(value) => ("request_id", value),
+                FactScope::Request(value) => ("event_request_id", value),
                 FactScope::Compaction(_) => unreachable!("compaction scope is handled separately"),
-                FactScope::Execution(value) => ("execution_id", value),
-                FactScope::Subagent(value) => ("subagent_id", value),
-                FactScope::Workflow(value) => ("run_id", value),
-                FactScope::Interaction(value) => ("interaction_id", value),
-                FactScope::Message(value) => ("message_id", value),
+                FactScope::Execution(value) => ("event_execution_id", value),
+                FactScope::Subagent(value) => ("event_subagent_id", value),
+                FactScope::Workflow(value) => ("event_run_id", value),
+                FactScope::Interaction(value) => ("event_interaction_id", value),
+                FactScope::Message(value) => ("event_message_id", value),
                 FactScope::All
                 | FactScope::AgentRequest
                 | FactScope::ContextReading
@@ -373,7 +449,7 @@ pub(super) fn presentation_statements(
                 | FactScope::ToolCall { .. } => unreachable!(),
             };
             values.push(Value::Text(value.clone()));
-            format!(" AND json_extract(event_json, '$.event.{field}') = ?3")
+            format!(" AND {field} = ?3")
         }
     };
     let index = match query.scope {
@@ -396,7 +472,11 @@ pub(super) fn presentation_statements(
     let mut statements = Vec::new();
     for kind in &query.kinds {
         let mut params = values.clone();
-        params.push(Value::Text((*kind).to_owned()));
+        params.push(if matches!(query.scope, FactScope::All) {
+            super::event_kind_key::parameter(kind)
+        } else {
+            Value::Text((*kind).to_owned())
+        });
         let kind_param = params.len();
         params.push(Value::Integer(seq_to_i64(query.after)?));
         let after_param = params.len();
@@ -404,143 +484,153 @@ pub(super) fn presentation_statements(
             i64::try_from(query.limit).map_err(|_| storage("fact limit"))?,
         ));
         let direction = if query.ascending { "ASC" } else { "DESC" };
-        let sql = format!("SELECT event_json FROM events INDEXED BY {index} WHERE sequence <= ?1 AND sequence < ?2{scope}
-                AND json_extract(event_json, '$.event.type') = ?{kind_param} AND sequence > ?{after_param}
+        let kind_column = if matches!(query.scope, FactScope::All) {
+            super::event_kind_key::NATIVE
+        } else {
+            "event_kind"
+        };
+        let columns = if matches!(query.scope, FactScope::All) {
+            "sequence,event_id,schema_version,conversation_id,attempt_id,turn_id,event_json"
+        } else {
+            "event_json"
+        };
+        let sql = format!("SELECT {columns} FROM events INDEXED BY {index} WHERE sequence <= ?1 AND sequence < ?2{scope}
+                AND {kind_column} = ?{kind_param} AND sequence > ?{after_param}
                 ORDER BY sequence {direction} LIMIT ?{}", params.len());
         statements.push((sql, params));
     }
     Ok(statements)
 }
 
+// Full index suffixes, including predicates that every matching reader implies.
 pub(super) const PRESENTATION_INDEXES: &[(&str, &str)] = &[
     (
         "events_primary_request_kind_idx",
-        "json_extract(event_json, '$.event.type'), json_extract(event_json, '$.event.owner.type'), sequence",
+        "(event_kind) WHERE event_owner_kind = 'agent'",
     ),
     (
         "events_context_reading_idx",
-        "json_extract(event_json, '$.event.type'), (json_extract(event_json, '$.event.type') = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND json_extract(event_json, '$.event.owner.type') = 'agent')), sequence",
+        "(event_kind) WHERE (event_kind = 'compaction_completed' OR (COALESCE(json_type(event_json, '$.event.usage.input_tokens'), 'null') != 'null' AND event_owner_kind = 'agent')) = 1",
     ),
     (
         "events_message_id_kind_idx",
-        "json_extract(event_json, '$.event.message_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_message_id, event_kind) WHERE event_message_id IS NOT NULL",
     ),
-    (
-        "events_kind_idx",
-        "json_extract(event_json, '$.event.type'), sequence",
-    ),
-    (
-        "events_attempt_kind_idx",
-        "attempt_id, json_extract(event_json, '$.event.type'), sequence",
-    ),
+    ("events_kind_idx", super::event_kind_key::NATIVE),
+    ("events_attempt_kind_idx", "(attempt_key, event_kind)"),
     (
         "events_step_kind_idx",
-        "attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+        "(attempt_key, turn_key, event_kind) WHERE attempt_key IS NOT NULL AND turn_key IS NOT NULL",
     ),
     (
         "events_compaction_operation_kind_idx",
-        "json_extract(event_json, '$.event.operation_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_operation_id, event_kind) WHERE event_operation_id IS NOT NULL",
     ),
     (
         "events_auxiliary_compaction_kind_idx",
-        "json_extract(event_json, '$.event.business_source.operation_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(json_extract(event_json, '$.event.business_source.operation_id'), event_kind) WHERE json_extract(event_json, '$.event.business_source.operation_id') IS NOT NULL",
     ),
     (
         "events_request_id_kind_idx",
-        "json_extract(event_json, '$.event.request_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_request_id, event_kind) WHERE event_request_id IS NOT NULL",
     ),
     (
         "events_tool_call_scope_kind_idx",
-        "json_extract(event_json, '$.event.tool_call_id'), attempt_id, turn_id, json_extract(event_json, '$.event.type'), sequence",
+        "(event_tool_call_id, attempt_key, turn_key, event_kind) WHERE event_tool_call_id IS NOT NULL",
     ),
     (
         "events_execution_id_kind_idx",
-        "json_extract(event_json, '$.event.execution_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_execution_id, event_kind) WHERE event_execution_id IS NOT NULL",
     ),
     (
         "events_subagent_id_kind_idx",
-        "json_extract(event_json, '$.event.subagent_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_subagent_id, event_kind) WHERE event_subagent_id IS NOT NULL",
     ),
     (
         "events_run_id_kind_idx",
-        "json_extract(event_json, '$.event.run_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_run_id, event_kind) WHERE event_run_id IS NOT NULL",
+    ),
+    (
+        "events_workflow_coordinates_idx",
+        "(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.origin.type'),coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id')),json_extract(event_json,'$.event.run_id.invocation')) WHERE event_kind='workflow_started'",
     ),
     (
         "events_workflow_node_run_kind_idx",
-        "json_extract(event_json, '$.event.instance.block.run'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_instance_run, event_kind) WHERE event_instance_run IS NOT NULL",
     ),
     (
         "events_workflow_node_instance_kind_idx",
-        "json_extract(event_json, '$.event.instance'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_instance, event_kind) WHERE event_instance IS NOT NULL",
     ),
     (
         "events_workflow_agent_node_idx",
-        "COALESCE(json_extract(event_json, '$.event.origin.node_id'), json_extract(event_json, '$.event.node_id')), json_extract(event_json, '$.event.type'), sequence",
+        "(event_workflow_agent_node, event_kind) WHERE event_workflow_agent_node IS NOT NULL",
     ),
     (
         "events_interaction_id_kind_idx",
-        "json_extract(event_json, '$.event.interaction_id'), json_extract(event_json, '$.event.type'), sequence",
+        "(event_interaction_id, event_kind) WHERE event_interaction_id IS NOT NULL",
     ),
 ];
 
 #[allow(clippy::too_many_lines)] // One fixed development schema; no migrations.
 pub(super) fn create_schema(connection: &mut Connection) -> Result<(), ConversationStoreError> {
+    register_native_functions(connection)?;
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| storage(format!("create schema transaction: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("create schema transaction: {error}"),
+            )
+        })?;
     let connection = &transaction;
     connection
         .execute_batch(
-            "CREATE TABLE IF NOT EXISTS rustx_store (
-                id INTEGER PRIMARY KEY CHECK(id=1),
-                schema_version INTEGER NOT NULL,
-                conversation_id TEXT NOT NULL,
-                next_inbound_sequence INTEGER NOT NULL CHECK(next_inbound_sequence >= 0),
-                next_event_sequence INTEGER NOT NULL CHECK(next_event_sequence >= 0),
-                next_transcript_position INTEGER NOT NULL CHECK(next_transcript_position >= 0),
-                retained_transcript_count INTEGER NOT NULL DEFAULT 0 CHECK(retained_transcript_count >= 0),
-                pending_observation_count INTEGER NOT NULL DEFAULT 0 CHECK(pending_observation_count >= 0),
-                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=16384),
-                reading_mutation_revision INTEGER NOT NULL DEFAULT 0 CHECK(reading_mutation_revision >= 0),
-                logical_step_sequence INTEGER NOT NULL CHECK(logical_step_sequence >= 0),
-                pending_unresolved_output_stream_id TEXT,
-                bootstrap_initialized INTEGER NOT NULL DEFAULT 0 CHECK(bootstrap_initialized IN (0,1))
-            );
+            concat!(crate::durable::sqlite::schema::store_root::table!(), ";
             CREATE TABLE IF NOT EXISTS observation_block_headers (
-                ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
+                ledger_position INTEGER NOT NULL,
                 block_index INTEGER NOT NULL CHECK(block_index>=0),
                 header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
-                message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
-                PRIMARY KEY(ledger_position,block_index),UNIQUE(message_id,block_index)
-            ) WITHOUT ROWID;
+                message_id TEXT NOT NULL,
+                PRIMARY KEY(ledger_position,block_index),
+                FOREIGN KEY(ledger_position,message_id) REFERENCES message_ledger(position,message_id)
+            );
             CREATE TABLE IF NOT EXISTS audit_observation_blocks (
-                transcript_position INTEGER NOT NULL REFERENCES transcript_order(position) ON DELETE CASCADE,
+                transcript_position INTEGER NOT NULL REFERENCES transcript_entries(position) ON DELETE CASCADE,
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
                 PRIMARY KEY(transcript_position,ordinal)
             ) WITHOUT ROWID;
-            CREATE TABLE IF NOT EXISTS observation_headers (
-                header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
+            CREATE TABLE IF NOT EXISTS transcript_entries (
+                header_json BLOB CHECK(header_json IS NULL OR length(header_json)<=16384),
                 tool_result_json BLOB CHECK(tool_result_json IS NULL OR length(tool_result_json)<=16384),
-                transcript_position INTEGER UNIQUE,ledger_position INTEGER,
+                position INTEGER PRIMARY KEY,ledger_position INTEGER,
                 journal_position INTEGER NOT NULL DEFAULT 0 CHECK(journal_position>=0),
-                reference_kind TEXT NOT NULL, reference_id TEXT NOT NULL,
-                PRIMARY KEY(reference_kind,reference_id)
+                reference_kind TEXT, reference_id TEXT,
+                native_reference_kind TEXT, native_reference_id TEXT,
+                observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
+                UNIQUE(reference_kind,reference_id),
+                UNIQUE(native_reference_kind,native_reference_id)
             );
-            CREATE UNIQUE INDEX IF NOT EXISTS observation_headers_ledger_idx ON observation_headers(ledger_position) WHERE ledger_position IS NOT NULL;
-            CREATE UNIQUE INDEX IF NOT EXISTS observation_headers_transcript_idx ON observation_headers(transcript_position) WHERE transcript_position IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS transcript_entries_ledger_idx ON transcript_entries(ledger_position) WHERE ledger_position IS NOT NULL;
             CREATE TABLE IF NOT EXISTS surface_observation_boundaries (
                 ordinal INTEGER PRIMARY KEY,ledger_position INTEGER NOT NULL UNIQUE,surface_revision INTEGER NOT NULL UNIQUE
             );
+            CREATE TABLE IF NOT EXISTS content_source_ids (
+                id INTEGER PRIMARY KEY AUTOINCREMENT CHECK(id>0),
+                alias TEXT NOT NULL UNIQUE
+            );
             CREATE TABLE IF NOT EXISTS content_segments (
-                source_kind TEXT NOT NULL, source_id TEXT NOT NULL, block_index INTEGER NOT NULL,
+                source_kind TEXT NOT NULL, source_id INTEGER NOT NULL CHECK(typeof(source_id)='integer' AND source_id>-9223372036854775808), block_index INTEGER NOT NULL,
                 representation TEXT NOT NULL, segment INTEGER NOT NULL, bytes BLOB NOT NULL CHECK(length(bytes)<=65536),
                 PRIMARY KEY(source_kind,source_id,block_index,representation,segment)
             ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS content_frontiers (
-                source_kind TEXT NOT NULL, source_id TEXT NOT NULL, block_index INTEGER NOT NULL,
+                source_kind TEXT NOT NULL, source_id INTEGER NOT NULL CHECK(typeof(source_id)='integer' AND source_id>-9223372036854775808), block_index INTEGER NOT NULL,
                 representation TEXT NOT NULL, revision INTEGER NOT NULL, readable_end INTEGER NOT NULL,
-                PRIMARY KEY(source_kind,source_id,block_index,representation,revision)
-            ) WITHOUT ROWID;
+                bytes BLOB CHECK(bytes IS NULL OR length(bytes)<=65536),
+                PRIMARY KEY(source_id,source_kind,block_index,representation,revision)
+            );
+            CREATE INDEX IF NOT EXISTS content_frontiers_goal_idx ON content_frontiers(source_kind) WHERE source_kind='observation_goal';
             CREATE TABLE IF NOT EXISTS publication_metadata_segments (
                 stream_id TEXT NOT NULL,block_index INTEGER NOT NULL,revision INTEGER NOT NULL,
                 segment INTEGER NOT NULL,bytes BLOB NOT NULL CHECK(length(bytes)<=65536),
@@ -561,7 +651,6 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 snapshot_json TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS observation_block_ledger_kind_idx ON observation_block_headers(ledger_position,json_extract(header_json,'$.kind'),block_index);
-            CREATE INDEX IF NOT EXISTS observation_block_kind_idx ON observation_block_headers(message_id,json_extract(header_json,'$.kind'),block_index);
             CREATE TABLE IF NOT EXISTS observation_models (
                 owner_anchor INTEGER NOT NULL REFERENCES events(sequence),
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),
@@ -570,11 +659,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 request_encoded_bytes INTEGER NOT NULL CHECK(request_encoded_bytes>=2),
                 model_hash BLOB NOT NULL CHECK(length(model_hash)=32),
                 encoded_bytes INTEGER NOT NULL CHECK(encoded_bytes>=0),
-                attempt_id TEXT NOT NULL,
-                PRIMARY KEY(attempt_id,ordinal),
-                UNIQUE(attempt_id,model_hash)
-            );
-            CREATE INDEX IF NOT EXISTS observation_models_owner_idx ON observation_models(owner_anchor,ordinal);
+                PRIMARY KEY(owner_anchor,ordinal),
+                UNIQUE(owner_anchor,model_hash)
+            ) WITHOUT ROWID;
             CREATE TABLE IF NOT EXISTS pending_inbound (
                 sequence INTEGER PRIMARY KEY,
                 observation_header BLOB CHECK(observation_header IS NULL OR length(observation_header)<=16384),
@@ -596,13 +683,14 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 observation_delivery_total INTEGER CHECK(observation_delivery_total IS NULL OR observation_delivery_total>=0),
                 native_transcript INTEGER,
                 human_activity_at TEXT,
-                human_activity_seconds INTEGER,
-                human_activity_nanos INTEGER,
+                human_activity_max_seconds INTEGER,
+                human_activity_max_nanos INTEGER,
                 opening_preview TEXT,
                 ordinary_user INTEGER NOT NULL DEFAULT 0 CHECK(ordinary_user IN (0,1)),
                 ordinary_human INTEGER NOT NULL DEFAULT 0 CHECK(ordinary_human IN (0,1)),
                 title_source_text TEXT CHECK(title_source_text IS NULL OR length(CAST(title_source_text AS BLOB))<=4096),
                 native_todo INTEGER NOT NULL DEFAULT 0 CHECK(native_todo IN (0,1)),
+                todo_publication INTEGER NOT NULL DEFAULT 0 CHECK(todo_publication IN (0,1)),
                 boundary_indexed INTEGER NOT NULL DEFAULT 0 CHECK(boundary_indexed IN (0,1)),
                 first_append_revision INTEGER,
                 position INTEGER PRIMARY KEY,
@@ -622,32 +710,23 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 observation_ledger INTEGER NOT NULL,observation_tool_ordinal INTEGER NOT NULL,observation_call_id TEXT,observation_tool_id TEXT,observation_name TEXT NOT NULL, result_ledger_position INTEGER,
                 block_index INTEGER NOT NULL CHECK(block_index >= 0),
                 assistant_message_id TEXT NOT NULL REFERENCES message_ledger(message_id),
+                assistant_ledger_position INTEGER NOT NULL REFERENCES message_ledger(position),
                 call_id TEXT NOT NULL,
                 tool_id TEXT NOT NULL,
                 attempt_id TEXT,
                 commit_sequence INTEGER,
                 result_message_id TEXT UNIQUE REFERENCES message_ledger(message_id),
                 PRIMARY KEY(assistant_message_id,block_index),
-                UNIQUE(assistant_message_id,call_id)
+                UNIQUE(assistant_message_id,call_id),
+                FOREIGN KEY(assistant_ledger_position,assistant_message_id) REFERENCES message_ledger(position,message_id)
             );
             CREATE UNIQUE INDEX IF NOT EXISTS canonical_tool_calls_observation_idx ON canonical_tool_calls(observation_ledger,block_index);
             CREATE UNIQUE INDEX IF NOT EXISTS canonical_tool_calls_result_ledger_idx ON canonical_tool_calls(result_ledger_position) WHERE result_ledger_position IS NOT NULL;
             CREATE INDEX IF NOT EXISTS canonical_tool_calls_scope_idx ON canonical_tool_calls(attempt_id,call_id,commit_sequence,assistant_message_id,block_index);
+            CREATE INDEX IF NOT EXISTS canonical_tool_calls_call_ledger_idx ON canonical_tool_calls(call_id,assistant_ledger_position,block_index);
             CREATE INDEX IF NOT EXISTS canonical_tool_calls_pending
                 ON canonical_tool_calls(assistant_message_id,block_index) WHERE result_message_id IS NULL;
-            CREATE TABLE IF NOT EXISTS transcript_order (
-                position INTEGER PRIMARY KEY,
-                reference_kind TEXT NOT NULL,
-                reference_id TEXT NOT NULL,
-                observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
-                UNIQUE(reference_kind,reference_id)
-            );
-            CREATE INDEX IF NOT EXISTS transcript_observation_readiness_missing_idx ON transcript_order(position) WHERE observation_readiness_missing=1;
-            CREATE TABLE IF NOT EXISTS transcript_observation_readiness (
-                position INTEGER PRIMARY KEY REFERENCES transcript_order(position) ON DELETE CASCADE,
-                ready INTEGER NOT NULL CHECK(ready IN (0,1))
-            );
-            CREATE INDEX IF NOT EXISTS transcript_observation_readiness_holes_idx ON transcript_observation_readiness(position) WHERE ready=0;
+            CREATE INDEX IF NOT EXISTS transcript_observation_readiness_missing_idx ON transcript_entries(position) WHERE observation_readiness_missing=1 AND position>0;
             CREATE TABLE IF NOT EXISTS bootstrap_identity (
                 occupancy_observation BLOB CHECK(occupancy_observation IS NULL OR length(occupancy_observation)<=16384),
                 id INTEGER PRIMARY KEY CHECK(id=1),
@@ -669,7 +748,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 observation_json_witness BLOB CHECK(observation_json_witness IS NULL OR length(observation_json_witness)=32),
                 observation_turn_display BLOB CHECK(observation_turn_display IS NULL OR length(observation_turn_display)<=16384),
                 display_provenance BLOB CHECK(display_provenance IS NULL OR length(display_provenance)<=16384),
-                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=16384),
+                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=49152),
                 observation_json BLOB CHECK(observation_json IS NULL OR length(observation_json)<=16384),
                 ordinal INTEGER PRIMARY KEY CHECK(ordinal>=0),
                 payload_digest TEXT NOT NULL,
@@ -699,12 +778,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             CREATE TABLE IF NOT EXISTS surface_ops (
                 revision INTEGER PRIMARY KEY,
                 compaction_generation INTEGER NOT NULL,
-                op_json TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS surface_head (
-                id INTEGER PRIMARY KEY CHECK(id=1),
-                revision INTEGER NOT NULL,
-                compaction_generation INTEGER NOT NULL
+                ledger_position INTEGER NOT NULL,
+                message_id TEXT NOT NULL,
+                FOREIGN KEY(ledger_position,message_id) REFERENCES message_ledger(position,message_id)
             );
             CREATE TABLE IF NOT EXISTS projection_checkpoints (
                 checkpoint_id TEXT PRIMARY KEY,
@@ -739,29 +815,48 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 receipt_digest TEXT NOT NULL,
                 receipt_json TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS request_configurations (
+                digest TEXT PRIMARY KEY CHECK(typeof(digest)='text' AND octet_length(digest)=64),
+                configuration_json TEXT NOT NULL CHECK(typeof(configuration_json)='text' AND octet_length(configuration_json)<=67108864)
+            ) WITHOUT ROWID;
+            CREATE TABLE IF NOT EXISTS tool_association_origin_sets (
+                id INTEGER PRIMARY KEY,
+                digest BLOB NOT NULL UNIQUE CHECK(typeof(digest)='blob' AND length(digest)=32),
+                origins_json TEXT NOT NULL CHECK(typeof(origins_json)='text' AND octet_length(origins_json)<=67108864)
+            );
+            CREATE TABLE IF NOT EXISTS tool_association_nodes (
+                id INTEGER PRIMARY KEY,
+                parent_id INTEGER REFERENCES tool_association_nodes(id),parent_digest BLOB,parent_private_bytes INTEGER,
+                digest BLOB NOT NULL UNIQUE CHECK(typeof(digest)='blob' AND length(digest)=32),
+                count INTEGER NOT NULL CHECK(count BETWEEN 1 AND 8192),
+                private_bytes INTEGER NOT NULL CHECK(private_bytes BETWEEN 1 AND 67108864),
+                association_json TEXT NOT NULL CHECK(typeof(association_json)='text' AND octet_length(association_json)<=67108864),
+                CHECK((count=1 AND parent_id IS NULL AND parent_digest IS NULL AND parent_private_bytes IS NULL) OR
+                      (count>1 AND parent_id<id AND parent_private_bytes BETWEEN 1 AND private_bytes-1 AND typeof(parent_digest)='blob' AND length(parent_digest)=32))
+            );
+            CREATE TABLE IF NOT EXISTS request_snapshot_payloads (
+                started_sequence INTEGER PRIMARY KEY,snapshot_json TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS request_snapshots (
                 observation_step_anchor INTEGER, observation_retry_number INTEGER, observation_context_total INTEGER, observation_accepted_ledger INTEGER,
                 observation_summary BLOB CHECK(observation_summary IS NULL OR length(observation_summary)<=16384),
                 retry_ledger_position INTEGER,
                 observation_terminal_sequence INTEGER,
                 observation_terminal_header BLOB CHECK(observation_terminal_header IS NULL OR length(observation_terminal_header)<=16384),
-                observation_source_id TEXT UNIQUE CHECK(observation_source_id IS NULL OR (length(observation_source_id)<=20 AND CAST(observation_source_id AS INTEGER)=started_sequence)),
+                observation_source_id TEXT CHECK(observation_source_id IS NULL OR (length(observation_source_id)<=20 AND CAST(observation_source_id AS INTEGER)=started_sequence)),
                 canonical_frontier INTEGER NOT NULL,
                 input_root INTEGER REFERENCES native_input_nodes(id),
                 input_root_digest BLOB,
                 input_count INTEGER NOT NULL CHECK(input_count BETWEEN 0 AND 8192),
-                started_sequence INTEGER,
+                started_sequence INTEGER PRIMARY KEY,
                 completed_sequence INTEGER,
                 manifest_digest TEXT NOT NULL CHECK(typeof(manifest_digest)='text' AND octet_length(manifest_digest)=64),
-                previous_request_id TEXT,
-                request_id TEXT PRIMARY KEY,
+                previous_started_sequence INTEGER,
                 retry_message_id TEXT,
-                snapshot_json TEXT NOT NULL,
                 CHECK((input_root IS NULL AND input_root_digest IS NULL AND input_count=0) OR
                     (input_root IS NOT NULL AND typeof(input_root_digest)='blob' AND length(input_root_digest)=32 AND input_count>0))
             );
             CREATE UNIQUE INDEX IF NOT EXISTS request_trace_retry_idx ON request_snapshots(observation_step_anchor,observation_retry_number) WHERE observation_step_anchor IS NOT NULL;
-            CREATE UNIQUE INDEX IF NOT EXISTS request_snapshots_started_idx ON request_snapshots(started_sequence) WHERE started_sequence IS NOT NULL;
             CREATE TABLE IF NOT EXISTS state_observation_sources (
                 domain TEXT NOT NULL,source_id TEXT NOT NULL,ledger_position INTEGER,journal_sequence INTEGER,
                 todo_header BLOB CHECK(todo_header IS NULL OR length(todo_header)<=16384),
@@ -769,42 +864,29 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
             ) WITHOUT ROWID;
             CREATE INDEX IF NOT EXISTS state_observation_ledger_idx ON state_observation_sources(domain,ledger_position,source_id);
             CREATE INDEX IF NOT EXISTS state_observation_journal_idx ON state_observation_sources(domain,journal_sequence,source_id);
-            CREATE TABLE IF NOT EXISTS state_observation_fields (
-                source_id TEXT NOT NULL,
-                path_json TEXT NOT NULL,parent_path TEXT,ordinal INTEGER,
-                key_path TEXT,key_header BLOB CHECK(key_header IS NULL OR length(key_header)<=4096),
-                start INTEGER NOT NULL CHECK(start>=0),end INTEGER NOT NULL CHECK(end>=start),
-                children INTEGER NOT NULL CHECK(children>=0),header_json BLOB NOT NULL CHECK(length(header_json)<=16384),
-                PRIMARY KEY(source_id,path_json)
-            ) WITHOUT ROWID;
-            CREATE UNIQUE INDEX IF NOT EXISTS state_observation_children_idx ON state_observation_fields(source_id,parent_path,ordinal);
-            CREATE TABLE IF NOT EXISTS request_observation_fields (
-                source_id TEXT PRIMARY KEY REFERENCES request_snapshots(observation_source_id),
-                path_json TEXT NOT NULL CHECK(path_json='[]'),
-                parent_path TEXT CHECK(parent_path IS NULL),ordinal INTEGER CHECK(ordinal IS NULL),
-                start INTEGER NOT NULL CHECK(start=0),
-                end INTEGER NOT NULL CHECK(end BETWEEN 0 AND 9007199254740991),
-                children INTEGER NOT NULL CHECK(children=0),
-                header_kind TEXT NOT NULL CHECK(header_kind='inline'),
-                header_json BLOB NOT NULL CHECK(header_json=x'6e756c6c'),
-                shape_witness BLOB NOT NULL CHECK(typeof(shape_witness)='blob' AND length(shape_witness)=32)
-            ) WITHOUT ROWID;
-
+            CREATE TABLE IF NOT EXISTS request_trace_catalog_versions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_count INTEGER NOT NULL CHECK(tool_count>=0),
+                complete INTEGER NOT NULL CHECK(complete IN (0,1)),
+                configuration_digest TEXT NOT NULL UNIQUE CHECK(typeof(configuration_digest)='text' AND octet_length(configuration_digest)=64)
+            );
             CREATE TABLE IF NOT EXISTS request_trace_catalogs (
                 source_sequence INTEGER PRIMARY KEY REFERENCES events(sequence),
+                catalog_id INTEGER NOT NULL,
                 tool_count INTEGER NOT NULL CHECK(tool_count>=0),
+                catalog_witness BLOB NOT NULL CHECK(length(catalog_witness)=32),
                 provisional_message_id TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS request_trace_catalog_identity_idx ON request_trace_catalogs(provisional_message_id,source_sequence);
             CREATE TABLE IF NOT EXISTS request_trace_definitions (
-                source_sequence INTEGER NOT NULL REFERENCES request_trace_catalogs(source_sequence) ON DELETE CASCADE,
+                catalog_id INTEGER NOT NULL REFERENCES request_trace_catalog_versions(id) ON DELETE CASCADE,
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),
                 tool_identity_digest BLOB NOT NULL CHECK(length(tool_identity_digest)=32),
                 tool_id TEXT NOT NULL,
-                PRIMARY KEY(source_sequence,ordinal)
+                PRIMARY KEY(catalog_id,ordinal)
             ) WITHOUT ROWID;
-            CREATE INDEX IF NOT EXISTS request_trace_definition_digest_idx ON request_trace_definitions(source_sequence,tool_identity_digest,ordinal);
-            CREATE INDEX IF NOT EXISTS request_trace_definition_identity_idx ON request_trace_definitions(source_sequence,tool_id,ordinal);
+            CREATE INDEX IF NOT EXISTS request_trace_definition_digest_idx ON request_trace_definitions(catalog_id,tool_identity_digest,ordinal);
+            CREATE INDEX IF NOT EXISTS request_trace_definition_identity_idx ON request_trace_definitions(catalog_id,tool_id,ordinal);
             CREATE TABLE IF NOT EXISTS trace_adoption_members (
                 source_sequence INTEGER NOT NULL REFERENCES events(sequence) ON DELETE CASCADE,
                 ordinal INTEGER NOT NULL CHECK(ordinal>=0),
@@ -857,6 +939,7 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 settlement TEXT,
                 PRIMARY KEY(stream_id, call_id)
             );
+            CREATE INDEX IF NOT EXISTS publication_proposals_call_idx ON publication_proposals(call_id);
             CREATE TABLE IF NOT EXISTS publication_audits (
                 stream_id TEXT PRIMARY KEY,
                 audit_json TEXT NOT NULL
@@ -865,105 +948,52 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
                 agent_id TEXT PRIMARY KEY,
                 authority_json TEXT NOT NULL
             );
-            CREATE TABLE IF NOT EXISTS events (
-                observation_trace_fact BLOB CHECK(observation_trace_fact IS NULL OR length(observation_trace_fact)<=16384),
-                observation_trace_owner INTEGER,
-                observation_trace_fact_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_trace_fact_required IN (0,1)),
-                observation_kind TEXT CHECK(observation_kind IS NULL OR length(observation_kind)<=128),
-                observation_unavailable INTEGER NOT NULL DEFAULT 0 CHECK(observation_unavailable IN (0,1)),
-                observation_transcript INTEGER,
-                observation_witness BLOB CHECK(observation_witness IS NULL OR length(observation_witness)<=16384),
-                observation_assistant_ledger INTEGER,
-                observation_tool_ledger INTEGER,observation_tool_block INTEGER,
-                observation_tool_phase INTEGER CHECK(observation_tool_phase IS NULL OR observation_tool_phase IN (1,2)),
-                observation_turn_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_turn_required IN (0,1)),
-                observation_turn_ordinal INTEGER, observation_turn_anchor INTEGER,
-                observation_turn_header BLOB CHECK(observation_turn_header IS NULL OR length(observation_turn_header)<=16384),
-                observation_turn_prompt BLOB CHECK(observation_turn_prompt IS NULL OR length(observation_turn_prompt)<=512),
-                observation_turn_prompt_positive INTEGER NOT NULL DEFAULT 0 CHECK(observation_turn_prompt_positive IN (0,1)),
-                observation_execution_owner INTEGER,
-                observation_execution_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_execution_required IN(0,1)),
-                observation_execution BLOB CHECK(observation_execution IS NULL OR length(observation_execution)<=16384),
-                observation_members BLOB CHECK(observation_members IS NULL OR length(observation_members)<=16384),
-                event_timestamp TEXT NOT NULL,
-                observation_member_anchor INTEGER,
-                observation_statistics BLOB CHECK(observation_statistics IS NULL OR length(observation_statistics)<=16384),
-                observation_occupancy BLOB CHECK(observation_occupancy IS NULL OR length(observation_occupancy)<=16384),
-                observation_readiness_missing INTEGER NOT NULL DEFAULT 1 CHECK(observation_readiness_missing IN (0,1)),
-                observation_statistics_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_statistics_required IN (0,1)),
-                observation_members_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_members_required IN (0,1)),
-                observation_trace_required INTEGER NOT NULL DEFAULT 0 CHECK(observation_trace_required IN (0,1)),
-                observation_trace_total INTEGER CHECK(observation_trace_total IS NULL OR observation_trace_total>=0),
-                sequence INTEGER PRIMARY KEY,
-                event_id TEXT NOT NULL UNIQUE,
-                schema_version INTEGER NOT NULL,
-                conversation_id TEXT NOT NULL,
-                attempt_id TEXT,
-                turn_id TEXT,
-                observation_json BLOB CHECK(observation_json IS NULL OR length(observation_json)<=16384),
-                event_json TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS events_trace_kind_idx ON events(observation_kind,sequence) WHERE observation_kind IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind,sequence) WHERE observation_trace_owner IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_trace_holes_idx ON events(sequence) WHERE observation_trace_fact_required=1 AND observation_trace_fact IS NULL;
-            CREATE INDEX IF NOT EXISTS events_workflow_coordinates_idx ON events(json_extract(event_json,'$.event.run_id.conversation_id'),json_extract(event_json,'$.event.run_id.origin.type'),coalesce(json_extract(event_json,'$.event.run_id.origin.attempt_id'),json_extract(event_json,'$.event.run_id.origin.start_id')),json_extract(event_json,'$.event.run_id.invocation'),json_extract(event_json,'$.event.type'),sequence);
-            CREATE TABLE IF NOT EXISTS event_observation_readiness (
-                sequence INTEGER PRIMARY KEY REFERENCES events(sequence) ON DELETE CASCADE,
-                ready INTEGER NOT NULL CHECK(ready IN (0,1)),
-                direct INTEGER NOT NULL DEFAULT 0 CHECK(direct IN (0,1))
-            );
+            CREATE UNIQUE INDEX IF NOT EXISTS rustx_store_conversation_idx ON rustx_store(conversation_id COLLATE BINARY);
+            ", crate::durable::sqlite::schema::events::table!(), ";
+            CREATE UNIQUE INDEX IF NOT EXISTS events_alias_idx ON events(event_id) WHERE event_id != conversation_id || '-event-' || sequence;
+            CREATE INDEX IF NOT EXISTS events_aggregate_holes_idx ON events(observation_aggregate_holes) WHERE observation_aggregate_holes>0;
+            CREATE INDEX IF NOT EXISTS events_owner_holes_idx ON events(observation_owner_holes) WHERE observation_owner_holes>0;
+            CREATE INDEX IF NOT EXISTS events_trace_owner_idx ON events(observation_trace_owner,observation_kind) WHERE observation_trace_owner IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_readiness_missing_idx ON events(sequence) WHERE observation_readiness_missing=1;
-            CREATE INDEX IF NOT EXISTS event_observation_readiness_holes_idx ON event_observation_readiness(sequence) WHERE ready=0;
-            CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger,sequence) WHERE observation_assistant_ledger IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_trace_holes_idx ON events(sequence) WHERE observation_trace_required=1 AND observation_trace_total IS NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_trace_total_idx ON events(sequence) WHERE observation_trace_total IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS transcript_order_audit_position_idx ON transcript_order(position) WHERE reference_kind='publication_audit';
-            CREATE INDEX IF NOT EXISTS events_observation_statistics_holes_idx ON events(sequence) WHERE observation_statistics_required=1 AND observation_statistics IS NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_statistics_idx ON events(sequence) WHERE observation_statistics IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase,sequence) WHERE observation_tool_phase IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_tool_occurrence_idx ON events(observation_tool_ledger,observation_tool_block,sequence) WHERE observation_tool_ledger IS NOT NULL AND json_extract(event_json,'$.event.type')='tool_execution_started';
-            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(json_extract(event_json,'$.event.tool_call_id'),attempt_id,json_extract(event_json,'$.event.type'),sequence);
-            CREATE INDEX IF NOT EXISTS events_observation_members_idx ON events(attempt_id,sequence) WHERE observation_members IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_id,sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_member_holes_sequence_idx ON events(sequence) WHERE observation_members_required=1 AND observation_members IS NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_member_anchor_idx ON events(observation_member_anchor,sequence) WHERE observation_members IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_assistant_ledger_idx ON events(observation_assistant_ledger) WHERE observation_assistant_ledger IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_aggregate_heads_idx ON events(observation_aggregate_heads) WHERE observation_aggregate_heads>0;
+            CREATE INDEX IF NOT EXISTS transcript_entries_audit_position_idx ON transcript_entries(position) WHERE native_reference_kind='publication_audit';
+            CREATE INDEX IF NOT EXISTS events_observation_tool_lifecycle_idx ON events(observation_tool_ledger,observation_tool_block,observation_tool_phase) WHERE observation_tool_phase IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_tool_idx ON events(event_tool_call_id,attempt_key,event_kind) WHERE event_tool_call_id IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_attempt_heads_idx ON events(attempt_key,observation_attempt_heads) WHERE observation_attempt_heads>0;
+            CREATE INDEX IF NOT EXISTS events_observation_member_holes_idx ON events(attempt_key) WHERE observation_members_required=1 AND observation_members IS NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_member_anchor_idx ON events(observation_member_anchor) WHERE observation_members IS NOT NULL;
             CREATE INDEX IF NOT EXISTS events_observation_unavailable_idx ON events(sequence) WHERE observation_unavailable=1;
             CREATE UNIQUE INDEX IF NOT EXISTS events_observation_transcript_idx ON events(observation_transcript) WHERE observation_transcript IS NOT NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS events_observation_turn_ordinal_idx ON events(observation_turn_ordinal) WHERE observation_turn_ordinal IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_turn_anchor_idx ON events(observation_turn_anchor,sequence) WHERE observation_turn_header IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_turn_holes_idx ON events(sequence) WHERE observation_turn_required=1 AND observation_turn_header IS NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_idx ON events(attempt_id,sequence) WHERE observation_turn_prompt_positive=1;
-            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(sequence) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
-            CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner,sequence) WHERE observation_execution IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS events_execution_holes_idx ON events(sequence) WHERE observation_execution_required=1 AND observation_execution IS NULL;
-            CREATE INDEX IF NOT EXISTS events_observation_execution_idx ON events(attempt_id,sequence) WHERE observation_execution IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_anchor_idx ON events(observation_turn_anchor) WHERE observation_turn_header IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_idx ON events(attempt_key) WHERE observation_turn_prompt_positive=1;
+            CREATE INDEX IF NOT EXISTS events_observation_turn_prompt_holes_idx ON events(attempt_key) WHERE observation_kind='inbound_turn_adopted' AND observation_turn_prompt IS NULL;
+            CREATE INDEX IF NOT EXISTS events_execution_owner_idx ON events(observation_execution_owner) WHERE observation_execution IS NOT NULL;
             CREATE TABLE IF NOT EXISTS lifecycle_state (
-                lifecycle_key TEXT PRIMARY KEY,
-                terminal_event_id TEXT
+                id INTEGER PRIMARY KEY,
+                lifecycle_key TEXT NOT NULL UNIQUE,
+                terminal_sequence INTEGER
             );
-            CREATE INDEX IF NOT EXISTS pending_inbound_sequence_idx ON pending_inbound(sequence);
-            CREATE INDEX IF NOT EXISTS message_ledger_id_idx ON message_ledger(message_id);
             CREATE INDEX IF NOT EXISTS message_ledger_append_position_idx ON message_ledger(position,first_append_revision) WHERE first_append_revision IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS message_ledger_transcript_position_idx ON message_ledger(position) WHERE native_transcript IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_todo_idx ON message_ledger(position) WHERE native_todo=1;
+            CREATE INDEX IF NOT EXISTS message_ledger_todo_publication_idx ON message_ledger(position) WHERE todo_publication=1;
             CREATE INDEX IF NOT EXISTS message_ledger_opening_idx ON message_ledger(position) WHERE ordinary_user=1;
-            CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(human_activity_seconds,human_activity_nanos,position) WHERE human_activity_at IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS message_ledger_human_activity_idx ON message_ledger(position) WHERE human_activity_at IS NOT NULL;
             CREATE INDEX IF NOT EXISTS message_ledger_boundary_holes_idx ON message_ledger(first_append_revision) WHERE ordinary_user=1 AND boundary_indexed=0 AND first_append_revision IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS transcript_order_reference_idx ON transcript_order(reference_kind, reference_id);
-            CREATE INDEX IF NOT EXISTS surface_ops_revision_idx ON surface_ops(revision);
-            CREATE INDEX IF NOT EXISTS events_sequence_idx ON events(sequence);
 
-            CREATE INDEX IF NOT EXISTS events_attempt_idx ON events(attempt_id, sequence);
-            CREATE INDEX IF NOT EXISTS request_snapshots_canonical_frontier_idx ON request_snapshots(canonical_frontier);
-            CREATE INDEX IF NOT EXISTS contribution_emission_heads_lookup_idx ON contribution_emission_heads(producer, semantic_key);
-            CREATE INDEX IF NOT EXISTS publication_frames_stream_idx ON publication_frames(stream_id, sequence);
             CREATE INDEX IF NOT EXISTS publication_frames_unindexed_idx ON publication_frames(stream_id,sequence) WHERE observation_indexed=0;
-            CREATE INDEX IF NOT EXISTS publication_streams_settlement_idx ON publication_streams(settlement);
-            CREATE INDEX IF NOT EXISTS publication_streams_message_settlement_idx ON publication_streams(message_id,settlement);",
+            CREATE INDEX IF NOT EXISTS publication_streams_owner_idx ON publication_streams(attempt_id,turn_id,stream_id);
+            CREATE INDEX IF NOT EXISTS publication_streams_open_idx ON publication_streams(stream_id) WHERE settlement IS NULL;
+            CREATE INDEX IF NOT EXISTS publication_streams_message_settlement_idx ON publication_streams(message_id,settlement);"),
         )
-        .map_err(|error| storage(format!("create schema: {error}")))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("create schema: {error}")))?;
     content::create_binary_schema(connection)?;
     manifest::create_schema(connection)?;
     observation_request::composed::create_schema(connection)?;
+    observation_request::state_preview::create_schema(connection)?;
+    super::observation_trace::create_catalog_schema(connection)?;
     auxiliary::create_schema(connection)?;
     super::schedule::create_schema(connection)?;
     super::scheduled_workflow::create_schema(connection)?;
@@ -972,25 +1002,32 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
     projection::create_auxiliary_lineage_schema(connection)?;
     connection
         .execute_batch(&projection::completion_index_sql())
-        .map_err(|error| storage(error.to_string()))?;
-    for (name, expression) in PRESENTATION_INDEXES {
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+    for (name, definition) in PRESENTATION_INDEXES {
         connection
-            .execute_batch(&format!("CREATE INDEX {name} ON events({expression});"))
-            .map_err(|error| storage(format!("create presentation index: {error}")))?;
+            .execute_batch(&format!("CREATE INDEX {name} ON events{definition};"))
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("create presentation index: {error}"),
+                )
+            })?;
     }
     connection
         .execute(
             "INSERT OR IGNORE INTO rustx_store(id,schema_version,conversation_id,next_inbound_sequence,next_event_sequence,next_transcript_position,logical_step_sequence,pending_unresolved_output_stream_id) VALUES(1,?1,'',0,0,0,0,NULL)",
             params![SQLITE_SCHEMA_VERSION],
         )
-        .map_err(|error| storage(format!("create schema root: {error}")))?;
+        .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("create schema root: {error}")))?;
     let version: i64 = connection
         .query_row(
             "SELECT schema_version FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("read schema version: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("read schema version: {error}"))
+        })?;
     if version != SQLITE_SCHEMA_VERSION {
         return Err(ConversationStoreError::SchemaVersionMismatch {
             stored: version,
@@ -998,9 +1035,9 @@ pub(super) fn create_schema(connection: &mut Connection) -> Result<(), Conversat
         });
     }
     verify_schema_shape(connection)?;
-    transaction
-        .commit()
-        .map_err(|error| storage(format!("create schema commit: {error}")))
+    transaction.commit().map_err(|error| {
+        crate::durable::sqlite::sqlite_error(&error, format!("create schema commit: {error}"))
+    })
 }
 
 pub(super) fn bind_identity(
@@ -1009,30 +1046,45 @@ pub(super) fn bind_identity(
 ) -> Result<(), ConversationStoreError> {
     let transaction = connection
         .transaction_with_behavior(TransactionBehavior::Immediate)
-        .map_err(|error| storage(format!("bind conversation transaction: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("bind conversation transaction: {error}"),
+            )
+        })?;
     let stored: String = transaction
-        .query_row(
+        .query_row_cached(
             "SELECT conversation_id FROM rustx_store WHERE id=1",
             [],
             |row| row.get(0),
         )
-        .map_err(|error| storage(format!("read conversation identity: {error}")))?;
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("read conversation identity: {error}"),
+            )
+        })?;
     if stored.is_empty() {
         transaction
             .execute(
                 "UPDATE rustx_store SET conversation_id=?1 WHERE id=1",
                 [conversation_id.as_str()],
             )
-            .map_err(|error| storage(format!("bind conversation identity: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("bind conversation identity: {error}"),
+                )
+            })?;
     } else if stored != conversation_id.as_str() {
         return Err(ConversationStoreError::ConversationIdMismatch {
             stored: ConversationId::parse(stored).map_err(storage)?,
             requested: conversation_id.clone(),
         });
     }
-    transaction
-        .commit()
-        .map_err(|error| storage(format!("bind conversation commit: {error}")))?;
+    transaction.commit().map_err(|error| {
+        crate::durable::sqlite::sqlite_error(&error, format!("bind conversation commit: {error}"))
+    })?;
     Ok(())
 }
 
@@ -1052,10 +1104,11 @@ impl SqliteConversationStore {
             .get_mut()
             .map_err(|_| storage("storage connection mutex poisoned"))?;
         let connection = slot
+            .connection
             .take()
             .ok_or_else(|| storage("storage writer has an outstanding lease"))?;
         if let Err((connection, error)) = connection.close() {
-            *slot = Some(connection);
+            slot.returned(Some(connection));
             return Err(storage(format!("close storage writer: {error}")));
         }
         Ok(())
@@ -1076,15 +1129,32 @@ impl SqliteConversationStore {
         crate::local_runtime::static_effects::observe(
             crate::local_runtime::static_effects::Effect::State,
         );
-        let mut connection = Connection::open(path)
-            .map_err(|error| storage(format!("open {}: {error}", path.display())))?;
+        let mut connection = Connection::open(path).map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("open {}: {error}", path.display()),
+            )
+        })?;
+        // A rejected WAL database must not be checkpointed when this handle closes.
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .map_err(|error| storage(format!("protect rejected SQLite: {error}")))?;
         // Refuse obsolete development state before changing journal settings.
         reject_legacy_schema(&connection)?;
         if has_table(&connection, "rustx_store")? {
-            register_integrity_function(&connection)?;
+            register_native_functions(&connection)?;
             validate_existing_schema(&connection)?;
             validate_existing_identity(&connection, &conversation_id)?;
         }
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                false,
+            )
+            .map_err(|error| storage(format!("restore SQLite checkpoint on close: {error}")))?;
         configure_connection(&mut connection, false)?;
         Self::from_connection(conversation_id, connection)
     }
@@ -1186,14 +1256,26 @@ impl SqliteConversationStore {
                 "existing-only access requires a supported SQLite file format",
             ));
         }
-        let connection = Connection::open_with_flags(path, flags)
-            .map_err(|error| storage(format!("open existing {}: {error}", path.display())))?;
+        let connection = Connection::open_with_flags(path, flags).map_err(|error| {
+            crate::durable::sqlite::sqlite_error(
+                &error,
+                format!("open existing {}: {error}", path.display()),
+            )
+        })?;
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                true,
+            )
+            .map_err(|error| storage(format!("protect rejected SQLite: {error}")))?;
         if let Some(scope) = scope {
             scope.install(&connection)?;
         }
         let mode: String = connection
             .query_row("PRAGMA journal_mode", [], |row| row.get(0))
-            .map_err(|error| storage(format!("read journal mode: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("read journal mode: {error}"))
+            })?;
         if mode != "wal"
             && !(mode == "delete" && flags.contains(rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE))
         {
@@ -1203,12 +1285,24 @@ impl SqliteConversationStore {
             writer_busy_policy(&connection)
                 .map_err(|error| storage(format!("configure SQLite busy policy: {error}")))?;
         }
+        register_native_functions(&connection)?;
         register_integrity_function(&connection)?;
         validate_existing_schema(&connection)?;
         validate_existing_identity(&connection, &conversation_id)?;
         connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE,
+                false,
+            )
+            .map_err(|error| storage(format!("restore SQLite checkpoint on close: {error}")))?;
+        connection
             .execute_batch("PRAGMA foreign_keys = ON; PRAGMA synchronous = NORMAL;")
-            .map_err(|error| storage(format!("configure existing SQLite: {error}")))?;
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("configure existing SQLite: {error}"),
+                )
+            })?;
         if let Some(scope) = scope {
             scope.check()?;
         }
@@ -1222,8 +1316,9 @@ impl SqliteConversationStore {
     /// configured or initialized.
     pub fn in_memory(conversation_id: ConversationId) -> Result<Self, ConversationStoreError> {
         count_conversation_store_open();
-        let mut connection =
-            Connection::open_in_memory().map_err(|error| storage(format!("in-memory: {error}")))?;
+        let mut connection = Connection::open_in_memory().map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("in-memory: {error}"))
+        })?;
         configure_connection(&mut connection, true)?;
         Self::from_connection(conversation_id, connection)
     }
@@ -1231,6 +1326,8 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         mut connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
+        register_native_functions(&connection)?;
+        register_integrity_function(&connection)?;
         reject_legacy_schema(&connection)?;
         if has_table(&connection, "rustx_store")? {
             validate_existing_schema(&connection)?;
@@ -1244,18 +1341,56 @@ impl SqliteConversationStore {
         conversation_id: ConversationId,
         connection: Connection,
     ) -> Result<Self, ConversationStoreError> {
+        observation_readiness::install(&connection)?;
+        observation_request::composed::install_workspace(&connection)?;
+        // Native capture, receipts and publication alternate on one connection.
+        // A repeated-turn trace observed 171 distinct prepared shapes even with
+        // the old 64-entry cache. Give that fixed workload 256 bounded slots;
+        // this caches plans only, never read results or evidence.
+        connection.set_prepared_statement_cache_capacity(256);
+        // Native readers select bounded index ranges explicitly. Do not
+        // recompile their plans whenever a historical cut or identity changes:
+        // bundled SQLite's STAT4 parameter-sensitive planning otherwise does
+        // so even for reused statements. Schema changes still invalidate plans.
+        connection
+            .set_db_config(
+                rusqlite::config::DbConfig::SQLITE_DBCONFIG_ENABLE_QPSG,
+                true,
+            )
+            .map_err(|error| storage(format!("configure stable SQLite plans: {error}")))?;
         let append_validation = append_validation::Owner::new(&connection)?;
+        let statistics = observation_statistics::FoldCache::new(&connection)?;
+        let transaction_writes = Arc::new(AtomicBool::new(false));
+        let rollback_writes = Arc::clone(&transaction_writes);
+        let statistics_rollback = Arc::clone(&statistics);
         let rollback = Arc::clone(&append_validation);
         connection
-            .rollback_hook(Some(move || rollback.invalidate()))
+            .rollback_hook(Some(move || {
+                if rollback_writes.swap(false, Ordering::AcqRel) {
+                    rollback.invalidate();
+                    statistics_rollback.invalidate();
+                }
+            }))
             .map_err(|error| storage(format!("install canonical rollback observer: {error}")))?;
-        let manifest = manifest::Owner::install(&connection, Arc::clone(&append_validation))?;
+        let response = observation_response::Owner::new(&connection)?;
+        let manifest = manifest::Owner::install(
+            &connection,
+            Arc::clone(&append_validation),
+            Arc::clone(&response),
+            Arc::clone(&statistics),
+            Arc::clone(&transaction_writes),
+        )?;
+        let event_guard =
+            event_insert::Guard::new(&connection, statistics, Some(manifest.geometry_cache()));
         Ok(Self::from_connection_owner(
             conversation_id,
             Arc::new(ConnectionOwner {
-                available: Mutex::new(Some(connection)),
+                available: Mutex::new(ConnectionSlot::new(connection)),
                 manifest,
                 append_validation,
+                response,
+                event_guard,
+                transaction_writes,
                 wake: Condvar::new(),
                 poisoned: AtomicBool::new(false),
                 lease_generation: AtomicU64::new(0),

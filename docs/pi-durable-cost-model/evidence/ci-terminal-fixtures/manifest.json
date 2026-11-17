@@ -1,0 +1,138 @@
+{
+  "archive_sha256": "a34d9f11b66fcc4b1a5a6a0956a5ad0953825772820ffbfbf7eab68ce44ffd48",
+  "files": {
+    "apply-fixture-fixes.py": {
+      "bytes": 7936,
+      "sha256": "ef5d90d9bf75a509a5f5f942256353c329a7647bdf461135632363b8bc717597"
+    },
+    "atomic-terminal-after.log": {
+      "bytes": 221,
+      "sha256": "af284298b0f13b6929dddde38be3cef849f4c79d375bc96e3bb1fb69113ddcc7"
+    },
+    "build-after.jsonl": {
+      "bytes": 456139,
+      "sha256": "c33ba4a17f3c4b550a5b59c2e90e6fc4cd9a134598023223c8fa5a94aa05516b"
+    },
+    "build-after.log": {
+      "bytes": 118,
+      "sha256": "1d66a19eb4674b03dd90a4b8ba7c9ee951167b8fc819bc34ea4747bd64a959d2"
+    },
+    "build-before.jsonl": {
+      "bytes": 456139,
+      "sha256": "796c621ad902d87203482deee3427b48416704575251a36a59a829202f9b652e"
+    },
+    "build-before.log": {
+      "bytes": 118,
+      "sha256": "378d6b3d08ac751212a1d9dc1251715b88f56dceb03acf14605a87bd937aedd9"
+    },
+    "cache-clean.log": {
+      "bytes": 37,
+      "sha256": "573f04c3267f0f4b1dc377bade42f778dd03793d4ab92a5d5c1c50722ddd0cba"
+    },
+    "check-fresh-capture.mjs": {
+      "bytes": 1717,
+      "sha256": "c596ac74d6ac695aed029a08bfac676ff06cd548a02d744c687b83631d53f499"
+    },
+    "ci-diagnosis.json": {
+      "bytes": 769,
+      "sha256": "56157b2ba6508870d699f966511065c4f4b8c39e85d9b95cc96b869eba1a4d1c"
+    },
+    "clippy.log": {
+      "bytes": 13123,
+      "sha256": "7ef69247d711787eb26e9a06635b552d98752a3e22ecc0ceaf8554209a9659e5"
+    },
+    "fix.patch": {
+      "bytes": 11131,
+      "sha256": "c2344e846e0d0deb15e0cff9d1f3204d715b4e5f036fcc5b36e87f5cb287b14c"
+    },
+    "fresh-capture-fold.log": {
+      "bytes": 133,
+      "sha256": "4b8098481f3d722405404e7e1e79ff3b6366e00317316ce7224879d30db3218f"
+    },
+    "fresh-native-capture.json": {
+      "bytes": 595028,
+      "sha256": "24a10a20017a2034217ffdaa7262708824c0e1bf5a4c6ffcc8b6d81e96e25c13"
+    },
+    "host-before.log": {
+      "bytes": 612,
+      "sha256": "5ac804707c01e7645f8579e41dc2db515204c20da63d743250e73377c44ced6a"
+    },
+    "host-capture-after.log": {
+      "bytes": 208,
+      "sha256": "46d84c2d3f0519aea841860e1fb4ce2339847e838a9c8fd2b4832fe3b480483e"
+    },
+    "initial-validation-with-empty-filter.json": {
+      "bytes": 1324,
+      "sha256": "bbb7c6947c1ff7b6b8f47e427aa25862737e08773a5891f528dc3f96a25950a4"
+    },
+    "native-final-after.log": {
+      "bytes": 784,
+      "sha256": "eafa5b6e57fe3871c54ade47d8a03770381ab5bc3404975a407f5b97e4da6d26"
+    },
+    "native-final-empty-filter.log": {
+      "bytes": 116,
+      "sha256": "7915cee3c4d0b482a20f01eb953817bc322629f4d1a37b68c97cfd430d732fdf"
+    },
+    "original-linux-ci.log": {
+      "bytes": 625244,
+      "sha256": "08ee22f34c76213db2b653155826c9222e2bd7f35272bf6bc28622063c0a8d2c"
+    },
+    "package-evidence.py": {
+      "bytes": 3186,
+      "sha256": "aae05bd22ba11f1d83bdad0ad7063724f1fded1e54ad8df4e498a088369833df"
+    },
+    "projection-after.log": {
+      "bytes": 9321,
+      "sha256": "ecb9b8045d7889e0f2c5dab3a662e3e7589960945b77a6e7e7147a3e0e90e7fc"
+    },
+    "publication-after.log": {
+      "bytes": 1586,
+      "sha256": "d8e6809e5fc7184517e879eac221a7127a074f531be8fcc84cd53b0258ca87ef"
+    },
+    "reproduce-before.json": {
+      "bytes": 955,
+      "sha256": "b72eaa4e7598d211d1b7f3e520e1a40bafcd4c4e3ec48e71c26b6bdb3d75f783"
+    },
+    "reproduce-before.py": {
+      "bytes": 1408,
+      "sha256": "1e6a5b58fd1ca8861eab1cfb590f8ce622ce102f3e7d97ad0570a3ee9047dafb"
+    },
+    "root-cause.md": {
+      "bytes": 3527,
+      "sha256": "3c9bde04c98e4c531fa693e48f1798b45cca27dc723e0e78e23c5ab2b7fcde2a"
+    },
+    "standalone-terminal-after.log": {
+      "bytes": 233,
+      "sha256": "56317d05b8142b4206ecf73cf933e9f83b4bfbccd35b9954d71ebb154397b1d8"
+    },
+    "static-capture-fold.log": {
+      "bytes": 133,
+      "sha256": "0948004ef5702893837879ccebb804817ef4583ee7c2d9bfd3f7324dd72728d5"
+    },
+    "terminal-before.log": {
+      "bytes": 16,
+      "sha256": "daf071121a9ffe32bbce44190e37a068c96d08bff63fd7b660dd95b77d786dca"
+    },
+    "test-inventory.txt": {
+      "bytes": 441483,
+      "sha256": "cd915d7d4b6c65fea95d33dd5949a386b37086c005afe5913d858ddf6eb514c7"
+    },
+    "test-only-proof.json": {
+      "bytes": 1006,
+      "sha256": "b505407e06381ae9386d63a6eebbcd2d1f502d733eaceb90cd7eeba6ab4b0ec2"
+    },
+    "validate-after.py": {
+      "bytes": 2215,
+      "sha256": "8a39a4fee69dd7c6b32cc3ce459faffbb4258b13c7766d5b57181abbb2ae68a5"
+    },
+    "validate-related.py": {
+      "bytes": 1935,
+      "sha256": "4a79476d4934032a06d1cf99f5c7d1b6061cdaff9207d54654318596a307a320"
+    },
+    "validation-after.json": {
+      "bytes": 2127,
+      "sha256": "5cfbbc9b54a0dd529b81aa4bb8c31880fe846288bb61005ddc3f71a879a6b81f"
+    }
+  },
+  "readable_logs": "Trailing blank lines omitted only from readable copies; original files retained in archive."
+}

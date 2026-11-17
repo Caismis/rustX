@@ -562,9 +562,21 @@ impl RuntimeInner {
                 CompactionDelivery::Ready(ready) => ready,
                 CompactionDelivery::Failed(_) => return,
             };
+            if !matches!(state.conversation.hydrate(self.store.as_ref()), Ok(Some(_))) {
+                // A failed hydration leaves the durable head authoritative.
+                // Return this selected result to Ready after releasing the
+                // coordinator lock; settlement can publish and wake admission.
+                drop(state);
+                if let Err(error) =
+                    coordinator.settle(&ready.admission, CompactionDisposition::Defer(None))
+                {
+                    self.fail_async_durability(&error);
+                }
+                return;
+            }
             let conversation = state
                 .conversation
-                .take()
+                .lend()
                 .expect("idle coordinator owns the conversation state");
             state.manual_compaction = Some(CurrentManualCompaction {
                 operation_id: ready.admission.operation_id.clone(),
@@ -615,7 +627,7 @@ impl RuntimeInner {
         .await;
         {
             let mut state = self.lock_state();
-            state.conversation = Some(conversation);
+            state.conversation.restore(conversation);
             let activated = match &result {
                 Ok(ActivationOutcome::Committed(completed))
                 | Err(CompactionExecutionError::Committed { completed, .. }) => {

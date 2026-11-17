@@ -385,7 +385,12 @@ pub(crate) fn checkpoint_fixture(
         call_sources: vec![],
         result_call: None,
     }];
-    for mut item in history.items.into_iter().skip(retired) {
+    for mut item in history
+        .checkpoint_items(parent.as_ref())
+        .expect("fixture checkpoint items")
+        .into_iter()
+        .skip(retired)
+    {
         if let Some(call) = &mut item.result_call {
             call.message.checkpoint_id = checkpoint_id.clone();
             call.message.item_index = call
