@@ -2443,9 +2443,10 @@ export type ChatToolProtocol = 'native' | 'qwen_xml';
 /**
  * How the `OpenAI` Responses protocol operates with provider storage.
  *
- * This is continuation *structure*, not a wire value: Stored continues by
- * `previous_response_id`, Stateless continues by preserved output items and
- * requires the encrypted-reasoning `include` value.
+ * Stored requests provider retention and continues by `previous_response_id`.
+ * If the response reports `store: false`, the original output items are used
+ * instead. Stateless always continues by preserved output items (encrypted
+ * reasoning or a provider's original plaintext reasoning).
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ResponsesStorageMode".

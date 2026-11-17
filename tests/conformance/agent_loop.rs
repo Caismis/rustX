@@ -1318,13 +1318,8 @@ async fn default_system_prompt_layers_project_instructions_on_every_protocol() {
                 .display()
         );
         assert!(prompt.contains(&project_instructions));
-        // PermissionReminder is the last system-section lane when eligible, so
-        // the prompt may continue past project instructions on first request.
-        let after_project = prompt.split(&project_instructions).nth(1).unwrap_or("");
-        assert!(
-            after_project.is_empty() || after_project.starts_with("\n\nExecution permission mode:"),
-            "unexpected system prompt tail after project instructions: {after_project:?}"
-        );
+        assert!(prompt.ends_with(&project_instructions));
+        assert!(!prompt.contains("Execution permission mode:"));
         let snapshots = driver.request_history().page(None, 32).unwrap().snapshots;
         assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].effective_system_prompt, prompt);

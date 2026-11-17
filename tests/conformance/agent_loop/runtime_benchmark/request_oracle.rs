@@ -68,13 +68,8 @@ fn text(role: &str, value: &str) -> Value {
     json!({"role":role,"content":content,"tool_calls":null})
 }
 
-fn expected_system_prompt(index: usize) -> String {
-    let base = format!("{CORE_SYSTEM_PROMPT}{WORKSPACE_CWD_PREFIX}<WORKSPACE>");
-    if index == 0 {
-        format!("{base}\n\n{FULL_ACCESS_PERMISSION_REMINDER}")
-    } else {
-        base
-    }
+fn expected_system_prompt() -> String {
+    format!("{CORE_SYSTEM_PROMPT}{WORKSPACE_CWD_PREFIX}<WORKSPACE>")
 }
 
 fn assert_tool_envelope_contract(tools: &[Value]) {
@@ -182,9 +177,13 @@ fn expected_tools() -> Value {
 
 pub(super) fn expected_body(case: &str, index: usize) -> Value {
     let mut messages = vec![
-        json!({"role":"system","content":expected_system_prompt(index)}),
+        json!({"role":"system","content":expected_system_prompt()}),
         text("user", "benchmark turn 0000"),
         text("user", &format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}")),
+        text(
+            "user",
+            &format!("<system-reminder>\n{FULL_ACCESS_PERMISSION_REMINDER}\n</system-reminder>"),
+        ),
     ];
     if case.starts_with("short-") {
         for turn in 0..index {
@@ -429,7 +428,7 @@ mod tests {
         body["messages"][2]["content"][0]["text"] =
             json!(format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}"));
         if case == "tool" && index == 1 {
-            body["messages"][3]["tool_calls"][0]["function"]["arguments"] = json!(
+            body["messages"][4]["tool_calls"][0]["function"]["arguments"] = json!(
                 serde_json::to_string(&json!({
                     "arguments": {
                         "path": format!("{FIXTURE_WORKSPACE}/note.txt"),
@@ -442,12 +441,8 @@ mod tests {
     }
 
     fn canonical_request_from_fixture(case: &str, index: usize) -> Value {
-        let mut system_prompt =
+        let system_prompt =
             format!("{CORE_SYSTEM_PROMPT}{WORKSPACE_CWD_PREFIX}{FIXTURE_WORKSPACE}");
-        if index == 0 {
-            system_prompt.push_str("\n\n");
-            system_prompt.push_str(FULL_ACCESS_PERMISSION_REMINDER);
-        }
         let tools: Vec<Value> = expected_tools()
             .as_array()
             .unwrap()
@@ -474,6 +469,10 @@ mod tests {
                 "id": "msg-time-0",
                 "role": "user",
                 "content": [{"type": "text", "text": format!("{TIME_PREFIX}{MODEL_TIME}{TIME_SUFFIX}")}],
+            }),
+            json!({
+                "input_kind": "canonical", "id": "msg-permission-0", "role": "user",
+                "content": [{"type": "text", "text": format!("<system-reminder>\n{FULL_ACCESS_PERMISSION_REMINDER}\n</system-reminder>")}],
             }),
         ];
         if case.starts_with("short-") {
@@ -677,7 +676,7 @@ mod tests {
         );
 
         let mut flat_call = wire("tool", 1);
-        flat_call["messages"][3]["tool_calls"][0]["function"]["arguments"] =
+        flat_call["messages"][4]["tool_calls"][0]["function"]["arguments"] =
             json!(format!(r#"{{"path":"{FIXTURE_WORKSPACE}/note.txt"}}"#));
         assert!(
             std::panic::catch_unwind(|| {
@@ -688,8 +687,9 @@ mod tests {
     }
 
     #[test]
-    fn complete_oracle_rejects_missing_or_stale_system_prompt_reminder() {
-        let missing_turn0 = wire("short-small", 1);
+    fn complete_oracle_rejects_missing_conversation_reminder_or_system_prompt_injection() {
+        let mut missing_turn0 = wire("short-small", 0);
+        missing_turn0["messages"].as_array_mut().unwrap().remove(3);
         assert!(
             std::panic::catch_unwind(|| assert_bodies(
                 "short-small",
@@ -702,8 +702,10 @@ mod tests {
         );
 
         let mut stale_turn1 = wire("short-small", 1);
-        stale_turn1["messages"][0]["content"] =
-            wire("short-small", 0)["messages"][0]["content"].clone();
+        stale_turn1["messages"][0]["content"] = json!(format!(
+            "{}\n\n{FULL_ACCESS_PERMISSION_REMINDER}",
+            stale_turn1["messages"][0]["content"].as_str().unwrap()
+        ));
         assert!(
             std::panic::catch_unwind(|| assert_bodies(
                 "short-small",
