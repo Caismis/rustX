@@ -6,7 +6,11 @@ use crate::local_runtime::{
     agent_resources, config::resolve_mcp_entry, mcp_resources::McpDocument, resource_directory,
     workflow_authoring, workflow_resources,
 };
-use crate::runtime::{identity::McpServerId, subagent::SubagentName, workflow::WorkflowId};
+use crate::runtime::{
+    identity::McpServerId,
+    subagent::{AgentCatalog, NamedAgentDefinition, SubagentName},
+    workflow::{WorkflowCatalog, WorkflowId, WorkflowProgram},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -97,23 +101,26 @@ impl ResourceTransfer {
         }
     }
 
-    fn selected(&self, document: super::RuntimeLayer) -> bool {
-        let Some(agent) = document.agent else {
+    fn selected(&self, document: &super::RuntimeLayer) -> bool {
+        let Some(agent) = document.agent.as_ref() else {
             return false;
         };
         match self {
-            Self::Workflow { destination, .. } => {
-                agent.workflows.is_some_and(|ids| ids.contains(destination))
-            }
-            Self::Agent { destination, .. } => {
-                agent.agents.is_some_and(|ids| ids.contains(destination))
-            }
+            Self::Workflow { destination, .. } => agent
+                .workflows
+                .as_ref()
+                .is_some_and(|ids| ids.contains(destination)),
+            Self::Agent { destination, .. } => agent
+                .agents
+                .as_ref()
+                .is_some_and(|ids| ids.contains(destination)),
             Self::Mcp { destination, .. } => {
                 let id = ToolSourceId::Mcp(destination.clone());
                 agent
                     .tools
-                    .and_then(|tools| tools.sources)
-                    .and_then(|mut sources| sources.remove(&id))
+                    .as_ref()
+                    .and_then(|tools| tools.sources.as_ref())
+                    .and_then(|sources| sources.get(&id))
                     .is_some_and(|selection| match selection {
                         SourceToolSelection::All => true,
                         SourceToolSelection::Exact(names) => !names.is_empty(),
@@ -204,6 +211,24 @@ impl ResourceTransfer {
     }
 }
 
+fn selects_mcp(agent: &NamedAgentDefinition, id: &McpServerId) -> bool {
+    let source = ToolSourceId::Mcp(id.clone());
+    agent
+        .tools()
+        .iter()
+        .any(|selector| selector.source() == Some(&source))
+}
+
+fn selected_programs<'a>(
+    catalog: &'a WorkflowCatalog,
+    selected: &[WorkflowId],
+) -> Vec<&'a WorkflowProgram> {
+    selected
+        .iter()
+        .filter_map(|id| catalog.get(id).map(AsRef::as_ref))
+        .collect()
+}
+
 impl UserConfigManager {
     fn admit_agent_transfer(
         &self,
@@ -233,6 +258,49 @@ impl UserConfigManager {
             return Err(SettingsError::Invalid);
         }
         Ok(())
+    }
+
+    /// Whether a copy would satisfy a consumer the root switch does not name.
+    ///
+    /// Named Agents selected by this layer, and Agents referenced by its selected
+    /// Workflows, contribute MCP selectors. Selected Workflows contribute their
+    /// direct tool selectors and Agent-node profiles, including nodes nested in
+    /// Loop and Iteration bodies. Programs come from the layered User-then-Workspace
+    /// catalog, so a Workspace selection of a Global file is still a consumer.
+    fn scope_consumers_select(
+        document: &super::RuntimeLayer,
+        agents: &AgentCatalog,
+        workflows: &WorkflowCatalog,
+        resource: &ResourceTransfer,
+    ) -> bool {
+        let Some(agent) = document.agent.as_ref() else {
+            return false;
+        };
+        let selected_agents = agent.agents.as_deref().unwrap_or(&[]);
+        let selected_workflows = agent.workflows.as_deref().unwrap_or(&[]);
+        let programs = selected_programs(workflows, selected_workflows);
+        match resource {
+            ResourceTransfer::Mcp { destination, .. } => {
+                selected_agents.iter().any(|name| {
+                    agents
+                        .get(name)
+                        .is_some_and(|definition| selects_mcp(definition, destination))
+                }) || programs.iter().any(|program| {
+                    let inspection = program.inspect();
+                    inspection.tools.iter().any(|selector| {
+                        matches!(selector.source(), Some(ToolSourceId::Mcp(source)) if source == destination)
+                    }) || inspection.profiles.iter().any(|name| {
+                        agents
+                            .get(name)
+                            .is_some_and(|definition| selects_mcp(definition, destination))
+                    })
+                })
+            }
+            ResourceTransfer::Agent { destination, .. } => programs
+                .iter()
+                .any(|program| program.inspect().profiles.contains(destination)),
+            ResourceTransfer::Workflow { .. } | ResourceTransfer::Skill { .. } => false,
+        }
     }
 
     #[allow(clippy::too_many_lines)] // One ordered, revision-fenced transfer.
@@ -348,11 +416,33 @@ impl UserConfigManager {
         }
         if !moving {
             let (global, _) = self.capture_authored_settings(user, None)?;
-            let (workspace, _) = self.capture_authored_settings(workspace, None)?;
+            let (workspace_layer, _) = self.capture_authored_settings(workspace, None)?;
+            let global = global.ok_or(SettingsError::Invalid)?;
+            let workspace_layer = workspace_layer.ok_or(SettingsError::Invalid)?;
+            let user_agents_root = self.resource_root(user).join("agents");
+            let user_agents = agent_resources::load_authorized(None, &user_agents_root)
+                .map_err(|_| SettingsError::Invalid)?;
+            let workspace_agents =
+                agent_resources::load_authorized(workspace.workspace(), &user_agents_root)
+                    .map_err(|_| SettingsError::Invalid)?;
+            // Same discovery as Session capture: User files, then Workspace
+            // files that shadow them. A Workspace selection resolves the
+            // winning program even when that file is Global.
+            let workflows =
+                workflow_resources::load(workspace.workspace(), &self.resource_root(user))
+                    .map_err(|_| SettingsError::Io)?;
+            let user_workflows = workflow_resources::load(None, &self.resource_root(user))
+                .map_err(|_| SettingsError::Io)?;
             // Check both views: a Workspace may override the root Agent or an
-            // MCP selection independently of what Global itself selects.
-            for document in [global, workspace] {
-                if resource.selected(document.ok_or(SettingsError::Invalid)?) {
+            // MCP selection independently of what Global itself selects. Root
+            // switches are not the only consumers.
+            for (document, agents, programs) in [
+                (&global, &user_agents.0, &user_workflows),
+                (&workspace_layer, &workspace_agents.0, &workflows),
+            ] {
+                if resource.selected(document)
+                    || Self::scope_consumers_select(document, agents, programs, resource)
+                {
                     return Err(SettingsError::TransferRejected(
                         TransferRejection::NameEnabled,
                     ));
@@ -397,5 +487,427 @@ impl UserConfigManager {
             .map_err(|_| SettingsError::Committed)?;
         }
         Ok(revision(Some(&candidate)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::super::super::launch::{HostEnvironment, LaunchRequest};
+    use super::super::{SettingsError, SourceTarget, UserConfigManager};
+    use super::{ResourceTransfer, TransferOperation, TransferRejection};
+    use crate::runtime::resources::SourceScope;
+    use crate::runtime::subagent::SubagentName;
+    use crate::runtime::workflow::{WorkflowId, WorkflowProgram};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn fixture() -> (tempfile::TempDir, UserConfigManager, SourceTarget) {
+        let temporary = tempfile::tempdir().unwrap();
+        let root = temporary.path().canonicalize().unwrap();
+        let home = root.join("home");
+        let workspace = root.join("workspace");
+        fs::create_dir_all(home.join("rustx")).unwrap();
+        fs::create_dir_all(&workspace).unwrap();
+        fs::write(
+            home.join("rustx/rustx.toml"),
+            r#"
+[providers.local]
+protocol = "openai_responses"
+base_url = "http://127.0.0.1:9/v1"
+api_key = "$RUSTX_TRANSFER_UNUSED"
+[models.local]
+provider = "local"
+id = "local"
+context_window = 128000
+max_output_tokens = 8192
+[models.local.capabilities]
+input_modalities = ["text"]
+output_modalities = ["text"]
+[agent.model]
+model = "local"
+"#,
+        )
+        .unwrap();
+        let host = HostEnvironment::from_paths(workspace.clone(), home).unwrap();
+        let request = LaunchRequest {
+            workspace: Some(workspace.clone()),
+            ..LaunchRequest::default()
+        };
+        let manager = request.session_input(&host).unwrap().0;
+        (
+            temporary,
+            manager,
+            SourceTarget::Workspace {
+                directory: workspace,
+            },
+        )
+    }
+
+    fn revision_of(path: &Path) -> String {
+        super::super::revision(Some(&fs::read(path).unwrap()))
+    }
+
+    fn copy(
+        manager: &UserConfigManager,
+        workspace: &SourceTarget,
+        resource: &ResourceTransfer,
+        expected: &str,
+    ) -> Result<String, SettingsError> {
+        manager.transfer_resource(
+            workspace,
+            SourceScope::User,
+            TransferOperation::Copy,
+            resource,
+            expected,
+        )
+    }
+
+    const NESTED_WORKFLOW: &str = r"
+description: Nested consumers.
+block:
+  input:
+    type: object
+    properties:
+      files:
+        type: array
+        items: {type: string}
+      proposal: {type: string}
+    required: [files, proposal]
+    additionalProperties: false
+  nodes:
+    workflow_start: {type: start}
+    repair:
+      type: loop
+      loop_count: 2
+      loop_variables:
+      - {label: passed, var_type: boolean, value: {type: literal, value: false}}
+      body:
+        nodes:
+          repair_start: {type: start}
+          review:
+            type: agent
+            profile: review-copy
+            task:
+            - {type: literal, value: Review}
+            output:
+              type: json_schema
+              schema:
+                type: object
+                properties: {summary: {type: string}}
+                required: [summary]
+                additionalProperties: false
+        edges:
+        - {from: repair_start, to: review}
+    each:
+      type: iteration
+      iterator: {type: reference, path: [args, files]}
+      output: {type: reference, path: [each, item]}
+      body:
+        nodes:
+          each_start: {type: start}
+          inspect:
+            type: tool
+            selector: {origin: source, source_id: review-copy, name: inspect}
+            arguments: {type: literal, value: {}}
+            result: {type: text}
+        edges:
+        - {from: each_start, to: inspect}
+    done: {type: return, outputs: []}
+  edges:
+  - {from: workflow_start, to: repair}
+  - {from: repair, to: each}
+  - {from: each, to: done}
+";
+
+    fn install_workflow_at(path: &Path, yaml: &str) {
+        let document: crate::workflow_file::WorkflowFileDocument =
+            serde_yaml_ng::from_slice(yaml.as_bytes()).unwrap();
+        WorkflowProgram::compile_document(WorkflowId::parse("pipeline").unwrap(), "test", document)
+            .unwrap_or_else(|error| panic!("workflow fixture does not compile: {error}"));
+        let _ = path;
+    }
+
+    fn install_workflow(workspace: &Path, yaml: &str) -> PathBuf {
+        let path = workspace.join(".agents/workflows/pipeline.yaml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, yaml).unwrap();
+        install_workflow_at(&path, yaml);
+        path
+    }
+
+    fn mcp_transfer() -> ResourceTransfer {
+        ResourceTransfer::Mcp {
+            source: crate::runtime::identity::McpServerId::new("review"),
+            destination: crate::runtime::identity::McpServerId::new("review-copy"),
+        }
+    }
+
+    fn agent_transfer() -> ResourceTransfer {
+        ResourceTransfer::Agent {
+            source: SubagentName::parse("original").unwrap(),
+            destination: SubagentName::parse("review-copy").unwrap(),
+        }
+    }
+
+    fn assert_name_enabled(result: &Result<String, SettingsError>, label: &str) {
+        assert!(
+            matches!(
+                result,
+                Err(SettingsError::TransferRejected(
+                    TransferRejection::NameEnabled
+                ))
+            ),
+            "{label}: {result:?}"
+        );
+    }
+
+    #[test]
+    fn copy_rejects_an_enabled_named_agent_mcp_selector_without_publishing() {
+        let (_temporary, manager, workspace) = fixture();
+        let workspace_dir = workspace.workspace().unwrap();
+        let user_mcp = manager.resource_root(&SourceTarget::User).join("mcp.toml");
+        fs::create_dir_all(user_mcp.parent().unwrap()).unwrap();
+        fs::write(
+            &user_mcp,
+            "[mcp_servers.review]\nurl = 'https://example.invalid/mcp'\n",
+        )
+        .unwrap();
+        let reviewer = workspace_dir.join(".agents/agents/reviewer.toml");
+        fs::create_dir_all(reviewer.parent().unwrap()).unwrap();
+        fs::write(
+            &reviewer,
+            "description = 'Review'\ninstructions = 'Review input'\n[tools.sources]\nreview-copy = ['inspect']\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_dir.join("rustx.toml"),
+            "[agent]\nagents = ['reviewer']\n",
+        )
+        .unwrap();
+        let destination = workspace_dir.join(".agents/mcp.toml");
+        let revision = revision_of(&user_mcp);
+        assert_name_enabled(
+            &copy(&manager, &workspace, &mcp_transfer(), &revision),
+            "enabled named agent",
+        );
+        assert!(
+            !fs::read_to_string(&destination)
+                .unwrap_or_default()
+                .contains("review-copy")
+        );
+
+        fs::write(
+            &reviewer,
+            "description = 'Review'\ninstructions = 'Review input'\n[tools.sources]\n",
+        )
+        .unwrap();
+        copy(&manager, &workspace, &mcp_transfer(), &revision)
+            .expect("clearing the named-agent selector allows the copy");
+        assert!(
+            fs::read_to_string(&destination)
+                .unwrap()
+                .contains("review-copy")
+        );
+    }
+
+    #[test]
+    fn copy_rejects_selected_workflow_profile_and_tool_consumers_without_publishing() {
+        let (_temporary, manager, workspace) = fixture();
+        let workspace_dir = workspace.workspace().unwrap().to_path_buf();
+        let user_agents = manager.resource_root(&SourceTarget::User).join("agents");
+        fs::create_dir_all(&user_agents).unwrap();
+        let source_agent = user_agents.join("original.toml");
+        fs::write(
+            &source_agent,
+            "description = 'Review'\ninstructions = 'Review input'\n",
+        )
+        .unwrap();
+        let user_mcp = manager.resource_root(&SourceTarget::User).join("mcp.toml");
+        fs::write(
+            &user_mcp,
+            "[mcp_servers.review]\nurl = 'https://example.invalid/mcp'\n",
+        )
+        .unwrap();
+        fs::write(
+            workspace_dir.join("rustx.toml"),
+            "[agent]\nworkflows = ['pipeline']\n",
+        )
+        .unwrap();
+        let workflow = install_workflow(&workspace_dir, NESTED_WORKFLOW);
+        let agent_destination = workspace_dir.join(".agents/agents/review-copy.toml");
+        let mcp_destination = workspace_dir.join(".agents/mcp.toml");
+        let agent_revision = revision_of(&source_agent);
+        let mcp_revision = revision_of(&user_mcp);
+
+        assert_name_enabled(
+            &copy(&manager, &workspace, &agent_transfer(), &agent_revision),
+            "nested loop agent profile",
+        );
+        assert!(!agent_destination.exists());
+        assert_name_enabled(
+            &copy(&manager, &workspace, &mcp_transfer(), &mcp_revision),
+            "nested iteration tool",
+        );
+        assert!(
+            !fs::read_to_string(&mcp_destination)
+                .unwrap_or_default()
+                .contains("review-copy")
+        );
+
+        let cleared_tool = NESTED_WORKFLOW.replace(
+            "selector: {origin: source, source_id: review-copy, name: inspect}",
+            "selector: {origin: builtin, name: read}",
+        );
+        fs::write(&workflow, &cleared_tool).unwrap();
+        install_workflow(&workspace_dir, &cleared_tool);
+        copy(&manager, &workspace, &mcp_transfer(), &mcp_revision)
+            .expect("clearing the nested tool dependency allows the MCP copy");
+        assert!(
+            fs::read_to_string(&mcp_destination)
+                .unwrap()
+                .contains("review-copy")
+        );
+
+        let cleared_profile = cleared_tool.replace("profile: review-copy", "profile: reviewer");
+        fs::create_dir_all(workspace_dir.join(".agents/agents")).unwrap();
+        fs::write(
+            workspace_dir.join(".agents/agents/reviewer.toml"),
+            "description = 'Review'\ninstructions = 'Review input'\n",
+        )
+        .unwrap();
+        fs::write(&workflow, &cleared_profile).unwrap();
+        install_workflow(&workspace_dir, &cleared_profile);
+        copy(&manager, &workspace, &agent_transfer(), &agent_revision)
+            .expect("clearing the nested profile reference allows the agent copy");
+        assert!(agent_destination.is_file());
+    }
+
+    #[test]
+    fn copy_rejects_a_global_workflow_selected_only_by_the_workspace() {
+        let (_temporary, manager, workspace) = fixture();
+        let workspace_dir = workspace.workspace().unwrap();
+        let user_root = manager.resource_root(&SourceTarget::User);
+        fs::create_dir_all(user_root.join("agents")).unwrap();
+        let source_agent = user_root.join("agents/original.toml");
+        fs::write(
+            &source_agent,
+            "description = 'Review'\ninstructions = 'Review input'\n",
+        )
+        .unwrap();
+        let user_mcp = user_root.join("mcp.toml");
+        fs::write(
+            &user_mcp,
+            "[mcp_servers.review]\nurl = 'https://example.invalid/mcp'\n",
+        )
+        .unwrap();
+        let global_workflow = user_root.join("workflows/pipeline.yaml");
+        fs::create_dir_all(global_workflow.parent().unwrap()).unwrap();
+        fs::write(&global_workflow, NESTED_WORKFLOW).unwrap();
+        install_workflow_at(&global_workflow, NESTED_WORKFLOW);
+        fs::write(
+            workspace_dir.join("rustx.toml"),
+            "[agent]\nworkflows = ['pipeline']\n",
+        )
+        .unwrap();
+        let agent_destination = workspace_dir.join(".agents/agents/review-copy.toml");
+        let mcp_destination = workspace_dir.join(".agents/mcp.toml");
+        assert_name_enabled(
+            &copy(
+                &manager,
+                &workspace,
+                &agent_transfer(),
+                &revision_of(&source_agent),
+            ),
+            "workspace-selected global workflow profile",
+        );
+        assert!(!agent_destination.exists());
+        assert_name_enabled(
+            &copy(
+                &manager,
+                &workspace,
+                &mcp_transfer(),
+                &revision_of(&user_mcp),
+            ),
+            "workspace-selected global workflow tool",
+        );
+        assert!(
+            !fs::read_to_string(&mcp_destination)
+                .unwrap_or_default()
+                .contains("review-copy")
+        );
+
+        fs::write(
+            workspace_dir.join("rustx.toml"),
+            "[agent]\nworkflows = []\n",
+        )
+        .unwrap();
+        copy(
+            &manager,
+            &workspace,
+            &mcp_transfer(),
+            &revision_of(&user_mcp),
+        )
+        .expect("clearing the workspace workflow selection allows the MCP copy");
+        copy(
+            &manager,
+            &workspace,
+            &agent_transfer(),
+            &revision_of(&source_agent),
+        )
+        .expect("clearing the workspace workflow selection allows the agent copy");
+    }
+
+    #[test]
+    fn copy_rejects_an_inherited_named_agent_whose_workspace_profile_selects_the_mcp() {
+        let (_temporary, manager, workspace) = fixture();
+        let workspace_dir = workspace.workspace().unwrap();
+        let user_root = manager.resource_root(&SourceTarget::User);
+        let user_config = user_root.parent().unwrap().join("rustx.toml");
+        let config = fs::read_to_string(&user_config).unwrap().replace(
+            "[agent.model]\nmodel = \"local\"\n",
+            "[agent]\nagents = ['reviewer']\n\n[agent.model]\nmodel = \"local\"\n",
+        );
+        assert!(
+            config.contains("agents = ['reviewer']"),
+            "fixture agent table was not found"
+        );
+        fs::write(&user_config, config).unwrap();
+        fs::create_dir_all(user_root.join("agents")).unwrap();
+        fs::write(
+            user_root.join("agents/reviewer.toml"),
+            "description = 'Review'\ninstructions = 'Review input'\n[tools.sources]\n",
+        )
+        .unwrap();
+        let user_mcp = user_root.join("mcp.toml");
+        fs::write(
+            &user_mcp,
+            "[mcp_servers.review]\nurl = 'https://example.invalid/mcp'\n",
+        )
+        .unwrap();
+        let override_profile = workspace_dir.join(".agents/agents/reviewer.toml");
+        fs::create_dir_all(override_profile.parent().unwrap()).unwrap();
+        fs::write(
+            &override_profile,
+            "description = 'Review'\ninstructions = 'Review input'\n[tools.sources]\nreview-copy = ['inspect']\n",
+        )
+        .unwrap();
+        let destination = workspace_dir.join(".agents/mcp.toml");
+        let revision = revision_of(&user_mcp);
+        assert_name_enabled(
+            &copy(&manager, &workspace, &mcp_transfer(), &revision),
+            "inherited named agent with workspace profile override",
+        );
+        assert!(
+            !fs::read_to_string(&destination)
+                .unwrap_or_default()
+                .contains("review-copy")
+        );
+        fs::write(
+            &override_profile,
+            "description = 'Review'\ninstructions = 'Review input'\n[tools.sources]\n",
+        )
+        .unwrap();
+        copy(&manager, &workspace, &mcp_transfer(), &revision)
+            .expect("clearing the overriding selector allows the copy");
     }
 }

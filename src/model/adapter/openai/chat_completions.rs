@@ -1986,32 +1986,57 @@ fn translate_message<'a>(
     })
 }
 
+/// Bridge kept on the tool message when ordered text and images follow.
+/// The follow-up carries the complete order; this string does not repeat it.
+const MIXED_TOOL_RESULT_BRIDGE: &str =
+    "Ordered text and images follow in the labelled user message.";
+
 fn translate_tool_message<'a>(
     tool_call_id: &ToolCallId,
     result: &crate::tools::types::ToolExecutionResult,
     images: &crate::model::images::ResolvedImages,
 ) -> Result<TranslatedMessage<'a>, ModelError> {
-    let mut text = Vec::new();
-    let mut media = Vec::new();
-    for part in result.image_projection().map_err(unsupported)? {
+    let projected = result.image_projection().map_err(unsupported)?;
+    let has_image = projected
+        .iter()
+        .any(|part| matches!(part, crate::tools::types::ModelToolResultPart::Image(_)));
+    if !has_image {
+        let content = projected
+            .into_iter()
+            .map(|part| match part {
+                crate::tools::types::ModelToolResultPart::Text(text) => text,
+                crate::tools::types::ModelToolResultPart::Image(_) => unreachable!("no image"),
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Ok(TranslatedMessage {
+            main: Some(WireMessage::Tool {
+                tool_call_id: tool_call_id.as_str().into(),
+                content,
+            }),
+            media: None,
+        });
+    }
+    let mut ordered = Vec::new();
+    for part in projected {
         match part {
-            crate::tools::types::ModelToolResultPart::Text(part) => text.push(part),
+            crate::tools::types::ModelToolResultPart::Text(text) if !text.is_empty() => {
+                ordered.push(WirePart::Text {
+                    text: Cow::Owned(text),
+                });
+            }
+            crate::tools::types::ModelToolResultPart::Text(_) => {}
             crate::tools::types::ModelToolResultPart::Image(image) => {
-                media.push(chat_image_part(&image, images)?);
+                ordered.push(chat_image_part(&image, images)?);
             }
         }
     }
-    let media = if media.is_empty() {
-        None
-    } else {
-        Some(WireMessage::User { content: media })
-    };
     Ok(TranslatedMessage {
         main: Some(WireMessage::Tool {
             tool_call_id: tool_call_id.as_str().into(),
-            content: text.join("\n"),
+            content: MIXED_TOOL_RESULT_BRIDGE.to_owned(),
         }),
-        media,
+        media: Some(WireMessage::User { content: ordered }),
     })
 }
 
@@ -2157,7 +2182,10 @@ fn invalid_request(message: &str) -> ModelError {
 
 #[cfg(test)]
 mod tests {
-    use super::{ChatStreamNormalizer, translate_tool_message, translate_tools};
+    use super::{
+        ChatStreamNormalizer, translate_request, translate_tool_message, translate_tools,
+        uncached_request,
+    };
     use crate::message::content::TextBlock;
     use crate::message::types::ToolMessageBlock;
     use crate::model::adapter::validation::ValidatedTools;
@@ -2415,6 +2443,213 @@ mod tests {
                 .unwrap()
                 .contains("input schema validation failed: query is required")
         );
+    }
+
+    fn picture(name: &str) -> ToolResultContent {
+        use crate::message::content::ImageReference;
+        use crate::runtime::identity::ArtifactId;
+        ToolResultContent::Image(ImageReference {
+            artifact_id: ArtifactId::new(name),
+            alt: None,
+        })
+    }
+
+    fn text_result(text: &str) -> ToolResultContent {
+        ToolResultContent::Text(TextBlock {
+            text: text.to_owned(),
+        })
+    }
+
+    fn encode_ordered_tool_media(groups: &[Vec<ToolResultContent>]) -> serde_json::Value {
+        use crate::message::types::{
+            AssistantContentBlock, AssistantMessageBlock, ContentBlockIndex, MessageBlock,
+            ToolCallOccurrenceRef,
+        };
+        use crate::model::images::FrozenImage;
+        use crate::model::{ModelInputMessage, ModelProtocol};
+        use crate::tools::types::ToolCall;
+
+        let mut bytes = Vec::new();
+        png::Encoder::new(&mut bytes, 1, 1)
+            .write_header()
+            .unwrap()
+            .write_image_data(&[128])
+            .unwrap();
+        let frozen = FrozenImage::new(bytes).unwrap();
+        let mut request = crate::scripted_suites::common::simple_request(
+            ModelProtocol::OpenAiChatCompletions,
+            "fixture",
+            "inspect",
+        );
+        request.messages.clear();
+        request.tools.push(ModelToolDefinition {
+            id: ToolId::new("inspect"),
+            name: "inspect".into(),
+            description: "Inspect images".into(),
+            input_schema: serde_json::json!({"type":"object"}).into(),
+        });
+        request
+            .invocation
+            .capabilities
+            .input_modalities
+            .insert(crate::model::catalog::Modality::Image);
+        for group in groups {
+            for item in group {
+                if let ToolResultContent::Image(image) = item {
+                    request
+                        .images
+                        .insert(image.artifact_id.clone(), frozen.clone());
+                }
+            }
+        }
+        let assistant = MessageId::new("msg-a");
+        request
+            .messages
+            .push(ModelInputMessage::Canonical(MessageBlock::Assistant(
+                AssistantMessageBlock {
+                    id: assistant.clone(),
+                    content: (0..groups.len())
+                        .map(|index| {
+                            AssistantContentBlock::ToolCall(ToolCall {
+                                id: ToolCallId::new(format!("call_{}", index + 1)),
+                                tool_id: ToolId::new("inspect"),
+                                name: "inspect".into(),
+                                arguments: serde_json::json!({}),
+                            })
+                        })
+                        .collect(),
+                },
+            )));
+        for (index, content) in groups.iter().enumerate() {
+            let id = format!("call_{}", index + 1);
+            request
+                .messages
+                .push(ModelInputMessage::Canonical(MessageBlock::Tool(
+                    ToolMessageBlock {
+                        occurrence: ToolCallOccurrenceRef::new(
+                            assistant.clone(),
+                            ContentBlockIndex::new(u32::try_from(index).unwrap()),
+                        ),
+                        id: MessageId::new(format!("result-{id}")),
+                        tool_call_id: ToolCallId::new(id),
+                        tool_id: ToolId::new("inspect"),
+                        result: ToolExecutionResult {
+                            deliveries: Vec::new(),
+                            status: ToolExecutionStatus::Success,
+                            content: content.clone(),
+                            duration_ms: 0,
+                            exit_code: None,
+                            artifacts: Vec::new(),
+                            truncation: None,
+                            workflow: None,
+                            managed_output: None,
+                        }
+                        .into(),
+                    },
+                )));
+        }
+        let tools = crate::model::adapter::validation::validate_request(
+            &request,
+            ModelProtocol::OpenAiChatCompletions,
+        )
+        .unwrap();
+        let cached = serde_json::to_value(translate_request(&request, &tools).unwrap()).unwrap();
+        let uncached = serde_json::to_value(uncached_request(&request).unwrap()).unwrap();
+        assert_eq!(
+            cached["messages"], uncached["messages"],
+            "cached and uncached Chat encodings must agree"
+        );
+        cached["messages"].clone()
+    }
+
+    fn labelled_user(messages: &serde_json::Value, index: usize) -> &serde_json::Value {
+        messages
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|message| message["role"] == "user")
+            .nth(index)
+            .unwrap()
+    }
+
+    #[test]
+    fn mixed_tool_results_keep_distinct_order_across_cached_and_uncached_encoding() {
+        let qualified = encode_ordered_tool_media(&[vec![
+            text_result("合格："),
+            picture("artifact-a"),
+            picture("artifact-b"),
+            text_result("不合格："),
+            picture("artifact-c"),
+        ]]);
+        let unqualified = encode_ordered_tool_media(&[vec![
+            text_result("合格："),
+            picture("artifact-a"),
+            text_result("不合格："),
+            picture("artifact-b"),
+            picture("artifact-c"),
+        ]]);
+        assert_ne!(
+            qualified, unqualified,
+            "different text/image boundaries must remain distinguishable"
+        );
+        assert_eq!(
+            labelled_user(&qualified, 0)["content"][4]["text"],
+            "不合格："
+        );
+        assert_eq!(
+            labelled_user(&unqualified, 0)["content"][3]["text"],
+            "不合格："
+        );
+        assert!(
+            labelled_user(&qualified, 0)["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("call_1")
+        );
+        let parallel = encode_ordered_tool_media(&[
+            vec![
+                text_result("合格："),
+                picture("artifact-a"),
+                text_result("不合格："),
+            ],
+            vec![
+                text_result("left"),
+                picture("artifact-b"),
+                text_result("right"),
+            ],
+        ]);
+        let roles: Vec<_> = parallel
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|message| message["role"].as_str().unwrap())
+            .collect();
+        let tool_positions: Vec<_> = roles
+            .iter()
+            .enumerate()
+            .filter_map(|(index, role)| (*role == "tool").then_some(index))
+            .collect();
+        assert_eq!(tool_positions, vec![1, 2], "tool results stay contiguous");
+        assert!(roles[3..].iter().all(|role| *role == "user"));
+        assert!(
+            labelled_user(&parallel, 0)["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("call_1")
+        );
+        assert_eq!(labelled_user(&parallel, 0)["content"][1]["text"], "合格：");
+        assert_eq!(
+            labelled_user(&parallel, 0)["content"][3]["text"],
+            "不合格："
+        );
+        assert!(
+            labelled_user(&parallel, 1)["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("call_2")
+        );
+        assert_eq!(labelled_user(&parallel, 1)["content"][1]["text"], "left");
+        assert_eq!(labelled_user(&parallel, 1)["content"][3]["text"], "right");
     }
 }
 

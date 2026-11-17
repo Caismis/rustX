@@ -3013,8 +3013,13 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
                 "the entire result group precedes synthetic User media"
             );
             let content = item["content"].as_array().unwrap();
-            assert_eq!(content.len(), 2, "one call label and one original image");
+            assert_eq!(
+                content.len(),
+                3,
+                "label, original text, and original image stay ordered"
+            );
             assert_eq!(content[0]["type"], "text");
+            assert_eq!(content[1]["text"], "Read static PNG image");
             let label = content[0]["text"].as_str().unwrap();
             let call = label
                 .strip_prefix("Images from tool result ")
@@ -3027,7 +3032,7 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
             );
             assert!(media_calls.insert(call.to_owned()), "one image per result");
             assert_eq!(
-                content[1],
+                content[2],
                 serde_json::json!({
                     "type":"image_url", "image_url":{"url":format!("data:image/png;base64,{encoded}")}
                 }),
@@ -3049,7 +3054,10 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
                     "image bytes belong only to labelled media"
                 );
                 if media_calls.contains(&call) {
-                    assert_eq!(content, "Read static PNG image");
+                    assert_eq!(
+                        content,
+                        "Ordered text and images follow in the labelled user message."
+                    );
                 } else {
                     assert!(
                         content.contains("Image artifact"),

@@ -810,15 +810,20 @@ async fn all_protocols_transport_user_and_ordered_tool_images() {
                         let tool = &messages[tool_positions[offset]];
                         assert_eq!(tool["role"], "tool");
                         assert_eq!(tool["tool_call_id"], id);
-                        assert_eq!(tool["content"], "A\nB");
+                        assert_eq!(
+                            tool["content"],
+                            "Ordered text and images follow in the labelled user message."
+                        );
                         let media = &messages[tool_positions[1] + offset + 1];
                         assert_eq!(media["role"], "user");
                         assert!(media["content"][0]["text"].as_str().unwrap().contains(id));
+                        assert_eq!(media["content"][1]["text"], "A");
                         assert_eq!(
-                            media["content"][1]["image_url"]["url"],
+                            media["content"][2]["image_url"]["url"],
                             format!("data:image/png;base64,{encoded}")
                         );
-                        assert_eq!(media["content"][2]["type"], "image_url");
+                        assert_eq!(media["content"][3]["text"], "B");
+                        assert_eq!(media["content"][4]["type"], "image_url");
                     }
                 }
                 ModelProtocol::OpenAiResponses => {
