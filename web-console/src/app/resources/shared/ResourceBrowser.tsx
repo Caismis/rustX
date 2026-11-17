@@ -18,6 +18,14 @@ import { transferActions } from './ResourceTransfer';
 const userTarget = { kind: 'user' } as const;
 const rowKey = (scope: SourceScope, name: string) => `${scope}:${name}`;
 
+/** Default-enabled names from the catalog `useSkillCatalog` already fences.
+ * Pending keeps that catalog's last settled skills. An error, or a catalog
+ * that is absent after a scope, directory, or generation change, yields none. */
+export function defaultEnabledSkillNames(catalog: { error?: string; skills: readonly { disable_model_invocation: boolean; enabled_by_default: boolean; catalog: { name: string } }[] } | undefined): string[] | undefined {
+  if (!catalog || catalog.error) return undefined;
+  return catalog.skills.filter(skill => !skill.disable_model_invocation && skill.enabled_by_default).map(skill => skill.catalog.name);
+}
+
 export function ResourceBrowser({ client, source, scope, revision, query, view, refresh, onRefresh, workspaceLabel,
   bindDisplayWrite, bindDelete, onTransfer, transferDisabled }: {
   client: AppServerClient; source: SourceSettings; scope: SourceScope; revision?: string;
@@ -41,8 +49,7 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
     ? [...listed.filter(skill => skill.provenance.source === 'workspace'), ...global.skills]
     : listed;
   const descriptors = new Map(skills.map(skill => [rowKey(skill.provenance.source, skill.catalog.name), skill]));
-  const skillNames = effective && !effective.error && !effective.pending
-    ? listed.filter(skill => !skill.disable_model_invocation && skill.enabled_by_default).map(skill => skill.catalog.name) : undefined;
+  const skillNames = defaultEnabledSkillNames(effective);
   const selectable = new Set(listed.map(skill => rowKey(skill.provenance.source, skill.catalog.name)));
   const catalogError = effective?.error ?? global?.error;
   const entries = new Map(extensionEntries(source, scope, 'skill').map(entry => [rowKey(entry.owner, entry.name), entry]));
