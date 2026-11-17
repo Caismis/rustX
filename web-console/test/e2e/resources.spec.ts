@@ -214,12 +214,18 @@ test('skill directories copy, move and delete from their exact scopes', async ({
     const installed = skills.getByRole('group', {name: 'Installed here', exact: true});
     const card = (group: Locator, name: string) => group.getByRole('listitem', {name, exact: true});
     const action = async (row: Locator, name: string) => {
-      await row.getByRole('button', {name: /^Actions for /}).click({timeout: 8_000});
+      const menuButton = row.getByRole('button', {name: /^Actions for /});
+      if (await menuButton.getAttribute('aria-expanded') !== 'true') {
+        await menuButton.click({timeout: 8_000});
+      }
       await page.getByRole('menuitem', {name, exact: true}).click({timeout: 8_000});
     };
     const transfer = async (row: Locator, name: string, operation: 'Copy' | 'Move') => {
       await action(row, name);
-      return page.getByRole('dialog', {name: `${operation} resource`, exact: true});
+      const dialog = page.getByRole('dialog', {name: `${operation} resource`, exact: true});
+      // The stale-revision write must not run until this dialog is actually open.
+      await expect(dialog).toBeVisible();
+      return dialog;
     };
     const submit = async (dialog: Locator, operation: 'Copy' | 'Move') => {
       await dialog.getByRole('button', {name: operation, exact: true}).click();

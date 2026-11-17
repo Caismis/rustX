@@ -579,8 +579,24 @@ fn unchanged_source_copy_failure_stays_io_and_removes_the_stage() {
 fn owned_stage_cleanup_does_not_follow_or_chmod_a_replacement() {
     use std::os::unix::fs::PermissionsExt;
     let temporary = tempfile::tempdir().unwrap();
-    let root = temporary.path().join("owned");
-    let secret = temporary.path().join("secret");
+    // PackageDirectory::open walks every ancestor with O_DIRECTORY|O_NOFOLLOW.
+    // macOS TMPDIR is under /var, a symlink to /private/var; that open returns
+    // ENOTDIR. Other fixtures canonicalize first. Confinement stays unchanged.
+    let canonical = temporary.path().canonicalize().unwrap();
+    let alias = canonical.join("alias");
+    std::os::unix::fs::symlink(&canonical, &alias).unwrap();
+    let through_alias = alias.join("owned");
+    fs::create_dir(canonical.join("owned")).unwrap();
+    match crate::package_io::PackageDirectory::open(&through_alias) {
+        Err(error) => {
+            let confined = error.kind() == std::io::ErrorKind::NotADirectory
+                || error.raw_os_error() == Some(rustix::io::Errno::LOOP.raw_os_error());
+            assert!(confined, "symlink ancestor must stay confined: {error}");
+        }
+        Ok(_) => panic!("symlink ancestor must stay confined, not followed"),
+    }
+    let root = canonical.join("owned");
+    let secret = canonical.join("secret");
     fs::create_dir_all(secret.join("nested")).unwrap();
     fs::write(secret.join("nested").join("keep"), "keep").unwrap();
     fs::set_permissions(&secret, fs::Permissions::from_mode(0o500)).unwrap();
@@ -604,13 +620,13 @@ fn owned_stage_cleanup_does_not_follow_or_chmod_a_replacement() {
         "keep"
     );
 
-    let replaced = temporary.path().join("replaced");
+    let replaced = canonical.join("replaced");
     fs::create_dir(&replaced).unwrap();
     let old_identity = {
         let metadata = fs::metadata(&replaced).unwrap();
         (metadata.dev(), metadata.ino())
     };
-    fs::rename(&replaced, temporary.path().join("moved-aside")).unwrap();
+    fs::rename(&replaced, canonical.join("moved-aside")).unwrap();
     fs::create_dir(&replaced).unwrap();
     fs::write(replaced.join("keep"), "foreign").unwrap();
     fs::set_permissions(&replaced, fs::Permissions::from_mode(0o500)).unwrap();
