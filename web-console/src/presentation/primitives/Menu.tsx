@@ -662,7 +662,6 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
       // React portals bubble synthetic events through the REACT tree: without
       // this stop, an item click re-fires the anchor row's own onClick
       // (open/toggle) after onSelect.
-      onPointerDown={(e) => { e.stopPropagation() }}
       onClick={(e) => { e.stopPropagation() }}
     >
       <div className={css.viewport} role="presentation">
