@@ -137,6 +137,10 @@ impl TraceProjection<'_> {
             D::ToolStart {
                 occurrence: Some(occurrence),
                 ..
+            }
+            | D::ToolRequest {
+                occurrence: Some(occurrence),
+                ..
             } => {
                 super::summary::record_tool_proposal();
                 let proposal = self

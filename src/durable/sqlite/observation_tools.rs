@@ -9,7 +9,7 @@ use crate::durable::sqlite::statements::FixedStatements as _;
 use crate::observation::content::CanonicalContentLocator;
 
 pub(super) const TOOL_NAME_SQL: &str = "SELECT observation_name FROM canonical_tool_calls INDEXED BY canonical_tool_calls_observation_idx WHERE observation_ledger=?1 AND block_index=?2";
-pub(super) const TOOL_WITNESS_SQL: &str = "SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_phase IS NOT NULL AND observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=?3 AND sequence<=?4 ORDER BY sequence DESC LIMIT 1";
+pub(super) const TOOL_WITNESS_SQL: &str = "SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_phase IS NOT NULL AND observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=?3 AND (?3!=1 OR observation_kind='tool_execution_started') AND sequence<=?4 ORDER BY sequence DESC LIMIT 1";
 pub(super) const TOOL_RESULT_SQL: &str =
     "SELECT tool_result_json FROM transcript_entries WHERE ledger_position=?1";
 

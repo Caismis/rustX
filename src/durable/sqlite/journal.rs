@@ -930,6 +930,9 @@ fn persist_event_isolated(
     let _ = optional_display_layout(transaction, || {
         observation_readiness::insert(transaction, &event)
     })?;
+    // Aggregate ownership and Trace capture use this exact canonical occurrence.
+    // Resolve it before either domain prepares its request/execution facts.
+    event.tool_occurrence = observation::tool_occurrence_receipt(transaction, &event)?;
     let statistics_required = observation_statistics::is_trace_anchor(&event.event)
         || observation_statistics::requires_statistics(&event)
         || observation_members::requires_members(&event);
@@ -946,8 +949,7 @@ fn persist_event_isolated(
         transaction.execute_cached("UPDATE canonical_tool_calls SET attempt_id=?1,commit_sequence=?2 WHERE assistant_message_id=?3",params![event.attempt_id.as_ref().map(crate::runtime::identity::AttemptId::as_str),sequence,message_id.as_str()]).map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     }
 
-    // Caller-supplied ephemeral evidence is never trusted. Native canonical
-    // ownership is resolved inside this exact append transaction.
+    // Publish only native canonical ownership resolved in this append transaction.
     let assistant_available = if let RuntimeEvent::AssistantMessageCommitted { message_id } =
         &event.event
     {
@@ -958,11 +960,11 @@ fn persist_event_isolated(
     } else {
         true
     };
-    event.tool_occurrence = observation::tool_occurrence_receipt(transaction, &event)?;
     let tool_available = if let Some(occurrence) = &event.tool_occurrence {
         optional_display_layout(transaction, || {
         let phase = match &event.event {
-            RuntimeEvent::ToolExecutionStarted { .. } => Some(1),
+            RuntimeEvent::ToolCallRequested { .. }
+            | RuntimeEvent::ToolExecutionStarted { .. } => Some(1),
             RuntimeEvent::ToolExecutionCompleted { .. }
             | RuntimeEvent::ToolExecutionFailed { .. } => Some(2),
             _ => None,
@@ -1019,9 +1021,36 @@ fn persist_event_isolated(
     )?;
     let witness_available = witness_facts.available;
     let trace_available = optional_display_layout(transaction, || {
-        observation_trace::index_event(transaction, &event, execution_facts.as_ref())
+        observation_trace::index_event(transaction, &event, execution_facts.as_ref())?;
+        if matches!(event.event, RuntimeEvent::ToolExecutionStarted { .. })
+            && observation_trace::tool_request_owner(transaction, &event)?.is_some()
+        {
+            // Only positive, captured request ownership removes this execution
+            // phase from the global root list. Its own header stays indexed.
+            transaction
+                .execute_cached(
+                    "UPDATE events SET observation_trace_fact_required=0 WHERE sequence=?1",
+                    [sequence],
+                )
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+        }
+        Ok(())
     })?
     .is_some();
+    if let Some(statistics) = &aggregate_facts
+        && !statistics.trace_anchor
+        && observation_statistics::is_trace_anchor(&event.event)
+    {
+        let _ = optional_display_layout(transaction, || {
+            transaction
+                .execute_cached(
+                    "UPDATE events SET observation_trace_required=0 WHERE sequence=?1",
+                    [sequence],
+                )
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
+            Ok(())
+        })?;
+    }
     transaction
         .prepare_cached("UPDATE rustx_store SET next_event_sequence=?1 WHERE id=1")
         .and_then(|mut statement| statement.execute([sequence]))
@@ -1266,6 +1295,7 @@ pub(super) fn validate_attempt_start_uniqueness(
 
 pub(super) fn runtime_event_dependency_name(event: &RuntimeEvent) -> &'static str {
     match event {
+        RuntimeEvent::ToolCallRequested { .. } => "ToolCallRequested",
         RuntimeEvent::ToolExecutionStarted { .. } => "ToolExecutionStarted",
         RuntimeEvent::ToolExecutionProgress { .. } => "ToolExecutionProgress",
         RuntimeEvent::ToolExecutionDeadlineFired { .. } => "ToolExecutionDeadlineFired",

@@ -414,6 +414,14 @@ pub enum RuntimeEvent {
         message_id: MessageId,
     },
 
+    /// A canonical model tool call entered authorization. This records the
+    /// request before review, human approval, or any execution can start.
+    ToolCallRequested {
+        /// Identity of the requested call.
+        tool_call_id: ToolCallId,
+        /// Identity of the requested tool.
+        tool_id: ToolId,
+    },
     /// Tool execution started.
     ToolExecutionStarted {
         /// Identity of the tool call being executed.
