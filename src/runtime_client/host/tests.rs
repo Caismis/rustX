@@ -4166,7 +4166,6 @@ async fn canonical_history_has_one_owner_at_a_time() {
         vec![
             "user",
             "user",
-            "user",
             "assistant",
             "tool",
             "user",
