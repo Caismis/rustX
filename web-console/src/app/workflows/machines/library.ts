@@ -167,7 +167,10 @@ export const workflowLibraryMachine = setup({
   context: ({ input }) => ({ ports: input.ports, scope: input.scope, confirmations: 0 }),
   initial: 'dormant',
   on: {
-    SCOPE: { guard: 'otherScope', target: '.loading', actions: 'selectScope' },
+    // Reenter so a scope chosen while a list is already in flight replaces that
+    // read. Without reentry the tab changes and the in-flight scope's files stay
+    // presented as the newly selected scope.
+    SCOPE: { guard: 'otherScope', target: '.loading', reenter: true, actions: 'selectScope' },
     CANCEL: { actions: 'cancel' },
     DISMISS: { actions: assign({ operationFailure: undefined }) },
   },
