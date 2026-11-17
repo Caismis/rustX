@@ -109,16 +109,9 @@ pub enum SkillPackageError {
         #[serde(skip)]
         detail: String,
     },
-    /// The frontmatter `name` does not match the parent directory name.
-    NameDirectoryMismatch {
-        directory: String,
-        #[serde(skip)]
-        name: String,
-    },
     /// The candidate directory contains no `SKILL.md`.
     MissingSkillMarkdown { directory: String },
-    /// The `SKILL.md` entry is not an ordinary regular file (or is a
-    /// symlink).
+    /// The resolved `SKILL.md` target is not an ordinary regular file.
     SkillMarkdownNotRegularFile { directory: String },
     /// The `SKILL.md` frontmatter is malformed YAML or violates the
     /// standard shape.
@@ -170,7 +163,6 @@ impl SkillPackageError {
                 name.clear();
                 detail.clear();
             }
-            Self::NameDirectoryMismatch { name, .. } => name.clear(),
             Self::MalformedFrontmatter { detail, .. }
             | Self::InvalidDescription { detail, .. }
             | Self::InvalidCompatibility { detail, .. }
@@ -194,11 +186,6 @@ impl core::fmt::Display for SkillPackageError {
                 f,
                 "skill {directory:?}: name {name:?} violates the Agent Skills naming rules: \
                  {detail}"
-            ),
-            Self::NameDirectoryMismatch { directory, name } => write!(
-                f,
-                "skill {directory:?}: frontmatter name {name:?} does not match the parent \
-                 directory"
             ),
             Self::MissingSkillMarkdown { directory } => {
                 write!(f, "skill {directory:?}: no {SKILL_MARKDOWN_FILE} present")
@@ -714,10 +701,19 @@ fn resolve_automatic_root(
         Ok(metadata) => metadata,
         Err(detail) => return invalid(detail),
     };
-    if metadata.file_type().is_symlink() {
-        return invalid("a Skill collection root must not be a symlink".to_owned());
-    }
-    if !metadata.is_dir() {
+    // A symlinked collection root follows ordinary path semantics like every
+    // other discovery link: resolve it and enumerate its target. Only an
+    // unresolvable link or a target that is not a directory invalidates the
+    // root.
+    let followed = if metadata.file_type().is_symlink() {
+        match std::fs::metadata(&root.root) {
+            Ok(metadata) => metadata,
+            Err(error) => return invalid(format!("cannot resolve the Skill source root: {error}")),
+        }
+    } else {
+        metadata
+    };
+    if !followed.is_dir() {
         return invalid("the Skill source root is not a directory".to_owned());
     }
     let boundary = match std::fs::canonicalize(&root.root) {
@@ -787,8 +783,19 @@ fn validate_candidates(
             }
         };
         match discover_package(&root, &name, source, cancellation) {
-            Ok(package) => {
-                candidates.last_mut().expect("reserved identity").package = Some(package);
+            Ok((package, warnings)) => {
+                for message in warnings {
+                    diagnostics.push(SkillDiagnostic::PackageWarning {
+                        source,
+                        package: package_display.clone(),
+                        message,
+                    });
+                }
+                let candidate = candidates.last_mut().expect("reserved identity");
+                // The effective identity (frontmatter name, else the offering
+                // directory) drives merge, shadowing, and selection.
+                package.name().clone_into(&mut candidate.name);
+                candidate.package = Some(package);
             }
             Err(cause) => diagnostics.push(SkillDiagnostic::PackageInvalid {
                 source,
@@ -874,25 +881,40 @@ fn discover_package(
     directory_name: &str,
     source: SkillSource,
     cancellation: &crate::runtime::CancellationSignal,
-) -> Result<SkillPackage, SkillPackageError> {
+) -> Result<(SkillPackage, Vec<String>), SkillPackageError> {
     validate_skill_name(directory_name).map_err(|detail| SkillPackageError::InvalidName {
         directory: directory_name.to_owned(),
         name: directory_name.to_owned(),
         detail,
     })?;
-    let skill_markdown = root.join(SKILL_MARKDOWN_FILE);
-    let location = published_location(root, &skill_markdown)?;
-    let markdown_meta = std::fs::symlink_metadata(&skill_markdown).map_err(|_| {
-        SkillPackageError::MissingSkillMarkdown {
-            directory: directory_name.to_owned(),
+    let offered = root.join(SKILL_MARKDOWN_FILE);
+    // A symlinked SKILL.md resolves and is read through its target, exactly
+    // like a symlinked package root; only the resolved target must be an
+    // ordinary regular file.
+    let skill_markdown = std::fs::canonicalize(&offered).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            SkillPackageError::MissingSkillMarkdown {
+                directory: directory_name.to_owned(),
+            }
+        } else {
+            SkillPackageError::Io {
+                path: offered.display().to_string(),
+                detail: format!("cannot resolve the Skill instructions file: {error}"),
+            }
         }
     })?;
-    if !markdown_meta.is_file() || markdown_meta.file_type().is_symlink() {
+    let location = published_location(root, &skill_markdown)?;
+    let markdown_meta =
+        std::fs::metadata(&skill_markdown).map_err(|error| SkillPackageError::Io {
+            path: skill_markdown.display().to_string(),
+            detail: error.to_string(),
+        })?;
+    if !markdown_meta.is_file() {
         return Err(SkillPackageError::SkillMarkdownNotRegularFile {
             directory: directory_name.to_owned(),
         });
     }
-    let header = super::frontmatter::read(root, cancellation).map_err(|detail| {
+    let header = super::frontmatter::read(&skill_markdown, cancellation).map_err(|detail| {
         SkillPackageError::MalformedFrontmatter {
             directory: directory_name.to_owned(),
             detail,
@@ -913,12 +935,28 @@ fn discover_package(
             detail,
         },
     })?;
-    if frontmatter.name != directory_name {
-        return Err(SkillPackageError::NameDirectoryMismatch {
-            directory: directory_name.to_owned(),
-            name: frontmatter.name.clone(),
-        });
-    }
+    // Pi-style identity: the frontmatter name wins when present; a missing
+    // name falls back to the offering directory. A present-but-different or
+    // non-standard name loads with a warning, never an exclusion.
+    let mut warnings = Vec::new();
+    let effective_name = if frontmatter.name.is_empty() {
+        directory_name.to_owned()
+    } else {
+        if frontmatter.name != directory_name {
+            warnings.push(format!(
+                "frontmatter name {:?} overrides the directory name {directory_name:?}",
+                frontmatter.name
+            ));
+        }
+        if let Err(detail) = validate_skill_name(&frontmatter.name) {
+            warnings.push(format!(
+                "frontmatter name {:?} is not standard: {detail}",
+                frontmatter.name
+            ));
+        }
+        frontmatter.name.clone()
+    };
+    frontmatter.name.clone_from(&effective_name);
     let description = frontmatter.description.trim();
     if description.is_empty() {
         return Err(SkillPackageError::InvalidDescription {
@@ -977,14 +1015,17 @@ fn discover_package(
         .compatibility
         .map(|value| value.trim().to_owned());
     let version_id = definition_version_id(&frontmatter);
-    Ok(SkillPackage {
-        id: SkillId::new(directory_name.to_owned()),
-        version_id,
-        definition: frontmatter,
-        dependencies,
-        location,
-        source,
-    })
+    Ok((
+        SkillPackage {
+            id: SkillId::new(effective_name),
+            version_id,
+            definition: frontmatter,
+            dependencies,
+            location,
+            source,
+        },
+        warnings,
+    ))
 }
 
 /// The model-visible location of one canonical package root's `SKILL.md`.
@@ -1044,7 +1085,8 @@ struct Frontmatter {
 /// otherwise coerce scalar numbers into strings.
 #[derive(serde::Deserialize)]
 struct FrontmatterSerde {
-    name: String,
+    #[serde(default)]
+    name: Option<String>,
     description: String,
     #[serde(default)]
     metadata: BTreeMap<String, serde_yaml::Value>,
@@ -1128,7 +1170,8 @@ fn parse_frontmatter(markdown: &str) -> Result<Frontmatter, FrontmatterFailure> 
         metadata.insert(key, string);
     }
     Ok(Frontmatter {
-        name: frontmatter.name,
+        // Absence resolves later against the offering directory name.
+        name: frontmatter.name.unwrap_or_default(),
         description: frontmatter.description,
         metadata,
         license: frontmatter.license,
@@ -1369,10 +1412,12 @@ mod frontmatter_tests {
         ));
     }
 
-    /// #280 (13): an invalid higher-precedence candidate never wins merely
-    /// by being in the higher-precedence source.
+    /// #280 (13): a higher-precedence candidate whose frontmatter name
+    /// differs from its directory loads under the frontmatter identity with
+    /// a warning; it neither takes the directory identity nor suppresses
+    /// the lower-source package of that name.
     #[test]
-    fn cfg332_invalid_workspace_identity_shadows_valid_user_package() {
+    fn cfg332_overriding_frontmatter_name_shadows_nothing_and_warns() {
         let (_temp, base, workspace) = workspace_fixture();
         let home = base.join("home");
         write_skill(&home.join("rustx/.agents/skills"), "foo", "Global foo", "");
@@ -1394,20 +1439,15 @@ mod frontmatter_tests {
             ]),
         )
         .discover();
-        assert!(outcome.packages.is_empty());
+        assert_eq!(names(&outcome.packages), ["bar", "foo"]);
         assert!(
             outcome
                 .diagnostics
                 .iter()
-                .any(|d| matches!(d, SkillDiagnostic::PackageInvalid { .. }))
+                .any(|d| matches!(d, SkillDiagnostic::PackageWarning { .. })),
+            "{:?}",
+            outcome.diagnostics
         );
-        assert!(
-            outcome
-                .diagnostics
-                .iter()
-                .any(|d| matches!(d, SkillDiagnostic::Shadowed { .. }))
-        );
-        assert_eq!(outcome.invalid.len(), 1);
     }
 
     /// #280 (12): a symlinked package root is followed with ordinary path

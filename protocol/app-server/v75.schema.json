@@ -10414,6 +10414,34 @@
           ]
         },
         {
+          "description": "One candidate package loaded with a non-fatal authorship warning, as\nPi loads skills with warnings: the package publishes under its\neffective identity and the warning names what was observed.",
+          "type": "object",
+          "properties": {
+            "source": {
+              "description": "The source the candidate was found under.",
+              "$ref": "#/$defs/SkillSource"
+            },
+            "package": {
+              "description": "The candidate package directory.",
+              "type": "string"
+            },
+            "message": {
+              "description": "The observed condition, preserved verbatim.",
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "package_warning"
+            }
+          },
+          "required": [
+            "kind",
+            "source",
+            "package",
+            "message"
+          ]
+        },
+        {
           "description": "Two or more distinct packages in the **same** scope resolve to one\nlogical Skill identity. Every conflicting definition is excluded;\ndiscovery never picks a winner by enumeration order.",
           "type": "object",
           "properties": {
@@ -10505,23 +10533,6 @@
           ]
         },
         {
-          "description": "The frontmatter `name` does not match the parent directory name.",
-          "type": "object",
-          "properties": {
-            "directory": {
-              "type": "string"
-            },
-            "cause": {
-              "type": "string",
-              "const": "name_directory_mismatch"
-            }
-          },
-          "required": [
-            "cause",
-            "directory"
-          ]
-        },
-        {
           "description": "The candidate directory contains no `SKILL.md`.",
           "type": "object",
           "properties": {
@@ -10539,7 +10550,7 @@
           ]
         },
         {
-          "description": "The `SKILL.md` entry is not an ordinary regular file (or is a\nsymlink).",
+          "description": "The resolved `SKILL.md` target is not an ordinary regular file.",
           "type": "object",
           "properties": {
             "directory": {

@@ -27,15 +27,6 @@
       "source": "workspace",
       "package": "/workspace/.agents/skills/review",
       "cause": {
-        "cause": "name_directory_mismatch",
-        "directory": "/workspace/.agents/skills/review"
-      }
-    },
-    {
-      "kind": "package_invalid",
-      "source": "workspace",
-      "package": "/workspace/.agents/skills/review",
-      "cause": {
         "cause": "missing_skill_markdown",
         "directory": "/workspace/.agents/skills/review"
       }

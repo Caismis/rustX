@@ -15,10 +15,25 @@ thread_local! {
     pub(crate) static READ_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) fn read(root: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
-    let directory = crate::package_io::PackageDirectory::open(root).map_err(|e| e.to_string())?;
+/// Reads the frontmatter prefix of one resolved SKILL.md path. The path is
+/// already canonical at every discovery call site, so a symlinked SKILL.md
+/// is read through its target with ordinary path semantics.
+pub(crate) fn read(skill_markdown: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
+    let (directory_path, file_name) = (
+        skill_markdown.parent().ok_or_else(|| {
+            format!(
+                "skill file {} has no parent directory",
+                skill_markdown.display()
+            )
+        })?,
+        skill_markdown
+            .file_name()
+            .ok_or_else(|| format!("skill file {} has no file name", skill_markdown.display()))?,
+    );
+    let directory =
+        crate::package_io::PackageDirectory::open(directory_path).map_err(|e| e.to_string())?;
     let prefix = || {
-        let file = directory.file(Path::new(super::package::SKILL_MARKDOWN_FILE))?;
+        let file = directory.file(Path::new(file_name))?;
         // Bounded read-ahead, independent of the body size. Never validate body UTF-8.
         let mut reader = BufReader::with_capacity(BUFFER_BYTES, file);
         let mut header = Vec::new();

@@ -127,10 +127,11 @@ fn hidden_entries_and_unrelated_files_are_ignored() {
     assert_eq!(names, ["visible"]);
 }
 
-/// A frontmatter `name` that does not match the parent directory is
-/// rejected.
+/// A frontmatter `name` that does not match the parent directory loads
+/// under the frontmatter identity with a warning, as Pi does; a missing
+/// `name` falls back to the directory name.
 #[test]
-fn name_must_match_the_parent_directory() {
+fn name_is_frontmatter_first_with_directory_fallback() {
     let (dir, workspace) = fixture();
     let root = dir.path().join(".agents/skills/pdf");
     std::fs::create_dir_all(&root).expect("dir");
@@ -139,10 +140,47 @@ fn name_must_match_the_parent_directory() {
         "---\nname: documents\ndescription: A skill.\n---\nbody\n",
     )
     .expect("SKILL.md");
-    assert!(matches!(
-        invalid_cause(&workspace),
-        SkillPackageError::NameDirectoryMismatch { .. }
-    ));
+    let outcome = project_discovery(&workspace).discover();
+    assert_eq!(
+        outcome
+            .packages
+            .iter()
+            .map(rustx::skills::SkillPackage::name)
+            .collect::<Vec<_>>(),
+        ["documents"]
+    );
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .any(|d| matches!(d, SkillDiagnostic::PackageWarning { .. })),
+        "{:?}",
+        outcome.diagnostics
+    );
+
+    // Absent name: the directory name is the identity, no warning.
+    let (dir2, workspace2) = fixture();
+    let fallback = dir2.path().join(".agents/skills/plain");
+    std::fs::create_dir_all(&fallback).expect("dir");
+    std::fs::write(
+        fallback.join("SKILL.md"),
+        "---\ndescription: A skill.\n---\nbody\n",
+    )
+    .expect("SKILL.md");
+    let outcome2 = project_discovery(&workspace2).discover();
+    assert_eq!(
+        outcome2
+            .packages
+            .iter()
+            .map(rustx::skills::SkillPackage::name)
+            .collect::<Vec<_>>(),
+        ["plain"]
+    );
+    assert!(
+        outcome2.diagnostics.is_empty(),
+        "{:?}",
+        outcome2.diagnostics
+    );
 }
 
 /// Invalid standard names are rejected: uppercase, leading hyphen,
@@ -1076,5 +1114,79 @@ fn environment_digests_are_deterministic() {
         node_digest.as_str(),
         digest.as_str(),
         "python and node identities remain distinct"
+    );
+}
+
+/// A symlinked collection root is followed with ordinary path semantics and
+/// its target's packages publish normally.
+#[test]
+fn a_symlinked_collection_root_is_followed() {
+    let (dir, workspace) = fixture();
+    write_skill(dir.path(), "real", "Real skill.", &[], "body\n");
+    let store = dir.path().join("store");
+    write_skill(&store, "stored", "Stored skill.", &[], "body\n");
+    std::fs::rename(
+        dir.path().join(".agents/skills"),
+        dir.path().join("skills-backup"),
+    )
+    .expect("move collection aside");
+    std::os::unix::fs::symlink(
+        store.join(".agents/skills"),
+        dir.path().join(".agents/skills"),
+    )
+    .expect("symlink collection root");
+    let outcome = project_discovery(&workspace).discover();
+    assert_eq!(
+        outcome
+            .packages
+            .iter()
+            .map(rustx::skills::SkillPackage::name)
+            .collect::<Vec<_>>(),
+        ["stored"]
+    );
+    assert!(outcome.diagnostics.is_empty(), "{:?}", outcome.diagnostics);
+}
+
+/// A symlinked SKILL.md resolves through its target; the package publishes
+/// the canonical target location.
+#[test]
+fn a_symlinked_skill_markdown_is_followed() {
+    let (dir, workspace) = fixture();
+    write_skill(
+        dir.path(),
+        "linked-md",
+        "Linked instructions.",
+        &[],
+        "body\n",
+    );
+    let target = dir.path().join("definitions/instructions.md");
+    std::fs::create_dir_all(dir.path().join("definitions")).expect("definitions");
+    std::fs::rename(
+        dir.path().join(".agents/skills/linked-md/SKILL.md"),
+        &target,
+    )
+    .expect("move instructions out");
+    std::os::unix::fs::symlink(
+        &target,
+        dir.path().join(".agents/skills/linked-md/SKILL.md"),
+    )
+    .expect("symlink SKILL.md");
+    let outcome = project_discovery(&workspace).discover();
+    assert_eq!(
+        outcome
+            .packages
+            .iter()
+            .map(rustx::skills::SkillPackage::name)
+            .collect::<Vec<_>>(),
+        ["linked-md"]
+    );
+    assert!(outcome.diagnostics.is_empty(), "{:?}", outcome.diagnostics);
+    assert_eq!(
+        outcome.packages[0].location(),
+        target
+            .canonicalize()
+            .expect("canonical")
+            .display()
+            .to_string()
     );
 }

@@ -15,6 +15,7 @@
 //! SourceRootInvalid      an automatic root exists but cannot be scanned
 //! SourceBudgetExceeded   one source offered more candidates than its budget
 //! PackageInvalid         one candidate failed Agent Skills validation
+//! PackageWarning         one candidate loaded with a non-fatal warning
 //! DuplicateIdentity      one scope defines the same identity twice
 //! Shadowed               a higher-precedence source won the same identity
 //! ```
@@ -93,6 +94,17 @@ pub enum SkillDiagnostic {
         /// The preserved typed validation cause.
         cause: SkillPackageError,
     },
+    /// One candidate package loaded with a non-fatal authorship warning, as
+    /// Pi loads skills with warnings: the package publishes under its
+    /// effective identity and the warning names what was observed.
+    PackageWarning {
+        /// The source the candidate was found under.
+        source: SkillSource,
+        /// The candidate package directory.
+        package: String,
+        /// The observed condition, preserved verbatim.
+        message: String,
+    },
     /// Two or more distinct packages in the **same** scope resolve to one
     /// logical Skill identity. Every conflicting definition is excluded;
     /// discovery never picks a winner by enumeration order.
@@ -140,6 +152,7 @@ impl SkillDiagnostic {
             Self::SourceRootInvalid { .. }
             | Self::SourceBudgetExceeded { .. }
             | Self::PackageInvalid { .. }
+            | Self::PackageWarning { .. }
             | Self::DuplicateIdentity { .. } => SkillDiagnosticSeverity::Warning,
         }
     }
@@ -152,6 +165,7 @@ impl SkillDiagnostic {
             | Self::SourceRootInvalid { source, .. }
             | Self::SourceBudgetExceeded { source, .. }
             | Self::PackageInvalid { source, .. }
+            | Self::PackageWarning { source, .. }
             | Self::DuplicateIdentity { source, .. } => Some(*source),
             Self::Shadowed { .. } => None,
         }
@@ -191,6 +205,14 @@ impl core::fmt::Display for SkillDiagnostic {
             } => write!(
                 formatter,
                 "the {source} Skill package {package:?} is excluded: {cause}"
+            ),
+            Self::PackageWarning {
+                source,
+                package,
+                message,
+            } => write!(
+                formatter,
+                "the {source} Skill package {package:?} loaded with a warning: {message}"
             ),
             Self::DuplicateIdentity {
                 source,

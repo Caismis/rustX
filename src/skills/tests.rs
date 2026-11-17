@@ -141,7 +141,7 @@ fn malformed_prefixes_are_bounded_cancellable_and_diagnosed() {
     file.set_len(4 * 1024 * 1024 * 1024).unwrap();
     super::frontmatter::READ_BYTES.with(|v| v.set(0));
     assert!(
-        super::frontmatter::read(&root.join("guide"), &CancellationSignal::new())
+        super::frontmatter::read(&root.join("guide/SKILL.md"), &CancellationSignal::new())
             .unwrap_err()
             .contains("1 MiB")
     );
@@ -151,7 +151,7 @@ fn malformed_prefixes_are_bounded_cancellable_and_diagnosed() {
     signal.cancel();
     super::frontmatter::READ_BYTES.with(|v| v.set(0));
     assert!(
-        super::frontmatter::read(&root.join("guide"), &signal)
+        super::frontmatter::read(&root.join("guide/SKILL.md"), &signal)
             .unwrap_err()
             .contains("cancelled")
     );
@@ -176,7 +176,7 @@ fn prefix_cancellation_and_definition_replacement_use_deterministic_io_hooks() {
         }));
     });
     assert!(
-        super::frontmatter::read(&root.join("guide"), &CancellationSignal::new())
+        super::frontmatter::read(&root.join("guide/SKILL.md"), &CancellationSignal::new())
             .unwrap_err()
             .contains("changed during")
     );
@@ -189,7 +189,7 @@ fn prefix_cancellation_and_definition_replacement_use_deterministic_io_hooks() {
         .with(|hook| *hook.borrow_mut() = Some(Box::new(move || cancel.cancel())));
     super::frontmatter::READ_BYTES.with(|count| count.set(0));
     assert!(
-        super::frontmatter::read(&root.join("guide"), &signal)
+        super::frontmatter::read(&root.join("guide/SKILL.md"), &signal)
             .unwrap_err()
             .contains("cancelled")
     );

@@ -8,21 +8,31 @@ The process binds exactly User `~/rustx/.agents/skills` and Workspace
 once, validates each candidate's `SKILL.md` frontmatter, and preserves deterministic
 Workspace-over-User replacement. An invalid Workspace winner never exposes the
 lower User definition. Collection/candidate bounds, canonical
-UTF-8 locations and regular/non-symlink SKILL.md checks remain in the discovery
-owner. Package roots follow ordinary path semantics: a symlinked candidate root
-is resolved and admitted wherever it points, inside or outside its collection —
-discovery performs no containment check on package roots.
+UTF-8 locations and a resolved regular-file `SKILL.md` check remain in the
+discovery owner. Roots follow ordinary path semantics: a symlinked candidate
+root — or a symlinked collection root — is resolved and its target enumerated,
+wherever it points, inside or outside its collection — discovery performs no
+containment check on roots, and the tools that open package files own path and
+permission rules.
 
-`skills/frontmatter.rs` opens SKILL.md through the existing anchored directory I/O
-owner. It reads a cancellable prefix with 4 KiB bounded read-ahead and stops on the
-closing YAML delimiter. Two matching prefix reads verify the definition without
+`skills/frontmatter.rs` opens a resolved SKILL.md path through the existing
+anchored directory I/O owner; a symlinked SKILL.md is read through its canonical
+target like every other link. It reads a cancellable prefix with 4 KiB bounded
+read-ahead and stops on the closing YAML delimiter. Two matching prefix reads verify the definition without
 using mtime/size/inode as content equality. No body UTF-8 validation occurs.
 The **frontmatter prefix**, including malformed newline-free input, is bounded to
 1 MiB. The file, body and assets have no discovery size limit. Missing delimiters,
 invalid YAML, field shapes, names, directory mismatches, malformed dependency
-metadata and unresolvable (for example broken-link) package roots retain explicit
+metadata and unresolvable (for example broken-link) roots retain explicit
 candidate diagnostics. Internal resource symlinks are
 not inspected; actual Native Tools own their ordinary path/permission rules.
+
+Identity is frontmatter-first, as Pi resolves it: a present `name` is the
+effective identity and wins over the offering directory name; an absent
+`name` falls back to the directory name. A present-but-different or
+non-standard name loads with a `PackageWarning` diagnostic, never an
+exclusion; merge, shadowing, and `[agent].skills` selection all key on the
+effective identity.
 
 `SkillPackage` stores one normalized definition, its dependency manifest, version
 and effective binding. It has no resource file list or materialization root.
