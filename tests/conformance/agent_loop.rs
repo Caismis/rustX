@@ -1236,13 +1236,15 @@ async fn a_normal_streamed_turn_settles_once_on_every_protocol() {
                 .starts_with("You are an expert coding assistant operating inside rustX."),
             "{scenario}: the default System Prompt needs no authored instructions"
         );
+        let expected_credentials = if scenario == "anthropic_streamed_turn" {
+            // Compatible Messages services use either authentication spelling.
+            serde_json::json!(["authorization", "x-api-key"])
+        } else {
+            serde_json::json!(["authorization"])
+        };
         assert_eq!(
-            requests[0]["credentialHeaders"]
-                .as_array()
-                .expect("credential headers")
-                .len(),
-            1,
-            "{scenario}: the runtime authenticated the request itself"
+            requests[0]["credentialHeaders"], expected_credentials,
+            "{scenario}: the runtime authenticates with exactly the protocol's credential headers"
         );
         assert!(
             !body_text(&requests[0]).contains(CREDENTIAL_VALUE),
@@ -2963,8 +2965,10 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
             (body["messages"].as_array().unwrap(), "tool", "tool_call_id")
         };
         // Stored Responses sends only the tail after its continuation boundary.
-        // Chat retains the initial User plus request-only runtime context.
-        let expected_users = if body.get("previous_response_id").is_some() {
+        // Chat retains initial User/runtime context and projects tool images
+        // into labelled User media after the complete text-only result group.
+        let chat = !text_model.contains("responses");
+        let expected_context_users = if body.get("previous_response_id").is_some() {
             0
         } else {
             requests[0]["body"]["messages"]
@@ -2974,29 +2978,90 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
                 .filter(|item| item["role"] == "user")
                 .count()
         };
+        let media: Vec<_> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| {
+                item["role"] == "user"
+                    && item["content"]
+                        .as_array()
+                        .is_some_and(|parts| parts.iter().any(|part| part["type"] == "image_url"))
+            })
+            .collect();
+        assert_eq!(media.len(), if chat { 16 } else { 0 });
         assert_eq!(
             items.iter().filter(|item| item["role"] == "user").count(),
-            expected_users,
-            "image results add no synthetic User turn"
+            expected_context_users + media.len(),
+            "tool media adds exactly its own messages without changing native User context"
         );
-        assert!(
-            items
-                .iter()
-                .filter(|item| item["role"] == "user")
-                .all(|item| !item.to_string().contains(&encoded)),
-            "Tool images never move to User content"
+        let results: Vec<_> = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item["role"] == tool_tag || item["type"] == tool_tag)
+            .collect();
+        assert_eq!(
+            results.len(),
+            17,
+            "every native result keeps its own wire slot"
         );
-        for i in 0..17 {
-            let tool = items
-                .iter()
-                .find(|item| {
-                    item[id_key] == format!("parallel-image-{i}")
-                        && (item["role"] == tool_tag || item["type"] == tool_tag)
-                })
-                .expect("each real native result retains its call identity");
+        let mut media_calls = std::collections::BTreeSet::new();
+        for (position, item) in media {
             assert!(
-                tool.to_string().contains(&encoded) || tool.to_string().contains("Image artifact")
+                results
+                    .iter()
+                    .all(|(result_position, _)| *result_position < position),
+                "the entire result group precedes synthetic User media"
             );
+            let content = item["content"].as_array().unwrap();
+            assert_eq!(content.len(), 2, "one call label and one original image");
+            assert_eq!(content[0]["type"], "text");
+            let label = content[0]["text"].as_str().unwrap();
+            let call = label
+                .strip_prefix("Images from tool result ")
+                .unwrap()
+                .strip_suffix(':')
+                .unwrap();
+            assert!(
+                results.iter().any(|(_, tool)| tool[id_key] == call),
+                "media names an actual native result"
+            );
+            assert!(media_calls.insert(call.to_owned()), "one image per result");
+            assert_eq!(
+                content[1],
+                serde_json::json!({
+                    "type":"image_url", "image_url":{"url":format!("data:image/png;base64,{encoded}")}
+                }),
+                "synthetic media preserves exact frozen image bytes"
+            );
+        }
+        for (i, (_, tool)) in results.iter().enumerate() {
+            let call = format!("parallel-image-{i}");
+            assert_eq!(
+                tool[id_key], call,
+                "each native result retains its order and call identity"
+            );
+            if chat {
+                let content = tool["content"]
+                    .as_str()
+                    .expect("Chat tool content is text-only");
+                assert!(
+                    !content.contains(&encoded),
+                    "image bytes belong only to labelled media"
+                );
+                if media_calls.contains(&call) {
+                    assert_eq!(content, "Read static PNG image");
+                } else {
+                    assert!(
+                        content.contains("Image artifact"),
+                        "the budget-omitted image retains its text descriptor"
+                    );
+                }
+            } else {
+                assert!(
+                    tool.to_string().contains(&encoded)
+                        || tool.to_string().contains("Image artifact")
+                );
+            }
         }
     }
 

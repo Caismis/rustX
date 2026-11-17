@@ -40,7 +40,10 @@ test('six concurrent reference conditions retain numeric operators during edits 
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     for (const scope of ['Global', 'Workspace']) {
       await page.getByRole('tab', { name: scope, exact: true }).click();
-      await page.getByRole('button', { name: 'concurrent_conditions', exact: true }).click(); await activate(page);
+      // The selected scope's list is a direct child; Global's additional list
+      // is nested inside its independently labelled region on Workspace.
+      const owned = page.locator('[data-workflows-level="library"] section[aria-labelledby="workflows-title"] > ul');
+      await owned.getByRole('button', { name: 'concurrent_conditions', exact: true }).click(); await activate(page);
       const title = inspector(page).getByRole('textbox', { name: 'Node title', exact: true });
       await title.fill('Overlapping candidate one'); await title.press('Enter');
       await title.fill('Overlapping candidate two'); await title.press('Enter');
@@ -50,6 +53,9 @@ test('six concurrent reference conditions retain numeric operators during edits 
       await page.getByRole('button', { name: 'Save File', exact: true }).click();
       await page.getByRole('button', { name: 'Save File', exact: true }).waitFor({ state: 'visible' });
       await expect(page.getByText('No unsaved changes', { exact: true })).toBeVisible();
+      const file = join(scope === 'Global' ? global : workspace, 'concurrent_conditions.yaml');
+      expect(readFileSync(file, 'utf8')).toContain('Overlapping candidate two');
+      expect(parse(readFileSync(file, 'utf8')).block.nodes.choose.cases[0].condition).toEqual(document.block.nodes.choose.cases[0].condition);
       await page.getByRole('button', { name: 'Back to Workflows', exact: true }).first().click();
     }
     expect(errors).toEqual([]);
