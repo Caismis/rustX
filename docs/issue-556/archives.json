@@ -1,0 +1,29 @@
+{
+  "compression": "gzip (mtime=0, filename omitted)",
+  "evidence": [
+    {
+      "original_path": "docs/issue-556/streaming-source.json",
+      "archive_path": "docs/issue-556/streaming-source.json.gz",
+      "uncompressed_bytes": 1776598,
+      "uncompressed_sha256": "f853f8cd803415ded579bcbb298282ca750195123fa0a3ec316f138256d8fab4",
+      "archive_bytes": 110632,
+      "archive_sha256": "4809450adf59a2e2c089525a25b8f474f5739d46fe212e7c6e20fdace55dcd7f"
+    },
+    {
+      "original_path": "docs/issue-556/streaming-source-production.json",
+      "archive_path": "docs/issue-556/streaming-source-production.json.gz",
+      "uncompressed_bytes": 2012683,
+      "uncompressed_sha256": "aa4e956e373928ec86a8f492c0014df37c9e6e12617e4b3572239b3fd785ec7c",
+      "archive_bytes": 121426,
+      "archive_sha256": "b8fc7cceaffcde33ba7efb2a1e56824c35b3dc5da73108dd45a8f3498baf1ad4"
+    },
+    {
+      "original_path": "docs/issue-556/streaming-source-production-tail.json",
+      "archive_path": "docs/issue-556/streaming-source-production-tail.json.gz",
+      "uncompressed_bytes": 1680403,
+      "uncompressed_sha256": "e2aa0ed95b17e17c444bd1bc7e2b03dffffbab6a80251e56c83e7f4eab1dd04f",
+      "archive_bytes": 80931,
+      "archive_sha256": "21434924d25e167ee916a064508fe33a1f7c7ec7b1ab05f240f3caa4e2457094"
+    }
+  ]
+}

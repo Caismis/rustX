@@ -1,7 +1,7 @@
 {
   "name": "occt-import-js",
-  "version": "0.0.23-rustx.3",
-  "description": "Pinned occt-import-js with bounded bulk transfers and whole-model LOD",
+  "version": "0.0.23-rustx.4",
+  "description": "Pinned OCCT importer with JS-owned double streams, invariant bounds and whole-model refinement",
   "license": "LGPL-2.1",
   "main": "./dist/occt-import-js.js",
   "repository": "github:kovacsv/occt-import-js",
@@ -13,6 +13,8 @@
     "src",
     "UPSTREAM.json",
     "rebuild.sh",
+    "configure-build.py",
+    "audit-build.py",
     "README.md",
     "LICENSE.md"
   ]

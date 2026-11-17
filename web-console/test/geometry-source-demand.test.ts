@@ -27,14 +27,15 @@ function admittedReads() {
     active++; maximum = Math.max(maximum, active);
     requests.push({ label: 'download', offset: 0, signal: new AbortController().signal, finish: () => { active--; resolve(); } });
   }));
-  return { requests, read, download, maximum: () => maximum };
+  const open = (label: string) => async (signal: AbortSignal) => ({ bytes: L.pageBytes * 3 + 7, version: label, read: (range: {offset:number;length:number}) => read(label)({kind:'bytes',range},signal), close: async () => {} });
+  return { requests, read, open, download, maximum: () => maximum };
 }
 it('two rolling previews and a download share capacity two and preserve FIFO admission across pages', async () => {
   const f = admittedReads(), signal = new AbortController().signal;
-  const a = readGeometrySource(f.read('A'), signal), b = readGeometrySource(f.read('B'), signal), download = f.download();
+  const a = readGeometrySource(f.open('A'), signal), b = readGeometrySource(f.open('B'), signal); await flush(); const download = f.download();
   const starts = () => f.requests.map(request => [request.label, request.offset]);
   expect(starts()).toEqual([['A', 0], ['B', 0]]);
-  f.requests[0].finish(); await flush();
+  await flush(); f.requests[0].finish(); await flush();
   expect(starts()).toEqual([['A', 0], ['B', 0], ['download', 0]]);
   f.requests[1].finish(); await flush();
   expect(starts().at(-1)).toEqual(['A', L.pageBytes]);
@@ -56,9 +57,9 @@ it('two rolling previews and a download share capacity two and preserve FIFO adm
 });
 it('cancelled preview lanes retain shared permits until each physical read settles', async () => {
   const f = admittedReads(), controller = new AbortController(); let settled = false;
-  const source = readGeometrySource(f.read('A'), controller.signal);
+  const source = readGeometrySource(f.open('A'), controller.signal);
   const observed = source.catch(cause => { settled = true; return cause; });
-  f.requests[0].finish(); await flush();
+  await flush(); f.requests[0].finish(); await flush();
   expect(f.requests).toHaveLength(3);
   const download = f.download(); controller.abort(); await flush();
   expect(f.requests).toHaveLength(3); expect(settled).toBe(false);
@@ -76,9 +77,9 @@ it.each([
   ['source change', 'file_settlement_unknown'], ['source change', 'document_settlement_unknown'],
 ] as const)('preserves late %s / %s settlement failure and closes shared admission', async (firstFailure, kind) => {
   const f = admittedReads(), controller = new AbortController(); let settled = false;
-  const pending = readGeometrySource(f.read('A'), controller.signal);
+  const pending = readGeometrySource(f.open('A'), controller.signal);
   const observed = pending.then(() => { settled = true; return undefined; }, cause => { settled = true; return cause; });
-  f.requests[0].finish(); await flush();
+  await flush(); f.requests[0].finish(); await flush();
   if (firstFailure === 'parent abort') controller.abort();
   f.requests[1].finish(firstFailure === 'source change' ? { version: 'changed' } : undefined); await flush();
   expect(f.requests[2].signal.aborted).toBe(true); expect(settled).toBe(false);

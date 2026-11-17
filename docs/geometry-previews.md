@@ -11,16 +11,44 @@ physical file-read settlement and original Download remain owned by the existing
 | Suffixes (case-insensitive) | Import | Coordinates and units |
 | --- | --- | --- |
 | GLB | Three.js GLTFLoader, static glTF 2.0 triangle scenes | Meters, original hierarchy/transforms, admitted materials and PNG/JPEG textures |
-| STL | Three.js STLLoader, binary or ASCII | Original coordinates, unknown units; ASCII syntax is normalized before loading while solid names/groups are preserved, supported binary vertex colors are retained |
+| STL | Incremental binary/ASCII decoder for private files; pinned Three.js STLLoader for complete managed Artifact input | Original coordinates, unknown units; solid names/groups, authored normals and supported binary vertex colors are retained |
 | STEP, STP | occt-import-js ReadStepFile | Explicit millimeter output; this labels the imported output, not an inferred source unit |
 | IGES, IGS | occt-import-js ReadIgesFile | Explicit millimeter output |
 | Open CASCADE BREP | occt-import-js ReadBrepFile | Native coordinates, unknown units; linearUnit does not affect BREP |
 
-ASCII STL names are metadata outside the loader's grammar. Admission consumes
-complete solid-name records; loading uses safe opaque boundary names, then
-restores the bounded original opening names to the corresponding decoded groups
-after vertex/group-count checks. Keywords or numeric vertex text in names cannot
-change the geometry or consume unadmitted loader allocations.
+ASCII STL names are metadata outside the facet grammar. Both decoders consume
+complete solid-name records separately from vertex/facet admission. The complete
+input adapter uses opaque boundary names for the pinned loader and restores the
+bounded original names; the incremental decoder handles boundary names directly.
+Keywords or numeric vertex text in names cannot change the geometry or consume
+unadmitted loader allocations.
+
+### Optimization scope
+
+Shared transport and ownership improvements apply across supported geometry
+formats. Decoder-specific work follows the backend's actual input capabilities;
+complete-input backends are not described as incremental decoders.
+
+| Mechanism | GLB | Binary/ASCII STL | STEP/STP | IGES/IGS | BREP |
+| --- | --- | --- | --- | --- | --- |
+| Persistent private source operation, bound identity/version/size, final validation | Yes | Yes | Yes | Yes | Yes |
+| Direct bounded byte destinations and shared two-read physical admission | Yes | Yes | Yes | Yes | Yes |
+| Incremental decoding with Worker ACK backpressure | Complete input | Yes | Complete input | Complete input | Complete input |
+| Exact GLB input backing reused without a whole-input copy | Yes | — | — | — | — |
+| Native typed output, phase profiling, bounding-box reuse and optimized build | — | — | Yes | Yes | Yes |
+| Existing bounded mounted-model reuse and renderer retirement | Yes | Yes | Yes | Yes | Yes |
+
+The source scheduler has no extension-specific read algorithm. Its consumer
+uses adaptive one-to-two reads when decoding overlaps I/O; complete-input
+assembly uses two reads. The CAD reader selection enters the same native
+`ImportFile`/export and triangulation utilities for all three CAD formats.
+BREP's embedded-triangulation preservation remains an explicit source semantic.
+The [browser source experiment](issue-556/README.md) measures the streamed path;
+its STL timings do not establish GLB or native CAD parsing performance.
+The [native CAD comparison](issue-534/native-cad-validation.md) includes STEP,
+IGES and BREP and records compiler and optional-tier tradeoffs separately.
+Managed immutable Artifacts keep their separate complete-byte resource API for
+every format; persistent ranged operations apply to Session and Workbench files.
 
 CAD triangulation uses `bounding_box_ratio`, linear deflection `0.001`, angular
 deflection `0.5`, and `linearUnit: millimeter`. Available names, mesh colors,
@@ -28,19 +56,20 @@ face-color ranges and hierarchy survive import. Unnamed parts receive localized
 ordinal labels. The independently exported cube fixtures cover STEP inch-to-mm
 normalization and unitless BREP/STL behavior.
 
-### STEP first picture
+### CAD first picture
 
 The first model picture must use independently admitted complete geometry.
-STEP/STP reads use ordinary contiguous, authorized ranges of at most 2 MiB.
+STEP/STP, IGES/IGS and BREP reads use ordinary contiguous, authorized ranges of at most 2 MiB.
 There are no point-sampling probes, projected convex-hull placeholders or sparse
 triangle bridges. Source reading, viewer loading and CAD code compilation can
 overlap after explicit demand. Before a real mesh is ready, the viewer displays
 its actual loading stage rather than inventing a model picture.
 CAD refinement operates on the entire model at each level of detail (LOD).
-The Worker parses the source once, then tessellates the same native document
-at coarse, medium and final precision. Coarse and medium levels use bounding-box
-deflection ratios of 0.02 and 0.005, and angular deflections of 1.0 and 0.75
-radians; the final level retains 0.001 and 0.5. Each published level contains
+The Worker parses the source once, then attempts a complete coarse model before
+the final tessellation. The shared CAD adapter selects this policy for STEP,
+IGES and BREP. Coarse precision uses a bounding-box deflection ratio of 0.02 and
+an angular deflection of 1.0 radian; final precision retains 0.001 and 0.5.
+Each published level contains
 every imported mesh and the complete occurrence hierarchy. Levels replace one
 another atomically; completed pieces never accumulate into an incomplete model.
 The coarsest available complete tier supplies the first model picture. A ready
@@ -55,6 +84,14 @@ do not affect final-model admission or extend the original import deadline.
 BREP sources with embedded triangulations skip optional retessellation to
 preserve their original final geometry. There is no minimum display duration:
 a ready final model can skip an unpainted intermediate level.
+
+The measured medium tier did not improve first-complete readiness and added
+final-completion work, so ordinary imports omit it. The native comparison API
+retains explicit final-only and all-tier cases for reproducible measurements.
+There is no source-size or format-name classifier. The dense B-spline workload
+still pays for a coarse pass without a measured first-complete improvement;
+the report preserves this limitation rather than inferring a predictive
+work threshold from one model.
 
 The localized Refining model label identifies provisional precision; picking,
 final occurrence metadata and outlines wait for final admission. Replacing a
@@ -360,28 +397,54 @@ decoder download, CAD editing, exact measurement or format export is provided.
 
 Geometry uses an explicit `geometry` mode in `PreviewContentOwner`. It does not
 change a mutable reader into an immutable source or introduce a second source
-cache. A complete authorized read establishes the fixed full-source copy.
-Geometry Session
-files and Workbench sources use the existing at-most-2-MiB byte ranges to assemble
-at most 200 MiB in one exact-size buffer. The first page establishes size and
-version; up to two rolling lanes then fill disjoint ranges directly into that
-buffer, accepting out-of-order completion. Each lane retains at most one page.
-Two mounted reading owners can therefore retain up to four geometry page
-results (8 MiB), in addition to their source buffers and transport/parser copies.
-The lanes share the existing two-read FIFO admission domain with other previews
-and Download; they do not add Host/native capacity. Every range reauthorizes its
-source and checks offset, size, version, EOF and response length. A changed
-version/size or malformed page cancels sibling lanes. Cancellation starts no next
-range and waits for every started physical read to settle; unknown settlement
-outranks canceled publication or a sibling's source error. No partial assembly
-is published or retained as a copy. A read-only descriptor does not freeze
-externally mutable contents or replace these checks.
+cache. One private preview operation binds the authorized source identity,
+version and size. Session files reuse one authenticated WebSocket, with at most
+two in-flight range ids. Workbench reuses one securely opened read-only
+descriptor and derives size/version from the same bigint stat. Operations have
+a fixed 60-second lifetime and at most two live source owners; idle owners hold
+no physical-read permit. Open, page reads and final validation share the existing
+two-read FIFO admission domain with other previews and Download.
 
-Workbench byte pages use one stat-sized output buffer and explicit positional
-reads, including short-read handling. They avoid the text reader's retained
-64-KiB chunks and final concatenation/copy. The byte reader checks growth, source
-metadata and a final secure pathname reopen before publication. Text pages keep
-their existing path. [Issue #534 reading evidence](issue-534/README.md) describes
+Streamed STL adjusts between one and two pending reads using bounded rolling
+read/decoder-acknowledgement costs and hysteresis. Complete-input GLB/CAD keeps
+two reads. The policy comparison, Download tail observations and delayed-read
+tradeoff are recorded in [the production browser experiment](issue-556/README.md).
+
+Pages contain at most 2 MiB. The bounded ordered window holds one current page
+and at most two pending pages per source, including out-of-order completions.
+Every page checks offset, size, version, EOF and response length. Workbench uses
+positional reads into one bounded destination, with descriptor metadata checks;
+its final validation securely reopens the pathname. Native Session-file reads
+continue to reauthorize each page. Rust byte reads fill the authorized result
+buffer directly, handling short/interrupted reads and growth without retained
+64-KiB chunks. A read-only descriptor does not freeze external writes. The final
+secure validation must succeed before publishing a complete copy or model.
+A changed source or malformed page cancels sibling reads. Cancellation waits
+for every started physical read to settle; unknown settlement outranks canceled
+publication or a sibling's source error. Text pages keep their existing path.
+
+Binary and ASCII STL decode while subsequent pages are read. A disposable Worker
+acknowledges each transferred chunk before another chunk enters its decoder.
+Binary records may cross page boundaries; ASCII decoding retains incomplete
+UTF-8 sequences, tokens and bounded solid names. No partial model is displayed.
+Only successful final source validation permits EOF, complete producer admission
+and the receiver's independent admission. The original absolute parser deadline
+includes reading and is never renewed by a chunk acknowledgement. GLB and native
+CAD still assemble one exact-size complete input buffer before parsing.
+
+Eligible large uncolored binary STL retains one bounded raw copy inside the
+Worker for the existing exact moving-view proof after first GPU readiness.
+It fills that buffer during incremental decoding. Worker retirement releases
+this optional backing together with the decoded data. Small sources can also
+fill the existing owner's bounded raw-copy cache while decoding proceeds; that
+cache is published only after final validation. A completed cached stream can
+replay acknowledged pages after reauthorization without rereading a changed
+file or changing its copy/camera identity. Sources above the 64-MiB cache budget
+have no parent full-source assembly or second whole-source clone. This preserves
+the shared inactive-cache contract across formats; it does not add a parsed-model
+cache. The standalone source/decoder experiment excludes the logical content
+cache and reports its memory scope separately.
+[Issue #534 reading evidence](issue-534/README.md) describes
 the paired production-function benchmark and its measurement limits.
 Ordinary complete reads and original Download retain their 32-MiB bound. Source-version
 hints still validate authority but cannot replace that copy. Refresh starts a
@@ -588,7 +651,7 @@ follow physical settlement independently of browser cancellation.
 
 Three.js is pinned to 0.187.0 (MIT). The exact orientation predicate is supplied
 by robust-predicates 3.0.3 (Unlicense). The local occt-import-js build is pinned
-to 0.0.23-rustx.3 (LGPL-2.1), derived from importer commit
+to 0.0.23-rustx.4 (LGPL-2.1), derived from importer commit
 `c2148e54b456b571238d35cac037d304053d64b2`, with
 OCCT submodule commit `d2abb6d844231cb8f29be6894440874a4700e4a5` from
 `https://git.dev.opencascade.org/repos/occt.git`.
@@ -602,15 +665,31 @@ Corresponding source and upstream build instructions are available at
 [the pinned importer revision](https://github.com/kovacsv/occt-import-js/tree/c2148e54b456b571238d35cac037d304053d64b2),
 including the pinned OCCT submodule and Emscripten build scripts. rustX ships
 a bounded-transfer and whole-model LOD build. Typed input copies
-in bulk, numeric output uses fixed 4096-double chunks, exclusively owned Worker
+in bulk. Numeric output fills JS-owned Float64 buffers through fixed 4096-double
+chunks; the adapter checks original doubles and indices before narrowing to
+Float32/Uint32, followed by independent receiver admission. No borrowed WASM
+memory view escapes as output. Exclusively owned Worker
 input can be released after native copy, and native input is freed before mesh
-extraction. Optional complete-model callbacks export coarse and medium
-tessellations of the same parsed document, with independent stream ownership.
+extraction. Optional complete-model callbacks export the coarse tessellation
+of the same parsed document, with independent stream ownership. A medium tier
+remains available only through the internal native comparison option.
 Later passes clear temporary triangulations before remeshing; embedded BREP
 triangulations retain the original path. Final CAD tolerances, geometry
-algorithms, allocator and the 2-GiB memory maximum remain intact.
-The runtime audit hashes all five modified C++ files. Their complete source, pinned revisions,
-licenses and rebuild script ship at `cad-runtime-source/` in the production
+algorithms, allocator and the 2-GiB memory maximum remain intact. An import-scoped
+shape/location cache reuses geometric bounding-box sizes across tiers without
+reusing an earlier tier's mesh or changing the deflection formula.
+
+Opt-in native profiling reports bounded phase/tier aggregates for input copying,
+file parsing, document transfer/healing, bounding boxes, tessellation, optional
+preflight/export and complete coarse/final readiness. Nested inclusive spans
+must not be summed as disjoint work. WASM committed capacity, allocator live
+bytes sampled at whole-model boundaries, and the fresh benchmark process's OS
+peak RSS are separate observations. Profiling is disabled in ordinary imports
+and primary paired timing comparisons.
+
+The runtime audit hashes all nine modified C++ source/header files and the build
+recipe. Their complete source, pinned revisions, licenses and rebuild instructions
+ship at `cad-runtime-source/` in the production
 artifact; the repository copy is `web-console/vendor/occt-import-js/`.
 
 Deterministic adapter tests, content-owner regressions, controlled Worker races,

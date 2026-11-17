@@ -1,0 +1,71 @@
+run 1: /tmp/pr556-build-Oz/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 1: /tmp/pr556-build-O2/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 1: /tmp/pr556-build-O3/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 1: /tmp/pr556-build-O2-lto/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 1: /tmp/pr556-build-Oz/build/Release /tmp/pr556-curved-200.step tiers=0
+run 1: /tmp/pr556-build-O2/build/Release /tmp/pr556-curved-200.step tiers=0
+run 1: /tmp/pr556-build-O3/build/Release /tmp/pr556-curved-200.step tiers=0
+run 1: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-curved-200.step tiers=0
+run 1: /tmp/pr556-build-Oz/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 1: /tmp/pr556-build-O2/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 1: /tmp/pr556-build-O3/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 1: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 1: /tmp/pr556-build-Oz/build/Release /tmp/pr556-curved.iges tiers=0
+run 1: /tmp/pr556-build-O2/build/Release /tmp/pr556-curved.iges tiers=0
+run 1: /tmp/pr556-build-O3/build/Release /tmp/pr556-curved.iges tiers=0
+run 1: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-curved.iges tiers=0
+run 1: /tmp/pr556-build-Oz/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 1: /tmp/pr556-build-O2/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 1: /tmp/pr556-build-O3/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 1: /tmp/pr556-build-O2-lto/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 2: /tmp/pr556-build-O2-lto/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 2: /tmp/pr556-build-O3/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 2: /tmp/pr556-build-O2/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 2: /tmp/pr556-build-Oz/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 2: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-curved-200.step tiers=0
+run 2: /tmp/pr556-build-O3/build/Release /tmp/pr556-curved-200.step tiers=0
+run 2: /tmp/pr556-build-O2/build/Release /tmp/pr556-curved-200.step tiers=0
+run 2: /tmp/pr556-build-Oz/build/Release /tmp/pr556-curved-200.step tiers=0
+run 2: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 2: /tmp/pr556-build-O3/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 2: /tmp/pr556-build-O2/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 2: /tmp/pr556-build-Oz/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 2: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-curved.iges tiers=0
+run 2: /tmp/pr556-build-O3/build/Release /tmp/pr556-curved.iges tiers=0
+run 2: /tmp/pr556-build-O2/build/Release /tmp/pr556-curved.iges tiers=0
+run 2: /tmp/pr556-build-Oz/build/Release /tmp/pr556-curved.iges tiers=0
+run 2: /tmp/pr556-build-O2-lto/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 2: /tmp/pr556-build-O3/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 2: /tmp/pr556-build-O2/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 2: /tmp/pr556-build-Oz/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 3: /tmp/pr556-build-Oz/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 3: /tmp/pr556-build-O2/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 3: /tmp/pr556-build-O3/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 3: /tmp/pr556-build-O2-lto/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.step tiers=0
+run 3: /tmp/pr556-build-Oz/build/Release /tmp/pr556-curved-200.step tiers=0
+run 3: /tmp/pr556-build-O2/build/Release /tmp/pr556-curved-200.step tiers=0
+run 3: /tmp/pr556-build-O3/build/Release /tmp/pr556-curved-200.step tiers=0
+run 3: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-curved-200.step tiers=0
+run 3: /tmp/pr556-build-Oz/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 3: /tmp/pr556-build-O2/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 3: /tmp/pr556-build-O3/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 3: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-large-bspline.step tiers=0
+run 3: /tmp/pr556-build-Oz/build/Release /tmp/pr556-curved.iges tiers=0
+run 3: /tmp/pr556-build-O2/build/Release /tmp/pr556-curved.iges tiers=0
+run 3: /tmp/pr556-build-O3/build/Release /tmp/pr556-curved.iges tiers=0
+run 3: /tmp/pr556-build-O2-lto/build/Release /tmp/pr556-curved.iges tiers=0
+run 3: /tmp/pr556-build-Oz/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 3: /tmp/pr556-build-O2/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 3: /tmp/pr556-build-O3/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+run 3: /tmp/pr556-build-O2-lto/build/Release /tmp/rustx-pr556/web-console/test/fixtures/geometry/lod-assembly.brep tiers=0
+file:///tmp/rustx-pr556/web-console/scripts/benchmark-cad-native.mjs:142
+      if (new Set(results.map(sample => sample[field])).size !== 1) throw new Error(`Final ${field} mismatch for ${fixture}`);
+                                                                          ^
+
+Error: Final finalDigest mismatch for /tmp/pr556-curved.iges
+    at file:///tmp/rustx-pr556/web-console/scripts/benchmark-cad-native.mjs:142:75
+    at ModuleJob.run (node:internal/modules/esm/module_job:561:25)
+    at async node:internal/modules/esm/loader:647:26
+    at async asyncRunEntryPointWithESMLoader (node:internal/modules/run_main:101:5)
+
+Node.js v24.21.0

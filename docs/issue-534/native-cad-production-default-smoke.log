@@ -1,0 +1,8 @@
+
+ RUN  v5.0.0 /tmp/rustx-pr556/web-console
+
+
+ Test Files  1 passed (1)
+      Tests  5 passed (5)
+   Start at  12:25:33
+   Duration  27.28s (tests 99%)

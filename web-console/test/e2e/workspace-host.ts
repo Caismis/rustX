@@ -43,7 +43,7 @@ export async function drainWorkspaceHostRoutes(page: Page) {
 }
 
 /** Same-origin deployment proxy to the actual isolated Node Product Host fixture. */
-export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl: string }, writeGate?: { before: () => Promise<void>; observed: () => Promise<void> }, observeResponse?: (request: Request, response: WorkspaceHostResponse) => void) {
+export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl: string }, writeGate?: { before: () => Promise<void>; observed: () => Promise<void> }, observeResponse?: (request: Request, response: WorkspaceHostResponse) => void | Promise<void>) {
   const proxy = { retiring: false, pending: new Set<Promise<void>>() }; proxies.set(page, proxy);
   const forward = async (route: Route) => {
     if (proxy.retiring) { await route.fulfill({ status: 503, body: 'Fixture proxy retired' }); return; }
@@ -61,7 +61,7 @@ export async function routeWorkspaceHost(page: Page, fixture: { workspaceHostUrl
     const buffered = { status: response.status, headers: Object.fromEntries(response.headers), body: Buffer.from(await response.arrayBuffer()) };
     // Observe the same terminal bytes delivered below, without retrieving a
     // synthetic response body through Chromium's resource cache.
-    observeResponse?.(route.request(), buffered);
+    await observeResponse?.(route.request(), buffered);
     await route.fulfill(buffered);
   };
   await page.route('**/product-host/*', route => {

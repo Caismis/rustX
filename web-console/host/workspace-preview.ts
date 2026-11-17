@@ -1,8 +1,9 @@
-import { closeSync, fstatSync, read } from 'node:fs';
+import { closeSync, fstatSync, read, type BigIntStats } from 'node:fs';
 import { openWorkspacePath } from './workbench.ts';
 import { WorkspaceHostError } from '../src/workspaces/host.ts';
 import { FILE_PREVIEW_LIMITS, validateFileRead, type FileBytes, type FileReadOptions } from '../shared/file-preview.ts';
-const version = (fd: number) => { const stat = fstatSync(fd, { bigint: true }); return `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`; };
+const version = (stat: BigIntStats) => `${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+const descriptorVersion = (fd: number) => version(fstatSync(fd, { bigint: true }));
 function openPreviewPath(root: string, path: string) {
   try { return openWorkspacePath(root, path, false); }
   catch (error) {
@@ -49,11 +50,13 @@ export async function readWorkspacePreview(root: string, path: string, options: 
   validateFileRead(options); signal.throwIfAborted();
   const fd = openPreviewPath(root, path);
   try {
-    const stat = fstatSync(fd), initial = version(fd);
+    const stat = fstatSync(fd, { bigint: true }), initial = version(stat);
+    if (stat.size < 0n || stat.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new WorkspaceHostError('source_unavailable', 'source_unavailable');
+    const bytes = Number(stat.size);
     if (!stat.isFile()) throw new WorkspaceHostError('source_unavailable', 'source_unavailable');
     let data: Uint8Array<ArrayBuffer>, eof = true, lines = 0;
     if (options.kind === 'bytes') {
-      ({ data, eof } = await readBytes(fd, stat.size, options, signal, max));
+      ({ data, eof } = await readBytes(fd, bytes, options, signal, max));
     } else {
       const chunk = Buffer.alloc(64 * 1024), parts: Buffer[] = []; let size = 0, line = 1, position = 0, pending = false;
       const readChunk = (length: number) => new Promise<number>((resolve, reject) => read(fd, chunk, 0, length, position, (error, count) => error ? reject(error) : resolve(count)));
@@ -86,10 +89,54 @@ export async function readWorkspacePreview(root: string, path: string, options: 
     signal.throwIfAborted();
     // Reopen through the secure walk; a pathname replacement or a symlink at
     // any edge must not publish data from the old descriptor.
-    if (initial !== version(fd)) throw new WorkspaceHostError('source_changed', 'source_changed');
+    if (initial !== descriptorVersion(fd)) throw new WorkspaceHostError('source_changed', 'source_changed');
     const current = openPreviewPath(root, path);
-    try { if (initial !== version(current)) throw new WorkspaceHostError('source_changed', 'source_changed'); }
+    try { if (initial !== descriptorVersion(current)) throw new WorkspaceHostError('source_changed', 'source_changed'); }
     finally { closeSync(current); }
-    return { data, version: initial, bytes: stat.size, offset: options.kind === 'text' ? options.offset : options.range?.offset ?? 0, eof, ...(options.kind === 'text' ? { lines } : {}) };
+    return { data, version: initial, bytes, offset: options.kind === 'text' ? options.offset : options.range?.offset ?? 0, eof, ...(options.kind === 'text' ? { lines } : {}) };
   } finally { closeSync(fd); }
+}
+
+/** One securely opened, read-only descriptor binds every positional page. */
+export function openWorkspaceBytePreview(root: string, path: string, signal: AbortSignal): import('../shared/file-preview.ts').FilePreviewOperation {
+  signal.throwIfAborted();
+  const fd = openPreviewPath(root, path);
+  let initial: string, bytes: number;
+  try {
+    const stat = fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || stat.size < 0n || stat.size > BigInt(Number.MAX_SAFE_INTEGER)) throw new WorkspaceHostError('source_unavailable', 'source_unavailable');
+    initial = version(stat); bytes = Number(stat.size);
+  } catch (error) { closeSync(fd); throw error; }
+  let closing: Promise<void> | undefined;
+  const pending = new Set<Promise<FileBytes>>();
+  const verify = (reopen = false) => {
+    signal.throwIfAborted();
+    if (descriptorVersion(fd) !== initial) throw new WorkspaceHostError('source_changed', 'source_changed');
+    if (reopen) {
+      const current = openPreviewPath(root, path);
+      try { if (descriptorVersion(current) !== initial) throw new WorkspaceHostError('source_changed', 'source_changed'); }
+      finally { closeSync(current); }
+    }
+    signal.throwIfAborted();
+  };
+  return {
+    version: initial, bytes,
+    read(range, active = signal) {
+      validateFileRead({ kind: 'bytes', range });
+      if (closing || signal.aborted || pending.size >= 2) return Promise.reject(new Error('Obsolete or full preview operation'));
+      const task = (async () => {
+        const combined = AbortSignal.any([signal, active]); combined.throwIfAborted(); verify();
+        const result = await readBytes(fd, bytes, { kind: 'bytes', range }, combined, FILE_PREVIEW_LIMITS.geometryBytes);
+        combined.throwIfAborted(); verify();
+        return { ...result, version: initial, bytes, offset: range.offset };
+      })();
+      pending.add(task); void task.finally(() => pending.delete(task)).catch(() => {}); return task;
+    },
+    close() {
+      return closing ??= (async () => {
+        await Promise.allSettled([...pending]);
+        try { verify(true); } finally { closeSync(fd); }
+      })();
+    },
+  };
 }

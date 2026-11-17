@@ -1,26 +1,75 @@
 {
-  "importer": "occt-import-js@0.0.23-rustx.3",
+  "importer": "occt-import-js@0.0.23-rustx.4",
   "renderer": "three@0.187.0",
   "importerCommit": "c2148e54b456b571238d35cac037d304053d64b2",
   "occtCommit": "d2abb6d844231cb8f29be6894440874a4700e4a5",
   "modifiedSourcesSha256": {
-    "src/importer-brep.cpp": "df40eac1bee6fd8f3404ff24a15d85f7937cb08cca1876af6d1f366309daf00f",
+    "src/importer-brep.cpp": "7780f7bda1ee1491e27b08574ebae71e8d81406495c5afc3cf30c12c893a7db3",
     "src/importer-brep.hpp": "f68ac0189bed382103fe35b98478accf75181f75b4b08c6eb7551b726a03a7e7",
-    "src/importer-utils.cpp": "2d5214f4ac59fa121c62c4ab5986af6b85a5c9b761350d13af6f7efc454e33e2",
-    "src/importer.hpp": "5710676b6d14a953e8859944a14cba49a7b2c821b808a73e087b837a9b38a439",
-    "src/js-interface.cpp": "aac86776c01a94b92fda80f0a59bb90f69783cf41feeb0010f1aa46b38b6b37e"
+    "src/importer-iges.cpp": "a24c258a65c3229847d689a137f373433fbef3ea798dfd05a9a15a59cede77f5",
+    "src/importer-step.cpp": "c25dad6df8e2bfecef055301dbb6c292a892b5c2b86fc0cdb0ab42d3f6ed1263",
+    "src/importer-utils.cpp": "e55e21a3818ad090d8d744a9b269655279a73dcfff319d704fb6090fda2247ed",
+    "src/importer-utils.hpp": "3bf00fd82fdaef8565c8b354a46cd35ec2d092fb7d4f4b03aa1e8336abc82658",
+    "src/importer.hpp": "a9479fc5555fbb3605ddaec35bf60af85e4e095121971a0a6ce762ade85cd921",
+    "src/js-interface.cpp": "f8d118460ee349f0686017b8b4435cc6b80c5f7a4e25adaaff56e5bd024f74c4",
+    "src/native-profile.hpp": "f4a1a1a1363663518e74cef3fa32e8c72baed385984f0cea7c1c5663026ff553"
+  },
+  "buildRecipeSha256": {
+    "rebuild.sh": "67db35dc1c25ee515ad8768f081d8d5d8497cf7e5118c228fe4068c8f3514c59",
+    "configure-build.py": "2bfcfbefc52db3d9316581d3607eb1ec2efcb0a4daad4a0bb77dac2b2f2f5356",
+    "audit-build.py": "8861c97be35c2791a171b177ecaa6395659ec8b8b669812cfe3096596a4574b8"
+  },
+  "build": {
+    "optimization": "O3",
+    "lto": false,
+    "compileFlags": [
+      "-O3"
+    ],
+    "linkFlags": [
+      "-O3"
+    ],
+    "scope": "OcctImportJS target: importer and all OCCT sources",
+    "modifiedSourcesSha256": {
+      "importer-brep.cpp": "7780f7bda1ee1491e27b08574ebae71e8d81406495c5afc3cf30c12c893a7db3",
+      "importer-brep.hpp": "f68ac0189bed382103fe35b98478accf75181f75b4b08c6eb7551b726a03a7e7",
+      "importer-iges.cpp": "a24c258a65c3229847d689a137f373433fbef3ea798dfd05a9a15a59cede77f5",
+      "importer-step.cpp": "c25dad6df8e2bfecef055301dbb6c292a892b5c2b86fc0cdb0ab42d3f6ed1263",
+      "importer-utils.cpp": "e55e21a3818ad090d8d744a9b269655279a73dcfff319d704fb6090fda2247ed",
+      "importer-utils.hpp": "3bf00fd82fdaef8565c8b354a46cd35ec2d092fb7d4f4b03aa1e8336abc82658",
+      "importer.hpp": "a9479fc5555fbb3605ddaec35bf60af85e4e095121971a0a6ce762ade85cd921",
+      "js-interface.cpp": "f8d118460ee349f0686017b8b4435cc6b80c5f7a4e25adaaff56e5bd024f74c4",
+      "native-profile.hpp": "f4a1a1a1363663518e74cef3fa32e8c72baed385984f0cea7c1c5663026ff553"
+    },
+    "translationUnits": 4775,
+    "occtTranslationUnits": 4768,
+    "compileCommandsSha256": "83a64136ffc0519663b29f198781e12fa5fee6e2db1c62ebbfa0a7862002e068",
+    "effectiveLinkCommandSha256": "4981748d90e98bd23b59a99f78e67e6b7b8be57de80a0954bf7cdd344376eeed",
+    "effectiveOptimizationFlags": [
+      "-O3"
+    ],
+    "effectiveCompileLto": false,
+    "effectiveLinkLto": false,
+    "emscriptenVersion": "3.1.69",
+    "emscriptenCommit": "c55ff404dbe1eb9f263c48b584d5ba627224763a",
+    "releaseFlags": [
+      "-DNDEBUG"
+    ],
+    "assetSha256": {
+      "occt-import-js.js": "4d94a94bdd52d550326d44a2d6fbb7ce2d91e78d888cf9da263084b8dc420796",
+      "occt-import-js.wasm": "40223e186a18c76b77aa42ec04b44ce0c7f430d6523cc71ed32bbe1d0554be0d"
+    }
   },
   "wasmMaximumBytes": 2147483648,
   "assets": {
     "occt-import-js.js": {
-      "bytes": 97149,
-      "gzipBytes": 26939,
-      "sha256": "f740060c7e934bc317bb2539fb0abf4e973e18742b1256fcf49eccb10050aa88"
+      "bytes": 97218,
+      "gzipBytes": 26960,
+      "sha256": "4d94a94bdd52d550326d44a2d6fbb7ce2d91e78d888cf9da263084b8dc420796"
     },
     "occt-import-js.wasm": {
-      "bytes": 7615810,
-      "gzipBytes": 3116681,
-      "sha256": "30823a95a54e0f639ad08499985af8335adc751f5478ac27491b54f0b58a87f3"
+      "bytes": 12134802,
+      "gzipBytes": 3985390,
+      "sha256": "40223e186a18c76b77aa42ec04b44ce0c7f430d6523cc71ed32bbe1d0554be0d"
     },
     "license.occt-import-js.txt": {
       "bytes": 26526,

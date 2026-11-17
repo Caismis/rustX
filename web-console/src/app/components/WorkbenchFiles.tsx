@@ -13,7 +13,7 @@ import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, 
 import { PreviewContentCache, PreviewContentOwner } from '../../client/preview-content';
 import { readGeometrySource } from '../../client/geometry-source';
 import type { PreviewObservation } from '../../../shared/file-observation.ts';
-import { FILE_PREVIEW_LIMITS, isFileData } from '../../../shared/file-preview';
+import { FILE_PREVIEW_LIMITS, isFileData, type FilePreviewOperation } from '../../../shared/file-preview';
 import { Button } from '../../presentation/primitives/Button';
 import { useViewScroll } from '../../presentation/right-panel/use-view-scroll';
 import type { WorkbenchRequest, WorkbenchResult } from '../../workspaces/workbench';
@@ -26,7 +26,7 @@ import { Menu } from '../../presentation/primitives/Menu';
 import { IconFolderClose16, IconFolderOpenOutline16, IconRefreshOutline16, IconWrapLinesOutline16, IconCodeOutline16, IconChevronDownOutline14 } from '../../presentation/primitives/icons';
 import css from '../../presentation/right-panel/WorkbenchFiles.module.css';
 import type { DesktopApplication } from '../../workspaces/desktop';
-export type WorkbenchCall = ((request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult>) & { observe?: (path: string, changed: () => void, signal: AbortSignal) => Promise<PreviewObservation> };
+export type WorkbenchCall = ((request: WorkbenchRequest, signal?: AbortSignal) => Promise<WorkbenchResult>) & { openPreview?: (path: string, signal: AbortSignal) => Promise<FilePreviewOperation>; observe?: (path: string, changed: () => void, signal: AbortSignal) => Promise<PreviewObservation> };
 /** Logical tab state; only inert layout/view metadata is persisted. */
 export interface FileTabView { line?: number; focusRevision?: number; treeFocus?: string; expanded: Set<string>; levels: Map<string, WorkbenchResult>; cwd: string; revision: number; mode?: Viewer; document?: PreviewViewState; top: number; left: number; wrap: boolean; cache: PreviewContentCache; current(): boolean; preview?: { call: WorkbenchCall; path: string; owner: PreviewContentOwner; dispose(): void } }
 export const fileTabView = (cache = new PreviewContentCache(), current = () => true): FileTabView => ({ expanded: new Set(), levels: new Map(), cwd: '', revision: 0, top: 0, left: 0, wrap: true, cache, current });
@@ -98,11 +98,15 @@ export function WorkspaceFile({ path, call, view, onOpen, visible = true, naviga
         if (result.offset !== offset || !Number.isSafeInteger(result.lines) || result.lines! < 0 || result.lines! > FILE_PREVIEW_LIMITS.pageLines || !result.eof && !result.lines || result.data.byteLength > FILE_PREVIEW_LIMITS.pageBytes) throw new Error('malformed');
         return { text: new TextDecoder('utf-8', { fatal: true }).decode(result.data), version: result.version, offset, lines: result.lines!, eof: result.eof };
       }, bytes: async (signal, mode) => {
-        if (mode === 'geometry') return readGeometrySource((options, signal) => read({ kind: 'preview', path, read: options }, signal), signal);
+        if (mode === 'geometry') return readGeometrySource(signal => {
+          const open = view.preview!.call.openPreview; if (!open) throw new Error('Preview operation unavailable'); return open(path, signal);
+        }, signal);
         const result = await read({ kind: 'preview', path, read: { kind: 'bytes' } }, signal);
         if (result.offset !== 0 || !result.eof || result.data.byteLength !== result.bytes || result.data.byteLength > FILE_PREVIEW_LIMITS.fileBytes) throw new Error('malformed');
         return result;
-      }, document: (_extension, signal) => read({ kind: 'office', path }, signal),
+      }, geometry: path.toLowerCase().endsWith('.stl') ? (signal, consumer) => readGeometrySource(signal => {
+        const open = view.preview!.call.openPreview; if (!open) throw new Error('Preview operation unavailable'); return open(path, signal);
+      }, signal, consumer) : undefined, document: (_extension, signal) => read({ kind: 'office', path }, signal),
       probe: async signal => (await read({ kind: 'preview', path, read: { kind: 'bytes', range: { offset: 0, length: 1 } } }, signal)).version,
       observe: call.observe ? (signal, changed) => view.preview!.call.observe!(path, changed, signal) : undefined });
     view.preview = { call, path, owner, dispose: () => { lifetime.abort(); view.cache.release(owner); owner.dispose(); } };
@@ -110,7 +114,7 @@ export function WorkspaceFile({ path, call, view, onOpen, visible = true, naviga
   view.preview.call = call;
   const owner = view.preview.owner, value = useSyncExternalStore(owner.subscribe, owner.getSnapshot), error = value.error;
   const failure = error === undefined ? undefined : documentFailure(error);
-  const loaded = value.text !== undefined || value.data !== undefined;
+  const loaded = value.text !== undefined || value.data !== undefined || value.source !== undefined;
   const reading = useViewScroll(view.top, view.left, (top, left) => { view.top = top; view.left = left; }, `${mode}:${loaded}:${value.loadedLines}`), scroll = reading.ref;
   useEffect(() => () => { owner.deactivate(); view.cache.retain(owner); }, [owner, view]);
   useEffect(() => {

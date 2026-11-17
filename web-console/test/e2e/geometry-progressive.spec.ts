@@ -21,6 +21,7 @@ async function heldCAD(page:Page) {
     Object.defineProperty(HTMLCanvasElement.prototype,'getContext',{value:function(this:HTMLCanvasElement,...args:unknown[]){const result=Reflect.apply(get,this,args);if(args[0]==='webgl2'&&result&&!seen.has(result)){seen.add(result);contexts++;}return result;}});
     Object.assign(window,{cadProgressive:{
       state:()=>({levels:[...(records[0]?.lods.keys()??[])],final:!!records[0]?.final,contexts}),
+      finalModel:()=>{const model=records[0]?.final?.data.model;return model?{meshNames:model.meshes.map((mesh:any)=>mesh.name),root:model.root,triangles:model.meshes.reduce((sum:number,mesh:any)=>sum+mesh.indices.length/3,0)}:undefined;},
       lod:(level:number)=>{const record=records[0],event=record.lods.get(level);if(event)record.handler?.call(record.worker,event);},
       final:()=>{const record=records[0],event=record.final;if(event)record.handler?.call(record.worker,event);},
     }});
@@ -30,10 +31,12 @@ async function heldCAD(page:Page) {
   await observeGeometryLatency(page);
   await page.getByRole('button',{name:'Preview cube.step in sidebar',exact:true}).click();
   await expect.poll(()=>page.evaluate(()=>(window as any).cadProgressive.state().final)).toBe(true);
-  expect(await page.evaluate(()=>(window as any).cadProgressive.state().levels)).toEqual([0,1]);
+  expect(await page.evaluate(()=>(window as any).cadProgressive.state().levels)).toEqual([0]);
   const tiers=await page.evaluate(()=>(window as any).geometryLods);
-  expect(tiers[0].meshNames.length).toBeGreaterThan(1);expect(tiers[0].meshNames).toEqual(tiers[1].meshNames);expect(tiers[0].root).toEqual(tiers[1].root);
-  expect(tiers[0].triangles).toBeLessThan(tiers[1].triangles);
+  expect(tiers).toHaveLength(1);expect(tiers[0].level).toBe(0);expect(tiers[0].meshNames.length).toBeGreaterThan(1);
+  const final=await page.evaluate(()=>(window as any).cadProgressive.finalModel());
+  expect(tiers[0].meshNames).toEqual(final.meshNames);expect(tiers[0].root).toEqual(final.root);
+  expect(tiers[0].triangles).toBeLessThan(final.triangles);
   return tiers as {level:number;meshNames:string[];root:unknown;triangles:number}[];
 }
 test('an ordinary unheld 96-part CAD import presents a complete LOD before the full model',async({page},info)=>{
@@ -69,7 +72,7 @@ test('an ordinary unheld 96-part CAD import presents a complete LOD before the f
     await info.attach('natural-unheld-CAD-retirement',{body:JSON.stringify(await resources(page)),contentType:'application/json'});
   }
 });
-test('whole-model CAD tessellation refines coarse to medium to full through one focused renderer',async({page},info)=>{
+test('whole-model CAD tessellation refines coarse to full through one focused renderer',async({page},info)=>{
   const tiers=await heldCAD(page);await page.evaluate(()=>(window as any).cadProgressive.lod(0));
   const canvas=page.locator('[data-geometry-completeness="preview"]');await expect(canvas).toBeVisible();await expect(canvas).toHaveAttribute('data-geometry-lod','coarse');
   await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.lodStages.coarse?.opportunity??0)).toBeGreaterThan(0);
@@ -81,26 +84,26 @@ test('whole-model CAD tessellation refines coarse to medium to full through one 
   for(const button of ['left','right'] as const)for(let action=0;action<4;action++){const sign=action%2?-1:1,x=box.x+box.width/2,y=box.y+box.height/2;await page.mouse.move(x,y);await page.mouse.down({button});await page.mouse.move(x+sign*24,y+sign*10,{steps:8});await page.mouse.up({button});}
   await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.pending)).toBe(0);
   await canvas.focus();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
-  await page.evaluate(()=>(window as any).cadProgressive.lod(1));await expect(canvas).toHaveAttribute('data-geometry-lod','medium');await expect(canvas).toBeFocused();
-  await page.mouse.move(box.x+box.width/2+16,box.y+box.height/2+8,{steps:5});await page.mouse.up();
-  await expect.poll(()=>page.evaluate(()=>(window as any).geometryLatency.lodStages.medium?.opportunity??0)).toBeGreaterThan(0);
-  await expect.poll(()=>page.evaluate(()=>(window as any).geometryDrawCalls.lastModelTriangles)).toBe(tiers[1].triangles);
-  await expect(page.getByRole('button',{name:'Parts',exact:true})).toBeDisabled();await page.screenshot({path:info.outputPath('cad-lod-medium.png')});
-  await page.mouse.down();await page.evaluate(()=>(window as any).cadProgressive.final());await expect(canvas).toHaveCount(1);
-  await page.mouse.move(box.x+box.width/2+24,box.y+box.height/2+12,{steps:5});await page.mouse.up();
+  await page.evaluate(()=>(window as any).cadProgressive.final());await expect(canvas).toHaveCount(1);
+  await expect(canvas).toHaveAttribute('data-geometry-lod','coarse');await expect(canvas).toBeFocused();
+  await expect(page.getByRole('button',{name:'Parts',exact:true})).toBeDisabled();
+  await expect.poll(()=>page.evaluate(()=>(window as any).geometryDrawCalls.lastModelTriangles)).toBe(tiers[0].triangles);
+  await page.mouse.move(box.x+box.width/2+24,box.y+box.height/2+12,{steps:5});
+  await expect(canvas).toHaveAttribute('data-geometry-lod','coarse');await expect(page.getByRole('button',{name:'Parts',exact:true})).toBeDisabled();await page.mouse.up();
   const full=page.locator('[data-geometry-completeness="complete"]');await expect(full).toBeVisible();await expect(full).toHaveAttribute('data-geometry-lod','full');await expect(full).toHaveAttribute('data-progressive-identity','same-context');await expect(full).toBeFocused();
   await expect(page.getByRole('button',{name:'Parts',exact:true})).toBeEnabled();await expect.poll(async()=>(await resources(page)).workers).toBe(0);await expect(full).toHaveAttribute('data-geometry-quality','complete');
   const imported=await page.evaluate(()=>(window as any).geometryImports.at(-1));
   expect(imported.map((mesh:any)=>mesh.name)).toEqual(tiers[0].meshNames);expect(await page.evaluate(()=>(window as any).geometryImportRoots.at(-1))).toEqual(tiers[0].root);
-  const triangles=imported.reduce((sum:number,mesh:any)=>sum+mesh.triangles,0);expect(triangles).toBeGreaterThan(tiers[1].triangles);
+  const triangles=imported.reduce((sum:number,mesh:any)=>sum+mesh.triangles,0);expect(triangles).toBeGreaterThan(tiers[0].triangles);
+  expect(triangles).toBe(await page.evaluate(()=>(window as any).cadProgressive.finalModel().triangles));
   await expect.poll(()=>page.evaluate(()=>(window as any).geometryDrawCalls.lastModelTriangles)).toBe(triangles);
   const keyboardDraws=await page.evaluate(()=>(window as any).geometryDrawCalls.modelCalls);
   await page.keyboard.press('ArrowRight');await expect.poll(()=>page.evaluate(()=>(window as any).geometryDrawCalls.modelCalls)).toBeGreaterThan(keyboardDraws);await expect(full).toBeFocused();
-  await page.evaluate(()=>{(window as any).cadProgressive.lod(0);(window as any).cadProgressive.lod(1);(window as any).cadProgressive.final();});await expect(full).toHaveCount(1);await expect(full).toHaveAttribute('data-geometry-lod','full');
+  await page.evaluate(()=>{(window as any).cadProgressive.lod(0);(window as any).cadProgressive.final();});await expect(full).toHaveCount(1);await expect(full).toHaveAttribute('data-geometry-lod','full');
   expect(await page.evaluate(()=>(window as any).cadProgressive.state().contexts)).toBe(1);
   const samples=await page.evaluate(()=>(window as any).geometryLatency.lodSamples as number[]);expect(samples.length).toBeGreaterThanOrEqual(40);
   await page.screenshot({path:info.outputPath('cad-lod-full.png')});
-  await info.attach('whole-model-CAD-LOD',{body:JSON.stringify({nativeTiers:await page.evaluate(()=>(window as any).geometryLods),displayedTiers:await page.evaluate(()=>(window as any).geometryLatency.lodStages),completeTriangles:triangles,lodInputSamples:samples,maximumLodInputMs:Math.max(...samples),createdContexts:1,method:'Actual native whole-model coarse/medium/final tessellations with controlled message delivery. Every stage contains the same complete assembly hierarchy; no sampled triangles or withheld-final proxy tiers.'},null,2),contentType:'application/json'});
+  await info.attach('whole-model-CAD-coarse-final',{body:JSON.stringify({nativeTiers:await page.evaluate(()=>(window as any).geometryLods),displayedTiers:await page.evaluate(()=>(window as any).geometryLatency.lodStages),completeTriangles:triangles,lodInputSamples:samples,maximumLodInputMs:Math.max(...samples),createdContexts:1,method:'Actual native whole-model coarse/final tessellations with controlled message delivery. Every stage contains the same complete assembly hierarchy; no sampled triangles or withheld-final proxy tiers.'},null,2),contentType:'application/json'});
   if(process.env.RUSTX_GEOMETRY_BUDGET==='1')expect(Math.max(...samples)).toBeLessThan(50);
   await page.getByRole('button',{name:'Close preview cube.step',exact:true}).click();await expect.poll(()=>resources(page)).toEqual({workers:0,contexts:0,buffers:0,textures:0,urls:0});
 });
@@ -113,6 +116,6 @@ test('whole-model adoption preserves focus on external controls',async({page})=>
 test('retirement destroys LOD graphics and fences native tiers and final results held in transit',async({page})=>{
   await heldCAD(page);await page.evaluate(()=>(window as any).cadProgressive.lod(0));await expect(page.locator('[data-geometry-lod="coarse"]')).toBeVisible();
   await page.getByRole('button',{name:'Hide delivery',exact:true}).click();await expect.poll(()=>resources(page)).toEqual({workers:0,contexts:0,buffers:0,textures:0,urls:0});
-  await page.evaluate(()=>{(window as any).cadProgressive.lod(0);(window as any).cadProgressive.lod(1);(window as any).cadProgressive.final();});
+  await page.evaluate(()=>{(window as any).cadProgressive.lod(0);(window as any).cadProgressive.final();});
   await expect(page.locator('[data-geometry-format] canvas')).toHaveCount(0);expect(await resources(page)).toEqual({workers:0,contexts:0,buffers:0,textures:0,urls:0});
 });

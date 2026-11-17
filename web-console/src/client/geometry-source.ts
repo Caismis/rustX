@@ -1,71 +1,89 @@
-import { FILE_PREVIEW_LIMITS as L, isFileData, type FileBytes, type FileReadOptions } from '../../shared/file-preview';
+import { FILE_PREVIEW_LIMITS as L, isFileData, type FileBytes } from '../../shared/file-preview';
+import type { FilePreviewOperation } from '../../shared/file-preview';
+import type { GeometrySourceConsumer } from '../../shared/geometry-source';
 import { settlementFailureKind, WorkspaceHostError } from '../workspaces/host';
 
-/** Reuse authorized range reads. A complete, single-version copy is published
- * only after every bounded physical read has settled. The two rolling lanes
- * share caller admission and copy directly into one exact-size destination. */
-export async function readGeometrySource(read: (options: FileReadOptions, signal: AbortSignal) => Promise<FileBytes>, signal: AbortSignal) {
+type Open = (signal: AbortSignal) => Promise<FilePreviewOperation>;
+/** Internal policies: streamed STL defaults to bounded adaptive reads; complete-input GLB/CAD defaults to two reads. */
+export type GeometryReadPolicy = 'fixed1' | 'fixed2' | 'adaptive';
+export interface GeometryReadObservation { offset: number; bytes: number; width: number; nextWidth: number; readMs: number; processMs: number }
+export function readGeometrySource(open: Open, signal: AbortSignal): Promise<{ data: Uint8Array<ArrayBuffer>; version: string }>;
+export function readGeometrySource(open: Open, signal: AbortSignal, consumer: GeometrySourceConsumer, policy?: GeometryReadPolicy, observe?: (sample: GeometryReadObservation) => void): Promise<{ version: string }>;
+export async function readGeometrySource(open: Open, signal: AbortSignal, consumer?: GeometrySourceConsumer, policy: GeometryReadPolicy = consumer ? 'adaptive' : 'fixed2', observe?: (sample: GeometryReadObservation) => void) {
   const controller = new AbortController(), reading = controller.signal;
   const abort = () => controller.abort(signal.reason);
   signal.addEventListener('abort', abort, { once: true });
   if (signal.aborted) abort();
-  let lastYield = performance.now();
-  const yieldTask = () => new Promise<void>(resolve => {
-    const channel = new MessageChannel(); let done = false;
-    const finish = () => { if (done) return; done = true; reading.removeEventListener('abort', finish); channel.port1.close(); channel.port2.close(); resolve(); };
-    reading.addEventListener('abort', finish, { once: true }); channel.port1.onmessage = finish;
-    if (reading.aborted) finish(); else channel.port2.postMessage(null);
-  });
+  let operation: FilePreviewOperation | undefined, failedSettlement: unknown;
+  const pending: Promise<FileBytes>[] = [], readTimes = new WeakMap<FileBytes, number>();
+  let lastYield = performance.now(), readAverage = 0, processAverage = 0, samples = 0, adaptiveWidth = 1, votes = 0;
   const yieldIfNeeded = async () => {
-    if (performance.now() - lastYield >= 4) { await yieldTask(); reading.throwIfAborted(); lastYield = performance.now(); }
+    if (performance.now() - lastYield < 4) return;
+    await new Promise<void>(resolve => {
+      const channel = new MessageChannel();
+      const finish = () => { reading.removeEventListener('abort', finish); channel.port1.close(); channel.port2.close(); resolve(); };
+      reading.addEventListener('abort', finish, { once: true }); channel.port1.onmessage = finish;
+      if (reading.aborted) finish(); else channel.port2.postMessage(null);
+    });
+    reading.throwIfAborted(); lastYield = performance.now();
   };
-  const validatePage = (page: FileBytes, offset: number, length: number) => {
-    if (!isFileData(page.data) || !Number.isSafeInteger(page.bytes) || page.bytes < 0 || page.bytes > L.geometryBytes
-      || page.lines !== undefined || page.offset !== offset || typeof page.version !== 'string' || !page.version
-      || page.data.length !== Math.min(length, Math.max(0, page.bytes - offset))
-      || page.eof !== (offset + page.data.length === page.bytes)) throw new Error(page.bytes > L.geometryBytes ? 'too_large' : 'malformed');
+  const failure = (cause: unknown) => {
+    if (settlementFailureKind(cause)) failedSettlement = cause;
+    controller.abort(cause);
   };
   try {
-    reading.throwIfAborted();
-    let total: number, version: string, data: Uint8Array<ArrayBuffer>, nextOffset: number;
-    {
-      const first = await read({ kind: 'bytes', range: { offset: 0, length: L.pageBytes } }, reading);
-      reading.throwIfAborted();
-      validatePage(first, 0, L.pageBytes);
-      total = first.bytes; version = first.version;
-      if (first.eof) return { data: first.data, version };
-      data = new Uint8Array(total);
-      data.set(first.data);
-      nextOffset = first.data.length;
-    }
-    await yieldIfNeeded();
-    let failedSettlement: unknown;
-    const lane = async () => {
-      try {
-        while (nextOffset < total) {
-          reading.throwIfAborted();
-          const offset = nextOffset, length = Math.min(L.pageBytes, total - offset);
-          nextOffset += length;
-          const page = await read({ kind: 'bytes', range: { offset, length } }, reading);
-          reading.throwIfAborted();
-          validatePage(page, offset, length);
-          if (version !== page.version || total !== page.bytes) throw new WorkspaceHostError('Geometry source changed during read', 'source_changed');
-          data.set(page.data, offset);
-          await yieldIfNeeded();
-        }
-      } catch (cause) {
-        // Abort siblings immediately, but retain every caller admission slot until
-        // the corresponding physical read settles, including late responses.
-        // Lost physical settlement outranks an earlier cancellation or source error.
-        if (settlementFailureKind(cause)) failedSettlement = cause;
-        controller.abort(cause);
-      }
+    reading.throwIfAborted(); operation = await open(reading); reading.throwIfAborted();
+    const { bytes: total, version } = operation;
+    if (!Number.isSafeInteger(total) || total < 0 || total > L.geometryBytes || typeof version !== 'string' || !version) throw new Error(total > L.geometryBytes ? 'too_large' : 'malformed');
+    let data: Uint8Array<ArrayBuffer> | undefined;
+    await consumer?.start({ bytes: total, version });
+    let nextOffset = 0, received = 0;
+    const start = () => {
+      const offset = nextOffset, length = offset === 0 ? L.pageBytes : Math.min(L.pageBytes, Math.max(1, total - offset)); nextOffset += length;
+      const readStart = performance.now();
+      const task = operation!.read({ offset, length }, reading).then(page => {
+        reading.throwIfAborted();
+        const elapsed = performance.now() - readStart; readTimes.set(page, elapsed); readAverage = samples ? readAverage * .75 + elapsed * .25 : elapsed;
+        if (page.bytes !== total || page.version !== version) throw new WorkspaceHostError('Geometry source changed during read', 'source_changed');
+        if (!isFileData(page.data) || page.lines !== undefined || page.offset !== offset
+          || page.data.length !== Math.min(length, Math.max(0, total - offset)) || page.eof !== (offset + page.data.length === total)) throw new Error('malformed');
+        return page;
+      });
+      void task.catch(failure); pending.push(task);
     };
-    await Promise.all([lane(), lane()]);
-    if (failedSettlement !== undefined) throw failedSettlement;
+    start();
+    while (pending.length) {
+      const page = await pending.shift()!; reading.throwIfAborted();
+      // The current page plus at most two pending pages form the complete
+      // reorder window. No lane can run arbitrarily ahead of a slow decoder.
+      const width = policy === 'fixed1' ? 1 : policy === 'adaptive' ? adaptiveWidth : 2;
+      while (nextOffset < total && pending.length < width) start();
+      const pageLength = page.data.length, processStart = performance.now();
+      if (consumer) await consumer.chunk(page.data, page.offset);
+      else {
+        if (total <= L.pageBytes) data = page.data;
+        else { data ??= new Uint8Array(total); data.set(page.data, page.offset); }
+        await yieldIfNeeded();
+      }
+      const elapsed = performance.now() - processStart;
+      processAverage = samples ? processAverage * .75 + elapsed * .25 : elapsed; samples++;
+      if (policy === 'adaptive' && samples >= 2) {
+        const wanted = readAverage > processAverage * 1.25 + .1 ? 2 : processAverage > readAverage * .8 ? 1 : adaptiveWidth;
+        votes = wanted === adaptiveWidth ? 0 : votes + 1;
+        if (votes >= 2) { adaptiveWidth = wanted; votes = 0; }
+      }
+      observe?.({ offset: page.offset, bytes: pageLength, width, nextWidth: policy === 'adaptive' ? adaptiveWidth : width, readMs: readTimes.get(page)!, processMs: elapsed });
+      received += pageLength;
+      reading.throwIfAborted();
+    }
+    if (received !== total) throw new Error('malformed');
+    await operation.close(); operation = undefined;
     reading.throwIfAborted();
-    return { data, version };
-  } finally {
-    signal.removeEventListener('abort', abort);
-  }
+    return data ? { data, version } : { version };
+  } catch (cause) {
+    failure(cause);
+    await Promise.allSettled(pending);
+    if (operation) { try { await operation.close(); } catch (closeError) { if (settlementFailureKind(closeError)) failedSettlement = closeError;  } }
+    throw failedSettlement ?? cause;
+  } finally { signal.removeEventListener('abort', abort); }
 }

@@ -2825,8 +2825,11 @@ describe('WorkflowRunCanvas UI and integration', () => {
       expect(exactLookupCalls[0]).toEqual({ cut: cut2, visitKey: lateVisitKey });
 
       // Old cut1 unsettled/omitted header was not retagged at cut2; selected visit stays #69 with completed cut2 header.
-      const selectedOption = dialog.querySelector(`[data-run-visit-key="${CSS.escape(lateVisitKey)}"]`);
-      expect(selectedOption?.getAttribute('aria-selected')).toBe('true');
+      // The lookup spy fires before its async header is committed to React.
+      await waitFor(() => {
+        const selectedOption = dialog.querySelector(`[data-run-visit-key="${CSS.escape(lateVisitKey)}"]`);
+        expect(selectedOption?.getAttribute('aria-selected')).toBe('true');
+      });
       expect(within(dialog).queryByText(/Waiting for/i)).toBeNull();
       expect(valueSpy).not.toHaveBeenCalled();
 

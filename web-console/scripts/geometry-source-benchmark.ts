@@ -107,11 +107,12 @@ type Mode = 'controlled-single' | 'controlled-shared' | 'workspace-hot-local';
 
 async function sample(variant: Variant, mode: Mode, delayMs: number, pair: number, order: number) {
   global.gc!();
-  const readGeometrySource = (variant === 'baseline' ? baselineGeometry : currentGeometry).readGeometrySource as typeof import('../src/client/geometry-source.ts').readGeometrySource;
+  const baselineRead = baselineGeometry.readGeometrySource as (read: (options: FileReadOptions, signal: AbortSignal) => Promise<FileBytes>, signal: AbortSignal) => Promise<{data:Uint8Array;version:string}>;
   const readWorkspacePreview = (variant === 'baseline' ? baselineWorkspace : currentWorkspace).readWorkspacePreview as typeof import('../host/workspace-preview.ts').readWorkspacePreview;
   const signal = new AbortController().signal;
   const demand = mode === 'controlled-shared' ? previewDemands({} as Parameters<typeof previewDemands>[0], undefined).privateReads : undefined;
   const requests: Request[] = [];
+  const operations = new Map<string, import('../shared/file-preview.ts').FilePreviewOperation>();
   const completed: { source: string; endedMs: number; version: string; data: Uint8Array }[] = [];
   let active = 0, maxActive = 0;
   const memorySamples: { atMs: number; rss: number; heapUsed: number; external: number; arrayBuffers: number }[] = [];
@@ -129,7 +130,7 @@ async function sample(variant: Variant, mode: Mode, delayMs: number, pair: numbe
       active++; maxActive = Math.max(maxActive, active);
       try {
         let result: FileBytes;
-        if (mode === 'workspace-hot-local') result = await readWorkspacePreview(temporaryDirectory, 'source.bin', options, reading);
+        if (mode === 'workspace-hot-local') result = operations.has(name) ? await operations.get(name)!.read(options.range!, reading) : await readWorkspacePreview(temporaryDirectory, 'source.bin', options, reading);
         else {
           if (delayMs) await pause(delayMs);
           reading.throwIfAborted();
@@ -143,7 +144,10 @@ async function sample(variant: Variant, mode: Mode, delayMs: number, pair: numbe
     return demand ? demand.run(reading, physical) : physical();
   };
   const geometry = async (name: string, bytes: number) => {
-    const result = await readGeometrySource(readFor(name, bytes), signal);
+    const read = readFor(name, bytes);
+    const operation = variant === 'current' && mode === 'workspace-hot-local' ? currentWorkspace.openWorkspaceBytePreview(temporaryDirectory, 'source.bin', signal) as import('../shared/file-preview.ts').FilePreviewOperation : undefined;
+    if (operation) operations.set(name, operation);
+    const result = variant === 'baseline' ? await baselineRead(read, signal) : await currentGeometry.readGeometrySource(async () => ({ bytes, version: mode === 'workspace-hot-local' ? workspaceVersion : controlledVersion, read: (range: {offset:number;length:number}, reading: AbortSignal) => read({kind:'bytes',range},reading), close: () => operation?.close() ?? Promise.resolve() }), signal);
     completed.push({ source: name, endedMs: performance.now() - origin, ...result });
   };
   let elapsedMs: number;
@@ -194,14 +198,17 @@ try {
   // Eight MiB exercises multiple pages without another large disk fixture.
   const warmBytes = Math.min(sizeBytes, 8 * 1024 * 1024);
   for (const baseline of [true, false]) {
-    const readGeometrySource = (baseline ? baselineGeometry : currentGeometry).readGeometrySource as typeof import('../src/client/geometry-source.ts').readGeometrySource;
+    const baselineRead = baselineGeometry.readGeometrySource as (read: (options: FileReadOptions, signal: AbortSignal) => Promise<FileBytes>, signal: AbortSignal) => Promise<{data:Uint8Array;version:string}>;
     const readWorkspacePreview = (baseline ? baselineWorkspace : currentWorkspace).readWorkspacePreview as typeof import('../host/workspace-preview.ts').readWorkspacePreview;
-    await readGeometrySource(async options => {
+    const warmRead = async (options: FileReadOptions): Promise<FileBytes> => {
       if (options.kind !== 'bytes' || !options.range) throw new Error('Expected warmup range');
       const { offset, length } = options.range;
       const data = source.slice(offset, Math.min(offset + length, warmBytes));
       return { data, bytes: warmBytes, version: controlledVersion, offset, eof: offset + data.length === warmBytes };
-    }, new AbortController().signal);
+    };
+    const signal = new AbortController().signal;
+    if (baseline) await baselineRead(warmRead, signal);
+    else await currentGeometry.readGeometrySource(async () => ({bytes:warmBytes,version:controlledVersion,read:(range:{offset:number;length:number})=>warmRead({kind:'bytes',range}),close:async()=>{}}),signal);
     await readWorkspacePreview(temporaryDirectory, 'source.bin', { kind: 'bytes', range: { offset: 0, length: pageBytes } }, new AbortController().signal);
   }
   const groups: { mode: Mode; delays: number[] }[] = [

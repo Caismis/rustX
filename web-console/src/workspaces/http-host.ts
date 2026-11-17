@@ -69,14 +69,14 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
   listWorkspaces = (signal?: AbortSignal) => this.call<WorkspaceCatalog>('list', {}, signal);
   /** File reads and derivations must retain their HTTP response until physical
    * Host settlement; fetch cancellation is not a settlement witness. */
-  private async settledFileCall<T>(kind: 'document' | 'file' | 'workbench', scope: WorkspaceAuthorityScope, coordinates: unknown, signal?: AbortSignal): Promise<T> {
+  private async settledFileCall<T>(kind: 'document' | 'file' | 'workbench', scope: WorkspaceAuthorityScope, coordinates: unknown, signal?: AbortSignal, previewMethod?: string): Promise<T> {
     signal?.throwIfAborted();
-    const operationId = crypto.randomUUID(), method = kind === 'document' ? 'document-preview' : kind === 'workbench' ? 'workbench-preview' : 'file-read';
+    const operationId = crypto.randomUUID(), method = previewMethod ?? (kind === 'document' ? 'document-preview' : kind === 'workbench' ? 'workbench-preview' : 'file-read');
     const unknown = kind === 'workbench' ? 'document_settlement_unknown' : `${kind}_settlement_unknown`;
     let response: Response;
     try {
       response = await carrierFetch(`${this.base}/${method}`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scope, operationId, [kind === 'document' ? 'request' : kind === 'workbench' ? 'call' : 'read']: coordinates }) });
+        body: JSON.stringify(previewMethod ? { scope, operationId, ...coordinates as object } : { scope, operationId, [kind === 'document' ? 'request' : kind === 'workbench' ? 'call' : 'read']: coordinates }) });
     } catch { throw new WorkspaceHostError('File operation settlement unavailable', unknown); }
     if (!response.ok) throw hostFailure(await response.json());
     if (response.headers.get(`X-Rustx-${kind}-Operation`) !== operationId) throw new WorkspaceHostError('File operation settlement unavailable', unknown);
@@ -100,7 +100,9 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
       // nested owner reported it. A valid terminal envelope preserves that fact.
       const failure = hostFailure(result);
       if (settlementFailureKind(failure)) throw failure;
-      signal?.throwIfAborted();
+      // A successful open owns a server identity even if cancellation arrived
+      // while its terminal body was in flight. Its caller must retire that id.
+      if (previewMethod !== 'preview-open' || !result.ok) signal?.throwIfAborted();
       if (!result.ok || result.value === undefined) throw hostFailure(result);
       return result.value;
     } finally { signal?.removeEventListener('abort', cancel); }
@@ -109,6 +111,32 @@ export class HttpWorkspaceHost implements ProductHostWorkspaces {
     this.settledFileCall<import('../../shared/documents.ts').DocumentResult>('document', scope, request, signal);
   readDelivery = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal?: AbortSignal) =>
     this.settledFileCall<DeliveryBytes>('file', scope, read, signal);
+  openDeliveryPreview = (scope: WorkspaceAuthorityScope, read: DeliveryRead, signal: AbortSignal) => this.openPreview(scope, { source: 'delivery', read }, signal);
+  openWorkspacePreview = (scope: WorkspaceAuthorityScope, call: import('./workbench.ts').WorkbenchCall, signal: AbortSignal) => this.openPreview(scope, { source: 'workspace', call }, signal);
+  private async openPreview(scope: WorkspaceAuthorityScope, coordinates: object, signal: AbortSignal): Promise<import('../../shared/file-preview.ts').FilePreviewOperation> {
+    const bound = await this.settledFileCall<{ identity: string; version: string; bytes: number; file?: DeliveryBytes['file'] }>('file', scope, coordinates, signal, 'preview-open');
+    if (!/^[a-f0-9-]{36}$/.test(bound.identity) || !bound.version || !Number.isSafeInteger(bound.bytes) || bound.bytes < 0) throw new Error('Invalid preview operation');
+    let closing: Promise<void> | undefined, cancellation: Promise<void> | undefined;
+    const abort = () => {
+      cancellation ??= this.call<void>('preview-abort', { scope, identity: bound.identity }, AbortSignal.timeout(10_000));
+      void cancellation.catch(() => {}); return cancellation;
+    };
+    signal.addEventListener('abort', abort, { once: true });
+    if (signal.aborted) {
+      // Open's physical success is already acknowledged. Abort retires this idle
+      // owner without starting an unadmitted final validation read.
+      try { await abort(); } catch { /* The bounded idle owner also has a Host deadline. */ }
+      finally { signal.removeEventListener('abort', abort); }
+      signal.throwIfAborted();
+    }
+    return { ...bound,
+      read: (range, active = signal) => {
+        if (closing) return Promise.reject(new Error('Obsolete preview operation'));
+        return this.settledFileCall<import('../../shared/file-preview.ts').FileBytes>('file', scope, { identity: bound.identity, range }, AbortSignal.any([signal, active]), 'preview-read');
+      },
+      close: () => closing ??= (signal.aborted ? abort() : this.settledFileCall<void>('file', scope, { identity: bound.identity }, undefined, 'preview-close')).finally(() => signal.removeEventListener('abort', abort)),
+    };
+  }
   configureWorkspace = (id: string, endpoint: string, operation: WorkspaceConfigurationOperation) => this.call<WorkspaceConfigurationResult>('configuration', { id, endpoint, operation });
   workflowWorkspace = async (scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation) => {
     try { return await this.call<WorkflowHostResult>('workflow', { scope, native, id, operation }); }
