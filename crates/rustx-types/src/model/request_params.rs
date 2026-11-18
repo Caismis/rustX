@@ -38,7 +38,7 @@ impl fmt::Display for RequestParamsLayer {
 }
 
 /// One configured collision with a runtime-owned protected wire key.
-
+///
 /// One configured request-parameter number that does not survive a binary64
 /// round trip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
