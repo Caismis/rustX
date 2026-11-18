@@ -48,6 +48,10 @@
      opacity: 1;
   }
 }
+@media (hover: none) {
+  /* Touch has no hover and no durable focus to reveal the actions. */
+  .nodeActions { opacity: 1; }
+}
 .nodeActions button, .expand { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; border: 0; border-radius: var(--dsw-radius-xs); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 @media (hover: hover) {
   .nodeActions button:hover {

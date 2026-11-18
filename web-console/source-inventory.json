@@ -6525,7 +6525,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "8694ba47f9dc9a7d02205bd03d83669c15d5a920df080cc243669b4435ceb40d",
+      "local_sha256": "1fbd6ce33ebf5631cb81a39c158598d4e9d925ddd0c79aa9d3608c6a4235ce0d",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/settings/PreferenceRow.module.css",

@@ -79,6 +79,10 @@
       opacity: 1;
   }
 }
+@media (hover: none) {
+  /* Touch has no hover and no durable focus to reveal the arrows. */
+  .arrows { opacity: 1; }
+}
 /* Arrow buttons: small chips carrying a translucent wash of the layer-1
    surface (white in light, the elevated layer in dark) over the module fill;
    hover raises the full layer-1 chip. */
