@@ -115,7 +115,7 @@
 
 /// The reserved envelope whose complete emission was recognized.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum QwenReservedEnvelope {
+pub enum QwenReservedEnvelope {
     /// A complete `<function=NAME>` … `</function>` region.
     Function,
     /// A complete `<parameter=KEY>` … `</parameter>` region.
@@ -125,7 +125,7 @@ pub(crate) enum QwenReservedEnvelope {
 impl QwenReservedEnvelope {
     /// The envelope's shape, for the runtime diagnostic. It names the
     /// dialect construct rather than echoing the model's own bytes.
-    pub(crate) const fn shape(self) -> &'static str {
+    pub const fn shape(self) -> &'static str {
         match self {
             Self::Function => "<function=\u{2026}>\u{2026}</function>",
             Self::Parameter => "<parameter=\u{2026}>\u{2026}</parameter>",
@@ -283,7 +283,7 @@ impl EmissionScan {
 /// when the output merely mentions, quotes, or discusses the dialect. The
 /// scan is a single bounded forward pass with constant state: it never
 /// backtracks and never materializes the candidate regions.
-pub(crate) fn tool_protocol_emission(output: &str) -> Option<QwenReservedEnvelope> {
+pub fn tool_protocol_emission(output: &str) -> Option<QwenReservedEnvelope> {
     let mut scan = EmissionScan::default();
     for line in output.lines() {
         match scan.consume_line(line) {

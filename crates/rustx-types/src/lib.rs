@@ -19,6 +19,7 @@ pub mod model {
         }
         pub mod openai {
             pub mod config;
+            pub mod qwen_xml;
         }
     }
 }
