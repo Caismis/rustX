@@ -73,6 +73,11 @@ pub mod app_server {
     }
 }
 
+pub mod local_runtime {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub mod static_effects;
+}
+
 pub mod context {
     pub mod assembly;
     pub mod images;

@@ -2,7 +2,7 @@
 use std::cell::RefCell;
 
 #[derive(Debug, Clone, Copy)]
-pub(crate) enum Effect {
+pub enum Effect {
     Process,
     Connect,
     Provider,
@@ -18,7 +18,7 @@ pub(crate) enum Effect {
 
 thread_local! { static COUNTS: RefCell<Option<[usize; 11]>> = const { RefCell::new(None) }; }
 
-pub(crate) fn observe(effect: Effect) {
+pub fn observe(effect: Effect) {
     COUNTS.with(|counts| {
         if let Some(counts) = counts.borrow_mut().as_mut() {
             counts[effect as usize] += 1;
@@ -26,7 +26,7 @@ pub(crate) fn observe(effect: Effect) {
     });
 }
 
-pub(crate) fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 11]) {
+pub fn measure<T>(operation: impl FnOnce() -> T) -> (T, [usize; 11]) {
     struct Reset;
     impl Drop for Reset {
         fn drop(&mut self) {
