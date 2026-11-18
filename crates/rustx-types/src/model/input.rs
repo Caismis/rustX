@@ -2,7 +2,7 @@
 //!
 //! `MessageBlock` is the canonical conversation type and therefore always
 //! carries a real Ledger identity. A primary request may also carry a narrow
-//! request-only value which is frozen in its [`RequestSnapshot`](crate::model::snapshot::RequestSnapshot). Keeping the
+//! request-only value which is frozen in its `RequestSnapshot`. Keeping the
 //! two variants distinct makes it impossible for an adapter or a caller to
 //! manufacture a canonical `MessageId` for execution-recovery context.
 
