@@ -2,7 +2,7 @@ import { parseObservedValue } from '../../../../protocol/app-server/domain-obser
 import { readTraceCollection, readTraceValue } from '../../client/trace-content';
 import type { TraceFieldReader } from '../../client/trace';
 import { readEditor } from '../../../../protocol/app-server/editor';
-import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator } from '../../../../protocol/app-server/v80';
+import type { CompletedResponseView, AttachmentTarget, SessionUserMessageBoundaryObservation, CanonicalContentLocator, UserInputBlock } from '../../../../protocol/app-server/v80';
 import { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
 import { selectSessionModel } from '../model-preference';
@@ -12,11 +12,27 @@ import { finishForkSession } from './fork-session';
 export interface HistoricalSelection {
   target: AttachmentTarget;
   nodeId: string;
-  boundary: SessionUserMessageBoundaryObservation | CompletedResponseView;
+  boundary: Pick<SessionUserMessageBoundaryObservation, 'locator' | 'surface_revision'> | CompletedResponseView;
 }
 export type HistoryAction = 'fork' | 'branch' | 'retry';
 /** The lineage actions a completed response offers in place. */
 export type ResponseAction = Extract<HistoryAction, 'fork' | 'retry'>;
+
+/** Preserve the destination-owned receipts and the original block layout for unchanged retries. */
+function replaceEditorText(content: UserInputBlock[], text: string): UserInputBlock[] {
+  const edited: UserInputBlock[] = [];
+  let sawText = false;
+  for (const block of content) {
+    if (block.type === 'upload') edited.push(block);
+    else if (!sawText) {
+      if (text.trim()) edited.push({ type: 'text', text });
+      sawText = true;
+    }
+  }
+  if (!sawText && text.trim()) edited.unshift({ type: 'text', text });
+  return edited;
+}
+
 export class CommandSession {
   readonly target: AttachmentTarget;
   private readonly generation: number;
@@ -62,7 +78,19 @@ export class CommandSession {
     this.requireCurrent();
     return { target: this.target, nodeId: this.admission!.nodeId, boundary: response };
   }
-  async transition(action: HistoryAction, selection: HistoricalSelection) {
+  async userSelection(locator: CanonicalContentLocator): Promise<HistoricalSelection> {
+    this.requireCurrent();
+    const nodeId = this.admission!.nodeId;
+    const { boundary } = await this.client.request({ method: 'session/messageBoundary', params: {
+      session_id: this.sessionId, node_id: nodeId, boundary: locator,
+    } }, 'session_message_boundary', undefined, this.current);
+    this.requireCurrent();
+    if (!boundary || boundary.node_id !== nodeId || boundary.conversation_id !== this.target.conversation_id) {
+      throw new Error('This message has no replayable native input.');
+    }
+    return { target: this.target, nodeId, boundary: { locator: boundary.boundary, surface_revision: boundary.surface_revision } };
+  }
+  async transition(action: HistoryAction, selection: HistoricalSelection, replacementText?: string) {
     this.requireCurrent();
     if (!sameTarget(selection.target, this.target)) throw new Error('Historical selection belongs to another attachment.');
     if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
@@ -107,7 +135,9 @@ export class CommandSession {
       if (!editorContent.length) throw new Error('Branch has no native editor input; execution refused.');
       // Native cut excludes the selected User message. Submit the native returned
       // input exactly once, including #319 receipts, to the new Conversation.
-      const accepted = await this.client.sendContent(session.id, editorContent, 'send', undefined, continuing);
+      const input = replacementText === undefined ? editorContent : replaceEditorText(editorContent, replacementText);
+      if (!input.length) throw new Error('The edited message is empty.');
+      const accepted = await this.client.sendContent(session.id, input, 'send', undefined, continuing);
       replay = { target, messageId: accepted.message_id };
       if (!continuing() || !sameTarget(this.client.getSnapshot().views[session.id]?.target, target)) return;
     }

@@ -9610,6 +9610,46 @@
         {
           "type": "object",
           "properties": {
+            "boundary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionMessageVersion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "session_message_boundary"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/SessionMessageVersionsPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_message_versions"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "result": {
               "$ref": "#/$defs/RuntimeClientSessionDeletionResult"
             },
@@ -12228,6 +12268,10 @@
         "active_node": {
           "description": "Active node in the session.",
           "$ref": "#/$defs/SessionNodeId"
+        },
+        "has_branches": {
+          "description": "A Session with multiple nodes can expose message versions.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -26856,6 +26900,10 @@
           "description": "Active node in the session.",
           "$ref": "#/$defs/SessionNodeId"
         },
+        "has_branches": {
+          "description": "A Session with multiple nodes can expose message versions.",
+          "type": "boolean"
+        },
         "thread_id": {
           "$ref": "#/$defs/ConversationId"
         },
@@ -27136,6 +27184,110 @@
         "block_count",
         "content",
         "collections"
+      ]
+    },
+    "SessionMessageVersion": {
+      "description": "Exact coordinates of a human message in a particular Session node.",
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/SessionNodeId"
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "message_id": {
+          "description": "Inline identity when it fits the native 256-byte locator budget.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "surface_revision": {
+          "$ref": "#/$defs/SurfaceRevision"
+        },
+        "boundary": {
+          "$ref": "#/$defs/CanonicalContentLocator"
+        }
+      },
+      "required": [
+        "node_id",
+        "conversation_id",
+        "surface_revision",
+        "boundary"
+      ]
+    },
+    "SessionMessageVersionsPage": {
+      "type": "object",
+      "properties": {
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionMessageVersionFamily"
+          }
+        },
+        "next_offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "versions"
+      ]
+    },
+    "SessionMessageVersionFamily": {
+      "description": "A version pager for a prompt present in the requested lineage.",
+      "type": "object",
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/SessionMessageVersion"
+        },
+        "current_index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionMessageVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionMessageVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "current",
+        "current_index",
+        "total"
       ]
     },
     "RuntimeClientSessionDeletionResult": {
@@ -38066,6 +38218,84 @@
               "additionalProperties": false,
               "required": [
                 "target",
+                "offset",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Resolve an ordinary human message at its original Surface append.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/messageBoundary"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "boundary": {
+                  "$ref": "#/$defs/CanonicalContentLocator"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "boundary"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Page the retry families visible in the selected native node.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/messageVersions"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 1,
+                  "maximum": 32
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
                 "offset",
                 "limit"
               ]

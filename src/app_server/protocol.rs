@@ -810,6 +810,23 @@ pub enum Method {
         offset: usize,
         limit: usize,
     },
+    /// Resolve an ordinary human message at its original Surface append.
+    #[serde(rename = "session/messageBoundary")]
+    SessionMessageBoundary {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        boundary: crate::observation::content::CanonicalContentLocator,
+    },
+    /// Page the retry families visible in the selected native node.
+    #[serde(rename = "session/messageVersions")]
+    SessionMessageVersions {
+        session_id: SessionId,
+        node_id: SessionNodeId,
+        #[schemars(range(max = 9_007_199_254_740_991_u64))]
+        offset: usize,
+        #[schemars(range(min = 1, max = 32))]
+        limit: usize,
+    },
     #[serde(rename = "session/forkProjection")]
     SessionForkProjection {
         session_id: SessionId,
@@ -1291,6 +1308,8 @@ impl Method {
             | Self::SessionHistoryValueRead { .. }
             | Self::SessionTree { .. }
             | Self::SessionBoundaries { .. }
+            | Self::SessionMessageBoundary { .. }
+            | Self::SessionMessageVersions { .. }
             | Self::SessionDeletePreview { .. }
             | Self::SessionCheckpoint { .. }
             | Self::ConversationContentRead { .. }
@@ -1847,6 +1866,12 @@ pub enum MethodResult {
         surface_revision: crate::conversation::SurfaceRevision,
         boundaries: Vec<crate::local_runtime::session::observation::SessionUserMessageBoundaryObservation>,
         next_offset: Option<usize>,
+    },
+    SessionMessageBoundary {
+        boundary: Option<crate::local_runtime::session::observation::SessionMessageVersion>,
+    },
+    SessionMessageVersions {
+        page: crate::local_runtime::session::observation::SessionMessageVersionsPage,
     },
     Deletion {
         result: crate::app_server::session_deletion::SessionDeletionResult,

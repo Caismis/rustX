@@ -206,6 +206,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     generated_title: None,
                     preview: Some("Native first user message".into()),
                     updated_at: chrono::DateTime::from_timestamp(0, 0).expect("fixture date"),
+                    has_branches: false,
                     active_node: crate::local_runtime::session::SessionNodeId::new(
                         "node_00000000-0000-7000-8000-000000000001",
                     ),
@@ -471,6 +472,23 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             surface_revision: crate::conversation::surface::SurfaceRevision::new(EXACT),
             boundary: None,
             side: crate::local_runtime::session::LineageSide::Before,
+        },
+        Method::SessionMessageBoundary {
+            session_id: target.session_id.clone(),
+            node_id: crate::runtime::identity::SessionNodeId::new(
+                "node_01942a9d-1800-7000-8000-000000000002",
+            ),
+            boundary: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                position: 128,
+            },
+        },
+        Method::SessionMessageVersions {
+            session_id: target.session_id.clone(),
+            node_id: crate::runtime::identity::SessionNodeId::new(
+                "node_01942a9d-1800-7000-8000-000000000002",
+            ),
+            offset: 0,
+            limit: 32,
         },
         Method::InboundEdit {
             target: target.clone(),

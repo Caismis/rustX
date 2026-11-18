@@ -278,9 +278,13 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     const view = commandable();
     if (view) shell.send({ type: 'OPEN', destination: { kind: 'transition', sessionId: view.id, action, response } });
   };
+  const publishedVersion = routeState.context.publication?.intent?.destination;
+  const messageVersionFocus = publishedVersion?.kind === 'node' && publishedVersion.sessionId === activeSessionId
+    ? publishedVersion : undefined;
   const destination = routeState.context.pending?.destination;
   const sessionTransition = routeState.context.retry ? { sessionId: routeState.context.retry.view.id, action: 'retry' as const }
     : destination?.kind === 'fork-session' ? { sessionId: destination.sessionId, action: 'fork' as const }
+    : destination?.kind === 'retry-message' ? { sessionId: destination.sessionId, action: 'retry' as const }
     : destination?.kind === 'transition' && (destination.action === 'fork' || destination.action === 'retry') ? { sessionId: destination.sessionId, action: destination.action } : undefined;
   const forkingResponse = destination?.kind === 'transition' && destination.action === 'fork' ? destination.response : undefined;
   const runGlobal = (action: () => Promise<unknown>, current: () => boolean = () => true) => {
@@ -456,7 +460,17 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ConversationQuestionPanels client={client} sessionId={view?.id}>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
-      <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={activeSessionId} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
+      <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={activeSessionId} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}
+        messageVersionFocus={messageVersionFocus}
+        onRetryMessage={(locator, replacementText) => {
+          const view = commandable();
+          if (view && lineageSwitchSafe(view)) shell.send({ type: 'OPEN', destination: { kind: 'retry-message', sessionId: view.id, locator, replacementText } });
+        }}
+        onSwitchMessageVersion={version => {
+          const view = commandable();
+          if (view && lineageSwitchSafe(view)) shell.send({ type: 'OPEN', destination: { kind: 'node', sessionId: view.id,
+            nodeId: version.node_id, conversationId: version.conversation_id, messageId: version.message_id ?? undefined } });
+        }}/>
       <ConversationSeat visible={home} intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) { shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); rememberWorkspace(id); } }}

@@ -22,7 +22,7 @@ import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
 import { RunningStatus } from '../../presentation/agent/RunningStatus';
 import { TurnProcess } from '../../presentation/agent/TurnProcess';
-import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution } from '../../../../protocol/app-server/v80';
+import type { RuntimeClientSnapshot, RuntimeClientMessageDescriptor, CompletedResponseView, RuntimeClientTranscriptEntry, MessageBlock, InFlightBlock, AssistantContentBlock, ForegroundToolExecution, CanonicalContentLocator } from '../../../../protocol/app-server/v80';
 import { conversation } from '../../bindings/projection';
 import { agentStatusPlacement, isContextInjection, statusesAt } from '../../bindings/agent-status';
 import { TranscriptContinuation } from './TranscriptContinuation';
@@ -49,6 +49,9 @@ import { SourceContent } from './SourceContent';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
 import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v80';
+import { UserMessageEditor, UserMessageVersions, type UserMessageVersionLabels } from './UserMessageVersions';
+import { useUserMessageEdit, type UserMessageHistory } from './user-message-edit';
+import type { ResponseRetry } from './response-retry';
 /** Standalone Tool-result bodies are suppressed: the native call projection
  * already renders their content beside the call. Context injections are
  * Harness hidden rows in every work-detail mode. Suppressing a body does not
@@ -58,12 +61,12 @@ const hasInlineBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type =
   ? entry.item.audit.content.some(block => block.kind !== 'proposed_tool_call' && block.text.trim() !== '')
   : entry.item.type === 'configuration_applied' ? hasConfigurationChangeRow(entry.item.change)
     : entry.item.type !== 'message' || entry.item.message.role !== 'tool' && !isContextInjection(entry.item.message);
-function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bodyHidden, message, tools, actions, blocks, streaming, reasoningHidden, other }: {
+function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bodyHidden, message, tools, actions, editor, blocks, streaming, reasoningHidden, other }: {
   id: string; hidden?: boolean; owner?: string; turnOwner?: string; reveal?: string; prefix?: ReactNode; suffix?: ReactNode; bodyHidden?: boolean;
-  message?: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; blocks?: InFlightBlock[]; streaming?: boolean; reasoningHidden?: boolean; other?: ReactNode;
+  message?: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; editor?: ReactNode; blocks?: InFlightBlock[]; streaming?: boolean; reasoningHidden?: boolean; other?: ReactNode;
 }) {
   return <div className={css.flow} hidden={hidden} data-chat-anchor-key={id} data-chat-turn-owner={turnOwner} data-turn-process-owner={owner} data-response-reveal={reveal}>
-    {prefix}<div className={css.flow} hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
+    {prefix}<div className={css.flow} hidden={bodyHidden}>{message ? <Message message={message} tools={tools} actions={actions} editor={editor} blocks={blocks} streaming={streaming} reasoningHidden={reasoningHidden}/> : other}</div>{suffix}
   </div>;
 }
 export interface RequestFeedback {
@@ -82,11 +85,55 @@ function withProcessSpacing(rows: (FlowRow | null)[]) {
     return next;
   });
 }
-export function AgentTranscript({ snapshot, history, accepted = [], publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, forking, lineageSwitchSafe = false, requestFeedback: suppliedFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'|'inbound'>>; history?: TranscriptCache; accepted?: readonly Submission[]; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; forking?: CompletedResponseView; lineageSwitchSafe?: boolean; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
+export function AgentTranscript({ snapshot, history, accepted = [], publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, forking, lineageSwitchSafe = false, userMessageHistory, editedMessage, requestFeedback: suppliedFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'|'inbound'>>; history?: TranscriptCache; accepted?: readonly Submission[]; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; forking?: CompletedResponseView; lineageSwitchSafe?: boolean; userMessageHistory?: UserMessageHistory; editedMessage?: ResponseRetry['edited']; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
   const tx = useTranslation();
   const receiver = useContext(AgentConversationContext);
   const isUser = (message: MessageBlock) => isUserBubble(message, receiver?.parent_agent_id);
-  const userActions = (message: MessageBlock) => isUser(message) && message.role === 'user' && <div className={tailCss.actions} data-clock="start" aria-label={tx('agent:agent-transcript.message-actions')}><MessageTime time={message.timestamp}/><CopyMessage messageId={message.id} text={message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/></div>;
+  const messageControlsDisabled = !userMessageHistory || !!historicalDisabled || !lineageSwitchSafe;
+  const { edit, open, setText, cancel } = useUserMessageEdit(messageControlsDisabled);
+  const versionLabels: UserMessageVersionLabels = {
+    edit: tx('agent:message-version.edit'), retry: tx('agent:message-version.retry'),
+    cancel: tx('agent:message-version.cancel'), input: tx('agent:message-version.input'),
+    previous: tx('agent:message-version.previous'), next: tx('agent:message-version.next'),
+    position: '', loading: tx('agent:message-version.loading'),
+  };
+  const controls = (locator: CanonicalContentLocator, fallback?: CanonicalContentLocator) => {
+    const key = canonicalLocatorKey(locator);
+    if (editedMessage && (canonicalLocatorKey(editedMessage.locator) === key
+      || editedMessage.messageId != null && (locator.type === 'by_message_id' && locator.message_id === editedMessage.messageId
+        || fallback?.type === 'by_message_id' && fallback.message_id === editedMessage.messageId))) {
+      return { editor: editedMessage.text ? <span>{editedMessage.text}</span> : false };
+    }
+    if (!userMessageHistory) return {};
+    const state = edit?.key === key ? edit : undefined;
+    if (state?.phase === 'ready') {
+      return { editor: <UserMessageEditor labels={versionLabels} disabled={messageControlsDisabled}
+        editing={{ text: state.text, hasAttachments: state.hasAttachments, onText: setText }}
+        onCancel={cancel} onRetry={() => userMessageHistory.retry(locator, state.text === state.original ? undefined : state.text)}/> };
+    }
+    const versions = userMessageHistory.versions;
+    const group = versions.get(key) ?? (fallback && versions.get(canonicalLocatorKey(fallback)));
+    return { actions: <>
+      <UserMessageVersions labels={group ? { ...versionLabels, position: tx('agent:message-version.position', { current: group.current_index + 1, total: group.total }) } : versionLabels}
+        disabled={messageControlsDisabled} busy={state?.phase === 'loading'}
+        version={group && { total: group.total, hasPrevious: !!group.previous, hasNext: !!group.next }}
+        onEdit={() => { void open(locator); }}
+        onPrevious={() => { if (group?.previous) userMessageHistory.switchVersion(group.previous); }}
+        onNext={() => { if (group?.next) userMessageHistory.switchVersion(group.next); }}/>
+      {state?.phase === 'failed' && <span role="alert">{tx('agent:message-version.unavailable')}</span>}
+    </> };
+  };
+  const userControls = (message: MessageBlock) => {
+    if (!isUser(message)) return {};
+    const control = message.source === 'human' && message.kind === 'message'
+      ? controls({ type: 'by_message_id', message_id: message.id }) : {};
+    return { editor: control.editor, actions: control.editor != null ? undefined :
+      <div className={tailCss.actions} data-clock="start" aria-label={tx('agent:agent-transcript.message-actions')}>
+        <MessageTime time={message.timestamp}/>
+        <CopyMessage messageId={message.id} text={message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/>
+        {control.actions}
+      </div> };
+  };
   const [{ transcriptMode }] = useConversationPreferences();
   const verbose = transcriptMode === 'verbose';
   const groupedLive = transcriptMode === 'compact' || transcriptMode === 'standard';
@@ -445,10 +492,13 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       if (node.kind === 'descriptor') {
         const { descriptor } = node;
         const collapsed = descriptorCollapsed(descriptor);
+        const user = descriptor.role === 'user' && descriptor.kind === 'message'
+          ? controls(descriptor.locator, descriptor.identity
+            ? { type: 'by_message_id', message_id: descriptor.identity } : undefined) : {};
         return <section className={`${css.flowItem} ${css.flow}`} data-chat-group-part={descriptor.completed_response || isFinalTurnDescriptor(descriptor) ? 'response' : undefined} key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
           {descriptorOwner(descriptor)}
           {requestFeedback.messages.get(descriptor.identity ?? (descriptor.locator.type === 'by_message_id' ? descriptor.locator.message_id : ''))}
-          {!collapsed && <DescriptorContent descriptor={descriptor}/>}
+          {!collapsed && <DescriptorContent descriptor={descriptor} editor={user.editor} actions={user.actions && <div className={tailCss.actions} data-clock="start">{user.actions}</div>}/>}
           {descriptorResponse(descriptor)}
           {!collapsed && descriptor.tool_calls.map(tool=><Tool key={`${canonicalLocatorKey(tool.occurrence.locator)}:${tool.block_index}`} tool={tool}/>)}
           {invocationPanels(descriptor.turn_process, descriptor.tool_calls)}
@@ -470,7 +520,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         const response = message.role === 'assistant' && (grouped ? grouped.some(piece => piece.kind === 'reply') : (head.blocks ?? message.content).some(block => block.type === 'text' || block.type === 'refusal'));
         return <div className={`${css.flowItem} ${css.flow}`} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={isUser(message) ? 'user' : undefined} key={`message:${message.id}`}><MessageSeat key="seat" id={`message:${message.id}`} reveal={childUser ? 'always' : undefined}
           prefix={<>{requestFeedback?.messages.get(message.id)}{descriptor && descriptorOwner(descriptor)}</>}
-          bodyHidden={descriptor && descriptorCollapsed(descriptor)} message={message.role !== 'assistant' ? message : undefined} tools={tools} actions={childUser && userActions(message)}
+          bodyHidden={descriptor && descriptorCollapsed(descriptor)} message={message.role !== 'assistant' ? message : undefined} tools={tools} {...((childUser || userMessageHistory || editedMessage) && userControls(message))}
           other={message.role === 'assistant' ? grouped ? pieces(undefined, grouped, true, head) : messageSegments(message,head.blocks ?? message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/>{panels}</div>;
       }
       if (node.kind === 'streaming') {
@@ -539,7 +589,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         {feedback}
         </>} bodyHidden={!final && !processOpen}
         message={body && !stepped && entry.item.type === 'message' && entry.item.message.role !== 'assistant' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
-        actions={entry.item.type === 'message' && userActions(entry.item.message)}
+        {...(entry.item.type === 'message' && userControls(entry.item.message))}
         tools={toolsOf(entry)}
         other={reply ?? (stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry)))}
         suffix={<>{statusRows.map(({ status, owner, header, bodyHidden, hidden }) => {
@@ -559,7 +609,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   </div></ToolDisclosureContext.Provider>;
 }
 
-function DescriptorContent({ descriptor }: { descriptor: RuntimeClientMessageDescriptor }) {
+function DescriptorContent({ descriptor, editor, actions }: { descriptor: RuntimeClientMessageDescriptor; editor?: ReactNode; actions?: ReactNode }) {
   const { source, read, presentation } = useContentSource(), tx = useTranslation();
   const hasBlocks = descriptor.collections.some(frontier => frontier.domain.endsWith('.blocks'));
   const request = { locator: descriptor.locator, offset: 0, total: descriptor.block_count };
@@ -569,10 +619,10 @@ function DescriptorContent({ descriptor }: { descriptor: RuntimeClientMessageDes
   if (native.errors.length) return <p role="alert">{native.errors.join("\n")} <button type="button" onClick={native.retry}>{tx('agent:message.retry-content')}</button></p>;
   if (blocks) {
     const attachments = blocks.flatMap((block,index) => ['uploaded_file','image','file'].includes(block.type) ? [index] : []);
-    return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} attachments={<Content blocks={blocks} include={attachments} messageAttachments/>}><Content blocks={blocks} include={blocks.map((_,index)=>index).filter(index=>!attachments.includes(index))}/></UserMessage>
+    return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions} attachments={attachments.length ? <Content blocks={blocks} include={attachments} messageAttachments/> : undefined}>{editor ?? <Content blocks={blocks} include={blocks.map((_,index)=>index).filter(index=>!attachments.includes(index))}/>}</UserMessage>
       : <AssistantMessage label={tx('agent:message.assistant-response')}><Content messageId={descriptor.identity ?? undefined} blocks={blocks} include={blocks.flatMap((block,index)=>block.type==='tool_call'?[]:[index])} markdown/></AssistantMessage>;
   }
   const content = <SourceContent explicit bindings={bindings} owned={source?.owned ?? (() => false)} read={source ? read : undefined} presentationOwner={presentation?.owner}>{text => <MarkdownText text={text}/>}</SourceContent>;
-  return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')}>{content}</UserMessage>
+  return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}>{editor ?? content}</UserMessage>
     : <AssistantMessage label={tx('agent:message.assistant-response')}>{content}</AssistantMessage>;
 }

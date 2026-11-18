@@ -758,6 +758,30 @@
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
+    "method": "session/messageBoundary",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_01942a9d-1800-7000-8000-000000000002",
+      "boundary": {
+        "type": "by_ledger_position",
+        "position": 128
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/messageVersions",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_01942a9d-1800-7000-8000-000000000002",
+      "offset": 0,
+      "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
     "method": "inbound/edit",
     "params": {
       "target": {

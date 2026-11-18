@@ -157,6 +157,8 @@ impl Family<'_> {
             | Method::SessionDelete { .. }
             | Method::SessionRecoverDeletion { .. } => Family::Catalog,
             Method::SessionHistory { .. }
+            | Method::SessionMessageBoundary { .. }
+            | Method::SessionMessageVersions { .. }
             | Method::SessionNodeOriginHistory { .. }
             | Method::SessionTraceHistory { .. }
             | Method::SessionTraceHistoryDetail { .. }

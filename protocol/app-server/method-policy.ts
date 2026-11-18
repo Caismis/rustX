@@ -188,6 +188,8 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'session/nodeValueRead': { effect: 'read' },
   'session/nodeOriginHistory': { effect: 'read' },
   'session/boundaries': { effect: 'read' },
+  'session/messageBoundary': { effect: 'read' },
+  'session/messageVersions': { effect: 'read' },
   'thread/fork': { effect: 'side_effecting' },
   'session/branch': { effect: 'side_effecting' },
   'session/deletePreview': { effect: 'read' },

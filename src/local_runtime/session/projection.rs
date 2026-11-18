@@ -443,6 +443,7 @@ fn project_summary(session: &PersistedSession) -> SessionSummary {
         preview: session.display_preview.clone(),
         updated_at: activity_at(session),
         active_node: session.active_node.clone(),
+        has_branches: session.nodes.len() > 1,
     }
 }
 

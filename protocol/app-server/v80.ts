@@ -926,6 +926,23 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/messageBoundary';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        boundary: CanonicalContentLocator;
+      };
+    }
+  | {
+      method: 'session/messageVersions';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
       method: 'session/forkProjection';
       params: {
         session_id: SessionId;
@@ -3029,6 +3046,14 @@ export type MethodResult =
       boundaries: SessionUserMessageBoundaryObservation[];
       next_offset?: number | null;
       type: 'boundaries';
+    }
+  | {
+      boundary?: SessionMessageVersion | null;
+      type: 'session_message_boundary';
+    }
+  | {
+      page: SessionMessageVersionsPage;
+      type: 'session_message_versions';
     }
   | {
       result: RuntimeClientSessionDeletionResult;
@@ -11056,6 +11081,10 @@ export interface SessionSummary {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
 }
 /**
  * Saved automatic display metadata, independent of a user's chosen name.
@@ -19507,6 +19536,10 @@ export interface SessionSummary2 {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
   thread_id: ConversationId;
   thread_status?: ThreadStatusEntry | null;
 }
@@ -19545,6 +19578,43 @@ export interface SessionUserMessageBoundaryObservation {
   block_count: string;
   content: ContentBinding[];
   collections: CollectionFrontier[];
+}
+/**
+ * Exact coordinates of a human message in a particular Session node.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersion".
+ */
+export interface SessionMessageVersion {
+  node_id: SessionNodeId;
+  conversation_id: ConversationId;
+  /**
+   * Inline identity when it fits the native 256-byte locator budget.
+   */
+  message_id?: MessageId | null;
+  surface_revision: SurfaceRevision;
+  boundary: CanonicalContentLocator;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersionsPage".
+ */
+export interface SessionMessageVersionsPage {
+  versions: SessionMessageVersionFamily[];
+  next_offset?: number | null;
+}
+/**
+ * A version pager for a prompt present in the requested lineage.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersionFamily".
+ */
+export interface SessionMessageVersionFamily {
+  current: SessionMessageVersion;
+  current_index: number;
+  total: number;
+  previous?: SessionMessageVersion | null;
+  next?: SessionMessageVersion | null;
 }
 /**
  * Confirmation metadata; counts include the complete native ownership graph.
@@ -21963,6 +22033,10 @@ export interface SessionSummary1 {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
 }
 /**
  * The original native filesystem root, independent of the viewing lineage.

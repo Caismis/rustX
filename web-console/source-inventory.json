@@ -4058,7 +4058,7 @@
           "treatment": "Add the English/Chinese pending-message label for the Harness-style sending progress, driven by rustX native admission state."
         }
       ],
-      "local_sha256": "07bb51d9e39fbdbb66415ec29efee810d6b2717304d2368e86feb4d3f4b37b8f"
+      "local_sha256": "1da2f5f785aefc4c731100d58479913f852e795b61b1f2c1ee93719617c68658"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

@@ -87,6 +87,28 @@ def web_response_retry() -> Scenario:
 SCENARIOS["web_response_retry"] = web_response_retry
 
 
+def web_user_message_versions() -> Scenario:
+    """The three sends carry the selected input's native attachment projection."""
+    def expected(prompt: str, *excludes: str) -> Expect:
+        return Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model",
+                      body_contains=(prompt, "user_uploaded_files", "selected-input.txt"),
+                      body_excludes=excludes)
+
+    return Scenario(
+        "web_user_message_versions",
+        Step(expected("Draft a harbor summary."),
+             Stream(Text("The harbor version is complete."), Finish())),
+        Step(expected("Draft an orchard summary.", "Draft a harbor summary.", "The harbor version is complete."),
+             Stream(Text("The orchard version is complete."), Finish())),
+        Step(expected("Draft an orchard summary.", "Draft a harbor summary.", "The harbor version is complete.",
+                      "The orchard version is complete."),
+             Stream(Text("The regenerated orchard version is complete."), Finish())),
+    )
+
+
+SCENARIOS["web_user_message_versions"] = web_user_message_versions
+
+
 def web_fork_feedback() -> Scenario:
     """One completed native turn, followed by browser-owned lineage navigation."""
     return Scenario("web_fork_feedback",
