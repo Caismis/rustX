@@ -36,7 +36,9 @@ pub mod tools {
 }
 
 pub mod skills {
+    pub mod discovery;
     pub mod frontmatter;
+    pub mod package;
 }
 
 pub mod capabilities {
@@ -45,8 +47,8 @@ pub mod capabilities {
 }
 
 pub mod runtime {
-    pub use rustx_identity as identity;
     pub use cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
+    pub use rustx_identity as identity;
 
     pub mod cancellation;
     pub mod monotonic;

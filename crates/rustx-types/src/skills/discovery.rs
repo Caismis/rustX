@@ -6,10 +6,10 @@ use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-use super::package::SKILL_MARKDOWN_FILE;
+use crate::skills::package::SKILL_MARKDOWN_FILE;
 use crate::runtime::CancellationSignal;
 
-pub(crate) const IGNORE_FILES: [&str; 3] = [".gitignore", ".ignore", ".fdignore"];
+pub const IGNORE_FILES: [&str; 3] = [".gitignore", ".ignore", ".fdignore"];
 const MAX_DIRECTORY_ENTRIES: usize = 2048;
 const MAX_COLLECTION_ENTRIES: usize = 8192;
 const MAX_CANDIDATES: usize = 256;
@@ -18,22 +18,22 @@ const MAX_IGNORE_FILE_BYTES: u64 = rustx_bounded_file::MAX_RESOURCE_BYTES;
 const MAX_IGNORE_COLLECTION_BYTES: u64 = 4 * MAX_IGNORE_FILE_BYTES;
 const MAX_IGNORE_PATTERNS: usize = MAX_COLLECTION_ENTRIES;
 
-pub(crate) struct Collection {
+pub struct Collection {
     pub files: Vec<PathBuf>,
     pub directories: Vec<PathBuf>,
     pub links: Vec<PathBuf>,
     pub error: Option<std::io::Error>,
 }
 
-pub(crate) fn is_markdown(path: &Path) -> bool {
+pub fn is_markdown(path: &Path) -> bool {
     path.extension().is_some_and(|extension| extension == "md")
 }
 
-pub(crate) fn hidden(name: &std::ffi::OsStr) -> bool {
+pub fn hidden(name: &std::ffi::OsStr) -> bool {
     name.as_encoded_bytes().starts_with(b".") || name == "node_modules"
 }
 
-pub(crate) fn canonical_root(path: &Path) -> std::io::Result<PathBuf> {
+pub fn canonical_root(path: &Path) -> std::io::Result<PathBuf> {
     let canonical = std::fs::canonicalize(path)?;
     if !canonical.is_dir() {
         return Err(std::io::Error::new(
@@ -44,7 +44,7 @@ pub(crate) fn canonical_root(path: &Path) -> std::io::Result<PathBuf> {
     Ok(canonical)
 }
 
-pub(crate) fn collect(root: &Path, signal: &CancellationSignal) -> Collection {
+pub fn collect(root: &Path, signal: &CancellationSignal) -> Collection {
     let mut scanner = Scanner {
         signal,
         ancestors: BTreeSet::new(),

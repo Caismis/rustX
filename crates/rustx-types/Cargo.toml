@@ -12,6 +12,8 @@ futures-util = "0.3"
 libc = "0.2"
 nix = { version = "0.31.3", features = ["signal", "process", "fs"] }
 rustx-identity = { path = "../rustx-identity" }
+rustx-bounded-file = { path = "../rustx-bounded-file" }
+ignore = "0.4.33"
 base64 = "0.22"
 tokio = { version = "1", features = ["macros", "sync"] }
 tokio-util = { version = "0.7", features = ["rt", "codec"] }

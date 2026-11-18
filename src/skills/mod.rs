@@ -35,7 +35,7 @@
 
 mod catalog;
 mod diagnostics;
-pub(crate) mod discovery;
+pub(crate) use rustx_types::skills::discovery;
 pub(crate) use rustx_types::skills::frontmatter;
 pub(crate) mod identity;
 pub(crate) mod package;
