@@ -20,6 +20,7 @@ import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
 import { Trajectory } from '../trajectory/Trajectory';
+import { SessionPanel } from './SessionPanel';
 import type { ResponseAction } from '../commands/native';
 import type { CompletedResponseView } from '../../../../protocol/app-server/v80';
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
@@ -143,7 +144,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   return wrapCanvas(mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}/>
     : <JournalSourceProvider presentationOwner={presentationOwner} historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={readingPending ? undefined : view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} latestLabel={tx('agent:agent-transcript.return-to-latest')}
-      overlay={!readingPending && <TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
+      overlay={<>{!readingPending && <TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         let clientIntent: number | undefined;
         const clientCurrent = () => {
           const current = client.getSnapshot().views[view.id];
@@ -155,7 +156,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
           clientIntent=client.getSnapshot().views[view.id]?.turnNavigation?.intent;
           void work.then(committed=>{if(committed)intent.commit(turnAnchor(committed.id),clientCurrent);});
         }
-      }}/>}
+      }}/>}<SessionPanel key={view.id} client={client} sessionId={view.id}/></>}
       latestTurn={view.attempt && ['admitted','running'].includes(view.attempt.phase.type) ? turnAnchor({conversation_id:view.conversation_id,attempt_id:view.attempt.attempt_id,attempt_id_source:view.attempt.attempt_id_source}) : undefined}
       initialHistoryLoading={readingPending || view.readingPreview || view.history?.initialLoading} historical={!!view.history?.window && !view.readingPreview} onLatest={() => { client.returnToLatest(view.id); void client.loadInitialHistory(view.id); }} onActiveTurn={setActive}>
       {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript accepted={view.submissions?.filter(value => value.messageId !== submission?.acceptedMessageId && value.placement !== 'queued')} publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} readable={!readingPending && view.readable && !view.readingPreview} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!readingPending && !view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!readingPending && !view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={readingPending ? undefined : () => client.loadLater(view.id)} loadEarlier={readingPending ? undefined : () => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} forking={forking} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical}/>}

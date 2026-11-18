@@ -2306,7 +2306,7 @@
         "react",
         "react-dom"
       ],
-      "local_sha256": "610da056ebf0022acf7796129b75aac306328d0cecab4ead0304e827dcdde12c",
+      "local_sha256": "83585f101c96f43e2a19f4158f052f92b47f27f502e59a4c1e7d078f0bbf1d41",
       "classification": "A",
       "additional_sources": [
         {
@@ -2702,7 +2702,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9474f2337b29c3584fad079ca9c82ea2129f13f9402d9ea93aa554d28a62e3de",
+      "local_sha256": "bd02987abf1d100ec41d9a80c4ee51c7e68965537851efdc92ce0be02395202e",
       "classification": "A",
       "additional_sources": [
         {
@@ -4028,7 +4028,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "b47bd69fd19ae2d6a229d4108aea49b25e830e1ec4424bd3ecdef8083728ae3a"
+      "local_sha256": "d65be0fa49e01ffde95518cf370db98ecf9a1366711138e21f6ccaa773df9a76"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -6862,18 +6862,17 @@
         "../../client/app-server",
         "../../client/selectors",
         "../../locale/react",
-        "../../presentation/primitives/MenuSurface",
+        "../../presentation/primitives/HoverCard",
         "../../presentation/primitives/icons",
         "./BackgroundJobItem",
         "./BackgroundJobs.module.css",
-        "./JobStateDot",
         "./job-state",
-        "@floating-ui/react-dom",
-        "react",
-        "react-dom"
+        "./jobs-store",
+        "./session-panel-state",
+        "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "cc9c354a745bfd4a32a8aeae96e27aed0aed12e41fe941ab0239ed21cbd8162a"
+      "local_sha256": "54cca1fc5a6e93fe53a672092ad09516a766b720482c514172bd5471b7888e46"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6885,7 +6884,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "979811b080ae2ab5a34ea9629453a62590022edd5fd4d61046828567398474c1",
+      "local_sha256": "85224099946f54ea682b2ad93f07207e1cafaf5ecf53c6e4aef5f9811a36b613",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/StateDot.module.css",
@@ -6923,17 +6922,21 @@
         "../../client/app-server",
         "../../locale/react",
         "../../locale/translation",
+        "../../presentation/primitives/HoverCard",
+        "../../presentation/primitives/Marquee",
         "../../presentation/primitives/TerminalBlock",
+        "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
         "../components/Artifact",
         "../components/useActivityRequest",
         "./BackgroundJobs.module.css",
         "./JobStateDot",
         "./job-state",
+        "./useLiveJobOutput",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "813748e419e69a3fc61df66c744f741733f46334c6832b20f2564b334f06f8ba"
+      "local_sha256": "c9719ad023a81f30526ae5c4432adaf5db89ab69a2ff89196c36905ebca095c4"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -8523,6 +8526,86 @@
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
       "local_sha256": "513c289fa9ebeac504b596c64d50a0b23ee58b68309719fecb6cf24f43a0848d"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/visibility.ts",
+      "destination": "web-console/src/app/agent/session-panel-state.ts",
+      "classification": "B",
+      "treatment": "Session panel pinned preference, dock probe ResizeObserver state, overlay visibility, and element id helpers adapted from ui-session-panel visibility.ts and element-ids.ts.",
+      "upstream_sha256": "86793862b54db81eb9ddfa40adf1c0b21a788ee15141a985dda02348abd10281",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "e32b3c615862490269497b6b44750dc33fe0a69f7eee2a87c84faf6bb2838178"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/SessionPanelToggle.tsx",
+      "destination": "web-console/src/app/agent/SessionPanelToggle.tsx",
+      "classification": "B",
+      "treatment": "Header utility toggle button for Session panel with running indicator slot and chat-view availability tooltip, adapted from ui-session-panel SessionPanelToggle.tsx.",
+      "upstream_sha256": "e543e5dd4f04bd8de23eb7c57a1b1cc89285c2460682f0cc7e1ad21ea34fd8c9",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../client/app-server",
+        "../../locale/react",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/icons",
+        "./BackgroundJobs",
+        "./SessionPanelToggle.module.css",
+        "./session-panel-state",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "234dcce0f075d249f42e00e366921a3103a5ba0bf468a7bdbf03621bb94b58e5"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/SessionPanelToggle.module.css",
+      "destination": "web-console/src/app/agent/SessionPanelToggle.module.css",
+      "classification": "B",
+      "treatment": "Session panel toggle button active/disabled states and top-right indicator dot geometry, adapted from ui-session-panel SessionPanelToggle.module.css.",
+      "upstream_sha256": "c273fe32090dd28895ec7f45d2a37dac89a8db40e36731a88a2789a55d756ee3",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "fe588f897e38b8f46fb3bed8fc00a2376222bd6681452d86dc1c79c403350d33"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/SessionPanel.tsx",
+      "destination": "web-console/src/app/agent/SessionPanel.tsx",
+      "classification": "B",
+      "treatment": "Chat-view floating/docked Session panel aside with dock probe, overlay dismissal, focus return, and Background jobs section, adapted from ui-session-panel SessionPanel.tsx.",
+      "upstream_sha256": "c07b734ed701784c0144e764c191da9a2584a57498c28bbdb9c3e8d14a191ef0",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../client/app-server",
+        "../../locale/react",
+        "../../presentation/primitives/keyboard-composition",
+        "./BackgroundJobs",
+        "./SessionPanel.module.css",
+        "./session-panel-state",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "c93add7946ed1b14c839686221582046386a80726314d4b2161a05c03fc7ca47"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/SessionPanel.module.css",
+      "destination": "web-console/src/app/agent/SessionPanel.module.css",
+      "classification": "B",
+      "treatment": "Session panel docked/overlay layout, dock probe geometry, empty section hiding, and fold row styling adapted from ui-session-panel SessionPanel.module.css.",
+      "upstream_sha256": "3f76a1b7bf1a793c1f24ef1e1467a38f5c9069d34577de1b729513b6463b624f",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "37976c2a358b05d204cd98c589250e714a75c814566400203dca80e76f696e42"
     }
   ],
   "inspected_only": [

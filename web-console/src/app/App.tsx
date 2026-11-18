@@ -13,6 +13,7 @@ import { message } from '../locale/translation';
 import { useTranslation } from '../locale/react';
 import { SettingsNavigationFeedback } from './settings/SettingsNavigationFeedback';
 import { ConversationHeader } from './agent/ConversationHeader';
+import { SessionPanelProvider } from './agent/session-panel-state';
 import { BtwPanel } from './agent/BtwPanel';
 import { DocumentTitle } from './DocumentTitle';
 import { useClientSelector, selectShell, sameValue } from '../client/selectors';
@@ -400,7 +401,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     {primaryRoute.kind === 'schedules' && <TaskManagerPage client={client} host={workspaceHost} authority={workspaceAuthority} openSession={openTaskSession}/>}
     {primaryRoute.kind === 'workflows' && <WorkflowsSurface surface={workflows} authority={workspaceAuthority} />}
     {(['subagents','mcp','skills'] as const).map(module=><OverlayScope key={`${module}:${state.authorityRevision}`} className="primary-page" active={primaryRoute.kind===module}><ResourceSurface module={module} visible={primaryRoute.kind===module} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} initialWorkspace={workspace}/></OverlayScope>)}
-    <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
+    <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><SessionPanelProvider><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
       <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}
         previewToggle={previews.mode === 'collapsed' && <>{sideQuestionAvailable && <Button size="sm" className={agentCss.iconButton} data-side-question-toggle aria-label={tx('agent:btw.title')} title={tx('agent:btw.title')} onClick={openSideQuestion}><IconQuestionOutline14/></Button>}<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={false} onClick={event => { previewOpener.current = event.currentTarget; if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button></>} invokeCommand={invokeCommand}
@@ -445,6 +446,6 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         close={() => shell.send({ type: 'COMMAND.CLOSE', command })}
         navigate={choice => { if (!commandCurrent() || command.route.kind !== 'session') return; shell.send({ type: 'OPEN', destination: choice.kind === 'node' ? { ...choice, sessionId: command.route.sessionId } : { kind: 'transition', sessionId: command.route.sessionId, action: choice.action, selection: choice.selection } }); }} />}
 
-    </section></FileLinks.Provider></div>
+    </section></SessionPanelProvider></FileLinks.Provider></div>
   </AppFrame></ChangesReviewContext></PreviewContext></SubagentScope></TaskNavigationProvider>;
 }

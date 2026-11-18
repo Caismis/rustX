@@ -4,7 +4,7 @@ import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { actionError } from '../../bindings/action-error';
 import { SessionTasks } from '../scheduler/SessionTasks';
 import { SubagentHeader } from './Subagents';
-import { BackgroundJobs } from './BackgroundJobs';
+import { SessionPanelToggle } from './SessionPanelToggle';
 import { useSubagents } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { OpenWorkspace } from './OpenWorkspace';
@@ -40,9 +40,9 @@ export function ConversationHeader({ host, authority, client, view, authorityRev
       <div className={agentCss.titleRow}>
         {view && <div className={agentCss.titleCluster}>
           <SubagentHeader title={sessionDisplayTitle(tx, view.summary)}/>
-          {!subagents?.selected && <BackgroundJobs client={client} sessionId={view.id}/>}
         </div>}
         <div className={agentCss.headerUtilities}>
+          {view && !subagents?.selected && <SessionPanelToggle client={client} sessionId={view.id}/>}
           {view?.summary && !subagents?.selected && <SessionTasks key={`${authorityRevision}:${view.id}`} client={client} sessionId={view.id} nodeId={view.nodeId ?? view.summary.active_node} disabled={!connected || !!view.deleting}/>}
           {subagents?.selected && <div id="subagent-header-actions"/>}
           {view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>}
