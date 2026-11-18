@@ -61,6 +61,7 @@ pub mod observation {
 
 pub mod agent {
     pub mod execution {
+        #[cfg(any(test, feature = "test-fixtures"))]
         pub mod attribution;
     }
     pub mod state;
