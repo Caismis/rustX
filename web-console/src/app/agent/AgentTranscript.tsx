@@ -94,8 +94,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   const versionLabels: UserMessageVersionLabels = {
     edit: tx('agent:message-version.edit'), retry: tx('agent:message-version.retry'),
     cancel: tx('agent:message-version.cancel'), input: tx('agent:message-version.input'),
-    previous: tx('agent:message-version.previous'), next: tx('agent:message-version.next'),
-    position: '', loading: tx('agent:message-version.loading'),
+    loading: tx('agent:message-version.loading'),
   };
   const controls = (locator: CanonicalContentLocator, fallback?: CanonicalContentLocator) => {
     const key = canonicalLocatorKey(locator);
@@ -114,12 +113,10 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     const versions = userMessageHistory.versions;
     const group = versions.get(key) ?? (fallback && versions.get(canonicalLocatorKey(fallback)));
     return { actions: <>
-      <UserMessageVersions labels={group ? { ...versionLabels, position: tx('agent:message-version.position', { current: group.current_index + 1, total: group.total }) } : versionLabels}
+      <UserMessageVersions labels={versionLabels} family={group}
         disabled={messageControlsDisabled} busy={state?.phase === 'loading'}
-        version={group && { total: group.total, hasPrevious: !!group.previous, hasNext: !!group.next }}
         onEdit={() => { void open(locator); }}
-        onPrevious={() => { if (group?.previous) userMessageHistory.switchVersion(group.previous); }}
-        onNext={() => { if (group?.next) userMessageHistory.switchVersion(group.next); }}/>
+        onSwitch={userMessageHistory.switchVersion}/>
       {state?.phase === 'failed' && <span role="alert">{tx('agent:message-version.unavailable')}</span>}
     </> };
   };

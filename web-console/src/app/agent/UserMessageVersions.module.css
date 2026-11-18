@@ -8,6 +8,19 @@
   gap: 4px;
 }
 
+.pager[data-compact] {
+  flex: none;
+  margin-inline-start: auto;
+  padding-inline-start: 6px;
+}
+
+.pager[data-compact] button {
+  inline-size: 24px;
+  block-size: 24px;
+  padding: 4px;
+  outline-offset: 0;
+}
+
 .position {
   min-inline-size: 3ch;
   color: var(--dsw-alias-label-secondary);

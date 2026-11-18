@@ -4,11 +4,18 @@ import { useTranslation } from '../../locale/react';
 import { CellContent, KindTag, cellKind, cellLabel, isErrorRecord, listText } from './TrajectoryCell';
 import type { InspectableDisplayItem, TrajectoryLedgerRow } from './layout';
 import css from './Trajectory.module.css';
-import type { TraceRecord } from '../../../../protocol/app-server/v80';
+import type { SessionMessageVersion, SessionMessageVersionFamily, TraceRecord } from '../../../../protocol/app-server/v80';
+import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { IconChevronRightOutline14 } from '../../presentation/primitives/icons';
+import { MessageVersionPager } from '../agent/UserMessageVersions';
 import type { WorkflowNodes, WorkflowTraceNode } from './workflow';
 
 export interface TrajectoryRowActions {
+  messageHistory?: {
+    versions: ReadonlyMap<string, SessionMessageVersionFamily>;
+    switchVersion: (version: SessionMessageVersion) => void;
+    disabled?: boolean;
+  };
   workflows?: ReadonlyMap<string, TraceRecord>;
   openedWorkflows?: ReadonlySet<string>;
   toggleWorkflow?: (id: string) => void;
@@ -34,6 +41,10 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
   const tx = useTranslation();
   const item = row.item;
   const record = item?.record;
+  const messageHistory = actions.messageHistory;
+  const messageFamily = item?.type === 'RecordRow' && record?.kind === 'user' && record.message_id
+    ? messageHistory?.versions.get(canonicalLocatorKey({ type: 'by_message_id', message_id: record.message_id }))
+    : undefined;
   const workflow = item && item.type !== 'WorkflowNode' ? actions.workflows?.get(item.owner_record_id) : undefined;
   const workflowOpen = !!workflow && actions.openedWorkflows?.has(workflow.id) === true;
   const node = item?.type === 'WorkflowNode' ? item.workflowNode : undefined;
@@ -117,6 +128,8 @@ export function TrajectoryRow({ row, index, style, activeKey, activeTurn, folded
           <span className={css.collapsedTurnText}>{row.summary}</span>
         </span>
         : item && row.kind === 'semantic' ? <CellContent item={item} /> : null}
+      {messageFamily && messageHistory && <MessageVersionPager compact family={messageFamily}
+        disabled={messageHistory.disabled} onSwitch={messageHistory.switchVersion}/>}
       {node && item?.type === 'WorkflowNode' && actions.openWorkflowNodeCanvas && (
         <button
           type="button"

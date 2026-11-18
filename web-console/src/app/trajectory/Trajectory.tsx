@@ -38,6 +38,7 @@ function defaultToolRequestWidth(splitWidth: number): number {
 
 export interface TrajectoryProps {
   cache: TraceCache;
+  messageHistory?: TrajectoryRowActions['messageHistory'];
   onLatest?: () => void;
   loadEarlier: (gapBefore?: string) => void;
   onSelect: (id?: string) => void;
@@ -45,7 +46,7 @@ export interface TrajectoryProps {
 }
 
 /** Native owner selection stays in the read cache; display/facet lives locally. */
-export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
+export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
@@ -212,7 +213,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
       sourceMode: 'history',
     }, trigger);
   }, [runCanvas, workflowNodes, cache.details, cache.fields, cache.readCuts, completeWorkflowNodes]);
-  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, workflows: workflowMap, openedWorkflows,
+  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, messageHistory, workflows: workflowMap, openedWorkflows,
     openWorkflowNodeCanvas: runCanvas ? openNodeCanvas : undefined,
     openWorkflowRootCanvas: runCanvas ? openRootCanvas : undefined,
     toggleWorkflow: id => {

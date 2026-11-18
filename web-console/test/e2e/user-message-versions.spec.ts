@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { EditorPage, UserInputBlock } from '../../../protocol/app-server/v80';
@@ -41,8 +41,15 @@ test('edits and retries a user message, then pages through durable conversation 
     const chat = page.getByLabel('Canonical conversation', { exact: true });
     const userMessage = chat.getByRole('article', { name: 'Your message', exact: true });
     const editor = userMessage.getByRole('textbox', { name: 'Edit your message', exact: true });
-    const previous = userMessage.getByRole('button', { name: 'Switch to previous message version', exact: true });
-    const next = userMessage.getByRole('button', { name: 'Switch to next message version', exact: true });
+    const previousVersion = (row: Locator) => row.getByRole('button', { name: 'Switch to previous message version', exact: true });
+    const nextVersion = (row: Locator) => row.getByRole('button', { name: 'Switch to next message version', exact: true });
+    const previous = previousVersion(userMessage);
+    const next = nextVersion(userMessage);
+    const chatTab = page.getByRole('tab', { name: 'Chat', exact: true });
+    const trajectoryTab = page.getByRole('tab', { name: 'Trajectory', exact: true });
+    const ledger = page.getByRole('table', { name: 'Trace ledger', exact: true });
+    const traceUserMessage = ledger.locator('[data-kind="user"]');
+    const inspector = page.getByRole('complementary', { name: 'Event details', exact: true });
     const answer = (text: string) => chat.getByText(text, { exact: true });
     const attachedFile = userMessage.getByText(attachment.name, { exact: true });
     const providerRequests = async (): Promise<ProviderRequest[]> => (await fixture.control('requests')).requests;
@@ -53,29 +60,30 @@ test('edits and retries a user message, then pages through durable conversation 
     const expectInference = async (count: number) => {
       await expect.poll(async () => (await providerRequests()).length, { timeout: 20_000 }).toBe(count);
     };
+    const expectPager = async (row: Locator, index: number, total: number) => {
+      await expect(row.getByRole('status').filter({ hasText: new RegExp(`^${index}/${total}$`) })).toBeVisible();
+      for (const [control, enabled] of [[previousVersion(row), index > 1], [nextVersion(row), index < total]] as const) {
+        if (enabled) await expect(control).toBeEnabled();
+        else await expect(control).toBeDisabled();
+      }
+    };
     const expectVersion = async ({ prompt, answer: text }: typeof original, index: number, total: number) => {
       await expect(session).toHaveAttribute('aria-current', 'page');
       await expect(userMessage).toHaveCount(1);
       await expect(userMessage.getByText(prompt, { exact: true })).toBeVisible();
       await expect(attachedFile).toBeVisible();
       await expect(answer(text)).toBeVisible();
-      await expect(userMessage.getByRole('status').filter({ hasText: new RegExp(`^${index}/${total}$`) })).toBeVisible();
-      for (const [control, enabled] of [[previous, index > 1], [next, index < total]] as const) {
-        if (enabled) await expect(control).toBeEnabled();
-        else await expect(control).toBeDisabled();
-      }
+      await expectPager(userMessage, index, total);
     };
-    const expectTrajectory = async ({ prompt, answer: text }: typeof original) => {
-      await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
-      const ledger = page.getByRole('table', { name: 'Trace ledger', exact: true });
-      const inspector = page.getByRole('complementary', { name: 'Event details', exact: true });
-      await ledger.locator('[data-kind="user"]').click();
+    const expectTraceVersion = async ({ prompt, answer: text }: typeof original, index: number, total: number) => {
+      await expect(trajectoryTab).toHaveAttribute('aria-selected', 'true');
+      await expectPager(traceUserMessage, index, total);
+      await traceUserMessage.click();
       await expect(inspector).toContainText(prompt.split('\n')[0]);
       const assistant = ledger.locator('[data-kind="assistant"]');
       await expect(assistant).toContainText(text);
       await assistant.click();
       await expect(inspector).toContainText(text);
-      await page.getByRole('tab', { name: 'Chat', exact: true }).click();
     };
 
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill(original.prompt);
@@ -101,6 +109,11 @@ test('edits and retries a user message, then pages through durable conversation 
     await expect(attachedFile).toBeVisible();
     await expect(previous).toHaveCount(0);
     await expect(next).toHaveCount(0);
+    await trajectoryTab.click();
+    await expect(traceUserMessage).toBeVisible();
+    await expect(previousVersion(traceUserMessage)).toHaveCount(0);
+    await expect(nextVersion(traceUserMessage)).toHaveCount(0);
+    await chatTab.click();
 
     await userMessage.getByRole('button', { name: 'Edit message', exact: true }).click();
     await expect(editor).toHaveValue(original.prompt);
@@ -124,12 +137,16 @@ test('edits and retries a user message, then pages through durable conversation 
     expect(editorReceipts()).toEqual([receipt]);
     await expectVersion(edited, 2, 2);
     await expect(answer(original.answer)).toBeHidden();
-    await expectTrajectory(edited);
+    await trajectoryTab.click();
+    await expectTraceVersion(edited, 2, 2);
+    await chatTab.click();
 
     await previous.click();
     await expectVersion(original, 1, 2);
     await expect(answer(edited.answer)).toBeHidden();
-    await expectTrajectory(original);
+    await trajectoryTab.click();
+    await expectTraceVersion(original, 1, 2);
+    await chatTab.click();
     await expectPrompts(original.prompt, edited.prompt);
 
     await page.reload();
@@ -147,11 +164,23 @@ test('edits and retries a user message, then pages through durable conversation 
     await expectPrompts(original.prompt, edited.prompt, edited.prompt);
     expect(editorReceipts()).toEqual([receipt, receipt]);
     await expectVersion(regenerated, 3, 3);
-    await expectTrajectory(regenerated);
-    await previous.click();
+    await trajectoryTab.click();
+    await expectTraceVersion(regenerated, 3, 3);
+    await previousVersion(traceUserMessage).click();
+    await expectTraceVersion(edited, 2, 3);
+    await chatTab.click();
     await expectVersion(edited, 2, 3);
     await expect(answer(regenerated.answer)).toBeHidden();
-    await expectTrajectory(edited);
+
+    await trajectoryTab.click();
+    await previousVersion(traceUserMessage).click();
+    await expectTraceVersion(original, 1, 3);
+    await nextVersion(traceUserMessage).click();
+    await expectTraceVersion(edited, 2, 3);
+    await nextVersion(traceUserMessage).click();
+    await expectTraceVersion(regenerated, 3, 3);
+    await chatTab.click();
+    await expectVersion(regenerated, 3, 3);
     await expectPrompts(original.prompt, edited.prompt, edited.prompt);
     passed = true;
   } finally {

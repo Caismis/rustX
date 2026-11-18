@@ -916,7 +916,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "3cadbbcb00dfdfcf0a153bedf099bcc389cd9a3637e84e2338a3bdf460f13b49"
+      "local_sha256": "bd352dab0a8cc7820df28319aa15f50e1ad93becaaacf7ce29533ded1be5a99a"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -4254,9 +4254,11 @@
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "../../../../protocol/app-server/content-identity",
         "../../../../protocol/app-server/v80",
         "../../locale/react",
         "../../presentation/primitives/icons",
+        "../agent/UserMessageVersions",
         "./Trajectory.module.css",
         "./TrajectoryCell",
         "./layout",
@@ -4280,7 +4282,7 @@
           "treatment": "Event-cell turn label (full/compact) and active-turn rail adapted onto native Turn/Step/Request controls."
         }
       ],
-      "local_sha256": "0b9a1bce26cdaff13aafcb2cee74b59b0941382e7e185ebccd2343f0e04493b5"
+      "local_sha256": "0def6eebb15866794a7913b8ee150d32582765855358de716090e94a5a070e22"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",

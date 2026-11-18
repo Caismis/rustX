@@ -1,4 +1,6 @@
 import type { ReactNode } from 'react';
+import type { SessionMessageVersion, SessionMessageVersionFamily } from '../../../../protocol/app-server/v80';
+import { useTranslation } from '../../locale/react';
 import { BundledIcon } from '../../presentation/primitives/BundledIcon';
 import { Button } from '../../presentation/primitives/Button';
 import { IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16 } from '../../presentation/primitives/icons';
@@ -11,10 +13,6 @@ export interface UserMessageVersionLabels {
   edit: string;
   retry: string;
   cancel: string;
-  previous: string;
-  next: string;
-  /** Localized position, formatted with the active version and total. */
-  position: string;
   input: string;
   loading: string;
 }
@@ -34,16 +32,11 @@ export interface UserMessageEditorProps {
 
 export interface UserMessageVersionsProps {
   labels: UserMessageVersionLabels;
-  version?: {
-    total: number;
-    hasPrevious: boolean;
-    hasNext: boolean;
-  };
+  family?: SessionMessageVersionFamily;
   busy?: boolean;
   disabled?: boolean;
   onEdit: () => void;
-  onPrevious: () => void;
-  onNext: () => void;
+  onSwitch: (version: SessionMessageVersion) => void;
 }
 
 function VersionAction({ label, tooltip = label, disabled, busy, onClick, children }: {
@@ -64,23 +57,36 @@ function VersionAction({ label, tooltip = label, disabled, busy, onClick, childr
   );
 }
 
+export function MessageVersionPager({ family, onSwitch, disabled, compact }: {
+  family: SessionMessageVersionFamily;
+  onSwitch: (version: SessionMessageVersion) => void;
+  disabled?: boolean;
+  compact?: boolean;
+}) {
+  const tx = useTranslation();
+  const { previous, next, current_index, total } = family;
+  if (total < 2) return null;
+  return (
+    <span className={css.pager} data-compact={compact || undefined}
+      onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
+      <VersionAction label={tx('agent:message-version.previous')} disabled={disabled || !previous} onClick={() => { if (previous) onSwitch(previous); }}>
+        <BundledIcon name="lucide:chevron-left" size={14} fallback={<IconChevronLeftOutline14 />} />
+      </VersionAction>
+      <span className={css.position} role="status">{tx('agent:message-version.position', { current: current_index + 1, total })}</span>
+      <VersionAction label={tx('agent:message-version.next')} disabled={disabled || !next} onClick={() => { if (next) onSwitch(next); }}>
+        <BundledIcon name="lucide:chevron-right" size={14} fallback={<IconChevronRightOutline14 />} />
+      </VersionAction>
+    </span>
+  );
+}
+
 export function UserMessageVersions({
-  labels, version, busy = false, disabled = false, onEdit, onPrevious, onNext,
+  labels, family, busy = false, disabled = false, onEdit, onSwitch,
 }: UserMessageVersionsProps) {
   const unavailable = disabled || busy;
   return (
     <span className={css.actions}>
-      {version && version.total > 1 && (
-        <span className={css.pager}>
-          <VersionAction label={labels.previous} disabled={unavailable || !version.hasPrevious} onClick={onPrevious}>
-            <BundledIcon name="lucide:chevron-left" size={14} fallback={<IconChevronLeftOutline14 />} />
-          </VersionAction>
-          <span className={css.position} role="status">{labels.position}</span>
-          <VersionAction label={labels.next} disabled={unavailable || !version.hasNext} onClick={onNext}>
-            <BundledIcon name="lucide:chevron-right" size={14} fallback={<IconChevronRightOutline14 />} />
-          </VersionAction>
-        </span>
-      )}
+      {family && <MessageVersionPager family={family} disabled={unavailable} onSwitch={onSwitch} />}
       <VersionAction label={labels.edit} tooltip={busy ? labels.loading : labels.edit}
         disabled={unavailable} busy={busy} onClick={onEdit}>
         {busy ? <StateDot state="ongoing" /> :

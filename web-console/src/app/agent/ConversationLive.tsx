@@ -93,8 +93,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   // or control crosses either the offline or target-present loading interval.
   const view = availableView ?? (retained && { ...retained, target: undefined, observation: undefined, readable: false, disabled: true, safe: false, hasCheckpoint: false, configurationObservation: undefined });
   const readingPending = !!retained;
-  const messageControls = !scope?.selected && mode === 'chat' && !!onRetryMessage && !!onSwitchMessageVersion;
-  const versions = useMessageVersions(client, messageControls && view?.hasBranches && view.readable && !view.retrying ? view.target : undefined, view?.nodeId);
+  const switchVersion = scope?.selected ? undefined : onSwitchMessageVersion;
+  const messageControls = mode === 'chat' && !!onRetryMessage && !!switchVersion;
+  const versions = useMessageVersions(client, switchVersion && view?.hasBranches && view.readable && !view.retrying ? view.target : undefined, view?.nodeId);
   const visitedVersion = useRef<typeof messageVersionFocus>(undefined);
   useEffect(() => {
     const target = view?.target;
@@ -164,7 +165,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     <PendingMessage client={client} sessionId={sessionId}/>
   </ChatViewport> : null;
   return wrapCanvas(mode === 'trajectory' && view.trace
-    ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}/>
+    ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}
+        messageHistory={switchVersion && !view.readingPreview && !view.retrying ? { versions, switchVersion, disabled: view.disabled || !view.safe || historicalPending } : undefined}/>
     : <JournalSourceProvider presentationOwner={presentationOwner} historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={readingPending ? undefined : view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={<>{!readingPending && <TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         let clientIntent: number | undefined;
@@ -184,7 +186,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       {(view.messages.length > 0 || !!view.transcript.entries?.length || !waiting) && <AgentTranscript accepted={[...(view.submissions ?? []), ...(view.sendingSubmissions ?? [])].filter(value => value.messageId !== submission?.acceptedMessageId && value.placement !== 'queued')} publicationHeads={view.publicationHeads} retrying={view.retrying} compactions={checkpoints.map(({ head, command }) => ({ head, content: <CompactionCheckpoint head={head} client={client} sessionId={view.id} readable={!readingPending && view.readable && !view.readingPreview} title={command ? tx('agent:context.command-title') : undefined}/> }))} contextActivity={!readingPending && !view.retrying && !view.readingPreview && <ContextSeat key={`${view.id}:${view.target?.attachment_id}`} client={client} sessionId={view.id}/>} requestFeedback={requestFeedback} snapshot={view} workflows={!readingPending && !view.retrying && !view.readingPreview && !view.history?.window ? workflows.snapshot : undefined} history={view.history} loadLater={readingPending ? undefined : () => client.loadLater(view.id)} loadEarlier={readingPending ? undefined : () => { viewport.current?.beginNavigation(); void (view.readingPreview ? client.loadEarlierPreview(view.id) : client.loadEarlier(view.id)).catch(() => {}); }} lineageSwitchSafe={view.safe} forking={forking} historicalDisabled={view.disabled || historicalPending} onHistorical={onHistorical}
         editedMessage={view.retrying ? retry?.edited : undefined}
         userMessageHistory={messageControls && !view.readingPreview && !view.retrying ? {
-          versions, retry: onRetryMessage, switchVersion: onSwitchMessageVersion,
+          versions, retry: onRetryMessage, switchVersion,
         } : undefined}/>}
       {view.configurationObservation?.error && <div className={pendingCss.root}><p role="alert">{view.configurationObservation.error}</p></div>}
       {workflows.error && <p role="alert">{workflows.error}</p>}
