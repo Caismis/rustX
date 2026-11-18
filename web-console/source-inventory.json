@@ -3303,7 +3303,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "13bf686c7c2b575c8401df6601e99ba942cf14e4de62ed80f996bd209c5f393b"
+      "local_sha256": "326e1668b7721d5d3c043de26034cb797dbf25b9fd2943c7c25550f1603c90ba"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -4028,7 +4028,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "d65be0fa49e01ffde95518cf370db98ecf9a1366711138e21f6ccaa773df9a76"
+      "local_sha256": "60956a45043358bfc90fce4596209b46e158fd9359d62ddd7a98fc093a2a2793"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -8606,6 +8606,21 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "local_sha256": "37976c2a358b05d204cd98c589250e714a75c814566400203dca80e76f696e42"
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/recent-views.ts",
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream_sha256": "fbe0f2764ff6cb25bd0a93cb72e5ddfe9929daa5ce5e3d786872cf2e7ff4abf6",
+      "treatment": "Recent-view ordering, attention exemptions, and pin-aware eviction.",
+      "destination": "web-console/src/app/navigation/recent-views.ts",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v80",
+        "../../client/contracts"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "714081423cea46e241f893a01b5d1577456b99e0950a9817d679c2f03b457f62"
     }
   ],
   "inspected_only": [
@@ -9760,6 +9775,18 @@
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
       "upstream_sha256": "5fe1d13f1072d5393d765ccfd8e61734ee5e75cf57949a45e14f392cc874d844",
       "treatment": "Read-only inspection: exact call-owned panel reveal/review with pending form preservation and native command detail selection. rustX owns the original local presentation controller and native response authority; Harness card registry, waterfall, timed-question projection, Remote and Cordis APIs are excluded."
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/index.ts",
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream_sha256": "ed4e16ee8cf7d8ae9d5353914d37bd90e769c5fb9b44f4cf3704708b475ba4dd",
+      "treatment": "Default recent view count of ten."
+    },
+    {
+      "upstream": "packages/api/session-controller/src/history/controller.ts",
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream_sha256": "9a982bfa8c9a9ad36c8ae0ffe17c579cabf7956675b5ef7d4fca4883aaa29aec",
+      "treatment": "Durable history reads independent of an active session."
     }
   ]
 }

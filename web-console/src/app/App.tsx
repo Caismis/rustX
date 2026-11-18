@@ -9,7 +9,6 @@ import { Workbench, type WorkbenchHandle } from './components/Workbench';
 import { WorkbenchPreviewRetention } from './workbench-previews';
 import { PreviewContentCache } from '../client/preview-content';
 import { DetachedFirstSubmissions } from './new-conversation/DetachedFirstSubmissions';
-import { message } from '../locale/translation';
 import { useTranslation } from '../locale/react';
 import { SettingsNavigationFeedback } from './settings/SettingsNavigationFeedback';
 import { ConversationHeader } from './agent/ConversationHeader';
@@ -38,6 +37,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, use
 import { useActorRef, useSelector } from '@xstate/react';
 import { shellNavigationMachine, isHomeRoute, committedRouteCurrent, draftSessionCurrent, type ShellNavigationActor } from './navigation/machine';
 import { navigationPreferencesKey, readNavigationPreferences, restoreRoute, resumableViews, saveRoute } from './navigation/preferences';
+import { RecentInactiveViews, recentViewSnapshot } from './navigation/recent-views';
+import { SessionPins } from '../workspaces/session-pins';
 import type { AppServerClient } from '../client/app-server';
 import type { CompletedResponseView, SourceTarget } from '../../../protocol/app-server/v80';
 import { CommandPanel, type CommandRequest } from './commands/CommandPanel';
@@ -114,6 +115,13 @@ export function App({ client, workspaceHost = defaultWorkspaceHost, connection: 
   const navigation = useActorRef(shellNavigationMachine, { input: { drafts, client, settings, host: workspaceHost, workspaces: workspaceAuthority, workflows, route: savedRoute?.kind === 'session' && !client.isAttachmentControlCurrent(savedRoute.sessionId, client.getSnapshot().views[savedRoute.sessionId]?.attachmentObservation) ? undefined : savedRoute } });
   return <AppSurface composerDraft={composerDraft} client={client} workspaceHost={workspaceHost} workspaceAuthority={workspaceAuthority} connection={connection} navigation={navigation} repairAcknowledgements={repairAcknowledgements} workflows={workflows}/>;
 }
+/** The Session a gesture or startup open is acquiring. Recent-view release must not detach it. */
+function navigationSession(shell: ShellNavigationActor): string | undefined {
+  const pending = shell.getSnapshot().context.pending?.destination;
+  if (pending && 'sessionId' in pending) return pending.sessionId;
+  const home = shell.getSnapshot().context.home;
+  return home.kind === 'session' || home.kind === 'session-draft' ? home.sessionId : undefined;
+}
 /** Route rendering and gestures; it owns no native admission or actor lifetime. */
 export function AppSurface({ client, workspaceHost, workspaceAuthority, connection, navigation: shell, composerDraft, repairAcknowledgements, workflows }: { composerDraft: ComposerDraft; client: AppServerClient; workspaceHost: ProductHostWorkspaces; workspaceAuthority: WorkspaceAuthority; connection: ConnectionController; navigation: ShellNavigationActor; repairAcknowledgements: RepairAcknowledgements; workflows: WorkflowSurfaceActor }) {
   const fileWorkbench = useRef<WorkbenchHandle>(null);
@@ -189,15 +197,38 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const [error, setError] = useToastNotice();
   const [deletingSession, setDeletingSession] = useState<string>();
   const [presentationAuthority, setPresentationAuthority] = useState(state.authorityRevision);
+  const pinScope = JSON.stringify([state.endpoint, state.authorityId]);
+  const pins = useMemo(() => {
+    let storage: Storage | undefined;
+    try { storage = globalThis.localStorage; } catch { /* Browser storage is optional. */ }
+    return new SessionPins(pinScope, storage);
+  }, [pinScope]);
+  const recent = useMemo(() => new RecentInactiveViews(
+    () => recentViewSnapshot(client.getSnapshot(), new Set(pins.getSnapshot()), navigationSession(shell)),
+    (id, claim) => client.releaseHeldView(id, claim),
+  ), [client, pins, shell]);
   // The client owns authority retirement. This render adjustment retires only
   // browser presentation before any children can reinterpret an old Session ID.
   if (presentationAuthority !== state.authorityRevision) {
     setPresentationAuthority(state.authorityRevision);
     setOpenViews([]);
     setDeletingSession(undefined); setError(''); setConsumed(undefined);
+    recent.reset();
   }
 
   useEffect(() => { if (center.kind === 'session' || center.kind === 'session-draft') { client.restoreViews([center.sessionId]); setOpenViews(open => open.includes(center.sessionId) ? open : [...open, center.sessionId]); } }, [client, center]);
+  useEffect(() => {
+    recent.setListener(evicted => setOpenViews(open => {
+      const keep = navigationSession(shell);
+      const next = open.filter(id => id === keep || !evicted.includes(id));
+      return next.length === open.length ? open : next;
+    }));
+    const stopClient = client.subscribe(() => recent.sync());
+    const stopPins = pins.subscribe(() => recent.sync());
+    recent.sync();
+    return () => { recent.setListener(undefined); stopClient(); stopPins(); };
+  }, [client, pins, recent, shell]);
+  useEffect(() => { recent.show(selected); }, [recent, selected]);
 
   const selectedView = selected ? state.views[selected] : center.kind === 'new-conversation' && routeState.context.draftSession ? state.views[routeState.context.draftSession.sessionId] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
@@ -263,17 +294,14 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     const route = restoreRoute(preferences, native);
     if (!route || owner.intentRevision !== 0 || owner.pending) return;
     const views = resumableViews(preferences.openViews, native);
-    client.restoreViews(views);
     setOpenViews(views);
+    recent.restore(views);
     if (route.kind === 'session') shell.send({ type: 'OPEN', destination: { kind: 'restore-session', sessionId: route.sessionId, sidebar: false } });
     else if (!sameValue(owner.route, route)) {
       if (route.kind === 'workflows') shell.send({ type: 'WORKFLOWS' });
       else if (route.kind === 'schedules') shell.send({ type: 'SCHEDULES' });
       else if (route.kind === 'new-conversation') shell.send({ type: 'DRAFT', workspaceId: route.workspaceId });
       else shell.send({ type: 'RESOURCES', module: route.kind });
-    }
-    if (client.getSnapshot().connection === 'connected') for (const id of views.filter(id => route.kind !== 'session' || id !== route.sessionId)) {
-      if (!client.getSnapshot().views[id]?.target && (!firstSubmissions(client).session(id) || ['admitted', 'discarded'].includes(firstSubmissions(client).session(id)!.phase))) void client.attach(id).catch(() => {});
     }
   }, [client, shell, endpoint, preferences, state.connection, settingsOpen, preferencesApplied]);
   const resumeRoute = JSON.stringify(saveRoute(routeState.context, JSON.parse(resumeViews)));
@@ -302,10 +330,11 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     else shell.send({ type: 'DRAFT' });
   };
   const open = (id: string, command?: CommandRequest, sidebar?: SidebarGeometry, node?: { nodeId: string; conversationId: string }) => {
-    if (!openViews.includes(id) && openViews.length >= 32) { setError(message('common:copy.32-session-views-are-open-close-a-view-from-its-sidebar-session-actions-or-use-sidebar-vie')); return; }
+    recent.show(id);
     shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: !!sidebar?.overlay, command, ...node } });
   };
   const closeView = (id: string) => {
+    recent.forget(id);
     const remaining = openViews.filter(item => item !== id);
     setOpenViews(remaining);
     if (selected === id) focusSession(remaining[0]);
@@ -313,6 +342,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   };
   const closeAllViews = () => {
     const closing = [...openViews];
+    recent.reset();
     setOpenViews([]); shell.send({ type: 'DRAFT' });
     runGlobal(() => Promise.all(closing.map(id => client.release(id))));
   };
@@ -359,7 +389,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       settings={{ id: 'settings', label: tx('settings:settings.settings'), icon: <IconSettingsOutline16 size={18}/>, select: () => shell.send({ type: 'SETTINGS' }) }}
       feedback={<ConnectionFeedback client={client} connection={connection} wide={false} settings={openConnectionSettings}/>}/>}
     sidebar={geometry => <HomeSidebar width={geometry.width} toggleSidebar={geometry.toggleSidebar} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
-      browser={<WorkspaceNavigation transition={sessionTransition} associations={associations} key={state.authorityRevision ?? 0} host={workspaceHost} client={client} state={state} endpoint={endpoint}
+      browser={<WorkspaceNavigation pins={pins} transition={sessionTransition} associations={associations} key={state.authorityRevision ?? 0} host={workspaceHost} client={client} state={state} endpoint={endpoint}
         metadataChanged={removed => { if (removed && center.kind === 'new-conversation' && center.workspaceId === removed) shell.send({ type: 'DRAFT' }); }}
         workspaceSettings={(id, label) => { openSettings(workspaceSettingsTarget(id, label)); geometry.dismissSidebar(); }} workspace={workspace} selected={selected}
         draft={center.kind === 'new-conversation' && workspace ? { workspaceId: workspace, binding: String(draftBinding), focus: focusDraft } : undefined} selectWorkspace={id => { createInWorkspace(id, true); geometry.dismissSidebar(); }}
@@ -411,6 +441,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         if (action === 'connection-settings') openConnectionSettings();
         else if (action === 'connect') void connection.reconnect();
         else if (action === 'refresh') runGlobal(() => client.refresh(view.id));
+        else if (client.getSnapshot().views[view.id]?.passiveHistory) focusSession(view.id);
         else {
           const current = committedRouteCurrent(shell);
           const route = shell.getSnapshot().context.route;

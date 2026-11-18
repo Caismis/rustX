@@ -13595,11 +13595,14 @@
           "default": []
         },
         "max_resident_runtimes": {
-          "type": "integer",
+          "description": "Optional explicit cap on concurrently resident runtimes (`Loading`,\n`Loaded`, `Unloading`, and reserved creations). `None` leaves residency\nuncapped while idle reaping and host/transport limits continue to apply.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint",
           "minimum": 1,
-          "maximum": 256,
-          "default": 8
+          "maximum": 256
         },
         "max_connections": {
           "type": "integer",

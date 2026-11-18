@@ -10490,7 +10490,12 @@ export interface AppServerPolicy {
    * @maxItems 32
    */
   environment_roots?: string[];
-  max_resident_runtimes?: number;
+  /**
+   * Optional explicit cap on concurrently resident runtimes (`Loading`,
+   * `Loaded`, `Unloading`, and reserved creations). `None` leaves residency
+   * uncapped while idle reaping and host/transport limits continue to apply.
+   */
+  max_resident_runtimes?: number | null;
   max_connections?: number;
   max_external_attachments?: number;
   idle_grace_ms?: number;

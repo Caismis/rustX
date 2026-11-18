@@ -236,6 +236,7 @@ export class AppServerClient {
       return;
     }
     this.publish({ views: { ...this.state.views, [id]: projection } });
+    if (facts.passiveHistory && !previous?.facts.passiveHistory) void this.cold.readPassiveHistory(id);
     if (attached && result) void this.readThreadStatus(result.target.conversation_id).catch(() => {});
     if (previous?.epoch !== context.epoch) this.catalog.epochChanged(id);
     if (retiredClaim || facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) this.retireAttachmentWork(id);
@@ -346,6 +347,7 @@ export class AppServerClient {
       refresh: () => this.refresh(id),
       cold: current => { void this.cold.readHistoryPreview(id, current); void this.cold.readMetadata(id, current); void this.traces.readPreview(id, current); },
       classify: error => error instanceof RequestNotDispatched ? 'unsent' : isOutcomeUncertain(error) ? 'uncertain'
+        : error instanceof RpcFailure && (error.error.data?.kind === 'residency_capacity' || error.error.data?.kind === 'attachment_capacity') ? 'capacity'
         : error instanceof RpcFailure ? error.error.data?.kind === 'stale_attachment' ? 'stale-route' : 'refused' : 'local',
     };
   }
@@ -375,7 +377,7 @@ export class AppServerClient {
     return allowed && valid() && { current: () => allowed.current() && valid(), validate: allowed.validate };
   }
   restoreViews(ids: readonly string[]) {
-    for (const id of ids.slice(0, 32)) if (!this.state.views[id]) this.lifecycles.restore(id);
+    for (const id of ids) if (!this.state.views[id]) this.lifecycles.restore(id);
   }
   private retireAuthority() {
     this.resumeSeeds.clear();
@@ -1146,6 +1148,29 @@ export class AppServerClient {
     this.auxiliary.clearDraft(id);
     this.models.release(id);
     await this.lifecycles.command(id, { kind: 'release', current: () => true });
+  }
+  /**
+   * Detach one background controller only while it still holds the claim captured at the decision.
+   * A missing view, a replaced claim, or an already released row is not a release and is not retried.
+   * Explicit close still uses {@link release}.
+   */
+  async releaseHeldView(id: string, claim: { generation: number; target?: AttachmentTarget }): Promise<boolean> {
+    const matches = () => {
+      if (this.state.generation !== claim.generation) return false;
+      const view = this.state.views[id];
+      if (!view || view.deleting) return false;
+      if (view.attachmentIntent === 'released' && !view.target) return false;
+      return claim.target ? sameTarget(view.target, claim.target) : !view.target && view.attachmentIntent === 'wanted';
+    };
+    if (!matches()) return false;
+    await this.lifecycles.command(id, { kind: 'release', current: matches });
+    const view = this.state.views[id];
+    if (this.state.generation !== claim.generation || !view || view.target || view.attachmentIntent !== 'released') return false;
+    this.resumeSeeds.delete(id);
+    this.setSession(id, { snapshot: undefined, checkpoint: undefined, publicationHeads: undefined, history: undefined,
+      preview: undefined, statisticsPreview: undefined, tracePreview: undefined, trace: undefined,
+      interactionPage: undefined, interactionDetail: undefined, turnOutline: undefined, turnNavigation: undefined });
+    return true;
   }
   switchNode(id: string, nodeId: string, current: () => boolean = () => true): Promise<void> {
     return this.lifecycles.command(id, { kind: 'switch', node: nodeId, current }, true).then(() => {});

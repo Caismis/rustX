@@ -231,6 +231,12 @@ async function prepare(input: { client: AppServerClient; host: ProductHostWorksp
       }
       if (requestedConversation && current() && client.getSnapshot().views[sessionId]?.target?.conversation_id !== requestedConversation) throw new RetiredPreparation();
     } catch (error) {
+      const view = client.getSnapshot().views[sessionId];
+      if (current() && view?.passiveHistory && error instanceof RpcFailure
+        && (error.error.data?.kind === 'residency_capacity' || error.error.data?.kind === 'attachment_capacity')
+        && (destination.kind === 'restore-session' || !destination.conversationId || destination.conversationId === view.nodeConversationId)) {
+        return { pending, route: { kind: 'session-draft', sessionId } };
+      }
       if (destination.kind !== 'restore-session' || !(error instanceof RpcFailure) || error.error.data?.kind !== 'unknown_session' || !current()) throw error;
       // Only Native can establish that a saved identity no longer exists.
       // Release this obsolete hint, which owns no runtime claim, and never

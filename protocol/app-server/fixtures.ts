@@ -243,7 +243,6 @@ export const fixtures = [
         "lifecycle": "Accepting",
         "policy": {
           "environment_roots": [],
-          "max_resident_runtimes": 8,
           "max_connections": 32,
           "max_external_attachments": 64,
           "idle_grace_ms": 300000,

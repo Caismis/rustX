@@ -51,7 +51,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const readingOwner = useClientSelector(client, state => {
     const native = sessionId ? state.views[sessionId] : undefined;
     return { endpoint: state.endpoint, authority: state.authorityId, authorityRevision: state.authorityRevision, node: native?.nodeId, conversation: native?.target?.conversation_id ?? native?.nodeConversationId,
-      loading: state.connection === 'connected' && !!native && !native.error && !native.deleting && (native.attachment === 'attaching' || native.attachment === 'resynchronizing' || native.observationState === 'checkpointLoading'),
+      loading: state.connection === 'connected' && !!native && !native.error && !native.deleting && (native.attachment === 'attaching' || native.attachment === 'resynchronizing' || native.observationState === 'checkpointLoading' || !!native.passiveHistory && !native.target && !native.preview),
       wanted: !!native && native.attachmentIntent === 'wanted' && !native.deletionCommitted,
       checkpointPending: !!native && !native.snapshot && native.attachmentIntent === 'wanted' && !native.deletionCommitted };
   }, shallowEqual);
@@ -62,7 +62,8 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     if (!view) return undefined;
     // A loading preview of the same Conversation cannot replace rows the
     // reader already has. A genuinely different Conversation still changes scope.
-    const preview = view.attachment === 'attaching' && (!view.snapshot || view.preview?.conversationId !== view.snapshot.conversation_id) ? view.preview : undefined;
+    const passiveHistory = !!view.passiveHistory && !view.target;
+    const preview = (view.attachment === 'attaching' || passiveHistory) && view.preview && (passiveHistory || !view.snapshot || view.preview.conversationId !== view.snapshot.conversation_id) ? view.preview : undefined;
     const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
     if (!snapshot) return undefined;
     return { retrying, publicationHeads: preview || view.history?.window ? undefined : view.publicationHeads, nodeId:view.nodeId,generation:state.generation,content: preview ? preview.history.page.content ?? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), inbound: 'inbound' in snapshot ? snapshot.inbound : undefined, messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt, submissions: view.submissions, sendingSubmissions: view.sendingSubmissions,
@@ -99,7 +100,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const ownsHistory=()=>{
     if(!view?.readingPreview||!view.history?.page.source_cut||currentContentView.current!==contentView||mode!=='chat'||scope?.selected)return false;
     const state=client.getSnapshot(),current=state.views[view.id];
-    return state.generation===view.generation&&current?.nodeId===view.nodeId&&current.attachment==='attaching'
+    return state.generation===view.generation&&current?.nodeId===view.nodeId&&(current.attachment==='attaching'||!!current.passiveHistory&&!current.target)
       &&current.preview?.history.page.source_cut===view.history.page.source_cut;
   };
   const inspect = useToolTraceNavigation(locator => view ? client.locateToolTrace(view.id, locator) : Promise.resolve(false), onMode, !!view && !readingPending && !view.readingPreview && !scope?.selected, `root:${sessionId}:${view?.target?.attachment_id}`);

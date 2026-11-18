@@ -1255,39 +1255,44 @@ TOML cannot override it, and it is never persisted in a Session:
 
 ```toml
 [app_server]
-max_resident_runtimes = 8
+# max_resident_runtimes = 8  # optional explicit cap (1..=256); unset = uncapped
 max_connections = 32
 max_external_attachments = 64
 idle_grace_ms = 300000
 shutdown_deadline_ms = 30000
 ```
 
-These conservative defaults allow several concurrently focused Sessions while
-bounding expensive live compositions. The five-minute grace avoids recomposing
-on ordinary focus changes; the thirty-second host deadline bounds operational
-shutdown independently of native settlement. They are product defaults, not
-throughput or user-per-host claims. One process still represents one user
-environment. Zero values are invalid. Upper authoring bounds are respectively
-256 runtimes, 1024 connections, 4096 attachments, one day of idle grace, and one
-hour of shutdown grace. Invalid policy fails before traffic admission. Settings
-changes take effect on the next process start.
+By default `max_resident_runtimes` is unset (`None` / uncapped), matching DSH's
+model of no fixed server resident runtime quota (`recentViewLimit = 10` remains
+only a soft client cache). The five-minute idle grace (`idle_grace_ms`) avoids
+recomposing on ordinary focus changes while letting the idle reaper reclaim
+unattached idle runtimes; the thirty-second host deadline bounds operational
+shutdown independently of native settlement; and hard transport/host limits
+(`max_connections`, `max_external_attachments`, and per-connection 32 routes)
+remain enforced. These are product defaults, not throughput or user-per-host
+claims. One process still represents one user environment. Zero values are
+invalid (including `max_resident_runtimes = 0`). Upper authoring bounds are
+respectively 256 runtimes (when configured), 1024 connections, 4096 attachments,
+one day of idle grace, and one hour of shutdown grace. Invalid policy fails
+before traffic admission.
 
 Configuration resolves the policy once during App Server composition. The host
-owns the full process policy and passes only runtime count and idle grace to
-SessionRuntimeManager. The dependency graph is AppServerHost → connection /
-transport / SessionRuntimeManager → ConversationRuntime; the manager never imports
-App Server types.
+owns the full process policy and passes only the optional runtime cap and idle
+grace to SessionRuntimeManager. The dependency graph is AppServerHost →
+connection / transport / SessionRuntimeManager → ConversationRuntime; the
+manager never imports App Server types.
 
-`Loading`, `Loaded`, and `Unloading` all consume the same writer quota. The
+When an operator configures `max_resident_runtimes`, `Loading`, `Loaded`, and
+`Unloading` (plus reserved creations) all consume that writer quota: the
 registry lock checks quota and installs `Loading` atomically; same-Conversation
 callers join that flight without consuming another slot. Composition runs
 outside that lock. Failure releases a loading reservation; unproven unload
 retains its counted `Unloading` slot. Capacity refusal does not queue for a slot.
-One native coordinator owns at most one current root attempt, so the resident
-slot limit also bounds aggregate root attempts. Pending inbound remains durable
-native work; a `turn/start` response does not release an execution permit. No
-second root-attempt registry or limiter is introduced. Subagent/Workflow limits
-remain with their native domains.
+One native coordinator owns at most one current root attempt, so an explicit
+resident slot limit also bounds aggregate root attempts. Pending inbound remains
+durable native work; a `turn/start` response does not release an execution permit.
+No second root-attempt registry or limiter is introduced. Subagent/Workflow
+limits remain with their native domains.
 
 AppServerHost owns process-wide attachment capacity reservations. Each admitted
 attachment separately obtains an incarnation-bound RuntimeResidencyPin from the

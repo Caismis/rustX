@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { appendFileSync } from 'node:fs';
 import { AppServerHost } from '../../../tui/src/app-server/host';
 import { startDogfood } from './dogfood-server';
 import { connectRemote, openConnectionSettings } from './shell-actions';
@@ -54,8 +55,7 @@ test('a real page reload restores the last selected Session on the same native a
     await expect(page.getByLabel('Session title', { exact: true })).toHaveText('Reload Session B');
 
     const restored = wire.requests.slice(beforeReload).filter(row => row.method === 'thread/resume');
-    // Other saved views restore concurrently; their wire order is incidental.
-    expect(restored.some(row => row.params.threadId === bThread)).toBe(true);
+    expect(restored.map(row => row.params.threadId)).toEqual([bThread]);
     const target = await wire.attachedTarget(b.id);
     expect(target.conversation_id).toBe(bThread);
     for (const [method, resultType] of [['session/checkpoint', 'checkpoint'], ['session/subscribe', 'subscribed']]) {
@@ -73,6 +73,82 @@ test('a real page reload restores the last selected Session on the same native a
   } catch (error) {
     console.error(fixture.diagnostics());
     throw error;
+  } finally {
+    try { await page.close(); }
+    finally {
+      try { await native?.shutdown(); }
+      finally { await fixture.stop(false); }
+    }
+  }
+});
+
+test('opening a dozen existing sessions and returning to the first keeps the conversation usable', async ({ page }) => {
+  const fixture = await startDogfood();
+  let native: AppServerHost | undefined;
+  try {
+    native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    const ids: string[] = [];
+    for (let i = 0; i < 12; i++) {
+      const { session } = await native.createSession({ cwd: fixture.workspaceA });
+      await native.renameSession(session.id, `Saved session ${i + 1}`);
+      ids.push(session.id);
+    }
+    const wire = await wireProbe(page);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    for (const i of [...ids.keys(), 0]) {
+      await page.locator(`button[data-session-id="${ids[i]}"]`).click();
+      await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+      await expect(page.getByLabel('Session title', { exact: true })).toHaveText(`Saved session ${i + 1}`);
+      await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEditable();
+    }
+    expect(new Set(wire.responses.filter(row => row.method === 'thread/resume' && row.result?.type === 'attached').map(row => row.result.target.session_id))).toEqual(new Set(ids));
+  } finally {
+    try { await page.close(); }
+    finally {
+      try { await native?.shutdown(); }
+      finally { await fixture.stop(false); }
+    }
+  }
+});
+
+test('a configured full runtime pool still serves the selected conversation history', async ({ page }) => {
+  const fixture = await startDogfood('web_fork_feedback');
+  let native: AppServerHost | undefined;
+  try {
+    native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    const reader = (await native.createSession({ cwd: fixture.workspaceA })).session;
+    const busy = (await native.createSession({ cwd: fixture.workspaceB })).session;
+    await native.renameSession(reader.id, "Saved conversation with history");
+    const session = await native.attach(reader.id);
+    await session.submitInbound([{ type: 'text', text: 'Fork source' }]);
+    await expect.poll(() => JSON.stringify(session.state.transcript)).toContain('Completed fork answer.');
+    await native.shutdown();
+    native = undefined;
+
+    appendFileSync(fixture.settings, '\n[app_server]\nmax_resident_runtimes = 1\n');
+    await fixture.restartApp();
+    native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+    await native.attach(busy.id);
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    await page.locator(`button[data-session-id="${reader.id}"]`).click();
+    const transcript = page.getByLabel('Canonical conversation');
+    await expect(transcript.getByText('Fork source', { exact: true })).toBeVisible();
+    await expect(transcript.getByText('Completed fork answer.', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Operation rejected.*capacity/)).toHaveCount(0);
+    const resume = page.getByRole('button', { name: 'Resume chat', exact: true });
+    await expect(resume).toBeVisible();
+    fixture.writeSettings();
+    const owner = native;
+    await expect.poll(async () => (await owner.client.call('server/diagnostics', {}, 'diagnostics')).snapshot.policy.max_resident_runtimes).toBeUndefined();
+    await resume.click();
+    await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+    await expect(page.getByRole('textbox', { name: 'Message', exact: true })).toBeEditable();
+    await expect(transcript.getByText('Completed fork answer.', { exact: true })).toBeVisible();
+    expect((await fixture.control('requests')).requests).toHaveLength(1);
   } finally {
     try { await page.close(); }
     finally {

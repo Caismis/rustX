@@ -2,7 +2,7 @@ import { useToastNotice } from '../locale/use-toast-notice';
 import type { Translate } from '../locale/translation';
 import { useTranslation } from '../locale/react';
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted from ui-workspace browser/rows/picker; see PROVENANCE.md. */
-import { useEffect, useMemo, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
+import { useEffect, useState, useRef, useSyncExternalStore, type ReactNode } from 'react';
 import type { AppServerClient } from '../client/app-server';
 import type { ClientView } from '../client/contracts';
 import { useClientSelector, sameValue, type ShellView } from '../client/selectors';
@@ -40,8 +40,8 @@ export function sessionObservation(tx: Translate, state: ClientView, id: string,
   if (!transition && state.connection === 'connected' && (!view || view.attachmentIntent === 'released')) return '';
   return product.label ?? '';
 }
-export function WorkspaceNavigation({ associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, workspaceSettings }: {
-  associations: WorkspaceAssociations; transition?: { sessionId: string; action: SessionTransition };
+export function WorkspaceNavigation({ pins, associations, host, client, state, transition, endpoint, workspace, selected, draft, selectWorkspace, openSession, openViews, closeView, closeAllViews, createSession, forkSession, deleteSession, metadataChanged, workspaceSettings }: {
+  pins: SessionPins; associations: WorkspaceAssociations; transition?: { sessionId: string; action: SessionTransition };
   workspaceSettings?: (id: string, label: string) => void;
   host: ProductHostWorkspaces; client: AppServerClient; state: ShellView; endpoint: string;
   metadataChanged: (removed?: string) => void;
@@ -61,8 +61,6 @@ export function WorkspaceNavigation({ associations, host, client, state, transit
   const folderPick = useRef<AbortController | undefined>(undefined);
   const [renaming, setRenaming] = useState<{ id: string; title: string }>();
   const [toast, setToast] = useState<{ sequence: number; copied: boolean }>();
-  const pinScope = JSON.stringify([state.endpoint, state.authorityId]);
-  const pins = useMemo(() => { let storage: Storage | undefined; try { storage = globalThis.localStorage; } catch {} return new SessionPins(pinScope, storage); }, [pinScope]);
   const pinned = useSyncExternalStore(pins.subscribe, pins.getSnapshot);
   useEffect(() => client.subscribeSessionDeletion(id => pins.remove(id)), [client, pins]);
   const [dialog, setDialog] = useState<{ kind: 'workspace' | 'remove' | 'add'; id: string; name: string; mutation: WorkspaceMutation; catalog: WorkspaceCatalog }>();

@@ -38,6 +38,10 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
     detail: tx('common:copy.an-operation-may-have-taken-effect-check-the-conversation-and-affected-work-before-trying-', { p0: view?.snapshot?.durability_failure ? tx('common:copy.storage-also-reported-a-failure-changes-may-not-be-saved') : '' }) };
   if (view?.snapshot?.durability_failure) return { status: 'failure', label: tx('common:session-product.changes-may-not-be-saved'), severity: 'error', recovery,
     detail: tx('common:copy.storage-reported-a-failure-resolve-the-storage-problem-before-continuing-inspect-the-recor') };
+  if (view?.passiveHistory && !view.target && !view.error && state.connection === 'connected') {
+    return { status: 'idle', severity: 'quiet', label: tx('common:session-product.history-only'),
+      recovery: { action: 'open', label: tx('common:session-product.resume-chat') } };
+  }
   if (state.connection === 'incompatible') return { status: 'failure', label: tx('common:session-product.connection-version-mismatch'), severity: 'error', recovery,
     detail: tx('common:copy.use-matching-web-and-server-versions-review-connection-settings-before-connecting-again') };
   if (recovery?.action === 'refresh') return { status: 'unavailable', label: tx('common:session-product.observation-unavailable'), severity: 'warning', recovery,

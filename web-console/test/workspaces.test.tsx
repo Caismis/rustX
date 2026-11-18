@@ -1,3 +1,4 @@
+import { SessionPins } from '../src/workspaces/session-pins';
 import {summaryFor} from '../../protocol/app-server/testing';
 import { threadFor } from '../../protocol/app-server/testing.ts';
 import { RpcFailure } from '../src/client/errors';
@@ -123,7 +124,7 @@ it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completio
   const metadataChanged = vi.fn();
   await act(async () => {
     stop = owner.start();
-    render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
+    render(<WorkspaceNavigation pins={new SessionPins("test")} associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
       endpoint={endpoint} metadataChanged={metadataChanged}
       selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
       createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
@@ -236,7 +237,7 @@ it.each(['add', 'rename', 'remove'] as const)('Sidebar %s preserves the opened i
   let stop!: () => void;
   await act(async () => {
     stop = owner.start();
-    render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
+    render(<WorkspaceNavigation pins={new SessionPins("test")} associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
       endpoint={endpoint} metadataChanged={metadataChanged}
       selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
       createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
