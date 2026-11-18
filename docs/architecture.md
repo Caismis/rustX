@@ -16,7 +16,9 @@ retain their original native authorities and public paths. See the
 contracts that lower layers need without pulling in the monolith:
 `rustx-identity` (canonical identity types), `rustx-types` (runtime, tool,
 model and message contracts at their original module paths),
-`rustx-bounded-json` and `rustx-bounded-file` (bounded readers). The
+`rustx-bounded-json` and `rustx-bounded-file` (bounded readers), and
+`rustx-publication` (the durable user-facing publication plane: carryover
+accounting, coalescer and frame records). The
 monolith re-exports each moved item at its original `crate::` path, so
 consumer paths do not change; extracted crates never depend back on `rustx`
 and keep dependencies pointing inward toward rustX-owned contracts.
