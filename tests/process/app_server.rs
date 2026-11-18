@@ -205,6 +205,16 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
         std::fs::hard_link(env!("CARGO_BIN_EXE_rustx"), &rustx)
             .or_else(|_| std::fs::copy(env!("CARGO_BIN_EXE_rustx"), &rustx).map(|_| ()))
             .unwrap();
+        // A stale handoff left behind under HOME must never be consumed: the
+        // missing workspace path it names stays missing and the file stays put.
+        let missing = f.root.path().join("a");
+        let admit = f
+            .root
+            .path()
+            .join("home/rustx/runtime/workspace-python/admit");
+        std::fs::create_dir_all(&admit).unwrap();
+        let stale = admit.join("stale.txt");
+        std::fs::write(&stale, format!("{}\n", missing.display())).unwrap();
         let mut child = Command::new(&rustx)
             .current_dir(f.root.path())
             .env_clear()
@@ -247,11 +257,15 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
-        // Neither recorded cwd was resurrected, and nothing was needed or
-        // created beside the executable.
+        // Neither recorded cwd was resurrected, the stale handoff was ignored
+        // (unread and undeleted), and nothing was created beside the executable.
         for name in ["a", "b"] {
             assert!(!f.root.path().join(name).exists());
         }
+        assert_eq!(
+            std::fs::read_to_string(&stale).unwrap(),
+            format!("{}\n", missing.display())
+        );
         assert_eq!(
             std::fs::read_dir(&bin)
                 .unwrap()

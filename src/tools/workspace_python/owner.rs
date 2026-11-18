@@ -16,14 +16,13 @@ use super::guard::{
 };
 use super::interpreter::{
     FixedInterpreter, InterpreterError, Requires, creation_request, exact_pin_conflicts, find_uv,
-    isolated_discovery_args, parse_request, path_request, read_optional_file, read_pin,
-    read_requires, uv_can_create,
+    isolated_discovery_args, parse_request, path_request, read_pin, read_requires, uv_can_create,
 };
 #[cfg(test)]
 use super::pass_gate;
 use super::{
     FileStamp, Flight, Generation, Owner, PathStamp, ProgramOutput, ProgramProbe, ProgramRequest,
-    PythonSelection, Record, schedule,
+    PythonSelection, Record,
 };
 use crate::tools::execution_environment::{self, ExecutionHost};
 
@@ -781,27 +780,6 @@ impl ProgramProbe for SupervisedProbe {
     }
 }
 
-pub(super) async fn receive_admissions(
-    directory: &Path,
-    shutdown: tokio_util::sync::CancellationToken,
-    watch: Result<notify::RecommendedWatcher, notify::Error>,
-    mut receiver: tokio::sync::mpsc::UnboundedReceiver<()>,
-) {
-    // Watch before scanning so a publication cannot fall between them. Even if
-    // setup failed, consume handoffs already published before this initial scan.
-    scan_admit(directory);
-    let Ok(_watcher) = watch else {
-        return;
-    };
-    loop {
-        tokio::select! {
-            () = shutdown.cancelled() => break,
-            () = global().shutdown.cancelled() => break,
-            Some(()) = receiver.recv() => scan_admit(directory),
-        }
-    }
-}
-
 impl Owner {
     pub(super) async fn stop(&self) {
         self.shutdown.cancel();
@@ -820,36 +798,6 @@ impl Owner {
             flight.wait().await;
         }
     }
-}
-
-pub(super) fn scan_admit(directory: &Path) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
-        return;
-    };
-    for entry in entries
-        .flatten()
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|extension| extension == "txt")
-        })
-        .take(32)
-    {
-        let path = entry.path();
-        let Ok(Some(text)) = read_optional_file(&path) else {
-            continue;
-        };
-        let location = text.trim();
-        if Path::new(location).is_absolute() {
-            schedule(Path::new(location));
-        }
-        let _ = std::fs::remove_file(path);
-    }
-}
-
-pub(super) fn admit_directory() -> Option<PathBuf> {
-    state_dir().map(|dir| dir.join("admit"))
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 //!
 //! Native Agent Bash, Workflow Bash, and Subagent Bash observe this owner.
 //! Manual terminals, generic command execution, MCP, and Managed Python do not.
-//! Registration and session creation schedule preparation and do not wait for it.
+//! Session creation schedules preparation and does not wait for it.
 //! An existing environment is reused or diagnosed; it is never deleted or rebuilt.
 
 use std::collections::{HashMap, HashSet};
@@ -11,7 +11,6 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::future::BoxFuture;
-use notify::Watcher;
 
 use super::execution_environment::ExecutionHost;
 use interpreter::FixedInterpreter;
@@ -243,25 +242,6 @@ pub(crate) fn publish_ready_for_test(root: &Path) {
                 fixed: None,
             },
         );
-}
-
-/// Watches the registration handoff directory until `shutdown` fires.
-pub(crate) fn start_admit_watcher(shutdown: tokio_util::sync::CancellationToken) {
-    tokio::spawn(async move {
-        if let Some(directory) = owner::admit_directory() {
-            let _ = std::fs::create_dir_all(&directory);
-            let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-            let watch =
-                notify::recommended_watcher(move |_event: notify::Result<notify::Event>| {
-                    let _ = sender.send(());
-                })
-                .and_then(|mut watcher| {
-                    watcher.watch(&directory, notify::RecursiveMode::NonRecursive)?;
-                    Ok(watcher)
-                });
-            owner::receive_admissions(&directory, shutdown, watch, receiver).await;
-        }
-    });
 }
 
 pub(crate) async fn shutdown() {

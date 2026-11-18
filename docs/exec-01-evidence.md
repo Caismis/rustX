@@ -29,7 +29,7 @@ Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79
 | T37 | Independent budgets and business/capture/readability facts | ADR; budget constants in `rustx-execution-protocol` | Open; finite constants alone insufficient |
 | T41 | Seeded local/remote semantic equivalence | UDS only | Open; remote transport/conformance missing |
 | T42 | Bounded line/match projection: transferred bytes, client reads, memory, RPCs | `read_range_serves_verified_bytes_at_a_sparse_file_boundary` | Partial; bootstrap proves byte range only, no line/search scaling evidence |
-| T44 | Minimal reservation before browsing, no unbound access or unrelated startup | Direct Client test `an_unbound_workspace_argument_never_connects` | Partial; bootstrap not actual UI browsing |
+| T44 | Minimal reservation before browsing, no unbound access or unrelated startup | `an_unbound_workspace_argument_never_connects`; `workspace-host.test.ts` proves folder registration schedules no Python; standalone Server test leaves stale preparation handoff untouched | Partial; product picker still needs Session authorization before browsing |
 | T54 | Candidate/sequence/offset integrity, late and mixed identities rejected | ADR pending Host and save messages | Open; needs fixtures |
 | T55 | Final encoded size including envelope and escaping | `transport::{encode_record,read_record}` frame cap | Partial; member unit framing tests; Host envelope boundary cases missing |
 

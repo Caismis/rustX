@@ -1908,6 +1908,9 @@ tools/workspace_python.rs  One Workspace `.venv`: reuse a valid environment,
                            In child processes, this drain precedes control
                            dispatcher shutdown so settled probe anchors can
                            still release through the reliable parent channel.
+                           UI Workspace registration persists metadata only
+                           and never schedules Python through `HOME`; the
+                           Server consumes no `HOME` preparation handoffs.
 tools/background.rs        ConversationBackgroundRegistry: conversation-owned
                            background executions (lifecycle state machine,
                            dispatch ownership commit, cancel-vs-complete

@@ -3398,7 +3398,10 @@ hold attempt leases and never block a capability commit.
   constraints. An existing empty directory is never initialized. Physical programs
   inherit that Owner's cancellation signal. Command environments travel in
   private snapshots retained through settlement, not an aggregated OS
-  environment string. See `docs/execution-environment.md`.
+  environment string. UI Workspace registration persists metadata only and
+  no longer schedules Python preparation through `HOME`; Server startup
+  never consumes `HOME` workspace-preparation handoff files. See
+  `docs/execution-environment.md`.
 - Skill, native-tool, and MCP capability mutations (a Python tool package's
   included, since it is an MCP source) in a live product
   runtime occur through native configuration coordination. Complete preserved

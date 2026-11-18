@@ -133,12 +133,13 @@ ordinary meaning.
   `#!/usr/bin/env python3` exit 127 with the guard diagnostic. Other commands
   keep the host `PATH`. The failure is not reported as a non-Unicode `PATH`
   or `HOME`.
-- Registration queues the authorized directory only when the Product Host
-  attests a shared filesystem. The location id is not a path. Waiting for
-  the cross-process lock observes runtime shutdown and does not stay blocked
-  in `flock`.
+- Registration persists Workspace metadata only; the Product Host no longer
+  publishes a filesystem handoff under `HOME`, and Server startup never
+  consumes such handoffs. Preparation is scheduled in-process when a Session
+  is created for the Workspace. Waiting for the cross-process lock observes
+  runtime shutdown and does not stay blocked in `flock`.
 
-Registration and session creation schedule this work and do not wait for it.
+Session creation schedules this work and does not wait for it.
 Read-only listing does not create an environment. The first native Bash use
 observes the current selection immediately and does not wait either.
 
@@ -199,10 +200,10 @@ This is independent of lazy output spill. Failure to allocate that snapshot
 refuses launch; moving it to a retained private FD or control-frame transport
 would require a separate supervisor transport change.
 
-Workspace registration publishes its native preparation handoff only after a
-private staging file has been fully written and atomically renamed. The native
-watcher ignores staging files and installs its watch before the initial scan.
-Already published handoffs still receive one initial scan if watch setup fails.
+Workspace registration schedules no Python preparation: the serving process
+never watches or reads `rustx/runtime/workspace-python/admit`, so a stale
+handoff file left under `HOME` is ignored and the path it names is never
+prepared.
 A subagent whose parent host snapshot is missing, unreadable, or malformed keeps
 native Bash closed; it never recaptures the environment injected at child spawn.
 An already-captured child host is a startup error.

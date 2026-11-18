@@ -6,9 +6,7 @@ use super::interpreter::{
     FixedInterpreter, ParsedRequest, absolute_pin, creation_request, exact_pin_conflicts,
     parse_request, path_request, pin_matches, read_pin, uv_can_create,
 };
-use super::owner::{
-    SupervisedProbe, generation_of, global, lock_file, receive_admissions, scan_admit, stamp,
-};
+use super::owner::{SupervisedProbe, generation_of, lock_file, stamp};
 use super::{
     Owner, ProgramOutput, ProgramProbe, ProgramRequest, PythonSelection, Record, TestGate,
     pass_gate,
@@ -534,68 +532,6 @@ async fn u16_second_process_holds_the_workspace_lock() {
             .count(),
         1
     );
-}
-
-#[tokio::test]
-async fn issue_u03_admit_scan_removes_the_file_without_waiting() {
-    let root = workspace();
-    let directory = tempfile::tempdir().expect("admit");
-    let file = directory.path().join("admission.txt");
-    std::fs::write(&file, format!("{}\n", root.path().display())).expect("admit file");
-    scan_admit(directory.path());
-    assert!(!file.exists());
-}
-
-#[tokio::test]
-async fn admission_consumes_only_atomically_published_complete_paths() {
-    use std::io::Write;
-    let root = workspace();
-    let directory = tempfile::tempdir().unwrap();
-    let pending = directory.path().join("admission.pending");
-    let published = directory.path().join("admission.txt");
-    let mut file = std::fs::File::create(&pending).unwrap();
-    scan_admit(directory.path());
-    assert!(
-        pending.exists(),
-        "CREATE before write must not consume the handoff"
-    );
-    file.write_all(root.path().to_str().unwrap().as_bytes())
-        .unwrap();
-    scan_admit(directory.path());
-    assert!(
-        pending.exists(),
-        "completed staging remains unpublished until rename"
-    );
-    drop(file);
-    std::fs::rename(&pending, &published).unwrap();
-    let owner = global();
-    let canonical = std::fs::canonicalize(root.path()).unwrap();
-    assert!(!owner.admitted.lock().unwrap().contains(&canonical));
-    scan_admit(directory.path());
-    assert!(!published.exists());
-    assert!(owner.admitted.lock().unwrap().contains(&canonical));
-    scan_admit(directory.path());
-}
-
-#[tokio::test]
-async fn watch_setup_failure_still_consumes_previously_published_admissions() {
-    let root = workspace();
-    let directory = tempfile::tempdir().unwrap();
-    let published = directory.path().join("admission.txt");
-    std::fs::write(&published, root.path().to_str().unwrap()).unwrap();
-    let (_sender, receiver) = tokio::sync::mpsc::unbounded_channel();
-    let canonical = std::fs::canonicalize(root.path()).unwrap();
-    let owner = global();
-    assert!(!owner.admitted.lock().unwrap().contains(&canonical));
-    receive_admissions(
-        directory.path(),
-        tokio_util::sync::CancellationToken::new(),
-        Err(notify::Error::generic("controlled watch setup failure")),
-        receiver,
-    )
-    .await;
-    assert!(!published.exists());
-    assert!(owner.admitted.lock().unwrap().contains(&canonical));
 }
 
 #[tokio::test]
