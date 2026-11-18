@@ -13,7 +13,7 @@
 }
 @media (hover: hover) {
   .empty:hover {
-     color: var(--dsw-alias-label-secondary); border-color: var(--dsw-alias-border-l2); 
+     color: var(--dsw-alias-label-secondary); border-color: var(--dsw-alias-border-l2);
   }
 }
 .list { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
@@ -58,13 +58,13 @@
 .row:focus-within .rowActions { display: inline-flex; }
 @media (hover: hover) {
   .row:hover .rowActions {
-     display: inline-flex; 
+     display: inline-flex;
   }
 }
 .row:focus-within .type { display: none; }
 @media (hover: hover) {
   .row:hover .type {
-     display: none; 
+     display: none;
   }
 }
 .dialog { width: min(520px, 100%); }
@@ -91,7 +91,7 @@
 }
 @media (hover: hover) {
   .typeTrigger:hover {
-     border-color: var(--dsw-alias-border-l2); 
+     border-color: var(--dsw-alias-border-l2);
   }
 }
 .typeTrigger:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
@@ -127,7 +127,7 @@
 }
 @media (hover: hover) {
   .addOption:hover {
-     color: var(--dsw-alias-label-primary); border-color: var(--dsw-alias-border-l2); 
+     color: var(--dsw-alias-label-primary); border-color: var(--dsw-alias-border-l2);
   }
 }
 .code { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }

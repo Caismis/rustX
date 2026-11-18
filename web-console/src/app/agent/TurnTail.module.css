@@ -6,7 +6,7 @@
 .actions[data-clock="end"] .time { font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px); }
 @media (hover: hover) {
   .action:hover {
-     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); 
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary);
   }
 }
 .action:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }

@@ -11,13 +11,13 @@
 .item:focus-within .dragHandle, .dragHandle:focus-visible { opacity: 1; }
 @media (hover: hover) {
   .item:hover .dragHandle {
-     opacity: 1; 
+     opacity: 1;
   }
 }
 .item:focus-within header { padding-left: 22px; }
 @media (hover: hover) {
   .item:has(.dragHandle:enabled):hover header {
-     padding-left: 22px; 
+     padding-left: 22px;
   }
 }
 .label { min-width: 0; flex: 1; color: var(--dsw-alias-label-secondary); font-size: 12px; font-weight: 500; }
@@ -30,7 +30,7 @@
 .inputVariable > div > button { width: 100%; min-height: 32px; padding: 4px 32px 4px 10px; border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover-solid); }
 @media (hover: hover) {
   .inputVariable > div > button:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .inputVariable[data-empty] > div > button { display: flex; align-items: center; gap: 6px; color: var(--dsw-alias-label-tertiary); }
@@ -39,12 +39,12 @@
 .inputVariable:focus-within .clearInput { opacity: 1; }
 @media (hover: hover) {
   .inputVariable:hover .clearInput {
-     opacity: 1; 
+     opacity: 1;
   }
 }
 @media (hover: hover) {
   .clearInput:hover {
-     color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover); 
+     color: var(--dsw-alias-label-primary); background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 

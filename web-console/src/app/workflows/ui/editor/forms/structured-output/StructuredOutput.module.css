@@ -4,7 +4,7 @@
 .iconButton { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 26px; height: 26px; padding: 4px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 @media (hover: hover) {
   .iconButton:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .tabs { display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -16,7 +16,7 @@
 .importButton { min-height: 28px; padding: 4px 8px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 @media (hover: hover) {
   .importButton:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .workspace { display: flex; flex: 1; min-height: 0; padding: 0 24px; outline: none; }
@@ -32,7 +32,7 @@
 .nodeRow:focus-within { background: var(--dsw-alias-interactive-bg-hover); }
 @media (hover: hover) {
   .nodeRow:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .nodeText { flex: 1; min-width: 0; }
@@ -45,13 +45,13 @@
 .nodeRow:focus-within .nodeActions { opacity: 1; }
 @media (hover: hover) {
   .nodeRow:hover .nodeActions {
-     opacity: 1; 
+     opacity: 1;
   }
 }
 .nodeActions button, .expand { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; padding: 4px; border: 0; border-radius: var(--dsw-radius-xs); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 @media (hover: hover) {
   .nodeActions button:hover {
-     background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary); 
+     background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary);
   }
 }
 .nodeActions button:disabled { opacity: .4; cursor: default; }
@@ -60,7 +60,7 @@
 .addField { display: inline-flex; align-items: center; gap: 4px; min-height: 28px; padding: 3px 6px; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 @media (hover: hover) {
   .addField:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .fieldCard { margin: 1px 0 5px; padding: 3px 0; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-2); }
@@ -71,7 +71,7 @@
 .typeTrigger[data-popup-open] { background: var(--dsw-alias-interactive-bg-hover); }
 @media (hover: hover) {
   .typeTrigger:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .fieldActions { display: flex; align-items: center; gap: 4px; margin-left: auto; }

@@ -4,7 +4,7 @@
 .agentActions button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 @media (hover: hover) {
   .agentActions button:hover:not(:disabled) {
-     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); 
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);
   }
 }
 .agentActions button:disabled { opacity: 0.4; cursor: default; }

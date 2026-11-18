@@ -44,7 +44,7 @@ label { display: grid; gap: 5px; font-size: 12px; }
   corner-shape: round; color: var(--dsw-alias-label-primary); background: var(--dsw-alias-button-floating-fill); box-shadow: var(--dsw-elevation-panel); cursor: pointer; }
 @media (hover: hover) {
   .chat-return-latest:hover {
-     background: var(--dsw-alias-button-floating-hover); 
+     background: var(--dsw-alias-button-floating-hover);
   }
 }
 .chat-return-latest:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 2px; }

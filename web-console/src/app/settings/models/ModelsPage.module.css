@@ -112,7 +112,7 @@
 :is(.detailHeader, .modelActions [data-tone]) button.iconButton { border: 0; background: transparent; display: grid; place-items: center; cursor: pointer; }
 @media (hover: hover) {
   :is(.detailHeader, .modelActions [data-tone]) button.iconButton:hover:not(:disabled) {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .section .iconButton[data-probe=connected] { color: var(--dsw-alias-state-success-primary); }

@@ -10,7 +10,7 @@
 .partRow { display: flex; align-items: center; gap: 2px; min-width: 0; border-radius: var(--dsw-radius-sm); }
 @media (hover: hover) {
   .partRow:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .parts .disclosure { width: 20px; flex: none; padding: 0; color: var(--dsw-alias-label-tertiary); }

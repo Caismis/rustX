@@ -11,7 +11,7 @@
 .advancedToggle { align-self: flex-start; display: inline-flex; align-items: center; gap: 6px; padding: 3px 5px; margin-left: -5px; border: none; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; cursor: pointer; }
 @media (hover: hover) {
   .advancedToggle:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .expanded { transform: rotate(180deg); }

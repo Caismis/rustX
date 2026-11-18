@@ -13,7 +13,7 @@
 @media (hover: hover) {
   .axisControl:hover .axisHead,
     .axisControl:hover .axisPole {
-     stroke: var(--dsw-alias-label-primary); stroke-width: 2px; 
+     stroke: var(--dsw-alias-label-primary); stroke-width: 2px;
   }
 }
 .axisControl:focus { outline: none; }

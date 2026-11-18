@@ -14,7 +14,7 @@
 .tile[aria-expanded='true'] { border-color: var(--dsw-alias-label-tertiary); }
 @media (hover: hover) {
   .tile:hover {
-     border-color: var(--dsw-alias-label-tertiary); 
+     border-color: var(--dsw-alias-label-tertiary);
   }
 }
 .tile:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
@@ -61,7 +61,7 @@
 }
 @media (hover: hover) {
   .option:hover {
-     background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-skeleton)); color: var(--dsw-alias-label-primary); 
+     background: var(--dsw-alias-bg-layer-2, var(--dsw-alias-bg-skeleton)); color: var(--dsw-alias-label-primary);
   }
 }
 .option:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
@@ -90,13 +90,13 @@
 }
 @media (hover: hover) {
   .category:hover {
-     color: var(--dsw-alias-label-primary); 
+     color: var(--dsw-alias-label-primary);
   }
 }
 .category:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .categoryActive { border-color: var(--dsw-alias-label-primary); background: var(--dsw-alias-label-primary); color: var(--dsw-alias-bg-layer-2); }
 @media (hover: hover) {
   .categoryActive:hover {
-     color: var(--dsw-alias-bg-layer-2); 
+     color: var(--dsw-alias-bg-layer-2);
   }
 }

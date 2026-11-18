@@ -11,7 +11,7 @@
 .catalog .list > * + * { border-top: .5px solid var(--dsw-alias-border-l2); }
 @media (hover: hover) {
   .catalog .card:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .catalog .card:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }

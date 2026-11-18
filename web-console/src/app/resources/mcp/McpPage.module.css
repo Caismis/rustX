@@ -44,7 +44,7 @@
 .page .form summary { padding:2px 4px; margin-left:-4px; border-radius: var(--dsw-radius-xs); list-style:none; display:flex; align-items:center; gap:6px; width:fit-content; cursor:pointer; color:var(--dsw-alias-label-secondary); font-size:12px; line-height:18px; }
 @media (hover: hover) {
   .page .form summary:hover {
-     color:var(--dsw-alias-label-primary); 
+     color:var(--dsw-alias-label-primary);
   }
 }
 .page .form summary::-webkit-details-marker { display:none; }

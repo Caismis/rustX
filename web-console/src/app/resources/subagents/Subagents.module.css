@@ -155,7 +155,7 @@
 .resourceChoice:has(input:checked) { background: var(--dsw-alias-interactive-bg-hover); }
 @media (hover: hover) {
   .resourceChoice:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .resourceChoice input { flex: none; margin: 2px 0 0; }

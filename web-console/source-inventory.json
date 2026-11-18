@@ -394,7 +394,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e5567f29bc112f0213cbd3a6c183997886bcc2e0e3cd87d77832cc563c30e695"
+      "local_sha256": "a5643b2ae03cace568d9bc8618b088e623b3b0a97be280d158cd972d4e33e967"
     },
     {
       "upstream": "packages/client/ui-primitives/src/rank-by-name.ts",
@@ -502,7 +502,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "01150fda58007151a86a4bde5a5a4194b94c5f172c41abd61821fa5b60db0d5e"
+      "local_sha256": "1541db1949246a7ada35837acad65258a985f4eaccf0b116759cf2698dee785e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -795,7 +795,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9b0d451cae164a1376930a7d2cf8f027e59c11a45cdda6f05fc2864f89f13ad0",
+      "local_sha256": "e349d05bec75b9495771501d4fadf88a65f45b8423682e67e5abe355ef8d5c22",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
@@ -3462,7 +3462,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "c5532c426bd3394ba4d4bda1ce458fc7f679ec592e23d4603f895a70f9a7c155"
+      "local_sha256": "ea61476de3fb7af9391a19c87fa5662a0bb4e9282213ab132a871fd8c0d59854"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -6601,14 +6601,14 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "3158d0e19f333be3a72078a4419ff26c19a13879334ac8efc31576457dd6a815"
+      "local_sha256": "79739dc6e291f350316a86b8fa5c019846326ea4370ff6bb5676d51684e15291"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/resources/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "56885a5f2ad5bf86e638ea3de24e7fff074f435bdd5263f3f4c207d3a8b96d31",
+      "local_sha256": "a6eefe529af77062bf6ef3103957fa2827aaa814cdf8ce239fca0f46cb3485da",
       "classification": "B",
       "treatment": "Harness-derived settings theme and controls with ZCode screenshot geometry: outlined compact form, short fields, footer actions, segmented modes and scoped MCP list. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged. Issue #499: wrap native connecting/catalog-hint provenance in the existing MCP list row; upstream baseline unchanged. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Centered editor with Harness setting-row spacing and persistent form actions.",
       "license": "MIT \u2014 Copyright (c) 2026 DeepSeek",
@@ -7385,7 +7385,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "b3e94c319fe6e058ffe7c1b826a14b91f2997a30bafd52b12247d62529af4570"
+      "local_sha256": "a2366b942db7fb66103ceb15ab290183054b059d9db2fd567426594693392f32"
     },
     {
       "upstream": "packages/client/ui-subagent/src/client/SubagentReadOnlyComposer.tsx",
@@ -7458,7 +7458,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "61f28d0fbdcaecddfee8dc97b4eedf5dff5cfb0a59d1aa7f05b07e31f31f7ecb"
+      "local_sha256": "aab8a47fc46cae798826478baae200e75dfa357c5d05939b9f9263b2c3b4c371"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/pdf.tsx",
@@ -7504,7 +7504,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "3fdfad7199e1944436e3c9058d5c6e51a0202d23ad38faaf3e434588b1b4ad65"
+      "local_sha256": "f534e5289a0213f66b7f8e4af99bc2bf73beb5a68be80cffe15c3a620e006ee7"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/document.ts",
