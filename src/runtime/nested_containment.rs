@@ -135,7 +135,7 @@ use crate::runtime::identity::ProcessUnitId;
 /// Every variant happens **before** the unit's local `START` gate opens, so
 /// no semantic command has been spawned when one is returned.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AnchorError {
+pub(crate) enum AnchorError {
     /// The parent control channel closed while the offer was outstanding.
     /// The parent is gone; nothing may start.
     ParentLost,
@@ -167,7 +167,7 @@ impl std::error::Error for AnchorError {}
 /// Exactly one implementation exists — the subagent child's control
 /// dispatcher — and it is installed once, before the child answers `Ready`.
 /// A unit owner never learns anything about the transport behind it.
-pub trait NestedAnchorAuthority: Send + Sync + std::fmt::Debug {
+pub(crate) trait NestedAnchorAuthority: Send + Sync + std::fmt::Debug {
     /// Offers one anchor and resolves when the parent has acknowledged
     /// retention of exactly this unit.
     fn offer(&self, unit: ProcessUnitId, pgid: i32) -> BoxFuture<'static, Result<(), AnchorError>>;
@@ -203,7 +203,7 @@ static NEXT_UNIT: AtomicU64 = AtomicU64::new(0);
 /// # Errors
 ///
 /// Returns an error when an authority is already installed.
-pub fn install_authority(
+pub(crate) fn install_authority(
     authority: std::sync::Arc<dyn NestedAnchorAuthority>,
 ) -> Result<(), String> {
     if INSTALLED.swap(true, Ordering::SeqCst) {
@@ -217,7 +217,7 @@ pub fn install_authority(
 
 /// The installed authority, if this process is a subagent child.
 #[must_use]
-pub fn authority() -> Option<std::sync::Arc<dyn NestedAnchorAuthority>> {
+pub(crate) fn authority() -> Option<std::sync::Arc<dyn NestedAnchorAuthority>> {
     AUTHORITY
         .read()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -230,7 +230,7 @@ pub fn authority() -> Option<std::sync::Arc<dyn NestedAnchorAuthority>> {
 /// one parent), so tests that install one must not run concurrently with
 /// each other or with a test that relies on there being none.
 #[cfg(test)]
-pub fn test_authority_lock() -> &'static tokio::sync::Mutex<()> {
+pub(crate) fn test_authority_lock() -> &'static tokio::sync::Mutex<()> {
     static LOCK: std::sync::OnceLock<tokio::sync::Mutex<()>> = std::sync::OnceLock::new();
     LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
 }
@@ -241,7 +241,7 @@ pub fn test_authority_lock() -> &'static tokio::sync::Mutex<()> {
 /// top-level (unanchored) shape. Hold [`test_authority_lock`] across the
 /// guard's lifetime.
 #[cfg(test)]
-pub fn install_authority_for_test(
+pub(crate) fn install_authority_for_test(
     authority: std::sync::Arc<dyn NestedAnchorAuthority>,
 ) -> TestAuthorityGuard {
     *AUTHORITY
@@ -252,7 +252,7 @@ pub fn install_authority_for_test(
 
 /// Removes the test-installed authority on drop.
 #[cfg(test)]
-pub struct TestAuthorityGuard;
+pub(crate) struct TestAuthorityGuard;
 
 #[cfg(test)]
 impl Drop for TestAuthorityGuard {
@@ -266,13 +266,13 @@ impl Drop for TestAuthorityGuard {
 /// Whether this process anchors its supervised units in a parent.
 #[cfg(test)]
 #[must_use]
-pub fn is_nested() -> bool {
+pub(crate) fn is_nested() -> bool {
     authority().is_some()
 }
 
 /// Allocates the typed identity of one supervised process unit.
 #[must_use]
-pub fn allocate_unit_id() -> ProcessUnitId {
+pub(crate) fn allocate_unit_id() -> ProcessUnitId {
     let ordinal = NEXT_UNIT.fetch_add(1, Ordering::Relaxed);
     ProcessUnitId::new(format!("unit:{}:{ordinal}", std::process::id()))
 }
@@ -288,7 +288,7 @@ pub fn allocate_unit_id() -> ProcessUnitId {
 /// process-global authority. An explicit authority exists so one invocation
 /// can be anchored into a recording owner without perturbing every other
 /// supervised unit in the same process.
-pub fn retain_with(
+pub(crate) fn retain_with(
     unit: ProcessUnitId,
     pgid: i32,
     override_authority: Option<std::sync::Arc<dyn NestedAnchorAuthority>>,
@@ -322,7 +322,7 @@ pub fn retain_with(
 /// drop deliberately keeps the parent's retained anchor — and its
 /// catastrophic containment authority for that exact group — alive.
 #[derive(Debug)]
-pub struct ProcessUnitAnchor {
+pub(crate) struct ProcessUnitAnchor {
     unit: ProcessUnitId,
     pgid: i32,
     authority: Option<std::sync::Arc<dyn NestedAnchorAuthority>>,
@@ -331,14 +331,14 @@ pub struct ProcessUnitAnchor {
 impl ProcessUnitAnchor {
     /// Whether this lease is actually anchored in a parent.
     #[cfg(test)]
-    pub const fn is_anchored(&self) -> bool {
+    pub(crate) const fn is_anchored(&self) -> bool {
         self.authority.is_some()
     }
 
     /// Reports the unit physically terminal and drops the parent's retained
     /// anchor. Called exactly at a proven-terminal settlement, and never
     /// from anywhere else: this is the one release-producing transition.
-    pub async fn release(mut self) {
+    pub(crate) async fn release(mut self) {
         if let Some(authority) = self.authority.take() {
             authority.release(self.unit.clone(), self.pgid).await;
         }
@@ -358,7 +358,7 @@ impl ProcessUnitAnchor {
 /// invocation deadline, and supervisor events while the parent decides, so
 /// the offer is polled as one arm of that loop rather than awaited inline.
 #[derive(Default)]
-pub enum AnchorGate {
+pub(crate) enum AnchorGate {
     /// No anchor has been offered yet.
     #[default]
     Idle,
@@ -385,7 +385,7 @@ impl core::fmt::Debug for AnchorGate {
 impl AnchorGate {
     /// Begins the handshake for one unit anchor, with an optional explicit
     /// authority override.
-    pub fn offer_with(
+    pub(crate) fn offer_with(
         &mut self,
         pgid: i32,
         override_authority: Option<std::sync::Arc<dyn NestedAnchorAuthority>>,
@@ -394,12 +394,12 @@ impl AnchorGate {
     }
 
     /// Whether the gate is waiting for the parent.
-    pub const fn is_pending(&self) -> bool {
+    pub(crate) const fn is_pending(&self) -> bool {
         matches!(self, Self::Pending(_))
     }
 
     /// Awaits the outstanding offer. Only valid while [`AnchorGate::is_pending`].
-    pub async fn settle_offer(&mut self) -> Result<(), AnchorError> {
+    pub(crate) async fn settle_offer(&mut self) -> Result<(), AnchorError> {
         let Self::Pending(pending) = self else {
             // Not pending: park forever so this select arm never fires.
             std::future::pending::<()>().await;
@@ -422,7 +422,7 @@ impl AnchorGate {
     /// This awaits the release's bounded delivery to the dispatcher: while
     /// the parent control plane is alive the release is never dropped under
     /// outbound backpressure.
-    pub async fn release(&mut self) {
+    pub(crate) async fn release(&mut self) {
         if let Self::Held(anchor) = std::mem::replace(self, Self::Released) {
             anchor.release().await;
         }
@@ -435,7 +435,7 @@ impl AnchorGate {
     /// unproven settlement must not drop the parent's containment authority
     /// for that exact group, so the lease is discarded without emitting a
     /// release.
-    pub fn retain_unproven(&mut self) {
+    pub(crate) fn retain_unproven(&mut self) {
         if let Self::Held(mut anchor) = std::mem::replace(self, Self::Released) {
             anchor.forget();
         }

@@ -36,7 +36,7 @@ use crate::tools::limits::MAX_DOCUMENT_SOURCE_BYTES;
 /// appear; xberg gaining support for another format never changes the Read
 /// contract on its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DocumentFormat {
+pub(super) enum DocumentFormat {
     Pdf,
     Docx,
     Xlsx,
@@ -46,7 +46,7 @@ pub enum DocumentFormat {
 impl DocumentFormat {
     /// The human-readable format label used in deterministic failure
     /// diagnostics.
-    pub fn label(self) -> &'static str {
+    pub(super) fn label(self) -> &'static str {
         match self {
             Self::Pdf => "PDF",
             Self::Docx => "DOCX",
@@ -72,7 +72,7 @@ impl DocumentFormat {
 
 /// The rustX-owned source classification of one resolved Read target.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
+pub(super) enum SourceKind {
     /// An ordinary byte source decoded as UTF-8 text by the faithful text
     /// path.
     Text,
@@ -87,7 +87,7 @@ pub enum SourceKind {
 /// extension component participates. Content is never sniffed to expand or
 /// redirect the whitelist; a mislabeled file is decoded by exactly the
 /// decoder its extension selects.
-pub fn classify_source(target: &Path) -> SourceKind {
+pub(super) fn classify_source(target: &Path) -> SourceKind {
     let Some(extension) = target.extension().and_then(|e| e.to_str()) else {
         return SourceKind::Text;
     };
@@ -221,7 +221,7 @@ fn read_document_source_bounded(target: &Path) -> Result<Vec<u8>, String> {
 /// ordinary Read path contract; only those bytes are ever handed to xberg,
 /// as in-memory bytes with an explicit MIME type. The function is
 /// synchronous and intended to run on a blocking thread.
-pub fn decode_document(target: &Path, format: DocumentFormat) -> Result<String, String> {
+pub(super) fn decode_document(target: &Path, format: DocumentFormat) -> Result<String, String> {
     let bytes = read_document_source_bounded(target)?;
     // The xberg decode pipeline starts here: everything before this line is
     // rustX-owned acquisition and bounding.
@@ -287,7 +287,7 @@ pub fn decode_document(target: &Path, format: DocumentFormat) -> Result<String, 
 /// there and, when the hook is gated, blocks until the test releases it.
 /// No production behavior reads any of this.
 #[cfg(test)]
-pub mod decode_hooks {
+pub(super) mod decode_hooks {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;

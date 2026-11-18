@@ -25,7 +25,7 @@ pub struct FileComparison {
     pub truncated: bool,
 }
 
-pub struct FileContents {
+pub(super) struct FileContents {
     old_text: Option<String>,
     new_text: Option<String>,
     pub binary: bool,

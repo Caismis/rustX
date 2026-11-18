@@ -24,7 +24,7 @@ pub enum ContentRepresentation {
 }
 impl ContentRepresentation {
     /// Private storage/cache key; serde retains the descriptive public name.
-    pub const fn key(self) -> &'static str {
+    pub(crate) const fn key(self) -> &'static str {
         match self {
             Self::Utf8Text => "t",
             Self::RawJsonUtf8 => "r",
@@ -45,7 +45,7 @@ pub enum CanonicalContentComponent {
     MessageMetadata,
 }
 impl CanonicalContentComponent {
-    pub const fn key(self) -> &'static str {
+    pub(crate) const fn key(self) -> &'static str {
         match self {
             Self::Payload => "canonical",
             Self::BlockMetadata => "cb",
@@ -72,7 +72,7 @@ pub enum CanonicalContentLocator {
     },
 }
 impl CanonicalContentLocator {
-    pub fn key(&self) -> std::borrow::Cow<'_, str> {
+    pub(crate) fn key(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::ByMessageId { message_id } => {
                 std::borrow::Cow::Owned(format!("message:{}", message_id.as_str()))
@@ -125,11 +125,11 @@ pub enum ContentSource {
 }
 impl ContentSource {
     /// The store key of the instructions a configuration change fact retains.
-    pub const CONFIGURATION_INSTRUCTIONS: &'static str = "configuration_instructions";
+    pub(crate) const CONFIGURATION_INSTRUCTIONS: &'static str = "configuration_instructions";
     /// The store key of the catalog a configuration change fact retains.
-    pub const CONFIGURATION_CATALOG: &'static str = "configuration_catalog";
+    pub(crate) const CONFIGURATION_CATALOG: &'static str = "configuration_catalog";
 
-    pub fn key(&self) -> (&'static str, std::borrow::Cow<'_, str>, u32) {
+    pub(crate) fn key(&self) -> (&'static str, std::borrow::Cow<'_, str>, u32) {
         match self {
             Self::CanonicalMessageBlock {
                 component,
