@@ -32,7 +32,8 @@ use rustx_execution_protocol::transport::{
 };
 use rustx_execution_protocol::{
     Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, Hello, HelloReply,
-    MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError, is_normalized_absolute_path,
+    MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError, RegularFileStamp,
+    is_normalized_absolute_path,
 };
 
 /// `O_NOFOLLOW` refuses a symlinked final component; `O_NONBLOCK` makes a
@@ -291,12 +292,26 @@ fn read_range(
         expected_revision,
         |relative| root.file(relative),
     ) {
-        Ok(chunk) => ClientReply::Range {
-            data_base64: chunk.data_base64,
-            offset,
-            next_offset: chunk.next_offset.map(DecimalU64::new),
-            revision: chunk.metadata.revision,
-        },
+        Ok(chunk) => {
+            // The wire file type is implicitly regular: the same stamp that
+            // verified the read projects it — never a fresh stat.
+            if !chunk.metadata.is_file {
+                return ClientReply::Error {
+                    kind: ReadError::Denied,
+                };
+            }
+            ClientReply::Range {
+                data_base64: chunk.data_base64,
+                offset,
+                next_offset: chunk.next_offset.map(DecimalU64::new),
+                metadata: RegularFileStamp {
+                    size: DecimalU64::new(chunk.metadata.size),
+                    revision: chunk.metadata.revision,
+                    identity: chunk.metadata.identity,
+                    modified_at_ms: chunk.metadata.modified_at_ms,
+                },
+            }
+        }
         Err(error) => ClientReply::Error {
             kind: match error.kind() {
                 std::io::ErrorKind::InvalidInput => ReadError::Invalid,

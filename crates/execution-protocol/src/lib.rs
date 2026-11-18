@@ -528,14 +528,33 @@ pub enum ClientReply {
         offset: DecimalU64,
         /// The next offset to read, absent at end of file.
         next_offset: Option<DecimalU64>,
-        /// The revision the range was verified under.
-        revision: String,
+        /// The source-descriptor stamp of the file the bytes came from.
+        metadata: RegularFileStamp,
     },
     /// The request failed; `kind` carries only the stable reason.
     Error {
         /// Why the operation failed — never a raw path or payload.
         kind: ReadError,
     },
+}
+
+/// The source-descriptor stamp of the regular file a range was read from.
+///
+/// Carried on every [`ClientReply::Range`] so the Server can project the
+/// file-read result without re-statting the workspace itself. The wire file
+/// type is implicitly regular: a `Range` reply only ever describes
+/// regular-file bytes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RegularFileStamp {
+    /// The file's byte length at the read.
+    pub size: DecimalU64,
+    /// The content-stable revision stamp the range was verified under.
+    pub revision: String,
+    /// The `dev:ino` identity of the file read.
+    pub identity: String,
+    /// Modification time in milliseconds since the Unix epoch, when known.
+    pub modified_at_ms: Option<i64>,
 }
 
 /// The stable machine reason a physical read failed.

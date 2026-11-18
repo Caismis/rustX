@@ -19,7 +19,7 @@ use constant_time_eq::constant_time_eq_32;
 use rustx_execution_protocol::{
     Admission, BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply,
     ClientRequest, ConnectionId, DecimalU64, EnvironmentId, Generation, Hello, HelloReply,
-    MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError, Reject, SessionId,
+    MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError, RegularFileStamp, Reject, SessionId,
     is_normalized_absolute_path,
     transport::{Handshake, encode_record, read_record, write_record},
 };
@@ -417,8 +417,8 @@ pub struct RangeRead {
     pub offset: u64,
     /// The next offset to read, absent at end of file.
     pub next_offset: Option<u64>,
-    /// The revision the range was verified under.
-    pub revision: String,
+    /// The source-descriptor stamp of the file the bytes came from.
+    pub metadata: RegularFileStamp,
 }
 
 impl LocalConnection<'_> {
@@ -570,7 +570,7 @@ impl LocalConnection<'_> {
             data_base64,
             offset: reply_offset,
             next_offset,
-            revision,
+            metadata,
         } = reply
         else {
             return Err(self.retire(violation("unexpected reply to range read")));
@@ -589,15 +589,27 @@ impl LocalConnection<'_> {
         }
         // The revision is a SHA-256 hex stamp: exactly 64 lowercase
         // hexadecimal characters, nothing else.
-        if revision.len() != 64
-            || !revision
+        if metadata.revision.len() != 64
+            || !metadata
+                .revision
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
         {
             return Err(self.retire(violation("range reply carries an invalid revision")));
         }
+        // The identity is the confined-fs `dev:ino` layout: two canonical
+        // decimal halves under the u64 pair bound, nothing else.
+        if metadata.identity.len() > 41
+            || !metadata.identity.split_once(':').is_some_and(|(dev, ino)| {
+                [dev, ino]
+                    .into_iter()
+                    .all(|part| part.parse::<DecimalU64>().is_ok())
+            })
+        {
+            return Err(self.retire(violation("range reply carries an invalid identity")));
+        }
         if let Some(expected) = expected_revision
-            && revision != expected
+            && metadata.revision != expected
         {
             return Err(self.retire(violation("range reply revision ignores expectation")));
         }
@@ -607,18 +619,19 @@ impl LocalConnection<'_> {
         let Some(end) = offset.checked_add(length) else {
             return Err(self.retire(violation("range reply overflows the offset space")));
         };
-        match next_offset {
-            // A continuing reply must land exactly at the end of the
-            // delivered bytes, which then must have filled the bound.
-            Some(next) if next.get() == end && bytes.len() == bound => {}
-            Some(_) => return Err(self.retire(violation("range reply has an invalid cursor"))),
-            None => {}
+        let size = metadata.size.get();
+        if offset > size
+            || end > size
+            || (*next_offset).map(DecimalU64::get) != (end < size).then_some(end)
+            || (end < size && bytes.len() != bound)
+        {
+            return Err(self.retire(violation("range reply contradicts file size")));
         }
         Ok(RangeRead {
             bytes,
             offset,
             next_offset: (*next_offset).map(DecimalU64::get),
-            revision: revision.clone(),
+            metadata: metadata.clone(),
         })
     }
 }
@@ -1173,7 +1186,12 @@ mod tests {
                     data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
                     offset,
                     next_offset: None,
-                    revision: "a".repeat(64),
+                    metadata: RegularFileStamp {
+                        size: DecimalU64::new(2),
+                        revision: "a".repeat(64),
+                        identity: String::from("1:1"),
+                        modified_at_ms: None,
+                    },
                 },
             )
             .unwrap();
@@ -1285,7 +1303,12 @@ mod tests {
                     data_base64: String::new(),
                     offset,
                     next_offset: None,
-                    revision: String::from("not-a-revision"),
+                    metadata: RegularFileStamp {
+                        size: DecimalU64::new(0),
+                        revision: String::from("not-a-revision"),
+                        identity: String::from("1:1"),
+                        modified_at_ms: None,
+                    },
                 },
             )
             .unwrap();
@@ -1298,6 +1321,51 @@ mod tests {
 
         // The violation detached the binding and retired the stream:
         // nothing further is ever requested on it.
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_size_contradiction_retires_the_stream_and_detaches_the_binding() {
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::ReadRange,
+        ]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &hello).unwrap();
+        let mut connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+
+        // The peer declares premature EOF: bytes end below the stamped size
+        // yet no continuation cursor is offered and the bound is unfilled.
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadRange { offset, .. } = request else {
+                panic!("expected a range request");
+            };
+            write_record(
+                &mut peer,
+                &ClientReply::Range {
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
+                    offset,
+                    next_offset: None,
+                    metadata: RegularFileStamp {
+                        size: DecimalU64::new(5),
+                        revision: "a".repeat(64),
+                        identity: String::from("1:1"),
+                        modified_at_ms: None,
+                    },
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .read_range(Path::new("file"), 0, 64, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+
         assert_eq!(binding.status().phase, BindingPhase::Detached);
         assert!(connection.ping().is_err());
     }

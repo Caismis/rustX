@@ -276,6 +276,9 @@ fn read_range_serves_verified_bytes_at_a_sparse_file_boundary() {
     file.write_all(marker).unwrap();
     drop(file);
 
+    let expected =
+        rustx_confined_fs::FileMetadata::of(&std::fs::File::open(&path).unwrap()).unwrap();
+
     let mut child = spawn_client(&rig);
     let stream = accept(&rig, &mut child);
     let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
@@ -286,7 +289,10 @@ fn read_range_serves_verified_bytes_at_a_sparse_file_boundary() {
     assert_eq!(range.bytes, marker);
     assert_eq!(range.offset, marker_at);
     assert_eq!(range.next_offset, None);
-    assert_ne!(range.revision, "");
+    assert_eq!(range.metadata.size.get(), expected.size);
+    assert_eq!(range.metadata.revision, expected.revision);
+    assert_eq!(range.metadata.identity, expected.identity);
+    assert_eq!(range.metadata.modified_at_ms, expected.modified_at_ms);
 
     // A bounded mid-file read returns the exact slice and a live cursor.
     let range = connection
@@ -294,7 +300,45 @@ fn read_range_serves_verified_bytes_at_a_sparse_file_boundary() {
         .unwrap();
     assert_eq!(range.bytes, vec![0; 64]);
     assert_eq!(range.next_offset, Some(7 + 64));
+    assert_eq!(range.metadata.revision, expected.revision);
 
+    // Reading exactly at EOF yields empty bytes, the same stamp, and no
+    // continuation.
+    let range = connection
+        .read_range(Path::new("blob"), expected.size, 64, None)
+        .unwrap();
+    assert_eq!(range.bytes, Vec::<u8>::new());
+    assert_eq!(range.offset, expected.size);
+    assert_eq!(range.next_offset, None);
+    assert_eq!(range.metadata.revision, expected.revision);
+
+    drop(connection);
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn a_fully_consumed_empty_file_is_a_valid_read() {
+    let rig = rig();
+    let path = rig.workspace_path.join("empty");
+    fs::write(&path, b"").unwrap();
+    let expected =
+        rustx_confined_fs::FileMetadata::of(&std::fs::File::open(&path).unwrap()).unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    let range = connection
+        .read_range(Path::new("empty"), 0, 64, None)
+        .unwrap();
+    assert_eq!(range.bytes, Vec::<u8>::new());
+    assert_eq!(range.offset, 0);
+    assert_eq!(range.next_offset, None);
+    assert_eq!(range.metadata.size.get(), expected.size);
+    assert_eq!(range.metadata.revision, expected.revision);
+    assert_eq!(range.metadata.identity, expected.identity);
+
+    connection.ping().unwrap();
     drop(connection);
     assert!(child.wait().unwrap().success());
 }
@@ -314,7 +358,7 @@ fn stale_expected_revision_is_a_conflict_not_a_read() {
         .unwrap();
     fs::write(&path, b"second").unwrap();
     let error = connection
-        .read_range(Path::new("asset"), 0, 64, Some(&range.revision))
+        .read_range(Path::new("asset"), 0, 64, Some(&range.metadata.revision))
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
 

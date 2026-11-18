@@ -250,10 +250,15 @@ publishes the trusted-channel bundle:
   trusted only after its base64 encoding fits the encoded-length bound
   before decoding and decodes within the requested bound, its offset
   echoes the request, its `next_offset` continues the delivered bytes
-  exactly (which must then fill the bound) without overflow, its
-  revision is a 64-character lowercase-hex SHA-256 stamp, and any
-  expected revision matches. A transport failure, truncation, unexpected
-  reply type, malformed `Range`, or offset overflow retires the stream —
+  exactly (which must then fill the bound) without overflow, and its
+  stamp checks out: the revision is a 64-character lowercase-hex
+  SHA-256 stamp matching any expected revision, the identity is a
+  bounded `dev:ino` pair of two canonical decimals, and the stamped
+  size agrees with the delivered range — offset and end may not pass
+  it, `next_offset` is present exactly while the end stays short of
+  it, and a continued reply must have filled the bound. A transport
+  failure, truncation, unexpected reply type, malformed `Range`, or
+  offset overflow retires the stream —
   `usable` is dropped, the binding is disconnected, and the socket is
   shut down; it is never reused with a reply accounting that cannot be
   trusted.
@@ -288,11 +293,17 @@ rather than duplicating the business types.
 On the wire the operation is `ClientRequest::ReadRange { relative_path,
 offset: DecimalU64, max_bytes: u32, expected_revision: Option<String>
 }` answered by `ClientReply::Range { data_base64, offset, next_offset,
-revision }` or `ClientReply::Error { kind }` with the stable
+metadata }` or `ClientReply::Error { kind }` with the stable
 `ReadError` codes `invalid`, `denied`, `not-found`, `conflict`,
-`unavailable` — no raw paths or payload details cross back. The Client
-validates `relative_path` to normal components only and enforces
-`1..=64 KiB` before touching the filesystem.
+`unavailable` — no raw paths or payload details cross back. `metadata`
+is a `RegularFileStamp { size: DecimalU64, revision, identity,
+modified_at_ms }`: the source descriptor of the file the bytes were
+read from, projected from the same `FileChunk.metadata` the confined
+read already verified — the Client performs no second stat for the
+reply, and a nonregular result is denied rather than stamped. The wire
+file type is implicitly regular; `Range` never describes another kind.
+The Client validates `relative_path` to normal components only and
+enforces `1..=64 KiB` before touching the filesystem.
 
 `rustx-execution-client --binding-file PATH --workspace PATH` is the
 physical Client:
@@ -624,8 +635,12 @@ two-process tests over a Unix socket that drive the built
 shutdown, post-EOF replay rejection, `0644` file/`0755` directory and
 hardlink denial, no retry or artifacts on reject, caller-controlled
 reaping without orphans, and — for this layer — exact bounded bytes at
-a sparse-file marker near EOF with correct offset/`next_offset`/
-revision, stale-revision conflict, symlink/`..`/absolute-path denial,
+a sparse-file marker near EOF with correct offset/`next_offset` and a
+full source-descriptor stamp (size, revision, `dev:ino` identity,
+mtime) verified against independently opened metadata — plus an
+exact-EOF read returning empty bytes under the same stamp and a fully
+consumed empty file — stale-revision conflict,
+symlink/`..`/absolute-path denial,
 unbound-workspace refusal before connect, foreign bootstrap-version
 refusal before connect, revoke-before-read denial, tampered-bundle
 capability refusal, admitted-capability gating (a `Connection`-only peer
