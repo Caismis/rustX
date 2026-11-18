@@ -6,7 +6,6 @@
   font-family: var(--dsw-font, inherit);
   white-space: normal;
 }
-
 /* Leading YAML frontmatter: a bordered metadata box above the body, never heading text. */
 .frontmatter {
   margin: 0 0 16px;
@@ -19,12 +18,10 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-
 /* A document without frontmatter content leaves the box empty. */
 .frontmatter:empty {
   display: none;
 }
-
 .frontmatterSource {
   margin: 0;
   font-family: var(--ds-font-family-code);

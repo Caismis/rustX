@@ -8,6 +8,5 @@
   overflow-wrap: anywhere;
 }
 .notice pre { white-space: pre-wrap; }
-
 /* Reserve the controls' height without flashing unread placeholder labels. */
 .pendingControl { visibility: hidden; }

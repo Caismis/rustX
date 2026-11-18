@@ -1,2 +1,2 @@
-.read { margin-block: 4px; padding: 4px 8px; border: 1px solid currentColor; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.read { margin-block: 4px; padding: 4px 8px; border: 1px solid currentColor; border-radius: var(--dsw-radius-sm); background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .read:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
