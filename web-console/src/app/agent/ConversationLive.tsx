@@ -50,6 +50,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const readingOwner = useClientSelector(client, state => {
     const native = sessionId ? state.views[sessionId] : undefined;
     return { endpoint: state.endpoint, authority: state.authorityId, authorityRevision: state.authorityRevision, node: native?.nodeId, conversation: native?.target?.conversation_id ?? native?.nodeConversationId,
+      loading: state.connection === 'connected' && !!native && !native.error && !native.deleting && (native.attachment === 'attaching' || native.attachment === 'resynchronizing' || native.observationState === 'checkpointLoading'),
       wanted: !!native && native.attachmentIntent === 'wanted' && !native.deletionCommitted,
       checkpointPending: !!native && !native.snapshot && native.attachmentIntent === 'wanted' && !native.deletionCommitted };
   }, shallowEqual);
@@ -135,7 +136,10 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     </ConversationRunCanvasHost>
   );
   if (sessionId && tracePreview) return wrapCanvas(<Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>);
-  if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}><PendingMessage client={client} sessionId={sessionId}/></ChatViewport> : null;
+  if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}>
+    {readingOwner.loading && !waiting && <div className={pendingCss.root}><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
+    <PendingMessage client={client} sessionId={sessionId}/>
+  </ChatViewport> : null;
   return wrapCanvas(mode === 'trajectory' && view.trace
     ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}/>
     : <JournalSourceProvider presentationOwner={presentationOwner} historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={readingPending ? undefined : view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} latestLabel={tx('agent:agent-transcript.return-to-latest')}
@@ -197,6 +201,12 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
   }:undefined}><ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/></JournalSourceProvider>;
 }
 
+function ConversationSkeleton({ label, phase }: { label: string; phase?: string }) {
+  return <div className={pendingCss.skeleton} role="status" aria-label={label} data-first-submission={phase}>
+    <span aria-hidden="true"/><span aria-hidden="true"/><span aria-hidden="true"/>
+  </div>;
+}
+
 export function PendingMessage({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
   const tx = useTranslation();
   const flow = useSyncExternalStore(firstSubmissions(client).subscribe, () => firstSubmissions(client).session(sessionId));
@@ -208,6 +218,6 @@ export function PendingMessage({ client, sessionId }: { client: AppServerClient;
     <UserMessage label={tx('agent:message.your-message')} attachments={flow.attachments.length > 0 ? flow.attachments.map(file => file.type.startsWith('image/')
       ? <AttachmentCard key={file.id} name={file.name} image/>
       : <MessageFile key={file.id} name={file.name} bytes={file.size}/>) : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>
-    <AssistantMessage label={tx('agent:message.assistant-response')}><p className={pendingCss.waiting} role="status" aria-label={tx('agent:submission.sending')} data-first-submission={flow.phase}><span className={pendingCss.dot} aria-hidden="true"/></p></AssistantMessage>
+    <AssistantMessage label={tx('agent:message.assistant-response')}><ConversationSkeleton label={tx('agent:submission.sending')} phase={flow.phase}/></AssistantMessage>
   </div>;
 }

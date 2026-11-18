@@ -1,6 +1,23 @@
 .root { display: flex; flex-direction: column; gap: 20px; padding-bottom: 16px; width: 100%; max-width: var(--dsh-chat-content-width); margin: 0 auto; }
 .text { white-space: pre-wrap; overflow-wrap: anywhere; }
-.waiting { display: flex; align-items: center; gap: 8px; color: var(--dsw-alias-label-tertiary); font-size: 14px; }
-.dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
-@keyframes pulse { 50% { opacity: .3; } }
-@media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+.skeleton {
+  display: grid;
+  gap: .7em;
+  width: min(100%, 32rem);
+  padding-block: .5em;
+  animation: reveal .16s ease-out .2s backwards;
+}
+.skeleton span {
+  height: .75em;
+  border-radius: .25em;
+  background: linear-gradient(100deg, transparent 30%, var(--dsw-alias-bg-skeleton) 50%, transparent 70%) 100% 0 / 240% 100% var(--dsw-alias-bg-skeleton);
+  animation: sweep 2s ease-in-out infinite;
+}
+.skeleton span:nth-child(2) { width: 86%; }
+.skeleton span:last-child { width: 57%; }
+@keyframes reveal { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sweep { to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .skeleton { animation-timing-function: step-end; }
+  .skeleton span { animation: none; }
+}
