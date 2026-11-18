@@ -8,6 +8,8 @@ spec = importlib.util.spec_from_file_location(
 build = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(build)
 
+MEMBERS = ['rustx', 'rustx-types']
+
 
 class BuildIdentityTests(unittest.TestCase):
     def artifacts(self):
@@ -16,26 +18,34 @@ class BuildIdentityTests(unittest.TestCase):
              'target': {'name': name, 'kind': [kind], 'src_path': '/repo/' + source}}
             for name, kind, source in (
                 ('rustx', 'lib', 'src/lib.rs'),
+                ('rustx-types', 'lib', 'crates/rustx-types/src/lib.rs'),
                 ('conformance', 'test', 'tests/conformance/main.rs'))
         ]
 
     def test_requires_fresh_library_and_harness(self):
-        for cached in (0, 1):
+        for cached in range(3):
             records = self.artifacts()
             records[cached]['fresh'] = True
             with self.assertRaisesRegex(ValueError, 'freshly compiled'):
-                build.checked_artifacts(records, Path('/repo'))
+                build.checked_artifacts(records, Path('/repo'), MEMBERS)
 
     def test_rejects_different_checkout(self):
-        for changed in (0, 1):
+        for changed in range(3):
             records = self.artifacts()
             records[changed]['target']['src_path'] = '/other/source.rs'
             with self.assertRaisesRegex(ValueError, 'different checkout'):
-                build.checked_artifacts(records, Path('/repo'))
+                build.checked_artifacts(records, Path('/repo'), MEMBERS)
 
-    def test_accepts_both_fresh_current_artifacts(self):
+    def test_rejects_missing_member_artifact(self):
         records = self.artifacts()
-        artifacts, library, benchmark = build.checked_artifacts(records, Path('/repo'))
+        del records[1]
+        with self.assertRaisesRegex(ValueError, 'rustx-types'):
+            build.checked_artifacts(records, Path('/repo'), MEMBERS)
+
+    def test_accepts_fresh_current_artifacts(self):
+        records = self.artifacts()
+        artifacts, library, benchmark = build.checked_artifacts(
+            records, Path('/repo'), MEMBERS)
         self.assertEqual(artifacts, records)
         self.assertIs(library, records[0])
-        self.assertIs(benchmark, records[1])
+        self.assertIs(benchmark, records[2])
