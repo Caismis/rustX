@@ -428,11 +428,17 @@ fn metadata_targets(cargo: &str, root: &Path) -> Result<PackageMetadata, String>
 }
 
 fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, String> {
-    let packages = metadata["packages"]
-        .as_array()
-        .filter(|packages| packages.len() == 1)
-        .ok_or("cargo metadata must describe exactly the one rustx package")?;
-    let package = &packages[0];
+    let packages = metadata["packages"].as_array().ok_or("cargo metadata has no packages")?;
+    let package = if packages.len() == 1 {
+        &packages[0]
+    } else {
+        // The workspace also hosts the extracted `rustx-*` crates; lanes only
+        // cover the root package's targets.
+        packages
+            .iter()
+            .find(|package| package["name"].as_str() == Some("rustx"))
+            .ok_or("cargo metadata has no rustx package")?
+    };
     let package_id = package["id"]
         .as_str()
         .filter(|id| !id.is_empty())
