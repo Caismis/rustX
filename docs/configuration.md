@@ -535,6 +535,10 @@ Root-only Goal pursuit. No dynamic plugin loading, hook API or marketplace exist
 `{ mode = "window", milliseconds = N }`. Meaningful progress can satisfy an
 idle window but cannot extend a hard deadline.
 
+For native Bash, a foreground call can move to the background if its handoff
+budget is at or below `hard_deadline_ms`. If the hard deadline comes first,
+the runtime terminates the call through the normal deadline settlement path.
+
 Initial MCP readiness uses a separate native policy in `rustx.toml`:
 
 ```toml

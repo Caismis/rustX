@@ -1684,12 +1684,14 @@ ordered `ToolExecutionStarted`, the retained progress facts,
 canonical ToolResult remains the only outcome authority.
 
 When Bash permits both execution modes, a foreground call starts one process
-privately and waits for the foreground budget. The budget is 120 seconds when `timeout` is omitted, matching the
-DeepSeek Harness executor default, and an explicit `timeout` overrides it,
-capped at 600 seconds. A command that finishes within the budget returns a
-normal foreground result: no background job is listed and no terminal inbound
-is published. A command still running at the budget is adopted into the
-conversation-owned registry and the call returns the handoff. Cancellation of
+privately and waits for the foreground budget. The budget is 120 seconds when
+`timeout` is omitted, matching the DeepSeek Harness executor default. An
+explicit `timeout` overrides it, capped at 600 seconds. A strictly shorter
+runtime hard deadline takes priority and terminates the foreground execution.
+A command that finishes within the budget returns a normal foreground result
+without a job listing or a terminal inbound. A command still running at the
+budget is adopted into the conversation-owned registry and the call returns
+the handoff. Cancellation of
 the call still kills that one process. Progress reported while the call waits
 stays on the foreground progress path. If Goal admission temporarily excludes a new job,
 Bash runs in the foreground with that budget as its execution timeout.

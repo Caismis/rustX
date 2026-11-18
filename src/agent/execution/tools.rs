@@ -1049,7 +1049,7 @@ impl AgentExecution<'_> {
             ToolInvocationMode::Foreground
                 if promotes_native_bash(self.tool_registry(), &prepared) =>
             {
-                self.run_bash_foreground_handoff(&prepared, todos, &occurrence, environment)
+                self.run_bash_foreground_handoff(prepared, todos, &occurrence, environment)
                     .await
             }
             ToolInvocationMode::Foreground => {
@@ -1296,7 +1296,7 @@ impl AgentExecution<'_> {
     /// Stages Bash privately, prints progress, and adopts a job only at the budget.
     async fn run_bash_foreground_handoff(
         &self,
-        prepared: &PreparedInvocation,
+        mut prepared: PreparedInvocation,
         todos: Option<crate::tools::todo::TodoWriter>,
         occurrence: &crate::message::types::ToolCallOccurrenceRef,
         environment: ToolEnvironment,
@@ -1304,11 +1304,18 @@ impl AgentExecution<'_> {
         let budget = crate::tools::limits::bash_foreground_budget(explicit_bash_timeout(
             &prepared.invocation.arguments,
         ));
-        let mut invocation = prepared.invocation.clone();
-        invocation.mode = ToolInvocationMode::Background;
-        if let Some(object) = invocation.arguments.as_object_mut() {
+        if let Some(object) = prepared.invocation.arguments.as_object_mut() {
             object.remove("timeout");
         }
+        // A strictly earlier hard deadline owns termination. At equal budgets
+        // Bash can hand off, including under the default two-minute policy.
+        if self.tool_deadline_policy.hard_deadline < budget {
+            return self
+                .run_foreground(&prepared, todos, occurrence, environment)
+                .await;
+        }
+        let mut invocation = prepared.invocation.clone();
+        invocation.mode = ToolInvocationMode::Background;
         let executor = self.tool_registry().executor(&invocation.tool_id);
         let Some(mcp_leases) = self.capability.mcp_leases() else {
             return (
@@ -1324,15 +1331,14 @@ impl AgentExecution<'_> {
         ) {
             Ok(stage) => stage,
             Err(crate::tools::background::BackgroundDispatchError::GoalAdmissionInProgress) => {
-                let mut killing = prepared.clone();
-                if let Some(object) = killing.invocation.arguments.as_object_mut() {
+                if let Some(object) = prepared.invocation.arguments.as_object_mut() {
                     object.insert(
                         "timeout".to_owned(),
                         serde_json::json!(budget.as_secs().max(1)),
                     );
                 }
                 return self
-                    .run_foreground(&killing, todos, occurrence, environment)
+                    .run_foreground(&prepared, todos, occurrence, environment)
                     .await;
             }
             Err(crate::tools::background::BackgroundDispatchError::ConversationInactive {
