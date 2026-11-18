@@ -12,7 +12,8 @@
     "Discard preview triangulations before later refinement; no coarse-to-final mesh substitution",
     "Add opt-in bounded native phase/tier aggregates with inclusive spans, committed WASM capacity and separately labeled major-boundary allocator samples",
     "Bound final output before typed-buffer allocation and return explicit limit failures",
-    "Apply and audit identical explicit optimization/LTO choices at compile and link across the complete importer/OCCT target"
+    "Apply and audit identical explicit optimization/LTO choices at compile and link across the complete importer/OCCT target",
+    "Use the existing Flex bulk stream refill for STEP without changing grammar, record storage or allocation"
   ],
   "wasmMaximumBytes": 2147483648,
   "modifiedSources": [
@@ -49,7 +50,7 @@
     },
     "translationUnits": 4775,
     "occtTranslationUnits": 4768,
-    "compileCommandsSha256": "83a64136ffc0519663b29f198781e12fa5fee6e2db1c62ebbfa0a7862002e068",
+    "compileCommandsSha256": "713ff263dc3ffbf75e9434bfa28178a58e67550c08d3a28669525ea2a19fc6f7",
     "effectiveLinkCommandSha256": "4981748d90e98bd23b59a99f78e67e6b7b8be57de80a0954bf7cdd344376eeed",
     "effectiveOptimizationFlags": [
       "-O3"
@@ -63,7 +64,12 @@
     ],
     "assetSha256": {
       "occt-import-js.js": "4d94a94bdd52d550326d44a2d6fbb7ce2d91e78d888cf9da263084b8dc420796",
-      "occt-import-js.wasm": "40223e186a18c76b77aa42ec04b44ce0c7f430d6523cc71ed32bbe1d0554be0d"
-    }
+      "occt-import-js.wasm": "0c7fbaad0ae9ed296856793c935031b69983c4124906ead2cde3e803416f1c27"
+    },
+    "occtModifiedSourcesSha256": {
+      "src/StepFile/step.lex": "887639be668f0bd9bc0361cbbf55b59582b1a72ac92bd631e148a9f5268b142c",
+      "src/StepFile/lex.step.cxx": "2c4c9972fd91ef309e2c56e416e2af1aaa51e9a730a582e286972aa470ba5e96"
+    },
+    "occtPatchSha256": "f8563cf99347e8bd7faf012ed779c1bea54cce8b82935179bb3d5b31f0ce78c8"
   }
 }

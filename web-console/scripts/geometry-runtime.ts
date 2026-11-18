@@ -11,12 +11,17 @@ if (importer.version !== '0.0.23-rustx.4' || renderer.version !== '0.187.0') thr
 const modifiedSources = ['src/importer-brep.cpp', 'src/importer-brep.hpp', 'src/importer-iges.cpp', 'src/importer-step.cpp', 'src/importer-utils.cpp', 'src/importer-utils.hpp', 'src/importer.hpp', 'src/js-interface.cpp', 'src/native-profile.hpp'];
 const actualSources = readdirSync(new URL('../src/', cad)).map(name => `src/${name}`).sort();
 if (JSON.stringify(actualSources) !== JSON.stringify(modifiedSources)) throw new Error('Unreviewed CAD modified source set');
-const buildRecipeSha256 = Object.fromEntries(['rebuild.sh', 'configure-build.py', 'audit-build.py'].map(file => [file,
+const buildRecipeSha256 = Object.fromEntries(['rebuild.sh', 'configure-build.py', 'audit-build.py', 'step-bulk-lexer.patch'].map(file => [file,
   createHash('sha256').update(readFileSync(new URL(`../${file}`, cad))).digest('hex')]));
 const modifiedSourcesSha256 = Object.fromEntries(modifiedSources.map(file => [file,
   createHash('sha256').update(readFileSync(new URL(`../${file}`, cad))).digest('hex')]));
 const upstream = JSON.parse(readFileSync(new URL('../UPSTREAM.json', cad), 'utf8'));
 const build = upstream.build;
+const stepSources = ['src/StepFile/step.lex', 'src/StepFile/lex.step.cxx'];
+if (JSON.stringify(Object.keys(build.occtModifiedSourcesSha256 ?? {}).sort()) !== JSON.stringify([...stepSources].sort())
+  || stepSources.some(file => !/^[a-f0-9]{64}$/.test(build.occtModifiedSourcesSha256[file]))
+  || build.occtPatchSha256 !== buildRecipeSha256['step-bulk-lexer.patch'])
+  throw new Error('Unreviewed OCCT STEP scanner patch');
 if (JSON.stringify(upstream.modifiedSources) !== JSON.stringify(modifiedSources.map(file => `occt-import-js/${file}`))) throw new Error('CAD source offer differs from reviewed source set');
 for (const [file, hash] of Object.entries(modifiedSourcesSha256)) {
   if (build.modifiedSourcesSha256[file.slice(4)] !== hash) throw new Error(`CAD build used different source: ${file}`);
@@ -57,7 +62,7 @@ if (process.argv.includes('--artifact')) {
   if (!shipped.some(bytes => createHash('sha256').update(bytes).digest('hex') === assets['occt-import-js.wasm'].sha256)) throw new Error('Reviewed CAD WASM missing from production assets');
   // Distribute the complete modified source and rebuild instructions alongside
   // the binary, without requiring access to a particular repository branch.
-  for (const file of ['README.md', 'LICENSE.md', 'UPSTREAM.json', 'rebuild.sh', 'configure-build.py', 'audit-build.py', ...modifiedSources, 'dist/license.occt-import-js.txt', 'dist/license.occt.txt']) {
+  for (const file of ['README.md', 'LICENSE.md', 'UPSTREAM.json', 'rebuild.sh', 'configure-build.py', 'audit-build.py', 'step-bulk-lexer.patch', ...modifiedSources, 'dist/license.occt-import-js.txt', 'dist/license.occt.txt']) {
     const source = readFileSync(new URL(`../${file}`, cad)), target = new URL(`dist/cad-runtime-source/${file}`, root);
     mkdirSync(new URL('./', target), { recursive: true }); writeFileSync(target, source);
   }

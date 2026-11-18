@@ -3,7 +3,8 @@
 This package derives from occt-import-js 0.0.23 at importer commit
 `c2148e54b456b571238d35cac037d304053d64b2` and its OCCT submodule
 `d2abb6d844231cb8f29be6894440874a4700e4a5`. Complete changed sources are
-in `src/`; `UPSTREAM.json` lists them and the selected build configuration.
+in `src/`; `step-bulk-lexer.patch` applies the STEP lexer changes to the pinned
+OCCT submodule. `UPSTREAM.json` lists the sources and selected build configuration.
 
 Input uses Emscripten's public bulk numeric-vector conversion. Each mesh's
 position, normal and index streams are JS-owned `Float64Array` buffers. Native
@@ -48,6 +49,13 @@ Worker releases its exclusively owned JS backing buffer then; direct callers
 keep input by default. Native input is released after source transfer, before
 mesh extraction. Retained owner copies are never detached by this callback.
 
+The STEP scanner uses Flex's existing noninteractive bulk stream refill. The
+same preprocessor directive is in `step.lex` and the generated `lex.step.cxx`.
+To verify the generated change, run Flex 2.6.4 with `-Pstep -L` on the pinned
+and patched `step.lex`. Compare the two generated outputs after removing their
+input-path `#line` directive. The delta is applied to the scanner distributed by
+OCCT, retaining its whitespace and inline `yywrap` adjustment.
+
 ## Native profiling
 
 `onNativeProfile(spans)` is opt-in. It receives at most 27 fixed phase/tier
@@ -86,7 +94,8 @@ both compile and link across all importer and OCCT files. It removes CMake's
 implicit Release optimization and the upstream hard-coded compile-only `-Oz`.
 `audit-build.py` checks every generated compile command and the actual link
 command, emitting `verified-build.json`. An optional fourth argument reuses an
-existing pinned upstream checkout for a paired build. Exceptions, 10 MiB stack,
+existing pinned upstream checkout for a paired build. The recipe exports OCCT
+into the build directory before applying the scanner patch. Exceptions, 10 MiB stack,
 growing memory and the 2 GiB WASM maximum are preserved.
 
 The native comparison script is `web-console/scripts/benchmark-cad-native.mjs`.

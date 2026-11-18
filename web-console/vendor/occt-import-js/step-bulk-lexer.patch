@@ -1,0 +1,24 @@
+--- a/src/StepFile/step.lex
++++ b/src/StepFile/step.lex
+@@ -45,6 +45,9 @@
+ # undef YY_DECL
+ #endif
+ #define YY_DECL int step::scanner::lex (step::parser::semantic_type* /*yylval*/)
++
++// Use Flex bulk input for the STEP file stream.
++#undef YY_INTERACTIVE
+ 
+ typedef step::parser::token token;
+ 
+--- a/src/StepFile/lex.step.cxx
++++ b/src/StepFile/lex.step.cxx
+@@ -654,6 +654,9 @@
+ # undef YY_DECL
+ #endif
+ #define YY_DECL int step::scanner::lex (step::parser::semantic_type* /*yylval*/)
++
++// Use Flex bulk input for the STEP file stream.
++#undef YY_INTERACTIVE
+ 
+ typedef step::parser::token token;
+ 

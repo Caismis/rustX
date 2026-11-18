@@ -15,9 +15,10 @@
     "src/native-profile.hpp": "f4a1a1a1363663518e74cef3fa32e8c72baed385984f0cea7c1c5663026ff553"
   },
   "buildRecipeSha256": {
-    "rebuild.sh": "8b1128e737ec7948aebe64d5fbe2751257add1bb26412f343632606b061c1c76",
+    "rebuild.sh": "24a76b7bb1e14cde68890c5c76b206f9d0252c899e8604bd5311563b3564b578",
     "configure-build.py": "2bfcfbefc52db3d9316581d3607eb1ec2efcb0a4daad4a0bb77dac2b2f2f5356",
-    "audit-build.py": "8861c97be35c2791a171b177ecaa6395659ec8b8b669812cfe3096596a4574b8"
+    "audit-build.py": "6a6c13964ea190a857203025df98d826ccc1a3bd6c31a2295b722f6ffe083825",
+    "step-bulk-lexer.patch": "f8563cf99347e8bd7faf012ed779c1bea54cce8b82935179bb3d5b31f0ce78c8"
   },
   "build": {
     "optimization": "O3",
@@ -42,7 +43,7 @@
     },
     "translationUnits": 4775,
     "occtTranslationUnits": 4768,
-    "compileCommandsSha256": "83a64136ffc0519663b29f198781e12fa5fee6e2db1c62ebbfa0a7862002e068",
+    "compileCommandsSha256": "713ff263dc3ffbf75e9434bfa28178a58e67550c08d3a28669525ea2a19fc6f7",
     "effectiveLinkCommandSha256": "4981748d90e98bd23b59a99f78e67e6b7b8be57de80a0954bf7cdd344376eeed",
     "effectiveOptimizationFlags": [
       "-O3"
@@ -56,8 +57,13 @@
     ],
     "assetSha256": {
       "occt-import-js.js": "4d94a94bdd52d550326d44a2d6fbb7ce2d91e78d888cf9da263084b8dc420796",
-      "occt-import-js.wasm": "40223e186a18c76b77aa42ec04b44ce0c7f430d6523cc71ed32bbe1d0554be0d"
-    }
+      "occt-import-js.wasm": "0c7fbaad0ae9ed296856793c935031b69983c4124906ead2cde3e803416f1c27"
+    },
+    "occtModifiedSourcesSha256": {
+      "src/StepFile/step.lex": "887639be668f0bd9bc0361cbbf55b59582b1a72ac92bd631e148a9f5268b142c",
+      "src/StepFile/lex.step.cxx": "2c4c9972fd91ef309e2c56e416e2af1aaa51e9a730a582e286972aa470ba5e96"
+    },
+    "occtPatchSha256": "f8563cf99347e8bd7faf012ed779c1bea54cce8b82935179bb3d5b31f0ce78c8"
   },
   "wasmMaximumBytes": 2147483648,
   "assets": {
@@ -67,9 +73,9 @@
       "sha256": "4d94a94bdd52d550326d44a2d6fbb7ce2d91e78d888cf9da263084b8dc420796"
     },
     "occt-import-js.wasm": {
-      "bytes": 12134802,
+      "bytes": 12134779,
       "gzipBytes": 3985390,
-      "sha256": "40223e186a18c76b77aa42ec04b44ce0c7f430d6523cc71ed32bbe1d0554be0d"
+      "sha256": "0c7fbaad0ae9ed296856793c935031b69983c4124906ead2cde3e803416f1c27"
     },
     "license.occt-import-js.txt": {
       "bytes": 26526,

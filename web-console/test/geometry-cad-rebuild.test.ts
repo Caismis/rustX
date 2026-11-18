@@ -20,6 +20,9 @@ function checkout() {
   writeFileSync(join(importer, 'CMakeLists.txt'), '\ttarget_compile_options (OcctImportJS PUBLIC "$<$<CONFIG:Release>:-Oz>")\n');
   writeFileSync(join(importer, 'occt-import-js/src/importer-xcaf.cpp'), 'pinned XCAF source\n');
   writeFileSync(join(occt, 'native.cpp'), 'pinned OCCT source\n');
+  mkdirSync(join(occt, 'src/StepFile'), { recursive: true });
+  const lexer = '# undef YY_DECL\n#endif\n#define YY_DECL int step::scanner::lex (step::parser::semantic_type* /*yylval*/)\n\ntypedef step::parser::token token;\n\n';
+  for (const name of ['step.lex', 'lex.step.cxx']) writeFileSync(join(occt, 'src/StepFile', name), lexer);
   for (const repository of [importer, occt]) {
     git(repository, 'init', '--quiet'); git(repository, 'add', '.');
     git(repository, '-c', 'user.name=CAD test', '-c', 'user.email=cad-test@example.invalid', 'commit', '--quiet', '-m', 'Pinned test source');
@@ -47,6 +50,10 @@ it('accepts a clean local checkout and reaches source copy/configuration before 
   expect(existsSync(fixture.sentinel)).toBe(true);
   expect(readFileSync(join(fixture.target, 'occt-import-js/src/importer-xcaf.cpp'), 'utf8')).toBe('pinned XCAF source\n');
   expect(readFileSync(join(fixture.target, 'occt-import-js/src/importer.hpp'))).toEqual(readFileSync(offeredSource));
+  for (const name of ['step.lex', 'lex.step.cxx']) {
+    expect(readFileSync(join(fixture.target, 'occt/src/StepFile', name), 'utf8')).toContain('#undef YY_INTERACTIVE');
+    expect(readFileSync(join(fixture.occt, 'src/StepFile', name), 'utf8')).not.toContain('#undef YY_INTERACTIVE');
+  }
   expect(readFileSync(join(fixture.target, 'CMakeLists.txt'), 'utf8')).toContain('target_link_options (OcctImportJS PUBLIC -O3)');
 });
 it.each([

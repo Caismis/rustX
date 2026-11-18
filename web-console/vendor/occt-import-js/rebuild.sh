@@ -15,7 +15,8 @@ if [[ -n ${4:-} ]]; then
     git -C "$4/occt" diff --quiet HEAD --
     mkdir -p "$target"
     cp -a -- "$4/CMakeLists.txt" "$4/occt-import-js" "$target/"
-    ln -s -- "$4/occt" "$target/occt"
+    mkdir -- "$target/occt"
+    git -C "$4/occt" archive HEAD | tar -x -C "$target/occt"
 else
     git clone https://github.com/kovacsv/occt-import-js.git "$target"
     git -C "$target" checkout c2148e54b456b571238d35cac037d304053d64b2
@@ -23,6 +24,7 @@ else
     git -C "$target" submodule update --init --recursive --depth 1
     [[ $(git -C "$target/occt" rev-parse HEAD) = d2abb6d844231cb8f29be6894440874a4700e4a5 ]]
 fi
+GIT_CEILING_DIRECTORIES="$target" git -C "$target/occt" apply "$here/step-bulk-lexer.patch"
 cp -- "$here"/src/* "$target/occt-import-js/src/"
 python3 "$here/configure-build.py" "$target" "$optimization" "$lto"
 # Set Release explicitly to avoid CMake's implicit -O3 competing with the choice.

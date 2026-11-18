@@ -25,7 +25,11 @@ if [arg for arg in link_args if arg.startswith('-O')] != [expected] or ('-flto' 
     raise SystemExit('Link flags do not match compile flags')
 modified = ['importer-brep.cpp', 'importer-brep.hpp', 'importer-iges.cpp', 'importer-step.cpp', 'importer-utils.cpp', 'importer-utils.hpp', 'importer.hpp', 'js-interface.cpp', 'native-profile.hpp']
 source_hashes = {name: hashlib.sha256((root / 'occt-import-js/src' / name).read_bytes()).hexdigest() for name in modified}
-record = {**config, 'modifiedSourcesSha256': source_hashes, 'translationUnits': len(commands),
+step_sources = ['src/StepFile/step.lex', 'src/StepFile/lex.step.cxx']
+step_source_hashes = {name: hashlib.sha256((root / 'occt' / name).read_bytes()).hexdigest() for name in step_sources}
+patch_hash = hashlib.sha256(pathlib.Path(__file__).with_name('step-bulk-lexer.patch').read_bytes()).hexdigest()
+record = {**config, 'occtModifiedSourcesSha256': step_source_hashes, 'occtPatchSha256': patch_hash,
+          'modifiedSourcesSha256': source_hashes, 'translationUnits': len(commands),
           'occtTranslationUnits': sum('/occt/src/' in item['file'] for item in commands),
           'compileCommandsSha256': hashlib.sha256(compile_bytes).hexdigest(),
           'effectiveLinkCommandSha256': hashlib.sha256(links[0].encode()).hexdigest(),
