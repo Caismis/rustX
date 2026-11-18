@@ -311,6 +311,9 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
+      # Bound compiler parallelism on this heavy all-feature lane.
+      # libtest concurrency, targets, assertions, and the 90-minute ceiling stay.
+      CARGO_BUILD_JOBS: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -333,6 +336,11 @@ jobs:
       # the emitted package binaries beside every emitted test harness executable.
       # Including `--test contracts --test provider` builds those binaries against
       # the same ordinary library unit without a second default-feature build.
+      - name: Record compiler budget
+        run: |
+          echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
+          nproc
+          awk '/MemAvailable|MemTotal/ {print}' /proc/meminfo
       - name: Compile the contracts harnesses and stage the real executables
         run: python3 test-support/prepare_native_tests.py -- cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 
@@ -400,6 +408,9 @@ jobs:
 
     env:
       VERIFICATION_PROFILE: full
+      # Same compiler serialization as rust-contracts. Targets, assertions,
+      # libtest concurrency, and the 90-minute ceiling stay.
+      CARGO_BUILD_JOBS: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -438,6 +449,11 @@ jobs:
 
       # Prepare and stage the emitted package binaries beside the `--test`
       # and `--lib` test harnesses before executing either boundary step.
+      - name: Record compiler budget
+        run: |
+          echo "CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}"
+          nproc
+          awk '/MemAvailable|MemTotal/ {print}' /proc/meminfo
       - name: Compile the boundary harnesses and stage the real executables
         run: >-
           python3 test-support/prepare_native_tests.py --

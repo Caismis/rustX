@@ -441,6 +441,8 @@ class Workflow(unittest.TestCase):
         self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-platform-core"])
         for job in ("rust-contracts", "rust-boundaries", "rust-platform-boundaries"):
             self.assertIn("VERIFICATION_PROFILE: full", jobs[job])
+        for job in ("rust-contracts", "rust-boundaries", "rust-platform-core", "rust-platform-boundaries"):
+            self.assertIn('CARGO_BUILD_JOBS: "1"', jobs[job])
 
 
 class StackedMergeGit(unittest.TestCase):

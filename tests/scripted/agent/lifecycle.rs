@@ -2068,9 +2068,11 @@ async fn deferred_post_tool_context_cannot_bypass_a_later_policy_rejection() {
 #[tokio::test]
 async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access() {
     use crate::agent::lifecycle::ConfiguredApprovalPolicy;
+    use crate::observation::trace::{TraceState, TraceToolOutcome};
     use crate::runtime::ApprovalMode;
+    use crate::runtime::permission::review::{PermissionReviewVerdict, ScriptedPermissionReviewer};
     for name in ["write", "edit", "bash"] {
-        for decision in ["allow", "deny", "cancel", "full_access"] {
+        for decision in ["allow", "deny", "cancel", "full_access", "automatic_deny"] {
             let fixture = common::native_fixture();
             let definition = fixture
                 .registry
@@ -2082,7 +2084,7 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 GatedTool::new(definition.clone(), Arc::new(Mutex::new(Vec::new())));
             let mut tools = ToolRegistry::new();
             probe.register(&mut tools);
-            let arguments = match name {
+            let mut arguments = match name {
                 // Plan elevates non-fast-path defaults only with a nonblank
                 // elevation_reason; otherwise the call is Denied and never Asks.
                 "write" => serde_json::json!({
@@ -2103,6 +2105,12 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 }),
                 _ => unreachable!(),
             };
+            if decision == "automatic_deny" {
+                arguments
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("elevation_reason");
+            }
             let call = ScriptedCall {
                 id: "native-approval",
                 tool_id: match name {
@@ -2119,29 +2127,57 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             let mut pending = rendezvous.subscribe_count();
             let facts = rendezvous.requests();
             let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-            let mode = if decision == "full_access" {
-                ApprovalMode::FullAccess
-            } else {
-                ApprovalMode::Plan
+            let mode = match decision {
+                "full_access" => ApprovalMode::FullAccess,
+                "automatic_deny" => ApprovalMode::Automatic,
+                _ => ApprovalMode::Plan,
             };
+            let policy = ConfiguredApprovalPolicy::new(mode).with_reviewer(Arc::new(
+                ScriptedPermissionReviewer {
+                    verdict: PermissionReviewVerdict::Deny {
+                        explanation: "automatic review denied".into(),
+                    },
+                },
+            ));
+            let tool_runtime = common::tool_runtime("conv_393d0148-e012-70f2-88f3-59c22ab51ae1");
+            let store = tool_runtime.durable_store();
+            let capability = common::capability_lease(tools, &tool_runtime).await;
             let task = {
                 let model = model.clone();
                 let cancellation = cancellation.clone();
                 tokio::spawn(async move {
-                    run(
-                        &model,
-                        tools,
-                        ContextAssembly::new(),
-                        AttemptLifecycle::inert()
-                            .with_pre_tool_policy(Arc::new(ConfiguredApprovalPolicy::new(mode)))
-                            .with_test_interaction_rendezvous(rendezvous),
+                    let result = AgentExecution::new(
+                        request(tool_runtime.conversation_id().clone(), &model),
+                        capability.into_lease(),
                         &cancellation,
+                        support::default_execution_policy(),
+                        context_runtime(&model, ContextAssembly::new()),
+                        &tool_runtime,
+                        AttemptLifecycle::inert()
+                            .with_pre_tool_policy(Arc::new(policy))
+                            .with_test_interaction_rendezvous(rendezvous),
                     )
-                    .await
+                    .unwrap()
+                    .run()
+                    .await;
+                    common::durable_agent_result(result, tool_runtime.durable_store().as_ref())
                 })
             };
-            if decision != "full_access" {
+            let mut pending_record_id = None;
+            if !matches!(decision, "full_access" | "automatic_deny") {
                 pending.wait_for(|count| *count == 1).await.unwrap();
+                let trace = crate::runtime_client::trace::TraceProjection::new(store.as_ref())
+                    .unwrap()
+                    .page(None, 32)
+                    .unwrap();
+                let tool_record = trace
+                    .records
+                    .iter()
+                    .find(|record| record.tool.is_some())
+                    .expect("the request is already durable while approval is pending");
+                assert!(!tool_record.tool.as_ref().unwrap().started);
+                assert_eq!(tool_record.tool.as_ref().unwrap().outcome, None);
+                pending_record_id = Some(tool_record.id.clone());
                 assert!(!*handle.started.borrow(), "{name} started before approval");
                 assert_eq!(
                     handle.invocations(),
@@ -2178,12 +2214,50 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             }
             let audit = task.await.unwrap();
             assert_single_terminal(&audit.event_history);
+            let trace = crate::runtime_client::trace::TraceProjection::new(store.as_ref())
+                .unwrap()
+                .page(None, 32)
+                .unwrap();
+            let tool_records = trace
+                .records
+                .iter()
+                .filter(|record| record.tool.is_some())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                tool_records.len(),
+                1,
+                "one record survives every approval outcome"
+            );
+            let record = tool_records[0];
+            if let Some(id) = pending_record_id {
+                assert_eq!(
+                    record.id, id,
+                    "approval preserves the original request identity"
+                );
+            }
+            let summary = record.tool.as_ref().unwrap();
+            match decision {
+                "deny" | "automatic_deny" => {
+                    assert_eq!(record.state, TraceState::Denied);
+                    assert_eq!(summary.outcome, Some(TraceToolOutcome::Denied));
+                    assert!(!summary.started);
+                }
+                "cancel" => {
+                    assert_eq!(record.state, TraceState::Cancelled);
+                    assert_eq!(summary.outcome, Some(TraceToolOutcome::Cancelled));
+                    assert!(!summary.started);
+                }
+                _ => {
+                    assert_eq!(record.state, TraceState::Completed);
+                    assert!(summary.started);
+                }
+            }
             let starts = audit
                 .event_history
                 .iter()
                 .filter(|event| matches!(event, RuntimeEvent::ToolExecutionStarted { .. }))
                 .count();
-            if decision == "deny" || decision == "cancel" {
+            if matches!(decision, "deny" | "cancel" | "automatic_deny") {
                 assert_eq!(starts, 0);
                 assert_eq!(
                     handle.invocations(),
@@ -2194,13 +2268,13 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 assert_eq!(handle.invocations().len(), 1);
                 assert_eq!(handle.invocations()[0].mode, ToolInvocationMode::Foreground);
             }
-            if decision == "full_access" {
+            if matches!(decision, "full_access" | "automatic_deny") {
                 assert!(
                     facts.lock().unwrap().is_empty(),
-                    "only the Tool approval gate was bypassed"
+                    "these modes require no human approval"
                 );
             }
-            if decision == "deny" {
+            if matches!(decision, "deny" | "automatic_deny") {
                 assert!(matches!(
                     tool_messages(&audit)[0].result.status,
                     ToolExecutionStatus::Denied { .. }
@@ -2404,6 +2478,14 @@ async fn approval_deny_emits_one_denied_result_without_starting_executor() {
         &messages[0].result.status,
         ToolExecutionStatus::Denied { reason } if reason == "human denied"
     ));
+    assert_eq!(
+        result
+            .event_history
+            .iter()
+            .filter(|event| matches!(event, RuntimeEvent::ToolCallRequested { .. }))
+            .count(),
+        1
+    );
 }
 
 /// P15: an allowed call may start while a sibling still waits for Ask. Denial
@@ -3643,25 +3725,9 @@ async fn deferred_context_never_changes_the_effective_system_prompt() {
         .map(|snapshot| snapshot.effective_system_prompt.clone())
         .collect::<Vec<_>>();
     assert_eq!(prompts.len(), 2, "two admitted model steps");
-    // Sparse §10 permission reminders are injected only on the first
-    // successful request-start; strip them so deferred-context admission is
-    // compared on the stable native system prompt alone.
-    let without_permission_reminder = |prompt: &str| -> String {
-        const MARKER: &str = "Execution permission mode:";
-        if let Some(index) = prompt.find("\n\nExecution permission mode:") {
-            prompt[..index].to_owned()
-        } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
-            prompt[..index].to_owned()
-        } else if prompt.starts_with(MARKER) {
-            String::new()
-        } else {
-            prompt.to_owned()
-        }
-    };
     assert_eq!(
-        without_permission_reminder(&prompts[0]),
-        without_permission_reminder(&prompts[1]),
-        "the step that admitted deferred context has the same Effective System Prompt aside from the sparse permission reminder"
+        prompts[0], prompts[1],
+        "deferred context preserves the system prompt"
     );
     assert!(
         !prompts[1].contains("deferred user fact"),

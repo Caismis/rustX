@@ -53,6 +53,15 @@ type SseStream = Pin<
     >,
 >;
 
+fn messages_url(base: &str) -> String {
+    let base = base.trim_end_matches('/');
+    if base.ends_with("/v1") {
+        format!("{base}/messages")
+    } else {
+        format!("{base}/v1/messages")
+    }
+}
+
 /// Adapter for the Anthropic Messages protocol.
 pub struct AnthropicMessagesAdapter {
     api_key: String,
@@ -110,7 +119,7 @@ impl ModelAdapter for AnthropicMessagesAdapter {
         }
         let state = AnthropicPhase::Preparing {
             api_key: self.api_key.clone(),
-            url: format!("{}/v1/messages", self.api_base),
+            url: messages_url(&self.api_base),
             anthropic_version: self.anthropic_version.clone(),
             http_client: self.http_client.clone(),
             response_byte_limit: input.response_byte_limit,
@@ -255,6 +264,7 @@ async fn open_stream(
             HeaderValue::from_static("application/json"),
         )
         .header("x-api-key", api_key)
+        .bearer_auth(api_key)
         .header("anthropic-version", anthropic_version)
         .body(wire_request)
         .send();
@@ -892,8 +902,10 @@ impl AnthropicStreamNormalizer {
                 "signature delta for non-thinking block index {index}"
             )));
         };
-        if let Some(new_signature) = delta.signature.clone() {
-            *signature = Some(new_signature);
+        if let Some(new_signature) = &delta.signature {
+            signature
+                .get_or_insert_with(String::new)
+                .push_str(new_signature);
         }
         Ok(Vec::new())
     }
@@ -957,27 +969,17 @@ impl AnthropicStreamNormalizer {
                 if *state_emitted {
                     return Ok(Vec::new());
                 }
-                // The streaming protocol always sends a `signature_delta`
-                // before the thinking block stops (the signature is the
-                // encrypted provider state that makes replay possible). A
-                // block without one (including the empty placeholder from
-                // `content_block_start`) cannot be replayed losslessly, so
-                // it is a provider protocol error instead of a reasoning
-                // block without continuation state.
-                let Some(signature) = signature.clone().filter(|s| !s.is_empty()) else {
-                    return Err(provider_error(
-                        "provider thinking block stopped without a signature; a \
-                         thinking block without provider state cannot be replayed \
-                         losslessly"
-                            .to_owned(),
-                    ));
-                };
+                // Compatible Messages APIs also return unsigned thinking.
+                // Preserve the complete native unit, including an empty or
+                // absent signature, instead of inventing one or dropping it.
                 *state_emitted = true;
-                let opaque = serde_json::json!({
+                let mut opaque = serde_json::json!({
                     "type": "thinking",
                     "thinking": buffer,
-                    "signature": signature,
                 });
+                if let Some(signature) = signature {
+                    opaque["signature"] = serde_json::Value::String(signature.clone());
+                }
                 Ok(vec![ModelEvent::ContinuationState {
                     block_index: *canonical_index,
                     state: ProviderContinuationState::Anthropic(AnthropicContinuation {

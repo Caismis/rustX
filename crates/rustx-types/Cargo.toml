@@ -13,6 +13,8 @@ jsonschema = { version = "0.60.2", default-features = false, features = ["macros
 croner = "=4.0.2"
 chrono-tz = "0.10"
 referencing = "=0.60.2"
+serde_yaml_ng = "0.10.0"
+tempfile = "3"
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "functions", "preupdate_hook", "fallible_uint"] }
 serde = { version = "1", features = ["derive", "rc"] }
 schemars = { version = "1", features = ["chrono04"] }
@@ -41,7 +43,6 @@ rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "cd83bcbb8e0a251
 
 [dev-dependencies]
 toml = "0.8"
-tempfile = "3"
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 
 [features]

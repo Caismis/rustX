@@ -638,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_borrowed_wire_matches_legacy_request_shape_for_large_frozen_input() {
+    fn openai_borrowed_wire_matches_expected_request_shape_for_large_frozen_input() {
         use crate::model::catalog::{ChatMaxTokensField, ChatStreamUsage, ResponsesStorageMode};
         use serde_json::json;
 
@@ -662,8 +662,7 @@ mod tests {
             let mut definition = tool("lookup", "tool-lookup");
             definition.input_schema = json!({"type":"object", "$comment":text}).into();
             request.tools.push(definition);
-            // The legacy Chat SDK message array and the legacy Responses
-            // item tree used these different structural shapes.
+            // Verify complete wire bodies, including escaping and nested params.
             let legacy = if protocol == ModelProtocol::OpenAiChatCompletions {
                 let mut messages = vec![json!({"role":"system", "content":"system"})];
                 messages.extend(std::iter::repeat_n(
@@ -679,7 +678,7 @@ mod tests {
                 json!({"model":"fixture", "input":vec![item;128], "stream":true,
                     "instructions":"system", "store":false, "include":["reasoning.encrypted_content"],
                     "max_output_tokens":request.max_output_tokens(), "tools":[{"type":"function",
-                        "name":"lookup","description":"d","parameters":request.tools[0].input_schema}]})
+                        "name":"lookup","description":"d","parameters":request.tools[0].input_schema,"strict":false}]})
             };
             let expected = crate::model::invocation::finalize_provider_request(
                 legacy,

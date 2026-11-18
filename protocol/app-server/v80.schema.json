@@ -10433,6 +10433,25 @@
         },
         "disable_model_invocation": {
           "type": "boolean"
+        },
+        "enabled_by_default": {
+          "type": "boolean"
+        },
+        "operation_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "display": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillDisplay"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "additionalProperties": false,
@@ -10440,7 +10459,8 @@
         "catalog",
         "provenance",
         "metadata_revision",
-        "disable_model_invocation"
+        "disable_model_invocation",
+        "enabled_by_default"
       ]
     },
     "SkillCatalogEntry": {
@@ -10528,6 +10548,119 @@
       "required": [
         "source",
         "location"
+      ]
+    },
+    "SkillDisplay": {
+      "type": "object",
+      "properties": {
+        "authored": {
+          "$ref": "#/$defs/SkillDisplayWrite"
+        },
+        "icon": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SkillDisplayIcon"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "revision": {
+          "description": "An exact write fence when this package has an editable sidecar.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "authored"
+      ]
+    },
+    "SkillDisplayWrite": {
+      "type": "object",
+      "properties": {
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "short_description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon_small": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon_large": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "icon": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "SkillDisplayIcon": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "media_type": {
+              "$ref": "#/$defs/SkillIconMediaType"
+            },
+            "data_base64": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "asset"
+            }
+          },
+          "required": [
+            "kind",
+            "media_type",
+            "data_base64"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "iconify"
+            }
+          },
+          "required": [
+            "kind",
+            "name"
+          ]
+        }
+      ]
+    },
+    "SkillIconMediaType": {
+      "type": "string",
+      "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/svg+xml"
       ]
     },
     "SkillDiagnostic": {
@@ -28278,7 +28411,7 @@
           "const": "max_completion_tokens"
         },
         {
-          "description": "The legacy `max_tokens` field.",
+          "description": "The `max_tokens` field used by `DeepSeek`, GLM, Kimi and Qwen APIs.",
           "type": "string",
           "const": "max_tokens"
         }
@@ -28335,10 +28468,10 @@
       ]
     },
     "ResponsesStorageMode": {
-      "description": "How the `OpenAI` Responses protocol operates with provider storage.\n\nThis is continuation *structure*, not a wire value: Stored continues by\n`previous_response_id`, Stateless continues by preserved output items and\nrequires the encrypted-reasoning `include` value.",
+      "description": "How the `OpenAI` Responses protocol operates with provider storage.\n\nStored requests provider retention and continues by `previous_response_id`.\nIf the response reports `store: false`, the original output items are used\ninstead. Stateless always continues by preserved output items (encrypted\nreasoning or a provider's original plaintext reasoning).",
       "oneOf": [
         {
-          "description": "Provider-side storage enabled (`store: true`).",
+          "description": "Request provider-side storage (`store: true`).",
           "type": "string",
           "const": "stored"
         },
@@ -33005,6 +33138,23 @@
         {
           "type": "object",
           "properties": {
+            "reason": {
+              "$ref": "#/$defs/TransferRejection"
+            },
+            "kind": {
+              "type": "string",
+              "const": "resource_transfer_rejected"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "reason"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "expected": {
               "type": "string",
               "pattern": "^(0|[1-9][0-9]{0,18}|18446744073709551615|1[0-7][0-9]{18}|18[0-3][0-9]{17}|184[0-3][0-9]{16}|1844[0-5][0-9]{15}|18446[0-6][0-9]{14}|184467[0-3][0-9]{13}|1844674[0-3][0-9]{12}|184467440[0-6][0-9]{10}|1844674407[0-2][0-9]{9}|18446744073[0-6][0-9]{8}|1844674407370[0-8][0-9]{6}|18446744073709[0-4][0-9]{5}|184467440737095[0-4][0-9]{4}|1844674407370955[0-0][0-9]{3}|18446744073709551[0-5][0-9]{2}|184467440737095516[0-0][0-9]{1}|1844674407370955161[0-4][0-9]{0})$(?![\\s\\S])"
@@ -33299,6 +33449,15 @@
         "corrupt_authority",
         "storage",
         "cancelled"
+      ]
+    },
+    "TransferRejection": {
+      "type": "string",
+      "enum": [
+        "name_taken",
+        "name_enabled",
+        "protected_mcp_values",
+        "same_directory"
       ]
     },
     "Notification": {
@@ -41214,6 +41373,81 @@
           ]
         },
         {
+          "description": "Edit the named Skill's presentation sidecar in its owning source.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "authored": {
+              "$ref": "#/$defs/SkillDisplayWrite"
+            },
+            "upload": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SkillIconUpload"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill_display"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name",
+            "authored"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string",
+              "const": "skill_delete"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "name"
+          ]
+        },
+        {
+          "description": "Copy or move a resource between User and the addressed Workspace.\nThe expected revision belongs to the source resource document.",
+          "type": "object",
+          "properties": {
+            "from": {
+              "$ref": "#/$defs/SourceScope"
+            },
+            "operation": {
+              "$ref": "#/$defs/TransferOperation"
+            },
+            "resource": {
+              "$ref": "#/$defs/ResourceTransfer"
+            },
+            "kind": {
+              "type": "string",
+              "const": "resource_transfer"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "from",
+            "operation",
+            "resource"
+          ]
+        },
+        {
           "description": "One whole-file edit of exactly `<scope>/.agents/workflows/<id>.yaml`\n(Issue #491). The expected revision is that file's.",
           "type": "object",
           "properties": {
@@ -41856,6 +42090,117 @@
           "required": [
             "kind",
             "value"
+          ]
+        }
+      ]
+    },
+    "SkillIconUpload": {
+      "type": "object",
+      "properties": {
+        "media_type": {
+          "$ref": "#/$defs/SkillIconMediaType"
+        },
+        "data_base64": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false,
+      "required": [
+        "media_type",
+        "data_base64"
+      ]
+    },
+    "TransferOperation": {
+      "type": "string",
+      "enum": [
+        "copy",
+        "move"
+      ]
+    },
+    "ResourceTransfer": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "destination": {
+              "$ref": "#/$defs/WorkflowId"
+            },
+            "family": {
+              "type": "string",
+              "const": "workflow"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "source",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/SubagentName"
+            },
+            "destination": {
+              "$ref": "#/$defs/SubagentName"
+            },
+            "family": {
+              "type": "string",
+              "const": "agent"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "source",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "$ref": "#/$defs/McpServerId"
+            },
+            "destination": {
+              "$ref": "#/$defs/McpServerId"
+            },
+            "family": {
+              "type": "string",
+              "const": "mcp"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "source",
+            "destination"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string"
+            },
+            "destination": {
+              "type": "string"
+            },
+            "family": {
+              "type": "string",
+              "const": "skill"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "family",
+            "source",
+            "destination"
           ]
         }
       ]

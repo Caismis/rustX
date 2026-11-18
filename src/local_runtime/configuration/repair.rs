@@ -1283,7 +1283,8 @@ impl UserConfigManager {
             Err(
                 SettingsError::Conflict { .. }
                 | SettingsError::Invalid
-                | SettingsError::InvalidWorkflow(_),
+                | SettingsError::InvalidWorkflow(_)
+                | SettingsError::TransferRejected(_),
             ) => {
                 return RepairOutcome::Superseded;
             }

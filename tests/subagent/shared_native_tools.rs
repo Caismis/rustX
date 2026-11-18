@@ -38,6 +38,20 @@ fn route_native_tools(body: &str) -> crate::common::FixtureReply {
                 &json!({"title":"Exercise native file tools", "agent":"explore", "task":"CHILD-NATIVE-TOOLS"}),
             )
         } else {
+            assert_eq!(results.len(), 1, "one Root subagent creation result");
+            assert_eq!(results[0]["tool_call_id"], "shared-subagent");
+            let receipt: Value = serde_json::from_str(
+                results[0]["content"]
+                    .as_str()
+                    .expect("Chat tool content is plain text"),
+            )
+            .expect("the creation result retains its exact business JSON");
+            assert_eq!(receipt.as_object().unwrap().len(), 4);
+            assert_eq!(receipt["agent"], "explore");
+            assert_eq!(receipt["state"], "active");
+            for identity in ["agent_id", "activation_id"] {
+                assert!(receipt[identity].as_str().is_some_and(|id| !id.is_empty()));
+            }
             crate::common::sse_fixture("openai_chat", "plain_text.sse")
         };
     }
@@ -60,9 +74,9 @@ fn route_native_tools(body: &str) -> crate::common::FixtureReply {
         0 => tool_reply("write", &json!({"path":"child.txt", "content":"before\n"})),
         1 => {
             assert!(
-                results[0]["content"][0]["text"]
+                results[0]["content"]
                     .as_str()
-                    .unwrap()
+                    .expect("Chat tool content is plain text")
                     .contains("Successfully wrote")
             );
             tool_reply(
@@ -72,18 +86,18 @@ fn route_native_tools(body: &str) -> crate::common::FixtureReply {
         }
         2 => {
             assert!(
-                results[1]["content"][0]["text"]
+                results[1]["content"]
                     .as_str()
-                    .unwrap()
+                    .expect("Chat tool content is plain text")
                     .contains("Successfully replaced")
             );
             tool_reply("read", &json!({"path":"child.txt"}))
         }
         3 => {
             assert!(
-                results[2]["content"][0]["text"]
+                results[2]["content"]
                     .as_str()
-                    .unwrap()
+                    .expect("Chat tool content is plain text")
                     .contains("after")
             );
             tool_reply(
@@ -93,9 +107,9 @@ fn route_native_tools(body: &str) -> crate::common::FixtureReply {
         }
         4 => {
             assert!(
-                results[3]["content"][0]["text"]
+                results[3]["content"]
                     .as_str()
-                    .unwrap()
+                    .expect("Chat tool content is plain text")
                     .contains("NATIVE-BASH-OK")
             );
             crate::common::sse_fixture("openai_chat", "subagent_child_answer.sse")

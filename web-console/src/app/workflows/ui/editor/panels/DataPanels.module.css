@@ -4,20 +4,20 @@
 .panel > section {
   padding: 16px 0;
   margin: 0;
-  border-bottom: 1px solid var(--dsw-alias-border-l3);
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
 }
 .panel > section:first-child {
   padding-top: 0;
 }
 .panel h3 {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
 }
 .input > div > button {
   width: 100%;
   min-height: 32px;
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
   padding: 4px 10px;
   background: var(--dsw-alias-interactive-bg-hover-solid);
 }
@@ -43,7 +43,7 @@
   padding: 4px 8px;
   background: var(--dsw-alias-interactive-bg-hover-solid);
   border: 0;
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
 }
 .condition > div {
   flex: 1;
@@ -52,7 +52,7 @@
 .scalar > div {
   min-height: 32px;
   background: var(--dsw-alias-interactive-bg-hover-solid);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
   border-color: transparent;
 }
 .scalar [contenteditable='true'] {
@@ -71,8 +71,8 @@
 }
 .options button {
   padding: 8px;
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 8px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-sm);
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-secondary);
   font: inherit;
@@ -111,7 +111,7 @@
 .group + .group {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid var(--dsw-alias-border-l3);
+  border-top: 0.5px solid var(--dsw-alias-border-l3);
 }
 .group h3 {
   display: flex;
@@ -125,13 +125,13 @@
   padding: 2px 4px;
   border-color: transparent;
   background: transparent;
-  font-weight: 600;
+  font-weight: 500;
 }
 .badge {
   flex: none;
   padding: 1px 4px;
-  border: 1px solid var(--dsw-alias-border-l3);
-  border-radius: 4px;
+  border: 0.5px solid var(--dsw-alias-border-l3);
+  border-radius: var(--dsw-radius-xs);
   color: var(--dsw-alias-label-tertiary);
   font-size: 11px;
   font-weight: 400;
@@ -141,7 +141,7 @@
   margin: 0;
   text-align: center;
   background: var(--dsw-alias-interactive-bg-hover-solid);
-  border-radius: 8px;
+  border-radius: var(--dsw-radius-sm);
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
   line-height: 18px;
@@ -152,7 +152,6 @@
   font-size: 12px;
   line-height: 18px;
 }
-
 .inputRow {
   display: flex;
   gap: 4px;
@@ -187,10 +186,8 @@
   width: 100%;
   padding: 4px 8px;
 }
-
 /* Inline pickers use the surrounding row's spacing, including variable tokens. */
-.input > div,
-.scalar [contenteditable='false'] > div {
+.input > div, .scalar [contenteditable='false'] > div {
   margin-bottom: 0;
 }
 .group h3 > div {

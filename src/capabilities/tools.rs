@@ -65,31 +65,18 @@ fn reject_extension_tool(name: &str, label: &str) -> Result<(), String> {
 
 impl AgentActivation {
     pub(crate) fn selects_root_skill(&self, package: &crate::skills::SkillPackage) -> bool {
-        !package.disable_model_invocation()
-            && self
-                .profile
-                .skills
-                .as_ref()
-                .is_none_or(|selection| match selection {
-                    crate::runtime::agent_profile::AgentSkillSelection::All => true,
-                    crate::runtime::agent_profile::AgentSkillSelection::Exact(names) => {
-                        names.iter().any(|name| name == package.name())
-                    }
-                })
+        self.profile.skills.as_ref().map_or_else(
+            || crate::runtime::agent_profile::AgentSkillSelection::All.selects_package(package),
+            |selection| selection.selects_package(package),
+        )
     }
 
     pub(crate) fn selects_skill(&self, package: &crate::skills::SkillPackage) -> bool {
-        !package.disable_model_invocation()
-            && (self.selects_root_skill(package)
-                || self
-                    .delegated_skills
-                    .iter()
-                    .any(|selection| match selection {
-                        crate::runtime::agent_profile::AgentSkillSelection::All => true,
-                        crate::runtime::agent_profile::AgentSkillSelection::Exact(names) => {
-                            names.iter().any(|name| name == package.name())
-                        }
-                    }))
+        self.selects_root_skill(package)
+            || self
+                .delegated_skills
+                .iter()
+                .any(|selection| selection.selects_package(package))
     }
 
     /// The Agent profile is the sole capability selection authority.

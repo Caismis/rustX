@@ -1,0 +1,12 @@
+event: response.created
+data: {"type":"response.created","response":{"id":"resp_plaintext","status":"in_progress","store":false}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"rs_plaintext","type":"reasoning","summary":[],"content":[]}}
+
+event: response.reasoning_text.delta
+data: {"type":"response.reasoning_text.delta","output_index":0,"content_index":0,"delta":"Original reasoning."}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_plaintext","status":"completed","store":false,"output":[{"id":"rs_plaintext","type":"reasoning","summary":[],"content":[{"type":"reasoning_text","text":"Original reasoning."}]},{"id":"msg_plaintext","type":"message","role":"assistant","content":[{"type":"output_text","text":"Answer.","annotations":[]}]}],"usage":{"input_tokens":10,"output_tokens":6,"total_tokens":16}}}
+

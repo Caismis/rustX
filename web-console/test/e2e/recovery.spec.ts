@@ -56,7 +56,7 @@ test('CFG3 committed write and reconciliation response loss reconstructs native 
       // A retained editor hides the scope tabs. Return to the catalog before
       // selecting its scope, preserving the editor's transaction on the way.
       await openResourceModule(page,'mcp');
-      await expect(mcp.locator('[data-mcp-page]')).toBeVisible();
+      await expect(mcp).toHaveAttribute('data-lifecycle', 'ready');
       const back = mcp.getByRole('button', { name: '← MCP servers', exact: true });
       const create = mcp.getByRole('button', { name: '＋ New MCP server', exact: true });
       // Reconnecting can restore the retained editor after the tabpanel mounts.

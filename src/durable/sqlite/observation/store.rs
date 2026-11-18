@@ -1238,7 +1238,9 @@ impl ObservationStore for SqliteConversationStore {
                 "tool trace source beyond captured cut".into(),
             ));
         }
-        connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<=?3 ORDER BY sequence DESC LIMIT 1",params![ledger_position,block_index.get(),seq_to_i64(cut.read.journal)?],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))
+        // A call's opening phases share this finite occurrence index. The
+        // request is the stable Trace identity even after execution starts.
+        connection.query_row("SELECT sequence FROM events INDEXED BY events_observation_tool_lifecycle_idx WHERE observation_tool_ledger=?1 AND observation_tool_block=?2 AND observation_tool_phase=1 AND sequence<=?3 ORDER BY CASE observation_kind WHEN 'tool_call_requested' THEN 0 ELSE 1 END,sequence DESC LIMIT 1",params![ledger_position,block_index.get(),seq_to_i64(cut.read.journal)?],|row|row.get(0)).optional().map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))
     }
     fn observation_workflow_trace_sequence(
         &self,

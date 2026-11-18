@@ -106,6 +106,70 @@ pub(crate) fn oracle(request: &ModelRequest) -> Vec<u8> {
 }
 
 #[test]
+fn chat_tool_media_cache_tracks_relabeling_and_wire_budget() {
+    let mut request = request();
+    append(&mut request, 0, true, true);
+    let image = crate::message::content::ImageReference {
+        artifact_id: crate::runtime::identity::ArtifactId::new("tool-image"),
+        alt: None,
+    };
+    let mut bytes = Vec::new();
+    png::Encoder::new(&mut bytes, 1, 1)
+        .write_header()
+        .unwrap()
+        .write_image_data(&[128])
+        .unwrap();
+    request.images.insert(
+        image.artifact_id.clone(),
+        crate::model::images::FrozenImage::new(bytes).unwrap(),
+    );
+    request
+        .invocation
+        .capabilities
+        .input_modalities
+        .insert(crate::model::Modality::Image);
+    let ModelInputMessage::Canonical(MessageBlock::Tool(tool)) = &mut request.messages[2] else {
+        unreachable!()
+    };
+    Arc::make_mut(&mut tool.result)
+        .content
+        .push(crate::tools::types::ToolResultContent::Image(image));
+    let first = prepared(&request);
+    assert_eq!(first, oracle(&request));
+    super::take_work();
+    assert_eq!(prepared(&request), first);
+    assert_eq!(super::take_work().encoded_items, 0);
+
+    // A second occurrence changes the first call's wire label. The image's
+    // caption must follow that same label even when the prefix was cached.
+    append(&mut request, 1, true, true);
+    let body = prepared(&request);
+    assert_eq!(body, oracle(&request));
+    let wire: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    let messages = wire["messages"].as_array().unwrap();
+    let tool_index = messages.iter().position(|m| m["role"] == "tool").unwrap();
+    let id = messages[tool_index]["tool_call_id"].as_str().unwrap();
+    assert!(
+        messages[tool_index + 1]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(id)
+    );
+    let error = super::super::validation::prepare_request_with_limit(
+        request.clone(),
+        request.protocol(),
+        Some(body.len() - 1),
+    )
+    .err()
+    .unwrap();
+    assert_eq!(
+        error.kind,
+        crate::model::ModelErrorKind::ContextWindowExceeded
+    );
+    assert_eq!(prepared(&request), body);
+}
+
+#[test]
 fn incremental_preparation_encodes_only_delta_at_8_64_512_1024_turns() {
     for protocol in [
         ModelProtocol::OpenAiChatCompletions,

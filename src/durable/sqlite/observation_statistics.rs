@@ -338,6 +338,7 @@ pub(super) fn is_trace_anchor(event: &RuntimeEvent) -> bool {
         .is_some_and(crate::durable::trace::TraceFactKind::is_anchor)
 }
 pub(super) struct Prepared {
+    pub(super) trace_anchor: bool,
     pub(super) trace_total: Option<u64>,
     pub(super) statistics: Option<super::append_facts::Captured<ConversationStatistics>>,
     fold: Option<(record::Frame, u64)>,
@@ -355,7 +356,10 @@ pub(super) fn prepare_cached(
     event: &RuntimeEventEnvelope,
     cache: Option<&FoldCache>,
 ) -> Result<Prepared, ConversationStoreError> {
-    let trace_total = if is_trace_anchor(&event.event) {
+    let trace_anchor = is_trace_anchor(&event.event)
+        && (!matches!(event.event, RuntimeEvent::ToolExecutionStarted { .. })
+            || super::observation_trace::tool_request_owner(connection, event)?.is_none());
+    let trace_total = if trace_anchor {
         Some(
             trace_total(connection, event.sequence.saturating_sub(1))?
                 .checked_add(1)
@@ -365,6 +369,7 @@ pub(super) fn prepare_cached(
         None
     };
     let mut prepared = Prepared {
+        trace_anchor,
         trace_total,
         statistics: None,
         fold: None,

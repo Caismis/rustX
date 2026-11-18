@@ -58,7 +58,11 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
             failed.units[&ApplyUnit::Instructions],
             UnitApplication::Failed { .. }
         ));
-        let after_failure = create().await.unwrap().session.id;
+        let after_failure_session = create().await.unwrap().session;
+        let reload_probe = fixture
+            .manager
+            .probe(&after_failure_session.active_conversation_id);
+        let after_failure = after_failure_session.id;
         assert_eq!(
             guidance(&retained(&after_failure).project_context_files),
             guidance(&retained(&during).project_context_files)
@@ -107,17 +111,34 @@ async fn t09_t13_t15_new_sessions_use_available_during_preparation_failure_and_r
             guidance(&retained(&during).project_context_files),
             "available after success"
         );
+        // Loading composes the retained binding, then queues the cold Session's
+        // current desired configuration. Hold that second preparation so its
+        // valid commit cannot race the assertion about the first binding.
+        reload_probe.before_configuration_prepare.arm();
         fixture.manager.load(&after_failure, None).await.unwrap();
+        reload_probe.before_configuration_prepare.entered().await;
+        let reloaded = fixture
+            .manager
+            .configuration_runtime(&after_failure)
+            .unwrap();
         assert_eq!(
-            guidance(
-                fixture
-                    .manager
-                    .configuration_runtime(&after_failure)
-                    .unwrap()
-                    .runtime_resources()
-                    .project_context_files()
-            ),
+            guidance(reloaded.runtime_resources().project_context_files()),
             guidance(before.project_context_files())
+        );
+        reload_probe.before_configuration_prepare.release();
+        let reapplication = session_applied(&fixture, &after_failure).await;
+        assert_eq!(
+            reapplication.units[&ApplyUnit::Instructions],
+            UnitApplication::Applied
+        );
+        assert_eq!(
+            guidance(reloaded.runtime_resources().project_context_files()),
+            "available after success"
+        );
+        assert_eq!(
+            retained(&after_failure).session_model().model.to_string(),
+            "local/a",
+            "reapplication preserves this Session's admitted model selection"
         );
         fixture.close().await;
     }))

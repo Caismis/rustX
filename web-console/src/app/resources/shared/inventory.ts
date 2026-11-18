@@ -86,10 +86,10 @@ function selectedOf(resources: CapabilityInspection, family: ResourceFamily, nam
  * catalogs, never recomputes precedence and never decides ownership of its own.
  * A shadowed same-name definition is listed as the losing definition it is
  * rather than used to stand in for the winner. */
-export function extensionEntries(source: SourceSettings | undefined, scope: SourceScope, family: ResourceFamily): readonly ExtensionEntry[] {
+export function extensionEntries(source: SourceSettings | undefined, scope: SourceScope, family: ResourceFamily, ownership: 'all' | 'owned' = 'all'): readonly ExtensionEntry[] {
   const resources = source?.prospective_resources;
   const capability = resourceCapability(family);
-  const inventoried = !resources ? [] : resources.definitions.filter(entry => entry.family === family).map(entry => {
+  const inventoried = !resources ? [] : resources.definitions.filter(entry => entry.family === family && (ownership === 'all' || entry.location.scope === scope)).map(entry => {
     const owner = entry.location.scope;
     const relationship: ExtensionRelationship = owner === scope
       ? (entry.location.shadowed ? 'overriding' : 'authored')

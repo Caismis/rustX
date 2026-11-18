@@ -9,21 +9,26 @@ use serde_json::{Map, Value, json};
 
 use super::{SchemaError, build_validator};
 
+mod compact;
+
 /// A canonical validator and its closed model-facing resource graph.
-pub struct CompiledBusiness {
-    pub root_uri: String,
+pub(super) struct CompiledBusiness {
+    pub schema: Value,
     pub resources: Value,
+    pub dialect: &'static str,
     pub validator: jsonschema::Validator,
 }
 
 /// Validate the owner-supplied business document and freeze its bundled resources.
 ///
-/// The caller places `resources` in a Draft 7 `definitions` object and
-/// references `root_uri` from `arguments`. Business validation uses the returned
+/// The caller places `resources` in the envelope's root `$defs` object and
+/// places `schema` inside `arguments`. Business validation uses the returned
 /// unchanged canonical validator. Both use only resource bytes supplied in the
 /// document. Missing resources fail without file or network access, including
 /// during registration; URI contents cannot grant host resource authority.
-pub fn compile_business_resources(canonical: &Value) -> Result<CompiledBusiness, SchemaError> {
+pub(super) fn compile_business_resources(
+    canonical: &Value,
+) -> Result<CompiledBusiness, SchemaError> {
     // Validate the unchanged document, including structural errors in siblings
     // ignored by legacy $ref evaluation. Both compilations are strictly no-I/O.
     let validator = build_validator(canonical).map_err(invalid_schema)?;
@@ -46,12 +51,15 @@ pub fn compile_business_resources(canonical: &Value) -> Result<CompiledBusiness,
         keys: HashMap::new(),
         resources: BTreeMap::new(),
         dynamic_names: BTreeSet::new(),
+        dynamic_scope: false,
     };
     graph.ensure_resource(&resolver)?;
     graph.close_dynamic_anchors()?;
+    let (schema, resources, dialect) = graph.finish(&root_uri)?;
     Ok(CompiledBusiness {
-        root_uri,
-        resources: graph.finish()?,
+        schema,
+        resources,
+        dialect,
         validator,
     })
 }
@@ -59,7 +67,7 @@ pub fn compile_business_resources(canonical: &Value) -> Result<CompiledBusiness,
 /// Validate a declaration's schema structure without resolving its references.
 /// Catalog observation uses this check; admitting an executable registration
 /// additionally compiles the complete business contract above.
-pub fn validate_declaration(schema: &Value) -> Result<(), SchemaError> {
+pub(super) fn validate_declaration(schema: &Value) -> Result<(), SchemaError> {
     // Generated draft validators check the declaration only. They do not resolve
     // external resources, so this path cannot retain bundled meta-schema trees
     // or fetch a dialect URI.
@@ -102,6 +110,7 @@ struct ResourceGraph<'a> {
     keys: HashMap<(usize, String, Draft), String>,
     resources: BTreeMap<String, ResourceNodes<'a>>,
     dynamic_names: BTreeSet<String>,
+    dynamic_scope: bool,
 }
 
 impl<'a> ResourceGraph<'a> {
@@ -199,6 +208,15 @@ impl<'a> ResourceGraph<'a> {
             // an id. Moving a document and injecting an id would change that.
             return self.static_reference(&resolver, reference);
         }
+        self.dynamic_scope |= match draft {
+            Draft::Draft201909 => {
+                source.get("$recursiveRef").is_some() || source.get("$recursiveAnchor").is_some()
+            }
+            Draft::Draft202012 => {
+                source.get("$dynamicRef").is_some() || source.get("$dynamicAnchor").is_some()
+            }
+            _ => false,
+        };
         let mut emitted = source.clone();
         if let Some(object) = emitted.as_object_mut() {
             remove_inert_schemas(source, object);
@@ -226,18 +244,12 @@ impl<'a> ResourceGraph<'a> {
         {
             self.dynamic_reference(&resolver, reference, &mut emitted)?;
         }
-        let mut children: Vec<_> = draft.subresources_of(source).collect();
-        // The validator also executes these legacy applicators in modern
-        // dialects, although referencing's discovery iterator omits them.
-        if let Some(dependencies) = source.get("dependencies").and_then(Value::as_object) {
-            children.extend(dependencies.values().filter(|schema| schema.is_object()));
-        }
-        if source.get("items").is_some_and(Value::is_array)
-            && let Some(additional) = source.get("additionalItems")
-        {
-            children.push(additional);
-        }
-        self.children(source, &mut emitted, &children, &resolver, draft)?;
+        map_schema_children(
+            source,
+            &mut emitted,
+            &schema_children(source, draft),
+            &mut |child| self.node(child, &resolver, draft, false),
+        )?;
         Ok(emitted)
     }
 
@@ -313,60 +325,49 @@ impl<'a> ResourceGraph<'a> {
         }
     }
 
-    fn children(
-        &mut self,
-        original: &'a Value,
-        emitted: &mut Value,
-        candidates: &[&'a Value],
-        resolver: &Resolver<'a>,
-        draft: Draft,
-    ) -> Result<(), SchemaError> {
-        match (original, emitted) {
-            (Value::Object(source), Value::Object(output)) => {
-                for (key, value) in source {
-                    if let Some(target) = output.get_mut(key) {
-                        self.child(value, target, candidates, resolver, draft)?;
-                    }
-                }
-            }
-            (Value::Array(source), Value::Array(output)) => {
-                for (value, target) in source.iter().zip(output) {
-                    self.child(value, target, candidates, resolver, draft)?;
-                }
-            }
-            _ => {}
-        }
-        Ok(())
-    }
-
-    fn child(
-        &mut self,
-        original: &'a Value,
-        emitted: &mut Value,
-        candidates: &[&'a Value],
-        resolver: &Resolver<'a>,
-        draft: Draft,
-    ) -> Result<(), SchemaError> {
-        if emitted.is_boolean() {
-            return Ok(());
-        }
-        if candidates.iter().any(|node| std::ptr::eq(*node, original)) {
-            *emitted = self.node(original, resolver, draft, false)?;
-            Ok(())
-        } else {
-            // Traverse containers to locate actual schema children, never
-            // interpreting const/enum/default business data as a schema.
-            self.children(original, emitted, candidates, resolver, draft)
-        }
-    }
-
     fn resource_mut(&mut self, uri: &str) -> Result<&mut ResourceNodes<'a>, SchemaError> {
         self.resources.get_mut(uri).ok_or_else(|| {
             SchemaError::InvalidSchema(format!("missing compiled business resource {uri:?}"))
         })
     }
 
-    fn finish(self) -> Result<Value, SchemaError> {
+    fn finish(self, root_uri: &str) -> Result<(Value, Value, &'static str), SchemaError> {
+        let root = self
+            .resources
+            .get(root_uri)
+            .ok_or_else(|| SchemaError::InvalidSchema("missing compiled business root".into()))?;
+        // Static references share one document base when their dialects agree.
+        // Hoist the resolved schemas into root $defs for provider tool requests.
+        if !self.dynamic_scope && self.keys.keys().all(|(_, _, draft)| *draft == root.draft) {
+            let root_name = root.root_name.as_ref().ok_or_else(|| {
+                SchemaError::InvalidSchema("missing compiled business root name".into())
+            })?;
+            let references: HashMap<_, _> = self
+                .resources
+                .iter()
+                .flat_map(|(uri, resource)| {
+                    resource.nodes.keys().map(move |name| {
+                        (
+                            format!("{uri}#/definitions/{name}"),
+                            format!("#/$defs/{name}"),
+                        )
+                    })
+                })
+                .collect();
+            let mut definitions = Map::new();
+            for resource in self.resources.values() {
+                for (name, node) in &resource.nodes {
+                    definitions.insert(name.clone(), local_schema(node, root.draft, &references)?);
+                }
+            }
+            let (schema, definitions) = compact::inline_single_use(
+                &json!({"$ref": format!("#/$defs/{root_name}")}),
+                &definitions,
+                root.draft,
+            )?;
+            return Ok((schema, Value::Object(definitions), dialect_uri(root.draft)?));
+        }
+        // Resource boundaries retain dynamic scope and mixed-dialect assertions.
         let mut resources = Map::new();
         for (uri, nodes) in self.resources {
             let root_name = nodes.root_name.ok_or_else(|| {
@@ -407,8 +408,81 @@ impl<'a> ResourceGraph<'a> {
             }
             resources.insert(uri, resource);
         }
-        Ok(Value::Object(resources))
+        Ok((
+            json!({"$ref": root_uri}),
+            Value::Object(resources),
+            dialect_uri(Draft::Draft202012)?,
+        ))
     }
+}
+
+fn schema_children(source: &Value, draft: Draft) -> Vec<&Value> {
+    let mut children: Vec<_> = draft.subresources_of(source).collect();
+    // The validator also executes these legacy applicators in modern dialects.
+    if let Some(dependencies) = source.get("dependencies").and_then(Value::as_object) {
+        children.extend(dependencies.values().filter(|schema| schema.is_object()));
+    }
+    if source.get("items").is_some_and(Value::is_array)
+        && let Some(additional) = source.get("additionalItems")
+    {
+        children.push(additional);
+    }
+    children
+}
+
+fn map_schema_children<'a>(
+    original: &'a Value,
+    emitted: &mut Value,
+    candidates: &[&'a Value],
+    transform: &mut impl FnMut(&'a Value) -> Result<Value, SchemaError>,
+) -> Result<(), SchemaError> {
+    if emitted.is_boolean() {
+        return Ok(());
+    }
+    if candidates.iter().any(|node| std::ptr::eq(*node, original)) {
+        *emitted = transform(original)?;
+        return Ok(());
+    }
+    match (original, emitted) {
+        (Value::Object(source), Value::Object(output)) => {
+            for (key, value) in source {
+                if let Some(target) = output.get_mut(key) {
+                    map_schema_children(value, target, candidates, transform)?;
+                }
+            }
+        }
+        (Value::Array(source), Value::Array(output)) => {
+            for (value, target) in source.iter().zip(output) {
+                map_schema_children(value, target, candidates, transform)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn local_schema(
+    source: &Value,
+    draft: Draft,
+    references: &HashMap<String, String>,
+) -> Result<Value, SchemaError> {
+    let mut emitted = source.clone();
+    if let Some(object) = emitted.as_object_mut() {
+        object.remove("$schema");
+        object.remove("$anchor");
+        if let Some(reference) = source.get("$ref").and_then(Value::as_str)
+            && let Some(local) = references.get(reference)
+        {
+            object.insert("$ref".into(), json!(local));
+        }
+    }
+    map_schema_children(
+        source,
+        &mut emitted,
+        &schema_children(source, draft),
+        &mut |child| local_schema(child, draft, references),
+    )?;
+    Ok(emitted)
 }
 
 /// Declarations and inactive applicators are not eagerly executable schemas.
@@ -468,12 +542,12 @@ mod tests {
 
     fn envelope_for(business: &CompiledBusiness) -> Value {
         json!({
-            "$schema": "http://json-schema.org/draft-07/schema#",
+            "$schema": business.dialect,
             "$id": "urn:rustx:envelope-test",
-            "definitions": business.resources,
+            "$defs": business.resources,
             "type": "object",
             "properties": {
-                "arguments": {"$ref": business.root_uri},
+                "arguments": business.schema,
                 "elevation_reason": {"type": ["string", "null"]},
             },
             "required": ["arguments"],

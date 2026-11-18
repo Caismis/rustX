@@ -2,18 +2,19 @@
 .agentConversation { display: flex; flex-direction: column; flex: 1 0 auto; min-height: auto; }
 .agentActions { display: flex; align-items: center; gap: 4px; }
 .agentActions button { display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: transparent; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
-.agentActions button:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
+@media (hover: hover) {
+  .agentActions button:hover:not(:disabled) {
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);
+  }
+}
 .agentActions button:disabled { opacity: 0.4; cursor: default; }
-
 .agentChat { display: contents; }
 .agentTrace { display: flex; flex-direction: column; flex: 1; min-height: 0; }
 .agentChat[hidden], .agentTrace[hidden] { display: none; }
-
 .agentConversation[data-view='trajectory'] { flex: 1 1 0; min-height: 0; overflow: hidden; }
 .agentConversation[data-view='trajectory'][data-agent-id] > :global([data-composer-seat]) { position: absolute; right: var(--dsh-scrollbar-width); bottom: 0; left: 0; }
-
 .headerStatus { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
-@media (max-width: 600px) { .agentActions .headerStatus { display: none; } }
 
+@media (max-width: 600px) { .agentActions .headerStatus { display: none; } }
 .readOnly { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px; min-height: 54px; margin: 0 var(--dsh-composer-side-clearance) 20px; padding: 10px 16px; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-lg); color: var(--dsw-alias-label-tertiary); background: var(--dsw-alias-bg-layer-1); font-size: 13px; line-height: 20px; }
-.readOnly strong { color: var(--dsw-alias-label-primary); font-weight: 510; }
+.readOnly strong { color: var(--dsw-alias-label-primary); font-weight: 500; }

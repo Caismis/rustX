@@ -133,6 +133,26 @@ impl WorkflowCatalog {
         self.entries.get(id).map(|entry| &entry.source)
     }
 
+    /// The winning file is enabled only by the raw selection of the scope that
+    /// owns it. A Global entry never enables the Workspace file that shadows
+    /// it, and a Workspace entry never enables a Global file.
+    #[must_use]
+    pub(crate) fn enabled_by_owning_scope(
+        &self,
+        id: &WorkflowId,
+        user_selected: &[WorkflowId],
+        workspace_selected: &[WorkflowId],
+    ) -> bool {
+        self.locations.get(id).is_some_and(|location| {
+            let selected = if location.scope == crate::runtime::resources::SourceScope::Workspace {
+                workspace_selected
+            } else {
+                user_selected
+            };
+            selected.contains(id)
+        })
+    }
+
     #[must_use]
     pub fn entries(&self) -> &BTreeMap<WorkflowId, WorkflowEntry> {
         &self.entries
