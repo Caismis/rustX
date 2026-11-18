@@ -12,7 +12,7 @@ mod bash;
 mod classify;
 mod decision;
 mod matrix;
-mod mode;
+pub use rustx_types::runtime::permission::mode;
 mod reminder;
 mod resource;
 mod task;

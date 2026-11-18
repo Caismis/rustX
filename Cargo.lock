@@ -4714,6 +4714,7 @@ dependencies = [
  "rustx-bounded-file",
  "rustx-bounded-json",
  "rustx-identity",
+ "rustx-types",
  "schemars",
  "serde",
  "serde_json",
@@ -4766,6 +4767,17 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "rustx-types"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

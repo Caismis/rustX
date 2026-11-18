@@ -102,6 +102,7 @@ jsonwebtoken = { version = "10.4", default-features = false, features = ["aws_lc
 similar = "3.2"
 imbl = { version = "7.0.0", features = ["serde"] }
 base64 = "0.22"
+rustx-types = { path = "crates/rustx-types" }
 # Workspace crates extracted from src/ (bottom-up split).
 rustx-bounded-json = { path = "crates/rustx-bounded-json" }
 rustx-bounded-file = { path = "crates/rustx-bounded-file" }
@@ -176,6 +177,7 @@ rusqlite = { version = "0.40.2", features = ["trace"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 rustx-identity = { path = "crates/rustx-identity", features = ["test-fixtures"] }
+rustx-types = { path = "crates/rustx-types", features = ["test-fixtures"] }
 
 [profile.dev.build-override]
 # Derive and proc-macro expansion dominates the serial front-end of each rustX

@@ -128,7 +128,7 @@ pub mod subagent;
 /// process unit (M5 Bash and M7 interactive MCP stdio). Internal
 /// coordination only — it is not part of the public runtime API.
 pub(crate) mod supervised_unit;
-pub mod types;
+pub use rustx_types::runtime::types;
 /// Native bounded Workflow definitions, immutable compiled programs, and
 /// catalog admission (Issue #83).
 pub mod workflow;

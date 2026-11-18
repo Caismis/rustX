@@ -5,7 +5,7 @@
 //! are plain runtime-owned data and never reference provider SDK or storage
 //! types.
 
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};
@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// Re-exported from [`crate::runtime::permission`] so existing runtime
 /// modules keep a short path while the closed three-mode contract lives with
 /// the permission owner.
-pub use crate::runtime::permission::ExecutionPermissionMode as ApprovalMode;
+pub use crate::runtime::permission::mode::ExecutionPermissionMode as ApprovalMode;
 
 /// The authoritative lifecycle state of one conversation runtime.
 ///
@@ -144,7 +144,7 @@ impl LifecycleCommitBoundary {
 /// The guard is intentionally private to runtime-owned subsystem seams. It
 /// is not a generic shutdown hook: it proves that one concrete operation or
 /// retained physical resource remains inside its native ownership boundary.
-pub(crate) struct LifecycleAdmission {
+pub struct LifecycleAdmission {
     inner: Arc<LifecycleInner>,
     resident_resource: bool,
 }
@@ -155,7 +155,7 @@ impl LifecycleAdmission {
     /// semantic state. Native configuration preparation and adoption acquire
     /// their own active admission. Close/observer settlement releases this
     /// guard, so drain still cannot publish quiescence early.
-    pub(crate) fn into_resident_resource(mut self) -> Self {
+    pub fn into_resident_resource(mut self) -> Self {
         let boundary = self
             .inner
             .commit_boundary
@@ -171,7 +171,7 @@ impl LifecycleAdmission {
     }
 }
 
-pub(crate) enum NativeAdmissionRefusal {
+pub enum NativeAdmissionRefusal {
     Busy,
     Closed(ConversationLifecycleState),
 }
@@ -219,14 +219,14 @@ impl Default for ConversationLifecycle {
 impl ConversationLifecycle {
     /// Wait for the actual native commit boundary, without reserving capacity
     /// or retaining a Conversation runtime. Subscribe before the level check.
-    pub(crate) async fn commit_available(&self) {
+    pub async fn commit_available(&self) {
         self.inner.commit_boundary.available().await;
     }
 
     /// Nonblocking native registration, including when called under the
     /// coordinator. A concurrent SQL-bearing legacy ownership commit cannot
     /// park the coordinator behind its lifecycle boundary.
-    pub(crate) fn try_admit_running_commit<T>(
+    pub fn try_admit_running_commit<T>(
         &self,
         operation: impl FnOnce(LifecycleAdmission) -> T,
     ) -> Result<T, NativeAdmissionRefusal> {
@@ -314,7 +314,7 @@ impl ConversationLifecycle {
     /// Repeated callers observe the already-draining or quiescent lifecycle
     /// and converge on the same drain operation.
     #[must_use]
-    pub(crate) fn begin_drain(&self) -> bool {
+    pub fn begin_drain(&self) -> bool {
         let _boundary = self
             .inner
             .commit_boundary
@@ -338,7 +338,7 @@ impl ConversationLifecycle {
 
     /// A change token, never a copy of subsystem ownership. An idle probe
     /// must inspect native owners and then validate this token.
-    pub(crate) fn idle_epoch(&self) -> Option<u64> {
+    pub fn idle_epoch(&self) -> Option<u64> {
         // An idle probe may run under the coordinator. A writer holding this
         // boundary is busy; waiting for it would also park failure/control
         // registration behind its SQL, defeating the native durability gate.
@@ -353,7 +353,7 @@ impl ConversationLifecycle {
 
     /// The native idle claim closes autonomous admission only if no owner
     /// entered since the probe. All admission increments share this boundary.
-    pub(crate) fn begin_idle_drain(&self, epoch: u64) -> bool {
+    pub fn begin_idle_drain(&self, epoch: u64) -> bool {
         let Ok(_boundary) = self.inner.commit_boundary.try_lock() else {
             return false;
         };
@@ -375,7 +375,7 @@ impl ConversationLifecycle {
     /// explicit composition owner uses this transition to drain its resources
     /// without first opening semantic admission.
     #[must_use]
-    pub(crate) fn begin_inactive_drain(&self) -> bool {
+    pub fn begin_inactive_drain(&self) -> bool {
         let _boundary = self
             .inner
             .commit_boundary
@@ -402,7 +402,7 @@ impl ConversationLifecycle {
     /// between the `Running` observation and the operation's authoritative
     /// commit. The returned admission is also counted so quiescence waits
     /// for the operation's publication handoff.
-    pub(crate) fn with_running_commit<T>(
+    pub fn with_running_commit<T>(
         &self,
         operation: impl FnOnce() -> T,
     ) -> Result<T, ConversationLifecycleState> {
@@ -436,7 +436,7 @@ impl ConversationLifecycle {
     /// scan and settle already-admitted work: the interaction coordinator
     /// inserts its pending entry while this boundary is held, then retains
     /// the guard until the waiter releases callback authority.
-    pub(crate) fn admit_running_commit<T>(
+    pub fn admit_running_commit<T>(
         &self,
         operation: impl FnOnce(LifecycleAdmission) -> T,
     ) -> Result<T, ConversationLifecycleState> {
@@ -463,9 +463,7 @@ impl ConversationLifecycle {
     /// The state is checked both before and after incrementing the admission
     /// count. If drain wins between those observations, the operation is
     /// refused and its count is removed before the guard is returned.
-    pub(crate) fn try_enter_running(
-        &self,
-    ) -> Result<LifecycleAdmission, ConversationLifecycleState> {
+    pub fn try_enter_running(&self) -> Result<LifecycleAdmission, ConversationLifecycleState> {
         let _boundary = self
             .inner
             .commit_boundary
@@ -493,9 +491,7 @@ impl ConversationLifecycle {
     /// composition operation rather than semantic admission; the counted
     /// guard still keeps an activation/drain race from escaping quiescence.
     /// Once `Draining` begins, no new preparation may start.
-    pub(crate) fn try_enter_preparation(
-        &self,
-    ) -> Result<LifecycleAdmission, ConversationLifecycleState> {
+    pub fn try_enter_preparation(&self) -> Result<LifecycleAdmission, ConversationLifecycleState> {
         let _boundary = self
             .inner
             .commit_boundary
@@ -530,9 +526,7 @@ impl ConversationLifecycle {
     ///
     /// Settlement is allowed while `Running` or `Draining`, but never after
     /// `Quiescent` (and never during pre-activation composition).
-    pub(crate) fn try_enter_settlement(
-        &self,
-    ) -> Result<LifecycleAdmission, ConversationLifecycleState> {
+    pub fn try_enter_settlement(&self) -> Result<LifecycleAdmission, ConversationLifecycleState> {
         // Settlement entry shares the native commit boundary with drain
         // publication. Without this short lock, a settlement caller could
         // observe `Draining` and increment `admissions` after
@@ -561,7 +555,7 @@ impl ConversationLifecycle {
 
     /// Attempts to publish `Quiescent` after all counted admissions settle.
     #[must_use]
-    pub(crate) fn mark_quiescent(&self) -> bool {
+    pub fn mark_quiescent(&self) -> bool {
         let _boundary = self
             .inner
             .commit_boundary
@@ -589,7 +583,7 @@ impl ConversationLifecycle {
     /// One announcement of the next lifecycle transition or counted
     /// admission entry/exit. A level-triggered waiter enables it before
     /// inspecting native state and inspects again after it fires.
-    pub(crate) fn changed(&self) -> tokio::sync::futures::Notified<'_> {
+    pub fn changed(&self) -> tokio::sync::futures::Notified<'_> {
         self.inner.changed.notified()
     }
 
@@ -600,8 +594,8 @@ impl ConversationLifecycle {
 
     /// Hold the native commit boundary until `release` fires, as a
     /// concurrent lifecycle commit would. Returns once it is held.
-    #[cfg(test)]
-    pub(crate) fn hold_commit_boundary(&self, release: std::sync::mpsc::Receiver<()>) {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn hold_commit_boundary(&self, release: std::sync::mpsc::Receiver<()>) {
         let (held, acquired) = std::sync::mpsc::channel();
         let lifecycle = self.clone();
         std::thread::spawn(move || {
@@ -616,8 +610,8 @@ impl ConversationLifecycle {
         acquired.recv().expect("boundary held");
     }
 
-    #[cfg(test)]
-    pub(crate) async fn wait_for_no_active_operations(&self) {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub async fn wait_for_no_active_operations(&self) {
         loop {
             let notified = self.inner.changed.notified();
             tokio::pin!(notified);
@@ -630,7 +624,7 @@ impl ConversationLifecycle {
     }
 
     /// Waits until no counted subsystem operation remains in flight.
-    pub(crate) async fn wait_for_no_admissions(&self) {
+    pub async fn wait_for_no_admissions(&self) {
         loop {
             if self.inner.admissions.load(Ordering::Acquire) == 0 {
                 return;
@@ -646,7 +640,7 @@ impl ConversationLifecycle {
     }
 
     /// Waits until the lifecycle has reached its terminal quiescent state.
-    pub(crate) async fn wait_until_quiescent(&self) {
+    pub async fn wait_until_quiescent(&self) {
         loop {
             if self.state() == ConversationLifecycleState::Quiescent {
                 return;
@@ -666,7 +660,7 @@ impl ConversationLifecycle {
 /// health (Issue #63): the finite set of conversation-owned durable
 /// transitions whose failure can degrade the runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DurableOperation {
+pub enum DurableOperation {
     /// Selecting the finite pending batch from the durable inbox.
     SelectPendingBatch,
     /// Adopting the selected batch into the durable canonical ledger.
@@ -724,12 +718,12 @@ pub(crate) enum DurableOperation {
 impl DurableOperation {
     /// Whether a failure of this operation is a transient storage failure
     /// that earns one bounded retry.
-    pub(crate) fn is_transient(self) -> bool {
+    pub fn is_transient(self) -> bool {
         matches!(self, Self::SelectPendingBatch | Self::AdoptPendingBatch)
     }
 
     /// The stable diagnostic name of the operation.
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::SelectPendingBatch => "select_pending_batch",
             Self::AdoptPendingBatch => "adopt_pending_batch",
@@ -759,11 +753,11 @@ impl DurableOperation {
 /// diagnostic belongs to it — and it is stored in exactly one place: the
 /// runtime-owned [`DurabilityGate`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct DurabilityFailure {
+pub struct DurabilityFailure {
     /// The durable operation that failed persistently.
-    pub(crate) operation: DurableOperation,
+    pub operation: DurableOperation,
     /// The bounded failure diagnostic.
-    pub(crate) diagnostic: String,
+    pub diagnostic: String,
 }
 
 /// The runtime-owned durability frontier of one conversation (Issue #60).
@@ -794,7 +788,7 @@ pub(crate) struct DurabilityFailure {
 /// durable authority and a shutting-down runtime are different dimensions,
 /// and this gate keeps them separate.
 #[derive(Default)]
-pub(crate) struct DurabilityGate {
+pub struct DurabilityGate {
     state: Mutex<DurabilityGateState>,
     released: Condvar,
     changed: tokio::sync::Notify,
@@ -825,11 +819,11 @@ impl std::fmt::Debug for DurabilityGate {
 impl DurabilityGate {
     /// Creates a fresh frontier with no committed failure.
     #[must_use]
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::default()
     }
 
-    pub(crate) fn install_failure_publisher(
+    pub fn install_failure_publisher(
         &self,
         publisher: Arc<dyn Fn(DurabilityFailure) + Send + Sync>,
     ) {
@@ -857,7 +851,7 @@ impl DurabilityGate {
     /// run under the coordinator; it never waits for an ownership writer's
     /// SQL. If a writer won first, its permission drop commits and publishes
     /// the pending winner after the write and native record publication exit.
-    pub(crate) fn commit_failure(
+    pub fn commit_failure(
         &self,
         operation: DurableOperation,
         diagnostic: String,
@@ -890,7 +884,7 @@ impl DurabilityGate {
 
     /// The one authoritative absorbing failure fact, if the runtime entered
     /// `DurabilityFailed`.
-    pub(crate) fn failure(&self) -> Option<DurabilityFailure> {
+    pub fn failure(&self) -> Option<DurabilityFailure> {
         self.state
             .lock()
             .expect("durability gate lock poisoned")
@@ -900,17 +894,17 @@ impl DurabilityGate {
 
     /// Nonblocking status observation never holds Coordinator while waiting
     /// for a Gate -> leaf reservation critical section.
-    pub(crate) fn try_is_failed(&self) -> Option<bool> {
+    pub fn try_is_failed(&self) -> Option<bool> {
         let state = self.state.try_lock().ok()?;
         Some(state.failure.is_some() || state.requested_failure.is_some())
     }
     /// Whether a committed or pending failure closes new admission.
-    pub(crate) fn is_failed(&self) -> bool {
+    pub fn is_failed(&self) -> bool {
         self.with_healthy_commit(|| ()).is_err()
     }
 
     /// Pending failure closes new work without claiming an earlier commit exited.
-    pub(crate) fn admission_failure(&self) -> Option<DurabilityFailure> {
+    pub fn admission_failure(&self) -> Option<DurabilityFailure> {
         let state = self.state.lock().expect("durability gate lock poisoned");
         state
             .failure
@@ -920,7 +914,7 @@ impl DurabilityGate {
     }
 
     /// Idle claims cannot wait behind another subsystem's durable write.
-    pub(crate) fn healthy_for_idle_claim(&self) -> bool {
+    pub fn healthy_for_idle_claim(&self) -> bool {
         self.state.try_lock().is_ok_and(|state| {
             state.failure.is_none()
                 && state.requested_failure.is_none()
@@ -931,7 +925,7 @@ impl DurabilityGate {
 
     /// One short native admission/dispatch decision, serialized with failure
     /// requests. The closure must not wait, write SQL or call the coordinator.
-    pub(crate) fn with_healthy_commit<T>(
+    pub fn with_healthy_commit<T>(
         &self,
         commit: impl FnOnce() -> T,
     ) -> Result<T, OwnershipCommitRefused> {
@@ -949,7 +943,7 @@ impl DurabilityGate {
     /// caller must hold its Conversation coordinator until this guard exits.
     /// SQL runs outside the gate's short state mutex. A failure requested
     /// during either active commit is published only after both have exited.
-    pub(crate) fn enter_coordinator_commit(
+    pub fn enter_coordinator_commit(
         self: &Arc<Self>,
     ) -> Result<DurabilityCommitGuard, OwnershipCommitRefused> {
         let mut state = self.state.lock().expect("durability gate lock poisoned");
@@ -974,8 +968,8 @@ impl DurabilityGate {
     /// work immediately and publishes only after this permission exits.
     /// Call only from a blocking worker or synchronous fixture, outside
     /// coordinator and registry locks. Async callers await the other entry.
-    #[cfg(test)]
-    pub(crate) fn enter_ownership_commit(
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn enter_ownership_commit(
         self: &Arc<Self>,
     ) -> Result<DurabilityCommitGuard, OwnershipCommitRefused> {
         let mut state = self.state.lock().expect("durability gate lock poisoned");
@@ -1000,7 +994,7 @@ impl DurabilityGate {
     }
 
     /// Waits outside coordinator/registry locks without occupying a Tokio worker.
-    pub(crate) async fn enter_ownership_commit_async(
+    pub async fn enter_ownership_commit_async(
         self: &Arc<Self>,
     ) -> Result<DurabilityCommitGuard, OwnershipCommitRefused> {
         loop {
@@ -1033,7 +1027,7 @@ impl DurabilityGate {
 /// admission but does not claim that an earlier writer exited. The gate's
 /// one publisher emits the observation when the fact becomes committed.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum DurabilityFailureCommit {
+pub enum DurabilityFailureCommit {
     /// An earlier ownership commit retains its permission until physical exit;
     /// later admission is closed and failure publication follows that exit.
     Pending(DurabilityFailure),
@@ -1049,7 +1043,7 @@ pub(crate) enum DurabilityFailureCommit {
 /// Held across its durable write and native publication, it is
 /// what gives the `DurabilityFailed` commit and the ownership commit one
 /// deterministic total order on the [`DurabilityGate`].
-pub(crate) struct DurabilityCommitGuard {
+pub struct DurabilityCommitGuard {
     gate: Arc<DurabilityGate>,
     owner: DurableCommitOwner,
 }
@@ -1090,10 +1084,10 @@ impl Drop for DurabilityCommitGuard {
 /// A new conversation-owned durable ownership commit refused because the
 /// owning runtime's durable authority is in the explicit failed state.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OwnershipCommitRefused {
+pub struct OwnershipCommitRefused {
     /// The owning runtime's bounded failure diagnostic (the authoritative
     /// fact's diagnostic).
-    pub(crate) diagnostic: String,
+    pub diagnostic: String,
 }
 
 /// A token measurement of a model input, with explicit provenance.

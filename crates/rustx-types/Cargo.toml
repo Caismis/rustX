@@ -1,0 +1,20 @@
+[package]
+name = "rustx-types"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+schemars = { version = "1", features = ["chrono04"] }
+chrono = { version = "0.4", features = ["serde"] }
+tokio = { version = "1", features = ["macros", "sync"] }
+
+[dev-dependencies]
+serde_json = "1"
+
+[features]
+# Monolith cfg(test) call sites reach the test-only lifecycle helpers
+# (hold_commit_boundary, wait_for_no_active_operations,
+# enter_ownership_commit) through the workspace dependency.
+test-fixtures = []
