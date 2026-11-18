@@ -7,8 +7,9 @@ const skill = (name: string, enabled = true) => ({
   catalog: { name },
 });
 
-it('keeps the fenced catalog names while a rescan is pending', () => {
+it('returns settled default-enabled names and withholds a pending rescan', () => {
   expect(defaultEnabledSkillNames({ skills: [skill('guide'), skill('copy', false)] })).toEqual(['guide']);
+  expect(defaultEnabledSkillNames({ pending: true, skills: [skill('guide')] })).toBeUndefined();
 });
 
 it('suppresses names on a catalog error and when the catalog is absent', () => {

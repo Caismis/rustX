@@ -38,12 +38,13 @@ test('six concurrent reference conditions retain numeric operators during edits 
     await routeWorkspaceHost(page, fixture); await page.goto('/');
     await connectRemote(page, fixture.endpoint, fixture.token); await openEmptySession(page, fixture, 'Workspace A');
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
+    const owned = page.locator('[data-workflows-level="library"] section[aria-labelledby="workflows-title"] > ul');
     for (const scope of ['Global', 'Workspace']) {
       await page.getByRole('tab', { name: scope, exact: true }).click();
-      // The selected scope's list is a direct child; Global's additional list
-      // is nested inside its independently labelled region on Workspace.
-      const owned = page.locator('[data-workflows-level="library"] section[aria-labelledby="workflows-title"] > ul');
+      await expect(page.getByRole('tab', { name: scope, exact: true })).toHaveAttribute('aria-selected', 'true');
       await owned.getByRole('button', { name: 'concurrent_conditions', exact: true }).click(); await activate(page);
+      const editor = page.locator('section[aria-labelledby="workflow-editor-title"]');
+      await expect(editor.getByText(scope === 'Global' ? 'Global' : 'Workspace: Workspace A', { exact: true })).toBeVisible();
       const title = inspector(page).getByRole('textbox', { name: 'Node title', exact: true });
       await title.fill('Overlapping candidate one'); await title.press('Enter');
       await title.fill('Overlapping candidate two'); await title.press('Enter');

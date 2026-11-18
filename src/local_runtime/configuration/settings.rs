@@ -423,6 +423,24 @@ fn reread(
 fn revision(bytes: Option<&[u8]>) -> String {
     super::super::settings::revision(bytes)
 }
+
+/// Workflow ids authored in one admitted document. Absence is an empty
+/// selection. An unreadable document is `Io`; a document that does not parse
+/// is `Invalid`.
+fn raw_workflow_selection(
+    document: &super::super::settings::AdmittedSource,
+    workspace: bool,
+) -> Result<Vec<crate::runtime::workflow::WorkflowId>, SettingsError> {
+    let Some(bytes) = document.read().map_err(|_| SettingsError::Io)? else {
+        return Ok(Vec::new());
+    };
+    let layer = super::capture::parse_layer(document.path(), &bytes, workspace)
+        .map_err(|_| SettingsError::Invalid)?;
+    Ok(layer
+        .agent
+        .and_then(|agent| agent.workflows)
+        .unwrap_or_default())
+}
 /// The prospective composition's native semantics, as Session resolution and
 /// automatic repair decide them; safe text only.
 fn source_resolution_diagnostic(document: &RuntimeLayer) -> Option<String> {
@@ -1052,6 +1070,29 @@ impl UserConfigManager {
     ) -> Result<(SourceSettings, String), SettingsError> {
         self.with_source_documents(target, |user, workspace| {
             self.capture_round(target, user, workspace)
+        })
+    }
+
+    /// Raw Workflow selections of the admitted User and Workspace documents.
+    /// These are not the merged list: each scope enables only files it owns.
+    pub(super) fn scoped_workflow_selections(
+        &self,
+        workspace: &SourceTarget,
+    ) -> Result<
+        (
+            Vec<crate::runtime::workflow::WorkflowId>,
+            Vec<crate::runtime::workflow::WorkflowId>,
+        ),
+        SettingsError,
+    > {
+        self.with_source_documents(workspace, |user, workspace_document| {
+            Ok((
+                raw_workflow_selection(user, false)?,
+                workspace_document
+                    .map(|document| raw_workflow_selection(document, true))
+                    .transpose()?
+                    .unwrap_or_default(),
+            ))
         })
     }
 

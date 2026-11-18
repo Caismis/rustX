@@ -14,7 +14,7 @@ import { IconChevronDownOutline14, IconCopyOutline16, IconEditOutline16, IconPlu
 import type { WorkspaceAuthority } from '../../../../workspaces/authority';
 import type { LibraryOperation, WorkflowLibraryActor, WorkflowLibrarySnapshot } from '../../machines/library';
 import type { WorkflowSurfaceActor } from '../../machines/surface';
-import { sameScope, USER_SCOPE, type WorkflowScope } from '../../port';
+import { USER_SCOPE, type WorkflowScope } from '../../port';
 import { IconFile, IconFolder } from '../icons';
 import { WorkflowIcon } from '../WorkflowIcon';
 import { FailureText } from '../notices';
@@ -143,9 +143,7 @@ function WorkflowFiles({ library, state, scopeLabel, query, view, revoked, onTra
 }) {
   const tx = useTranslation();
   const { scope, observation, listFailure, operationFailure, confirmation } = state.context;
-  // A tab can change while the accepted listing still belongs to the scope
-  // whose read is in flight. Do not present that listing as the new scope.
-  const listing = observation && sameScope(observation.port.scope, scope) ? observation.listing : undefined;
+  const listing = observation?.listing;
   const settled = state.matches('ready');
   const modified = useModified();
   const operationName = (operation: LibraryOperation) => operation.kind === 'enable' ? tx(operation.enabled ? 'workflows:library.operation-enable' : 'workflows:library.operation-disable')

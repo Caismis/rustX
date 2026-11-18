@@ -219,12 +219,18 @@ fn selects_mcp(agent: &NamedAgentDefinition, id: &McpServerId) -> bool {
         .any(|selector| selector.source() == Some(&source))
 }
 
-fn selected_programs<'a>(
+/// Programs whose winning file [`WorkflowCatalog::enabled_by_owning_scope`]
+/// accepts. `get` still includes a disabled source, so the shared scope rule
+/// decides; this only loads that program for inspection.
+fn enabled_programs<'a>(
     catalog: &'a WorkflowCatalog,
-    selected: &[WorkflowId],
+    user_selected: &[WorkflowId],
+    workspace_selected: &[WorkflowId],
 ) -> Vec<&'a WorkflowProgram> {
-    selected
-        .iter()
+    catalog
+        .locations
+        .keys()
+        .filter(|id| catalog.enabled_by_owning_scope(id, user_selected, workspace_selected))
         .filter_map(|id| catalog.get(id).map(AsRef::as_ref))
         .collect()
 }
@@ -262,23 +268,21 @@ impl UserConfigManager {
 
     /// Whether a copy would satisfy a consumer the root switch does not name.
     ///
-    /// Named Agents selected by this layer, and Agents referenced by its selected
-    /// Workflows, contribute MCP selectors. Selected Workflows contribute their
-    /// direct tool selectors and Agent-node profiles, including nodes nested in
-    /// Loop and Iteration bodies. Programs come from the layered User-then-Workspace
-    /// catalog, so a Workspace selection of a Global file is still a consumer.
+    /// Named Agents selected by this layer contribute MCP selectors. `programs`
+    /// are the Workflows whose winning file is enabled by that file's own scope,
+    /// the same rule Session capture uses. Those programs contribute direct tool
+    /// selectors and Agent-node profiles, including nodes nested in Loop and
+    /// Iteration bodies.
     fn scope_consumers_select(
         document: &super::RuntimeLayer,
         agents: &AgentCatalog,
-        workflows: &WorkflowCatalog,
+        programs: &[&WorkflowProgram],
         resource: &ResourceTransfer,
     ) -> bool {
         let Some(agent) = document.agent.as_ref() else {
             return false;
         };
         let selected_agents = agent.agents.as_deref().unwrap_or(&[]);
-        let selected_workflows = agent.workflows.as_deref().unwrap_or(&[]);
-        let programs = selected_programs(workflows, selected_workflows);
         match resource {
             ResourceTransfer::Mcp { destination, .. } => {
                 selected_agents.iter().any(|name| {
@@ -425,28 +429,35 @@ impl UserConfigManager {
             let workspace_agents =
                 agent_resources::load_authorized(workspace.workspace(), &user_agents_root)
                     .map_err(|_| SettingsError::Invalid)?;
-            // Same discovery as Session capture: User files, then Workspace
-            // files that shadow them. A Workspace selection resolves the
-            // winning program even when that file is Global.
+            // Discovery shadows definitions: User files, then Workspace files
+            // that replace them. That chooses the winning file, not whether it
+            // runs. Enablement is the owning scope's raw selection.
+            let (user_selected, workspace_selected) = self.scoped_workflow_selections(workspace)?;
+            // Global's own catalog, then the layered catalog Session capture
+            // uses. Each view applies the same owning-scope rule to its own
+            // winning files; a Workspace shadow is not a Global consumer.
+            let user_workflows = workflow_resources::load(None, &self.resource_root(user))
+                .map_err(|_| SettingsError::Io)?;
             let workflows =
                 workflow_resources::load(workspace.workspace(), &self.resource_root(user))
                     .map_err(|_| SettingsError::Io)?;
-            let user_workflows = workflow_resources::load(None, &self.resource_root(user))
-                .map_err(|_| SettingsError::Io)?;
-            // Check both views: a Workspace may override the root Agent or an
-            // MCP selection independently of what Global itself selects. Root
-            // switches are not the only consumers.
-            for (document, agents, programs) in [
-                (&global, &user_agents.0, &user_workflows),
-                (&workspace_layer, &workspace_agents.0, &workflows),
-            ] {
-                if resource.selected(document)
-                    || Self::scope_consumers_select(document, agents, programs, resource)
-                {
-                    return Err(SettingsError::TransferRejected(
-                        TransferRejection::NameEnabled,
-                    ));
-                }
+            let user_programs =
+                enabled_programs(&user_workflows, &user_selected, &workspace_selected);
+            let workspace_programs =
+                enabled_programs(&workflows, &user_selected, &workspace_selected);
+            if resource.selected(&global)
+                || Self::scope_consumers_select(&global, &user_agents.0, &user_programs, resource)
+                || resource.selected(&workspace_layer)
+                || Self::scope_consumers_select(
+                    &workspace_layer,
+                    &workspace_agents.0,
+                    &workspace_programs,
+                    resource,
+                )
+            {
+                return Err(SettingsError::TransferRejected(
+                    TransferRejection::NameEnabled,
+                ));
             }
         }
         if !source.holds() {
@@ -783,7 +794,7 @@ block:
     }
 
     #[test]
-    fn copy_rejects_a_global_workflow_selected_only_by_the_workspace() {
+    fn copy_allows_a_global_workflow_selected_only_by_the_workspace() {
         let (_temporary, manager, workspace) = fixture();
         let workspace_dir = workspace.workspace().unwrap();
         let user_root = manager.resource_root(&SourceTarget::User);
@@ -811,6 +822,35 @@ block:
         .unwrap();
         let agent_destination = workspace_dir.join(".agents/agents/review-copy.toml");
         let mcp_destination = workspace_dir.join(".agents/mcp.toml");
+        copy(
+            &manager,
+            &workspace,
+            &agent_transfer(),
+            &revision_of(&source_agent),
+        )
+        .expect("a Workspace list does not enable the Global file it does not own");
+        assert!(agent_destination.is_file());
+        copy(
+            &manager,
+            &workspace,
+            &mcp_transfer(),
+            &revision_of(&user_mcp),
+        )
+        .expect("a Workspace list does not enable the Global file it does not own");
+        assert!(
+            fs::read_to_string(&mcp_destination)
+                .unwrap()
+                .contains("review-copy")
+        );
+
+        fs::remove_file(&agent_destination).unwrap();
+        fs::remove_file(&mcp_destination).unwrap();
+        let user_config = user_root.parent().unwrap().join("rustx.toml");
+        let config = fs::read_to_string(&user_config).unwrap().replace(
+            "[agent.model]\nmodel = \"local\"\n",
+            "[agent]\nworkflows = ['pipeline']\n\n[agent.model]\nmodel = \"local\"\n",
+        );
+        fs::write(&user_config, config).unwrap();
         assert_name_enabled(
             &copy(
                 &manager,
@@ -818,7 +858,7 @@ block:
                 &agent_transfer(),
                 &revision_of(&source_agent),
             ),
-            "workspace-selected global workflow profile",
+            "the Global file's own scope enables its profile",
         );
         assert!(!agent_destination.exists());
         assert_name_enabled(
@@ -828,33 +868,101 @@ block:
                 &mcp_transfer(),
                 &revision_of(&user_mcp),
             ),
-            "workspace-selected global workflow tool",
+            "the Global file's own scope enables its tool",
         );
         assert!(
             !fs::read_to_string(&mcp_destination)
                 .unwrap_or_default()
                 .contains("review-copy")
         );
+    }
 
+    #[test]
+    fn copy_allows_a_disabled_workspace_shadow_and_rejects_the_enabled_owner() {
+        let (_temporary, manager, workspace) = fixture();
+        let workspace_dir = workspace.workspace().unwrap();
+        let user_root = manager.resource_root(&SourceTarget::User);
+        let user_config = user_root.parent().unwrap().join("rustx.toml");
+        let config = fs::read_to_string(&user_config).unwrap().replace(
+            "[agent.model]\nmodel = \"local\"\n",
+            "[agent]\nworkflows = ['pipeline']\n\n[agent.model]\nmodel = \"local\"\n",
+        );
+        fs::write(&user_config, config).unwrap();
+        fs::create_dir_all(user_root.join("agents")).unwrap();
+        let source_agent = user_root.join("agents/original.toml");
         fs::write(
-            workspace_dir.join("rustx.toml"),
-            "[agent]\nworkflows = []\n",
+            &source_agent,
+            "description = 'Review'\ninstructions = 'Review input'\n",
         )
         .unwrap();
-        copy(
-            &manager,
-            &workspace,
-            &mcp_transfer(),
-            &revision_of(&user_mcp),
+        let user_mcp = user_root.join("mcp.toml");
+        fs::write(
+            &user_mcp,
+            "[mcp_servers.review]\nurl = 'https://example.invalid/mcp'\n",
         )
-        .expect("clearing the workspace workflow selection allows the MCP copy");
+        .unwrap();
+        let quiet = NESTED_WORKFLOW.replace("profile: review-copy", "profile: reviewer").replace(
+            "selector: {origin: source, source_id: review-copy, name: inspect}",
+            "selector: {origin: builtin, name: read}",
+        );
+        let global_workflow = user_root.join("workflows/pipeline.yaml");
+        fs::create_dir_all(global_workflow.parent().unwrap()).unwrap();
+        fs::write(&global_workflow, &quiet).unwrap();
+        install_workflow_at(&global_workflow, &quiet);
+        fs::create_dir_all(workspace_dir.join(".agents/agents")).unwrap();
+        fs::write(workspace_dir.join(".agents/agents/reviewer.toml"), "description = 'Review'\ninstructions = 'Review input'\n").unwrap();
+        install_workflow(workspace_dir, NESTED_WORKFLOW);
+        fs::write(workspace_dir.join("rustx.toml"), "[agent]\nworkflows = []\n").unwrap();
+        let agent_destination = workspace_dir.join(".agents/agents/review-copy.toml");
+        let mcp_destination = workspace_dir.join(".agents/mcp.toml");
         copy(
             &manager,
             &workspace,
             &agent_transfer(),
             &revision_of(&source_agent),
         )
-        .expect("clearing the workspace workflow selection allows the agent copy");
+        .expect("a disabled Workspace shadow is not a consumer");
+        assert!(agent_destination.is_file());
+        fs::remove_file(&agent_destination).unwrap();
+        copy(
+            &manager,
+            &workspace,
+            &mcp_transfer(),
+            &revision_of(&user_mcp),
+        )
+        .expect("a disabled Workspace shadow is not a consumer");
+        assert!(
+            fs::read_to_string(&mcp_destination)
+                .unwrap()
+                .contains("review-copy")
+        );
+        assert!(!fs::read_to_string(workspace_dir.join("rustx.toml")).unwrap().contains("pipeline"));
+        fs::write(workspace_dir.join("rustx.toml"), "[agent]\nworkflows = ['pipeline']\n").unwrap();
+        fs::remove_file(&mcp_destination).unwrap();
+        assert_name_enabled(
+            &copy(
+                &manager,
+                &workspace,
+                &agent_transfer(),
+                &revision_of(&source_agent),
+            ),
+            "owning scope enables the shadowing profile",
+        );
+        assert!(!agent_destination.exists());
+        assert_name_enabled(
+            &copy(
+                &manager,
+                &workspace,
+                &mcp_transfer(),
+                &revision_of(&user_mcp),
+            ),
+            "owning scope enables the shadowing tool",
+        );
+        assert!(
+            !fs::read_to_string(&mcp_destination)
+                .unwrap_or_default()
+                .contains("review-copy")
+        );
     }
 
     #[test]

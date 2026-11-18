@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useSelector } from '@xstate/react';
 import type { SkillDescriptor, SourceScope, SourceSettings, TransferOperation } from '../../../../../protocol/app-server/v80';
 import type { AppServerClient } from '../../../client/app-server';
 import { useTranslation } from '../../../locale/react';
@@ -10,6 +11,7 @@ import { SkillDeleteDialog } from '../skills/SkillDeleteDialog';
 import { SkillDisplayDialog, type SkillDisplayWriter } from '../skills/SkillDisplayDialog';
 import { SkillDetail } from '../skills/SkillDetail';
 import { useSkillCatalog } from '../skills/useSkillCatalog';
+import { useSettingsActor } from '../../settings/machines/react';
 import { extensionEntries } from './inventory';
 import { ResourceAvailability, SkillSelectionPolicy } from './ResourceAvailability';
 import { ResourceCard, ResourceGroup } from './ResourceCards';
@@ -18,11 +20,11 @@ import { transferActions } from './ResourceTransfer';
 const userTarget = { kind: 'user' } as const;
 const rowKey = (scope: SourceScope, name: string) => `${scope}:${name}`;
 
-/** Default-enabled names from the catalog `useSkillCatalog` already fences.
- * Pending keeps that catalog's last settled skills. An error, or a catalog
- * that is absent after a scope, directory, or generation change, yields none. */
-export function defaultEnabledSkillNames(catalog: { error?: string; skills: readonly { disable_model_invocation: boolean; enabled_by_default: boolean; catalog: { name: string } }[] } | undefined): string[] | undefined {
-  if (!catalog || catalog.error) return undefined;
+/** Default-enabled names from a settled catalog. A pending or failed
+ * rescan is not a complete directory, so it cannot expand `all` into an exact
+ * list. Exact edits and none/all/inherit do not use this list. */
+export function defaultEnabledSkillNames(catalog: { pending?: boolean; error?: string; skills: readonly { disable_model_invocation: boolean; enabled_by_default: boolean; catalog: { name: string } }[] } | undefined): string[] | undefined {
+  if (!catalog || catalog.pending || catalog.error) return undefined;
   return catalog.skills.filter(skill => !skill.disable_model_invocation && skill.enabled_by_default).map(skill => skill.catalog.name);
 }
 
@@ -40,6 +42,8 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
   const [focus, setFocus] = useState<{ name: string; owner: SourceScope }>();
   const [editing, setEditing] = useState<{ skill: SkillDescriptor; write: SkillDisplayWriter }>();
   const [deleting, setDeleting] = useState<{ title: string; owner: SourceScope; path: string; remove: () => Promise<void> }>();
+  const settings = useSettingsActor();
+  const sourceReading = useSelector(settings, state => state.matches({ authority: { attached: 'reading' } }));
   const effective = useSkillCatalog(client, source, true, scope, refresh + localRefresh);
   const global = useSkillCatalog(client, source, scope === 'workspace', 'user', refresh + localRefresh);
   const listed = effective?.skills ?? [];
@@ -49,7 +53,10 @@ export function ResourceBrowser({ client, source, scope, revision, query, view, 
     ? [...listed.filter(skill => skill.provenance.source === 'workspace'), ...global.skills]
     : listed;
   const descriptors = new Map(skills.map(skill => [rowKey(skill.provenance.source, skill.catalog.name), skill]));
-  const skillNames = defaultEnabledSkillNames(effective);
+  // A source read in flight has not yet produced the catalog's source. Withhold
+  // names until that read and the catalog are both settled, so all→exact cannot
+  // start on the previous directory.
+  const skillNames = sourceReading ? undefined : defaultEnabledSkillNames(effective);
   const selectable = new Set(listed.map(skill => rowKey(skill.provenance.source, skill.catalog.name)));
   const catalogError = effective?.error ?? global?.error;
   const entries = new Map(extensionEntries(source, scope, 'skill').map(entry => [rowKey(entry.owner, entry.name), entry]));

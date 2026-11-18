@@ -286,6 +286,9 @@ test('skill directories copy, move and delete from their exact scopes', async ({
     expect(readFileSync(join(user, 'local-guide/SKILL.md'))).toEqual(localText);
     expect(readFileSync(join(user, 'local-guide/assets/icon.svg'), 'utf8')).toBe(icon);
 
+    // The post-transfer source read and its catalog must settle before an
+    // all→exact toggle. The switch stays disabled until both are ready.
+    await expect(workspaceCopy.getByRole('switch')).toBeEnabled();
     await workspaceCopy.getByRole('switch').click();
     await expect(workspaceCopy.getByRole('switch')).toBeChecked();
     await expect(globalCopy.getByRole('switch')).not.toBeChecked();

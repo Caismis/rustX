@@ -25,7 +25,8 @@ export function SkillSelectionPolicy({ source, scope, revision, skillNames }: {
     : selection === 'all' ? 'all' : selection.length ? 'selected' : 'none';
   const blocked = unit.draft || unit.reviewNeeded || !unit.writable || !unit.admitted || unit.busy;
   const canFreeze = selection !== 'all' || skillNames !== undefined;
-  return <section className={css.skillPolicy} aria-label={tx('resources:skills.selection')} aria-busy={unit.busy || unit.awaitingObservation}>
+  const catalogIncomplete = selection === 'all' && skillNames === undefined;
+  return <section className={css.skillPolicy} aria-label={tx('resources:skills.selection')} aria-busy={unit.busy || unit.awaitingObservation || catalogIncomplete}>
     <Choice label={tx('resources:skills.selection')} value={mode} disabled={blocked}
       disabledKeys={canFreeze ? undefined : ['selected']}
       options={[
@@ -70,7 +71,8 @@ export function ResourceAvailability({ family, name, valid, source, scope, revis
   const names = Array.isArray(selection) ? selection : skillNames ?? (source.prospective_resources?.definitions ?? []).filter(row => row.family === family && row.valid).map(row => row.name);
   const selected = selection === 'all' ? skillEnabledByDefault ?? true : family === 'mcp' ? names.length > 0 : names.includes(name);
   const review = !!unit.draft || unit.reviewNeeded;
-  return <div className={css.availability} aria-busy={unit.busy || unit.awaitingObservation}>
+  const catalogIncomplete = family === 'skill' && selection === 'all' && skillNames === undefined;
+  return <div className={css.availability} aria-busy={unit.busy || unit.awaitingObservation || catalogIncomplete}>
     <Switch label={tx('settings:catalog.enable', { name })} checked={selected}
       disabled={review || !unit.writable || !unit.admitted || unit.busy || valid === false && !selected
         || family === 'skill' && selection === 'all' && skillNames === undefined}
