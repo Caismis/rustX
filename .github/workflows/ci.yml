@@ -364,7 +364,9 @@ jobs:
       # proofs) are not executed by `--all-targets`; execute them explicitly
       # here against the compiled `--all-features` library.
       - name: Run doctests
-        run: cargo test --doc --all-features --locked
+        # --workspace so doctests that moved into the extracted rustx-*
+        # crates keep executing; the lane checker forwards it the same way.
+        run: cargo test --doc --workspace --all-features --locked
 
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
       # select only the root package, so run the extracted packages once.

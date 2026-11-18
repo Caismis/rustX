@@ -804,6 +804,10 @@ fn parse_cargo_arguments(
                 }
             }
             "--no-run" => step.executes = false,
+            // Selection over every workspace member: forwarded verbatim like
+            // a feature flag so doctest discovery covers the extracted
+            // `rustx-*` crates too.
+            "--workspace" => step.features.push((*argument).into()),
             "--locked" | "--timings" => {}
             other => return Err(format!("unsupported cargo test option `{other}`")),
         }
@@ -1998,8 +2002,8 @@ jobs:
                 "unsupported libtest option `--ignored`",
             ),
             (
-                "cargo test --workspace",
-                "unsupported cargo test option `--workspace`",
+                "cargo test --frozen",
+                "unsupported cargo test option `--frozen`",
             ),
             (
                 "cargo test -- boundary_suites::",

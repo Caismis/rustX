@@ -451,8 +451,9 @@ summarizes them and the lane check below verifies them against Cargo:
   then
   `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::`,
   `cargo test --test contracts --test provider --all-features --locked`, and
-  explicit `cargo test --doc --all-features --locked` (executing both
-  positive API counterparts and `compile_fail` encapsulation proofs).
+  explicit `cargo test --doc --workspace --all-features --locked` (executing
+  both positive API counterparts and `compile_fail` encapsulation proofs,
+  including doctests of the extracted `rustx-*` crates).
   Preparation compiles the lane's targets once with `--all-features` (matching
   the ordinary library unit that `--examples`, `--test contracts`, and `--test
   provider` share) and physically stages the emitted package binaries beside
@@ -887,7 +888,7 @@ python3 test-support/prepare_native_tests.py -- \
   cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features --locked
-cargo test --doc --all-features --locked
+cargo test --doc --workspace --all-features --locked
 
 # Boundary lane (CI: rust-boundaries); uv is mandatory:
 BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
