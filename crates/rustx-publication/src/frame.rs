@@ -8,11 +8,11 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-use crate::message::types::ContentBlockIndex;
-use crate::runtime::identity::{
+use rustx_types::message::types::ContentBlockIndex;
+use rustx_types::runtime::identity::{
     AttemptId, MessageId, PublicationStreamId, RequestId, ToolCallId, ToolId, TurnId,
 };
-use crate::tools::types::{ToolCall, ToolCallStart};
+use rustx_types::tools::types::{ToolCall, ToolCallStart};
 
 /// Finite observation evidence produced inside the existing frame staging transaction.
 /// Returning this receipt never grants access beyond its exact committed frame.
@@ -22,7 +22,7 @@ pub struct PublicationFrameReceipt {
     pub unavailable: bool,
     pub stream_id: PublicationStreamId,
     pub sequence: u64,
-    pub content: Vec<crate::observation::content::ContentRef>,
+    pub content: Vec<rustx_types::observation::content::ContentRef>,
     pub suffix_bytes: Option<u64>,
     pub block_ordinal: Option<u64>,
     pub block_total: u64,
@@ -590,9 +590,9 @@ mod tests {
         PublicationAuditBlock, PublicationFrame, PublicationPayload, PublicationSettlement,
         consolidate_audit_content,
     };
-    use crate::message::types::ContentBlockIndex;
-    use crate::runtime::identity::{MessageId, PublicationStreamId, ToolCallId, ToolId};
-    use crate::tools::types::{ToolCall, ToolCallStart};
+    use rustx_types::message::types::ContentBlockIndex;
+    use rustx_types::runtime::identity::{MessageId, PublicationStreamId, ToolCallId, ToolId};
+    use rustx_types::tools::types::{ToolCall, ToolCallStart};
 
     fn frame(sequence: u64, payload: PublicationPayload) -> PublicationFrame {
         PublicationFrame {
@@ -764,10 +764,7 @@ mod tests {
                 },
             },
         )]);
-        assert_eq!(
-            content,
-            [] as [crate::publication::frame::PublicationAuditBlock; 0]
-        );
+        assert_eq!(content, [] as [crate::frame::PublicationAuditBlock; 0]);
     }
 
     /// The durable settlement form round-trips.

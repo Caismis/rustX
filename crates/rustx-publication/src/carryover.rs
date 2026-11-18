@@ -4,15 +4,15 @@
 //! derives a source identity and constructs a bounded request-only value from
 //! a keyed audit; it never creates a canonical message or a Tool Plane fact.
 
-use crate::model::input::{
+use crate::{PublicationAudit, PublicationAuditBlock, PublicationAuditKind};
+use rustx_types::model::input::{
     CARRYOVER_RENDER_HEADER, CARRYOVER_SOURCE_SETTLEMENT_PREFIX,
     CARRYOVER_SOURCE_SETTLEMENT_SUFFIX, CarryoverBlockKind, CarryoverOmissionCounts,
     RenderedCarryoverRecord, RenderedCarryoverText, RenderedCarryoverToolCall,
     RenderedUnresolvedOutputCarryover, UnresolvedOutputSettlement, render_carryover_record,
 };
-use crate::model::snapshot::RequestIdentity;
-use crate::publication::{PublicationAudit, PublicationAuditBlock, PublicationAuditKind};
-use crate::runtime::identity::PublicationStreamId;
+use rustx_types::model::snapshot::RequestIdentity;
+use rustx_types::runtime::identity::PublicationStreamId;
 
 /// The maximum UTF-8 bytes admitted for one complete carryover rendering.
 pub const MAX_UNRESOLVED_OUTPUT_CARRYOVER_BYTES: usize = 4_096;
@@ -217,11 +217,11 @@ mod tests {
         MAX_UNRESOLVED_OUTPUT_CARRYOVER_BYTES, RenderedCarryoverRecord,
         render_unresolved_output_carryover, select_unresolved_output_source,
     };
-    use crate::message::types::ContentBlockIndex;
-    use crate::model::snapshot::RequestIdentity;
-    use crate::model::{CarryoverDetailLevel, UnresolvedOutputSettlement};
-    use crate::publication::{PublicationAudit, PublicationAuditBlock, PublicationAuditKind};
-    use crate::runtime::identity::{
+    use crate::{PublicationAudit, PublicationAuditBlock, PublicationAuditKind};
+    use rustx_types::message::types::ContentBlockIndex;
+    use rustx_types::model::input::{CarryoverDetailLevel, UnresolvedOutputSettlement};
+    use rustx_types::model::snapshot::RequestIdentity;
+    use rustx_types::runtime::identity::{
         AttemptId, MessageId, PublicationStreamId, RequestId, ToolCallId, ToolId, TurnId,
     };
 
@@ -366,7 +366,7 @@ mod tests {
         assert!(carryover.rendered_bytes() <= MAX_UNRESOLVED_OUTPUT_CARRYOVER_BYTES);
         assert!(carryover.records.iter().any(|record| matches!(
             record,
-            crate::model::input::RenderedCarryoverRecord::ProposedToolCall(call)
+            rustx_types::model::input::RenderedCarryoverRecord::ProposedToolCall(call)
                 if call.arguments.is_none() && call.omitted_argument_bytes > MAX_CARRYOVER_TOOL_ARGUMENT_BYTES
         )));
     }
@@ -538,8 +538,10 @@ mod tests {
             .records
             .iter()
             .filter_map(|record| match record {
-                crate::model::input::RenderedCarryoverRecord::Text(text) => text.text.as_deref(),
-                crate::model::input::RenderedCarryoverRecord::ProposedToolCall(_) => None,
+                rustx_types::model::input::RenderedCarryoverRecord::Text(text) => {
+                    text.text.as_deref()
+                }
+                rustx_types::model::input::RenderedCarryoverRecord::ProposedToolCall(_) => None,
             })
             .collect();
         assert_eq!(retained.len(), 2);
@@ -563,7 +565,8 @@ mod tests {
             }],
         ))
         .expect("UTF-8 text is meaningful");
-        let crate::model::input::RenderedCarryoverRecord::Text(text) = &carryover.records[0] else {
+        let rustx_types::model::input::RenderedCarryoverRecord::Text(text) = &carryover.records[0]
+        else {
             panic!("text record expected");
         };
         assert_eq!(text.omitted_prefix_bytes, 4);

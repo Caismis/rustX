@@ -26,7 +26,9 @@
 pub mod bounded;
 pub mod capability_source;
 pub(crate) mod capture;
-pub mod content;
+pub use rustx_types::observation::content;
+#[cfg(test)]
+mod content_tests;
 pub mod cut;
 pub mod delivery;
 pub mod failure;

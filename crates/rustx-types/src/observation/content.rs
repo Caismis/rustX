@@ -24,7 +24,7 @@ pub enum ContentRepresentation {
 }
 impl ContentRepresentation {
     /// Private storage/cache key; serde retains the descriptive public name.
-    pub(crate) const fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Utf8Text => "t",
             Self::RawJsonUtf8 => "r",
@@ -45,7 +45,7 @@ pub enum CanonicalContentComponent {
     MessageMetadata,
 }
 impl CanonicalContentComponent {
-    pub(crate) const fn key(self) -> &'static str {
+    pub const fn key(self) -> &'static str {
         match self {
             Self::Payload => "canonical",
             Self::BlockMetadata => "cb",
@@ -72,7 +72,7 @@ pub enum CanonicalContentLocator {
     },
 }
 impl CanonicalContentLocator {
-    pub(crate) fn key(&self) -> std::borrow::Cow<'_, str> {
+    pub fn key(&self) -> std::borrow::Cow<'_, str> {
         match self {
             Self::ByMessageId { message_id } => {
                 std::borrow::Cow::Owned(format!("message:{}", message_id.as_str()))
@@ -125,11 +125,11 @@ pub enum ContentSource {
 }
 impl ContentSource {
     /// The store key of the instructions a configuration change fact retains.
-    pub(crate) const CONFIGURATION_INSTRUCTIONS: &'static str = "configuration_instructions";
+    pub const CONFIGURATION_INSTRUCTIONS: &'static str = "configuration_instructions";
     /// The store key of the catalog a configuration change fact retains.
-    pub(crate) const CONFIGURATION_CATALOG: &'static str = "configuration_catalog";
+    pub const CONFIGURATION_CATALOG: &'static str = "configuration_catalog";
 
-    pub(crate) fn key(&self) -> (&'static str, std::borrow::Cow<'_, str>, u32) {
+    pub fn key(&self) -> (&'static str, std::borrow::Cow<'_, str>, u32) {
         match self {
             Self::CanonicalMessageBlock {
                 component,
@@ -246,22 +246,6 @@ pub struct ContentChunk {
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub next_offset: Option<u64>,
     pub complete: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn t19_canonical_json_v1_recursively_orders_keys_preserves_arrays_and_values() {
-        let value = serde_json::json!({"z":[{"z":"\n水", "a":2},1],"a":{"z":true,"a":null}});
-        assert_eq!(
-            {
-                let mut bytes = Vec::new();
-                crate::runtime::read_layout::canonical::to_writer(&mut bytes, &value).unwrap();
-                bytes
-            },
-            "{\"a\":{\"a\":null,\"z\":true},\"z\":[{\"a\":2,\"z\":\"\\n水\"},1]}".as_bytes()
-        );
-    }
 }
 
 /// Native P-derived finite display descriptor; byte authority remains in `ContentRefs`.

@@ -23,6 +23,7 @@ pub mod model {
     pub mod projected;
     pub mod replay;
     pub mod request_params;
+    pub mod snapshot;
     pub mod transformations;
     pub mod types;
     pub mod uploads;
@@ -93,6 +94,7 @@ pub mod runtime_client {
 
 pub mod observation {
     pub mod bounded;
+    pub mod content;
     pub mod preflight;
     pub mod structural_json;
 
