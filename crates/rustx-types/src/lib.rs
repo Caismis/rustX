@@ -47,6 +47,7 @@ pub mod skills {
 
 pub mod capabilities {
     pub mod availability;
+    pub mod error;
     pub mod selected;
     pub mod source;
     pub use source::ToolSourceId;
@@ -58,8 +59,23 @@ pub mod observation {
     pub mod structural_json;
 }
 
+pub mod agent {
+    pub mod execution {
+        pub mod attribution;
+    }
+    pub mod state;
+}
+
+pub mod app_server {
+    pub mod transport {
+        pub mod auth;
+    }
+}
+
 pub mod context {
     pub mod assembly;
+    pub mod images;
+    pub mod system_prompt;
 }
 
 pub mod goal;

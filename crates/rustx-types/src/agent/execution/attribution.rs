@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Clone, Copy)]
-pub(crate) enum Phase {
+pub enum Phase {
     Prepare,
     Start,
     Commit,
@@ -24,25 +24,25 @@ pub(crate) enum Phase {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct PhaseProfile {
-    pub(crate) calls: u64,
-    pub(crate) total_us: u128,
+pub struct PhaseProfile {
+    pub calls: u64,
+    pub total_us: u128,
 }
 
 /// Inclusive actual Source I/O. Lookup and leaf work are subsets of request work.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct SourceWork {
-    pub(crate) samples: u64,
-    pub(crate) native_header_queries: u64,
-    pub(crate) native_node_queries: u64,
-    pub(crate) index_pages: u64,
-    pub(crate) index_bytes: u64,
-    pub(crate) metadata_blobs: u64,
-    pub(crate) metadata_bytes: u64,
-    pub(crate) new_leaves: u64,
-    pub(crate) new_nodes: u64,
-    pub(crate) new_fragment_bytes: u64,
-    pub(crate) header_decodes: u64,
+pub struct SourceWork {
+    pub samples: u64,
+    pub native_header_queries: u64,
+    pub native_node_queries: u64,
+    pub index_pages: u64,
+    pub index_bytes: u64,
+    pub metadata_blobs: u64,
+    pub metadata_bytes: u64,
+    pub new_leaves: u64,
+    pub new_nodes: u64,
+    pub new_fragment_bytes: u64,
+    pub header_decodes: u64,
 }
 impl SourceWork {
     fn add(&mut self, value: Self) {
@@ -60,28 +60,28 @@ impl SourceWork {
     }
 }
 #[derive(Clone, Copy)]
-pub(crate) enum SourceScope {
+pub enum SourceScope {
     Request,
     Lookup,
     Leaf,
 }
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct ContextWork {
-    pub(crate) anchor_roots: u64,
-    pub(crate) token_bytes: u64,
-    pub(crate) estimator_calls: u64,
-    pub(crate) materialized_items: u64,
+pub struct ContextWork {
+    pub anchor_roots: u64,
+    pub token_bytes: u64,
+    pub estimator_calls: u64,
+    pub materialized_items: u64,
 }
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct NativeWork {
-    pub(crate) preparation_items: u64,
-    pub(crate) old_items: u64,
-    pub(crate) new_items: u64,
-    pub(crate) index_queries: u64,
-    pub(crate) hash_bytes: u64,
+pub struct NativeWork {
+    pub preparation_items: u64,
+    pub old_items: u64,
+    pub new_items: u64,
+    pub index_queries: u64,
+    pub hash_bytes: u64,
 }
 impl SourceWork {
-    pub(crate) fn since(&self, previous: &Self) -> Self {
+    pub fn since(&self, previous: &Self) -> Self {
         Self {
             samples: self.samples - previous.samples,
             native_header_queries: self.native_header_queries - previous.native_header_queries,
@@ -98,7 +98,7 @@ impl SourceWork {
     }
 }
 impl ContextWork {
-    pub(crate) fn since(&self, previous: &Self) -> Self {
+    pub fn since(&self, previous: &Self) -> Self {
         Self {
             anchor_roots: self.anchor_roots - previous.anchor_roots,
             token_bytes: self.token_bytes - previous.token_bytes,
@@ -108,7 +108,7 @@ impl ContextWork {
     }
 }
 impl NativeWork {
-    pub(crate) fn since(&self, previous: &Self) -> Self {
+    pub fn since(&self, previous: &Self) -> Self {
         Self {
             preparation_items: self.preparation_items - previous.preparation_items,
             old_items: self.old_items - previous.old_items,
@@ -119,34 +119,34 @@ impl NativeWork {
     }
 }
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct AgentRequestProfile {
-    pub(crate) prepare: PhaseProfile,
-    pub(crate) start: PhaseProfile,
-    pub(crate) commit: PhaseProfile,
-    pub(crate) commit_evidence: PhaseProfile,
-    pub(crate) context_projection: PhaseProfile,
-    pub(crate) source: PhaseProfile,
-    pub(crate) source_capture: PhaseProfile,
-    pub(crate) source_lookup: PhaseProfile,
-    pub(crate) source_leaf: PhaseProfile,
-    pub(crate) source_scalar: PhaseProfile,
-    pub(crate) source_geometry: PhaseProfile,
-    pub(crate) context_observe: PhaseProfile,
-    pub(crate) context_measure: PhaseProfile,
-    pub(crate) input_assembly: PhaseProfile,
-    pub(crate) source_work: SourceWork,
-    pub(crate) source_lookup_work: SourceWork,
-    pub(crate) source_leaf_work: SourceWork,
-    pub(crate) context_work: ContextWork,
-    pub(crate) native_work: NativeWork,
+pub struct AgentRequestProfile {
+    pub prepare: PhaseProfile,
+    pub start: PhaseProfile,
+    pub commit: PhaseProfile,
+    pub commit_evidence: PhaseProfile,
+    pub context_projection: PhaseProfile,
+    pub source: PhaseProfile,
+    pub source_capture: PhaseProfile,
+    pub source_lookup: PhaseProfile,
+    pub source_leaf: PhaseProfile,
+    pub source_scalar: PhaseProfile,
+    pub source_geometry: PhaseProfile,
+    pub context_observe: PhaseProfile,
+    pub context_measure: PhaseProfile,
+    pub input_assembly: PhaseProfile,
+    pub source_work: SourceWork,
+    pub source_lookup_work: SourceWork,
+    pub source_leaf_work: SourceWork,
+    pub context_work: ContextWork,
+    pub native_work: NativeWork,
 }
 
 static ACTIVE: Mutex<Option<Arc<Mutex<AgentRequestProfile>>>> = Mutex::new(None);
 
-pub(crate) fn active() -> bool {
+pub fn active() -> bool {
     ACTIVE.lock().unwrap().is_some()
 }
-pub(crate) fn record_source(scope: SourceScope, work: SourceWork) {
+pub fn record_source(scope: SourceScope, work: SourceWork) {
     let active = ACTIVE.lock().unwrap().clone();
     let Some(active) = active else {
         return;
@@ -159,7 +159,7 @@ pub(crate) fn record_source(scope: SourceScope, work: SourceWork) {
     }
     .add(work);
 }
-pub(crate) fn record_context(work: ContextWork) {
+pub fn record_context(work: ContextWork) {
     let active = ACTIVE.lock().unwrap().clone();
     let Some(active) = active else {
         return;
@@ -170,7 +170,7 @@ pub(crate) fn record_context(work: ContextWork) {
     profile.context_work.estimator_calls += work.estimator_calls;
     profile.context_work.materialized_items += work.materialized_items;
 }
-pub(crate) fn record_native(work: NativeWork) {
+pub fn record_native(work: NativeWork) {
     let active = ACTIVE.lock().unwrap().clone();
     let Some(active) = active else {
         return;
@@ -182,11 +182,11 @@ pub(crate) fn record_native(work: NativeWork) {
     profile.native_work.index_queries += work.index_queries;
     profile.native_work.hash_bytes += work.hash_bytes;
 }
-pub(crate) struct Guard {
+pub struct Guard {
     profile: Arc<Mutex<AgentRequestProfile>>,
 }
 
-pub(crate) fn start() -> Guard {
+pub fn start() -> Guard {
     let mut active = ACTIVE.lock().unwrap();
     assert!(active.is_none(), "one native agent request measurement");
     let profile = Arc::new(Mutex::new(AgentRequestProfile::default()));
@@ -195,7 +195,7 @@ pub(crate) fn start() -> Guard {
 }
 
 impl Guard {
-    pub(crate) fn snapshot(&self) -> AgentRequestProfile {
+    pub fn snapshot(&self) -> AgentRequestProfile {
         *self.profile.lock().unwrap()
     }
 }
@@ -206,13 +206,13 @@ impl Drop for Guard {
     }
 }
 
-pub(crate) struct Timer {
+pub struct Timer {
     phase: Phase,
     started: Option<(Arc<Mutex<AgentRequestProfile>>, Instant)>,
 }
 
 impl Timer {
-    pub(crate) fn new(phase: Phase) -> Self {
+    pub fn new(phase: Phase) -> Self {
         let started = ACTIVE
             .lock()
             .unwrap()

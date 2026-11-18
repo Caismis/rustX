@@ -3,7 +3,7 @@
 //! Agent and project instructions occupy their own later System sections.
 //! Auxiliary summarization requests keep their separate task-specific input.
 
-pub(crate) const DEFAULT_SYSTEM_PROMPT: &str = r"You are an expert coding assistant operating inside rustX. Help the user understand and change code, investigate problems, and complete tasks using the tools available in this request.
+pub const DEFAULT_SYSTEM_PROMPT: &str = r"You are an expert coding assistant operating inside rustX. Help the user understand and change code, investigate problems, and complete tasks using the tools available in this request.
 
 Working guidelines:
 - Follow the user's request and the applicable agent and project instructions. Use agent-specific instructions to specialize your role.

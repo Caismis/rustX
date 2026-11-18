@@ -20,13 +20,12 @@ pub mod compaction_budget;
 pub(crate) mod compaction_metadata;
 pub mod engine;
 pub mod error;
-mod images;
 pub mod occupancy;
 pub mod projection;
 pub mod resources;
 pub mod status;
 pub mod summarizer;
-mod system_prompt;
+pub(crate) use rustx_types::context::system_prompt;
 pub mod tokens;
 
 use std::sync::Arc;

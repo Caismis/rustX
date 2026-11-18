@@ -14,7 +14,7 @@ pub struct Credential(Mode);
 
 #[derive(Clone)]
 enum Mode {
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
     Clock(
         Box<Credential>,
         std::sync::Arc<std::sync::atomic::AtomicI64>,
@@ -48,8 +48,8 @@ fn invalid(message: &'static str) -> io::Error {
 }
 
 impl Credential {
-    #[cfg(test)]
-    pub(crate) fn with_clock(self, clock: std::sync::Arc<std::sync::atomic::AtomicI64>) -> Self {
+#[cfg(any(test, feature = "test-fixtures"))]
+    pub fn with_clock(self, clock: std::sync::Arc<std::sync::atomic::AtomicI64>) -> Self {
         Self(Mode::Clock(Box::new(self), clock))
     }
 
@@ -116,7 +116,7 @@ impl Credential {
         }))
     }
 
-    pub(crate) fn validate(&self, token: &str) -> bool {
+    pub fn validate(&self, token: &str) -> bool {
         let Ok(duration) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
         else {
             return false;
@@ -129,7 +129,7 @@ impl Credential {
 
     fn validate_at(&self, token: &str, now: i64) -> bool {
         match &self.0 {
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Mode::Clock(policy, clock) => {
                 policy.validate_at(token, clock.load(std::sync::atomic::Ordering::Acquire))
             }
@@ -168,7 +168,7 @@ impl Credential {
                         .as_ref()
                         .is_none_or(|expected| claims.iss.as_ref() == Some(expected))
                     && audience.as_ref().is_none_or(|expected| match &claims.aud {
-                        Some(Audience::One(actual)) => actual == expected,
+                        Some(Audience::One(actual)) => *actual == *expected,
                         Some(Audience::Many(actual)) => actual.contains(expected),
                         None => false,
                     })
@@ -176,7 +176,7 @@ impl Credential {
         }
     }
 
-    pub(crate) fn offered(&self, offered: &[&str], prefix: &str) -> bool {
+    pub fn offered(&self, offered: &[&str], prefix: &str) -> bool {
         let mut values = offered
             .iter()
             .filter_map(|value| value.strip_prefix(prefix));
@@ -186,7 +186,7 @@ impl Credential {
         values.next().is_none() && self.validate(value)
     }
 
-    pub(crate) fn same_secret(&self, other: &Self) -> bool {
+    pub fn same_secret(&self, other: &Self) -> bool {
         match (&self.0, &other.0) {
             (Mode::Capability(a), Mode::Capability(b)) => {
                 constant_time_eq::constant_time_eq_32(a, b)
@@ -204,7 +204,7 @@ fn valid_capability(token: &str) -> bool {
 }
 
 /// Reject ambiguous carriers before validating either. No fallback on failure.
-pub(super) fn authorize(
+pub fn authorize(
     credential: &Credential,
     headers: &http::HeaderMap,
     offered: &[&str],

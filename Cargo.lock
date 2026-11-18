@@ -4776,10 +4776,12 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "constant_time_eq",
  "futures-util",
  "http",
  "httpdate",
  "ignore",
+ "jsonwebtoken",
  "libc",
  "nix",
  "reqwest",

@@ -29,7 +29,7 @@ pub mod cancellation;
 pub mod execution;
 pub mod lifecycle;
 pub mod observer;
-pub mod state;
+pub use rustx_types::agent::state;
 
 pub use crate::runtime::inbound::InitialTurnTrigger;
 pub use cancellation::AgentCancellation;

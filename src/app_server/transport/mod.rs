@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{connection::AppServerConnection, connection::Reply, delivery_access::Publication};
 
-mod auth;
+pub(crate) use rustx_types::app_server::transport::auth;
 pub mod resources;
 pub mod stdio;
 pub mod websocket;
