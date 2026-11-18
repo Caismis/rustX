@@ -205,7 +205,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -435,7 +435,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -599,7 +599,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -727,7 +727,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -830,7 +830,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v10
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -969,7 +969,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
@@ -1112,7 +1112,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
@@ -1172,7 +1172,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
@@ -1242,6 +1242,19 @@ jobs:
         with:
           pattern: browser-shard-*
           path: ${{ runner.temp }}/shards
+      # v8 flattens the download into `path` when the pattern matches exactly
+      # one artifact (a one-shard FAST run); wrap it back under its shard dir
+      # so the coverage loop sees one layout either way.
+      - name: Normalize a single-shard artifact layout
+        run: |
+          if [ -f "$RUNNER_TEMP/shards/shard-report/identity.json" ]; then
+            shard=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/shards/shard-report/identity.json','utf8')).shard)")
+            dest="$RUNNER_TEMP/shards/browser-shard-$shard"
+            mkdir -p "$dest"
+            for entry in shard-report blob-report; do
+              [ -d "$RUNNER_TEMP/shards/$entry" ] && mv "$RUNNER_TEMP/shards/$entry" "$dest/$entry"
+            done
+          fi
       - name: Merge the shard reports
         working-directory: web-console
         env:
