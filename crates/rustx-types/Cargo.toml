@@ -5,15 +5,8 @@ edition = "2024"
 publish = false
 
 [dependencies]
-similar = "3.2"
-tempfile = "3.27.0"
 jsonschema = { version = "0.60.2", default-features = false, features = ["macros"] }
 croner = "=4.0.2"
-xberg = { version = "1.0.14", default-features = false, features = [
-    "pdf",
-    "excel",
-    "office",
-] }
 chrono-tz = "0.10"
 referencing = "=0.60.2"
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "functions", "preupdate_hook", "fallible_uint"] }
