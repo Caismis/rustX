@@ -88,6 +88,15 @@ impl PackageDirectory {
 
     pub fn child(&self, name: &std::ffi::OsStr) -> std::io::Result<Self> {
         self.verify()?;
+        // A resolved directory must stay inside the opened root: reject parent
+        // traversal and separators outright, since `verify` only confirms the
+        // ancestor chain it was given.
+        if name == std::ffi::OsStr::new("..") || name.as_encoded_bytes().contains(&b'/') {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "unsafe package child name",
+            ));
+        }
         let fd = openat(self.fd.as_ref(), name, DIRECTORY, Mode::empty())?;
         let mut ancestors = self.ancestors.clone();
         if name != "." {
