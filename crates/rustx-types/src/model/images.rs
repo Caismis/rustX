@@ -416,7 +416,7 @@ pub fn resolve(
 }
 
 /// The exact semantic omission value shared with frozen-input validation.
-pub fn omission_text(id: &ArtifactId) -> String {
+pub(crate) fn omission_text(id: &ArtifactId) -> String {
     format!("[Image artifact {id}; image omitted from this request]")
 }
 

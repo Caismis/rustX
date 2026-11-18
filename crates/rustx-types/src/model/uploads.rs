@@ -43,7 +43,7 @@ pub fn escaped_len(value: &str) -> Option<usize> {
         total.checked_add(escaped_character(character).map_or(character.len_utf8(), str::len))
     })
 }
-pub fn escape(value: &str) -> String {
+pub(crate) fn escape(value: &str) -> String {
     let mut escaped = String::new();
     for character in value.chars() {
         if let Some(replacement) = escaped_character(character) {
