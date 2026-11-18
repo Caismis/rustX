@@ -317,7 +317,7 @@ pub struct ToolExecutionResult {
 /// content. Runtime-owned status feedback and managed-output continuation are
 /// added here, rather than by an executor or provider adapter. The complete
 /// joined representation is always bounded by
-/// [`MAX_MODEL_TOOL_RESULT_BYTES`](crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES).
+/// `MAX_MODEL_TOOL_RESULT_BYTES`.
 ///
 /// Tool-owned file/image references remain marked as non-text content so
 /// protocol adapters can reject them when their wire format cannot represent

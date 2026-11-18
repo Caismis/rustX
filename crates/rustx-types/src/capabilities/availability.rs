@@ -9,7 +9,7 @@
 //!
 //! The capability coordinator owns this state authoritatively. It is
 //! control-plane health, deliberately separate from the execution
-//! identity: [`crate::runtime::identity::CapabilityRevision`] advances
+//! identity: `crate::runtime::identity::CapabilityRevision` advances
 //! only when the effective committed executable capability set changes,
 //! never because a diagnostic reason string changed, and the
 //! provider/model-facing `CapabilitiesManifest` never carries

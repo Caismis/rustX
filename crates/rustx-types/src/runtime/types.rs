@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 /// The runtime-wide execution-permission mode (Issue #544).
 ///
-/// Re-exported from [`crate::runtime::permission`] so existing runtime
+/// Re-exported from `crate::runtime::permission` so existing runtime
 /// modules keep a short path while the closed three-mode contract lives with
 /// the permission owner.
 pub use crate::runtime::permission::mode::ExecutionPermissionMode as ApprovalMode;

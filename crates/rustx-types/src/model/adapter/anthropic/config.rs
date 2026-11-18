@@ -5,7 +5,7 @@
 //! There is deliberately **no** default `https://api.anthropic.com`. A
 //! provider binding is constructible only with an explicit base URL, which
 //! always originates from the validated model catalog
-//! ([`crate::model::catalog`]). No provider *name* can therefore select an
+//! (`crate::model::catalog`). No provider *name* can therefore select an
 //! official network endpoint.
 
 use reqwest::Client as ReqwestClient;

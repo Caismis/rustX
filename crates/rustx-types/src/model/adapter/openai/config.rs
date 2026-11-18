@@ -8,14 +8,14 @@
 //! There is deliberately **no** default `https://api.openai.com/v1`. A
 //! provider binding is constructible only with an explicit base URL, which
 //! always originates from the validated model catalog
-//! ([`crate::model::catalog`]). No provider *name* can therefore select an
+//! (`crate::model::catalog`). No provider *name* can therefore select an
 //! official network endpoint.
 //!
 //! # Storage mode is not adapter configuration
 //!
 //! Responses storage/continuation mode is a per-model structural translation
 //! behaviour and lives in
-//! [`ModelCompat`](crate::model::catalog::ModelCompat), carried by each
+//! `ModelCompat`, carried by each
 //! request's invocation configuration. One adapter therefore serves every
 //! model of its provider.
 

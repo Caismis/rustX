@@ -1,7 +1,7 @@
 //! Runtime-owned monotonic time.
 //!
 //! Monotonic time is for elapsed-time policies only. It is deliberately
-//! separate from [`crate::runtime::types::RuntimeClock`], which supplies UTC
+//! separate from `crate::runtime::types::RuntimeClock`, which supplies UTC
 //! timestamps for durable facts and must never be used for deadlines.
 
 use std::fmt;

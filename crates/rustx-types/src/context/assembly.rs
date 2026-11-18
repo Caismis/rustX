@@ -8,7 +8,7 @@ pub enum UserContextLane {
     /// Claimed inbound input. This is not extension-controlled.
     ClaimedInbound,
     /// The semantic lane of the **native runtime observation owner**
-    /// ([`NativeContextContributor::RuntimeToolObservation`]).
+    /// (`NativeContextContributor::RuntimeToolObservation` in `rustx`).
     ///
     /// This lane describes *who owns the fact*, not *when the fact became
     /// eligible*. Deferred proposals produced by a certified extension keep

@@ -19,8 +19,8 @@
 //! executor-owned physical cancellation and then transitions to the
 //! executor's settlement authority: the independent cancellation/settlement
 //! control plane of the started execution
-//! ([`crate::tools::executor::ToolExecutionHandle`]), which returns typed
-//! [`crate::tools::executor::ToolSettlement`] evidence and is awaited without
+//! (`crate::tools::executor::ToolExecutionHandle`), which returns typed
+//! `crate::tools::executor::ToolSettlement` evidence and is awaited without
 //! a timeout — it is the *normal* settlement mechanism. The settled evidence
 //! selects the canonical status: proven terminal settlement after a deadline
 //! winner is [`ToolExecutionStatus::TimedOut`], an executor-proven
@@ -59,10 +59,10 @@ pub const DEFAULT_TOOL_HARD_DEADLINE: Duration = Duration::from_mins(2);
 /// the physical operation stopped, that local cleanup completed, or that
 /// remote termination is known or unknown for a protocol reason. On that
 /// exceptional path the lifecycle commits `OutcomeUnknown`, journals the
-/// typed [`crate::events::types::RuntimeEvent::ToolExecutionSettlementControlFailed`]
+/// typed `crate::events::types::RuntimeEvent::ToolExecutionSettlementControlFailed`
 /// fact (never `ToolExecutionSettlementObserved` — no executor evidence was
 /// observed), and drops the handle. For
-/// [`crate::tools::executor::ToolExecutionHandle::settled_by_operation`]
+/// `crate::tools::executor::ToolExecutionHandle::settled_by_operation`
 /// dropping the handle drops the settlement future, which owns the
 /// operation future: all rustX-owned local execution ownership of a
 /// conforming executor is consumed by that drop, because a conforming
@@ -230,7 +230,7 @@ pub enum ToolCancellationCause {
 /// The certainty of one observed physical settlement (Issue #204).
 ///
 /// This is the journaled form of the executor's typed
-/// [`crate::tools::executor::ToolSettlement`] evidence: `Confirmed` records
+/// `crate::tools::executor::ToolSettlement` evidence: `Confirmed` records
 /// executor-proven physical terminality, `Unconfirmed` records that the
 /// executor's settlement authority consumed/reclaimed all rustX-owned local
 /// execution ownership while terminality past the external-effect frontier
@@ -238,7 +238,7 @@ pub enum ToolCancellationCause {
 /// control plane actually returned. A settlement authority that never
 /// returned is a settlement control-plane failure and is journaled through
 /// its own typed fact
-/// ([`crate::events::types::RuntimeEvent::ToolExecutionSettlementControlFailed`]),
+/// (`crate::events::types::RuntimeEvent::ToolExecutionSettlementControlFailed`),
 /// never as `Unconfirmed` certainty.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,

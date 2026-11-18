@@ -182,7 +182,7 @@ id_type! {
     ///
     /// A request identity is distinct from an attempt, turn, retry ordinal,
     /// and Event Journal sequence. Primary requests derive the `request:`
-    /// namespace from immutable [`RequestIdentity`](crate::model::snapshot::RequestIdentity).
+    /// namespace from immutable `RequestIdentity` (`rustx::model::snapshot::RequestIdentity`).
     /// Auxiliary requests allocate the separate `req_` `UUIDv7` namespace with
     /// [`RequestId::generate_auxiliary`]. Each physical retry is a distinct
     /// request. Identity alone grants no execution permission.
@@ -352,7 +352,7 @@ id_type! {
     /// MCP Tool definition (Issue #145).
     ///
     /// The identity is derived by
-    /// [`mcp_tool_identity`](crate::tools::mcp::identity::mcp_tool_identity)
+    /// `mcp_tool_identity` (`rustx::tools::mcp::identity::mcp_tool_identity`)
     /// over the versioned `MCP_TOOL_IDENTITY_V1` field set — server
     /// identity, canonical name, description, canonical input schema, and
     /// the effective execution policy — in the textual form
