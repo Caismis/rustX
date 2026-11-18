@@ -2918,7 +2918,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "9682cf628ea866c6fd17892390471117bb9a992072748cddf4a258b9de82b1e7",
+      "local_sha256": "866542e9aeedbf4f4ed00e2c6157d526295530913daa691f3c01baf30ba2ea0b",
       "retained_dependencies": [],
       "classification": "B"
     },
