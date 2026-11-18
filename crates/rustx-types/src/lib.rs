@@ -54,6 +54,11 @@ pub mod tools {
         pub mod stdout;
     }
     pub mod schema;
+
+    pub mod mcp {
+        #[cfg(feature = "test-fixtures")]
+        pub mod test_sync;
+    }
 }
 
 pub mod skills {
@@ -71,6 +76,10 @@ pub mod capabilities {
     pub mod selected;
     pub mod source;
     pub use source::ToolSourceId;
+}
+
+pub mod runtime_client {
+    pub mod interaction_observation;
 }
 
 pub mod observation {

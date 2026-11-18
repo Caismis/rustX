@@ -147,7 +147,7 @@ pub use types::{
 
 pub(crate) mod state_observation;
 
-pub(crate) mod interaction_observation;
+pub(crate) use rustx_types::runtime_client::interaction_observation;
 
 mod pending_observation;
 

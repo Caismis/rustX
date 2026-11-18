@@ -4789,6 +4789,7 @@ dependencies = [
  "nix",
  "referencing",
  "reqwest",
+ "rmcp",
  "rmp-serde",
  "rusqlite",
  "rustix",
