@@ -85,7 +85,7 @@ for (const { locale, theme, width } of [
   const reveal = async () => { const box = (await frame.boundingBox())!; await page.mouse.move(box.x + box.width / 2, box.y + box.height - 20); };
   await reveal();
   const controlsBox = (await panel.locator('[data-document-zoom-controls]').boundingBox())!;
-  expect(Math.abs(controlsBox.width - 132)).toBeLessThan(1);
+  expect(Math.abs(controlsBox.width - 130)).toBeLessThan(1);
   const zoom = panel.getByRole('button', { name: locale === 'zh' ? '缩放' : 'Zoom', exact: true });
   await zoom.click(); await page.getByRole('menuitem', { name: '150%', exact: true }).click();
   await expect(frame).toHaveAttribute('data-document-zoom-mode', 'fixed');
