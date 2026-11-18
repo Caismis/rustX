@@ -9391,5 +9391,24 @@
     [324, 36, [21, 21, 23, 255], [20, 20, 22, 255]],
     [326, 36, [21, 21, 23, 255], [20, 20, 22, 255]]
   ]
+},
+{
+  "reference": "pre-style-sync-model-profiles-zh-dark-linux.png",
+  "referenceSha256": "d8a2ac48af584d6a792cbad5337af0dda06f901daa8c37481dba2c6b5489f6cf",
+  "capture": "model-profiles-zh-dark-noise-43499868422-linux.png",
+  "captureSha256": "e8fb98e3a19c412d9bcdb2ef2054aecde356474e046d3440bb0081f5ce2fb906",
+  "evidence": "Frozen pre-restyle comparator fixture: pinned Playwright 1.63.0 Chromium image bc6ab0d6, FULL CI run 43499868422 job 132146747931 produced exactly the two CodeMirror focus-ring corner variants below against the pre-restyle baseline, with byte-identical DOM geometry (retained Brotli proofs). After the Harness restyle the live baseline no longer reproduces this variant, so the live manifest keeps no allowance; this entry is comparator evidence only.",
+  "geometry": {
+    "baseline": {"file": "model-profiles-zh-dark-baseline-geometry.json.br", "sha256": "4699defe6698904c0c28e10d1d227460fa5d733d3b6b84a134013caedf1e570b"},
+    "variant": {"file": "model-profiles-zh-dark-variant-geometry.json.br", "sha256": "5164bdf35d08c83646aee2ff2d9cd0b38fbe982c576347f7ddbf85e8b934df1f"}
+  },
+  "regions": [
+    {"label": "JSON editor focus corner coverage at 642,499", "x": 642, "y": 499, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 8},
+    {"label": "JSON editor focus corner coverage at 642,500", "x": 642, "y": 500, "width": 1, "height": 1, "maxChangedPixels": 1, "maxChannelDelta": 25}
+  ],
+  "pixels": [
+    [642, 499, [99, 152, 246, 255], [103, 158, 254, 255]],
+    [642, 500, [67, 88, 128, 255], [74, 103, 153, 255]]
+  ]
 }
 ]

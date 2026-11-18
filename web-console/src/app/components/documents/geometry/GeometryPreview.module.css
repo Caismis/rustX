@@ -3,13 +3,19 @@
 .viewport canvas { position: absolute; inset: 0; display: block; max-width: 100%; }
 .axes { position: absolute; inset-inline-start: 8px; bottom: 8px; pointer-events: none; }
 .axisControl { cursor: pointer; }
-.axisControl[data-axis="X"] { color: #f17b7b; }
-.axisControl[data-axis="Y"] { color: #76bd85; }
-.axisControl[data-axis="Z"] { color: #84aff8; }
+.axisControl[data-axis="X"] { color: var(--dsw-alias-state-error-secondary); }
+.axisControl[data-axis="Y"] { color: var(--dsw-alias-state-success-secondary); }
+.axisControl[data-axis="Z"] { color: var(--dsw-alias-state-business-primary); }
 .axisHit { fill: transparent; pointer-events: all; }
 .axisShaft { fill: none; stroke: currentColor; stroke-width: 2px; pointer-events: none; }
 .axisHead, .axisPole { fill: currentColor; stroke: var(--dsw-alias-bg-document-preview); stroke-width: 1px; stroke-linejoin: round; pointer-events: none; }
-.axisControl:hover .axisHead, .axisControl:hover .axisPole, .axisControl:focus-visible .axisHead, .axisControl:focus-visible .axisPole { stroke: var(--dsw-alias-label-primary); stroke-width: 2px; }
+.axisControl:focus-visible .axisHead, .axisControl:focus-visible .axisPole { stroke: var(--dsw-alias-label-primary); stroke-width: 2px; }
+@media (hover: hover) {
+  .axisControl:hover .axisHead,
+    .axisControl:hover .axisPole {
+     stroke: var(--dsw-alias-label-primary); stroke-width: 2px;
+  }
+}
 .axisControl:focus { outline: none; }
 .outlineStatus { position: absolute; bottom: 8px; inset-inline: 164px 8px; margin: 0; padding: 6px 8px; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-secondary); font-size: 11px; pointer-events: none; }
 .previewStatus { composes: outlineStatus; z-index: 1; }
@@ -36,5 +42,7 @@
 .message > svg { width: 32px; height: 32px; opacity: .6; }
 .loading { pointer-events: none; }
 .loader { display: block; flex: none; animation: spin 800ms linear infinite; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
+
 @media (prefers-reduced-motion: reduce) { .loader { animation: none; } }

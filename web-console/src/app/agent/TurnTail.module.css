@@ -4,11 +4,16 @@
 .action svg { width: calc(15px + var(--dsh-content-font-delta, 0px)); height: calc(15px + var(--dsh-content-font-delta, 0px)); }
 .actions[data-clock="end"] .action svg { width: calc(17px + var(--dsh-content-font-delta, 0px)); height: calc(17px + var(--dsh-content-font-delta, 0px)); }
 .actions[data-clock="end"] .time { font-size: calc(var(--dsh-content-font-size-secondary, 13px) - 1px); }
-.action:hover { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
+@media (hover: hover) {
+  .action:hover {
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary);
+  }
+}
 .action:focus-visible { outline: 2px solid var(--dsw-alias-button-info-fill); outline-offset: 2px; }
 .action:disabled { opacity: .4; cursor: default; }
 .action[aria-busy=true] { opacity: 1; color: var(--dsw-alias-button-info-fill); }
-@media (hover: hover) {
+
+@media (hover: hover) and (pointer: fine) {
   :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering']):has(~ :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])):not(:hover):not(:focus-within) .actions {
     opacity: 0;
     transition: opacity 80ms ease;
@@ -16,16 +21,16 @@
   [data-response-reveal='hover'] .actions, .actions[data-response-reveal='hover'] { opacity: 0; transition: opacity 80ms ease; }
   [data-response-reveal='hover']:hover .actions, [data-response-reveal='hover']:focus-within .actions, .actions[data-response-reveal='hover']:hover, .actions[data-response-reveal='hover']:focus-within { opacity: 1; }
 }
-@media (max-width: 480px) { .actions { gap: 4px; } .action { width: 36px; height: 36px; } }
 
+@media (max-width: 480px) { .actions { gap: 4px; } .action { width: 36px; height: 36px; } }
 .time { color: var(--dsw-alias-label-tertiary); font-size: var(--dsh-content-font-size-secondary, 13px); white-space: nowrap; }
+
 @media (prefers-reduced-motion: reduce) { .actions { transition: none !important; } }
 .root { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .root > .actions { margin-top: 4px; }
 /* Runtime-bound cards can resolve to no DOM. Keep an empty tail's original
    action-row spacing rather than adding the card-to-actions separation. */
 .root > .actions:only-child { margin-top: 0; }
-
 .actions[data-clock="start"] { margin-top: 0; }
 .actions[data-clock="start"] .time { padding-right: 12px; }
 .actions[data-clock="end"] { margin-left: -6px; }

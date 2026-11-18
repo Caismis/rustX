@@ -8,10 +8,9 @@
   width: 2px;
   height: 2px;
   margin: 0 8px;
-  border-radius: 1px;
+  border-radius: var(--dsw-radius-xs);
   background: var(--dsw-alias-label-caption);
 }
-
 /* The change's one-line account: the reason it rarely needs expanding. */
 .summary {
   flex: 1 1 auto;
@@ -23,7 +22,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .body {
   box-sizing: border-box;
   /* Indent under the title, which starts at leading (16 + delta) + gap 6. */
@@ -37,7 +35,6 @@
   color: var(--dsw-alias-label-tertiary);
   font: 400 11px/16px var(--ds-font-family-code);
 }
-
 /* Names wrap on a narrow Session instead of scrolling the row sideways. */
 .toolChanges {
   overflow-wrap: anywhere;
