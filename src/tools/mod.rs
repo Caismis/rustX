@@ -15,7 +15,7 @@
 
 pub mod artifacts;
 pub mod background;
-pub mod deadline;
+pub use rustx_types::tools::deadline;
 pub mod environment;
 pub mod execution_environment;
 pub mod executor;
@@ -30,7 +30,7 @@ pub(crate) mod output;
 pub mod python;
 pub mod runtime;
 pub mod schema;
-pub mod session_files;
+pub use rustx_types::tools::session_files;
 pub mod todo;
 pub mod types;
 pub mod workspace;

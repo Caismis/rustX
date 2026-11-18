@@ -254,7 +254,7 @@ pub enum ToolSettlementCertainty {
 
 /// The absolute monotonic-clock deadline `duration` after `now_millis`,
 /// saturating at the representable maximum.
-pub(crate) fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
+pub fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
     let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
     now_millis.saturating_add(millis)
 }
@@ -262,8 +262,8 @@ pub(crate) fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_TOOL_HARD_DEADLINE, TOOL_SETTLEMENT_CONTROL_GUARD, ToolDeadlineKind,
-        ToolExecutionDeadlinePolicy, ToolProgressCapability, deadline_after,
+        deadline_after, ToolDeadlineKind, ToolExecutionDeadlinePolicy, ToolProgressCapability,
+        DEFAULT_TOOL_HARD_DEADLINE, TOOL_SETTLEMENT_CONTROL_GUARD,
     };
     use std::time::Duration;
 

@@ -5,11 +5,11 @@ use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-use nix::fcntl::{AtFlags, OFlag, open, openat};
-use nix::sys::stat::{Mode, fstat, fstatat};
+use nix::fcntl::{open, openat, AtFlags, OFlag};
+use nix::sys::stat::{fstat, fstatat, Mode};
 use serde::{Deserialize, Serialize};
 
-pub(crate) mod preview;
+pub mod preview;
 
 /// One JSON frame is 1 MiB. 512 KiB becomes at most 699,052 base64 bytes.
 pub const SESSION_FILE_MAX_BYTES: usize = 512 * 1024;
@@ -23,7 +23,7 @@ pub const PRESENT_MAX_FILES: usize = 8;
 #[serde(deny_unknown_fields)]
 pub struct SessionFileScope {
     /// Original Conversation. Copies retain this identity verbatim.
-    pub conversation_id: crate::runtime::identity::ConversationId,
+    pub conversation_id: rustx_identity::ConversationId,
     /// Device/inode identity of the authorized root, encoded losslessly.
     pub device: String,
     /// Root inode; never silently rebound after root replacement.
@@ -76,13 +76,13 @@ fn invalid(reason: SessionFileReadFailure, message: &'static str) -> io::Error {
         AccessFailure { reason, message },
     )
 }
-pub(crate) fn unavailable() -> io::Error {
+pub fn unavailable() -> io::Error {
     invalid(
         SessionFileReadFailure::Unavailable,
         "original Session filesystem unavailable",
     )
 }
-pub(crate) fn read_failure(error: &io::Error) -> SessionFileReadFailure {
+pub fn read_failure(error: &io::Error) -> SessionFileReadFailure {
     if let Some(failure) = error
         .get_ref()
         .and_then(|e| e.downcast_ref::<AccessFailure>())
@@ -101,7 +101,7 @@ pub(crate) fn read_failure(error: &io::Error) -> SessionFileReadFailure {
 
 /// Agent paths may be relative or absolute under the exact native cwd.
 /// Parent traversal is rejected even when it would normalize back inside.
-pub(crate) fn relative_path(root: &Path, requested: &str) -> io::Result<String> {
+pub fn relative_path(root: &Path, requested: &str) -> io::Result<String> {
     if requested.is_empty() || requested.len() > 4096 || requested.contains('\0') {
         return Err(invalid(
             SessionFileReadFailure::Unauthorized,
@@ -279,9 +279,9 @@ fn open_file(
     Ok((opened, identity))
 }
 
-pub(crate) fn declare(
+pub fn declare(
     root: &Path,
-    conversation_id: &crate::runtime::identity::ConversationId,
+    conversation_id: &rustx_identity::ConversationId,
     requested: &str,
     description: Option<String>,
 ) -> io::Result<SessionFileReference> {
@@ -305,7 +305,7 @@ pub(crate) fn declare(
     })
 }
 
-pub(crate) fn read_authorized(
+pub fn read_authorized(
     root: &Path,
     reference: &SessionFileReference,
     authorized: impl Fn() -> io::Result<()>,
@@ -317,7 +317,7 @@ pub(crate) fn read_authorized(
 /// The verified native location of a committed delivery: its absolute path
 /// under the original root and the regular leaf's current device/inode.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SessionFileLocation {
+pub struct SessionFileLocation {
     pub path: PathBuf,
     pub device: u64,
     pub inode: u64,
@@ -327,7 +327,7 @@ pub(crate) struct SessionFileLocation {
 /// reading bytes. The size limit does not apply: nothing is transferred.
 /// The identity lets a client that shares this filesystem prove its own path
 /// names the same regular file; it confers no authority by itself.
-pub(crate) fn locate_authorized(
+pub fn locate_authorized(
     root: &Path,
     reference: &SessionFileReference,
     authorized: impl Fn() -> io::Result<()>,
@@ -405,7 +405,7 @@ mod tests {
         std::fs::write(root.join("sub/报告 file.md"), b"# Original\r\n").unwrap();
         let file = declare(
             &root,
-            &crate::runtime::identity::ConversationId::generate(),
+            &rustx_identity::ConversationId::generate(),
             "sub/报告 file.md",
             Some("Report".into()),
         )
@@ -435,12 +435,10 @@ mod tests {
             vec![b'x'; SESSION_FILE_MAX_BYTES + 1],
         )
         .unwrap();
-        assert!(
-            read_authorized(&root, &file, || Ok(()))
-                .unwrap_err()
-                .to_string()
-                .contains("512 KiB")
-        );
+        assert!(read_authorized(&root, &file, || Ok(()))
+            .unwrap_err()
+            .to_string()
+            .contains("512 KiB"));
         std::fs::remove_file(root.join(&file.path)).unwrap();
         assert_eq!(
             read_authorized(&root, &file, || Ok(())).unwrap_err().kind(),

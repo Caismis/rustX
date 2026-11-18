@@ -5,8 +5,8 @@
 //! timestamps for durable facts and must never be used for deadlines.
 
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;

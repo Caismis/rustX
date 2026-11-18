@@ -1,18 +1,18 @@
 //! Descriptor-authorized preview reads. File budgets are independent of RPC framing.
-use super::{SessionFileReadFailure, SessionFileReference, invalid, open_file};
+use super::{invalid, open_file, SessionFileReadFailure, SessionFileReference};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 
-pub(crate) const PAGE_BYTES: usize = 2 * 1024 * 1024;
-pub(crate) const PAGE_LINES: usize = 5000;
-pub(crate) const FILE_BYTES: usize = 32 * 1024 * 1024;
-pub(crate) const OFFICE_BYTES: usize = 50 * 1024 * 1024;
+pub const PAGE_BYTES: usize = 2 * 1024 * 1024;
+pub const PAGE_LINES: usize = 5000;
+pub const FILE_BYTES: usize = 32 * 1024 * 1024;
+pub const OFFICE_BYTES: usize = 50 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ByteRange {
+pub struct ByteRange {
     #[schemars(range(max = 9_007_199_254_740_991_u64))]
     pub offset: u64,
     #[schemars(range(max = 2_097_152))]
@@ -21,7 +21,7 @@ pub(crate) struct ByteRange {
 
 #[derive(Clone, Debug, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub(crate) enum ReadOptions {
+pub enum ReadOptions {
     Bytes {
         max_bytes: usize,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -34,7 +34,7 @@ pub(crate) enum ReadOptions {
 }
 
 #[derive(Debug, Serialize)]
-pub(crate) struct PreviewRead {
+pub struct PreviewRead {
     pub version: String,
     pub bytes: u64,
     pub offset: u64,
@@ -67,7 +67,7 @@ fn too_large() -> io::Error {
 }
 
 /// One exact opened descriptor owns the complete read or selected page/window.
-pub(crate) fn read_authorized(
+pub fn read_authorized(
     root: &Path,
     reference: &SessionFileReference,
     options: &ReadOptions,
@@ -222,9 +222,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         std::fs::write(root.join("file.txt"), bytes).unwrap();
-        let conversation = crate::runtime::identity::ConversationId::new(
-            "conv_00000000-0000-7000-8000-000000000001",
-        );
+        let conversation =
+            rustx_identity::ConversationId::new("conv_00000000-0000-7000-8000-000000000001");
         let reference = super::super::declare(&root, &conversation, "file.txt", None).unwrap();
         (dir, root, reference)
     }
@@ -314,17 +313,15 @@ mod tests {
             600 * 1024
         );
         std::fs::write(root.join("file.txt"), vec![b'x'; PAGE_BYTES + 1]).unwrap();
-        assert!(
-            read_authorized(
-                &root,
-                &file,
-                &ReadOptions::Text {
-                    offset: 1,
-                    limit: 5000
-                },
-                || Ok(())
-            )
-            .is_err()
-        );
+        assert!(read_authorized(
+            &root,
+            &file,
+            &ReadOptions::Text {
+                offset: 1,
+                limit: 5000
+            },
+            || Ok(())
+        )
+        .is_err());
     }
 }

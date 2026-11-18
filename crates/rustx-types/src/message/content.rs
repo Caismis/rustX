@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::runtime::identity::ArtifactId;
+use rustx_identity::ArtifactId;
 
 /// A plain text content block.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -47,7 +47,7 @@ pub struct FileReference {
 #[cfg(test)]
 mod tests {
     use super::{FileReference, ImageReference, TextBlock};
-    use crate::runtime::identity::ArtifactId;
+    use rustx_identity::ArtifactId;
 
     /// Shared content blocks round-trip with runtime-owned artifact ids.
     #[test]

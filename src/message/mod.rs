@@ -5,7 +5,7 @@
 //! compaction, and context compilation are owned by the conversation/context
 //! layers; this module remains the canonical message vocabulary.
 
-pub mod content;
+pub use rustx_types::message::content;
 pub mod types;
 
 pub use content::{FileReference, ImageReference, TextBlock};

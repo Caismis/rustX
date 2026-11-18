@@ -15,7 +15,7 @@ mod macos {
 
     /// The process or process-group selector accepted by `waitid(2)`.
     #[derive(Debug, Clone, Copy)]
-    pub(crate) enum Id {
+    pub enum Id {
         /// Select one process.
         Pid(Pid),
         /// Select children in one process group.
@@ -25,7 +25,7 @@ mod macos {
     /// Waits for a macOS child or child in a process group and translates the
     /// result into the `nix` wait-status type shared by the supervisors.
     #[allow(unsafe_code)]
-    pub(crate) fn waitid(id: Id, flags: WaitPidFlag) -> nix::Result<WaitStatus> {
+    pub fn waitid(id: Id, flags: WaitPidFlag) -> nix::Result<WaitStatus> {
         let (id_type, id_value) = match id {
             Id::Pid(pid) => (
                 libc::P_PID,
@@ -64,10 +64,10 @@ mod macos {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) use macos::{Id, waitid};
+pub use macos::{waitid, Id};
 
 #[cfg(not(target_os = "macos"))]
-pub(crate) use nix::sys::wait::{Id, waitid};
+pub use nix::sys::wait::{waitid, Id};
 
 #[cfg(all(test, target_os = "macos"))]
 #[allow(unsafe_code)] // test-local fork/pipe/_exit shims, mirroring the seccomp regressions
@@ -83,7 +83,7 @@ mod macos_waitid_tests {
     //! pipe until the parent releases it, so the parent can observe a
     //! deterministic `StillAlive` state before forcing the transition.
 
-    use super::{Id, waitid};
+    use super::{waitid, Id};
     use nix::errno::Errno;
     use nix::sys::signal::Signal;
     use nix::sys::wait::{WaitPidFlag, WaitStatus};
@@ -184,9 +184,7 @@ mod macos_waitid_tests {
 
 /// Inspect a stopped child without consuming the sole result owner's status.
 /// Darwin's waitid WSTOPPED differs from waitpid's WUNTRACED; Linux aliases them.
-pub(crate) fn observe_stopped_child(
-    pid: nix::unistd::Pid,
-) -> nix::Result<nix::sys::wait::WaitStatus> {
+pub fn observe_stopped_child(pid: nix::unistd::Pid) -> nix::Result<nix::sys::wait::WaitStatus> {
     use nix::sys::wait::WaitPidFlag;
     waitid(
         Id::Pid(pid),
@@ -196,9 +194,9 @@ pub(crate) fn observe_stopped_child(
 
 #[cfg(test)]
 mod stopped_observation_tests {
-    use super::{Id, observe_stopped_child, waitid};
+    use super::{observe_stopped_child, waitid, Id};
     use nix::sys::{
-        signal::{Signal, kill},
+        signal::{kill, Signal},
         wait::{WaitPidFlag, WaitStatus},
     };
     use nix::unistd::Pid;
