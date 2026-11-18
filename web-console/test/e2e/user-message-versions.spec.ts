@@ -65,6 +65,18 @@ test('edits and retries a user message, then pages through durable conversation 
         else await expect(control).toBeDisabled();
       }
     };
+    const expectTrajectory = async ({ prompt, answer: text }: typeof original) => {
+      await page.getByRole('tab', { name: 'Trajectory', exact: true }).click();
+      const ledger = page.getByRole('table', { name: 'Trace ledger', exact: true });
+      const inspector = page.getByRole('complementary', { name: 'Event details', exact: true });
+      await ledger.locator('[data-kind="user"]').click();
+      await expect(inspector).toContainText(prompt.split('\n')[0]);
+      const assistant = ledger.locator('[data-kind="assistant"]');
+      await expect(assistant).toContainText(text);
+      await assistant.click();
+      await expect(inspector).toContainText(text);
+      await page.getByRole('tab', { name: 'Chat', exact: true }).click();
+    };
 
     await page.getByRole('textbox', { name: 'Message', exact: true }).fill(original.prompt);
     await page.getByLabel('Attach files').setInputFiles({
@@ -112,10 +124,12 @@ test('edits and retries a user message, then pages through durable conversation 
     expect(editorReceipts()).toEqual([receipt]);
     await expectVersion(edited, 2, 2);
     await expect(answer(original.answer)).toBeHidden();
+    await expectTrajectory(edited);
 
     await previous.click();
     await expectVersion(original, 1, 2);
     await expect(answer(edited.answer)).toBeHidden();
+    await expectTrajectory(original);
     await expectPrompts(original.prompt, edited.prompt);
 
     await page.reload();
@@ -133,9 +147,11 @@ test('edits and retries a user message, then pages through durable conversation 
     await expectPrompts(original.prompt, edited.prompt, edited.prompt);
     expect(editorReceipts()).toEqual([receipt, receipt]);
     await expectVersion(regenerated, 3, 3);
+    await expectTrajectory(regenerated);
     await previous.click();
     await expectVersion(edited, 2, 3);
     await expect(answer(regenerated.answer)).toBeHidden();
+    await expectTrajectory(edited);
     await expectPrompts(original.prompt, edited.prompt, edited.prompt);
     passed = true;
   } finally {
