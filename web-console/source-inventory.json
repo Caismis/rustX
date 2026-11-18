@@ -2918,7 +2918,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "d957e84356fbaf90f29e6fb190c7b7bd6ec920dd05330f95a4e55a1ceba9076c",
+      "local_sha256": "849f6bdade14f26bd7a0796b9268b999f8dd641b8b35faf6ab6a3c0015ebca60",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2943,7 +2943,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "c4e9f4c01fd1236d962beaee5b507e1bddf03a8a43e6455f6dba6fccdb3ed633",
+      "local_sha256": "b8246f03efdc1d9ddc0603791e7440a27db65962f126805fb14ae0392cae16bc",
       "classification": "B",
       "additional_sources": [
         {

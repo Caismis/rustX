@@ -1,5 +1,7 @@
 # rustX
 
+<img src="web-console/public/rustx-logo.png" alt="rustX" width="167">
+
 rustX is a standalone Rust execution runtime for durable, tool-using LLM
 agents.
 
