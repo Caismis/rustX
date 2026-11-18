@@ -41,7 +41,7 @@ export function ComposerAttachments({ files, canAcceptDrop, onAddFiles, onRemove
   </>;
 }
 
-function DraftImage({ file, remove, loading }: { file: File; remove?: () => void; loading: boolean }) {
+export function DraftImage({ file, remove, loading }: { file: File; remove?: () => void; loading: boolean }) {
   const tx = useTranslation();
   const [preview, setPreview] = useState(false), [failed, setFailed] = useState(false);
   const [url, setUrl] = useState<string>();

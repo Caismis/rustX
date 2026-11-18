@@ -6914,6 +6914,9 @@ export type ErrorData =
       kind: 'stale_runtime';
     }
   | {
+      kind: 'steer_unavailable';
+    }
+  | {
       kind: 'invalid_state';
     }
   | {

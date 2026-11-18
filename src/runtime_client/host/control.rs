@@ -80,7 +80,7 @@ impl ClientInner {
             .as_ref()
             .expect("writable runtime")
             .start_or_steer(content, expected, input_id)
-            .map_err(input_admission_error)
+            .map_err(|error| admit_turn_error(error, expected.is_some()))
     }
 
     pub(crate) fn lookup_input(
@@ -875,6 +875,18 @@ impl ClientInner {
     pub(crate) fn model_catalog(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.domain_page("model_catalog.models", 0, 32)
     }
+}
+
+fn admit_turn_error(error: InboundAdmissionError, steering: bool) -> RuntimeClientError {
+    if steering
+        && matches!(
+            error,
+            InboundAdmissionError::StaleAttempt | InboundAdmissionError::NotSteerable
+        )
+    {
+        return RuntimeClientError::SteerUnavailable;
+    }
+    input_admission_error(error)
 }
 
 fn input_admission_error(error: InboundAdmissionError) -> RuntimeClientError {

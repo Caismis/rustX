@@ -68,7 +68,7 @@ export interface SessionView extends Omit<LifecycleFacts, 'error' | 'attachmentI
   /** Exact acknowledged MessageIds awaiting projection reconciliation, not queue authority. */
   submissions?: readonly Submission[];
   /** Local sending rows retire when the transport settles. */
-  sendingQueue?: readonly Submission[];
+  sendingSubmissions?: readonly Submission[];
   /** Current-generation turn/start or turn/steer requests awaiting an outcome.
    * Transport ownership only, including unsent requests in the bounded pipeline. */
   inboundRequests?: number;

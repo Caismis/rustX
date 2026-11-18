@@ -261,7 +261,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "ef96f42bc876b29d48d784e729822c5548df6a62f014e5f4876f8c0e5ec626dd",
+      "local_sha256": "4f1806f54960054b985ee19eafc05243aad93aa528144a145421c3570f39e7e0",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -502,7 +502,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "3b29157a70be03a6c0e8100f7d0e68c2fb9dd4bd4381be71dd1e4a5fc0fa2b83"
+      "local_sha256": "b04970c7016b26d15a67660a6fc37254e7cdab60479a3c18c0879e8056b75ca1"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -533,7 +533,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "c5b5ff1ac34c1ee1d064feaa92e6829bb54e55794c4050ce01111952d4223205"
+      "local_sha256": "e9041bc35ad838b18d21fe4f5fdbe635175007affe7876d85bc8f443b0ec1e22"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -1275,7 +1275,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "0694f0912d2f88e30e36ece65721cf6fa053458db4d657d2fde8fdd320083f55",
+      "local_sha256": "57da70657e78f76ef7b2012651b1c62b07374a7b5f19171d316799979a8722f2",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
@@ -3469,7 +3469,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "d063052f86103e359eb4310669c6ad12cfcb764870ca6034f4bf6aaf29fe8c0f"
+      "local_sha256": "5521676a848ecc144b5056673666f28738be4699050ac2955ebe48936713a184"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -4058,7 +4058,7 @@
           "treatment": "Add the English/Chinese pending-message label for the Harness-style sending progress, driven by rustX native admission state."
         }
       ],
-      "local_sha256": "d583337a7e1f78fce71181b6270bdb17b1e1730a919db4a5fe40c352dd0d333b"
+      "local_sha256": "07bb51d9e39fbdbb66415ec29efee810d6b2717304d2368e86feb4d3f4b37b8f"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -7103,7 +7103,7 @@
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "8b0fa076ee621312671b699c5db0d7b6b95f6b3c2ab6cc33ef99fd55505e3af4"
+      "local_sha256": "72b70c00176d87a49aae2d43457f2a5d3f17142eb8c21c75fd07afbb7f0c6c59"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

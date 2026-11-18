@@ -53,11 +53,15 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
-.chevron[data-collapsed='true'] { transform: rotate(180deg); }
+.chevron {
+  width: 14px;
+  height: 14px;
+}
 
 .count {
   flex: 1 1 auto;
   min-width: 0;
+  font-family: Inter, var(--dsw-font-family);
   font-size: 13px;
   font-weight: 500;
   line-height: 24px;
@@ -150,26 +154,22 @@
   min-width: 0;
   overflow: hidden;
   font: var(--dsw-font-xs-13);
+  font-family: Inter, var(--dsw-font-family);
   color: var(--dsw-alias-label-primary-dimmed);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .status {
-  flex: 0 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  line-height: 20px;
+  flex: none;
   color: var(--dsw-alias-label-tertiary);
-  text-overflow: ellipsis;
+  font: var(--dsw-font-xs-13);
   white-space: nowrap;
 }
 
-.pendingRow .preview { color: var(--dsw-alias-label-tertiary); }
-
 /* Harness row actions adapted to explicit native CAS controls. */
-.actions { display: flex; flex: none; align-items: center; gap: 8px; flex-wrap: wrap; }
+.actions { display: flex; flex: none; align-items: center; gap: 8px; }
+.row .editPanel .actions { flex-wrap: wrap; }
 .action { min-height: 32px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; cursor: pointer; }
 .action[aria-label] { display: grid; flex: none; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border-radius: 999px; corner-shape: round; color: var(--dsw-alias-label-tertiary); }
 @media (hover: hover) {
@@ -180,5 +180,6 @@
 .editPanel, .notice { padding: 8px 12px; font-size: 13px; }
 .row .editPanel { display: flex; align-items: center; flex: 1; gap: 8px; flex-wrap: wrap; padding: 0; }
 .editorField { flex: 1; min-width: 0; }
-.editor { font: var(--dsw-font-xs-13); box-sizing: border-box; display: block; width: 100%; min-height: 32px; max-height: 120px; padding: 5px 8px; margin: 4px 0; border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); resize: none; field-sizing: content; }
-.editor:focus-visible { outline: none; border-color: var(--dsw-alias-state-business-primary); }
+/* InlineEditor metrics: grow with the draft up to six lines, then scroll. */
+.editor { box-sizing: border-box; display: block; width: 100%; min-width: 0; min-height: 28px; max-height: 127px; margin: 0; padding: 3px 8px; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-sm); outline: none; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: var(--dsw-font-xs-13); font-family: Inter, var(--dsw-font-family); overflow-y: auto; resize: none; }
+.editor:focus { border-color: var(--dsw-alias-state-business-primary); }

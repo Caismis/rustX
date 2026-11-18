@@ -530,7 +530,7 @@ export class AppServerClient {
     this.statusNotifications.clear();
     this.publish({ sessions:this.state.sessions.map(row=>({...row,thread_status:undefined})), threadStatusSynchronized:false, connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, sendingQueue: undefined, inboundRequests: undefined,
+        ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, sendingSubmissions: undefined, inboundRequests: undefined,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -1079,12 +1079,19 @@ export class AppServerClient {
     if(acknowledged)this.inputAcknowledgements.set(inputId,{authorityId:this.state.authorityId,conversationId:target.conversation_id,acknowledge:acknowledged});
     const acknowledge: typeof acknowledged = result => { this.inputAcknowledgements.delete(inputId); acknowledged?.(result); };
     try {
-    if (delivery === 'steer') {
-      const expectedTurnId = this.state.views[id].snapshot?.attempt?.attempt_id;
-      if (!expectedTurnId) throw new Error('No exact active Turn is available.');
-      return await this.request({ method:'turn/steer', params:{target,content,expectedTurnId,inputId} }, 'turn_input_accepted', acknowledge, dispatchCurrent);
-    }
-    return await this.request({ method:'inbound/queue', params:{target,content,inputId} }, 'inbound_accepted', acknowledge, dispatchCurrent);
+      if (delivery === 'steer') {
+        const attempt = this.state.views[id]?.snapshot?.attempt;
+        const expectedTurnId = attempt && ['admitted', 'running'].includes(attempt.phase.type) ? attempt.attempt_id : undefined;
+        if (expectedTurnId) {
+          try {
+            return await this.request({ method:'turn/steer', params:{target,content,expectedTurnId,inputId} }, 'turn_input_accepted', acknowledge, dispatchCurrent);
+          } catch (error) {
+            if (!(error instanceof RpcFailure) || error.error.data?.kind !== 'steer_unavailable') throw error;
+            if (!this.current(generation)) throw new Error('Connection changed before sending.');
+          }
+        }
+      }
+      return await this.request({ method:'inbound/queue', params:{target,content,inputId} }, 'inbound_accepted', acknowledge, dispatchCurrent);
     } finally {
       // The pipeline publishes uncertainty before rejecting the request.
       if(!this.state.uncertain.some(operation=>operation.inputId===inputId))this.inputAcknowledgements.delete(inputId);
@@ -1095,7 +1102,7 @@ export class AppServerClient {
     if (!view) return;
     const inboundRequests = this.pipeline.inboundRequests(id);
     const submissions = view.submissions ?? [];
-    this.setSession(id, { inboundRequests, sendingQueue: this.pipeline.sendingQueue(id), submissions: accepted && !submissions.some(item => item.messageId === accepted.messageId)
+    this.setSession(id, { inboundRequests, sendingSubmissions: this.pipeline.sendingSubmissions(id), submissions: accepted && !submissions.some(item => item.messageId === accepted.messageId)
       ? [...submissions, accepted] : submissions });
     this.pruneUploadAttachments(id);
   }
@@ -1104,7 +1111,7 @@ export class AppServerClient {
     if (!view) return;
     const activeReceipts = new Set<string>();
     const activeFiles = new Set<string>();
-    for (const submission of [...(view.sendingQueue ?? []), ...(view.submissions ?? [])]) {
+    for (const submission of [...(view.sendingSubmissions ?? []), ...(view.submissions ?? [])]) {
       for (const block of submission.content ?? []) {
         if (block.type === 'upload') activeReceipts.add(uploadReceiptKey(block));
       }
@@ -1153,7 +1160,7 @@ export class AppServerClient {
     this.retireObservationWork(id);
     this.uploads.retire(id);
     this.catalog.forgetAttachment(id);
-    this.setSession(id,{history:this.initialized?undefined:this.state.views[id]?.history,submissions:undefined,sendingQueue:undefined,turnOutline:undefined,turnNavigation:undefined});
+    this.setSession(id,{history:this.initialized?undefined:this.state.views[id]?.history,submissions:undefined,sendingSubmissions:undefined,turnOutline:undefined,turnNavigation:undefined});
   }
   /** Resample admission proofs after their browser owner retires. No native
    * transaction is cancelled after dispatch. */

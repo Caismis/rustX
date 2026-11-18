@@ -5,6 +5,29 @@ const gap = async (a: Locator, b: Locator) => {
   // Focus can scroll the mobile reader between separate remote measurements.
   return a.evaluate((first, next) => next!.getBoundingClientRect().top - first.getBoundingClientRect().bottom, await b.elementHandle());
 };
+for (const width of [1440, 390]) test(`steer preserves workflow and background job order at ${width}px`, async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.setViewportSize({ width, height: 900 });
+  await page.goto(`${origin}/test/fixtures/agent.html?mode=chat-spacing&case=workflow-steer`);
+  const card = page.locator('[data-workflow-run-id]');
+  await expect(card).toHaveCount(1);
+  const reply = page.getByText('Current reply', { exact: true });
+  const steer = page.getByText('Change direction', { exact: true });
+  const job = page.locator('[data-inbound-source="job"]');
+  await expect(job).toBeVisible();
+  for (const [before, after] of [[card, job], [job, reply], [reply, page.locator('[data-chat-running]')], [page.locator('[data-chat-running]'), steer]]) {
+    expect(await gap(before, after)).toBeGreaterThanOrEqual(0);
+  }
+  const waiting = page.locator('[data-pending-steering]');
+  await expect(waiting).toHaveCount(2);
+  expect(await gap(page.locator('[data-chat-running]'), waiting.first())).toBe(0);
+  expect(await gap(waiting.first(), waiting.last())).toBe(4);
+  await card.locator('[data-disclosure-row]').first().click();
+  expect(await gap(card, reply)).toBeGreaterThanOrEqual(0);
+  expect(errors).toEqual([]);
+});
+
 for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) test.describe(`${width}px ${theme}`, () => {
   test.use({ hasTouch: width === 390, isMobile: width === 390 });
   for (const kind of ['workflow', 'workflow-turns', 'workflow-turns-hidden', 'workflow-turns-status', 'descriptor', 'descriptor-tools', 'status']) test(`${kind} keeps spacing at native seat boundaries`, async ({ page }) => {

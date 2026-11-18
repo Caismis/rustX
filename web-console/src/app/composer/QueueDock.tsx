@@ -10,11 +10,11 @@ import { useTranslation, useNotice } from '../../locale/react';
 // directly, several rows default to a collapsible count header, sending and
 // accepted submissions stay visibly provisional until exact native readback,
 // and human rows expose CAS-bound Edit / Remove / Steer controls.
-import { useContext, useEffect, useId, useRef, useState } from 'react';
+import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
 import { fileSizeText } from '../../presentation/primitives/file-size';
 import {
-  IconCheckOutline14, IconChevronDownOutline14, IconCloseOutline16, IconEditOutline16, IconQueueOutline14, IconSendOutline14, IconTrashOutline16,
+  IconCheckOutline14, IconChevronDownOutline14, IconChevronUpOutline14, IconCloseOutline16, IconEditOutline16, IconQueueOutline14, IconSendOutline14, IconTrashOutline16,
 } from '../../presentation/primitives/icons';
 import { Tooltip } from '../../presentation/primitives/Tooltip';
 import { ArtifactContext } from '../components/Artifact';
@@ -144,6 +144,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   const [operation, setOperation] = useState<{ status: 'pending' | 'uncertain' | 'readback'; observation?: object; clearDraft?: boolean }>();
   const [notice, setNotice] = useNotice();
   const editButtons = useRef(new Map<string, HTMLButtonElement>());
+  const editorNode = useRef<HTMLTextAreaElement>(null);
   const returnFocus = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (operation && operation.status !== 'pending' && observation !== operation.observation) {
@@ -210,8 +211,24 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
     && (!item.sendingInputId || !admittedInputIds.has(item.sendingInputId)),
   );
   const count = rows.length + echoes.length;
-  useEffect(() => { if (count === 0) setCollapsed(true); }, [count]);
-  if (count === 0 && !draft && !notice) return null;
+  useEffect(() => {
+    if (count === 0) setCollapsed(true);
+    if (draft && !currentDraft) { setDraft(undefined); setNotice(''); }
+  }, [count, draft, currentDraft, setNotice]);
+  useLayoutEffect(() => {
+    const node = editorNode.current;
+    if (!node) return;
+    const fit = () => {
+      node.style.height = 'auto';
+      // scrollHeight excludes the border that the border-box height includes.
+      node.style.height = `${node.scrollHeight + node.offsetHeight - node.clientHeight}px`;
+    };
+    fit();
+    const observer = new ResizeObserver(fit);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [draft?.text]);
+  if (count === 0) return null;
   const listed = count === 1 || !collapsed || !!draft || !!operation;
   const cancelEdit = () => {
     if (draft) returnFocus.current = draft.expected.sequence;
@@ -220,7 +237,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   };
   const editor = draft && <div className={css.editPanel}>
     <div className={css.editorField}>
-      <textarea className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={locked}
+      <textarea ref={editorNode} className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={locked}
         onChange={event => setDraft({ ...draft, text: event.currentTarget.value })}
         onKeyDown={event => {
           if (event.key === 'Escape' && !locked) {
@@ -250,7 +267,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         <QueueGlyph /><span className={css.count}>{count} {tx('agent:queue-dock.queued')}</span>
         {/* A collapsed header keeps sending/accepted provisional submissions visible. */}
         {!listed && echoes.length > 0 && <span className={css.status} role="status">{tx('agent:submission.sending')}</span>}
-        <span className={css.chevron} data-collapsed={!listed} aria-hidden><IconChevronDownOutline14 /></span>
+        <span className={css.chevron} aria-hidden>{listed ? <IconChevronDownOutline14 /> : <IconChevronUpOutline14 />}</span>
       </button>}
       <ul id={listId} className={css.list} hidden={!listed}>
         {listed && rows.map(row => {
@@ -277,7 +294,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
                     : <QueueFile key={`${item.name}:${index}`} name={item.name} bytes={item.bytes} label={tx('agent:queue-dock.file', { name: item.name })} />)}
                 </span>
               )}
-              <span className={css.preview} title={previewText || undefined}>{previewText}</span>
+              <span className={css.preview}>{previewText}</span>
               {origin && <span className={css.status}>{origin}</span>}
               {row.message.source === 'human' && isPlainMessageKind(row.message.kind) && <div className={css.actions}>
                 <Tooltip label={tx('agent:queue-dock.edit')} side="bottom" delayMs={500} disabled={editDisabled}>
@@ -327,17 +344,16 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
                   : <QueueFile key={`${item.name}:${index}`} name={item.name} bytes={item.bytes} label={tx('agent:queue-dock.file', { name: item.name })} />)}
               </span>
             )}
-            <span className={css.preview} title={previewText || undefined}>{previewText}</span>
+            <span className={css.preview}>{previewText}</span>
             <span className={css.status} role="status">{tx('agent:submission.sending')}</span>
-            {isSending && <div className={css.actions}>
+            <div className={css.actions}>
               <button type="button" className={css.action} aria-label={tx('agent:queue-dock.edit')} title={tx('agent:submission.sending')} disabled><IconEditOutline16 size={14} /></button>
               <button type="button" className={css.action} aria-label={tx('agent:queue-dock.remove')} title={tx('agent:submission.sending')} disabled><IconTrashOutline16 size={14} /></button>
               <button type="button" className={css.action} aria-label={tx('agent:queue-dock.steer')} title={tx('agent:submission.sending')} disabled><IconSendOutline14 size={14} /></button>
-            </div>}
+            </div>
           </li>;
         })}
       </ul>
-      {!currentDraft && editor}
       {notice && <p className={css.notice} role="status">{notice}</p>}
     </div>
   </section>;

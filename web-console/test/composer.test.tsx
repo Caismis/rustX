@@ -225,3 +225,33 @@ it('draft content and attachments outrank the queue on Ctrl/Cmd+Enter', async ()
   expect(p.onSend).toHaveBeenCalledExactlyOnceWith('Steer this draft', [], 'steer', expect.any(Function));
   expect(onSteerQueue).not.toHaveBeenCalled();
 });
+
+it('keeps Stop beside the sending control while a running draft waits for acceptance', async () => {
+  let finish!: (accepted: boolean) => void;
+  const p = props();
+  const onSend = vi.fn(() => new Promise<boolean>(resolve => { finish = resolve; }));
+  render(<AgentComposer {...p} active onSend={onSend}/>);
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Queue this' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+  const sending = screen.getByRole('button', { name: 'Sending…' });
+  expect(sending).toHaveProperty('disabled', true);
+  expect(screen.getByRole('button', { name: 'Stop' })).toHaveProperty('disabled', false);
+  fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
+  expect(p.onCancel).toHaveBeenCalledTimes(1);
+  expect(onSend).toHaveBeenCalledOnce();
+  await act(async () => finish(false));
+  expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+  expect(screen.getByRole('button', { name: 'Queue' })).toHaveProperty('disabled', false);
+});
+
+it('explains Enter while draft uploads are unresolved and does not send', async () => {
+  const p = props();
+  let complete!: (value: []) => void;
+  render(<AgentComposer uploadPolicy={uploadCapabilities.upload_policy} {...p} active onUpload={() => new Promise(resolve => { complete = resolve; })}/>);
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'with file' } });
+  fireEvent.change(screen.getByLabelText('Attach files'), { target: { files: [new File(['x'], 'note.txt')] } });
+  fireEvent.keyDown(screen.getByLabelText('Message'), { key: 'Enter' });
+  expect((await screen.findByRole('alert')).textContent).toContain('Resolve draft uploads before sending');
+  expect(p.onSend).not.toHaveBeenCalled();
+  await act(async () => complete([]));
+});

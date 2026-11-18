@@ -764,6 +764,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         super::protocol::ErrorData::AttachmentCapacity,
         super::protocol::ErrorData::RequestCapacity,
         super::protocol::ErrorData::ServerDraining,
+        super::protocol::ErrorData::SteerUnavailable,
     ] {
         fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
             jsonrpc: JsonRpcVersion::V2,

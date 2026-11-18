@@ -1,3 +1,4 @@
+import { isPlainMessageKind } from '../../../protocol/app-server/message-kind';
 import { attemptOwnerKey } from '../../../protocol/app-server/attempt-identity';
 import { sameCanonicalLocator, statusIdentity } from '../../../protocol/app-server/projection';
 import { statusesAt, type AgentStatusPlacement } from './agent-status';
@@ -17,6 +18,34 @@ export function isFinalTurnDescriptor(descriptor: RuntimeClientMessageDescriptor
   return descriptor.role==='assistant' && process?.outcome==='completed'
     && process.final_message_locator!=null && sameCanonicalLocator(descriptor.locator,process.final_message_locator);
 }
+/** A whole-turn disclosure cannot span a visible human interruption. Match
+ * the process on both sides, or its live continuation at the end of the page. */
+export function steeringBoundaries(entries: readonly RuntimeClientTranscriptEntry[], liveOwner?: string) {
+  const interrupted = new Set<string>();
+  const rows = new Map<string, 'start' | 'member'>();
+  let owner: string | undefined;
+  const inputs: string[] = [];
+  const meet = (next: string | undefined) => {
+    if (next && owner === next && inputs.length) {
+      interrupted.add(next);
+      inputs.forEach((id, index) => rows.set(id, index === 0 ? 'start' : 'member'));
+    }
+    inputs.length = 0;
+    owner = next;
+  };
+  for (const entry of entries) {
+    const item = entry.item;
+    if (item.type === 'message' && item.message.role === 'user' && item.message.source === 'human' && isPlainMessageKind(item.message.kind)) {
+      if (owner) inputs.push(item.message.id);
+    } else if (entry.turn_process) {
+      meet(attemptOwnerKey(entry.turn_process));
+      if (entry.completed_response) meet(undefined);
+    } else if (item.type === 'attempt_terminal' || item.type === 'message' && item.message.role === 'assistant') meet(undefined);
+  }
+  meet(liveOwner);
+  return { interrupted, rows };
+}
+
 /** Only exact native identity is a grouping key. Canonical order is untouched;
  * pagination can add members without changing the disclosure's identity. */
 export type ProcessSeat = { cursor: string; kind: 'entry' } | { cursor: string; kind: 'status'; statusId: string };

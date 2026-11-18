@@ -170,7 +170,14 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     if (menu && rows[highlight]) { selectMenu(rows[highlight].id); return; }
     const action = composerSubmissionPolicy(facts, gesture);
     // Enter submits a draft; it never cancels an empty running Session.
-    if (action.disabled || action.kind === 'stop') return;
+    // Unresolved uploads are the one disabled send Enter explains, matching
+    // Harness: the button stays disabled, and the key names why it held.
+    if (action.disabled || action.kind === 'stop') {
+      if (facts.uploadsPending && !facts.blocked && !facts.acknowledging && action.kind !== 'stop') {
+        setError(message('agent:submission.resolve-draft-uploads-before-sending'));
+      }
+      return;
+    }
     if (action.kind === 'command') {
       if (selectedCommand) invoke(selectedCommand);
       else { trigger.dismiss(); setError(message('agent:copy.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prompt')); }
@@ -269,7 +276,10 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
         </div>
         <div className={css.trailing}>
           {model}
-          {separateStop && active && <button type="button" className={css.primary} data-composer-stop aria-label={tx('agent:submission.stop')} title={tx('agent:submission.stop-double-escape')}
+          {/* A continuable child always keeps Stop beside Send. An ordinary
+              running session does the same only while the message waits for
+              acceptance, so Stop is not replaced by the sending spinner. */}
+          {active && (separateStop || sending) && <button type="button" className={css.primary} data-composer-stop aria-label={tx('agent:submission.stop')} title={tx('agent:submission.stop-double-escape')}
             disabled={!cancellationAvailable} onMouseDown={event => event.preventDefault()} onClick={onCancel}>
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
           </button>}

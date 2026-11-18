@@ -9,6 +9,35 @@ export function chatSpacingFixture(server: Server, current: RuntimeClientSnapsho
   if (kind === 'workflow-turns' || kind === 'workflow-turns-hidden' || kind === 'workflow-turns-status') {
     workflowTurnsFixture(server, current, kind === 'workflow-turns-hidden', kind === 'workflow-turns-status'); return;
   }
+  if (kind === 'workflow-steer') {
+    workflowRunsFixture(server, current);
+    const entries = current.transcript.entries!.slice(0, 2);
+    const call = entries[1];
+    if (call.item.type !== 'message' || call.item.message.role !== 'assistant') throw Error('Expected workflow call');
+    // Only the first call is inside the loaded window; its inline block is
+    // available before the richer tool projection.
+    call.item.message.content = call.item.message.content.slice(0, 1);
+    const tool = call.tool_calls![0];
+    server.handlers.set('conversation/checkpointPage', request => {
+      if (request.method !== 'conversation/checkpointPage' || request.params.domain !== 'messages.message:workflow-work.tools') throw Error('Expected original tool projection');
+      return { type: 'checkpoint_page', page: { read_cut: request.params.cut, cursor: request.params.cut.revision, domain: request.params.domain,
+        total: '1', next_offset: null, collections: [], items: [{ offset: '0', identity: tool.call_id!, value: tool, content: [], deferred: false }] } };
+    });
+    call.tool_calls = [];
+    const steer = { role: 'user' as const, id: 'steer', source: 'human' as const, content: [{ type: 'text' as const, text: 'Change direction' }] };
+    const job = { role: 'user' as const, id: 'background-bash-terminal', source: 'runtime' as const,
+      content: [{ type: 'text' as const, text: 'Background execution bash (bash) settled: succeeded' }] };
+    entries.push({ cursor: '3', item: { type: 'message', message: steer } }, { cursor: '4', item: { type: 'message', message: job } });
+    current.transcript.entries = entries;
+    current.messages = entries.flatMap(entry => entry.item.type === 'message' ? [entry.item.message] : []);
+    current.inbound = { pending: [
+      { sequence: '1', revision: '0', input_id: 'input-steer', message: steer },
+      { sequence: '2', revision: '0', message: { ...steer, id: 'next-steer', content: [{ type: 'text', text: 'One more instruction' }] } },
+    ] };
+    current.attempt = { attempt_id: 'next-attempt', phase: { type: 'running' }, turn: 2,
+      in_flight: { message_id: 'current-answer', blocks: [{ block_index: 0, type: 'text', text: 'Current reply' }] } };
+    return;
+  }
   if (kind === 'workflow') {
     workflowRunsFixture(server, current);
     current.messages = current.messages.slice(0, 2);

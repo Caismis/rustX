@@ -600,6 +600,48 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(ui.container.querySelector('[data-provisional-message-id]')).toBeNull();
     expect(screen.getAllByText('Change direction')).toHaveLength(1);
   });
+  it('shows direct steer before acknowledgement and deduplicates the native mailbox echo', async () => {
+    const state = running();
+    const ui = await mount(state);
+    server.held.add('turn/steer');
+    let sending!: Promise<unknown>;
+    await act(async () => { sending = server.client.send('A', 'Mid-turn note', [], 'steer'); });
+    const request = await server.waitFor('turn/steer', 1);
+    if (request.method !== 'turn/steer') throw Error('Expected steer');
+    const pending = () => ui.container.querySelectorAll('[data-pending-steering]');
+    expect(pending()).toHaveLength(1);
+    expect(pending()[0].textContent).toContain('Mid-turn note');
+    await update({ ...state, inbound: { pending: [{ revision: '0', sequence: '1', input_id: request.params.inputId,
+      message: { id: 'accepted-user', source: 'human', kind: 'message', content: [{ type: 'text', text: 'Mid-turn note' }] } }] } });
+    expect(pending()).toHaveLength(1);
+    expect(screen.getByText('Mid-turn note')).toBeTruthy();
+    expect(region('Queue')).toBeNull();
+    await act(async () => { server.reply(request); await sending; });
+    expect(pending()).toHaveLength(1);
+  });
+  it('keeps a pending steer below running status until adoption restores its transcript position', async () => {
+    const steer = 'Steer while answering';
+    const notice = 'Background execution job-one (bash) settled: outcome_unknown\n\nResult:\nExternal outcome was not proven';
+    const state = running();
+    state.attempt!.in_flight = { message_id: 'reply', blocks: [{ type: 'text', block_index: 0, text: 'Still answering' }] };
+    state.inbound = { pending: [{ revision: '0', sequence: '2', input_id: 'steer-input', message: { id: 'steer-1', source: 'human', kind: 'message', content: [{ type: 'text', text: steer }] } }] };
+    state.transcript = { entries: [
+      { cursor: '2', item: { type: 'message', message: { role: 'user', id: 'steer-1', source: 'human', kind: 'message', content: [{ type: 'text', text: steer }] } } },
+      { cursor: '3', item: { type: 'message', message: { role: 'user', id: 'background-job-one-terminal', source: 'runtime', kind: 'message', content: [{ type: 'text', text: notice }] } } },
+    ] };
+    const ui = await mount(state);
+    const streaming = screen.getByLabelText('Streaming response');
+    const steered = screen.getByText(steer);
+    const background = ui.container.querySelector('[data-inbound-source="job"]');
+    expect(background).toBeTruthy();
+    expect(streaming.compareDocumentPosition(steered) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const status = ui.container.querySelector('[data-chat-running]')!;
+    expect(background!.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(status.compareDocumentPosition(steered) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await update({ ...state, inbound: { pending: [] } });
+    expect(ui.container.querySelector('[data-pending-steering]')).toBeNull();
+    expect(screen.getByText(steer).compareDocumentPosition(background!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
   it('an accepted echo settles only by its exact MessageId', async () => {
     await mount(running());
     await sendQueued('Queued draft');
@@ -761,7 +803,7 @@ describe('exact pending QueueDock mutations', () => {
     expect(screen.getByText('after')).toBeTruthy();
     expect(edit).toHaveBeenCalledTimes(1);
   });
-  it('preserves stale drafts and requires deliberate reconciliation', async () => {
+  it('preserves edits across revision conflicts and closes the editor when the row leaves the queue', async () => {
     const edit = vi.fn(async () => ({ status: 'known' as const, outcome: { status: 'conflict' as const }, observed: true }));
     const ui = render(<QueueDock rows={[row()]} submissions={[]} running edit={edit} />);
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
@@ -775,7 +817,8 @@ describe('exact pending QueueDock mutations', () => {
     expect(edit).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', false);
     ui.rerender(<QueueDock rows={[]} submissions={[]} running edit={edit} />);
-    expect(screen.getByRole('textbox')).toHaveProperty('value', 'my draft');
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(ui.container.querySelector('[data-queue-dock]')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
   });
   it('keeps an uncertain remove locked without inventing or replaying a snapshot', async () => {
@@ -789,10 +832,10 @@ describe('exact pending QueueDock mutations', () => {
     expect(screen.queryByText('before')).toBeNull();
     expect(remove).toHaveBeenCalledTimes(1);
   });
-  it('omits provisional controls for accepted echoes, disables them for sending echoes, and disables unsafe typed-content editing', () => {
+  it('keeps provisional controls disabled through acknowledgement and limits editing to text rows', () => {
     const mixed = { ...row(), message: { ...row().message, content: [{ type: 'text' as const, text: 'one' }, { type: 'uploaded_file' as const, batch_id: 'owned-batch', name: 'report.pdf' }] } };
     const ui = render(<QueueDock rows={[]} submissions={[{ messageId: 'echo', content: [{ type: 'text', text: 'provisional' }], placement: 'queued' }]} running edit={vi.fn()} remove={vi.fn()} steer={vi.fn()} />);
-    expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
+    for (const name of ['Edit', 'Remove', 'Steer queued message']) expect(screen.getByRole('button', { name })).toHaveProperty('disabled', true);
     ui.rerender(<QueueDock rows={[]} submissions={[{ messageId: 'sending:in-1', sendingInputId: 'in-1', content: [{ type: 'text', text: 'in flight' }], placement: 'queued' }]} running edit={vi.fn()} remove={vi.fn()} steer={vi.fn()} />);
     for (const name of ['Edit', 'Remove', 'Steer queued message']) {
       const btn = screen.getByRole('button', { name }) as HTMLButtonElement;

@@ -1505,6 +1505,8 @@ pub enum ErrorData {
     SubscriptionSuperseded,
     StaleAttachment,
     StaleRuntime,
+    /// Direct `turn/steer` was not admitted because the expected Turn is stale or not steerable.
+    SteerUnavailable,
     InvalidState,
     InvalidParams,
     ResyncRequired,

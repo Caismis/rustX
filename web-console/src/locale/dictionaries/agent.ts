@@ -233,7 +233,7 @@ export const en = {
   "goal-dock.edit-round-budget": "Edit round budget",
   "goal-dock.blocked": "Blocked:",
   "queue-dock.queue": "Queue",
-  "queue-dock.queued": "queued",
+  "queue-dock.queued": "queued messages",
   "queue-dock.text-only-editing": "Only text messages can be edited.",
   "queue-dock.edit-queued-message": "Edit queued message",
   "queue-dock.edit": "Edit",
