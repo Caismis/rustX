@@ -174,7 +174,9 @@ function LiveSessionNode({ client, node, children, transition }: { client: AppSe
   const activity = useClientSelector(client, state => {
     const view = state.views[node.id];
     const row = state.sessions.find(row => row.id === node.id) ?? view?.summary;
-    const entry = row?.thread_status;
+    const target = view?.target?.conversation_id ?? view?.nodeConversationId ?? row?.thread_id;
+    const entry = (view?.threadStatus && view.threadStatus.threadId === target ? view.threadStatus : undefined)
+      ?? (row?.thread_status && (!target || row.thread_status.threadId === target) ? row.thread_status : undefined);
     const connected = state.connection === 'connected';
     let runtimeStatus: SessionNode['runtimeStatus'];
     if (connected && entry != null) switch (entry.status.type) {

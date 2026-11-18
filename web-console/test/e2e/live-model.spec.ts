@@ -390,3 +390,74 @@ for (const width of [1440, 390]) test(`switching A → B → A restores each Ses
     expect(errors).toEqual([]);
   } finally { await native?.shutdown(); await stopDogfoodPage(page, fixture, false); }
 });
+
+test('idle model, effort and session switches keep the header and sidebar quiet', async ({ page }) => {
+  const fixture = await startDogfood('tui_multi_session');
+  const native = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
+  const wire = await wireProbe(page);
+  try {
+    const cold = (await native.createSession({ cwd: fixture.workspaceA })).session.id;
+    await native.renameSession(cold, 'Cold target');
+    await routeWorkspaceHost(page, fixture);
+    await page.goto('/');
+    await connectRemote(page, fixture.endpoint, fixture.token);
+    const warm = await openEmptySession(page, fixture, 'Workspace A');
+    const trigger = page.locator('[data-model-select]');
+    await expect(trigger).toContainText('fixture/integration-model');
+    const warmTitle = page.locator(`button[data-session-id="${warm}"]`);
+    const titleInset = () => warmTitle.evaluate(el => el.getBoundingClientRect().left - el.parentElement!.getBoundingClientRect().left);
+    const groupedInset = await titleInset();
+    await page.getByRole('button', { name: 'View options' }).click();
+    await page.getByRole('menuitem', { name: 'Flat view' }).click();
+    expect(await titleInset()).toBe(groupedInset);
+    const finish = await page.evaluateHandle(() => {
+      const notices = new Set<string>();
+      const header = () => document.querySelector('#session-view > header');
+      const rows = () => [...document.querySelectorAll('button[data-session-id]')].map(row => row.getAttribute('data-session-id'));
+      const expectedRows = rows();
+      const height = header()?.getBoundingClientRect().height;
+      const sample = () => {
+        if (header()?.getBoundingClientRect().height !== height) notices.add('Session header changed height');
+        const currentRows = rows();
+        if (expectedRows.some(id => !currentRows.includes(id))) notices.add('Session row disappeared');
+        if (!document.querySelector('#session-title')?.textContent) notices.add('Session title disappeared');
+        const banners = document.querySelectorAll('#session-view [aria-label="Session status"], #session-view [aria-label="Session configuration"], [aria-label="Session browser"] [role="status"], button[data-session-id] small');
+        for (const banner of banners) notices.add(banner.textContent ?? '');
+        for (const row of document.querySelectorAll('[role="treeitem"]')) {
+          if (row.textContent?.match(/Observation unavailable|Connection interrupted/)) notices.add(row.textContent);
+        }
+      };
+      const observer = new MutationObserver(sample);
+      observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+      return () => { sample(); observer.disconnect(); return [...notices]; };
+    });
+    for (const [pane, selection] of [['Thinking effort', 'low'], ['Model', 'fixture/second-model']]) {
+      await trigger.click();
+      await page.getByRole('menuitem', { name: pane, exact: true }).click();
+      wire.holdNext('session/setModel');
+      await page.getByRole('menuitemradio', { name: selection, exact: true }).click();
+      await expect.poll(() => wire.held()).toBe(1);
+      await expect(trigger).toHaveAttribute('aria-busy', 'true');
+      wire.releaseHeld();
+      await expect(trigger).toHaveAttribute('aria-busy', 'false');
+      await expect(trigger).toContainText(selection);
+    }
+    const open = (id: string) => page.locator(`button[data-session-id="${id}"]`).click();
+    wire.holdNext('thread/resume');
+    await open(cold);
+    await expect.poll(() => wire.held()).toBe(1);
+    await open(warm);
+    wire.releaseHeld();
+    await expect(trigger).toContainText('fixture/second-model');
+    await open(cold);
+    await expect(trigger).toContainText('fixture/integration-model');
+    await open(warm);
+    await expect(trigger).toContainText('fixture/second-model');
+    expect(await finish.evaluate(read => read())).toEqual([]);
+  } finally {
+    wire.releaseHeld();
+    await native.shutdown();
+    const report = await stopDogfoodPage(page, fixture, false);
+    expect(report.requestCount).toBe(0);
+  }
+});

@@ -167,6 +167,9 @@ export function recentViewSnapshot(state: ClientView, pinned: ReadonlySet<string
     if (transcript?.source_cut?.transcript_total === '0' && !transcript.entries?.length
       && !view.snapshot?.messages?.length && !view.inboundRequests && !view.sendingSubmissions?.length
       && !view.submissions?.length && !attention.has(view.id)) known.delete(view.id);
+    if (state.connection === 'connected' && view.attachmentIntent === 'wanted' && view.attachment === 'detached' && !view.target && !view.passiveHistory && !view.error
+      && !view.snapshot && !attention.has(view.id) && !view.inboundRequests
+      && !view.sendingSubmissions?.length && !view.submissions?.length) known.delete(view.id);
     const claim = heldView(view, state.generation);
     if (claim) held.set(view.id, claim);
   }

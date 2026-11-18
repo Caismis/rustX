@@ -232,6 +232,8 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
 
   const selectedView = selected ? state.views[selected] : center.kind === 'new-conversation' && routeState.context.draftSession ? state.views[routeState.context.draftSession.sessionId] : undefined;
   const view = selectedView?.deleting && !selectedView.target ? undefined : selectedView;
+  const activeSessionId = view?.id ?? (!selectedView?.deleting ? selected : undefined);
+  const activeSummary = activeSessionId ? (state.sessions.find(session => session.id === activeSessionId) ?? view?.summary) : undefined;
   const sideQuestionAvailable = !!view && (!!client.getSnapshot().capabilities?.delivery_access || !!client.auxiliary.snapshot(view.id));
   const openSideQuestion = () => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openSideQuestion(); };
   const workbenchTarget: WorkbenchTarget | undefined = view?.summary
@@ -330,8 +332,8 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     else shell.send({ type: 'DRAFT' });
   };
   const open = (id: string, command?: CommandRequest, sidebar?: SidebarGeometry, node?: { nodeId: string; conversationId: string }) => {
-    recent.show(id);
     shell.send({ type: 'OPEN', destination: { kind: 'session', sessionId: id, sidebar: !!sidebar?.overlay, command, ...node } });
+    if (navigationSession(shell) === id) recent.show(id);
   };
   const closeView = (id: string) => {
     recent.forget(id);
@@ -376,7 +378,7 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
     else shell.send({ type: 'SETTINGS', destination: { type: 'OPEN.OWNER', directory: owner.directory } });
   };
   const openTaskSession = (task: TaskRef) => open(task.session_id, undefined, undefined, { nodeId: task.node_id, conversationId: task.id.conversation_id });
-  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={view?.id} openAside={(id, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(id, title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
+  return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={activeSessionId} openAside={(id, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(id, title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
     primary={geometry => <PrimaryNavigationRail label={tx('sidebar:navigation.label')} activeId={home ? 'home' : primaryRoute.kind}
       items={[
         { id: 'home', label: tx('sidebar:navigation.home'), icon: <IconHomeOutline16 size={18}/>, controls: 'home-sidebar', expanded: geometry.sidebarExpanded, select: () => { if (home) geometry.expandSidebar(); else shell.send({ type: 'HOME' }); } },
@@ -424,15 +426,15 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         if (next) open(next); else focusSession();
       }
     }}/>}
-    <DocumentTitle client={client} sessionId={home || settingsOpen ? view?.id : undefined}/>
+    <DocumentTitle client={client} sessionId={home || settingsOpen ? activeSessionId : undefined}/>
     <OverlayScope className="primary-page" active={settingsOpen}>
       <Settings visible={settingsOpen} associations={associations} navigation={navigationActor} connection={connection} client={client} host={workspaceHost} theme={theme} setTheme={setTheme} />
     </OverlayScope>
     {primaryRoute.kind === 'schedules' && <TaskManagerPage client={client} host={workspaceHost} authority={workspaceAuthority} openSession={openTaskSession}/>}
     {primaryRoute.kind === 'workflows' && <WorkflowsSurface surface={workflows} authority={workspaceAuthority} />}
     {(['subagents','mcp','skills'] as const).map(module=><OverlayScope key={`${module}:${state.authorityRevision}`} className="primary-page" active={primaryRoute.kind===module}><ResourceSurface module={module} visible={primaryRoute.kind===module} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} initialWorkspace={workspace}/></OverlayScope>)}
-    <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><SessionPanelProvider><section className={`session-panel ${agentCss.root}`} data-phase={view ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={view ? 'session-title' : undefined} aria-label={view ? undefined : tx('agent:conversation-header.product-title')}>
-      <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} view={view && { ...view, summary: state.sessions.find(session => session.id === view.id) ?? view.summary }} authorityRevision={state.authorityRevision}
+    <div className="primary-page" hidden={!home} inert={!home}><FileLinks.Provider value={file => { previewOwner.showWorkbench(); void fileWorkbench.current?.openFile(file.path, file.line); }}><SessionPanelProvider><section className={`session-panel ${agentCss.root}`} data-phase={activeSessionId ? 'active' : 'hero'} data-shell-route={center.kind} id="session-view" role="region" aria-labelledby={activeSessionId ? 'session-title' : undefined} aria-label={activeSessionId ? undefined : tx('agent:conversation-header.product-title')}>
+      <ConversationHeader host={workspaceHost} authority={workspaceAuthority} client={client} sessionId={activeSessionId} summary={activeSummary} view={view} authorityRevision={state.authorityRevision}
         connected={connected} attached={attached} commandOpen={commandOpen}
         previewToggle={previews.mode === 'collapsed' && <>{sideQuestionAvailable && <Button size="sm" className={agentCss.iconButton} data-side-question-toggle aria-label={tx('agent:btw.title')} title={tx('agent:btw.title')} onClick={openSideQuestion}><IconQuestionOutline14/></Button>}<Button size="sm" className={agentCss.iconButton} data-preview-toggle aria-label={tx(previews.workspace ? 'artifacts:workspace.reopen' : 'artifacts:workbench.toggle')} title={tx('artifacts:workbench.toggle')} aria-expanded={false} onClick={event => { previewOpener.current = event.currentTarget; if (previews.workspace) previewOwner.reveal(); else previewOwner.showWorkbench(); setPreviewFocus(value => value + 1); }}><IconPanelLeftOutline16 className={agentCss.mirrored} /></Button></>} invokeCommand={invokeCommand}
         openOwningSettings={openOwningSettings} conversationMode={conversationMode} setConversationMode={setConversationMode}/>
@@ -450,11 +452,11 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
         }
       }} />}
 
-      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={view && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={view && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
+      <section className={`conversation-panel ${agentCss.body}`} id="conversation-view" role={activeSessionId && displayPreferences.codingView ? 'tabpanel' : undefined} aria-labelledby={activeSessionId && displayPreferences.codingView ? `view-tab-${conversationMode}` : undefined} tabIndex={0}>
       <ConversationWidthControls active={!!view && conversationMode === 'chat'}/>
       <ConversationQuestionPanels client={client} sessionId={view?.id}>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
-      <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={view?.id} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
+      <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={activeSessionId} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}/>
       <ConversationSeat visible={home} intakeCommitted={center.kind !== 'session-draft'} draftOwner={composerDraft} client={client} host={workspaceHost} authority={workspaceAuthority} associations={associations} sessionId={view?.id}
         initialWorkspace={workspace ?? (center.kind === 'new-conversation' ? center.workspaceId : undefined)}
         workspacePicked={id => { if (newConversationCurrent()) { shell.send({ type: 'DRAFT.WORKSPACE', workspaceId: id }); rememberWorkspace(id); } }}

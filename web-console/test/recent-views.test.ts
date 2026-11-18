@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AttachmentTarget } from '../../protocol/app-server/v80';
-import { RecentInactiveViews, RECENT_INACTIVE_VIEW_LIMIT, type HeldView, type RecentViewSnapshot } from '../src/app/navigation/recent-views';
+import { RecentInactiveViews, RECENT_INACTIVE_VIEW_LIMIT, recentViewSnapshot, type HeldView, type RecentViewSnapshot } from '../src/app/navigation/recent-views';
+import type { ClientView } from '../src/client/contracts';
 
 const target = (id: string): AttachmentTarget => ({ session_id: id, conversation_id: `conversation-${id}`, runtime_incarnation: '1', attachment_id: `attachment-${id}` });
 
@@ -134,5 +135,27 @@ describe('recent inactive views', () => {
     b.recent.show('b');
     b.recent.restore(['a']);
     expect(b.released.has('a')).toBe(false);
+  });
+
+  it('excludes unattached cold-detached views from retention while preserving errors and passive history', () => {
+    const baseState: ClientView = {
+      connection: 'connected',
+      generation: 1,
+      sessions: [],
+      views: {
+        aborted: { id: 'aborted', attachmentIntent: 'wanted', attachment: 'detached' },
+        attaching: { id: 'attaching', attachmentIntent: 'wanted', attachment: 'attaching' },
+        errored: { id: 'errored', attachmentIntent: 'wanted', attachment: 'error', error: 'Attach failed' },
+        passive: { id: 'passive', attachmentIntent: 'wanted', attachment: 'detached', passiveHistory: true },
+      },
+      uncertain: [],
+      interactionOperations: {},
+    };
+    const snap = recentViewSnapshot(baseState, new Set(), 'attaching');
+    expect(snap.known.has('aborted')).toBe(false);
+    expect(recentViewSnapshot({ ...baseState, connection: 'reconnecting' }, new Set()).known.has('aborted')).toBe(true);
+    expect(snap.known.has('attaching')).toBe(true);
+    expect(snap.known.has('errored')).toBe(true);
+    expect(snap.known.has('passive')).toBe(true);
   });
 });

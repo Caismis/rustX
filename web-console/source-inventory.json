@@ -3097,7 +3097,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "21548f2d70312ca09cb56742393159019460511f30a1474c62ed165903fd934f",
+      "local_sha256": "7fb72665e6077ac9f0df33aa2d8fccaa7fd114f90bf6b6894b1e0260174d0ecb",
       "retained_dependencies": [],
       "classification": "B",
       "additional_sources": [
@@ -3142,7 +3142,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "9a7352ec8e057e34434533555dcbe632bf8b471ec32945e21f3f086bcc8e2d4d",
+      "local_sha256": "a191c30c1fc0a1aaf694ec19a6cfdfdf5ae498db8a1e8582bc0f23de595df8e2",
       "classification": "B",
       "additional_sources": [
         {
@@ -3220,7 +3220,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "785dd59f0717fc4ea994ed09729649b0962ec166aeafda2368d8a4b806ae177e",
+      "local_sha256": "3b8b1d80f4c940ef5e70ed5381ec672548ac5cd2027829654579f7ba73073151",
       "classification": "B",
       "additional_sources": [
         {
@@ -3303,7 +3303,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "bdddad8dc636367c30a7353c40c7205238875231c10194b97d4b5858882f06f2"
+      "local_sha256": "6482b355a216e797496677c0c3595d61ce164c7fe3842e76cc1ad0089892f900"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -8620,7 +8620,7 @@
         "../../client/contracts"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "714081423cea46e241f893a01b5d1577456b99e0950a9817d679c2f03b457f62"
+      "local_sha256": "526df85e3a221b4261b2c954e4b330e0da68f416e6d79b529aad34010b29f17f"
     }
   ],
   "inspected_only": [

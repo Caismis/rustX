@@ -51,6 +51,12 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
   if (transition && state.connection === 'connected' && !view?.error) return {
     status: 'connecting', severity: 'quiet', label: tx(transition === 'fork' ? 'common:session-product.forking' : 'common:session-product.regenerating'),
   };
+  if (state.connection === 'connected' && (view?.error || view?.attachment === 'error')) return {
+    status: 'unavailable', severity: 'warning', label: tx('common:session-product.observation-unavailable'), recovery,
+  };
+  if (state.connection === 'connected' && view && view.attachmentIntent === 'wanted' && view.attachment === 'detached' && !view.target) {
+    return { status: 'connecting', severity: 'quiet' };
+  }
   if (recovery) return { status: 'reconnect', label: tx('common:session-product.connection-interrupted'), severity: 'warning', recovery,
     detail: recovery.action === 'open' ? tx('common:copy.open-this-session-to-continue-your-previous-requests-will-not-be-sent-again') : tx('common:copy.reconnect-to-see-current-work-your-previous-requests-will-not-be-sent-again') };
   if (connecting || view?.attachment === 'attaching' || view?.attachment === 'resynchronizing') return { status: 'connecting', severity: 'quiet' };

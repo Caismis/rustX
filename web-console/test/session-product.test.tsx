@@ -4,7 +4,7 @@ import { afterEach, expect, it } from 'vitest';
 import type { ClientView, SessionView } from '../src/client/contracts';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { App } from '../src/app/App';
-import { Server, snapshot } from './fixture';
+import { Server, settingsReceipt, snapshot } from './fixture';
 import { RpcFailure } from '../src/client/errors';
 
 const connected = { connection: 'connected' as const, uncertain: [] };
@@ -51,6 +51,8 @@ it.each([
   ['failed read with target', { attachment: 'stale' }, {}, 'unavailable', 'refresh'],
   ['failed observation after confirmed attach', { attachment: 'error' }, {}, 'unavailable', 'refresh'],
   ['opening is not recovery', { target: undefined, attachment: 'attaching' }, {}, 'connecting', undefined],
+  ['cold unattached intent is not connection interruption', { target: undefined, attachment: 'detached', attachmentIntent: 'wanted', snapshot: undefined, threadStatus: undefined }, {}, 'connecting', undefined],
+  ['cold attach failure without target preserves unavailability', { target: undefined, attachment: 'error', attachmentIntent: 'wanted', error: 'Attach failed', snapshot: undefined, threadStatus: undefined }, {}, 'unavailable', 'open'],
   ['uncertain outranks reconnect', {}, { connection: 'stale', uncertain: [uncertain] }, 'uncertain', 'connect'],
   ['uncertain survives suggestive settled state', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } } } }, { uncertain: [uncertain] }, 'uncertain', undefined],
   ['durability failure', { snapshot: { ...snapshot(), durability_failure: { operation: 'commit', diagnostic: 'storage-failure' } } }, {}, 'failure', undefined],
@@ -140,4 +142,67 @@ it('failed observation exposes one Refresh observation action which refreshes wi
   expect(operations).not.toContain('inbound/queue');
   expect(operations).not.toContain('turn/interrupt');
   expect(screen.queryByRole('button', { name: 'Refresh observation' })).toBeNull();
+});
+it('rapid cold switch aborted before attach stays quiet in the header and recovers on explicit return', async () => {
+  const s = new Server();
+  server = s;
+  await s.attached('A');
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
+  await act(async () => { render(<App client={s.client} workspaceHost={s.workspaceHost} />); });
+
+  const notices: string[] = [];
+  const header = document.querySelector('#session-view > header')!;
+  const observer = new MutationObserver(() => {
+    const title = document.querySelector('#session-title')?.textContent;
+    if (!title || title === 'New session') notices.push(`title:${String(title)}`);
+    const status = document.querySelector('#session-view [aria-label="Session status"]')?.textContent;
+    if (status) notices.push(`status:${status}`);
+  });
+  observer.observe(document.querySelector('#session-view')!, { childList: true, characterData: true, subtree: true });
+  try {
+    expect(header.className).not.toMatch(/headerBlank/);
+    s.held.add('session/read');
+    const readsBefore = s.requests.filter(row => row.request.method === 'session/read').length;
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    const read = await s.waitFor('session/read', readsBefore + 1);
+    expect(read.method === 'session/read' && read.params.session_id).toBe('B');
+    expect(document.querySelector('#session-title')?.textContent).toBe('Session B');
+    // Rapidly switch back to warm A before B dispatches thread/resume.
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+    expect(document.querySelector('#session-title')?.textContent).toBe('Session A');
+    s.held.delete('session/read');
+    await act(async () => s.reply(read));
+    expect(s.requests.filter(row => row.request.method === 'thread/resume' && s.sessionForThread(row.request.params.threadId) === 'B')).toHaveLength(0);
+    expect(s.client.getSnapshot().views.B).toMatchObject({ attachmentIntent: 'released', attachment: 'detached' });
+    expect(notices).toEqual([]);
+
+    // Reconnecting must not reopen B after user rapidly switched away.
+    await act(async () => { s.socket.close(); await s.connect(); });
+    expect(s.requests.filter(row => row.request.method === 'thread/resume' && s.sessionForThread(row.request.params.threadId) === 'B')).toHaveLength(0);
+
+    // Explicitly opening B attaches it once cleanly.
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    expect(document.querySelector('#session-title')?.textContent).toBe('Session B');
+    expect(s.requests.filter(row => row.request.method === 'thread/resume' && s.sessionForThread(row.request.params.threadId) === 'B')).toHaveLength(1);
+    expect(notices).toEqual([]);
+  } finally {
+    observer.disconnect();
+  }
+});
+it('unlisted cold session header falls back to its session id while summary is loading', async () => {
+  const s = new Server();
+  server = s;
+  s.snapshots.set('unlisted', snapshot('unlisted'));
+  s.handlers.set('session/list', () => ({ type: 'sessions', sessions: [], next_offset: null }));
+  s.handlers.set('session/settings', req => settingsReceipt({ cwd: req.method === 'session/settings' && req.params.session_id === 'unlisted' ? '/workspace/A' : '/workspace/B' }, '0'));
+  s.summaries.set('unlisted', { cwd: '/workspace/A', name: 'Recovered title' });
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['unlisted'], route: { kind: 'session', sessionId: 'unlisted' } }));
+  s.held.add('session/summary');
+  await act(async () => { render(<App client={s.client} workspaceHost={s.workspaceHost} />); });
+  await act(async () => s.connect());
+  const read = await s.waitFor('session/summary', 1);
+  expect(document.querySelector('#session-title')?.textContent).toBe('unlisted');
+  expect(document.querySelector('#session-title')?.textContent).not.toBe('New session');
+  await act(async () => s.reply(read));
+  expect(document.querySelector('#session-title')?.textContent).toBe('Recovered title');
 });

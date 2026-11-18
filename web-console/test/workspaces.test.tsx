@@ -1143,3 +1143,53 @@ it('sidebar rows preserve immediate disconnected, systemError, and unconfirmed u
   expect(rowA().textContent).toContain('Observation unavailable');
   expect(rowB().textContent).toContain('Observation unavailable');
 });
+
+it('rapid cold/warm session switching keeps sidebar rows quiet while preserving real attach errors', async () => {
+  await mount();
+  const browser = screen.getByRole('tree', { name: 'Session browser' });
+  const rowA = () => screen.getByRole('button', { name: 'Open Session A' }).closest('[role="treeitem"]')!;
+  const rowB = () => screen.getByRole('button', { name: 'Open Session B' }).closest('[role="treeitem"]')!;
+  const flashes: string[] = [];
+  const observer = new MutationObserver(() => {
+    for (const item of browser.querySelectorAll('[role="treeitem"]')) {
+      if (item.textContent?.match(/Observation unavailable|Connection interrupted/)) flashes.push(item.textContent ?? '');
+    }
+  });
+  observer.observe(browser, { childList: true, characterData: true, subtree: true });
+  try {
+    // Warm A first.
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+    // Switch rapidly to cold B while session/read is held, then back to warm A before thread/resume.
+    server.held.add('session/read');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    const read = await server.waitFor('session/read', 2);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+    server.held.delete('session/read');
+    await act(async () => server.reply(read));
+    expect(flashes).toEqual([]);
+    expect(rowB().textContent).not.toContain('Connection interrupted');
+    expect(rowB().textContent).not.toContain('Observation unavailable');
+
+    // Switch to cold B while thread/resume is held, then rapidly back to warm A, then settle B warmly.
+    server.held.add('thread/resume');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    const resume = await server.waitFor('thread/resume', 2);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+    server.held.delete('thread/resume');
+    await act(async () => server.reply(resume));
+    await waitFor(() => expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B?.attachmentObservation)).toBe(true));
+    expect(flashes).toEqual([]);
+    expect(rowA().textContent).not.toContain('Connection interrupted');
+    expect(rowB().textContent).not.toContain('Connection interrupted');
+  } finally {
+    observer.disconnect();
+  }
+
+  // Real attach error on an unattached session still surfaces in the sidebar row.
+  await act(async () => server.client.release('B'));
+  server.handlers.set('thread/resume', () => { throw new RpcFailure({ code: -32000, message: 'B attach failed', data: { kind: 'operation_failed' } }); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+  await waitFor(() => expect(server.client.getSnapshot().views.B.attachment).toBe('error'));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(rowB().textContent).toContain('Observation unavailable');
+});
