@@ -21,7 +21,7 @@ pub mod execution_environment;
 pub mod executor;
 pub mod host;
 pub mod invocation;
-pub mod limits;
+pub use rustx_types::tools::limits;
 pub mod locator;
 pub mod managed_output;
 pub mod mcp;
@@ -32,7 +32,7 @@ pub mod runtime;
 pub mod schema;
 pub use rustx_types::tools::session_files;
 pub mod todo;
-pub mod types;
+pub use rustx_types::tools::types;
 pub mod workspace;
 pub mod workspace_python;
 

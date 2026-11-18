@@ -143,19 +143,7 @@ const PYTHON_TOOL_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from
 /// Finite deadline of one managed-Python uv lock or materialization command.
 const PYTHON_TOOL_UV_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(10);
 
-/// A package discovery/preparation failure.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum PythonToolError {
-    /// The package is malformed.
-    #[error("invalid Python tool package: {0}")]
-    InvalidPackage(String),
-    /// Prepared state could not be read or published.
-    #[error("Python tool storage failed: {0}")]
-    Storage(String),
-    /// The dependency environment could not be checked or materialized.
-    #[error("Python tool environment failed: {0}")]
-    Environment(String),
-}
+pub use rustx_types::tools::python::PythonToolError;
 
 /// Package-local permission authoring document (`permissions.toml`).
 ///
@@ -548,21 +536,7 @@ fn collect_files(
     Ok(files)
 }
 
-pub(crate) fn validate_identifier(identifier: &str) -> Result<(), PythonToolError> {
-    if identifier.is_empty()
-        || identifier.starts_with('-')
-        || identifier.ends_with('-')
-        || identifier.contains("--")
-        || !identifier.chars().all(|character| {
-            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-'
-        })
-    {
-        return Err(PythonToolError::InvalidPackage(format!(
-            "invalid package name {identifier:?}"
-        )));
-    }
-    Ok(())
-}
+pub(crate) use rustx_types::tools::python::validate_identifier;
 
 /// Parses the normalized requirement lines of one `requirements.txt`.
 ///

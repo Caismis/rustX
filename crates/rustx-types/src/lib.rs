@@ -27,7 +27,15 @@ pub mod message {
 
 pub mod tools {
     pub mod deadline;
+    pub mod limits;
+    pub mod python;
     pub mod session_files;
+    pub mod types;
+}
+
+pub mod capabilities {
+    pub mod source;
+    pub use source::ToolSourceId;
 }
 
 pub mod runtime {

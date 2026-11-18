@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
+use rustx_identity::{McpServerId, ToolCallId, ToolId};
 use crate::runtime::types::CancellationReason;
 
 /// The canonical runtime/tool contract of one registered tool.
@@ -235,7 +235,7 @@ impl ToolInvocationId {
     }
 }
 
-/// The caller-neutral runtime-owned invocation delivered to a [`ToolExecutor`].
+/// The caller-neutral runtime-owned invocation delivered to a `ToolExecutor`.
 ///
 /// An invocation contains only runtime-owned execution data: the logical
 /// call identity, the tool identity, the model-facing tool name, the
@@ -243,7 +243,6 @@ impl ToolInvocationId {
 /// arguments. No provider types and no executor-specific fields (Bash
 /// commands, MCP SDK types, Python runtime objects) ever appear here.
 ///
-/// [`ToolExecutor`]: crate::tools::executor::ToolExecutor
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolInvocation {
     /// Correlation with the caller's concrete invocation authority.
@@ -378,7 +377,7 @@ impl ToolResultProjection {
 /// Bounded model-facing content, retaining the canonical image/text ordering.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", content = "content", rename_all = "snake_case")]
-pub(crate) enum ModelToolResultPart {
+pub enum ModelToolResultPart {
     Text(String),
     Image(crate::message::content::ImageReference),
 }
@@ -388,12 +387,12 @@ pub(crate) enum ModelToolResultPart {
 /// media parts retain their model-visible ordering.
 #[derive(Serialize)]
 #[serde(untagged)]
-pub(crate) enum ModelToolResultContent {
+pub enum ModelToolResultContent {
     Text(String),
     Parts(Vec<ModelToolResultPart>),
 }
 impl ToolExecutionResult {
-    pub(crate) fn model_visible_content(&self) -> Result<ModelToolResultContent, &'static str> {
+    pub fn model_visible_content(&self) -> Result<ModelToolResultContent, &'static str> {
         if self
             .content
             .iter()
@@ -412,7 +411,7 @@ impl ToolExecutionResult {
 impl ToolExecutionResult {
     /// Project supported input content without encoding provider wire structures.
     /// Status/continuation text keeps its reserved budget; images retain position.
-    pub(crate) fn image_projection(&self) -> Result<Vec<ModelToolResultPart>, &'static str> {
+    pub fn image_projection(&self) -> Result<Vec<ModelToolResultPart>, &'static str> {
         self.reject_file_projection()?;
         if !self
             .content
@@ -843,7 +842,7 @@ impl ManagedOutputContinuation {
     /// locator is shortened with an explicit marker; diagnostics are advisory
     /// and are omitted before structural continuation text is lost.
     #[must_use]
-    pub(crate) fn render_bounded(&self, bound: usize) -> String {
+    pub fn render_bounded(&self, bound: usize) -> String {
         let complete_prefix = "Complete output: ";
         let partial_prefix = "Partial output only: ";
         let diagnostic_prefix = "\nDiagnostic: ";
@@ -1039,7 +1038,7 @@ pub enum ToolExecutionStatus {
 impl ToolExecutionStatus {
     /// Renders status feedback for consumers that apply their own byte budget.
     #[must_use]
-    pub(crate) fn feedback_text(&self) -> Option<String> {
+    pub fn feedback_text(&self) -> Option<String> {
         (*self != Self::Success).then(|| {
             let mut text = String::new();
             self.write_feedback(&mut text).expect("writing to a String");
@@ -1156,7 +1155,7 @@ mod tests {
         ToolCall, ToolCallStart, ToolCancellationPhase, ToolDefinition, ToolExecutionPolicy,
         ToolExecutionResult, ToolExecutionStatus, ToolReplayPolicy, TruncationState,
     };
-    use crate::runtime::identity::{McpServerId, ToolCallId, ToolId};
+    use rustx_identity::{McpServerId, ToolCallId, ToolId};
     use serde_json::json;
 
     /// The safe replay default is `Never`.
@@ -1357,7 +1356,7 @@ mod tests {
     #[test]
     fn typed_artifact_projection_survives_content_pressure_and_tracks_current_identity() {
         use crate::message::content::{FileReference, ImageReference, TextBlock};
-        use crate::runtime::identity::ArtifactId;
+        use rustx_identity::ArtifactId;
         let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
         let mut result = ToolExecutionResult {
             deliveries: Vec::new(),
@@ -1416,7 +1415,7 @@ mod tests {
     #[test]
     fn oversized_artifact_projection_omits_whole_references() {
         use crate::message::content::FileReference;
-        use crate::runtime::identity::ArtifactId;
+        use rustx_identity::ArtifactId;
         let references = [FileReference {
             artifact_id: ArtifactId::new("artifact_123"),
             name: Some("界".repeat(100)),
@@ -1511,7 +1510,7 @@ mod tests {
     fn bounded_render_matches_the_full_projection_prefix_and_detects_late_media() {
         use super::{CONTENT_TRUNCATION_MARKER, ToolResultContent};
         use crate::message::content::{ImageReference, TextBlock};
-        use crate::runtime::identity::ArtifactId;
+        use rustx_identity::ArtifactId;
 
         let bound = crate::tools::limits::MAX_MODEL_TOOL_RESULT_BYTES;
         let value = json!({"escaped": "界😀\n\"".repeat(bound)});
