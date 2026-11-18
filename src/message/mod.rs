@@ -6,7 +6,7 @@
 //! layers; this module remains the canonical message vocabulary.
 
 pub use rustx_types::message::content;
-pub mod types;
+pub use rustx_types::message::types;
 
 pub use content::{FileReference, ImageReference, TextBlock};
 pub use types::{

@@ -2,6 +2,10 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+/// Provider-specific continuation state preserved by the runtime.
+///
+/// `None` (absence) is the natural representation for protocols that carry no
+/// continuation state, such as `OpenAI` Chat Completions, which resend the
 /// full context instead of referencing a previous response.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

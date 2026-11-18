@@ -195,15 +195,12 @@ impl Default for BackgroundStatusConfig {
     }
 }
 
-impl AgentStatusModuleId {
-    /// The stable section identity carried by the internal status value.
-    #[must_use]
-    pub const fn section_id(self) -> &'static str {
-        match self {
-            Self::Time => AgentStatusSectionId::TEMPORAL,
-            Self::Background => AgentStatusSectionId::BACKGROUND_EXECUTION,
-            Self::Todo => AgentStatusSectionId::TODO,
-        }
+/// The stable section identity carried by the internal status value.
+const fn status_module_section_id(id: AgentStatusModuleId) -> &'static str {
+    match id {
+        AgentStatusModuleId::Time => AgentStatusSectionId::TEMPORAL,
+        AgentStatusModuleId::Background => AgentStatusSectionId::BACKGROUND_EXECUTION,
+        AgentStatusModuleId::Todo => AgentStatusSectionId::TODO,
     }
 }
 
@@ -1213,7 +1210,7 @@ fn validate_payload(
             },
         ) => Ok(Some(AgentStatusContribution {
             section: AgentStatusSection {
-                id: AgentStatusSectionId::new(id.section_id()),
+                id: AgentStatusSectionId::new(status_module_section_id(id)),
                 data: AgentStatusSectionData::Temporal {
                     current_time,
                     timezone,
@@ -1229,7 +1226,7 @@ fn validate_payload(
             },
         ) if !executions.is_empty() || omitted_count > 0 => Ok(Some(AgentStatusContribution {
             section: AgentStatusSection {
-                id: AgentStatusSectionId::new(id.section_id()),
+                id: AgentStatusSectionId::new(status_module_section_id(id)),
                 data: AgentStatusSectionData::BackgroundExecution {
                     executions,
                     omitted_count,
@@ -1252,7 +1249,7 @@ fn validate_payload(
         {
             Ok(Some(AgentStatusContribution {
                 section: AgentStatusSection {
-                    id: AgentStatusSectionId::new(id.section_id()),
+                    id: AgentStatusSectionId::new(status_module_section_id(id)),
                     data: AgentStatusSectionData::Todo { presentation },
                 },
                 emission: Some(emission),

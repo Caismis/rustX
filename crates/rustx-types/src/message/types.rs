@@ -469,7 +469,7 @@ pub struct ContributionEmission {
 
 impl ContributionEmission {
     /// Validates the bounded producer-local receipt before acceptance or commit.
-    pub(crate) fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), String> {
         if self.key.is_empty()
             || self.key.len() > 128
             || self.fingerprint.is_empty()
@@ -652,7 +652,7 @@ pub enum ContextKind {
 }
 
 impl ContextKind {
-    pub(crate) fn native_contribution_owner(
+    pub fn native_contribution_owner(
         &self,
     ) -> Option<(
         crate::runtime::identity::NativeContextContributor,
@@ -758,7 +758,7 @@ pub struct ReasoningBlock {
 
 impl ReasoningBlock {
     /// Native replay requires positive attribution on both sides.
-    pub(crate) fn belongs_to(&self, origin: Option<&crate::model::replay::ReplayOrigin>) -> bool {
+    pub fn belongs_to(&self, origin: Option<&crate::model::replay::ReplayOrigin>) -> bool {
         self.origin
             .as_ref()
             .zip(origin)

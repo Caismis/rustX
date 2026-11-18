@@ -28,6 +28,7 @@ pub mod model {
 
 pub mod message {
     pub mod content;
+    pub mod types;
 }
 
 pub mod tools {
