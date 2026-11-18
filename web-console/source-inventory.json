@@ -394,7 +394,7 @@
         "Harness queue and retry authority"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "cee66d60729ec178095c5e2554d91cf8a0280470f13353172ac76429c41544a0"
+      "local_sha256": "a5643b2ae03cace568d9bc8618b088e623b3b0a97be280d158cd972d4e33e967"
     },
     {
       "upstream": "packages/client/ui-primitives/src/rank-by-name.ts",
@@ -462,7 +462,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "bf957977761c1b96c0505771a469bef00b9ac32e800df195d23e265b5fb4519c"
+      "local_sha256": "73a73f3b1737fca7096af4fa21d42baf81e8406cc1cc3a4da01c3379c0e8e6d1"
     },
     {
       "upstream": "packages/client/ui-goal/src/client/GoalBar.tsx",
@@ -502,7 +502,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e0201639551250852d0b818ff25f3090e1cc0ca6d704e72e26f6ca820b4e64e8"
+      "local_sha256": "1541db1949246a7ada35837acad65258a985f4eaccf0b116759cf2698dee785e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -542,7 +542,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "01526ffe224e9f892b417f41ec992e8e0d990c509807f99c1d05563e09ae5c98"
+      "local_sha256": "e1218e6c8ccf76d6507adfb6e5604416ce1b439ef33a6cc55507f3ec3290a382"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
@@ -795,7 +795,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "8c59feaf0855a8e9cdfefd4afdfb88f824c9dbee9f434f63f9064fc1d95c3efe",
+      "local_sha256": "e349d05bec75b9495771501d4fadf88a65f45b8423682e67e5abe355ef8d5c22",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
@@ -1015,7 +1015,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "6f530a599d653a68afb278eaa6111af3ea3a56823366e24fa6cb98f97603b978",
+      "local_sha256": "89069dae66bb36273364964b2d0412b9dce9c19c7ca54978dd4648b1bb2a5cdd",
       "additional_sources": [
         {
           "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -3463,7 +3463,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "d063052f86103e359eb4310669c6ad12cfcb764870ca6034f4bf6aaf29fe8c0f"
+      "local_sha256": "ea61476de3fb7af9391a19c87fa5662a0bb4e9282213ab132a871fd8c0d59854"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -3992,7 +3992,7 @@
       ],
       "retained_dependencies": [],
       "upstream_sha256": "233b9e4d400343d4aadd91b6977fd9108c020168916acdf4996adf8774eb791f",
-      "local_sha256": "ad40be4efd1ecde39ce78fdb3e4d176a40767159ff9e3c6c7271bdc5ec76e47b"
+      "local_sha256": "cf83b90d9857e7ad3f0e37fa2f1a79836cd475de8c5d1ec281f8ab8e95e0ae4e"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4375,7 +4375,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "e586b93054ed12e67dac7c2b96556225366b7a9eb99a0564245ade15c3c06685"
+      "local_sha256": "391148c8c20478428b8a31dc1ab38492b5504f24cb6ba82901cd562e3da5580e"
     },
     {
       "upstream": "packages/client/ui-chat/tests/turn-navigator-fixture.ts",
@@ -4556,7 +4556,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "3eedcb1d4ac4aa39e4393d6c23773c568fe9245cde249e0858062ad5124cb8a8",
+      "local_sha256": "a826d9ca822e9351fa8e2967902cb6b9427adde8bbd491dcfe7726c09008ca26",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
@@ -4608,7 +4608,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "3403d0f48563a3d5d8cf5dd4f5674f4ada955fbbb551b217f315c947724e4d57"
+      "local_sha256": "193c3ec79b68d0fd129a0085459e5cd2f623ce9583da64356c42e5ec92d79718"
     },
     {
       "destination": "web-console/src/app/components/Workbench.tsx",
@@ -5612,7 +5612,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "328bbe5f8c749e046ca9af6097da8b9892dffd8c7c370ee2c5ccbb24691c9568"
+      "local_sha256": "5a9774cde75023070ea6fb2d04dbbed1544326aa8f2bd09b2fedd2470a3c3984"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/markdown/MarkdownBody.module.css",
@@ -5625,7 +5625,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "6f0ea621e011477fba68029ba64761693760c451d8bbe3b048b8283583c8dda0"
+      "local_sha256": "5ea9b2d7e472344d909478681e5413bf6fe7455072e29f3952169bdc3ee3c3da"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/ExcelBody.module.css",
@@ -5638,7 +5638,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "32d1d25839e8251679fcadf3ae9ead8d46ee5ad238c91554988603e6f5892ff7"
+      "local_sha256": "f4dbab306c7512343286646d134a3edb5b26211abf7df6eebbb08f36e7439262"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/convert.ts",
@@ -5829,7 +5829,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "ea328e12e04dc9d067c2400f186b5edd475ee2981da55cab4140dbc3c67571d0"
+      "local_sha256": "94ac2c0d99cd0be05236453321b8a616756c5dec92da3586a1f66fba4296086e"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomControls.tsx",
@@ -5860,7 +5860,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "d131dedc83230601855921944532002b3f5dd7d8c38a458b4a689af4cb269319"
+      "local_sha256": "e2aaa0094e0ed170b14bff8d9851b32dbd261b67472ebb8c968d957c3a04065b"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomViewport.tsx",
@@ -6235,7 +6235,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "02e00d185481a7ad29d30948ecf174b707ff9bcddcea6ac3d3b83f41b063c045"
+      "local_sha256": "d5e30d62ef749874f9762b92c57d12962215aa9e9cbb820f172adb938f49ca11"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/tests/html-pack.client.spec.ts",
@@ -6399,7 +6399,7 @@
         "Harness retry event protocol and runtime authority"
       ],
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
-      "local_sha256": "96cd43c73bdb1300e392648d6f22393a65dcf2e538ba6a00e5d94e7078341df0",
+      "local_sha256": "8766568f23c06fc93c2531355f35bae5e2850a243f86458d718dc08c66c08222",
       "classification": "A"
     },
     {
@@ -6525,7 +6525,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "d8eb7159650158fbdbcc2a88b54496c2d5d37c2013260d072aafa67c5bac0e9b",
+      "local_sha256": "1fbd6ce33ebf5631cb81a39c158598d4e9d925ddd0c79aa9d3608c6a4235ce0d",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/settings/PreferenceRow.module.css",
@@ -6603,14 +6603,14 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "fe7f1c68d906868e48e4cc2a9d4bd712bf612cc029cb2700153332bb15597091"
+      "local_sha256": "79739dc6e291f350316a86b8fa5c019846326ea4370ff6bb5676d51684e15291"
     },
     {
       "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
       "upstream": "packages/client/ui-settings-models/src/client/ModelsSection.module.css",
       "destination": "web-console/src/app/resources/mcp/McpPage.module.css",
       "upstream_sha256": "0de105abac343887fbea8508fc0e20b6903505a3f689dd05b1125ff02886e801",
-      "local_sha256": "7d7e030349126ba23b4e6254db124b938c541d777da48148bb0969e16fe732c1",
+      "local_sha256": "a6eefe529af77062bf6ef3103957fa2827aaa814cdf8ce239fca0f46cb3485da",
       "classification": "B",
       "treatment": "Harness-derived settings theme and controls with ZCode screenshot geometry: outlined compact form, short fields, footer actions, segmented modes and scoped MCP list. MCP finite diagnostics: native revision-bound connectivity checks and shared status colors; upstream baseline unchanged. Issue #499: wrap native connecting/catalog-hint provenance in the existing MCP list row; upstream baseline unchanged. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Centered editor with Harness setting-row spacing and persistent form actions.",
       "license": "MIT — Copyright (c) 2026 DeepSeek",
@@ -6752,7 +6752,7 @@
       "retained_dependencies": [],
       "excluded_dependencies": [],
       "license": "MIT; Copyright (c) 2026 DeepSeek",
-      "local_sha256": "8cdb79f2c27796d996702bf42a194360f3ed26736451703164857e3498337395",
+      "local_sha256": "dd62752be73dda0133874d3af9157ab7e446f96f34e5ed93f5e2316d9a7033e8",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-subagent/src/client/SubagentHeaderLineage.module.css",
@@ -6881,7 +6881,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "979811b080ae2ab5a34ea9629453a62590022edd5fd4d61046828567398474c1",
+      "local_sha256": "0429e81ee16a8fa1287a5b770fc2040045a25adc248c26efe2100098e4c73fb9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/StateDot.module.css",
@@ -7387,7 +7387,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "280139c2933a7a3e21f011c614e8d54bfe2a66f4051f6965058c5e7b457b0300"
+      "local_sha256": "a2366b942db7fb66103ceb15ab290183054b059d9db2fd567426594693392f32"
     },
     {
       "upstream": "packages/client/ui-subagent/src/client/SubagentReadOnlyComposer.tsx",
@@ -7460,7 +7460,7 @@
         "Harness Cordis slots, stores and plugin runtime",
         "Harness Agent execution and session observation authority"
       ],
-      "local_sha256": "5b1f06e7d313c3d0049e5ce5207dae35f9edd90a0f2cced641b095c91ab51d74"
+      "local_sha256": "aab8a47fc46cae798826478baae200e75dfa357c5d05939b9f9263b2c3b4c371"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/pdf.tsx",
@@ -7506,7 +7506,7 @@
       "excluded_dependencies": [
         "Harness tab/store/slots and PDF runtime authority; rustX keeps its native preview resource owner"
       ],
-      "local_sha256": "a08bdf48714134dd94f784f5ea289fb91cc00565adebc9cf7d54ae8cdbc037f8"
+      "local_sha256": "f534e5289a0213f66b7f8e4af99bc2bf73beb5a68be80cffe15c3a620e006ee7"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/pdf/document.ts",
@@ -7612,7 +7612,7 @@
         "Harness context injection history and runtime authority"
       ],
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
-      "local_sha256": "08177354e9620fb5c74280f42c6076fb3448e4ce03434e9dbc1bdbb0b98e9d25"
+      "local_sha256": "4cafddf3576cd0715ba703f8f5aad9a0d93b89b897e324ee80ee42974056d5ed"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/ContextInjectionRow.tsx",
@@ -7822,7 +7822,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "9e8a45003fd9112717a5761ffdd5ac148738e8e5898b0d206863176cd7f26f03"
+      "local_sha256": "c208435550707d7c42af59a7fb10979ad98b0afdb0809b0a5121871f35c65557"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -7877,7 +7877,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "49684e97911514238d6b67f5b87babb88619ba35752ff01ee5e7ede25ab49d1e"
+      "local_sha256": "e6464e6316485061d8e47f83e46b1127d331d612a2dbee177505a3fdc3b79234"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -7916,7 +7916,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "b86a420cb57b0b60a6c3a4f4905574eaa08c271cd74259cabd6520ef78b72ae0"
+      "local_sha256": "7f98225d19a4f77040144cf85f724c8839d4a246e9812c163e34067770a1b3f6"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -7954,7 +7954,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "e102b57021ddbd070533e73e2aa6433f51e80453315d4669a2b805ded4c76a17"
+      "local_sha256": "27b11b13f3fdfd95b619bdda8748cb79ebf477d9cc8b9cccd23169f64e70fee8"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -7988,7 +7988,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "e29e081cd558ae2a75d3fd8426716311a0a8a417526d6f61492c6fb05b665cc9"
+      "local_sha256": "dcf6ede231307e76e7149e1fb612a1093723c6306a369993c95d1344ebb71416"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8293,7 +8293,7 @@
       "excluded_dependencies": [
         "Cordis, Remote, plugin slots/store and resource-address authority"
       ],
-      "local_sha256": "0c12cf367561bf5ab0b8858d215840a3c0ed77d66d0086e1a070e10b9a7313ac"
+      "local_sha256": "0e9ac91fefc1096dec49dabb5207a2018f5a79a0c9f33a9081ece1225a0e299d"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
@@ -8349,7 +8349,7 @@
       "excluded_dependencies": [
         "Cordis, Remote, plugin slots/store and resource-address authority"
       ],
-      "local_sha256": "32ceb0d7557379f6ea83076833cac0fe8373256757e72b3b9a2ea458ef569f4b"
+      "local_sha256": "dfb085e99ed842dc493bd5fc0f735dd5ed33b07482d75711cd213290fd547ec6"
     },
     {
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",

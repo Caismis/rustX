@@ -6,21 +6,16 @@
   gap: 4px 16px;
   margin: 0;
 }
-
 .field {
   display: contents;
 }
-
 .key {
   color: var(--dsw-alias-label-secondary);
   font-family: var(--ds-font-family-code);
 }
-
-.value,
-.block {
+.value, .block {
   margin: 0;
 }
-
 .block {
   font-family: var(--ds-font-family-code);
 }

@@ -4,7 +4,6 @@
   padding-bottom: 24px;
   container: subagent-editor / inline-size;
 }
-
 .breadcrumb {
   display: flex;
   align-items: center;
@@ -17,19 +16,17 @@
 .breadcrumb span { overflow-wrap: anywhere; }
 .breadcrumb svg { flex: none; }
 .heading { margin-bottom: 20px; }
-.heading h1 { margin: 0 0 4px; font-size: 24px; font-weight: 600; line-height: 32px; }
+.heading h1 { margin: 0 0 4px; font-size: 24px; font-weight: 500; line-height: 32px; }
 .heading p { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 13px; line-height: 20px; }
-
 .editor .form {
   --editor-inset: 20px;
   box-sizing: border-box;
   display: block;
   padding-inline: var(--editor-inset);
   border: .5px solid var(--dsw-alias-border-l2);
-  border-radius: 16px;
+  border-radius: var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-module-platform);
 }
-
 .form fieldset { min-width: 0; margin: 0; padding: 0; border: 0; }
 .form fieldset[disabled] { opacity: 1; }
 .form .section {
@@ -39,7 +36,7 @@
   min-width: 0;
 }
 .section + .section { border-top: .5px solid var(--dsw-alias-border-l2); }
-.form .section h2 { margin: 0; font-size: 15px; font-weight: 600; line-height: 22px; }
+.form .section h2 { margin: 0; font-size: 15px; font-weight: 500; line-height: 22px; }
 .sectionHead, .scope, .settingRow, .toolServerHead, .toolSwitch, .toolStatus {
   display: flex;
   align-items: center;
@@ -70,14 +67,12 @@
 }
 .scope button svg { flex: none; }
 .scope button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-
 .identity {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 164px), 1fr));
   align-items: start;
   gap: 12px;
 }
-
 .form label, .form :has(> button[aria-haspopup=listbox]) { padding-block: 0; }
 .form [aria-haspopup=listbox] { min-width: 0; min-height: 36px; }
 .form :is(input:not([type=checkbox]), textarea, [aria-haspopup=listbox]) { background: var(--dsw-alias-bg-layer-2); }
@@ -104,7 +99,6 @@
 }
 .form legend { margin-bottom: 6px; }
 .form .featureGroup legend { margin-bottom: 2px; }
-
 .form .nativeTools > fieldset {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 124px), 1fr));
@@ -118,7 +112,6 @@
   color: var(--dsw-alias-label-primary);
 }
 .nativeTools input { flex: none; margin: 0; }
-
 .form .choiceGroup { display: grid; gap: 8px; min-width: 0; }
 .form .choiceGroup p { margin: 0; color: var(--dsw-alias-label-secondary); font-size: 12px; line-height: 18px; }
 .scopedChoices { min-width: 0; }
@@ -159,7 +152,12 @@
   border-radius: var(--dsw-radius-md);
   cursor: pointer;
 }
-.resourceChoice:hover, .resourceChoice:has(input:checked) { background: var(--dsw-alias-interactive-bg-hover); }
+.resourceChoice:has(input:checked) { background: var(--dsw-alias-interactive-bg-hover); }
+@media (hover: hover) {
+  .resourceChoice:hover {
+     background: var(--dsw-alias-interactive-bg-hover);
+  }
+}
 .resourceChoice input { flex: none; margin: 2px 0 0; }
 .resourceChoice > span { min-width: 0; }
 .choiceName, .choiceDescription { display: block; overflow-wrap: anywhere; }
@@ -179,7 +177,6 @@
   outline-offset: 1px;
 }
 .noMatches { padding: 8px; }
-
 .actions, .saveActions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .form .actions {
   position: sticky;
@@ -188,10 +185,11 @@
   margin: 0 calc(-1 * var(--editor-inset));
   padding: 10px var(--editor-inset);
   border-top: .5px solid var(--dsw-alias-border-l2);
-  border-radius: 0 0 16px 16px;
+  border-radius: 0 0 var(--dsw-radius-lg) var(--dsw-radius-lg);
   background: var(--dsw-alias-bg-module-platform);
 }
 .saveActions { margin-inline-start: auto; justify-content: flex-end; }
+
 
 @container subagent-editor (max-width: 480px) {
   .editor .form { --editor-inset: 12px; }
@@ -200,15 +198,15 @@
   .form .section { gap: 12px; padding-block: 14px; }
   .form .nativeTools > fieldset { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-
 .group { margin-bottom: 24px; }
-.group h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; }
+.group h2 { font-size: 14px; font-weight: 500; margin: 0 0 8px; }
 .group h2 span { margin-inline-start: 6px; font-size: 12px; font-weight: 400; color: var(--dsw-alias-label-secondary); }
 .table { table-layout: fixed; overflow-wrap: anywhere; }
 .enabledColumn { width: 96px; }
 .rowOpen { max-width: 100%; text-align: start; }
 .rowOpen svg { flex: none; }
 .narrowDescription { display: none; }
+
 
 @media (max-width: 760px) {
   .table .enabledColumn { width: 72px; }
