@@ -102,7 +102,7 @@ pub(in crate::durable::sqlite) fn validate_accepted_continuation_source(
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             previous.request_id,
             conversation,
-            &input.messages,
+            input.messages.semantic_fingerprint(),
             &output,
         )
         .map_err(ConversationStoreError::InvalidReference)?;

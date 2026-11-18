@@ -11,7 +11,7 @@ use crate::model::projected::{
     CheckpointSourceRef, DerivedModelMessage, ModelMessageView, ProjectedMessage,
     SemanticTransformation,
 };
-use crate::runtime::identity::{CheckpointId, MessageId, PublicationStreamId};
+use rustx_identity::{CheckpointId, MessageId, PublicationStreamId};
 
 fn user(index: usize) -> ModelInputMessage {
     ModelInputMessage::Canonical(MessageBlock::User(UserMessageBlock {
@@ -379,8 +379,8 @@ fn empty_snapshot(request: &crate::model::ModelRequest) -> crate::model::Request
     crate::model::RequestSnapshot::new(
         crate::runtime::types::ApprovalMode::FullAccess,
         crate::model::RequestIdentity {
-            attempt_id: crate::runtime::identity::AttemptId::new("selected-budget"),
-            turn: crate::runtime::identity::TurnId::new("1"),
+            attempt_id: rustx_identity::AttemptId::new("selected-budget"),
+            turn: rustx_identity::TurnId::new("1"),
             retry_number: 0,
         },
         crate::context::resources::LedgerFrontier(1),
@@ -391,7 +391,7 @@ fn empty_snapshot(request: &crate::model::ModelRequest) -> crate::model::Request
         128_000,
         None,
         request.tools.clone(),
-        crate::runtime::identity::CapabilityRevision::new(1),
+        rustx_identity::CapabilityRevision::new(1),
         crate::context::assembly::ContextGeneration {
             id: 1,
             contributors: Vec::new(),
@@ -469,4 +469,17 @@ fn skew_append_allocates_at_most_four_nodes_with_all_old_cuts_retained() {
         assert_eq!(old.get(history - 1), Some(&expected[1]));
         assert_eq!(old.messages().get(history / 2), Some(&user(history / 2)));
     }
+}
+
+#[test]
+fn hashing_work_is_attributed_to_native_work_under_an_active_profile() {
+    let guard = crate::agent::execution::attribution::start();
+    take_hash_work();
+    let baseline = guard.snapshot().native_work.hash_bytes;
+    let input = user(90_001);
+    let _ = crate::model::types::semantic_messages_fingerprint(std::slice::from_ref(&input));
+    let (original_bytes, semantic_bytes) = take_hash_work();
+    assert!(original_bytes + semantic_bytes > 0);
+    let attributed = guard.snapshot().native_work.hash_bytes - baseline;
+    assert!(attributed >= (original_bytes + semantic_bytes) as u64);
 }

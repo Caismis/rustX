@@ -339,7 +339,7 @@ fn request_with_private_continuation(store: &dyn ConversationStore) -> RequestSn
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             prior.request_id,
             store.conversation_id(),
-            &crate::model::SelectedModelInput::default(),
+            crate::model::SelectedModelInput::default().semantic_fingerprint(),
             &output,
         )
         .unwrap(),

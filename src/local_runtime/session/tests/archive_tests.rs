@@ -1140,7 +1140,8 @@ async fn archive_request_projection_excludes_infrastructure_and_preserves_author
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             prior.request_id,
             &conversation,
-            &crate::model::input::canonical_input(&history).into(),
+            crate::model::SelectedModelInput::from(crate::model::input::canonical_input(&history))
+                .semantic_fingerprint(),
             &output,
         )
         .unwrap();

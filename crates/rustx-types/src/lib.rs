@@ -12,11 +12,21 @@ pub mod package_io;
 pub mod toml_authoring;
 
 pub mod model {
+    pub mod capabilities;
     pub mod finish;
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub mod hash_work;
+    pub mod images;
+    pub mod input;
     pub mod inspection;
+    pub mod invocation_config;
+    pub mod projected;
     pub mod replay;
     pub mod request_params;
+    pub mod snapshot;
+    pub mod transformations;
     pub mod types;
+    pub mod uploads;
     pub mod adapter {
         pub mod response_budget;
         pub mod retry;
@@ -84,6 +94,7 @@ pub mod runtime_client {
 
 pub mod observation {
     pub mod bounded;
+    pub mod content;
     pub mod preflight;
     pub mod structural_json;
 

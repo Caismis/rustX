@@ -23,8 +23,8 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 
-use crate::runtime::MonotonicClock;
-use crate::runtime::identity::{MessageId, PublicationStreamId};
+use rustx_types::runtime::identity::{MessageId, PublicationStreamId};
+use rustx_types::runtime::monotonic::MonotonicClock;
 
 use super::frame::{PublicationFrame, PublicationPayload};
 
@@ -235,11 +235,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::{CoalescePolicy, PublicationCoalescer};
-    use crate::message::types::ContentBlockIndex;
-    use crate::publication::frame::PublicationPayload;
-    use crate::runtime::identity::{MessageId, PublicationStreamId, ToolCallId, ToolId};
-    use crate::runtime::{ManualMonotonicClock, MonotonicClock};
-    use crate::tools::types::ToolCallStart;
+    use crate::frame::PublicationPayload;
+    use rustx_types::message::types::ContentBlockIndex;
+    use rustx_types::runtime::identity::{MessageId, PublicationStreamId, ToolCallId, ToolId};
+    use rustx_types::runtime::monotonic::{ManualMonotonicClock, MonotonicClock};
+    use rustx_types::tools::types::ToolCallStart;
 
     fn coalescer(
         policy: CoalescePolicy,
@@ -483,7 +483,7 @@ mod tests {
     fn oversized_tool_payload_forces_pressure_without_truncation() {
         let clock = Arc::new(ManualMonotonicClock::new());
         let mut buffer = coalescer(CoalescePolicy::default(), &clock);
-        let call = crate::tools::types::ToolCall {
+        let call = rustx_types::tools::types::ToolCall {
             id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-a"),
             name: "alpha".to_owned(),

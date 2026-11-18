@@ -4,7 +4,7 @@ use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
 use crate::model::ModelInputMessage;
-use crate::runtime::identity::{ConversationId, MessageId};
+use rustx_identity::{ConversationId, MessageId};
 use std::sync::Arc;
 
 fn message(index: usize) -> ModelInputMessage {

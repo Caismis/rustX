@@ -4713,7 +4713,9 @@ dependencies = [
  "rustix",
  "rustx-bounded-file",
  "rustx-bounded-json",
+ "rustx-conversation",
  "rustx-identity",
+ "rustx-publication",
  "rustx-types",
  "schemars",
  "serde",
@@ -4761,6 +4763,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustx-conversation"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "imbl",
+ "rustx-types",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "rustx-identity"
 version = "0.1.0"
 dependencies = [
@@ -4768,6 +4782,19 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "rustx-publication"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "futures-util",
+ "rustx-types",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -4787,6 +4814,7 @@ dependencies = [
  "jsonwebtoken",
  "libc",
  "nix",
+ "png",
  "referencing",
  "reqwest",
  "rmcp",

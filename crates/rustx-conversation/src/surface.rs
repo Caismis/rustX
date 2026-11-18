@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use super::selection::CanonicalSelection;
 #[cfg(test)]
-use crate::message::types::MessageBlock;
-use crate::runtime::identity::MessageId;
+use rustx_types::message::types::MessageBlock;
+use rustx_types::runtime::identity::MessageId;
 
 /// The identity of one exact historical Conversation Surface state.
 ///
@@ -368,7 +368,7 @@ impl ConversationSurface {
     /// Panics if the supplied body is not canonical.
     pub fn append(
         &mut self,
-        message: Arc<crate::model::ModelInputMessage>,
+        message: Arc<rustx_types::model::input::ModelInputMessage>,
     ) -> Result<SurfaceRevision, SurfaceError> {
         let message_id = message
             .as_canonical()
@@ -384,9 +384,9 @@ impl ConversationSurface {
     /// Applies an append after the caller has validated the current Surface
     /// under exclusive ownership. This is infallible so an ordinary Ledger
     /// append cannot be followed by a recoverable Surface error.
-    pub(crate) fn append_after_validation(
+    pub fn append_after_validation(
         &mut self,
-        message: Arc<crate::model::ModelInputMessage>,
+        message: Arc<rustx_types::model::input::ModelInputMessage>,
     ) -> SurfaceRevision {
         debug_assert!(
             !self.is_active(message.as_canonical().expect("canonical Surface body").id())
@@ -449,9 +449,9 @@ mod tests {
     fn id(s: &str) -> MessageId {
         MessageId::new(s)
     }
-    fn body(s: &str) -> Arc<crate::model::ModelInputMessage> {
-        use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
-        Arc::new(crate::model::ModelInputMessage::Canonical(
+    fn body(s: &str) -> Arc<rustx_types::model::input::ModelInputMessage> {
+        use rustx_types::message::types::{InboundKind, UserMessageBlock, UserSource};
+        Arc::new(rustx_types::model::input::ModelInputMessage::Canonical(
             MessageBlock::User(UserMessageBlock {
                 id: id(s),
                 content: Vec::new(),
@@ -536,7 +536,9 @@ mod tests {
 
     #[test]
     fn surface_history_does_not_retain_duplicate_identity_owners() {
-        use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+        use rustx_types::message::types::{
+            InboundKind, MessageBlock, UserMessageBlock, UserSource,
+        };
         use std::sync::Arc;
 
         let first = MessageId::new("surface-owner-first");
@@ -550,15 +552,17 @@ mod tests {
             };
             identities.push(Arc::downgrade(&id.0));
             surface
-                .append(Arc::new(crate::model::ModelInputMessage::Canonical(
-                    MessageBlock::User(UserMessageBlock {
-                        id,
-                        content: Vec::new(),
-                        source: UserSource::Human,
-                        kind: InboundKind::Message,
-                        timestamp: None,
-                    }),
-                )))
+                .append(Arc::new(
+                    rustx_types::model::input::ModelInputMessage::Canonical(MessageBlock::User(
+                        UserMessageBlock {
+                            id,
+                            content: Vec::new(),
+                            source: UserSource::Human,
+                            kind: InboundKind::Message,
+                            timestamp: None,
+                        },
+                    )),
+                ))
                 .unwrap();
             if ![32, 512, 4096].contains(&count) {
                 continue;
@@ -606,10 +610,7 @@ mod tests {
                 .sum::<usize>(),
             2 * 4096 + 1
         );
-        assert_eq!(
-            hydrated.ops(),
-            [] as [crate::conversation::surface::SurfaceOp; 0]
-        );
+        assert_eq!(hydrated.ops(), [] as [crate::surface::SurfaceOp; 0]);
         assert_eq!(hydrated.reconstruct(revision).unwrap().len(), 4096);
         assert!(
             hydrated

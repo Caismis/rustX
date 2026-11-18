@@ -3,8 +3,8 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::message::types::MessageBlock;
-use crate::model::ModelInputMessage;
+use rustx_types::message::types::MessageBlock;
+use rustx_types::model::input::ModelInputMessage;
 
 /// A bounded session-local registry of recent canonical allocations.
 /// Values enter only after native canonical validation, never through Source
@@ -16,7 +16,7 @@ pub struct CanonicalBodies {
 }
 
 impl CanonicalBodies {
-    pub(crate) fn admit(&self, body: Arc<ModelInputMessage>) -> Arc<ModelInputMessage> {
+    pub fn admit(&self, body: Arc<ModelInputMessage>) -> Arc<ModelInputMessage> {
         let message = body.as_canonical().expect("native canonical body");
         let key = body_key(message);
         let mut recent = self.recent.lock().expect("canonical body registry");
@@ -36,7 +36,7 @@ impl CanonicalBodies {
 
     /// Share an immutable canonical value already validated by its native owner.
     #[must_use]
-    pub(crate) fn share(&self, message: MessageBlock) -> Arc<ModelInputMessage> {
+    pub fn share(&self, message: MessageBlock) -> Arc<ModelInputMessage> {
         let key = body_key(&message);
         let mut recent = self.recent.lock().expect("canonical body registry");
         for (prior_key, weak) in recent.iter().rev() {
@@ -62,7 +62,7 @@ struct BodyKey {
 }
 
 fn body_key(message: &MessageBlock) -> BodyKey {
-    let (bytes, digest) = crate::model::projected::canonical_body_identity(message);
+    let (bytes, digest) = rustx_types::model::projected::canonical_body_identity(message);
     BodyKey {
         bytes,
         digest: digest.into(),
@@ -71,12 +71,11 @@ fn body_key(message: &MessageBlock) -> BodyKey {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::conversation::ConversationState;
-    use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
-    use crate::message::{TextBlock, UserContentBlock};
-    use crate::model::SelectedInputManifest;
-    use crate::runtime::identity::{ConversationId, MessageId};
+    use crate::{ConversationState, bodies::CanonicalBodies};
+    use rustx_types::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
+    use rustx_types::message::{content::TextBlock, types::UserContentBlock};
+    use rustx_types::runtime::identity::MessageId;
+    use std::sync::Arc;
 
     fn user(index: usize, text: &str) -> MessageBlock {
         MessageBlock::User(UserMessageBlock {
@@ -90,18 +89,17 @@ mod tests {
 
     #[test]
     fn canonical_ledger_surface_and_actual_lease_the_same_body_at_8_64_512_4096() {
-        let scope = ConversationId::generate();
         let bodies = Arc::new(CanonicalBodies::default());
         let mut state = ConversationState::new();
         state.bind_bodies(Arc::clone(&bodies));
-        let mut input = SelectedInputManifest::default();
+        let mut input: Vec<Arc<rustx_types::model::input::ModelInputMessage>> = Vec::new();
         for h in 1..=4096 {
             let message = user(h, "canonical body");
             let id = state.commit(message.clone()).unwrap();
-            input = input.append_shared(&scope, bodies.share(message));
+            input.push(bodies.share(message));
             if [8, 64, 512, 4096].contains(&h) {
                 assert_eq!(bodies.recent.lock().unwrap().len(), h.min(64));
-                let selected = input.messages();
+                let selected = &input;
                 for i in 0..h {
                     let actual = selected.get(i).unwrap().as_canonical().unwrap();
                     assert!(std::ptr::eq(
@@ -117,7 +115,7 @@ mod tests {
                             .unwrap()
                     ));
                 }
-                let original = selected.shared(h - 1);
+                let original = selected[h - 1].clone();
                 state.bind_bodies(Arc::clone(&bodies));
                 assert!(std::ptr::eq(
                     original.as_canonical().unwrap(),
@@ -129,9 +127,9 @@ mod tests {
 
     #[test]
     fn registry_preserves_the_exact_sign_of_zero() {
-        use crate::message::types::{AssistantContentBlock, AssistantMessageBlock};
-        use crate::runtime::identity::{ToolCallId, ToolId};
-        use crate::tools::types::ToolCall;
+        use rustx_types::message::types::{AssistantContentBlock, AssistantMessageBlock};
+        use rustx_types::runtime::identity::{ToolCallId, ToolId};
+        use rustx_types::tools::types::ToolCall;
         let message = |number: &str| {
             MessageBlock::Assistant(AssistantMessageBlock {
                 id: MessageId::new("numeric-owner"),

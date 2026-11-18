@@ -16,10 +16,27 @@ retain their original native authorities and public paths. See the
 contracts that lower layers need without pulling in the monolith:
 `rustx-identity` (canonical identity types), `rustx-types` (runtime, tool,
 model and message contracts at their original module paths),
-`rustx-bounded-json` and `rustx-bounded-file` (bounded readers). The
+`rustx-bounded-json` and `rustx-bounded-file` (bounded readers), and
+`rustx-publication` (the durable user-facing publication plane: carryover
+accounting, coalescer and frame records). The
 monolith re-exports each moved item at its original `crate::` path, so
 consumer paths do not change; extracted crates never depend back on `rustx`
 and keep dependencies pointing inward toward rustX-owned contracts.
+
+Under `rustx-types`, `model` holds the model contract plane:
+`input` (`ModelInputMessage`, canonical/request-only context, carryover
+rendering), `projected` (model-visible views, canonical body identity),
+`images` (frozen image payloads and PNG measurement), `transformations`
+(provider payload rewrites) and `uploads` (attachment upload accounting),
+plus the semantic-fingerprint cluster in `types`. Request selection stays
+with the monolith: `model::selected_input` owns manifest assembly and
+`assemble_selected_model_input` because they depend on Durable projection,
+the request cache and context token accounting, and `model::structured`,
+`auxiliary`, `occurrence`, `snapshot` and `media` remain on the same side of
+that line. Test-only instrumentation (`model::hash_work`, image decode
+counting, `agent::execution::attribution`) is compiled under
+`cfg(any(test, feature = "test-fixtures"))`, which the monolith enables only
+through its dev-dependency edge, so production builds never carry it.
 
 ## App Server environment services (#533)
 
