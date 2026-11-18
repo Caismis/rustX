@@ -470,3 +470,16 @@ fn skew_append_allocates_at_most_four_nodes_with_all_old_cuts_retained() {
         assert_eq!(old.messages().get(history / 2), Some(&user(history / 2)));
     }
 }
+
+#[test]
+fn hashing_work_is_attributed_to_native_work_under_an_active_profile() {
+    let guard = crate::agent::execution::attribution::start();
+    take_hash_work();
+    let baseline = guard.snapshot().native_work.hash_bytes;
+    let input = user(90_001);
+    let _ = crate::model::types::semantic_messages_fingerprint(std::slice::from_ref(&input));
+    let (original_bytes, semantic_bytes) = take_hash_work();
+    assert!(original_bytes + semantic_bytes > 0);
+    let attributed = guard.snapshot().native_work.hash_bytes - baseline;
+    assert!(attributed >= (original_bytes + semantic_bytes) as u64);
+}
