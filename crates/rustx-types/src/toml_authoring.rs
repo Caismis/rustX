@@ -22,7 +22,7 @@ use std::cell::Cell;
 use serde::de::{DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 
-use crate::model::invocation::{RequestParams, exact_json_number, numbers_are_exact};
+use crate::model::request_params::{RequestParams, exact_json_number, numbers_are_exact};
 
 thread_local! {
     static SOURCE: Cell<bool> = const { Cell::new(false) };
@@ -84,7 +84,7 @@ pub struct ParseFailure {
     detail: String,
 }
 impl ParseFailure {
-    pub(crate) fn into_detail(self) -> String {
+    pub fn into_detail(self) -> String {
         self.detail
     }
 }
@@ -660,7 +660,7 @@ mod tests {
 
     #[test]
     fn numbers_some_hop_would_round_are_refused_before_any_rounding() {
-        use crate::model::invocation::{
+        use crate::model::request_params::{
             InexactNumber, RequestParamsLayer, validate_request_params_numbers,
         };
         for (json, column) in [

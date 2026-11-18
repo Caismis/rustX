@@ -171,6 +171,7 @@ pub(crate) fn summary_model_input(transcript: &str) -> SummaryModelInput {
 }
 #[cfg(test)]
 thread_local! { static SUMMARY_RENDERED_MESSAGES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn take_summary_rendered_messages() -> usize {
     SUMMARY_RENDERED_MESSAGES.with(|count| count.replace(0))
@@ -178,6 +179,7 @@ pub(crate) fn take_summary_rendered_messages() -> usize {
 
 #[cfg(test)]
 thread_local! { static SUMMARY_COPIED_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn take_summary_copied_bytes() -> u64 {
     SUMMARY_COPIED_BYTES.with(|total| total.replace(0))
@@ -428,6 +430,7 @@ pub trait SummaryBackend: Send + Sync {
 pub struct ModelBackedSummarizer {
     invocation: ResolvedModelInvocation,
     model_timeout_policy: ModelTimeoutPolicy,
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     monotonic_clock: Arc<dyn MonotonicClock>,
     backend: OnceLock<(Arc<dyn SummaryBackend>, u64)>,
@@ -491,12 +494,12 @@ impl ModelBackedSummarizer {
         model_timeout_policy: ModelTimeoutPolicy,
         monotonic_clock: Arc<dyn MonotonicClock>,
     ) -> Self {
-        #[cfg(not(test))]
+        #[cfg(not(all(test, target_os = "linux")))]
         drop(monotonic_clock);
         Self {
             invocation,
             model_timeout_policy,
-            #[cfg(test)]
+            #[cfg(all(test, target_os = "linux"))]
             monotonic_clock,
             backend: OnceLock::new(),
         }
@@ -505,6 +508,7 @@ impl ModelBackedSummarizer {
     /// Standalone stream fixtures use the production native executor over a
     /// real isolated Store; they carry no historical checkpoint authority.
     #[cfg(test)]
+    #[cfg(target_os = "linux")]
     pub(crate) fn summarize(
         &self,
         request: SummaryRequest,

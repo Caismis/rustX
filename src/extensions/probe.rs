@@ -41,8 +41,10 @@ impl crate::agent::lifecycle::ToolResultObserver for ProbeConfig {
 pub enum Behavior {
     Empty,
     Normal,
+    #[cfg(target_os = "linux")]
     OptionalFailure,
     MandatoryFailure,
+    #[cfg(target_os = "linux")]
     Invalid,
 }
 
@@ -113,11 +115,14 @@ impl ContextContributor for ProbeConfig {
             }
             match self.behavior {
                 Behavior::Empty => Ok(vec![]),
-                Behavior::OptionalFailure | Behavior::MandatoryFailure => {
-                    Err(ContextAssemblyError::AcquisitionFailed(
-                        "controlled acquisition failure".into(),
-                    ))
-                }
+                Behavior::MandatoryFailure => Err(ContextAssemblyError::AcquisitionFailed(
+                    "controlled acquisition failure".into(),
+                )),
+                #[cfg(target_os = "linux")]
+                Behavior::OptionalFailure => Err(ContextAssemblyError::AcquisitionFailed(
+                    "controlled acquisition failure".into(),
+                )),
+                #[cfg(target_os = "linux")]
                 Behavior::Invalid => Ok(vec![ContextProposal::NativeUserMessage {
                     message: UserMessageProposal {
                         content: vec![crate::message::UserContentBlock::Text(

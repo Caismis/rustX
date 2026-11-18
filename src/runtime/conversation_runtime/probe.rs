@@ -253,6 +253,7 @@ impl Drop for GateRelease {
 
 #[cfg(test)]
 impl ConversationRuntime {
+    #[cfg(target_os = "linux")]
     pub(crate) fn hold_auxiliary_resource_release_for_test(
         &self,
     ) -> (

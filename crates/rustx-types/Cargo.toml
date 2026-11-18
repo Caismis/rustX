@@ -5,6 +5,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
+serde_path_to_error = "0.1"
+toml = "0.8"
+toml_edit = "0.22"
+url = "2.5"
 jsonschema = { version = "0.60.2", default-features = false, features = ["macros"] }
 croner = "=4.0.2"
 chrono-tz = "0.10"
@@ -33,6 +37,7 @@ thiserror = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 http = "1"
 httpdate = "1"
+rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "cd83bcbb8e0a2512bb9df98db8acd1c2bb0233d0", default-features = false, features = ["client"], optional = true }
 
 [dev-dependencies]
 toml = "0.8"
@@ -43,4 +48,4 @@ serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "
 # Monolith cfg(test) call sites reach the test-only lifecycle helpers
 # (hold_commit_boundary, wait_for_no_active_operations,
 # enter_ownership_commit) through the workspace dependency.
-test-fixtures = []
+test-fixtures = ["dep:rmcp"]

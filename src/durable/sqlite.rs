@@ -947,18 +947,21 @@ impl SqliteConversationStore {
         observation_request::composed::take_work()
     }
     /// Fails the next `count` publication staging commits.
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn arm_fail_publication_frames_times(&self, count: usize) {
         self.fail_publication_frames_remaining
             .store(count, Ordering::SeqCst);
     }
     /// Fails the next `count` publication terminal (U) commits.
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn arm_fail_publication_terminal_times(&self, count: usize) {
         self.fail_publication_terminal_remaining
             .store(count, Ordering::SeqCst);
     }
     /// Fails the next `count` publication audit terminalizations.
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn arm_fail_publication_audit_times(&self, count: usize) {
         self.fail_publication_audit_remaining
@@ -1039,6 +1042,7 @@ impl SqliteConversationStore {
             .extend(operations);
     }
     /// Park after durable commit and Journal staging, before returning the receipt.
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn arm_projection_commit_return_probe(&self, probe: impl FnOnce() + Send + 'static) {
         *self

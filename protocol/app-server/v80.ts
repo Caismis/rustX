@@ -21710,7 +21710,7 @@ export interface QuestionnaireSpecification3 {
  * ```
  *
  * It is deliberately orthogonal to
- * [`InteractionSource`](crate::runtime::interaction::InteractionSource):
+ * `InteractionSource` (`rustx::runtime::interaction::InteractionSource`):
  * *where* an interaction came from (primary or subagent) and *who* requested
  * it (native tool or MCP server) are two independent facts and are never
  * collapsed into one field.

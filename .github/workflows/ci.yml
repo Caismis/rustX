@@ -364,7 +364,9 @@ jobs:
       # proofs) are not executed by `--all-targets`; execute them explicitly
       # here against the compiled `--all-features` library.
       - name: Run doctests
-        run: cargo test --doc --all-features --locked
+        # --workspace so doctests that moved into the extracted rustx-*
+        # crates keep executing; the lane checker forwards it the same way.
+        run: cargo test --doc --workspace --all-features --locked
 
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
       # select only the root package, so run the extracted packages once.
@@ -502,10 +504,10 @@ jobs:
   #   39035924891) it shortened FULL by about one minute (39.0 vs 40.1 min)
   #   for about 17 more macOS runner-minutes, because that runner compiles
   #   the dependencies and the ordinary library again. The deterministic scripted contract
-  #   suites are selected OUT by their `scripted_suites::` prefix: they are
-  #   pure state-machine/planning/manual-clock contracts whose invariants
-  #   carry no OS semantics, so rerunning them on macOS would be duplication
-  #   without platform value.
+  #   suites are `cfg(target_os = "linux")`: they are pure state-machine/
+  #   planning/manual-clock contracts whose invariants carry no OS semantics,
+  #   so compiling and rerunning them on macOS would be duplication without
+  #   platform value.
   #
   # The contracts and provider targets assert deterministic JSON/SSE
   # translation with no process or filesystem semantics, so they are
@@ -745,7 +747,10 @@ jobs:
       - name: Run unit tests and the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::'
+        # The scripted contract suites are `cfg(target_os = "linux")` and are
+        # not compiled on macOS, so no `scripted_suites::` skip belongs here:
+        # a skip that excludes nothing fails the lane checker.
+        run: '/usr/bin/time -l cargo test --lib --bins --all-features --locked -- --skip local_runtime::session_runtime_manager::tests::'
 
       - name: Run the external boundary targets
         env:

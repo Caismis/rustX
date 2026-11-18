@@ -434,7 +434,7 @@ summarizes them and the lane check below verifies them against Cargo:
 | Suite / group | Class | Linux lane | macOS |
 | --- | --- | --- | --- |
 | source-module unit tests (`src/**`) | unit | rust-contracts | full |
-| `scripted_suites::` | deterministic contracts | rust-contracts | skipped |
+| `scripted_suites::` | deterministic contracts | rust-contracts | not compiled (`cfg(target_os = "linux")`) |
 | `local_runtime::session_runtime_manager::tests::` | deterministic contracts | rust-contracts | skipped |
 | `boundary_suites::` | boundary conformance | rust-boundaries | full (required) |
 | bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts | bins only |
@@ -451,8 +451,9 @@ summarizes them and the lane check below verifies them against Cargo:
   then
   `cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::`,
   `cargo test --test contracts --test provider --all-features --locked`, and
-  explicit `cargo test --doc --all-features --locked` (executing both
-  positive API counterparts and `compile_fail` encapsulation proofs).
+  explicit `cargo test --doc --workspace --all-features --locked` (executing
+  both positive API counterparts and `compile_fail` encapsulation proofs,
+  including doctests of the extracted `rustx-*` crates).
   Preparation compiles the lane's targets once with `--all-features` (matching
   the ordinary library unit that `--examples`, `--test contracts`, and `--test
   provider` share) and physically stages the emitted package binaries beside
@@ -485,7 +486,7 @@ summarizes them and the lane check below verifies them against Cargo:
   targets compiled and staged first, then `--lib --bins --test durable` compiled
   and staged (reusing the fresh ordinary library and binaries from the first
   step without compiling a third library copy), then `cargo test --lib --bins --all-features
-  -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::`
+  -- --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
   primitives differ across OSes — plus the in-crate boundary suites) and the
   external targets, both with `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Running
@@ -887,7 +888,7 @@ python3 test-support/prepare_native_tests.py -- \
   cargo test --all-features --locked --no-run --lib --bins --examples --test contracts --test provider
 cargo test --lib --bins --examples --all-features --locked -- --skip boundary_suites::
 cargo test --test contracts --test provider --all-features --locked
-cargo test --doc --all-features --locked
+cargo test --doc --workspace --all-features --locked
 
 # Boundary lane (CI: rust-boundaries); uv is mandatory:
 BOUNDARY_TARGETS='--test durable --test process --test subagent --test tools
@@ -902,7 +903,6 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked -- bo
 python3 test-support/prepare_native_tests.py -- \
   cargo test --lib --bins --test durable --all-features --locked --no-run
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features --locked -- \
-  --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
 
 # Lane coverage for one CI job on its own platform, or every target here
@@ -917,7 +917,8 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --lock
 # One domain target:
 cargo test --test durable --all-features
 
-# The in-crate scripted contract suites only:
+# The in-crate scripted contract suites only (Linux only — the suite
+# declarations are cfg(target_os = "linux") and do not compile on macOS):
 cargo test --lib --all-features scripted_suites::
 
 # The App Server contracts under the manager's private test module:

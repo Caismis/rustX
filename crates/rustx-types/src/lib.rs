@@ -4,12 +4,18 @@
 //! `runtime::permission::mode`, `tools::deadline`, ...) so moved items
 //! resolve at the same absolute path inside this crate.
 
+pub mod events {
+    pub mod interaction;
+    pub mod review;
+}
 pub mod package_io;
+pub mod toml_authoring;
 
 pub mod model {
     pub mod finish;
     pub mod inspection;
     pub mod replay;
+    pub mod request_params;
     pub mod types;
     pub mod adapter {
         pub mod response_budget;
@@ -48,6 +54,11 @@ pub mod tools {
         pub mod stdout;
     }
     pub mod schema;
+
+    pub mod mcp {
+        #[cfg(feature = "test-fixtures")]
+        pub mod test_sync;
+    }
 }
 
 pub mod skills {
@@ -65,6 +76,10 @@ pub mod capabilities {
     pub mod selected;
     pub mod source;
     pub use source::ToolSourceId;
+}
+
+pub mod runtime_client {
+    pub mod interaction_observation;
 }
 
 pub mod observation {
