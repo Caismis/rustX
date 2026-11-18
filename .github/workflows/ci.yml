@@ -243,9 +243,10 @@ jobs:
 
 
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
-      # select only the root package, so run the extracted packages once.
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
       - name: Run extracted workspace crate tests
-        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
@@ -377,9 +378,10 @@ jobs:
         run: cargo test --doc --workspace --all-features --locked
 
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
-      # select only the root package, so run the extracted packages once.
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
       - name: Run extracted workspace crate tests
-        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
       # Cargo/libtest discovery of this lane's targets against every Linux
       # step that selects them: an unassigned target, a stale filter or
@@ -486,9 +488,10 @@ jobs:
         run: 'cargo test --lib --all-features --locked -- boundary_suites::'
 
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
-      # select only the root package, so run the extracted packages once.
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
       - name: Run extracted workspace crate tests
-        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With
@@ -637,9 +640,10 @@ jobs:
       # REQUIREMENTS in the checker) must execute here.
 
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
-      # select only the root package, so run the extracted packages once.
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
       - name: Run extracted workspace crate tests
-        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-core
@@ -782,9 +786,10 @@ jobs:
           --test cfg3_managed_output
 
       # Unit tests of the extracted workspace crates (rustx-*): the lanes
-      # select only the root package, so run the extracted packages once.
+      # select only the root package, so run every member except rustx once.
+      # check_test_lanes fails closed when a new member is left unselected.
       - name: Run extracted workspace crate tests
-        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
 
 
       # Native macOS discovery: both --skip selectors must still exclude
