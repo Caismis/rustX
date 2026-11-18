@@ -12,12 +12,14 @@ pub mod package_io;
 pub mod toml_authoring;
 
 pub mod model {
+    pub mod capabilities;
     pub mod finish;
     #[cfg(any(test, feature = "test-fixtures"))]
     pub mod hash_work;
     pub mod images;
     pub mod input;
     pub mod inspection;
+    pub mod invocation_config;
     pub mod projected;
     pub mod replay;
     pub mod request_params;

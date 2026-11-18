@@ -329,52 +329,7 @@ pub fn runtime_fallback_generation_safety_policy(max_output_tokens: u32) -> Gene
     }
 }
 
-/// The provider-neutral invocation configuration one model request carries
-/// to its adapter.
-///
-/// This is the only provider-configuration channel of a [`ModelRequest`](crate::model::types::ModelRequest): it is immutable for the whole
-/// attempt, carries no credential and no adapter object, and never leaks
-/// into canonical conversation facts.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct ModelInvocationConfig {
-    /// Frozen provider/endpoint fingerprint, when the invocation has a catalog
-    /// binding. Unattributed invocations cannot authorize native reasoning replay.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub replay_binding: Option<String>,
-    /// The provider-facing model identifier.
-    pub model: String,
-    /// The protocol the adapter must speak.
-    pub protocol: ModelProtocol,
-    /// The runtime-resolved effective maximum output tokens.
-    ///
-    /// The runtime resolves this before the adapter boundary: no adapter
-    /// invents a generation limit, and providers that require an explicit
-    /// maximum (Anthropic) are always satisfiable.
-    pub max_output_tokens: u32,
-    /// The effective opaque provider request parameters.
-    #[serde(default)]
-    pub request_params: RequestParams,
-    /// The effective capabilities of this invocation.
-    pub capabilities: ModelCapabilities,
-    /// The bounded structural translation metadata.
-    #[serde(default)]
-    pub compat: ModelCompat,
-}
-
-impl ModelInvocationConfig {
-    /// The exact owner of reasoning produced by this frozen invocation.
-    #[must_use]
-    pub fn replay_origin(&self) -> Option<super::replay::ReplayOrigin> {
-        self.replay_binding
-            .as_ref()
-            .map(|binding| super::replay::ReplayOrigin {
-                binding: binding.clone(),
-                protocol: self.protocol,
-                model: self.model.clone(),
-            })
-    }
-}
+pub use rustx_types::model::invocation_config::ModelInvocationConfig;
 
 /// The immutable resolved model invocation of one attempt (or one explicit
 /// summary model).
@@ -1143,9 +1098,12 @@ impl ModelBindingRegistry {
             request_params: analyzed.request_params,
             capabilities: analyzed.capabilities,
             declared_capabilities: analyzed.declared_capabilities,
-            compat: model
-                .compat
-                .for_binding(protocol, model.id.as_str(), provider.base_url()),
+            compat: crate::model::catalog::compat_for_binding(
+                model.compat,
+                protocol,
+                model.id.as_str(),
+                provider.base_url(),
+            ),
         })
     }
 
