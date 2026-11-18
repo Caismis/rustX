@@ -111,9 +111,7 @@
 .column > .running { margin-top: 12px; }
 .column > [data-chat-steering-batch="start"]:not([hidden]) { margin-top: calc(44px + var(--dsh-content-font-delta, 0px)); }
 .column > [data-chat-steering-batch="member"]:not([hidden]) { margin-top: 4px; }
-.column > .running + [data-pending-steering] { margin-top: 0; }
-.column > [data-pending-steering] + [data-pending-steering] { margin-top: 4px; }
-.column > :nth-last-child(2 of :not([hidden]):not(:empty):not([data-pending-steering])):is(.flowItem:not([data-chat-flow-kind="user"], [data-chat-flow-kind="steering"])) ~ .running > .runningDivider {
+.column > :nth-last-child(2 of :not([hidden]):not(:empty)):is(.flowItem:not([data-chat-flow-kind="user"], [data-chat-flow-kind="steering"])) ~ .running > .runningDivider {
   opacity: 1;
 }
 

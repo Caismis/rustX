@@ -2826,6 +2826,23 @@ async fn submit_when_idle_admits_and_runs_the_attempt() {
     assert_eq!(settled_events.len(), 1);
     assert_eq!(settled, 1);
 
+    let commits: Vec<_> = events
+        .iter()
+        .flat_map(|event| complete_transition(&event.event).facts())
+        .filter_map(|fact| match fact {
+            RuntimeClientEvent::MessageCommitted {
+                message,
+                transcript_cursor,
+                ..
+            } if message.id() == &message_id => Some(transcript_cursor),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        matches!(commits.as_slice(), [Some(_)]),
+        "expected one positioned commit for the adopted user, got {commits:?}"
+    );
+
     // The first model request observed the admitted Runtime Agent Status
     // fact through canonical history.
     let requests = adapter.requests();
@@ -3388,18 +3405,6 @@ fn publish_pending_mutation(
         pending_observation.as_deref(),
         &read_cut,
     );
-    if let Some(cursor) = pending_observation.as_ref().and_then(|receipt| {
-        receipt
-            .selected
-            .as_ref()
-            .and_then(|header| header.message.transcript_cursor)
-            .or(receipt.removed_transcript)
-    }) {
-        inner
-            .store
-            .mark_observation_transcript_ready(cursor.get())
-            .unwrap();
-    }
 }
 
 fn pending_terminal_diagnostic(store: &dyn ConversationStore, attempt: &AttemptId) -> Vec<String> {
@@ -3486,7 +3491,11 @@ async fn assert_native_pending_removal_wakes_worker(fixture: &HostFixture, attem
         panic!("actual native removal receipt");
     };
     assert!(receipt.selected.is_none());
-    assert!(receipt.removed_transcript.is_some());
+    assert_eq!(receipt.removed_sequence, Some(sequence.get()));
+    assert_eq!(
+        read_cut.transcript,
+        before.read_cut.source_cut.as_ref().unwrap().read.transcript
+    );
     await_pending_fixture_publication(&fixture.host).await;
     let after = fixture.host.checkpoint().unwrap();
     assert!(after.cursor > before.cursor);
@@ -5717,7 +5726,7 @@ async fn captured_pending_body_survives_later_edit_removal_and_commit() {
         inbound_text("x", "captured body").content
     );
     let transcript = format!("{:?}", candidate.snapshot.transcript);
-    assert!(transcript.contains("captured body"));
+    assert!(!transcript.contains("captured body"));
     assert!(!transcript.contains("later edit"));
     assert!(!transcript.contains("future-commit"));
     release.send(true).unwrap();

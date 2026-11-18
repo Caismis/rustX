@@ -108,12 +108,10 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       && (binding.deferred || entry.item.audit.content.some(block => block.block_index === messageSource(binding.content_ref.source)?.block_index
         && block.kind !== 'proposed_tool_call' && new TextEncoder().encode(block.text).length !== binding.content_ref.readable_end)));
   const canonical = conversation(snapshot);
-  // Acceptance can already have a transcript position while the queue dock
-  // still owns the message. Adoption or promotion releases that position.
+  // Pending input belongs to the mailbox until the runtime adopts it.
+  // A retained history page and the live mailbox can come from different cuts.
   const mailbox = snapshot.inbound?.pending ?? [];
-  const pendingSteers = history?.window ? [] : mailbox.filter(row => row.message.source === 'human'
-    && isPlainMessageKind(row.message.kind) && row.message.kind !== 'queued_message');
-  const waitingIds = new Set(mailbox.filter(row => !history?.window || row.message.kind === 'queued_message').map(row => row.message.id));
+  const waitingIds = new Set(mailbox.map(row => row.message.id));
   const original = transcriptPresentation(history, snapshot.transcript).filter(entry =>
     entry.item.type !== 'message' || !waitingIds.has(entry.item.message.id));
   const page = history?.page ?? snapshot.transcript;
@@ -389,27 +387,25 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   if (streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id)) {
     flow.push({ kind: 'streaming', streaming });
   }
-  type InputNode = { kind: 'accepted'; submission: Submission } | { kind: 'inbox'; row: typeof pendingSteers[number] };
+  type InputNode = { kind: 'accepted'; submission: Submission };
   const nodes: (typeof flow[number] | { kind: 'continuation' } | InputNode)[] = [...flow];
   const pendingInputs = new Set(mailbox.map(row => row.input_id).filter(Boolean));
-  const inputs: InputNode[] = pendingSteers.map(row => ({ kind: 'inbox', row }));
+  const inputs: InputNode[] = [];
   if (!history?.window) {
     for (const submission of accepted) {
-      if (submission.placement !== 'queued' && !waitingIds.has(submission.messageId) && !durableIds.has(submission.messageId)
+      // Queue and steer echoes are not provider receipt. Only an idle opening
+      // prompt is echoed, and only until its adopted transcript row arrives.
+      if (submission.placement === 'transcript' && !waitingIds.has(submission.messageId) && !durableIds.has(submission.messageId)
         && !messages.some(message => message.id === submission.messageId)
         && !(submission.sendingInputId && pendingInputs.has(submission.sendingInputId))) inputs.push({ kind: 'accepted', submission });
     }
   }
-  // A new opening prompt claims any older waiting inputs ahead of it. Later
-  // steering stays below the running status until the host adopts the batch.
-  const opensTurn = (node: InputNode) => node.kind === 'accepted' && node.submission.placement === 'transcript';
-  const firstOpening = inputs.findIndex(opensTurn);
-  const waitingInputs = inputs.slice(firstOpening + 1).filter(node => !opensTurn(node));
-  if (firstOpening >= 0) {
+  // An idle opening echo precedes the running status until its adopted row arrives.
+  if (inputs.length) {
     const at = nodes.findIndex(node => node.kind === 'streaming'
       || node.kind === 'head' && activeOwner && node.head.owner && attemptOwnerKey(node.head.owner) === attemptOwnerKey(activeOwner)
       || node.kind === 'process' && node.process.outcome === 'running');
-    nodes.splice(at < 0 ? nodes.length : at, 0, ...inputs.slice(0, firstOpening + 1), ...inputs.slice(firstOpening + 1).filter(opensTurn));
+    nodes.splice(at < 0 ? nodes.length : at, 0, ...inputs);
   }
   const continuation = history?.window?.newer_cursor;
   if (continuation != null && loadLater) {
@@ -427,17 +423,8 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       return <MessageFile key={index} name={meta?.name ?? tx('agent:attachments.one', { n: 1 })} bytes={meta?.bytes}/>;
     });
     const text = value.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
-    return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-pending-steering={value.placement === 'steering' || undefined} data-chat-flow-kind={value.placement === 'steering' ? 'steering' : 'user'} data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
+    return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-chat-flow-kind="user" data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
       other={<UserMessage actions={<div className={tailCss.actions} data-clock="start"><CopyMessage messageId={value.messageId} text={text}/></div>} label={tx('agent:message.your-message')} attachments={files.length ? files : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>}/></div>;
-  };
-  const inputBubble = (node: InputNode) => {
-    if (node.kind === 'accepted') return submissionBubble(node.submission);
-    const message = { ...node.row.message, role: 'user' as const };
-    return <div className={css.flowItem} key={'message:' + message.id} data-chat-flow-kind="steering" data-pending-steering="">
-      <Message message={message} actions={<div className={tailCss.actions} data-clock="start">
-        <CopyMessage messageId={message.id} text={message.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('')}/>
-      </div>}/>
-    </div>;
   };
   return <ToolDisclosureContext.Provider value={toolDisclosure}><div className={css.column} aria-label={tx('agent:agent-transcript.canonical-conversation')}>
     {!retrying && !history?.initialLoading && history?.page.next_cursor != null && <div className={css.older}><button type="button" disabled={history.loading || !loadEarlier} onClick={loadEarlier}>{history.loading ? tx('agent:agent-transcript.loading-earlier') : tx('agent:agent-transcript.load-earlier')}</button></div>}
@@ -454,7 +441,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
           {invocationPanels(descriptor.turn_process, descriptor.tool_calls)}
         </section>;
       }
-      if (node.kind === 'accepted' || node.kind === 'inbox') return inputBubble(node);
+      if (node.kind === 'accepted') return submissionBubble(node.submission);
       if (node.kind === 'compaction') return <div className={css.flowItem} key={`compaction:${node.marker.head.activation_id}`} data-chat-anchor-key={`compaction:${node.marker.head.activation_id}`} data-compaction-anchor={node.marker.head.transcript_anchor}>{node.marker.content}</div>;
       if (node.kind === 'continuation') return <TranscriptContinuation key="history-continuation" cursor={continuation!} loading={!!history?.loading} load={loadLater!}/>;
       if (node.kind === 'head') {
@@ -556,7 +543,6 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     {contextActivity}
     {retrying && <RunningStatus/>}
     {runningAttempt && <RunningStatus key={attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt})} startTime={startTime !== undefined && Number.isFinite(startTime) ? startTime : undefined}/>}
-    {waitingInputs.map(inputBubble)}
   </div></ToolDisclosureContext.Provider>;
 }
 

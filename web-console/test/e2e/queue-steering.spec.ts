@@ -4,7 +4,7 @@ import { routeWorkspaceHost } from './workspace-host';
 import { connectRemote, openEmptySession } from './shell-actions';
 import { wireProbe } from './wire-probe';
 
-test('promotes one queued message and then the remaining queue during the same attempt', async ({ page }) => {
+test('places promoted steers, direct steer and next-turn input at model adoption, including after reload', async ({ page }) => {
   const fixture = await startDogfood('web_queue_steering');
   const wire = await wireProbe(page);
   let passed = false;
@@ -41,18 +41,47 @@ test('promotes one queued message and then the remaining queue during the same a
     await expect(queue).toHaveCount(0);
     await expect(page.getByText(/History changed/)).toHaveCount(0);
     expect((await checkpoint()).attempt?.attempt_id).toBe(attempt);
-    await expect(chat.getByText(/^(?:First|Second|Third) revision$/)).toHaveText([revisions[1], revisions[0], revisions[2]]);
-    await fixture.release('queue-review');
-    await expect(page.getByText('Reviewed all three revisions.', { exact: true })).toBeVisible();
-    const messages = (await checkpoint()).messages;
-    expect(messages.filter(message => ids.includes(message.id)).map(message => message.id)).toEqual([ids[1], ids[0], ids[2]]);
-    const request = JSON.stringify((await fixture.control('requests')).requests.at(-1).body);
-    expect(request.match(/(?:First|Second|Third) revision/g)).toEqual([revisions[1], revisions[0], revisions[2]]);
     const revisionBubbles = chat.getByText(/^(?:First|Second|Third) revision$/);
+    await input.fill('Direct steer');
+    await input.press('Control+Enter');
+    await expect(input).toHaveValue('');
+    const direct = chat.getByText('Direct steer', { exact: true });
+    await expect(direct).toHaveCount(0);
+    await expect(revisionBubbles).toHaveCount(0);
+    await fixture.release('queue-review');
+    await fixture.gate('queue-revisions-received');
     await expect(revisionBubbles).toHaveText([revisions[1], revisions[0], revisions[2]]);
+    await expect(direct).toHaveCount(1);
+    await input.fill('Separate follow-up');
+    await input.press('Enter');
+    await expect(queue).toBeVisible();
+    const followUp = chat.getByText('Separate follow-up', { exact: true });
+    await expect(followUp).toHaveCount(0);
+    await fixture.release('queue-revisions-received');
+    await expect(chat.getByText('Answered the separate follow-up.', { exact: true })).toBeVisible();
+    const snapshot = await checkpoint();
+    const messages = snapshot.messages;
+    // Trace/provider input follows the ledger. Check the durable chat cursor
+    // order independently, including the assistant output completed after Send.
+    const ledgerIds = messages.filter(message => message.role === 'user' || message.role === 'assistant').map(message => message.id);
+    const chatIds = (snapshot.transcript.entries ?? []).flatMap(entry => entry.item.type === 'message'
+      && ledgerIds.includes(entry.item.message.id) ? [entry.item.message.id] : []);
+    expect(chatIds).toEqual(ledgerIds.filter(id => chatIds.includes(id)));
+    expect(chatIds).toEqual(expect.arrayContaining(ids));
+    expect(messages.filter(message => ids.includes(message.id)).map(message => message.id)).toEqual([ids[1], ids[0], ids[2]]);
+    const request = JSON.stringify((await fixture.control('requests')).requests[1].body);
+    expect(request.match(/(?:First|Second|Third) revision|Direct steer/g)).toEqual([revisions[1], revisions[0], revisions[2], 'Direct steer']);
+    await expect(revisionBubbles).toHaveText([revisions[1], revisions[0], revisions[2]]);
+    const initialAnswer = 'Review started. Finished the original request.';
+    const answersAndInputs = chat.getByText(initialAnswer, { exact: true }).or(revisionBubbles).or(direct).or(followUp)
+      .or(chat.getByText('Reviewed all three revisions.', { exact: true }))
+      .or(chat.getByText('Answered the separate follow-up.', { exact: true }));
+    const order = [initialAnswer, revisions[1], revisions[0], revisions[2], 'Direct steer',
+      'Reviewed all three revisions.', 'Separate follow-up', 'Answered the separate follow-up.'];
+    await expect(answersAndInputs).toHaveText(order);
     await page.reload();
     await connectRemote(page, fixture.endpoint, fixture.token);
-    await expect(revisionBubbles).toHaveText([revisions[1], revisions[0], revisions[2]]);
+    await expect(answersAndInputs).toHaveText(order);
     passed = true;
   } finally {
     await stopDogfoodPage(page, fixture, passed);

@@ -161,19 +161,6 @@ impl crate::goal::GoalObserver for RuntimeObserver {
             fanout.source_failed();
             return;
         };
-        if let Some(header) = receipt
-            .pending
-            .as_ref()
-            .and_then(|pending| pending.selected.as_ref())
-            && let Some(cursor) = header.message.transcript_cursor
-            && inner
-                .store
-                .mark_observation_transcript_ready(cursor.get())
-                .is_err()
-        {
-            fanout.source_failed();
-            return;
-        }
         if let Some((first, last)) = native.journal_range {
             if inner.store.mark_observation_direct(first, last).is_ok() {
                 fanout.source_ready(last);
@@ -353,31 +340,6 @@ impl InboundObserver for RuntimeObserver {
             && let Some(fanout) = inner.pending.get()
         {
             fanout.native_pending(receipt, cut);
-            if let Some((first, last)) = receipt.and_then(|receipt| receipt.promoted_transcripts)
-                && (first.get()..=last.get()).any(|position| {
-                    inner
-                        .store
-                        .mark_observation_transcript_ready(position)
-                        .is_err()
-                })
-            {
-                fanout.source_failed();
-            }
-            // Removal owns the retired T position too. Marking that exact
-            // position wakes source preparation even though its row is gone.
-            if let Some(receipt) = receipt
-                && let Some(cursor) = receipt
-                    .selected
-                    .as_ref()
-                    .and_then(|header| header.message.transcript_cursor)
-                    .or(receipt.removed_transcript)
-                && inner
-                    .store
-                    .mark_observation_transcript_ready(cursor.get())
-                    .is_err()
-            {
-                fanout.source_failed();
-            }
         }
     }
 }

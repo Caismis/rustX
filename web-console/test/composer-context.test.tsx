@@ -586,21 +586,22 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(echo.textContent).toContain('Sending…');
     expect(server.client.getSnapshot().views.A.submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
   });
-  it('seats an acknowledged steer after the live reply, outside the queue, until exact observation', async () => {
+  it('keeps an acknowledged steer out of the chat until the provider-adopted row arrives', async () => {
     const state = running(withQueue([inbound('1', 'Next turn')]));
     state.attempt!.in_flight = { message_id: 'reply', blocks: [{ type: 'text', block_index: 0, text: 'Still answering' }] };
     const ui = await mount(state);
     await act(async () => { await server.client.send('A', 'Change direction', [], 'steer'); });
-    const echo = ui.container.querySelector('[data-chat-flow-kind="steering"][data-provisional-message-id="accepted-user"]');
-    expect(echo?.textContent).toContain('Change direction');
-    expect(screen.getByText('Still answering').compareDocumentPosition(echo!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(ui.container.querySelector('[data-provisional-message-id]')).toBeNull();
+    expect(ui.container.querySelector('[data-chat-flow-kind="user"]')).toBeNull();
+    expect(screen.queryByText('Change direction')).toBeNull();
     expect(dock('Queue').textContent).not.toContain('Change direction');
     const message = { ...inbound('2', 'Change direction', { id: 'accepted-user' }).message, role: 'user' as const };
     await update({ ...state, messages: [message], transcript: { entries: [{ cursor: '2', item: { type: 'message', message } }] } });
-    expect(ui.container.querySelector('[data-provisional-message-id]')).toBeNull();
     expect(screen.getAllByText('Change direction')).toHaveLength(1);
+    expect(ui.container.querySelector('[data-provisional-message-id]')).toBeNull();
+    expect(ui.container.querySelector('[data-chat-flow-kind="user"]')?.textContent).toContain('Change direction');
   });
-  it('shows direct steer before acknowledgement and deduplicates the native mailbox echo', async () => {
+  it('does not paint a direct steer at enqueue or mailbox admission', async () => {
     const state = running();
     const ui = await mount(state);
     server.held.add('turn/steer');
@@ -608,39 +609,51 @@ describe('Queue dock binds the native inbound mailbox', () => {
     await act(async () => { sending = server.client.send('A', 'Mid-turn note', [], 'steer'); });
     const request = await server.waitFor('turn/steer', 1);
     if (request.method !== 'turn/steer') throw Error('Expected steer');
-    const pending = () => ui.container.querySelectorAll('[data-pending-steering]');
-    expect(pending()).toHaveLength(1);
-    expect(pending()[0].textContent).toContain('Mid-turn note');
+    expect(ui.container.querySelector('[data-pending-steering]')).toBeNull();
+    expect(screen.queryByText('Mid-turn note')).toBeNull();
     await update({ ...state, inbound: { pending: [{ revision: '0', sequence: '1', input_id: request.params.inputId,
-      message: { id: 'accepted-user', source: 'human', kind: 'message', content: [{ type: 'text', text: 'Mid-turn note' }] } }] } });
-    expect(pending()).toHaveLength(1);
-    expect(screen.getByText('Mid-turn note')).toBeTruthy();
+      message: { id: 'accepted-user', source: 'human', kind: 'message', content: [{ type: 'text', text: 'Mid-turn note' }] } }] },
+      transcript: { entries: [{ cursor: '4', item: { type: 'message', message: { role: 'user', id: 'accepted-user', source: 'human', kind: 'message', content: [{ type: 'text', text: 'Mid-turn note' }] } } }] } });
+    expect(screen.queryByText('Mid-turn note')).toBeNull();
     expect(region('Queue')).toBeNull();
     await act(async () => { server.reply(request); await sending; });
-    expect(pending()).toHaveLength(1);
+    expect(screen.queryByText('Mid-turn note')).toBeNull();
+    const message = { role: 'user' as const, id: 'accepted-user', source: 'human' as const, kind: 'message' as const, content: [{ type: 'text' as const, text: 'Mid-turn note' }] };
+    await update({ ...state, inbound: { pending: [] }, messages: [message], transcript: { entries: [{ cursor: '4', item: { type: 'message', message } }] } });
+    expect(screen.getAllByText('Mid-turn note')).toHaveLength(1);
   });
-  it('keeps a pending steer below running status until adoption restores its transcript position', async () => {
+  it('places an adopted steer after job activity committed while it was waiting', async () => {
     const steer = 'Steer while answering';
     const notice = 'Background execution job-one (bash) settled: outcome_unknown\n\nResult:\nExternal outcome was not proven';
     const state = running();
     state.attempt!.in_flight = { message_id: 'reply', blocks: [{ type: 'text', block_index: 0, text: 'Still answering' }] };
     state.inbound = { pending: [{ revision: '0', sequence: '2', input_id: 'steer-input', message: { id: 'steer-1', source: 'human', kind: 'message', content: [{ type: 'text', text: steer }] } }] };
     state.transcript = { entries: [
-      { cursor: '2', item: { type: 'message', message: { role: 'user', id: 'steer-1', source: 'human', kind: 'message', content: [{ type: 'text', text: steer }] } } },
       { cursor: '3', item: { type: 'message', message: { role: 'user', id: 'background-job-one-terminal', source: 'runtime', kind: 'message', content: [{ type: 'text', text: notice }] } } },
     ] };
     const ui = await mount(state);
-    const streaming = screen.getByLabelText('Streaming response');
-    const steered = screen.getByText(steer);
     const background = ui.container.querySelector('[data-inbound-source="job"]');
     expect(background).toBeTruthy();
-    expect(streaming.compareDocumentPosition(steered) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText(steer)).toBeNull();
+    expect(ui.container.querySelector('[data-pending-steering]')).toBeNull();
     const status = ui.container.querySelector('[data-chat-running]')!;
     expect(background!.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(status.compareDocumentPosition(steered) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    await update({ ...state, inbound: { pending: [] } });
-    expect(ui.container.querySelector('[data-pending-steering]')).toBeNull();
-    expect(screen.getByText(steer).compareDocumentPosition(background!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    await update({ ...state, inbound: { pending: [] }, transcript: { entries: [...state.transcript.entries!, { cursor: '4', item: { type: 'message', message: { role: 'user', id: 'steer-1', source: 'human', kind: 'message', content: [{ type: 'text', text: steer }] } } }] } });
+    expect(background!.compareDocumentPosition(screen.getByText(steer)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+  it('keeps a reserved queue seat in the dock until adoption, not as a chat bubble', async () => {
+    const text = 'Queued until the next request';
+    const row = inbound('4', text, { id: 'queued-seat' });
+    const message = { ...row.message, role: 'user' as const };
+    const state = running();
+    state.inbound = { pending: [row] };
+    state.transcript = { entries: [{ cursor: '8', item: { type: 'message', message } }] };
+    const ui = await mount(state);
+    expect(screen.getByLabelText('Canonical conversation').textContent).not.toContain(text);
+    expect(dock('Queue').textContent).toContain(text);
+    await update({ ...state, inbound: { pending: [] }, messages: [message] });
+    expect(ui.container.querySelector('[data-chat-flow-kind="user"]')?.textContent).toContain(text);
+    expect(screen.queryByRole('region', { name: 'Queue' })).toBeNull();
   });
   it('an accepted echo settles only by its exact MessageId', async () => {
     await mount(running());

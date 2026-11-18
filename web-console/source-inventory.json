@@ -1275,7 +1275,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "57da70657e78f76ef7b2012651b1c62b07374a7b5f19171d316799979a8722f2",
+      "local_sha256": "c78c6210d4dc14ab9ac473aa084141a3e129490cd7c196e62c387bb433ba46f9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",

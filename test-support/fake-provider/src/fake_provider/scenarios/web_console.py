@@ -711,9 +711,11 @@ def web_queue_steering() -> Scenario:
     return Scenario(
         "web_queue_steering",
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("Begin queue review",)),
-             Stream(Text("Review started."), Gate("queue-review"), Finish())),
-        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("First revision", "Second revision", "Third revision")),
-             Stream(Text("Reviewed all three revisions."), Finish())),
+             Stream(Text("Review started."), Gate("queue-review"), Text(" Finished the original request."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("First revision", "Second revision", "Third revision", "Direct steer")),
+             Stream(Gate("queue-revisions-received"), Text("Reviewed all three revisions."), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("Separate follow-up",)),
+             Stream(Text("Answered the separate follow-up."), Finish())),
     )
 
 

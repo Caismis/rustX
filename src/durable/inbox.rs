@@ -72,9 +72,6 @@ pub struct PendingObservationReceipt {
     pub head: Vec<super::observation::PendingHeader>,
     pub selected: Option<super::observation::PendingHeader>,
     pub removed_sequence: Option<u64>,
-    pub removed_transcript: Option<TranscriptCursor>,
-    /// Contiguous transcript seats appended by one queue promotion.
-    pub promoted_transcripts: Option<(TranscriptCursor, TranscriptCursor)>,
     pub adopted_through: Option<u64>,
     pub adopted_count: Option<u64>,
 }
@@ -117,8 +114,8 @@ pub struct AcceptedInbound {
     pub message_id: MessageId,
     /// The persisted canonical inbound message.
     pub message: UserMessageBlock,
-    /// The transcript position allocated at acceptance for visible inbound.
-    /// Adoption into the Ledger reuses this exact position.
+    /// The durable transcript cursor when the message has already been
+    /// adopted into the Ledger (on an idempotent retry); `None` while pending.
     pub transcript_cursor: Option<TranscriptCursor>,
     /// Whether this acceptance was an idempotent correlation retry of an
     /// already-committed acceptance (no new sequence was allocated).
@@ -190,7 +187,7 @@ pub struct PendingInboundItem {
     pub message_id: MessageId,
     /// The persisted canonical inbound message.
     pub message: UserMessageBlock,
-    /// The transcript position allocated at acceptance for visible inbound.
+    /// The canonical transcript position, populated on adoption for visible input.
     pub transcript_cursor: Option<TranscriptCursor>,
     /// The producer correlation, when one was supplied.
     pub correlation: Option<String>,

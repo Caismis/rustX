@@ -6111,8 +6111,7 @@ export type RuntimeClientEvent =
       sequence: string;
       message: UserMessageBlock2;
       /**
-       * The durable transcript position allocated at acceptance, absent
-       * for hidden Context-kind inbound.
+       * Pending messages have no transcript position.
        */
       transcript_cursor?: RuntimeClientTranscriptCursor | null;
       type: 'inbound_enqueued';
@@ -17241,8 +17240,7 @@ export interface RuntimeClientProtocolEvent {
         sequence: string;
         message: UserMessageBlock2;
         /**
-         * The durable transcript position allocated at acceptance, absent
-         * for hidden Context-kind inbound.
+         * Pending messages have no transcript position.
          */
         transcript_cursor?: RuntimeClientTranscriptCursor | null;
         type: 'inbound_enqueued';

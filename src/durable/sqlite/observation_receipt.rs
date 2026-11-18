@@ -542,7 +542,7 @@ pub(super) fn pending(
     connection: &Connection,
     conversation: &ConversationId,
     selected: Option<u64>,
-    removed: Option<(u64, Option<crate::durable::TranscriptCursor>)>,
+    removed_sequence: Option<u64>,
     adopted: Option<(u64, u64)>,
 ) -> Option<Arc<crate::durable::PendingObservationReceipt>> {
     let read_cut = super::reading::cut(connection, conversation).ok()?;
@@ -586,9 +586,7 @@ pub(super) fn pending(
         read_cut,
         head: page.headers,
         selected,
-        promoted_transcripts: None,
-        removed_sequence: removed.map(|(sequence, _)| sequence),
-        removed_transcript: removed.and_then(|(_, cursor)| cursor),
+        removed_sequence,
         adopted_through: adopted.map(|(through, _)| through),
         adopted_count: adopted.map(|(_, count)| count),
     }))

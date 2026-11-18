@@ -166,7 +166,7 @@ fn t14_t15_t20_pending_native_receipt_refills_head_without_a_body_mirror() {
     };
     assert_eq!(receipt.total, 72);
     assert_eq!(receipt.removed_sequence, Some(1));
-    assert_eq!(receipt.removed_transcript, first.transcript_cursor);
+    assert_eq!(first.transcript_cursor, None);
     assert_eq!(
         (
             receipt.head.first().unwrap().sequence,
@@ -279,6 +279,46 @@ fn active_steering_adopts_exact_rows_and_keeps_interleaved_queue_pending() {
         [] as [crate::durable::inbox::PendingInboundItem; 0]
     );
     assert_eq!(store.load_canonical().unwrap().len(), 3);
+}
+
+#[test]
+fn reopened_chat_and_model_input_share_the_adoption_order() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("adoption.db");
+    let conversation = ConversationId::new("conv_129ce50d-d90b-7244-8587-63d3f10932a9");
+    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    let queued = store.accept_inbound(queued("next turn")).unwrap();
+    let steer = store.accept_inbound(draft("next step")).unwrap();
+    store
+        .append_canonical(&assistant_message("before-adoption", "original reply"))
+        .unwrap();
+    assert_eq!(
+        store.load_transcript_page(None, 8).unwrap().entries.len(),
+        1
+    );
+    // Reopening before the claim must preserve the steering and queue lanes.
+    drop(store);
+    let store = SqliteConversationStore::open(conversation.clone(), &path).unwrap();
+    store.adopt_pending_batch(steer.sequence, None).unwrap();
+    drop(store);
+    let store = SqliteConversationStore::open(conversation, &path).unwrap();
+    let ids = message_ids(&store);
+    assert_eq!(
+        ids,
+        [
+            "before-adoption",
+            steer.message_id.as_str(),
+            queued.message_id.as_str()
+        ]
+    );
+    let transcript = store.load_transcript_page(None, 8).unwrap();
+    assert_eq!(transcript.entries.len(), ids.len());
+    for (entry, id) in transcript.entries.iter().zip(ids) {
+        let crate::durable::TranscriptItem::Message { message } = &entry.item else {
+            panic!("expected adopted chat message");
+        };
+        assert_eq!(message.id().as_str(), id);
+    }
 }
 
 fn queued(text: &str) -> crate::durable::InboundDraft {

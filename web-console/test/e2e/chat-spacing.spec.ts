@@ -13,16 +13,15 @@ for (const width of [1440, 390]) test(`steer preserves workflow and background j
   const card = page.locator('[data-workflow-run-id]');
   await expect(card).toHaveCount(1);
   const reply = page.getByText('Current reply', { exact: true });
-  const steer = page.getByText('Change direction', { exact: true });
   const job = page.locator('[data-inbound-source="job"]');
   await expect(job).toBeVisible();
-  for (const [before, after] of [[card, job], [job, reply], [reply, page.locator('[data-chat-running]')], [page.locator('[data-chat-running]'), steer]]) {
+  // Reserved steer seats stay out of the chat until provider receipt.
+  await expect(page.getByText('Change direction', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('One more instruction', { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-pending-steering]')).toHaveCount(0);
+  for (const [before, after] of [[card, job], [job, reply], [reply, page.locator('[data-chat-running]')]]) {
     expect(await gap(before, after)).toBeGreaterThanOrEqual(0);
   }
-  const waiting = page.locator('[data-pending-steering]');
-  await expect(waiting).toHaveCount(2);
-  expect(await gap(page.locator('[data-chat-running]'), waiting.first())).toBe(0);
-  expect(await gap(waiting.first(), waiting.last())).toBe(4);
   await card.locator('[data-disclosure-row]').first().click();
   expect(await gap(card, reply)).toBeGreaterThanOrEqual(0);
   expect(errors).toEqual([]);

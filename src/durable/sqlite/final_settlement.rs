@@ -305,41 +305,20 @@ impl SqliteConversationStore {
                 item.message.kind != crate::message::types::InboundKind::QueuedMessage
             });
         }
-        // Pending visible messages retain their transcript order across
-        // individual promotions and direct steering. Context-only messages
-        // have no transcript cursor and retain their admission slots.
-        if !items
-            .iter()
-            .filter_map(|item| item.transcript_cursor)
-            .is_sorted()
-        {
-            let visible_slots: Vec<_> = items
-                .iter()
-                .map(|item| item.transcript_cursor.is_some())
-                .collect();
-            let (mut visible, context): (Vec<_>, Vec<_>) = items
-                .into_iter()
-                .partition(|item| item.transcript_cursor.is_some());
-            visible.sort_unstable_by_key(|item| item.transcript_cursor);
-            let mut visible = visible.into_iter();
-            let mut context = context.into_iter();
-            items = visible_slots
-                .into_iter()
-                .map(|slot| {
-                    if slot { visible.next() } else { context.next() }
-                        .expect("slot matches partition")
-                })
-                .collect();
-        }
-        for item in &items {
+        for item in &mut items {
             let block = crate::durable::canonical_block(&item.message);
+            let expected_visible = !matches!(
+                item.message.kind,
+                crate::message::types::InboundKind::Context(_)
+            );
             let cursor = validation.append(transaction, &block, Some(&item.message_id))?;
-            if cursor != item.transcript_cursor {
+            if cursor.is_some() != expected_visible {
                 return Err(ConversationStoreError::InvalidReference(format!(
-                    "adopted inbound {} changed its transcript cursor from {:?} to {:?}",
-                    item.message_id, item.transcript_cursor, cursor
+                    "adopted inbound {} transcript visibility mismatch: {:?}",
+                    item.message_id, cursor
                 )));
             }
+            item.transcript_cursor = cursor;
         }
         // The active attempt adopts only steering input. The queued rows keep
         // their exact identities and remain available to the next admission.

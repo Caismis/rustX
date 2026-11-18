@@ -156,7 +156,7 @@ impl InboundItem {
         &self.message
     }
 
-    /// The durable transcript position allocated at acceptance, when this
+    /// The durable transcript position allocated on adoption, when this
     /// item is visible in the ordinary transcript.
     #[must_use]
     pub fn transcript_cursor(&self) -> Option<TranscriptCursor> {
@@ -1219,10 +1219,10 @@ impl ConversationInboundMailbox {
         batch
             .items
             .retain(|item| item.message.kind != InboundKind::QueuedMessage);
-        let Some(last) = batch.items.last() else {
+        let Some(watermark) = batch.items.iter().map(InboundItem::sequence).max() else {
             return Ok(None);
         };
-        batch.watermark = last.sequence;
+        batch.watermark = watermark;
         Ok(Some(batch))
     }
 

@@ -23706,7 +23706,7 @@
           ]
         },
         {
-          "description": "An inbound message was enqueued into the conversation mailbox.\n\nHuman and runtime-originated producers share the one inbound\nordering domain; the event carries the authoritative mailbox\nsequence and the canonical message.\nPending authority changed; reread the snapshot and transcript.",
+          "description": "The mailbox pending head changed.",
           "type": "object",
           "properties": {
             "pending": {
@@ -23728,6 +23728,7 @@
           ]
         },
         {
+          "description": "An inbound message was enqueued into the conversation mailbox.",
           "type": "object",
           "properties": {
             "sequence": {
@@ -23739,7 +23740,7 @@
               "$ref": "#/$defs/UserMessageBlock"
             },
             "transcript_cursor": {
-              "description": "The durable transcript position allocated at acceptance, absent\nfor hidden Context-kind inbound.",
+              "description": "Pending messages have no transcript position.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/RuntimeClientTranscriptCursor"

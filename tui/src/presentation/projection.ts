@@ -184,9 +184,8 @@ export function reduce(state: PresentationState, protocolEvent: ProjectedEvent):
   if (!native) throw new Error('No authoritative checkpoint for Runtime Client observation.');
   event = expandRuntimeEvent(native, event);
   const projected = foldRuntimeEvent(native, event);
-  const adaptation: Adaptation = { projected, displayedInbound: new Map((native.inbound.pending ?? []).map(item => [item.message.id, item.sequence])) };
   let view: TranscriptView = transcriptView(state);
-  for (const fact of transitionFacts(event)) view = adaptTranscript(view, fact, adaptation);
+  for (const fact of transitionFacts(event)) view = adaptTranscript(view, fact, projected);
   const next: PresentationState = { ...view, ...nativeFields(projected), cursor };
   nativeSnapshots.set(next, projected);
   preserveHistoryBindings(state, next);
@@ -221,36 +220,17 @@ function withNativeStreaming(view: TranscriptView, projected: RuntimeClientSnaps
   return { ...view, transcript: [...view.transcript.filter(isDurableTranscriptEntry), ...streamingRows(projected)] };
 }
 
-/**
- * What transcript adaptation reads while it walks one observation's facts.
- *
- * `projected` is the native snapshot after the complete observation, so a
- * fact inside a batch reads the batch's settled native head. The native fold
- * owns the pending inbound queue; `displayedInbound` is only the display
- * bookkeeping of which committed user rows currently show a pending inbound
- * message (by message id, with its native sequence), seeded from the native
- * queue before the observation and advanced fact by fact, so an edit or
- * removal inside a batch rewrites exactly the row it displayed.
- */
-interface Adaptation {
-  readonly projected: RuntimeClientSnapshot;
-  readonly displayedInbound: Map<string, string>;
-}
-
 /** Adapts the terminal transcript to one native fact. */
-function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, adaptation: Adaptation): TranscriptView {
-  const { projected, displayedInbound } = adaptation;
+function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, projected: RuntimeClientSnapshot): TranscriptView {
   switch (event.type) {
     case 'projection_delta':
     case 'read_domains_patched':
     case 'message_descriptor_patched':
     case 'checkpoint_patched': throw new Error('Unexpanded native projection delta.');
     case 'checkpoint_advanced':
-      displayedInbound.clear();
-      for (const item of event.checkpoint.snapshot.inbound.pending ?? []) displayedInbound.set(item.message.id, item.sequence);
       return snapshotTranscript(event.checkpoint.snapshot);
     case 'projection_transition':
-      return event.events.reduce((current, item) => adaptTranscript(current, item, adaptation), view);
+      return event.events.reduce((current, item) => adaptTranscript(current, item, projected), view);
     case 'read_domains_updated':
       return mergeNativeTranscript(view, {
         ...view,
@@ -345,37 +325,10 @@ function adaptTranscript(view: TranscriptView, event: RuntimeClientEvent, adapta
         nativeFactsPending: event.message.role === 'assistant',
       }) };
     }
-    case 'inbound_enqueued': {
-      // Durable acceptance is the display frontier. Context facts remain
-      // model-visible runtime input but are hidden from ordinary chat.
-      const transcriptCursor = validateTranscriptCursorContract(event.message, event.transcript_cursor);
-      if (isHiddenContextMessage(event.message)) return view;
-      if (transcriptCursor === undefined) throw new Error('visible inbound_enqueued event is missing its durable transcript cursor');
-      displayedInbound.set(event.message.id, event.sequence);
-      return { ...view, transcript: appendTranscriptEntry(view.transcript, {
-        kind: 'committed',
-        key: `committed:${event.message.id}`,
-        messageId: event.message.id,
-        cursor: transcriptCursor,
-        message: { role: 'user', ...event.message },
-      }) };
-    }
-    case 'pending_inbound_changed': {
-      // An edited pending message replaces its row; a removed one leaves it.
-      const previous = new Set(displayedInbound.keys());
-      const pending = new Map(event.pending.map(item => [item.message.id, item.message]));
-      displayedInbound.clear();
-      for (const item of event.pending) displayedInbound.set(item.message.id, item.sequence);
-      return { ...view, transcript: view.transcript.flatMap(entry => {
-        if (entry.kind !== 'committed' || !previous.has(entry.messageId)) return [entry];
-        const message = pending.get(entry.messageId);
-        return message ? [{ ...entry, message: { role: 'user' as const, ...message } }] : [];
-      }) };
-    }
+    // Pending input belongs to the native inbox until its canonical commit.
+    case 'inbound_enqueued':
+    case 'pending_inbound_changed':
     case 'inbound_drained':
-      // Drained messages are ordinary history now; their rows stay as shown.
-      for (const id of event.message_ids) displayedInbound.delete(id);
-      return view;
     case 'trace_changed': // Trace is a read capability; this client has no Trajectory UI.
     case 'goal_changed':
     case 'workflows_updated':
