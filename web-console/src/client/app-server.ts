@@ -223,7 +223,8 @@ export class AppServerClient {
       ...(changedNode ? { threadStatus: undefined, snapshot: undefined, publicationHeads: undefined, cursor: undefined, history: undefined, trace: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(opening ? { modelIntent: undefined, cancellation: undefined, preview: undefined, statisticsPreview: undefined, tracePreview: undefined } : {}),
       ...(facts.attachmentIntent === 'released' ? { modelIntent: undefined, cancellation: undefined } : {}),
-      ...(attached && result ? { threadStatus: undefined, snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, statisticsPreview: undefined, tracePreview: undefined,
+      ...(attached && result ? { threadStatus: undefined, snapshot: undefined, publicationHeads: undefined, cursor: undefined, observationState: 'attached' as const, preview: undefined, tracePreview: undefined,
+        statisticsPreview: !changedNode && view.statisticsPreview?.conversationId === result.target.conversation_id ? view.statisticsPreview : undefined,
         history: readingHistory ? { ...readingHistory, loading: false, initialLoading: false, error: undefined } : undefined,
         turnOutline: undefined, turnNavigation: undefined } : {}),
     };
@@ -301,7 +302,7 @@ export class AppServerClient {
         const chain=new ObservationChain<RuntimeClientEvent>();
         chain.installCheckpoint(checkpoint.cursor);
         this.observationChains.set(id,chain);
-        this.setSession(id,{snapshot:observed,checkpoint,cursor:checkpoint.cursor,observationState:'subscribePending',
+        this.setSession(id,{snapshot:observed,statisticsPreview:undefined,checkpoint,cursor:checkpoint.cursor,observationState:'subscribePending',
           ...(!resumable&&this.state.views[id]?.modelMutation?.generation!==this.state.generation?{modelMutation:undefined}:{}),
           history:refreshTranscript(this.state.views[id]?.history,observed.transcript),
           trace:this.traces.supersede(id,({...replaceTrace(observed.trace,this.state.views[id]?.trace,checkpoint.read_cut),fields:this.traces.liveFields(result.target)}))});

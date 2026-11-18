@@ -193,7 +193,13 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     const view = state.views[sessionId];
     // A detached or disconnected view's last reading is not current occupancy.
     const current = state.connection === 'connected' && view?.attachment === 'attached';
-    return { preview: !current && view?.attachment === 'attaching' ? view.statisticsPreview : undefined, nodeId: view?.nodeId, generation: state.generation, target:current?view?.target:undefined, observation:current?view?.attachmentObservation:undefined, statistics: view?.attachment === 'attaching' ? view.statisticsPreview?.statistics ?? view.snapshot?.transcript.statistics : view?.snapshot?.transcript.statistics, occupancy: current ? view?.snapshot?.context?.occupancy : view?.attachment === 'attaching' ? view.statisticsPreview?.occupancy ?? view.snapshot?.context?.occupancy : undefined };
+    const attaching = view?.attachment === 'attaching';
+    const waitingForCheckpoint = current && !view.snapshot && (view.observationState === 'attached' || view.observationState === 'checkpointLoading');
+    const preview = attaching || waitingForCheckpoint ? view.statisticsPreview : undefined;
+    return { preview: attaching ? preview : undefined, nodeId: view?.nodeId, generation: state.generation,
+      target: current && view.snapshot ? view.target : undefined, observation: current && view.snapshot ? view.attachmentObservation : undefined,
+      statistics: preview?.statistics ?? view?.snapshot?.transcript.statistics,
+      occupancy: preview?.occupancy ?? (current || attaching ? view?.snapshot?.context?.occupancy : undefined) };
   }, shallowEqual);
   return <JournalSourceProvider source={facts.target&&facts.observation ? {
     client,target:facts.target,cut:()=>client.getSnapshot().views[sessionId]?.checkpoint?.read_cut,

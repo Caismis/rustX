@@ -4562,7 +4562,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "3eedcb1d4ac4aa39e4393d6c23773c568fe9245cde249e0858062ad5124cb8a8",
+      "local_sha256": "33586b2970e7494b0d76c45a5a819a204ce85a90f74e4f8084ad585fe0e1739e",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
