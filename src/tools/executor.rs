@@ -966,9 +966,10 @@ pub const ASK_USER_TOOL_NAME: &str = "ask_user";
 /// The model-facing name reserved for Workflow Agent terminalization.
 ///
 /// This is a runtime protocol identity, not an ordinary Tool capability. It
-/// lives with the canonical Tool identity constants so every capability origin
-/// shares one collision rule before a definition can enter a catalog.
-pub const WORKFLOW_OUTPUT_TOOL_NAME: &str = "workflow_output";
+/// lives with the workflow identity contracts in `rustx-types` and is
+/// re-exported here so every capability origin shares one collision rule
+/// before a definition can enter a catalog.
+pub use rustx_types::runtime::workflow::WORKFLOW_OUTPUT_TOOL_NAME;
 
 pub(crate) fn validate_model_facing_name(name: &str) -> Result<(), ToolRegistryError> {
     if name == WORKFLOW_OUTPUT_TOOL_NAME {

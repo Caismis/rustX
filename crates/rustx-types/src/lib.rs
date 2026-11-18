@@ -35,6 +35,7 @@ pub mod runtime {
     pub mod process_supervision;
     pub mod process_wait;
     pub mod types;
+    pub mod workflow;
     pub mod permission {
         pub mod mode;
     }

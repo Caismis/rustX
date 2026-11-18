@@ -15,6 +15,7 @@ rustx-identity = { path = "../rustx-identity" }
 base64 = "0.22"
 tokio = { version = "1", features = ["macros", "sync"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+sha2 = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 http = "1"
 httpdate = "1"
