@@ -4,6 +4,8 @@
 //! `runtime::permission::mode`, `tools::deadline`, ...) so moved items
 //! resolve at the same absolute path inside this crate.
 
+pub mod package_io;
+
 pub mod model {
     pub mod finish;
     pub mod inspection;

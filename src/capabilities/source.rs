@@ -4,7 +4,6 @@ use crate::runtime::identity::McpServerId;
 
 pub use rustx_types::capabilities::source::ToolSourceId;
 
-
 /// Finite source demand admitted by the composition owner for one candidate.
 /// The Python catalog carries discovery/path authority; selecting a missing
 /// identity cannot manufacture a package or admitted materialization demand.

@@ -11,14 +11,14 @@ use std::path::{Component, Path, PathBuf};
 
 use rustix::fs::{Mode, OFlags, open, openat};
 
-use crate::runtime::CancellationSignal;
+use crate::runtime::cancellation::CancellationSignal;
 
-pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
-#[cfg(test)]
+pub const CHUNK_BYTES: usize = 64 * 1024;
+#[cfg(any(test, feature = "test-fixtures"))]
 thread_local! {
-    pub(crate) static OPENED_FILES: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
-    pub(crate) static DIRECTORY_LISTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    pub(crate) static STREAMED_FILE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub static OPENED_FILES: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+    pub static DIRECTORY_LISTS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub static STREAMED_FILE_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::DIRECTORY)
@@ -26,16 +26,16 @@ const DIRECTORY: OFlags = OFlags::RDONLY
     .union(OFlags::CLOEXEC);
 
 /// Every component is resolved relative to an already opened directory.
-pub(crate) struct PackageDirectory {
+pub struct PackageDirectory {
     fd: std::sync::Arc<OwnedFd>,
     ancestors: Vec<(std::sync::Arc<OwnedFd>, std::ffi::OsString)>,
 }
 
 impl PackageDirectory {
-    pub(crate) fn descriptor(&self) -> &OwnedFd {
+    pub fn descriptor(&self) -> &OwnedFd {
         &self.fd
     }
-    pub(crate) fn open(path: &Path) -> std::io::Result<Self> {
+    pub fn open(path: &Path) -> std::io::Result<Self> {
         let mut directory = Self {
             fd: std::sync::Arc::new(open("/", DIRECTORY, Mode::empty())?),
             ancestors: Vec::new(),
@@ -53,7 +53,7 @@ impl PackageDirectory {
         Ok(directory)
     }
 
-    pub(crate) fn verify(&self) -> std::io::Result<()> {
+    pub fn verify(&self) -> std::io::Result<()> {
         for (index, (parent, name)) in self.ancestors.iter().enumerate() {
             let child = self
                 .ancestors
@@ -73,7 +73,7 @@ impl PackageDirectory {
     }
 
     /// Detect a physical descendant, including case aliases on native filesystems.
-    pub(crate) fn contains(&self, file: &File) -> std::io::Result<bool> {
+    pub fn contains(&self, file: &File) -> std::io::Result<bool> {
         let source = rustix::fs::fstat(file)?;
         for descriptor in
             std::iter::once(&self.fd).chain(self.ancestors.iter().map(|(descriptor, _)| descriptor))
@@ -86,7 +86,7 @@ impl PackageDirectory {
         Ok(false)
     }
 
-    pub(crate) fn child(&self, name: &std::ffi::OsStr) -> std::io::Result<Self> {
+    pub fn child(&self, name: &std::ffi::OsStr) -> std::io::Result<Self> {
         self.verify()?;
         let fd = openat(self.fd.as_ref(), name, DIRECTORY, Mode::empty())?;
         let mut ancestors = self.ancestors.clone();
@@ -101,8 +101,8 @@ impl PackageDirectory {
         Ok(directory)
     }
 
-    pub(crate) fn names(&self, limit: usize) -> std::io::Result<Vec<PathBuf>> {
-        #[cfg(test)]
+    pub fn names(&self, limit: usize) -> std::io::Result<Vec<PathBuf>> {
+        #[cfg(any(test, feature = "test-fixtures"))]
         DIRECTORY_LISTS.with(|count| count.set(count.get() + 1));
         self.verify()?;
         let mut names = Vec::new();
@@ -124,8 +124,8 @@ impl PackageDirectory {
         Ok(names)
     }
 
-    pub(crate) fn file(&self, relative: &Path) -> std::io::Result<File> {
-        #[cfg(test)]
+    pub fn file(&self, relative: &Path) -> std::io::Result<File> {
+        #[cfg(any(test, feature = "test-fixtures"))]
         OPENED_FILES.with(|files| files.borrow_mut().push(relative.to_path_buf()));
         self.verify()?;
         let mut parts = relative.components().peekable();
@@ -171,7 +171,7 @@ fn stamp(meta: &Metadata) -> (u64, u64, u64, i64, i64, i64, i64) {
     )
 }
 
-pub(crate) fn check_cancelled(signal: &CancellationSignal) -> std::io::Result<()> {
+pub fn check_cancelled(signal: &CancellationSignal) -> std::io::Result<()> {
     if signal.is_cancelled() {
         Err(std::io::Error::new(
             std::io::ErrorKind::Interrupted,
@@ -185,16 +185,16 @@ pub(crate) fn check_cancelled(signal: &CancellationSignal) -> std::io::Result<()
 /// Evidence over two complete matching reads. Metadata is additional mutation
 /// evidence, never a substitute for content verification on a coarse clock.
 #[derive(Debug)]
-pub(crate) struct FileEvidence {
-    pub(crate) metadata: Metadata,
-    pub(crate) digest: [u8; 32],
+pub struct FileEvidence {
+    pub metadata: Metadata,
+    pub digest: [u8; 32],
 }
 
 /// Read the opened regular file, then verify the complete content again through
 /// that descriptor. Callers consume chunks once; growth/truncation/replacement
 /// and changed content fail closed. This does not claim an atomic snapshot of a
 /// mutable directory. Publication verifies the actual copied package separately.
-pub(crate) fn stream(
+pub fn stream(
     directory: &PackageDirectory,
     relative: &Path,
     signal: &CancellationSignal,
@@ -244,7 +244,7 @@ fn read_pass(
         if read == 0 {
             break;
         }
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         STREAMED_FILE_BYTES.with(|count| count.set(count.get() + read as u64));
         consumed = consumed
             .checked_add(read as u64)

@@ -13,8 +13,8 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use rustx_identity::{McpServerId, ToolCallId, ToolId};
 use crate::runtime::types::CancellationReason;
+use rustx_identity::{McpServerId, ToolCallId, ToolId};
 
 /// The canonical runtime/tool contract of one registered tool.
 ///

@@ -4782,6 +4782,7 @@ dependencies = [
  "libc",
  "nix",
  "reqwest",
+ "rustix",
  "rustx-identity",
  "schemars",
  "serde",
