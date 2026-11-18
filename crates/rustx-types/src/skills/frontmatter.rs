@@ -35,9 +35,9 @@ pub fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String>
                     "SKILL.md frontmatter is missing its closing delimiter",
                 ));
             }
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             READ_BYTES.with(|count| count.set(count.get() + bytes.len() as u64));
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             ON_CHUNK.with(|hook| {
                 if let Some(hook) = hook.borrow_mut().take() {
                     hook();
@@ -75,7 +75,7 @@ pub fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String>
         }
     };
     let header = prefix().map_err(|e| e.to_string())?;
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     AFTER_PREFIX.with(|hook| {
         if let Some(hook) = hook.borrow_mut().take() {
             hook();
