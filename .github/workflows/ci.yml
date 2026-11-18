@@ -54,7 +54,7 @@ jobs:
       steps: ${{ steps.plan.outputs.steps }}
       browser: ${{ steps.plan.outputs.browser }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Classify the change and select the profile's jobs
         id: plan
         env:
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 2
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Test notification filters, signing, and secret isolation
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
 
@@ -81,7 +81,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -144,7 +144,7 @@ jobs:
         run: python3 -m unittest discover -s benchmarks/runtime -p 'test_*.py' -v
 
       - name: Install pinned Node for benchmark contract tests
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -182,7 +182,7 @@ jobs:
       VERIFICATION_PROFILE: fast
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -200,12 +200,12 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -265,7 +265,7 @@ jobs:
       VERIFICATION_PROFILE: fast
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -316,7 +316,7 @@ jobs:
       CARGO_BUILD_JOBS: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -413,7 +413,7 @@ jobs:
       CARGO_BUILD_JOBS: "1"
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -430,12 +430,12 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -554,7 +554,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -594,12 +594,12 @@ jobs:
       # The conformance target and the in-crate boundary suites launch the
       # provider emulator with `uv run`.
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -646,7 +646,7 @@ jobs:
 
       - name: Native Cargo timing reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-core-cargo-timings
           path: target/cargo-timings/*.html
@@ -682,7 +682,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -722,12 +722,12 @@ jobs:
       # The conformance target and the in-crate boundary suites launch the
       # provider emulator with `uv run`.
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -795,7 +795,7 @@ jobs:
 
       - name: Native Cargo timing reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: macos-cargo-timings
           path: target/cargo-timings/*.html
@@ -813,7 +813,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -825,12 +825,12 @@ jobs:
       # The real-child integration suite drives the shared provider emulator,
       # so this job needs the same Python 3.12 + uv toolchain as the Rust one.
       - name: Install Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v10.3.3
 
       - name: Sync the provider emulator environment
         working-directory: test-support/fake-provider
@@ -906,7 +906,7 @@ jobs:
     # prior 15m budget for the native generator and both protocol checks.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.100.0"
@@ -920,7 +920,7 @@ jobs:
         with:
           shared-key: app-server-protocol
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned protocol toolchain
@@ -943,7 +943,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.100.0"
@@ -957,7 +957,7 @@ jobs:
       # binary for the TUI Save integration suite adds only its own link.
       - name: Build native PTY ownership supervisor and the App Server
         run: cargo build --bins --locked
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Node dependencies
@@ -966,10 +966,10 @@ jobs:
           (cd web-console && corepack install && pnpm install --frozen-lockfile)
           (cd tui && pnpm install --frozen-lockfile)
       # The TUI Save integration suite drives the shared provider emulator.
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
@@ -1022,8 +1022,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
@@ -1068,14 +1068,14 @@ jobs:
           node scripts/browser-shards.ts inventory "$RUNNER_TEMP/browser-prepared/browser-prepared.json" "$RUNNER_TEMP/browser-inventory"
       - name: Package the prepared inputs
         run: tar -C "$RUNNER_TEMP/browser-prepared" -cf - . | zstd -T0 -3 -o "$RUNNER_TEMP/browser-prepared.tar.zst"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: browser-prepared
           path: ${{ runner.temp }}/browser-prepared.tar.zst
           compression-level: 0
           retention-days: 3
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/browser-inventory/
@@ -1089,8 +1089,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned Web dependencies
@@ -1109,10 +1109,10 @@ jobs:
           pnpm typecheck
           pnpm test
       - uses: ./.github/actions/document-runtime
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
@@ -1152,8 +1152,8 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.browser).shards }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       - name: Install pinned browser toolchain
@@ -1169,15 +1169,15 @@ jobs:
           (cd tui && pnpm install --frozen-lockfile)
           (cd dev && pnpm install --frozen-lockfile)
       - uses: ./.github/actions/document-runtime
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.3.3
       - name: Prepare the existing provider emulator
         working-directory: test-support/fake-provider
         run: uv sync --frozen
       - uses: ./.github/actions/browser-inputs
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/inventory
@@ -1197,7 +1197,7 @@ jobs:
         run: bash scripts/browser-tests.sh --test-list "$RUNNER_TEMP/inventory/shard-${{ matrix.shard }}.txt"
       - name: Shard report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-shard-${{ matrix.shard }}
           path: |
@@ -1206,7 +1206,7 @@ jobs:
           if-no-files-found: ignore
       - name: Browser evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-evidence-shard-${{ matrix.shard }}
           path: web-console/test-results/
@@ -1222,8 +1222,8 @@ jobs:
     runs-on: ubuntu-26.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
       # Report aggregation uses locked development tools and existing artifacts.
@@ -1234,14 +1234,27 @@ jobs:
           corepack enable
           corepack install
           pnpm install --frozen-lockfile --dev --ignore-scripts
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: browser-inventory
           path: ${{ runner.temp }}/inventory
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: browser-shard-*
           path: ${{ runner.temp }}/shards
+      # v8 flattens the download into `path` when the pattern matches exactly
+      # one artifact (a one-shard FAST run); wrap it back under its shard dir
+      # so the coverage loop sees one layout either way.
+      - name: Normalize a single-shard artifact layout
+        run: |
+          if [ -f "$RUNNER_TEMP/shards/shard-report/identity.json" ]; then
+            shard=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$RUNNER_TEMP/shards/shard-report/identity.json','utf8')).shard)")
+            dest="$RUNNER_TEMP/shards/browser-shard-$shard"
+            mkdir -p "$dest"
+            for entry in shard-report blob-report; do
+              [ -d "$RUNNER_TEMP/shards/$entry" ] && mv "$RUNNER_TEMP/shards/$entry" "$dest/$entry"
+            done
+          fi
       - name: Merge the shard reports
         working-directory: web-console
         env:
@@ -1265,7 +1278,7 @@ jobs:
         run: test "${{ needs.browser-shard.result }}" = success
       - name: Merged browser report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: web-console-browser-report
           path: ${{ runner.temp }}/merged/
@@ -1303,7 +1316,7 @@ jobs:
       # second parent is still head, and the PR base is an ancestor of the
       # first parent (an intermediate stack merge) rather than the parent
       # itself. Ordinary PRs still match parents `[base, head]` exactly.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Every selected job succeeded, at the right profile, for the current head
