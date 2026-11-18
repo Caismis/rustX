@@ -13,7 +13,7 @@ use crate::model::types::ModelProtocol;
 /// The provider-neutral invocation configuration one model request carries
 /// to its adapter.
 ///
-/// This is the only provider-configuration channel of a [`ModelRequest`](crate::model::types::ModelRequest): it is immutable for the whole
+/// This is the only provider-configuration channel of a `ModelRequest`: it is immutable for the whole
 /// attempt, carries no credential and no adapter object, and never leaks
 /// into canonical conversation facts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
