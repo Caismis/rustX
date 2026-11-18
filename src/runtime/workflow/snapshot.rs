@@ -70,7 +70,7 @@ pub(crate) fn encode_snapshot_document(
 ) -> Result<(Vec<u8>, String, String), String> {
     snapshot.document.validate().map_err(|error| error.reason)?;
     let mut writer =
-        crate::bounded_file::LimitedWriter::new(Vec::new(), MAX_WORKFLOW_DOCUMENT_BYTES);
+        rustx_bounded_file::LimitedWriter::new(Vec::new(), MAX_WORKFLOW_DOCUMENT_BYTES);
     serde_json::to_writer(&mut writer, &snapshot.document).map_err(|error| error.to_string())?;
     let bytes = writer.inner;
     let payload_sha256 = sha256_hex(&bytes);

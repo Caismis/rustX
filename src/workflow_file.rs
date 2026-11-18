@@ -85,7 +85,7 @@ impl WorkflowFileDocument {
         if let Some(editor) = &self.editor {
             editor.validate()?;
         }
-        if !crate::bounded_file::json_fits(self, MAX_WORKFLOW_DOCUMENT_BYTES) {
+        if !rustx_bounded_file::json_fits(self, MAX_WORKFLOW_DOCUMENT_BYTES) {
             return Err(WorkflowPresentationDiagnostic::new(
                 "$",
                 "file_size",
@@ -113,7 +113,7 @@ impl WorkflowFileDocument {
             omit_ordinary_ports(block);
         }
         let mut encoded =
-            crate::bounded_file::LimitedWriter::new(Vec::new(), MAX_WORKFLOW_FILE_BYTES);
+            rustx_bounded_file::LimitedWriter::new(Vec::new(), MAX_WORKFLOW_FILE_BYTES);
         serde_yaml_ng::to_writer(&mut encoded, &value).map_err(|_| failure())?;
         let bytes = encoded.inner;
         if bytes.len() > MAX_WORKFLOW_FILE_BYTES {

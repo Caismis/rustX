@@ -258,7 +258,7 @@ pub(crate) fn prepare_request_with_limit(
     #[cfg(test)]
     PREPARATION_WORK.with(|work| work.update(|(translated, encoded)| (translated, encoded + 1)));
     let body = if let Some(limit) = body_limit {
-        crate::bounded_json::encode_capped_bytes(&wire, limit)
+        rustx_bounded_json::encode_capped_bytes(&wire, limit)
     } else {
         let mut body = Vec::with_capacity(wire.capacity_hint());
         serde_json::to_writer(&mut body, &wire).map(|()| body)

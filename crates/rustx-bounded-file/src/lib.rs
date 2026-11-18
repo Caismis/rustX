@@ -6,12 +6,12 @@ use std::path::Path;
 
 /// A mechanism only: the caller owns the byte policy. Refuse an oversized
 /// write before growing its destination (including a Vec or encoded document).
-pub(crate) struct LimitedWriter<W> {
-    pub(crate) inner: W,
+pub struct LimitedWriter<W> {
+    pub inner: W,
     remaining: usize,
 }
 impl<W> LimitedWriter<W> {
-    pub(crate) fn new(inner: W, limit: usize) -> Self {
+    pub fn new(inner: W, limit: usize) -> Self {
         Self {
             inner,
             remaining: limit,
@@ -32,16 +32,16 @@ impl<W: std::io::Write> std::io::Write for LimitedWriter<W> {
     }
 }
 
-pub(crate) fn json_fits(value: &impl serde::Serialize, limit: usize) -> bool {
+pub fn json_fits(value: &impl serde::Serialize, limit: usize) -> bool {
     serde_json::to_writer(LimitedWriter::new(std::io::sink(), limit), value).is_ok()
 }
 
 /// The default byte policy of configuration and other ordinary authored resources.
 /// Workflow and package owners choose their own policy.
-pub(crate) const MAX_RESOURCE_BYTES: u64 = 1024 * 1024;
+pub const MAX_RESOURCE_BYTES: u64 = 1024 * 1024;
 
 /// Whether `bytes` fit the authored file bound.
-pub(crate) fn within_bound(bytes: &[u8]) -> bool {
+pub fn within_bound(bytes: &[u8]) -> bool {
     u64::try_from(bytes.len()).is_ok_and(|length| length <= MAX_RESOURCE_BYTES)
 }
 
@@ -54,7 +54,7 @@ thread_local! {
 /// [`read_with_limit`] or authorized through [`record_read`] on this thread,
 /// whether or not the read succeeded: the exact inputs of a synchronous
 /// capture, including the one it failed at.
-pub(crate) fn recording_reads<T>(
+pub fn recording_reads<T>(
     read: impl FnOnce() -> T,
 ) -> (T, std::collections::BTreeSet<std::path::PathBuf>) {
     let outer = READS.with(|reads| {
@@ -76,7 +76,7 @@ pub(crate) fn recording_reads<T>(
 
 /// Record `path` as an input of the enclosing [`recording_reads`], before
 /// anything that may reject it is checked.
-pub(crate) fn record_read(path: &Path) {
+pub fn record_read(path: &Path) {
     READS.with(|reads| {
         if let Some(reads) = reads.borrow_mut().as_mut() {
             reads.insert(path.to_path_buf());
@@ -84,11 +84,11 @@ pub(crate) fn record_read(path: &Path) {
     });
 }
 
-pub(crate) fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+pub fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     read_with_limit(path, MAX_RESOURCE_BYTES)
 }
 
-pub(crate) fn read_with_limit(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+pub fn read_with_limit(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
     record_read(path);
     if !std::fs::metadata(path)
         .map_err(|e| format!("cannot read {}: {e}", path.display()))?

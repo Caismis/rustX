@@ -8,6 +8,9 @@ description = "A standalone Rust execution runtime for durable, tool-using LLM a
 repository = "https://github.com/Caismis/rustX"
 publish = false
 
+[workspace]
+members = [".", "crates/*"]
+
 [features]
 mcp-fixture = ["rmcp/server", "rmcp/transport-io", "rmcp/transport-streamable-http-server"]
 # Issue #387 measurement-only counters (reservation / conflict / legacy-layout
@@ -99,6 +102,9 @@ jsonwebtoken = { version = "10.4", default-features = false, features = ["aws_lc
 similar = "3.2"
 imbl = { version = "7.0.0", features = ["serde"] }
 base64 = "0.22"
+# Workspace crates extracted from src/ (bottom-up split).
+rustx-bounded-json = { path = "crates/rustx-bounded-json" }
+rustx-bounded-file = { path = "crates/rustx-bounded-file" }
 # Bounded validation of native managed PNG image outputs.
 png = "0.18.1"
 getrandom = "0.3.4"

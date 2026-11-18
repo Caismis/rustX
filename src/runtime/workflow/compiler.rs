@@ -135,7 +135,7 @@ fn compile_program(
         ))
         .at("description"));
     }
-    if !crate::bounded_file::json_fits(&definition, MAX_WORKFLOW_BYTES) {
+    if !rustx_bounded_file::json_fits(&definition, MAX_WORKFLOW_BYTES) {
         return Err(WorkflowCompileError::InvalidField(
             "aggregate program size exceeded".into(),
         ));

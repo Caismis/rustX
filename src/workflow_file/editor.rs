@@ -264,7 +264,7 @@ impl WorkflowEditorMetadata {
         {
             return Err(invalid("duplicate presentation identity"));
         }
-        if !crate::bounded_file::json_fits(self, MAX_EDITOR_BYTES) {
+        if !rustx_bounded_file::json_fits(self, MAX_EDITOR_BYTES) {
             return Err(invalid("editor exceeds 256 KiB"));
         }
         Ok(())

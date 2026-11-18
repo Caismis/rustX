@@ -14,7 +14,7 @@ pub mod settings;
 mod units;
 
 use super::settings::{AdmittedSource, SourceReread};
-use crate::bounded_file::read_bounded;
+use rustx_bounded_file::read_bounded;
 use crate::runtime::capability_inspection::{ResourceDefinition, ResourceFamily};
 use crate::runtime::resources::SourceScope;
 use std::collections::BTreeMap;

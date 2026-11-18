@@ -115,7 +115,7 @@ pub(crate) fn load_authorized(
             let bytes = super::resource_directory::read_resource(
                 boundary,
                 path,
-                crate::bounded_file::MAX_RESOURCE_BYTES,
+                rustx_bounded_file::MAX_RESOURCE_BYTES,
             )?;
             revision = super::settings::revision(Some(&bytes));
             let text = std::str::from_utf8(&bytes).map_err(|e| error(e.to_string()))?;

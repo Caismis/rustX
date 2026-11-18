@@ -53,19 +53,19 @@ fn descriptor(
     // Leave room for the surrounding array so every projected descriptor can
     // be paged on its own. Only the WebUI preview is shortened.
     let limit = SKILL_PAGE_DATA_BYTES - 2;
-    if crate::bounded_file::json_fits(&skill, limit) {
+    if rustx_bounded_file::json_fits(&skill, limit) {
         return Ok(Some(skill));
     }
     let description = &mut skill.catalog.description;
     if description.len() > SKILL_DESCRIPTION_PREVIEW_BYTES {
         description.truncate(description.floor_char_boundary(SKILL_DESCRIPTION_PREVIEW_BYTES));
         description.push('…');
-        if crate::bounded_file::json_fits(&skill, limit) {
+        if rustx_bounded_file::json_fits(&skill, limit) {
             return Ok(Some(skill));
         }
     }
     skill.provenance.shadowed.clear();
-    Ok(crate::bounded_file::json_fits(&skill, limit).then_some(skill))
+    Ok(rustx_bounded_file::json_fits(&skill, limit).then_some(skill))
 }
 impl SessionRuntimeManager {
     pub(crate) async fn skill_page(
@@ -124,7 +124,7 @@ impl SessionRuntimeManager {
             let mut data = Vec::new();
             for descriptor in descriptors.into_iter().skip(offset).take(limit) {
                 data.push(descriptor);
-                if !crate::bounded_file::json_fits(&data, SKILL_PAGE_DATA_BYTES) {
+                if !rustx_bounded_file::json_fits(&data, SKILL_PAGE_DATA_BYTES) {
                     data.pop();
                     break;
                 }
@@ -134,7 +134,7 @@ impl SessionRuntimeManager {
             let diagnostic_count = all_diagnostics.len();
             for diagnostic in all_diagnostics.into_iter().take(32) {
                 diagnostics.push(diagnostic);
-                if !crate::bounded_file::json_fits(&diagnostics, 65_536) {
+                if !rustx_bounded_file::json_fits(&diagnostics, 65_536) {
                     diagnostics.pop();
                     break;
                 }

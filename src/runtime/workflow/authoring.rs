@@ -315,7 +315,7 @@ pub fn validate_candidate(definition: &WorkflowDefinition) -> Result<(), &'stati
         }
         Ok(())
     }
-    if !crate::bounded_file::json_fits(definition, super::MAX_WORKFLOW_BYTES) {
+    if !rustx_bounded_file::json_fits(definition, super::MAX_WORKFLOW_BYTES) {
         return Err("executable candidate exceeds 16 MiB");
     }
     walk(&definition.block, 0, &mut 0)

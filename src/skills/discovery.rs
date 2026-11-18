@@ -14,7 +14,7 @@ const MAX_DIRECTORY_ENTRIES: usize = 2048;
 const MAX_COLLECTION_ENTRIES: usize = 8192;
 const MAX_CANDIDATES: usize = 256;
 const MAX_COLLECTION_DEPTH: usize = 128;
-const MAX_IGNORE_FILE_BYTES: u64 = crate::bounded_file::MAX_RESOURCE_BYTES;
+const MAX_IGNORE_FILE_BYTES: u64 = rustx_bounded_file::MAX_RESOURCE_BYTES;
 const MAX_IGNORE_COLLECTION_BYTES: u64 = 4 * MAX_IGNORE_FILE_BYTES;
 const MAX_IGNORE_PATTERNS: usize = MAX_COLLECTION_ENTRIES;
 
@@ -91,7 +91,7 @@ impl Scanner<'_> {
         for name in IGNORE_FILES {
             let file = path.join(name);
             self.record_link(&file);
-            crate::bounded_file::record_read(&file);
+            rustx_bounded_file::record_read(&file);
             if let Ok(target) = std::fs::canonicalize(&file)
                 && target.is_file()
             {
@@ -113,7 +113,7 @@ impl Scanner<'_> {
         target: &Path,
     ) -> std::io::Result<()> {
         let limit = self.remaining_ignore_bytes.min(MAX_IGNORE_FILE_BYTES);
-        let bytes = crate::bounded_file::read_with_limit(target, limit).map_err(invalid_data)?;
+        let bytes = rustx_bounded_file::read_with_limit(target, limit).map_err(invalid_data)?;
         self.remaining_ignore_bytes -= bytes.len() as u64;
         for (index, line) in bytes.split(|byte| *byte == b'\n').enumerate() {
             crate::package_io::check_cancelled(self.signal)?;

@@ -479,7 +479,7 @@ fn parse_permissions_document(
     PythonToolError,
 > {
     let path = root.join(PERMISSIONS_FILE);
-    let bytes = crate::bounded_file::read_bounded(&path).map_err(|error| {
+    let bytes = rustx_bounded_file::read_bounded(&path).map_err(|error| {
         invalid(format!(
             "{PERMISSIONS_FILE}: cannot read resource permissions: {error}"
         ))
@@ -1340,7 +1340,7 @@ fn read_prepared_state(
     let manifest_path = state_dir.join(MANIFEST_FILE);
     crate::package_io::check_cancelled(cancellation).map_err(io_error)?;
     let bytes =
-        crate::bounded_file::read_bounded(&manifest_path).map_err(PythonToolError::Storage)?;
+        rustx_bounded_file::read_bounded(&manifest_path).map_err(PythonToolError::Storage)?;
     let manifest: PreparedManifest = serde_json::from_slice(&bytes).map_err(|error| {
         PythonToolError::Storage(format!(
             "invalid prepared-state manifest {}: {error}",

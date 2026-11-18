@@ -157,7 +157,7 @@ pub(super) fn encode_raw<T: serde::Serialize>(
     limit: Option<usize>,
 ) -> Result<Arc<serde_json::value::RawValue>, crate::model::ModelError> {
     let raw = if let Some(limit) = limit {
-        let bytes = crate::bounded_json::encode_capped_bytes(value, limit)
+        let bytes = rustx_bounded_json::encode_capped_bytes(value, limit)
             .map_err(|error| super::validation::wire_encoding_error(&error))?;
         let json = String::from_utf8(bytes).expect("encoded JSON is UTF-8");
         serde_json::value::RawValue::from_string(json)

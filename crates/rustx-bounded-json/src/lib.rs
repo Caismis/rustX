@@ -30,7 +30,7 @@ impl std::io::Write for Buffer {
     }
 }
 /// Exact JSON encoding with a hard byte and buffer-capacity limit.
-pub(crate) fn encode_capped_bytes<T: Serialize + ?Sized>(
+pub fn encode_capped_bytes<T: Serialize + ?Sized>(
     value: &T,
     limit: usize,
 ) -> serde_json::Result<Vec<u8>> {

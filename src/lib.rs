@@ -6,8 +6,6 @@
 
 pub mod agent;
 pub mod app_server;
-mod bounded_file;
-mod bounded_json;
 pub mod capabilities;
 pub mod context;
 pub mod conversation;
