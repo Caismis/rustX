@@ -6,13 +6,13 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, ser::SerializeSeq};
 
-use crate::message::types::{AgentStatusModuleId, MessageBlock};
-use crate::runtime::identity::MessageId;
+use rustx_types::message::types::{AgentStatusModuleId, MessageBlock};
+use rustx_types::runtime::identity::MessageId;
 
 /// A persistent ordered selection of immutable canonical bodies.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CanonicalSelection {
-    records: imbl::Vector<Arc<crate::model::ModelInputMessage>>,
+    records: imbl::Vector<Arc<rustx_types::model::input::ModelInputMessage>>,
     positions: imbl::HashMap<MessageId, (usize, usize)>,
     non_status: usize,
     latest_status: [Option<(MessageId, DateTime<Utc>)>; 3],
@@ -72,7 +72,7 @@ impl CanonicalSelection {
     pub fn non_status_since(&self, id: &MessageId) -> Option<usize> {
         self.positions.get(id).map(|p| self.non_status - p.1)
     }
-    pub(crate) fn append(&mut self, message: Arc<crate::model::ModelInputMessage>) {
+    pub fn append(&mut self, message: Arc<rustx_types::model::input::ModelInputMessage>) {
         let body = message.as_canonical().expect("canonical selection body");
         let id = body.id().clone();
         assert!(
@@ -129,8 +129,8 @@ impl<'de> Deserialize<'de> for CanonicalSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conversation::{ConversationState, SurfaceRevision};
-    use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
+    use crate::{ConversationState, SurfaceRevision};
+    use rustx_types::message::types::{InboundKind, UserMessageBlock, UserSource};
 
     fn user(id: &str) -> MessageBlock {
         MessageBlock::User(UserMessageBlock {

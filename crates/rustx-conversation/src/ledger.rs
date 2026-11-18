@@ -17,8 +17,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::message::types::MessageBlock;
-use crate::runtime::identity::MessageId;
+use rustx_types::message::types::MessageBlock;
+use rustx_types::runtime::identity::MessageId;
 
 /// A Message Ledger contract violation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +86,7 @@ impl LedgerAccess {
 /// are paged from that authority rather than retained here after restart.
 #[derive(Debug, Default)]
 pub struct MessageLedger {
-    records: Vec<Arc<crate::model::ModelInputMessage>>,
+    records: Vec<Arc<rustx_types::model::input::ModelInputMessage>>,
     bodies: Arc<super::bodies::CanonicalBodies>,
     index: HashMap<MessageId, usize>,
     access: Arc<LedgerAccess>,
@@ -107,7 +107,7 @@ impl MessageLedger {
         Self::default()
     }
 
-    pub(crate) fn bind_bodies(&mut self, bodies: Arc<super::bodies::CanonicalBodies>) {
+    pub fn bind_bodies(&mut self, bodies: Arc<super::bodies::CanonicalBodies>) {
         if Arc::ptr_eq(&self.bodies, &bodies) {
             return;
         }
@@ -160,13 +160,13 @@ impl MessageLedger {
     /// seam (Issue #63): once a caller has validated the Ledger and Surface
     /// identities against the current state, the ordinary [`MessageLedger::append`]
     /// failure can no longer occur.
-    pub(crate) fn append_after_validation(&mut self, message: MessageBlock) -> MessageId {
+    pub fn append_after_validation(&mut self, message: MessageBlock) -> MessageId {
         self.append_shared_after_validation(self.bodies.share(message))
     }
 
-    pub(crate) fn append_shared_after_validation(
+    pub fn append_shared_after_validation(
         &mut self,
-        message: Arc<crate::model::ModelInputMessage>,
+        message: Arc<rustx_types::model::input::ModelInputMessage>,
     ) -> MessageId {
         let id = message
             .as_canonical()
@@ -197,7 +197,10 @@ impl MessageLedger {
     }
 
     /// Share the immutable Ledger allocation with the canonical Surface.
-    pub(crate) fn shared(&self, id: &MessageId) -> Option<Arc<crate::model::ModelInputMessage>> {
+    pub fn shared(
+        &self,
+        id: &MessageId,
+    ) -> Option<Arc<rustx_types::model::input::ModelInputMessage>> {
         self.access.keyed_reads.fetch_add(1, Ordering::Relaxed);
         self.index
             .get(id)
@@ -251,11 +254,11 @@ pub fn message_id_of(message: &MessageBlock) -> MessageId {
 #[cfg(test)]
 mod tests {
     use super::{LedgerError, MessageLedger, message_id_of};
-    use crate::message::content::TextBlock;
-    use crate::message::types::{
+    use rustx_types::message::content::TextBlock;
+    use rustx_types::message::types::{
         InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
     };
-    use crate::runtime::identity::MessageId;
+    use rustx_types::runtime::identity::MessageId;
 
     fn user(id: &str, text: &str) -> MessageBlock {
         MessageBlock::User(UserMessageBlock {

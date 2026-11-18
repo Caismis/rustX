@@ -103,6 +103,7 @@ similar = "3.2"
 imbl = { version = "7.0.0", features = ["serde"] }
 base64 = "0.22"
 rustx-types = { path = "crates/rustx-types" }
+rustx-conversation = { path = "crates/rustx-conversation" }
 rustx-publication = { path = "crates/rustx-publication" }
 # Workspace crates extracted from src/ (bottom-up split).
 rustx-bounded-json = { path = "crates/rustx-bounded-json" }

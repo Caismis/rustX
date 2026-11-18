@@ -4713,6 +4713,7 @@ dependencies = [
  "rustix",
  "rustx-bounded-file",
  "rustx-bounded-json",
+ "rustx-conversation",
  "rustx-identity",
  "rustx-publication",
  "rustx-types",
@@ -4757,6 +4758,18 @@ dependencies = [
 name = "rustx-bounded-json"
 version = "0.1.0"
 dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rustx-conversation"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "imbl",
+ "rustx-types",
+ "schemars",
  "serde",
  "serde_json",
 ]
