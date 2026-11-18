@@ -35,11 +35,11 @@
 
 mod catalog;
 mod diagnostics;
-pub(crate) mod discovery;
-mod frontmatter;
-pub(crate) mod identity;
+pub(crate) use rustx_types::skills::discovery;
+pub(crate) use rustx_types::skills::frontmatter;
+pub(crate) use rustx_types::skills::identity;
 pub(crate) mod package;
-pub mod source;
+pub use rustx_types::skills::source;
 
 pub use catalog::{SkillCatalogEntry, SkillReadTool, SkillSnapshot, render_skill_catalog};
 pub use diagnostics::{ShadowedSkill, SkillDiagnostic, SkillDiagnosticSeverity, SkillProvenance};

@@ -4714,6 +4714,7 @@ dependencies = [
  "rustx-bounded-file",
  "rustx-bounded-json",
  "rustx-identity",
+ "rustx-types",
  "schemars",
  "serde",
  "serde_json",
@@ -4745,6 +4746,7 @@ name = "rustx-bounded-file"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "nix",
  "serde",
  "serde_json",
  "tempfile",
@@ -4766,6 +4768,42 @@ dependencies = [
  "serde",
  "serde_json",
  "uuid",
+]
+
+[[package]]
+name = "rustx-types"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "chrono",
+ "chrono-tz",
+ "constant_time_eq",
+ "croner",
+ "futures-util",
+ "http",
+ "httpdate",
+ "ignore",
+ "jsonschema",
+ "jsonwebtoken",
+ "libc",
+ "nix",
+ "referencing",
+ "reqwest",
+ "rmp-serde",
+ "rusqlite",
+ "rustix",
+ "rustx-bounded-file",
+ "rustx-bounded-json",
+ "rustx-identity",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "toml 0.8.23",
 ]
 
 [[package]]

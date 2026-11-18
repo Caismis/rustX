@@ -2,8 +2,8 @@
 use crate::runtime::identity::{ConversationId, MessageId};
 use crate::runtime::inbound::InboundSequence;
 use chrono::{DateTime, Datelike, Duration, Utc};
+pub use rustx_types::scheduler::calendar;
 use serde::{Deserialize, Serialize};
-mod calendar;
 pub(crate) mod control;
 
 /// A conversation-scoped identity whose ordinal is never reused.

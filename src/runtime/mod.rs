@@ -22,7 +22,7 @@
 
 pub mod agent_profile;
 pub mod auxiliary;
-pub mod cancellation;
+pub use rustx_types::runtime::cancellation;
 pub mod capability_inspection;
 /// Native configuration-adoption contracts: prepared candidates, adoption
 /// eligibility/refusal, admitted Attempt configuration, and cache impact.
@@ -48,7 +48,7 @@ pub(crate) mod interactive_process;
 pub mod interactive_supervisor;
 /// Runtime-owned monotonic elapsed time for deterministic policy deadlines.
 /// This is separate from the UTC [`RuntimeClock`] timestamp boundary.
-pub mod monotonic;
+pub use rustx_types::runtime::monotonic;
 /// Fixed execution-permission modes, resource overrides, and the built-in
 /// permission matrix (Issue #544).
 pub mod permission;
@@ -100,12 +100,12 @@ pub(crate) mod process_runner;
 /// The runtime-level Linux/macOS process-supervision prerequisite used by
 /// Bash catastrophic fallback. Internal coordination only — it is not part
 /// of the public runtime API.
-pub(crate) mod process_supervision;
+pub(crate) use rustx_types::runtime::process_supervision;
 /// The platform adapter for the `waitid` primitive. Linux uses `nix`'s
 /// implementation; macOS uses its libc implementation because `nix` does not
 /// currently expose `waitid` on Apple targets.
 #[cfg(unix)]
-pub(crate) mod process_wait;
+pub(crate) use rustx_types::runtime::process_wait;
 /// Durable startup recovery (Issue #12, M9a): the reconstruct → classify →
 /// reconcile → resume pipeline the conversation runtime owns. Recovery policy
 /// lives here, above the durable store and below nothing: no client, no
@@ -128,7 +128,7 @@ pub mod subagent;
 /// process unit (M5 Bash and M7 interactive MCP stdio). Internal
 /// coordination only — it is not part of the public runtime API.
 pub(crate) mod supervised_unit;
-pub mod types;
+pub use rustx_types::runtime::types;
 /// Native bounded Workflow definitions, immutable compiled programs, and
 /// catalog admission (Issue #83).
 pub mod workflow;

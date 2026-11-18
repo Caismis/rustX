@@ -915,7 +915,7 @@ fn latest_event(
         (
             concat!(
                 "SELECT sequence,observation_json,observation_witness FROM events INDEXED BY events_kind_idx WHERE ",
-                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+                rustx_types::sql!("event_kind"),
                 "=?1",
                 " AND sequence<=?2 AND sequence<?3 ORDER BY sequence DESC LIMIT 1"
             ),

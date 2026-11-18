@@ -46,12 +46,7 @@ pub(crate) fn bounded_structural_len<T: Serialize + schemars::JsonSchema>(
 
 /// A capped serializer bounds both encoded length and buffer capacity.
 /// The allocation depends only on the selected display budget, not source size.
-pub(crate) fn bounded_bytes<T: Serialize + ?Sized>(value: &T, limit: usize) -> Option<Vec<u8>> {
-    if !crate::observation::preflight::fits(value, limit) {
-        return None;
-    }
-    encode_capped_bytes(value, limit).ok()
-}
+pub(crate) use rustx_types::observation::bounded::bounded_bytes;
 /// Decodes one source-typed native domain value, preserving exact native u64 fields.
 /// Opaque JSON fields retain their original JSON semantics.
 /// # Errors

@@ -7,10 +7,10 @@
 //! and the transport (`messages.rs`). No Anthropic SDK type exists anywhere
 //! in rustX, and one adapter invocation performs exactly one HTTP request.
 
-pub mod config;
+pub use rustx_types::model::adapter::anthropic::config;
 pub(crate) mod mapping;
 pub mod messages;
-pub(crate) mod wire;
+pub(crate) use rustx_types::model::adapter::anthropic::wire;
 
 pub use config::AnthropicAdapterConfig;
 pub use messages::AnthropicMessagesAdapter;

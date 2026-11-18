@@ -251,9 +251,15 @@ def load_package_metadata(
     elif len(packages) == 1:
         pkg = packages[0]
     else:
-        raise PreparationError(
-            f"expected one package in workspace metadata (pass `-p`), found {len(packages)}"
-        )
+        # Multi-member workspace: cargo resolves the default member the same
+        # way a bare `cargo test` at the root does.
+        default_ids = set(metadata.get("workspace_default_members") or [])
+        matches = [pkg for pkg in packages if pkg.get("id") in default_ids]
+        if len(matches) != 1:
+            raise PreparationError(
+                f"expected one package in workspace metadata (pass `-p`), found {len(packages)}"
+            )
+        pkg = matches[0]
 
     pkg_id = pkg["id"]
     manifest_path = Path(pkg["manifest_path"]).resolve()

@@ -34,7 +34,7 @@ fn digest(bytes: &str) -> String {
 // Journal scan is unbounded after a long non-lifecycle tail (or an empty owner).
 pub(super) const OWNER_KIND_SQL: &str = concat!(
     "SELECT sequence FROM events INDEXED BY events_kind_idx WHERE ",
-    crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+    rustx_types::sql!("event_kind"),
     "=?1 ORDER BY sequence DESC LIMIT 1"
 );
 

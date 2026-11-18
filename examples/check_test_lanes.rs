@@ -430,9 +430,17 @@ fn metadata_targets(cargo: &str, root: &Path) -> Result<PackageMetadata, String>
 fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, String> {
     let packages = metadata["packages"]
         .as_array()
-        .filter(|packages| packages.len() == 1)
-        .ok_or("cargo metadata must describe exactly the one rustx package")?;
-    let package = &packages[0];
+        .ok_or("cargo metadata has no packages")?;
+    let package = if packages.len() == 1 {
+        &packages[0]
+    } else {
+        // The workspace also hosts the extracted `rustx-*` crates; lanes only
+        // cover the root package's targets.
+        packages
+            .iter()
+            .find(|package| package["name"].as_str() == Some("rustx"))
+            .ok_or("cargo metadata has no rustx package")?
+    };
     let package_id = package["id"]
         .as_str()
         .filter(|id| !id.is_empty())
@@ -703,7 +711,54 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
         profile: Profile::Full,
         affected: false,
     };
+    let (names_rustx, names_other) = parse_cargo_arguments(&mut step, cargo, targets)?;
+    parse_libtest_arguments(&mut step, libtest)?;
+    if names_other && !names_rustx {
+        // The step exercises only extracted `rustx-*` packages.
+        if !step.targets.is_empty() {
+            // Its target selections would claim root-package coverage it
+            // does not run; reject rather than misread the command.
+            return Err(
+                "target selections alongside `-p` for other packages claim root coverage they do not run"
+                    .into(),
+            );
+        }
+        if !step.filters.is_empty() || !step.skips.is_empty() || step.exact {
+            // The lanes model only the root package's tests, so a filter or
+            // skip here is unverifiable and could silently run zero tests.
+            return Err(
+                "a `-p` step for other packages must not carry libtest selections the lanes cannot verify"
+                    .into(),
+            );
+        }
+        // It covers none of the root package's targets, so the lanes
+        // ignore it.
+        return Ok(step);
+    }
+    if names_other {
+        // `rustx` and extracted packages selected together: per-package
+        // feature and target resolution is not modeled, so reject instead
+        // of silently dropping the other selectors.
+        return Err(
+            "a `cargo test` step mixing `rustx` with other `-p` packages is not modeled by the lanes"
+                .into(),
+        );
+    }
+    if step.targets.is_empty() {
+        return Err("a cargo test step must select its targets explicitly".into());
+    }
+    Ok(step)
+}
+
+fn parse_cargo_arguments(
+    step: &mut Step,
+    cargo: &[&str],
+    targets: &[Target],
+) -> Result<(bool, bool), String> {
     let of = |kind: Kind| targets.iter().filter(move |target| target.kind == kind);
+    // `targets` holds only the root `rustx` package's targets; a `-p` step that
+    // names other packages selects none of them and contributes no coverage.
+    let (mut names_rustx, mut names_other) = (false, false);
     let mut cargo = cargo.iter();
     while let Some(argument) = cargo.next() {
         let mut named = |kind: Kind| -> Result<Target, String> {
@@ -738,16 +793,27 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
                 step.features
                     .extend([(*argument).into(), (*features).into()]);
             }
+            "-p" | "--package" => {
+                let name = cargo
+                    .next()
+                    .ok_or(format!("{argument} requires a package name"))?;
+                if *name == "rustx" {
+                    names_rustx = true;
+                } else {
+                    names_other = true;
+                }
+            }
             "--no-run" => step.executes = false,
             "--locked" | "--timings" => {}
             other => return Err(format!("unsupported cargo test option `{other}`")),
         }
     }
-    if step.targets.is_empty() {
-        return Err("a cargo test step must select its targets explicitly".into());
-    }
     step.targets.sort();
     step.targets.dedup();
+    Ok((names_rustx, names_other))
+}
+
+fn parse_libtest_arguments(step: &mut Step, libtest: &[&str]) -> Result<(), String> {
     let mut libtest = libtest.iter();
     while let Some(argument) = libtest.next() {
         match *argument {
@@ -761,7 +827,7 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
             filter => step.filters.push(filter.into()),
         }
     }
-    Ok(step)
+    Ok(())
 }
 
 /// libtest's own view of one harness.

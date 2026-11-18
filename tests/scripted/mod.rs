@@ -98,5 +98,7 @@ pub(crate) use capability::exercise_skill_catalog_without_environments;
 mod context;
 mod extensions;
 mod interaction;
+mod observation_relocated;
 mod runtime_client;
+mod sqlite_event_kind;
 mod tools;

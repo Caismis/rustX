@@ -7,6 +7,8 @@
 //! the conversation runtime derives interaction identities from the already
 //! non-reused attempt domain in `InteractionId::for_attempt`.
 
+#![allow(rustdoc::broken_intra_doc_links)]
+
 use serde::{Deserialize, Serialize};
 
 /// Bounded caller correlation for one manual compaction, not an idempotency key.

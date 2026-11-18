@@ -12,9 +12,8 @@ mod bash;
 mod classify;
 mod decision;
 mod matrix;
-mod mode;
-mod reminder;
-mod resource;
+pub use rustx_types::runtime::permission::mode;
+pub(crate) use rustx_types::runtime::permission::reminder;
 mod task;
 pub use task::PermissionTaskEvidence;
 pub(crate) mod review;
@@ -28,8 +27,8 @@ pub use decision::{
 pub use matrix::{BuiltinPermissionAction, BuiltinToolKind, builtin_action_for};
 pub use mode::ExecutionPermissionMode;
 pub use reminder::{PermissionReminderState, permission_reminder_text};
-pub use resource::{
+pub use review::{PermissionReviewVerdict, accept_permission_review};
+pub use rustx_types::runtime::permission::resource::{
     ResourcePermissionSet, ResourcePermissionValue, effective_invocation_resource_permission,
     resolve_resource_permission, stricter_resource_permission,
 };
-pub use review::{PermissionReviewVerdict, accept_permission_review};

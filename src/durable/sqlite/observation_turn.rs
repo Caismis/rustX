@@ -283,7 +283,7 @@ fn prompt(
         .query_row_cached(
             concat!(
                 "SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE ",
-                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+                rustx_types::sql!("event_kind"),
                 "=x'0002'",
                 " AND sequence<?1"
             ),

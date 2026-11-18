@@ -64,8 +64,7 @@ macro_rules! profile_stage {
     };
 }
 
-#[cfg(test)]
-pub(crate) mod create_profile;
+pub use rustx_types::local_runtime::session::create_profile;
 
 /// The persisted native session-catalog schema.
 ///
@@ -479,7 +478,7 @@ struct PersistedSession {
 mod artifacts;
 mod catalog_commit;
 mod creation;
-mod invalidations;
+pub use rustx_types::local_runtime::session::invalidations;
 mod lineage;
 mod metadata;
 mod projection;
