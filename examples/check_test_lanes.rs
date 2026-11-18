@@ -428,7 +428,9 @@ fn metadata_targets(cargo: &str, root: &Path) -> Result<PackageMetadata, String>
 }
 
 fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, String> {
-    let packages = metadata["packages"].as_array().ok_or("cargo metadata has no packages")?;
+    let packages = metadata["packages"]
+        .as_array()
+        .ok_or("cargo metadata has no packages")?;
     let package = if packages.len() == 1 {
         &packages[0]
     } else {
