@@ -8565,3 +8565,10 @@ local Execution Protocol over Unix sockets:
   bounded reads; `..`, absolute paths, symlinks, and special files have no
   addressable path, and a path replaced between the two open/verify calls is
   an `AlreadyExists` conflict, never silently followed.
+- **Session claims are process-owned, once, and fenced by residency.** The
+  manager admits an execution claim only under the catalog visibility cut
+  and the residency mutex together — never on endpoint status — prepares at
+  most one endpoint per Session (a concurrent claimant fails explicitly), and
+  returns the identical endpoint to every later claim. Deletion and drain
+  fence the claim and revoke the binding; a closed claim is never recovered,
+  and endpoint teardown never runs under a registry or residency mutex.

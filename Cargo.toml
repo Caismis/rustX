@@ -167,6 +167,8 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 # The proven descriptor-relative filesystem primitives the physical
 # Execution Client shares; there is no parallel implementation.
 rustx-confined-fs = { path = "crates/confined-fs" }
+rustx-execution-protocol = { path = "crates/execution-protocol" }
+rustx-execution-server = { path = "crates/execution-server" }
 biodivine-lib-bdd = "0.6.3"
 minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }

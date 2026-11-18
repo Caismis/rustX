@@ -13,6 +13,7 @@ impl SessionRuntimeManager {
         self.configuration.resource_io.cancel();
         let mut registry = self.registry.0.lock().expect("registry mutex");
         registry.draining = true;
+        self.execution.fence_all();
         let mut initializations = Vec::new();
         for entry in registry.entries.values() {
             match entry {

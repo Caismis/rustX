@@ -24,6 +24,7 @@ use crate::runtime::identity::ConversationId;
 mod client;
 mod configuration;
 mod drain;
+mod execution;
 mod lifecycle;
 mod model_selection;
 #[cfg(feature = "issue-387-profile")]
@@ -32,6 +33,7 @@ mod schedule;
 mod schedule_catalog;
 mod schedule_driver;
 pub(crate) mod status;
+pub use execution::LocalExecutionEndpoint;
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
 mod sessions;
 mod source_watch;
@@ -621,6 +623,7 @@ pub struct SessionRuntimeManager {
         Arc<std::sync::OnceLock<Arc<dyn crate::runtime_client::host::InteractionLifecycleSink>>>,
     pub(super) sessions: SessionController,
     registry: Arc<RuntimeRegistry>,
+    execution: Arc<execution::SessionExecutionRegistry>,
     pub(in crate::local_runtime) configuration: UserConfigManager,
     pub(in crate::local_runtime) credentials: CredentialSnapshot,
     pub(super) process_policy: Arc<std::sync::RwLock<super::app_server_policy::AppServerPolicy>>,
@@ -859,6 +862,7 @@ impl SessionRuntimeManager {
                 #[cfg(test)]
                 reaper_waiting: None,
             }))),
+            execution: Arc::default(),
             process_policy: Arc::new(std::sync::RwLock::new(
                 configuration.app_server_policy().map_err(error)?,
             )),

@@ -486,14 +486,16 @@ envelope.
 - No Client instance replacement, generation increment, or death-cleanup
   evidence path exists; a detached binding rejects every Hello with
   `RecoveryRequired` until #577 lands.
-- No integration between this arbitration and the Agent runtime exists
-  yet; these crates are new workspace members and nothing in `rustx`
-  calls them today. The boundary is read-only so far — the single
-  physical operation is the bounded revision-checked range read — and
-  the existing App Server keeps serving workspace reads through its own
-  local filesystem path (`src/package_io.rs` and the environment file
-  readers, now delegating to `rustx-confined-fs`). The new boundary is
-  not yet wired into `rustx`'s runtime.
+- The only caller inside `rustx` today is the native composition layer:
+  `SessionRuntimeManager::reserve_local_execution` claims one
+  process-owned `LocalExecutionEndpoint` per Session (binding, listener,
+  and owner-only bootstrap in a private directory) for the trusted
+  composer. No product data path uses it — the boundary is read-only so
+  far, the single physical operation is the bounded revision-checked
+  range read, and the existing App Server keeps serving workspace reads
+  through its own local filesystem path (`src/package_io.rs` and the
+  environment file readers, now delegating to `rustx-confined-fs`). No
+  Client is spawned and no dispatch happens yet.
 
 ## Test ownership (T01–T73) and optional O-SUM
 
@@ -636,4 +638,9 @@ after the RPC — a read-only T02 fragment.
 T03/T24/T28's connection-singularity,
 dependency-boundary, and cross-instance rejection portions and T42's
 bounded-read portion have their first coverage here; the remainder of
-the matrix is pending in its owning layer.
+the matrix is pending in its owning layer. The process-owned Session
+claim adds a further limited T03/T28 fragment — registry-level proof
+that one claimant wins preparation, that a dropped waiter never strands
+the claim, that two Sessions never share binding material, and that
+delete/drain revokes — but it dispatches no work and proves no recovery,
+so the full contracts stay pending in their owning layers.

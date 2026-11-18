@@ -274,16 +274,29 @@ impl SessionRuntimeManager {
         session: &SessionId,
         revision: &str,
     ) -> Result<super::super::session::deletion::SessionDeleteResult, RuntimeManagerError> {
-        if let blocked @ super::super::session::deletion::SessionDeleteResult::Blocked { .. } =
-            self.sessions.delete_preview(session).await
-        {
-            return Ok(blocked);
+        match self.sessions.delete_preview(session).await {
+            result @ (super::super::session::deletion::SessionDeleteResult::Blocked { .. }
+            | super::super::session::deletion::SessionDeleteResult::NotFound { .. }) => {
+                return Ok(result);
+            }
+            super::super::session::deletion::SessionDeleteResult::Preview { preview }
+                if preview.target_revision != revision =>
+            {
+                return Ok(
+                    super::super::session::deletion::SessionDeleteResult::Stale {
+                        session_id: preview.session_id,
+                        actual_revision: preview.target_revision,
+                    },
+                );
+            }
+            _ => {}
         }
         let residents = {
             let mut registry = self.registry.0.lock().expect("registry mutex");
             if !registry.retiring_sessions.insert(session.clone()) {
                 return Err(error("Session retirement already owns admission"));
             }
+            self.execution.fence(session);
             registry.failed_submissions.retain(|_, flight| {
                 let (owner, _) = flight.target.get().expect("failed initialization target");
                 owner != session
@@ -326,6 +339,10 @@ impl SessionRuntimeManager {
                 .lock()
                 .expect("Session configuration bindings")
                 .remove(session);
+            // The retired claim's endpoint teardown runs here, outside the
+            // residency mutex. An uncertain durable result keeps
+            // `retiring_sessions` closed so no new claim can start.
+            self.execution.retire(session);
         }
         if !matches!(
             result,
@@ -390,6 +407,7 @@ impl SessionRuntimeManager {
                 .expect("registry mutex")
                 .retiring_sessions
                 .remove(session);
+            self.execution.retire(session);
         }
         Ok(result)
     }

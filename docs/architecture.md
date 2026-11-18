@@ -7770,13 +7770,20 @@ current layer status.
 - `rustx-execution-protocol` owns the typed records, bounded length-prefixed
   framing, `Handshake` deadline wrapper, and `LOCAL_HANDSHAKE_TIMEOUT`. It
   depends on no other workspace crate; both boundary crates depend on it.
-- `rustx-execution-server` is a library for the Agent, not yet wired into
-  it. It owns binding
+- `rustx-execution-server` is a library owned by the Agent. It owns binding
   reservation, credential authentication, arbitration, connection lifecycle,
   and typed request dispatch (`Ping`, `ReadRange`). Binding uniqueness is per
   `Binding`, not per `Session`: each binding admits at most one live
   connection, and a `Detached` binding is closed to every new Hello until the
   live-instance recovery work in #577.
+- `SessionRuntimeManager` claims one local endpoint per Session through
+  `session_runtime_manager/execution.rs`: a trusted-composer-only
+  `LocalExecutionEndpoint` (binding, listener, and an owner-only bootstrap in
+  a private directory) admitted under the catalog visibility cut and the
+  residency mutex together, prepared exactly once on a blocking task, and
+  fenced on Session delete and process drain. The claim is not reachable
+  through the App Server protocol, nothing spawns or polls a Client yet, and
+  no product operation dispatches through it.
 - `rustx-execution-client` is a standalone binary performing physical
   workspace/environment I/O inside the workspace view it was launched under.
   Its production workspace dependencies are the protocol and
