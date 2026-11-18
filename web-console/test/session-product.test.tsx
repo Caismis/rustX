@@ -2,6 +2,7 @@ import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { ClientView, SessionView } from '../src/client/contracts';
+import { nativeTool } from './native-tool-cases';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { App } from '../src/app/App';
 import { Server, settingsReceipt, snapshot } from './fixture';
@@ -97,6 +98,18 @@ it('conversation chrome exposes product controls without developer diagnostics',
   await act(async () => server.update('A', { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'completed', finish_reason: { type: 'stop' } } } } }));
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(screen.queryByLabelText('Native diagnostic JSON')).toBeNull();
+});
+it('keeps an unconfirmed remote fetch result out of the session chrome after Stop', async () => {
+  const server = await mount();
+  const tool = nativeTool('fetch', 'web_fetch_exa', {}, []);
+  tool.state = { type: 'settled', arguments: '{}', result: {
+    status: { type: 'outcome_unknown', detail: 'Remote termination could not be confirmed' }, duration_ms: '0',
+  } };
+  await act(async () => server.update('A', { ...snapshot(), attempt: {
+    ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } }, foreground: [tool],
+  } }));
+  expect(screen.queryByText('Needs verification')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Review outcome' })).toBeNull();
 });
 it('lost cancellation remains uncertain through reconnect and a settled snapshot, with no replay', async () => {
   const server = await mount(); server.held.add('turn/interrupt');

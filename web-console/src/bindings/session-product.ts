@@ -32,7 +32,6 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
   const uncertain = state.uncertain.some(item => sessionId !== undefined && item.sessionId === sessionId)
     || view?.cancellation?.status === 'uncertain' || view?.modelMutation?.status === 'uncertain'
     || view?.snapshot?.jobs?.some(tool => tool.state === 'outcome_unknown')
-    || view?.snapshot?.attempt?.foreground?.some(tool => tool.state.type === 'settled' && tool.state.result.status.type === 'outcome_unknown')
     || view?.snapshot?.workflows?.runs.some(run => run.state.type === 'settled' && run.state.outcome === 'outcome_unknown');
   if (uncertain) return { status: 'uncertain', label: tx('common:session-product.needs-verification'), severity: 'warning', recovery,
     detail: tx('common:copy.an-operation-may-have-taken-effect-check-the-conversation-and-affected-work-before-trying-', { p0: view?.snapshot?.durability_failure ? tx('common:copy.storage-also-reported-a-failure-changes-may-not-be-saved') : '' }) };
