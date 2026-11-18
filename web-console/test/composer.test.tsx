@@ -165,3 +165,63 @@ it('prepares Send without locking the draft or admitting any submission gesture'
   ui.rerender(<AgentComposer {...p} submitPending busy/>);
   expect(screen.getByRole('button', { name: 'Sending…' }).getAttribute('data-sending')).toBe('true');
 });
+
+it('advertises and executes empty-draft Ctrl/Cmd+Enter steer-all only when eligible', async () => {
+  const p = props();
+  const onSteerQueue = vi.fn();
+  const ui = render(<AgentComposer {...p} active hasQueuedMessages onSteerQueue={onSteerQueue}/>);
+  const input = screen.getByLabelText('Message');
+  expect(input.getAttribute('placeholder')).toBe('Cmd/Ctrl+Enter steers all queued messages');
+
+  // Repeat Enter is ignored; Ctrl/Cmd+Enter steers all queued messages instead of sending.
+  fireEvent.keyDown(input, { key: 'Enter', metaKey: true, repeat: true });
+  expect(onSteerQueue).not.toHaveBeenCalled();
+  fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+  fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+  expect(onSteerQueue).toHaveBeenCalledTimes(2);
+  expect(p.onSend).not.toHaveBeenCalled();
+
+  // Plain Enter never steers the queue, even under Steer busyEnterBehavior.
+  ui.rerender(<AgentComposer {...p} active hasQueuedMessages busyEnterBehavior="steer" onSteerQueue={onSteerQueue}/>);
+  fireEvent.keyDown(input, { key: 'Enter' });
+  expect(onSteerQueue).toHaveBeenCalledTimes(2);
+  expect(p.onSend).not.toHaveBeenCalled();
+
+  // An open command menu withholds both the contextual hint and the gesture.
+  fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+  expect(input.getAttribute('placeholder')).toBe('Give this Session a task…');
+  fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+  expect(onSteerQueue).toHaveBeenCalledTimes(2);
+  fireEvent.keyDown(input, { key: 'Escape' });
+  expect(input.getAttribute('placeholder')).toBe('Cmd/Ctrl+Enter steers all queued messages');
+
+  // Explicit placeholder overrides the hint; idle/no-queue/disabled/submitDisabled withhold both.
+  ui.rerender(<AgentComposer {...p} active hasQueuedMessages onSteerQueue={onSteerQueue} placeholder="Custom hint"/>);
+  expect(input.getAttribute('placeholder')).toBe('Custom hint');
+
+  for (const override of [
+    { active: false, hasQueuedMessages: true },
+    { active: true, hasQueuedMessages: false },
+    { active: true, hasQueuedMessages: true, disabled: true },
+    { active: true, hasQueuedMessages: true, submitDisabled: true },
+    { active: true, hasQueuedMessages: true, onSteerQueue: undefined },
+  ]) {
+    ui.rerender(<AgentComposer {...p} onSteerQueue={onSteerQueue} {...override}/>);
+    expect(input.getAttribute('placeholder')).toBe('Give this Session a task…');
+    fireEvent.keyDown(input, { key: 'Enter', metaKey: true });
+  }
+  expect(onSteerQueue).toHaveBeenCalledTimes(2);
+  expect(p.onSend).not.toHaveBeenCalled();
+});
+
+it('draft content and attachments outrank the queue on Ctrl/Cmd+Enter', async () => {
+  const p = props();
+  const onSteerQueue = vi.fn();
+  render(<AgentComposer {...p} uploadPolicy={uploadCapabilities.upload_policy} active hasQueuedMessages onSteerQueue={onSteerQueue}/>);
+  const input = screen.getByLabelText('Message');
+  fireEvent.change(input, { target: { value: 'Steer this draft' } });
+  expect(input.getAttribute('placeholder')).toBe('Give this Session a task…');
+  await act(async () => { fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true }); });
+  expect(p.onSend).toHaveBeenCalledExactlyOnceWith('Steer this draft', [], 'steer', expect.any(Function));
+  expect(onSteerQueue).not.toHaveBeenCalled();
+});

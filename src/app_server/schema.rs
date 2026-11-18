@@ -487,6 +487,23 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 revision: EXACT,
             },
         },
+        Method::InboundSteer {
+            target: target.clone(),
+            expected_turn_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+            scope: crate::durable::PendingSteerScope::Row {
+                expected: crate::durable::PendingInboundRef {
+                    sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
+                    revision: EXACT,
+                },
+            },
+        },
+        Method::InboundSteer {
+            target: target.clone(),
+            expected_turn_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+            scope: crate::durable::PendingSteerScope::All {
+                through: crate::runtime::inbound::InboundSequence::new(EXACT),
+            },
+        },
         Method::AgentStatistics {
             target: target.clone(),
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),

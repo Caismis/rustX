@@ -1181,6 +1181,14 @@ export type Request1 =
       };
     }
   | {
+      method: 'inbound/steer';
+      params: {
+        target: AttachmentTarget;
+        expectedTurnId: AttemptId;
+        scope: PendingSteerScope;
+      };
+    }
+  | {
       method: 'turn/interrupt';
       params: {
         target: AttachmentTarget;
@@ -2015,6 +2023,38 @@ export type UserInputBlock =
       token: string;
       type: 'upload';
     };
+/**
+ * One running-turn promotion of queued rows into steering.
+ *
+ * `Row` is compare-and-set on one occurrence. `All` reclassifies every
+ * eligible queued row through the observed sequence. Neither mints an identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "PendingSteerScope".
+ */
+export type PendingSteerScope =
+  | {
+      expected: PendingInboundRef;
+      kind: 'row';
+    }
+  | {
+      through: InboundSequence;
+      kind: 'all';
+    };
+/**
+ * A conversation-scoped inbound sequence number.
+ *
+ * The sequence identifies one item of the conversation's inbound ordering
+ * domain. It is **not**
+ * [`RuntimeEventEnvelope`]`::sequence`
+ * and is never allocated from the Event Journal sequence; the durable
+ * Pending Inbound Inbox owns allocation, and the first successful
+ * acceptance of a conversation receives `1`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundSequence".
+ */
+export type InboundSequence = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "EffectiveFieldName".
@@ -3306,20 +3346,6 @@ export type ThreadStatus =
  * via the `definition` "ThreadActiveFlag".
  */
 export type ThreadActiveFlag = 'waitingOnApproval' | 'waitingOnUserInput';
-/**
- * A conversation-scoped inbound sequence number.
- *
- * The sequence identifies one item of the conversation's inbound ordering
- * domain. It is **not**
- * [`RuntimeEventEnvelope`]`::sequence`
- * and is never allocated from the Event Journal sequence; the durable
- * Pending Inbound Inbox owns allocation, and the first successful
- * acceptance of a conversation receives `1`.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InboundSequence".
- */
-export type InboundSequence = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "TurnInputDisposition".
@@ -14978,6 +15004,11 @@ export interface InboundItemView {
    * The bounded native header defers part of its authoritative message.
    */
   deferred?: boolean;
+  /**
+   * Original public app-server input id, projected only from durable
+   * correlation `app-server:<id>`. Absent for every other producer.
+   */
+  input_id?: string | null;
   message: UserMessageBlock1;
 }
 /**

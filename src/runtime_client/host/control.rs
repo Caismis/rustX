@@ -344,6 +344,26 @@ impl ClientInner {
             .unwrap_or(crate::durable::PendingMutationOutcome::DurabilityUncertain))
     }
 
+    pub(crate) fn steer_queued(
+        &self,
+        expected: &crate::runtime::identity::AttemptId,
+        scope: &crate::durable::PendingSteerScope,
+    ) -> Result<crate::durable::PendingMutationOutcome, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        match self
+            .runtime
+            .as_ref()
+            .expect("writable runtime")
+            .steer_queued(expected, scope)
+        {
+            Ok(outcome) => Ok(outcome),
+            Err(InboundAdmissionError::Mailbox(_)) => {
+                Ok(crate::durable::PendingMutationOutcome::DurabilityUncertain)
+            }
+            Err(error) => Err(input_admission_error(error)),
+        }
+    }
+
     pub(crate) fn submit_session_inbound(
         &self,
         content: Vec<crate::message::types::UserContentBlock>,

@@ -342,6 +342,7 @@ impl RuntimeClientProjection {
                     revision: header.revision,
                     sequence: crate::runtime::inbound::InboundSequence::new(header.sequence),
                     deferred: header.message.deferred,
+                    input_id: header.input_id.clone(),
                     message: message.clone(),
                 });
             }
@@ -351,6 +352,9 @@ impl RuntimeClientProjection {
             && let Some(cursor) = header.message.transcript_cursor
         {
             self.observe_transcript_position(cursor);
+        }
+        if let Some((first, last)) = receipt.promoted_transcripts {
+            self.observe_transcript_range(first.get(), last.get());
         }
         if let Some(cursor) = receipt.removed_transcript {
             self.observe_transcript_position(cursor);

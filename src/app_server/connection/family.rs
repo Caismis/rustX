@@ -100,6 +100,7 @@ impl Family<'_> {
             | Method::InboundSubmissionLookup { target, .. }
             | Method::InboundEdit { target, .. }
             | Method::InboundRemove { target, .. }
+            | Method::InboundSteer { target, .. }
             | Method::TurnCancel { target, .. } => Family::Runtime(target),
             Method::WorkflowScheduledRecovery { .. }
             | Method::WorkflowScheduledCancel { .. }

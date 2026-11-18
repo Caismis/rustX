@@ -19543,6 +19543,13 @@
           "type": "boolean",
           "default": false
         },
+        "input_id": {
+          "description": "Original public app-server input id, projected only from durable\ncorrelation `app-server:<id>`. Absent for every other producer.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message": {
           "description": "The canonical inbound message.",
           "$ref": "#/$defs/UserMessageBlock"
@@ -39080,6 +39087,40 @@
           ]
         },
         {
+          "description": "Promote one expected queued row, or every currently queued row, into the running attempt.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "inbound/steer"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "expectedTurnId": {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                "scope": {
+                  "$ref": "#/$defs/PendingSteerScope"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "expectedTurnId",
+                "scope"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -41194,6 +41235,47 @@
       "required": [
         "sequence",
         "revision"
+      ]
+    },
+    "PendingSteerScope": {
+      "description": "One running-turn promotion of queued rows into steering.\n\n`Row` is compare-and-set on one occurrence. `All` reclassifies every\neligible queued row through the observed sequence. Neither mints an identity.",
+      "oneOf": [
+        {
+          "description": "Reclassify one exact queued occurrence.",
+          "type": "object",
+          "properties": {
+            "expected": {
+              "$ref": "#/$defs/PendingInboundRef"
+            },
+            "kind": {
+              "type": "string",
+              "const": "row"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "expected"
+          ]
+        },
+        {
+          "description": "Reclassify eligible occurrences through the queue observed by the caller.",
+          "type": "object",
+          "properties": {
+            "through": {
+              "$ref": "#/$defs/InboundSequence"
+            },
+            "kind": {
+              "type": "string",
+              "const": "all"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "through"
+          ]
+        }
       ]
     },
     "ModelProbeSource": {

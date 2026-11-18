@@ -261,7 +261,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "d66b2def7067e62230cdb4658790550840ba79dcc9c8d01805ca113db5b1fc25",
+      "local_sha256": "ef96f42bc876b29d48d784e729822c5548df6a62f014e5f4876f8c0e5ec626dd",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -502,7 +502,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "a046ea01343063e290bdebcc59838b59a6ecbdb85e73b9e153b6ea66f829de5b"
+      "local_sha256": "3b29157a70be03a6c0e8100f7d0e68c2fb9dd4bd4381be71dd1e4a5fc0fa2b83"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -514,9 +514,14 @@
         "../../../../protocol/app-server/v80",
         "../../bindings/composer-context",
         "../../client/contracts",
+        "../../client/session-uploads",
         "../../locale/react",
         "../../locale/translation",
+        "../../presentation/primitives/FileTypeIcon",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/file-size",
         "../../presentation/primitives/icons",
+        "../components/Artifact",
         "./QueueDock.module.css",
         "react"
       ],
@@ -528,7 +533,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1129163426cc11407d9097e23a5ca3d5eb773c7ed33b552f7e5fcccf72ef7d90"
+      "local_sha256": "c5b5ff1ac34c1ee1d064feaa92e6829bb54e55794c4050ce01111952d4223205"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -4053,7 +4058,7 @@
           "treatment": "Add the English/Chinese pending-message label for the Harness-style sending progress, driven by rustX native admission state."
         }
       ],
-      "local_sha256": "c193227f9daf529c54f8d9cea255e6a8cd5e0d603b7c014dc4f67fa95df1d83a"
+      "local_sha256": "d583337a7e1f78fce71181b6270bdb17b1e1730a919db4a5fe40c352dd0d333b"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

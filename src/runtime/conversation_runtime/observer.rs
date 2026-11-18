@@ -353,6 +353,16 @@ impl InboundObserver for RuntimeObserver {
             && let Some(fanout) = inner.pending.get()
         {
             fanout.native_pending(receipt, cut);
+            if let Some((first, last)) = receipt.and_then(|receipt| receipt.promoted_transcripts)
+                && (first.get()..=last.get()).any(|position| {
+                    inner
+                        .store
+                        .mark_observation_transcript_ready(position)
+                        .is_err()
+                })
+            {
+                fanout.source_failed();
+            }
             // Removal owns the retired T position too. Marking that exact
             // position wakes source preparation even though its row is gone.
             if let Some(receipt) = receipt

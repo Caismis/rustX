@@ -139,8 +139,8 @@ for (const theme of ['light', 'dark'] as const) for (const width of [1440, 390])
           });
         });
         expect(labels).toEqual([
-          { text:'native/coder', x:143.453125, y:285, width:70.78125, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
-          { text:'deliberate', x:218.234375, y:285, width:20.765625, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
+          { text:'native/coder', x:143.453125, y:259, width:70.78125, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(207, 211, 214)', transform:'none' },
+          { text:'deliberate', x:218.234375, y:259, width:20.765625, height:20, fontSize:'13px', fontWeight:'400', lineHeight:'20px', color:'rgb(129, 133, 140)', transform:'none' },
         ]);
       }
       await expectStableScreenshot(stack, `composer-${state}-${theme}-${width}.png`);

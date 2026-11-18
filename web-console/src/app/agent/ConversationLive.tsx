@@ -64,7 +64,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     const preview = view.attachment === 'attaching' && (!view.snapshot || view.preview?.conversationId !== view.snapshot.conversation_id) ? view.preview : undefined;
     const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
     if (!snapshot) return undefined;
-    return { retrying, publicationHeads: preview || view.history?.window ? undefined : view.publicationHeads, nodeId:view.nodeId,generation:state.generation,content: preview ? preview.history.page.content ?? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt, submissions: view.submissions,
+    return { retrying, publicationHeads: preview || view.history?.window ? undefined : view.publicationHeads, nodeId:view.nodeId,generation:state.generation,content: preview ? preview.history.page.content ?? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), inbound: 'inbound' in snapshot ? snapshot.inbound : undefined, messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt, submissions: view.submissions,
       transcript: snapshot.transcript, statuses: snapshot.statuses, pending_interactions: 'pending_interactions' in snapshot ? snapshot.pending_interactions : undefined, conversation_id: snapshot.conversation_id,
       readingPreview: !!preview, history: preview?.history ?? view.history, trace: mode === 'trajectory' ? view.trace : undefined,
       safe: !retrying && lineageSwitchSafe(view), disabled: retrying || disabled || !client.isAttachmentControlCurrent(view.id, view.attachmentObservation)
@@ -171,15 +171,19 @@ export function ConversationDocks({ client, sessionId, disabled }: { client: App
     return frontier && JSON.stringify([frontier.revision, frontier.total, frontier.loaded, frontier.next_offset]);
   };
   const view = useClientSelector(client, state => state.views[sessionId], (a, b) => a === b || !!a && !!b &&
-    a.target === b.target && a.attachmentObservation === b.attachmentObservation && a.submissions === b.submissions && a.snapshot?.goal === b.snapshot?.goal && a.snapshot?.todos === b.snapshot?.todos &&
+    a.target === b.target && a.attachmentObservation === b.attachmentObservation && a.submissions === b.submissions && a.sendingQueue === b.sendingQueue && a.snapshot?.goal === b.snapshot?.goal && a.snapshot?.todos === b.snapshot?.todos &&
     a.snapshot?.inbound === b.snapshot?.inbound && activeAttempt(a.snapshot) === activeAttempt(b.snapshot) && todoEvidence(a) === todoEvidence(b));
   const content = useComposerContent(client, view);
   if (!view) return null;
+  const queuedSubmissions = [
+    ...(view.submissions ?? []).filter(value => value.messageId !== first?.acceptedMessageId && value.placement === 'queued'),
+    ...(view.sendingQueue ?? []),
+  ];
   return <>
     {content.error && <p role="alert">{content.error}</p>}
     <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : view.checkpoint?.collections.find(value => value.domain === 'todos.tasks'))}/>
     <GoalDock state={goalDock(content.snapshot)} observation={view.snapshot?.goal ?? undefined} disabled={disabled} mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} loadObjective={expected => client.goalObjective(view.id, expected)}/>
-    <QueueDock disabled={disabled} observation={view.snapshot?.inbound} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} rows={queueRows(view.snapshot)} submissions={(view.submissions ?? []).filter(value => value.messageId !== first?.acceptedMessageId && value.placement === 'queued')} running={activeAttempt(view.snapshot)}/>
+    <QueueDock disabled={disabled} observation={view.snapshot?.inbound} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} steer={expected => client.steerInbound(view.id, expected)} attachmentMetadata={key => client.uploadAttachmentMetadata(view.id, key)} rows={queueRows(view.snapshot)} submissions={queuedSubmissions} running={activeAttempt(view.snapshot)}/>
   </>;
 }
 

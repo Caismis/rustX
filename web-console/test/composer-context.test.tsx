@@ -11,7 +11,9 @@ import { QueueDock } from '../src/app/composer/QueueDock';
 import { TodoDock } from '../src/app/composer/TodoDock';
 import { goalDock, queueRows, todoDock, type TodoDockState } from '../src/bindings/composer-context';
 import { AppServerClient } from '../src/client/app-server';
-import type { GoalControlOutcome } from '../src/client/contracts';
+import type { GoalControlOutcome, InboundControlOutcome } from '../src/client/contracts';
+import { ArtifactContext } from '../src/app/components/Artifact';
+import { ArtifactResources } from '../src/client/artifacts';
 import { Server, snapshot } from './fixture';
 
 const task = (id: string, status: TodoTask['status'], extra: Partial<TodoTask> = {}): TodoTask => ({ id, subject: `Task ${id}`, status, ...extra });
@@ -24,7 +26,7 @@ const withTodos = (tasks: TodoTask[] | undefined, base = snapshot()): RuntimeCli
 const withGoal = (current: RuntimeClientGoalSnapshot | null, base = snapshot()): RuntimeClientSnapshot => ({ ...base, goal: { current } });
 const running = (base = snapshot()): RuntimeClientSnapshot => ({ ...base, attempt: { attempt_id: 'attempt-A', phase: { type: 'running' }, turn: 1 } });
 const inbound = (sequence: string, text: string, message: { id?: string; source?: 'human' | 'runtime'; kind?: { goal_continuation: { id: string; revision: string } } } = {}) =>
-  ({ revision: "0", sequence, message: { id: `message-${sequence}`, source: 'human' as const, content: [{ type: 'text' as const, text }], ...message } });
+  ({ revision: "0", sequence, message: { id: `message-${sequence}`, source: 'human' as const, kind: 'queued_message' as const, content: [{ type: 'text' as const, text }], ...message } });
 const withQueue = (rows: ReturnType<typeof inbound>[], base = snapshot()): RuntimeClientSnapshot => ({ ...base, inbound: { pending: rows } });
 /** One anchored historical Agent Status composition carrying Todo A, on a
  * conversation whose later turn must never receive it. */
@@ -514,8 +516,12 @@ describe('Queue dock binds the native inbound mailbox', () => {
     const rows = within(dock('Queue')).getAllByRole('listitem');
     expect(rows.map(row => row.getAttribute('data-inbound-sequence'))).toEqual(['7', '8']);
     expect(rows[1].textContent).toContain('Goal continuation');
-    // Only human authoritative rows expose native Edit/Remove; no per-row Steer.
-    expect(within(dock('Queue')).getAllByRole('button')).toHaveLength(3);
+    // Only human authoritative rows expose native Edit/Remove/Steer (header + 3 row actions).
+    expect(within(dock('Queue')).getAllByRole('button')).toHaveLength(4);
+    expect(within(rows[0]).getByRole('button', { name: 'Edit' })).toBeTruthy();
+    expect(within(rows[0]).getByRole('button', { name: 'Remove' })).toBeTruthy();
+    expect(within(rows[0]).getByRole('button', { name: 'Steer queued message' })).toBeTruthy();
+    expect(within(rows[1]).queryAllByRole('button')).toHaveLength(0);
     expect(Object.getOwnPropertyNames(AppServerClient.prototype).filter(name => /queue|inbox/i.test(name))).toEqual([]);
     await update(running(withQueue([inbound('8', 'Continue')])));
     expect(within(dock('Queue')).queryByRole('button', { expanded: false })).toBeNull();
@@ -551,7 +557,7 @@ describe('Queue dock binds the native inbound mailbox', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Send' })));
     expect((await server.waitFor('inbound/queue', 2)).params).toMatchObject({ content: [{ type: 'text', text: 'Idle again' }] });
   });
-  it('an unacknowledged request is composer transport state, never a queue row', async () => {
+  it('an in-flight queue request renders a Sending row with disabled actions and hands off to accepted then native rows', async () => {
     await mount(running(withQueue([inbound('1', 'Native row')])));
     server.held.add('inbound/queue');
     await sendQueued('Queued draft');
@@ -559,21 +565,25 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(screen.getByRole('button', { name: 'Sending…' })).toHaveProperty('disabled', true);
     expect(screen.queryByText('Awaiting acknowledgement…')).toBeNull();
     expect(screen.getByRole('textbox', { name: 'Message' }).closest('[data-composer-card]')?.getAttribute('aria-busy')).toBe('true');
-    // No count header: the in-flight request is not counted as queued.
-    expect(within(dock('Queue')).queryByRole('button', { expanded: false })).toBeNull();
-    expect(dock('Queue').querySelectorAll('li')).toHaveLength(1);
-    expect(dock('Queue').querySelector('[data-submission-echo]')).toBeNull();
-    expect(dock('Queue').textContent).not.toContain('Queued draft');
+    // Collapsed header exposes the Sending status while a pre-ack row is in flight.
+    const sendingHeader = within(dock('Queue')).getByRole('button', { expanded: false });
+    expect(sendingHeader.textContent).toContain('2 queued');
+    expect(within(sendingHeader).getByRole('status').textContent).toBe('Sending…');
+    fireEvent.click(sendingHeader);
+    const sendingEcho = dock('Queue').querySelector('[data-sending-input-id]')!;
+    expect(sendingEcho).toBeTruthy();
+    expect(sendingEcho.textContent).toContain('Queued draft');
+    expect(within(sendingEcho as HTMLElement).getByRole('status').textContent).toBe('Sending…');
+    for (const name of ['Edit', 'Remove', 'Steer queued message']) {
+      expect(within(sendingEcho as HTMLElement).getByRole('button', { name })).toHaveProperty('disabled', true);
+    }
     expect(server.client.getSnapshot().views.A.submissions ?? []).toEqual([]);
     await act(async () => { server.reply(turn); });
-    // Acceptance names the server MessageId; only now may provisional presentation exist.
-    const header = await within(dock('Queue')).findByRole('button', { expanded: false });
-    expect(header.textContent).toContain('2 queued');
-    expect(within(header).getByRole('status').textContent).toBe('1 queued · updating…');
-    fireEvent.click(header);
-    const echo = dock('Queue').querySelector('[data-submission-echo]')!;
-    expect(echo.getAttribute('data-accepted-message-id')).toBe('accepted-user');
-    expect(echo.textContent).toContain('Queued · updating…');
+    // Acceptance names the server MessageId; the sending row hands off to the accepted provisional row.
+    await waitFor(() => expect(dock('Queue').querySelector('[data-sending-input-id]')).toBeNull());
+    const echo = dock('Queue').querySelector('[data-accepted-message-id="accepted-user"]')!;
+    expect(echo).toBeTruthy();
+    expect(echo.textContent).toContain('Sending…');
     expect(server.client.getSnapshot().views.A.submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
   });
   it('seats an acknowledged steer after the live reply, outside the queue, until exact observation', async () => {
@@ -779,13 +789,300 @@ describe('exact pending QueueDock mutations', () => {
     expect(screen.queryByText('before')).toBeNull();
     expect(remove).toHaveBeenCalledTimes(1);
   });
-  it('omits provisional controls and disables unsafe typed-content editing', () => {
+  it('omits provisional controls for accepted echoes, disables them for sending echoes, and disables unsafe typed-content editing', () => {
     const mixed = { ...row(), message: { ...row().message, content: [{ type: 'text' as const, text: 'one' }, { type: 'uploaded_file' as const, batch_id: 'owned-batch', name: 'report.pdf' }] } };
-    const ui = render(<QueueDock rows={[]} submissions={[{ messageId: 'echo', content: [{ type: 'text', text: 'provisional' }], placement: 'queued' }]} running edit={vi.fn()} remove={vi.fn()} />);
+    const ui = render(<QueueDock rows={[]} submissions={[{ messageId: 'echo', content: [{ type: 'text', text: 'provisional' }], placement: 'queued' }]} running edit={vi.fn()} remove={vi.fn()} steer={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
-    ui.rerender(<QueueDock rows={[mixed]} submissions={[]} running edit={vi.fn()} remove={vi.fn()} />);
+    ui.rerender(<QueueDock rows={[]} submissions={[{ messageId: 'sending:in-1', sendingInputId: 'in-1', content: [{ type: 'text', text: 'in flight' }], placement: 'queued' }]} running edit={vi.fn()} remove={vi.fn()} steer={vi.fn()} />);
+    for (const name of ['Edit', 'Remove', 'Steer queued message']) {
+      const btn = screen.getByRole('button', { name }) as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+      expect(btn.title).toBe('Sending…');
+    }
+    ui.rerender(<QueueDock rows={[mixed]} submissions={[]} running edit={vi.fn()} remove={vi.fn()} steer={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Edit' })).toHaveProperty('disabled', true);
     expect(screen.getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', false);
+    expect(screen.getByRole('button', { name: 'Steer queued message' })).toHaveProperty('disabled', false);
+    expect(screen.getByLabelText('Queued file report.pdf').textContent).toBe('report.pdf');
+    expect(screen.getByLabelText('Queued file report.pdf').textContent).not.toMatch(/0B|undefined/);
+  });
+
+  it('steers a complete row only while running and reports steer failures', async () => {
+    const mixed = { ...row(), message: { ...row().message, content: [{ type: 'uploaded_file' as const, batch_id: 'b', name: 'shot.png' }] } };
+    const steer = vi.fn<() => Promise<InboundControlOutcome>>(async () => ({ status: 'known', outcome: { status: 'applied', read_cut: readCut() }, observed: true }));
+    const ui = render(<QueueDock rows={[mixed]} submissions={[]} running steer={steer} />);
+    const button = screen.getByRole('button', { name: 'Steer queued message' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    await act(async () => { fireEvent.click(button); });
+    expect(steer).toHaveBeenCalledExactlyOnceWith({ sequence: '7', revision: '0' });
+
+    ui.rerender(<QueueDock rows={[mixed]} submissions={[]} running={false} steer={steer} />);
+    expect((screen.getByRole('button', { name: 'Steer queued message' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Steer queued message' }).getAttribute('title')).toBe('Steer is only available while running');
+
+    steer.mockRejectedValueOnce(new Error('network lost'));
+    ui.rerender(<QueueDock rows={[mixed]} submissions={[]} running steer={steer} />);
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Steer queued message' })); });
+    expect(screen.getByRole('status').textContent).toBe('Could not steer the queued message. Try again.');
+    expect(screen.getByLabelText('Queued file shot.png')).toBeTruthy();
+  });
+
+  it('deduplicates a sending submission as soon as a native row matches its input_id', () => {
+    const sending = { messageId: 'sending:input-42', sendingInputId: 'input-42', content: [{ type: 'text' as const, text: 'hello' }], placement: 'queued' as const };
+    const ui = render(<QueueDock rows={[]} submissions={[sending]} running />);
+    expect(ui.container.querySelector('[data-sending-input-id="input-42"]')).toBeTruthy();
+    const nativeRow = { ...inbound('9', 'hello'), input_id: 'input-42' } as ReturnType<typeof inbound>;
+    ui.rerender(<QueueDock rows={[nativeRow]} submissions={[sending]} running />);
+    expect(ui.container.querySelector('[data-sending-input-id]')).toBeNull();
+    expect(ui.container.querySelectorAll('li')).toHaveLength(1);
+    expect(ui.container.querySelector('[data-inbound-sequence="9"]')).toBeTruthy();
+  });
+
+  it('keeps line breaks when editing a multiline queued message with Shift+Enter and Enter', async () => {
+    const text = 'line one\n  line two\n\nline four';
+    const edit = vi.fn(async (): Promise<InboundControlOutcome> => ({ status: 'known', outcome: { status: 'applied', read_cut: readCut() }, observed: true }));
+    render(<QueueDock rows={[{ ...row(), message: { ...row().message, content: [{ type: 'text', text: text.slice(0, 8) }, { type: 'text', text: text.slice(8) }] } }]} submissions={[]} running edit={edit} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+    const editor = screen.getByRole('textbox', { name: 'Edit queued message' }) as HTMLTextAreaElement;
+    expect(editor.value).toBe(text);
+    // Shift+Enter does not save.
+    expect(fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true })).toBe(true);
+    expect(edit).not.toHaveBeenCalled();
+    // IME composition Enter does not save.
+    fireEvent.change(editor, { target: { value: `${text}\nline five` } });
+    fireEvent.keyDown(editor, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(editor, { key: 'Enter', keyCode: 229 });
+    expect(edit).not.toHaveBeenCalled();
+    await act(async () => { fireEvent.keyDown(editor, { key: 'Enter' }); });
+    expect(edit).toHaveBeenCalledExactlyOnceWith({ sequence: '7', revision: '0' }, `${text}\nline five`);
+  });
+
+  it('renders durable image thumbnails and file attachments in block order with ArtifactContext', async () => {
+    const server = new Server(); await server.attached('A');
+    const resources = new ArtifactResources(server.client, 'A');
+    const read = vi.spyOn(resources, 'read').mockResolvedValue('blob:durable-thumb');
+    const release = vi.spyOn(resources, 'release').mockImplementation(() => {});
+    try {
+      const mixed = {
+        ...row(),
+        message: {
+          ...row().message,
+          content: [
+            { type: 'file' as const, artifact_id: 'f-1', name: 'report.csv' },
+            { type: 'image' as const, artifact_id: 'img-1', alt: 'Preview shot' },
+            { type: 'text' as const, text: 'See both' },
+          ],
+        },
+      };
+      const ui = render(<ArtifactContext.Provider value={resources}><QueueDock rows={[mixed]} submissions={[]} running /></ArtifactContext.Provider>);
+      const img = await ui.findByRole('img', { name: 'Preview shot' });
+      expect(img.getAttribute('src')).toBe('blob:durable-thumb');
+      expect(read).toHaveBeenCalledWith('img-1');
+      const fileChip = ui.getByLabelText('Queued file report.csv');
+      expect(fileChip.textContent).toBe('report.csv');
+      expect(fileChip.textContent).not.toContain('undefined');
+      expect(fileChip.parentElement?.children[0]).toBe(fileChip);
+      expect(fileChip.parentElement?.children[1]).toBe(img);
+      expect(ui.getByText('See both')).toBeTruthy();
+      ui.unmount();
+      expect(release).toHaveBeenCalledWith('blob:durable-thumb');
+    } finally {
+      resources.dispose();
+      server.client.disconnect();
+    }
+  });
+
+  it('retains the thumbnail placeholder when an image read fails and shows hover tooltips on enabled actions', async () => {
+    vi.useFakeTimers();
+    const server = new Server(); await server.attached('A');
+    const resources = new ArtifactResources(server.client, 'A');
+    vi.spyOn(resources, 'read').mockRejectedValue(new Error('denied'));
+    try {
+      const withImage = { ...row(), message: { ...row().message, content: [{ type: 'image' as const, artifact_id: 'img-err' }] } };
+      const ui = render(<ArtifactContext.Provider value={resources}><QueueDock rows={[withImage]} submissions={[]} running remove={vi.fn()} /></ArtifactContext.Provider>);
+      await act(async () => { await Promise.resolve(); });
+      expect(ui.container.querySelector('img')).toBeNull();
+      const removeButton = ui.getByRole('button', { name: 'Remove' });
+      fireEvent.mouseEnter(removeButton);
+      act(() => { vi.advanceTimersByTime(500); });
+      expect(ui.getByRole('tooltip').textContent).toBe('Remove');
+    } finally {
+      resources.dispose();
+      server.client.disconnect();
+      vi.useRealTimers();
+    }
+  });
+
+  it('live user uploads carry real File name, size, and safe raster thumbnails across Sending and durable QueueDock rows, releasing on drain', async () => {
+    const pngBytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6pAAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+    const pngFile = new File([pngBytes], 'shot.png', { type: 'image/png' });
+    const txtFile = new File(['hello world'], 'notes.txt', { type: 'text/plain' });
+    const svgFile = new File(['<svg/>'], 'icon.svg', { type: 'image/svg+xml' });
+    let nextBlob = 0;
+    const origCreateObjectUrl = URL.createObjectURL;
+    const origRevokeObjectUrl = URL.revokeObjectURL;
+    const createObjectUrl = vi.fn(() => `blob:test-url-${++nextBlob}`);
+    const revokeObjectUrl = vi.fn();
+    Object.assign(URL, { createObjectURL: createObjectUrl, revokeObjectURL: revokeObjectUrl });
+    let ui: ReturnType<typeof render> | undefined;
+    try {
+      ui = await mount(running(snapshot()));
+      const fileInput = ui.container.querySelector('input[type="file"]') as HTMLInputElement;
+      const uploadedBatches: Array<{ receipt: { session_id: string; batch_id: string; token: string }; file: { batch_id: string; name: string } }> = [];
+      for (const file of [pngFile, txtFile, svgFile]) {
+        const before = uploadedBatches.length;
+        await act(async () => {
+          fireEvent.change(fileInput, { target: { files: [file] } });
+        });
+        await waitFor(() => {
+          expect(server.requests.filter(r => r.request.method === 'session/uploadStatus').length).toBeGreaterThan(before);
+        });
+        const prepareReq = server.requests.filter(r => r.request.method === 'session/uploadPrepare').at(-1)!;
+        const batchId = (prepareReq.request.params as { operation_id: string }).operation_id;
+        uploadedBatches.push({
+          receipt: { session_id: 'A', batch_id: batchId, token: 'file-0' },
+          file: { batch_id: batchId, name: file.name },
+        });
+      }
+      // Wait for all draft attachment chips to settle so Queue button is enabled.
+      await waitFor(() => {
+        expect(screen.getByAltText('shot.png')).toBeTruthy();
+        expect(screen.getByText('notes.txt')).toBeTruthy();
+        expect(screen.getByAltText('icon.svg')).toBeTruthy();
+      });
+
+      // Hold inbound/queue to observe Sending row with uploaded metadata before ACK.
+      server.held.add('inbound/queue');
+      fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Check files' } });
+      await waitFor(() => {
+        expect((screen.getByRole('button', { name: 'Queue' }) as HTMLButtonElement).disabled).toBe(false);
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: 'Queue' }));
+      });
+      await server.waitFor('inbound/queue', 1);
+
+      const queueRegion = dock('Queue');
+      expect(within(queueRegion).getByText('Sending…')).toBeTruthy();
+      expect(within(queueRegion).getByRole('img', { name: 'shot.png' })).toBeTruthy();
+      const notesChip = within(queueRegion).getByLabelText('Queued file notes.txt');
+      expect(notesChip.textContent).toContain('notes.txt');
+      expect(notesChip.textContent).toContain('11B');
+      const svgChip = within(queueRegion).getByLabelText('Queued file icon.svg');
+      expect(svgChip.textContent).toContain('icon.svg');
+      expect(svgChip.textContent).toContain('6B');
+      expect(within(queueRegion).queryByRole('img', { name: 'icon.svg' })).toBeNull();
+      expect(within(queueRegion).getByText('Check files')).toBeTruthy();
+
+      // Native accepts and stores durable uploaded_file blocks; Sending row retires cleanly.
+      server.held.delete('inbound/queue');
+      const queuedReq = server.requests.filter(r => r.request.method === 'inbound/queue').at(-1)!;
+      const durableRow = {
+        revision: '0',
+        sequence: '10',
+        message: {
+          id: 'msg-durable-files',
+          source: 'human' as const,
+          kind: 'queued_message' as const,
+          content: [
+            ...uploadedBatches.map(entry => ({ type: 'uploaded_file' as const, ...entry.file })),
+            { type: 'text' as const, text: 'Check files' },
+          ],
+        },
+      };
+      await act(async () => {
+        server.socket.deliver({ jsonrpc: '2.0', id: queuedReq.request.id, result: { type: 'inbound_accepted', message_id: 'msg-durable-files', inbound_sequence: '10' } });
+        await server.update('A', running({ ...snapshot(), inbound: { pending: [durableRow] } }));
+      });
+      await waitFor(() => {
+        expect(within(dock('Queue')).queryByText('Sending…')).toBeNull();
+      });
+      expect(within(dock('Queue')).getByRole('img', { name: 'shot.png' })).toBeTruthy();
+      expect(within(dock('Queue')).getByLabelText('Queued file notes.txt').textContent).toContain('11B');
+      expect(within(dock('Queue')).getByLabelText('Queued file icon.svg').textContent).toContain('6B');
+      expect(within(dock('Queue')).queryByRole('img', { name: 'icon.svg' })).toBeNull();
+      const createdThumbUrls = createObjectUrl.mock.results.map(result => result.value as string);
+      expect(createdThumbUrls.length).toBeGreaterThan(0);
+
+      // Draining the queue releases the upload metadata and revokes thumbnail URLs.
+      await update(running(withQueue([])));
+      await waitFor(() => {
+        expect(region('Queue')).toBeNull();
+      });
+      for (const createdUrl of createdThumbUrls) {
+        expect(revokeObjectUrl).toHaveBeenCalledWith(createdUrl);
+      }
+      expect(server.client.uploadAttachmentMetadata('A', { receipt: uploadedBatches[0].receipt })).toBeUndefined();
+      expect(server.client.uploadAttachmentMetadata('A', { file: uploadedBatches[0].file })).toBeUndefined();
+    } finally {
+      ui?.unmount();
+      Object.assign(URL, { createObjectURL: origCreateObjectUrl, revokeObjectURL: origRevokeObjectUrl });
+    }
+  });
+
+  it('uses authorized native names without fake sizes on restored attachments and releases upload metadata on session release', async () => {
+    const pngBytes = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6pAAAAABJRU5ErkJggg=='), c => c.charCodeAt(0));
+    const restoredDurable = {
+      ...row(),
+      message: {
+        ...row().message,
+        content: [
+          { type: 'uploaded_file' as const, batch_id: 'restored-batch', name: 'restored.pdf' },
+          { type: 'text' as const, text: 'From prior run' },
+        ],
+      },
+    };
+    const restoredSending = [{
+      messageId: 'restored-sending',
+      sendingInputId: 'in-restored',
+      placement: 'queued' as const,
+      content: [
+        { type: 'upload' as const, session_id: 'A', batch_id: 'restored-b2', token: 't1' },
+        { type: 'text' as const, text: 'Restored draft' },
+      ],
+    }];
+    const dockUi = render(<QueueDock rows={[restoredDurable]} submissions={restoredSending} running />);
+    fireEvent.click(within(dockUi.getByRole('region', { name: 'Queue' })).getByRole('button', { expanded: false }));
+    const chip = dockUi.getByLabelText('Queued file restored.pdf');
+    expect(chip.textContent).toBe('restored.pdf');
+    expect(chip.textContent).not.toContain('0B');
+    expect(dockUi.queryByRole('img')).toBeNull();
+    expect(dockUi.getByText(/1 attachment/)).toBeTruthy();
+    dockUi.unmount();
+
+    // Live upload followed by session release clears stored metadata immediately.
+    await server.attached('A');
+    const pngFile = new File([pngBytes], 'release.png', { type: 'image/png' });
+    const [uploaded] = await server.client.upload('A', [pngFile]);
+    expect(server.client.uploadAttachmentMetadata('A', { receipt: uploaded.receipt })?.name).toBe('release.png');
+    expect(server.client.uploadAttachmentMetadata('A', { file: uploaded.file })?.bytes).toBe(pngFile.size);
+    await server.client.release('A');
+    expect(server.client.uploadAttachmentMetadata('A', { receipt: uploaded.receipt })).toBeUndefined();
+    expect(server.client.uploadAttachmentMetadata('A', { file: uploaded.file })).toBeUndefined();
+  });
+
+  it('empty-draft Ctrl/Cmd+Enter in ConversationSeat calls client.steerInbound(sessionId) without expected and advertises the contextual hint', async () => {
+    await mount(running(withQueue([inbound('1', 'One'), inbound('2', 'Two')])));
+    const steerInbound = vi.spyOn(server.client, 'steerInbound').mockResolvedValue({ status: 'known', outcome: { status: 'applied', read_cut: readCut() }, observed: true });
+    const textarea = screen.getByLabelText('Message');
+    expect(textarea.getAttribute('placeholder')).toBe('Cmd/Ctrl+Enter steers all queued messages');
+    await act(async () => { fireEvent.keyDown(textarea, { key: 'Enter', metaKey: true }); });
+    expect(steerInbound).toHaveBeenCalledTimes(1);
+    expect(steerInbound).toHaveBeenCalledWith('A');
+    expect(steerInbound.mock.calls[0]).toHaveLength(1);
+
+    // Non-empty draft shows ordinary guidance and steers only the draft.
+    fireEvent.change(textarea, { target: { value: 'New steer' } });
+    expect(textarea.getAttribute('placeholder')).toBe('Give this Session a task…');
+    await act(async () => { fireEvent.keyDown(textarea, { key: 'Enter', ctrlKey: true }); });
+    await server.waitFor('turn/steer', 1);
+    expect(steerInbound).toHaveBeenCalledTimes(1);
+
+    // Clicking per-row Steer in QueueDock calls client.steerInbound(sessionId, expected).
+    fireEvent.click(within(dock('Queue')).getByRole('button', { expanded: false }));
+    const steerButtons = within(dock('Queue')).getAllByRole('button', { name: 'Steer queued message' });
+    await act(async () => { fireEvent.click(steerButtons[0]); });
+    expect(steerInbound).toHaveBeenLastCalledWith('A', { sequence: '1', revision: '0' });
   });
 });
 

@@ -704,3 +704,17 @@ def auxiliary_classification_transport() -> Scenario:
 
 
 SCENARIOS["auxiliary_classification_transport"] = auxiliary_classification_transport
+
+
+def web_queue_steering() -> Scenario:
+    """Hold a live generation while the browser promotes three queued messages."""
+    return Scenario(
+        "web_queue_steering",
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("Begin queue review",)),
+             Stream(Text("Review started."), Gate("queue-review"), Finish())),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, body_contains=("First revision", "Second revision", "Third revision")),
+             Stream(Text("Reviewed all three revisions."), Finish())),
+    )
+
+
+SCENARIOS["web_queue_steering"] = web_queue_steering

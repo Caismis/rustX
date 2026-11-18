@@ -919,7 +919,9 @@ clears it. Superseded source completions cannot publish stale tools or failures.
 `turn/steer` requires `expectedTurnId` and refuses a different or closed Attempt.
 Both carry `inputId`; receipts retain the exact native Turn, disposition, message
 identity and inbound sequence. `inbound/queue` explicitly waits for a future
-Attempt rather than steering current work. These use one native coordinator and
+Attempt rather than steering current work. `inbound/steer` promotes one expected
+queued row, or every eligible queued row through the observed sequence, into that running Attempt without a
+new identity. These use one native coordinator and
 mailbox, with no separate execution state machine.
 
 `turn/interrupt` requires exact `turnId`; the native coordinator checks and cancels
@@ -1520,12 +1522,11 @@ and `invalid_item`. Storage acknowledgement/readback failures report
 `durability_uncertain`. Routing errors retain the existing typed attachment and
 runtime errors. Clients never substitute a newer revision or replay after loss.
 
-Edit currently supports one ordinary Human text block without producer
-correlation. Unsupported typed or multipart content is rejected atomically;
-QueueDock disables Edit for those shapes. In particular it never flattens or
-drops Session-owned upload references. Remove supports ordinary uncorrelated
-Human pending messages, including uploads. Runtime-authored work is not a user
-queue control target.
+Edit accepts human messages composed entirely of text blocks. The editor joins
+their text in order and saves the replacement as one block. Messages with
+attachments support removal and steering. App-server input IDs continue to
+identify the original submission across these operations. Other producers
+retain ownership of their pending work.
 
 Selection is a non-destructive finite watermark, not a payload reservation.
 Canonical adoption reads the current rows inside its own transaction and builds
@@ -1539,8 +1540,10 @@ An empty claim creates no answer obligation and admits no fresh turn.
 Editing updates the pending message body read through its original transcript
 cursor. Removal deletes only its pending transcript index entry, in the same
 transaction. Neither operation edits canonical history or cancels attempts,
-background executions, Subagents or Workflows. Queue/Steer submission converges
-on this same native domain; there is no per-row Steer/reclassification flag.
+background executions, Subagents or Workflows. `inbound/steer` reclassifies
+queued rows in this same domain: one expected row or the observed queue through an inclusive
+inbound sequence. Later arrivals remain queued. Promoted rows keep their message
+identities and follow earlier steering input in the running Attempt. It does not mint a second message.
 
 The mailbox publishes a complete `pending_inbound_changed` projection only after
 the durable mutation check and readback. Its publication ordering is coordination,

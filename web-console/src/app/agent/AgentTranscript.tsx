@@ -81,7 +81,7 @@ function withProcessSpacing(rows: (FlowRow | null)[]) {
     return next;
   });
 }
-export function AgentTranscript({ snapshot, history, accepted = [], publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, forking, lineageSwitchSafe = false, requestFeedback: suppliedFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'>>; history?: TranscriptCache; accepted?: readonly Submission[]; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; forking?: CompletedResponseView; lineageSwitchSafe?: boolean; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
+export function AgentTranscript({ snapshot, history, accepted = [], publicationHeads = [], retrying = false, loadEarlier, loadLater, onHistorical, historicalDisabled, forking, lineageSwitchSafe = false, requestFeedback: suppliedFeedback, compactions = [], contextActivity, workflows }: { snapshot: Pick<RuntimeClientSnapshot, 'messages' | 'attempt' | 'transcript' | 'statuses' | 'conversation_id'> & Partial<Pick<RuntimeClientSnapshot,'message_descriptors'|'publication_settlements'|'pending_interactions'|'inbound'>>; history?: TranscriptCache; accepted?: readonly Submission[]; publicationHeads?: readonly PublicationHead[]; retrying?: boolean; loadEarlier?: () => void; loadLater?: () => void | Promise<void>; onHistorical?: (action: ResponseAction, response: CompletedResponseView) => void; historicalDisabled?: boolean; forking?: CompletedResponseView; lineageSwitchSafe?: boolean; requestFeedback?: RequestFeedback; compactions?: readonly { head: RuntimeClientProjectionHeadView; content: ReactNode }[]; contextActivity?: ReactNode; workflows?: RuntimeClientSnapshot['workflows'] }) {
   const tx = useTranslation();
   const receiver = useContext(AgentConversationContext);
   const isUser = (message: MessageBlock) => isUserBubble(message, receiver?.parent_agent_id);
@@ -107,7 +107,11 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       && (binding.deferred || entry.item.audit.content.some(block => block.block_index === messageSource(binding.content_ref.source)?.block_index
         && block.kind !== 'proposed_tool_call' && new TextEncoder().encode(block.text).length !== binding.content_ref.readable_end)));
   const canonical = conversation(snapshot);
-  const original = transcriptPresentation(history, snapshot.transcript);
+  // Acceptance can already have a transcript position while the queue dock
+  // still owns the message. Adoption or promotion releases that position.
+  const queued = new Set(snapshot.inbound?.pending?.filter(row => row.message.kind === 'queued_message').map(row => row.message.id));
+  const original = transcriptPresentation(history, snapshot.transcript).filter(entry =>
+    entry.item.type !== 'message' || !queued.has(entry.item.message.id));
   const page = history?.page ?? snapshot.transcript;
   // Canonical block counts also discover new live messages alongside a frozen window.
   const allDescriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], page, [], false);
@@ -126,7 +130,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     const request = messageContinuation(message, allDescriptors, page), suffix = request && blockPages.blocks(request);
     return suffix && message.role !== 'tool' ? { ...message, content: [...message.content, ...suffix] } as MessageBlock : message;
   };
-  const messages = canonical.messages.map(enrich), streaming = canonical.streaming;
+  const messages = canonical.messages.filter(message => !queued.has(message.id)).map(enrich), streaming = canonical.streaming;
   const loaded = original.map(entry => {
     if (entry.item.type !== 'message') return entry;
     const message = enrich(entry.item.message);
@@ -135,7 +139,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   const auditHeads: RuntimeClientTranscriptEntry[] = history?.window ? [] : publicationHeads.filter(head => head.read_cut.read.conversation_id === snapshot.conversation_id && !loaded.some(entry => entry.cursor === head.transcript_cursor))
     .map(head => ({ cursor: head.transcript_cursor, item: { type: 'publication_audit', audit: head.audit } }));
   const entries = auditHeads.length ? [...loaded, ...auditHeads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
-  const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isContextInjection(descriptor));
+  const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isContextInjection(descriptor) && !(descriptor.identity && queued.has(descriptor.identity)));
   // Harness Chat hides system-prompt and ordinary Context rows; committed
   // Tool changes arrive as their own transcript facts, never from requests.
   const requestFeedback = suppliedFeedback ?? noFeedback;
@@ -369,6 +373,17 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     flow.splice(at < 0 ? flow.length : at, 0, { kind: 'head', head });
   }
   if (streaming && !durableIds.has(streaming.message_id) && !settledPublications.has(streaming.message_id)) flow.push({ kind: 'streaming', streaming });
+  if (streaming && !history?.window) {
+    const steering = new Set(snapshot.inbound?.pending?.filter(row => row.input_id && row.message.source === 'human' && isPlainMessageKind(row.message.kind) && row.message.kind !== 'queued_message').map(row => row.message.id));
+    // The current assistant reply precedes interruptions that arrived while it
+    // was streaming, even when its durable transcript seat is still missing.
+    const interruptions = flow.filter(node => node.kind === 'entry' && node.entry.item.type === 'message' && steering.has(node.entry.item.message.id));
+    if (interruptions.length) {
+      const moved = new Set(interruptions);
+      const ordered = flow.filter(node => !moved.has(node));
+      flow.splice(0, flow.length, ...ordered, ...interruptions);
+    }
+  }
   const nodes: (typeof flow[number] | { kind: 'continuation' } | { kind: 'accepted'; submission: Submission })[] = [...flow];
   if (!history?.window && accepted.length) {
     // An acknowledged idle input belongs before the new live reply. It never

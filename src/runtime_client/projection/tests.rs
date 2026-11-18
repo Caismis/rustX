@@ -6964,3 +6964,55 @@ fn replay_direct_index_handles_last_cursor_without_wrapping() {
         SubscriberPoll::Exhausted
     ));
 }
+
+#[test]
+fn app_server_input_id_projects_onto_pending_rows_from_durable_correlation_only() {
+    use crate::durable::SqliteConversationStore;
+    let mut projection = projection();
+    let store =
+        SqliteConversationStore::in_memory(projection.snapshot.conversation_id.clone()).unwrap();
+    projection
+        .initialize_descriptor_heads(&store, store.observation_read_cut().unwrap())
+        .unwrap();
+    let accept = |correlation: Option<&str>, text: &str, kind: InboundKind| {
+        store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: text.to_owned(),
+                })],
+                timestamp: chrono::DateTime::UNIX_EPOCH,
+                correlation: correlation.map(str::to_owned),
+            })
+            .unwrap()
+    };
+    accept(
+        Some("app-server:send-1"),
+        "queued",
+        InboundKind::QueuedMessage,
+    );
+    accept(Some("background:send-1"), "foreign", InboundKind::Message);
+    accept(Some("app-server:bad/id"), "malformed", InboundKind::Message);
+    let last = accept(None, "plain", InboundKind::Message);
+    projection.apply_pending_receipt(last.pending_observation.as_deref());
+    assert_eq!(
+        projection
+            .snapshot_ref()
+            .inbound
+            .pending
+            .iter()
+            .map(|item| item.input_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("send-1"), None, None, None]
+    );
+    let page = store.pending_header_page(&last.read_cut, None, 32).unwrap();
+    assert_eq!(
+        page.headers
+            .iter()
+            .map(|header| header.input_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("send-1"), None, None, None]
+    );
+}

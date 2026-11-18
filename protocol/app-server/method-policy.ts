@@ -220,6 +220,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'inbound/queue': { effect: 'side_effecting' },
   'inbound/edit': { effect: 'side_effecting' },
   'inbound/remove': { effect: 'side_effecting' },
+  'inbound/steer': { effect: 'side_effecting' },
   'turn/interrupt': { effect: 'side_effecting', lane: 'control' },
   'session/settings': { effect: 'read', lane: 'metadata' },
   'session/settingsValueRead': { effect: 'read' },

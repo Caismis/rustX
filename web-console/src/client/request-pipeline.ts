@@ -77,6 +77,14 @@ export class RequestPipeline {
     return [...this.pending.values()].filter(item =>
       (item.request.method === 'turn/start' || item.request.method === 'turn/steer' || item.request.method === 'inbound/queue') && item.sessionId === id).length;
   }
+  sendingQueue(id: string): Submission[] {
+    const target = this.port.state().views[id]?.target;
+    return [...this.pending.values()].flatMap(({ request, sent, submittedWhileRunning }) => {
+      if (!sent || !submittedWhileRunning || request.method !== 'inbound/queue' || !sameTarget(target, request.params.target)) return [];
+      const { inputId, content } = request.params;
+      return [{ messageId: `sending:${inputId}`, sendingInputId: inputId, content, placement: 'queued' }];
+    });
+  }
   private capacityReleased() {
     ++this.admissionRevision;
     if (this.admissionNotification) return;
@@ -246,6 +254,7 @@ export class RequestPipeline {
     pending.sent = true;
     if (hasResponseDeadline(pending.request.method) && ['rpc', 'metadata'].includes(requestLane(pending.request.method))) pending.timer = setTimeout(() => this.port.lose(generation), this.port.timeoutMs());
     try { socket.send(raw); } catch { this.port.lose(generation); }
+    if (pending.request.method === 'inbound/queue' && pending.submittedWhileRunning && this.pending.has(String(pending.request.id))) this.port.inboundChanged(pending.request.params.target.session_id);
     try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
     catch (error) { console.error('App Server dispatch observer failed', error); }
   }

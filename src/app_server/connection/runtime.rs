@@ -624,6 +624,15 @@ pub(super) async fn dispatch_runtime(
         } => Ok(MethodResult::InboundMutation {
             outcome: authority.remove_pending(&expected).map_err(client_error)?,
         }),
+        Method::InboundSteer {
+            expected_turn_id,
+            scope,
+            ..
+        } => Ok(MethodResult::InboundMutation {
+            outcome: authority
+                .steer_queued(&expected_turn_id, &scope)
+                .map_err(client_error)?,
+        }),
         Method::TurnCancel { turn_id, .. } => native_result(
             route
                 .attachment

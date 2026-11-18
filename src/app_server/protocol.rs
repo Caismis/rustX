@@ -1001,6 +1001,14 @@ pub enum Method {
         target: AttachmentTarget,
         expected: crate::durable::PendingInboundRef,
     },
+    /// Promote one expected queued row, or every currently queued row, into the running attempt.
+    #[serde(rename = "inbound/steer")]
+    InboundSteer {
+        target: AttachmentTarget,
+        #[serde(rename = "expectedTurnId")]
+        expected_turn_id: crate::runtime::identity::AttemptId,
+        scope: crate::durable::PendingSteerScope,
+    },
     #[serde(rename = "turn/interrupt")]
     TurnCancel {
         target: AttachmentTarget,
@@ -1369,6 +1377,7 @@ impl Method {
             | Self::InboundQueue { .. }
             | Self::InboundEdit { .. }
             | Self::InboundRemove { .. }
+            | Self::InboundSteer { .. }
             | Self::TurnCancel { .. }
             | Self::SourcesWrite { .. }
             | Self::ConfigurationReconcile { .. } => true,

@@ -484,6 +484,12 @@ impl InboxStore for SqliteConversationStore {
     ) -> Result<crate::durable::PendingMutationOutcome, ConversationStoreError> {
         self.mutate_pending(expected, None)
     }
+    fn steer_pending(
+        &self,
+        scope: &crate::durable::PendingSteerScope,
+    ) -> Result<crate::durable::PendingMutationOutcome, ConversationStoreError> {
+        self.steer_pending_rows(scope)
+    }
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
         let connection = self.lock()?;
         load_pending_rows(&connection)
@@ -1033,7 +1039,12 @@ impl SqliteConversationStore {
         }
         if let Some(text) = text {
             if text.trim().is_empty()
-                || !matches!(item.message.content.as_slice(), [UserContentBlock::Text(_)])
+                || item.message.content.is_empty()
+                || !item
+                    .message
+                    .content
+                    .iter()
+                    .all(|block| matches!(block, UserContentBlock::Text(_)))
             {
                 return Ok(Outcome::InvalidItem);
             }
@@ -1076,4 +1087,162 @@ impl SqliteConversationStore {
             pending_observation,
         })
     }
+
+    pub(super) fn steer_pending_rows(
+        &self,
+        scope: &crate::durable::PendingSteerScope,
+    ) -> Result<crate::durable::PendingMutationOutcome, ConversationStoreError> {
+        use crate::durable::PendingMutationOutcome as Outcome;
+        use crate::durable::PendingSteerScope;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| {
+                crate::durable::sqlite::sqlite_error(&error, format!("pending steer: {error}"))
+            })?;
+        let mut rows = match scope {
+            PendingSteerScope::Row { expected } => {
+                let revision: Option<u64> = transaction
+                    .query_row(
+                        "SELECT revision FROM pending_inbound WHERE sequence=?1",
+                        [expected.sequence.get()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|error| {
+                        crate::durable::sqlite::sqlite_error(&error, error.to_string())
+                    })?;
+                let Some(revision) = revision else {
+                    return Ok(Outcome::NotPending);
+                };
+                if revision != expected.revision {
+                    return Ok(Outcome::Conflict);
+                }
+                let Some(item) = load_pending_exact(&transaction, expected.sequence)? else {
+                    return Ok(Outcome::NotPending);
+                };
+                if !queue_row_steerable(&item) {
+                    return Ok(Outcome::InvalidItem);
+                }
+                vec![item]
+            }
+            PendingSteerScope::All { through } => load_pending_until(&transaction, *through)?
+                .into_iter()
+                .filter(queue_row_steerable)
+                .collect(),
+        };
+        if !rows.is_empty() {
+            for item in &mut rows {
+                reclassify_queued_row(&transaction, item)?;
+            }
+            transaction
+                .execute(
+                    "UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",
+                    [],
+                )
+                .map_err(|error| {
+                    crate::durable::sqlite::sqlite_error(
+                        &error,
+                        format!("reading mutation: {error}"),
+                    )
+                })?;
+        }
+        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
+        let mut pending_observation =
+            observation_receipt::pending(&transaction, &self.conversation_id, None, None, None);
+        if let (Some(receipt), Some(first), Some(last)) = (
+            pending_observation.as_mut(),
+            rows.first().and_then(|row| row.transcript_cursor),
+            rows.last().and_then(|row| row.transcript_cursor),
+        ) {
+            Arc::make_mut(receipt).promoted_transcripts = Some((first, last));
+        }
+        if !rows.is_empty() {
+            transaction.commit().map_err(|error| {
+                crate::durable::sqlite::sqlite_error(
+                    &error,
+                    format!("pending steer commit: {error}"),
+                )
+            })?;
+        }
+        Ok(Outcome::Applied {
+            read_cut,
+            pending_observation,
+        })
+    }
+}
+
+fn queue_row_steerable(item: &PendingInboundItem) -> bool {
+    item.message.source == UserSource::Human
+        && item.message.kind == InboundKind::QueuedMessage
+        && item
+            .correlation
+            .as_deref()
+            .is_none_or(|id| id.starts_with("app-server:"))
+}
+
+fn reclassify_queued_row(
+    transaction: &Transaction<'_>,
+    item: &mut PendingInboundItem,
+) -> Result<(), ConversationStoreError> {
+    item.message.kind = InboundKind::Message;
+    let revision = item
+        .revision
+        .checked_add(1)
+        .filter(|value| i64::try_from(*value).is_ok())
+        .ok_or(ConversationStoreError::SequenceExhausted)?;
+    let updated = transaction
+        .execute(
+            "UPDATE pending_inbound SET message_json=?1, revision=?2
+             WHERE sequence=?3 AND revision=?4
+               AND json_extract(message_json, '$.kind') = 'queued_message'",
+            params![
+                encode(&item.message, "pending steer")?,
+                revision,
+                seq_to_i64(item.sequence.get())?,
+                item.revision,
+            ],
+        )
+        .map_err(|error| {
+            crate::durable::sqlite::sqlite_error(&error, format!("pending steer: {error}"))
+        })?;
+    if updated != 1 {
+        return Err(ConversationStoreError::InvalidReference(
+            "pending steer changed a different row".into(),
+        ));
+    }
+    // DSH appends promoted input to the steering queue at gesture time.
+    // Only the pending transcript seat moves. The acceptance sequence and
+    // message ID still identify the original submission and its receipts.
+    let removed = transaction.execute(
+        "DELETE FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1",
+        [item.message_id.as_str()],
+    ).map_err(|error| storage(error.to_string()))?;
+    if removed != 1 {
+        return Err(storage("missing queued transcript seat"));
+    }
+    transaction.execute_cached(
+        "UPDATE rustx_store SET retained_transcript_count=retained_transcript_count-1 WHERE id=1", [],
+    ).map_err(|error| storage(error.to_string()))?;
+    let cursor = append_transcript_reference(transaction, "message", item.message_id.as_str())?;
+    item.transcript_cursor = Some(cursor);
+    item.revision = revision;
+    let indexed = optional_display_layout(transaction, || {
+        content::index_pending(transaction, &item.message, item.sequence.get(), revision)?;
+        observation::index::index_message(
+            transaction,
+            &MessageBlock::User(item.message.clone()),
+            None,
+        )
+    })?;
+    if indexed.is_none() {
+        return Err(storage("pending steer display index failed"));
+    }
+    observation::index::index_pending_header(
+        transaction,
+        item.sequence.get(),
+        &item.message_id,
+        Some(cursor.get()),
+    )?;
+    Ok(())
 }

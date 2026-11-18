@@ -1278,7 +1278,7 @@ pub(super) fn pending_page(
         return Err(ConversationStoreError::ObservationCutExpired);
     }
     let total = at.pending_total;
-    let mut statement=connection.prepare_cached("SELECT p.sequence,p.revision,p.observation_header,p.observation_transcript FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2 ORDER BY p.sequence LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
+    let mut statement=connection.prepare_cached("SELECT p.sequence,p.revision,p.observation_header,p.observation_transcript,CASE WHEN octet_length(p.correlation)<=75 THEN p.correlation END FROM pending_inbound p WHERE p.sequence>?1 AND p.sequence<=?2 ORDER BY p.sequence LIMIT ?3").map_err(|error|crate::durable::sqlite::sqlite_error(&error,error.to_string()))?;
     let rows = statement
         .query_map(
             params![after.unwrap_or(0), at.pending_through, page_limit],
@@ -1288,13 +1288,14 @@ pub(super) fn pending_page(
                     row.get::<_, u64>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
                     row.get::<_, Option<u64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
                 ))
             },
         )
         .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
     let mut headers = Vec::with_capacity(page_limit);
     for row in rows {
-        let (sequence, revision, bytes, transcript_cursor) =
+        let (sequence, revision, bytes, transcript_cursor, correlation) =
             row.map_err(|error| storage(error.to_string()))?;
         if bytes.len() > HEADER_ENCODED_MAX {
             return Err(storage("pending header exceeds bound"));
@@ -1306,6 +1307,7 @@ pub(super) fn pending_page(
             sequence,
             revision,
             message,
+            input_id: crate::durable::observation::app_server_input_id(correlation.as_deref()),
         });
     }
     let next_sequence = if let Some(last) = headers.last() {

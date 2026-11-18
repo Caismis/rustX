@@ -21,7 +21,7 @@ import { TraceReads } from './trace-reads';
 import { SessionControls } from './session-controls';
 import { ModelSelection } from './model-selection';
 import { Interactions } from './interactions';
-import { SessionUploads } from './session-uploads';
+import { SessionUploads, uploadFileRefKey, uploadReceiptKey, type UploadAttachmentKey } from './session-uploads';
 import { ConfigurationObservations } from './configuration-observations';
 import { sameTarget } from '../../../protocol/app-server/attachment-identity';
 import { SessionExportController } from "./session-export";
@@ -519,6 +519,7 @@ export class AppServerClient {
     const uncertain = [...this.state.uncertain];
     uncertain.push(...this.pipeline.disconnect(this.state.generation));
     this.models.disconnect();
+    this.uploads.retireAll();
     for (const chain of this.observationChains.values()) chain.retire(); this.observationChains.clear();
     this.refreshes.clear(); this.traces.disconnect(); this.reading.disconnect(); this.acquiring.clear(); this.dirty.clear(); this.resubscribe.clear();
     const operations = { ...this.state.interactionOperations };
@@ -528,7 +529,7 @@ export class AppServerClient {
     this.statusNotifications.clear();
     this.publish({ sessions:this.state.sessions.map(row=>({...row,thread_status:undefined})), threadStatusSynchronized:false, connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, inboundRequests: undefined,
+        ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, sendingQueue: undefined, inboundRequests: undefined,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {
@@ -642,12 +643,14 @@ export class AppServerClient {
     if (!observation?.current() || !sameTarget(observation.proof.target, target) || !view?.snapshot) throw new Error('Observation view was replaced.');
     event = expandRuntimeEvent(view.snapshot, event);
     validateRootEvent(target, event, cursor);
-    if (transitionFacts(event).some(fact=>fact.type==='pending_inbound_changed')) {
+    const pendingChanged = transitionFacts(event).some(fact => fact.type === 'pending_inbound_changed');
+    const readingInterrupted = !!(view.history?.window || view.history?.loading || view.turnNavigation?.pending);
+    if (pendingChanged) {
       this.reading.invalidateReading(id);
       if(!observation.current())throw new Error('Observation view was replaced during invalidation.');
       this.reading.retireOutline(id);
       const error = 'History changed. Reload the Turn outline to navigate again.';
-      this.setSession(id, { turnOutline: { paging: view.turnOutline?.paging ?? { type: 'latest' }, error },
+      this.setSession(id, { turnOutline: { paging: view.turnOutline?.paging ?? { type: 'latest' }, error: readingInterrupted ? error : undefined },
         ...(view.history?.window ? { history: { ...replaceTranscript(view.snapshot.transcript, view.history), error } } : {}) });
     }
     // Presentation subscribers may retire this exact observation synchronously.
@@ -666,6 +669,7 @@ export class AppServerClient {
       this.interactions.settled(keys);
     }
     this.reconcile(id); this.settleSubmissions(id);
+    if (pendingChanged && !readingInterrupted && view.turnOutline) void this.reading.refreshTurns(id);
     if (snapshot.transcript !== view.snapshot.transcript) void this.reading.refreshTranscriptDomain(id);
     if (checkpointAdvanced) void this.catalog.refreshDisplaySummary(id);
     if ((checkpointAdvanced && !traceAdvanced) || transitionFacts(event).some(fact=>fact.type==='trace_changed')) this.traces.repairDomain(id);
@@ -730,6 +734,7 @@ export class AppServerClient {
   goalObjective(id: string, expected: GoalRef) { return this.controls.goalObjective(id, expected); }
   controlGoal(id: string, expected: GoalRef, mutation: GoalMutation) { return this.controls.controlGoal(id, expected, mutation); }
   editInbound(id: string, expected: PendingInboundRef, text: string) { return this.controls.editInbound(id, expected, text); }
+  steerInbound(id: string, expected?: PendingInboundRef) { return this.controls.steerInbound(id, expected); }
   removeInbound(id: string, expected: PendingInboundRef) { return this.controls.removeInbound(id, expected); }
   /** Claims the local gesture synchronously. Native maintenance owns admission. */
   compact(id: string, consume?: () => void) { return this.controls.compact(id, consume); }
@@ -780,6 +785,7 @@ export class AppServerClient {
   });
   uploadStatus(id: string, operationId: string) { return this.uploads.uploadStatus(id, operationId); }
   upload(id: string, files: readonly File[], evidence?: { current: () => boolean; acknowledged: (files: UploadedFile[]) => void }, operationId?: string) { return this.uploads.upload(id, files, evidence, operationId); }
+  uploadAttachmentMetadata(id: string, key: UploadAttachmentKey) { return this.uploads.lookupAttachment(id, key); }
   /** A new navigation or an explicit reload retires the previous jump's landing. */
   invalidateReading(id: string) { return this.reading.invalidateReading(id); }
   refreshTurns(id: string) { return this.reading.refreshTurns(id); }
@@ -1008,6 +1014,7 @@ export class AppServerClient {
     this.controls.reconcileCancellation(id);
     this.interactions.reconcile(id);
     this.repairInputReceipts(id);
+    this.pruneUploadAttachments(id);
   }
   private readonly inputRepairs = new Set<string>();
   /** Application-owned settlement, retained only while its bounded uncertain
@@ -1087,8 +1094,26 @@ export class AppServerClient {
     if (!view) return;
     const inboundRequests = this.pipeline.inboundRequests(id);
     const submissions = view.submissions ?? [];
-    this.setSession(id, { inboundRequests, submissions: accepted && !submissions.some(item => item.messageId === accepted.messageId)
+    this.setSession(id, { inboundRequests, sendingQueue: this.pipeline.sendingQueue(id), submissions: accepted && !submissions.some(item => item.messageId === accepted.messageId)
       ? [...submissions, accepted] : submissions });
+    this.pruneUploadAttachments(id);
+  }
+  private pruneUploadAttachments(id: string) {
+    const view = this.state.views[id];
+    if (!view) return;
+    const activeReceipts = new Set<string>();
+    const activeFiles = new Set<string>();
+    for (const submission of [...(view.sendingQueue ?? []), ...(view.submissions ?? [])]) {
+      for (const block of submission.content ?? []) {
+        if (block.type === 'upload') activeReceipts.add(uploadReceiptKey(block));
+      }
+    }
+    for (const item of view.snapshot?.inbound.pending ?? []) {
+      for (const block of item.message.content) {
+        if (block.type === 'uploaded_file') activeFiles.add(uploadFileRefKey(block));
+      }
+    }
+    this.uploads.pruneAttachments(id, activeReceipts, activeFiles);
   }
   /** An accepted submission settles only when an authoritative snapshot names its
    * exact MessageId: pending in the mailbox (the native row replaces it) or adopted
@@ -1103,7 +1128,10 @@ export class AppServerClient {
       ...(view.snapshot.transcript.entries ?? []).flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []),
     ]);
     const remaining = view.submissions.filter(item => !observed.has(item.messageId));
-    if (remaining.length !== view.submissions.length) this.setSession(id, { submissions: remaining });
+    if (remaining.length !== view.submissions.length) {
+      this.setSession(id, { submissions: remaining });
+      this.pruneUploadAttachments(id);
+    }
   }
   /** Intent events are synchronously admitted and projected by the Session actor. */
   async release(id: string): Promise<void> {
@@ -1122,8 +1150,9 @@ export class AppServerClient {
   }
   private retireAttachmentWork(id: string) {
     this.retireObservationWork(id);
+    this.uploads.retire(id);
     this.catalog.forgetAttachment(id);
-    this.setSession(id,{history:this.initialized?undefined:this.state.views[id]?.history,submissions:undefined,turnOutline:undefined,turnNavigation:undefined});
+    this.setSession(id,{history:this.initialized?undefined:this.state.views[id]?.history,submissions:undefined,sendingQueue:undefined,turnOutline:undefined,turnNavigation:undefined});
   }
   /** Resample admission proofs after their browser owner retires. No native
    * transaction is cancelled after dispatch. */

@@ -586,6 +586,7 @@ pub(super) fn pending(
         read_cut,
         head: page.headers,
         selected,
+        promoted_transcripts: None,
         removed_sequence: removed.map(|(sequence, _)| sequence),
         removed_transcript: removed.and_then(|(_, cursor)| cursor),
         adopted_through: adopted.map(|(through, _)| through),

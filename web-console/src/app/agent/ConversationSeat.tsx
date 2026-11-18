@@ -13,7 +13,7 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import type { WorkspaceAssociations } from '../../workspaces/associations';
 import type { UserInputBlock } from '../../../../protocol/app-server/v80';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
-import { goalDock } from '../../bindings/composer-context';
+import { goalDock, queueRows } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery, type SessionTransition } from '../../bindings/session-product';
 import { SessionStatus } from '../SessionStatus';
 import { ConversationComposer } from '../new-conversation/ConversationComposer';
@@ -45,6 +45,7 @@ export function ConversationSeat({ visible = true, client, host, authority, asso
   restored?: { conversation: string; content: UserInputBlock[] }; preparePublication: () => ((id: string) => (() => boolean) | void);
   onCommand: (id: CommandId) => void;
 }) {
+  const tx = useTranslation();
   const panels = useQuestionPanels();
   const state = useClientSelector(client, state => ({ ...transportSelection(state), composer: composerFacts(sessionId ? state.views[sessionId] : undefined) }), sameValue);
   const view = sessionId ? client.getSnapshot().views[sessionId] : undefined;
@@ -64,6 +65,30 @@ export function ConversationSeat({ visible = true, client, host, authority, asso
         active={view ? {
           initialContent: restored?.conversation === (view.nodeConversationId ?? view.target?.conversation_id ?? view.snapshot?.conversation_id) ? restored?.content : undefined,
           submissionTarget: view.target, submitDisabled: view.snapshot?.model_status?.available === false, disabled, busy: sending === owner, active: activeAttempt(view.snapshot),
+          hasQueuedMessages: queueRows(view.snapshot).some(row => row.message.source === 'human'),
+          onSteerQueue: async () => {
+            if (!current()) return;
+            setFailure('');
+            try {
+              const result = await client.steerInbound(view.id);
+              if (!current() || result.status === 'obsolete') return;
+              if (result.status === 'uncertain') {
+                setFailure(tx('agent:copy.outcome-uncertain-do-not-resend-reconnect-to-read-the-authoritative-queue'));
+                return;
+              }
+              if (result.status === 'rejected') {
+                setFailure(result.reason);
+                return;
+              }
+              if (result.outcome.status !== 'applied') {
+                setFailure(tx(result.outcome.status === 'conflict'
+                  ? 'agent:copy.this-item-changed-your-draft-is-preserved-compare-it-with-the-current-row'
+                  : 'agent:queue-dock.steer-failed'));
+              }
+            } catch (cause) {
+              if (current()) setFailure(actionError(cause));
+            }
+          },
           lineageSwitchSafe: lineageSwitchSafe(view), hasGoal: !!goalDock(view.snapshot), onCommand,
           consumed, cancellationAvailable: !!cancellation, cancellationOnly: !attached && !!cancellation,
           cancellationScope: cancellation ? { authority: client, identity: JSON.stringify([binding, cancellation]) } : undefined,
@@ -104,6 +129,7 @@ function composerFacts(view: ReturnType<AppServerClient['getSnapshot']>['views']
     resources: view.snapshot?.resources?.revision, attemptModel: view.snapshot?.attempt?.model,
     lineage: lineageSwitchSafe(view), goal: !!goalDock(view.snapshot), model: view.snapshot?.model, modelStatus: view.snapshot?.model_status, settings: view.settings,
     conversation: view.snapshot?.conversation_id, shuttingDown: view.snapshot?.shutting_down, durability: view.snapshot?.durability_failure,
+    hasQueuedMessages: queueRows(view.snapshot).some(row => row.message.source === 'human'),
     interactions: !!view.snapshot?.pending_interactions?.length };
 }
 function LiveInteractions({ client, sessionId }: { client: AppServerClient; sessionId: string }) {
