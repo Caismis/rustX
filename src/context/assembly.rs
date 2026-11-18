@@ -1213,6 +1213,8 @@ pub fn render_effective_system_prompt(sections: &[AcceptedSystemSection]) -> Str
         .join("\n\n")
 }
 
+pub use rustx_types::context::assembly::UserContextLane;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2246,5 +2248,3 @@ mod tests {
         );
     }
 }
-
-pub use rustx_types::context::assembly::UserContextLane;

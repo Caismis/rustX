@@ -711,6 +711,50 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
         profile: Profile::Full,
         affected: false,
     };
+    let (names_rustx, names_other) = parse_cargo_arguments(&mut step, cargo, targets)?;
+    parse_libtest_arguments(&mut step, libtest)?;
+    if names_other && !names_rustx {
+        // The step exercises only extracted `rustx-*` packages.
+        if !step.targets.is_empty() {
+            // Its target selections would claim root-package coverage it
+            // does not run; reject rather than misread the command.
+            return Err(
+                "target selections alongside `-p` for other packages claim root coverage they do not run"
+                    .into(),
+            );
+        }
+        if !step.filters.is_empty() || !step.skips.is_empty() || step.exact {
+            // The lanes model only the root package's tests, so a filter or
+            // skip here is unverifiable and could silently run zero tests.
+            return Err(
+                "a `-p` step for other packages must not carry libtest selections the lanes cannot verify"
+                    .into(),
+            );
+        }
+        // It covers none of the root package's targets, so the lanes
+        // ignore it.
+        return Ok(step);
+    }
+    if names_other {
+        // `rustx` and extracted packages selected together: per-package
+        // feature and target resolution is not modeled, so reject instead
+        // of silently dropping the other selectors.
+        return Err(
+            "a `cargo test` step mixing `rustx` with other `-p` packages is not modeled by the lanes"
+                .into(),
+        );
+    }
+    if step.targets.is_empty() {
+        return Err("a cargo test step must select its targets explicitly".into());
+    }
+    Ok(step)
+}
+
+fn parse_cargo_arguments(
+    step: &mut Step,
+    cargo: &[&str],
+    targets: &[Target],
+) -> Result<(bool, bool), String> {
     let of = |kind: Kind| targets.iter().filter(move |target| target.kind == kind);
     // `targets` holds only the root `rustx` package's targets; a `-p` step that
     // names other packages selects none of them and contributes no coverage.
@@ -766,6 +810,10 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
     }
     step.targets.sort();
     step.targets.dedup();
+    Ok((names_rustx, names_other))
+}
+
+fn parse_libtest_arguments(step: &mut Step, libtest: &[&str]) -> Result<(), String> {
     let mut libtest = libtest.iter();
     while let Some(argument) = libtest.next() {
         match *argument {
@@ -779,41 +827,7 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
             filter => step.filters.push(filter.into()),
         }
     }
-    if names_other && !names_rustx {
-        // The step exercises only extracted `rustx-*` packages.
-        if !step.targets.is_empty() {
-            // Its target selections would claim root-package coverage it
-            // does not run; reject rather than misread the command.
-            return Err(
-                "target selections alongside `-p` for other packages claim root coverage they do not run"
-                    .into(),
-            );
-        }
-        if !step.filters.is_empty() || !step.skips.is_empty() || step.exact {
-            // The lanes model only the root package's tests, so a filter or
-            // skip here is unverifiable and could silently run zero tests.
-            return Err(
-                "a `-p` step for other packages must not carry libtest selections the lanes cannot verify"
-                    .into(),
-            );
-        }
-        // It covers none of the root package's targets, so the lanes
-        // ignore it.
-        return Ok(step);
-    }
-    if names_other {
-        // `rustx` and extracted packages selected together: per-package
-        // feature and target resolution is not modeled, so reject instead
-        // of silently dropping the other selectors.
-        return Err(
-            "a `cargo test` step mixing `rustx` with other `-p` packages is not modeled by the lanes"
-                .into(),
-        );
-    }
-    if step.targets.is_empty() {
-        return Err("a cargo test step must select its targets explicitly".into());
-    }
-    Ok(step)
+    Ok(())
 }
 
 /// libtest's own view of one harness.
