@@ -62,7 +62,8 @@ export function chatSpacingFixture(server: Server, current: RuntimeClientSnapsho
     ];
     return;
   }
-  if (kind !== 'descriptor' && kind !== 'descriptor-tools') throw Error('Unknown spacing fixture');
+  const denied = kind === 'descriptor-denied' || kind === 'descriptor-denied-inline';
+  if (!denied && kind !== 'descriptor' && kind !== 'descriptor-tools' && kind !== 'descriptor-approval') throw Error('Unknown spacing fixture');
   const id = 'spacing-deferred-answer', locator = { type: 'by_message_id' as const, message_id: id };
   const body = new TextEncoder().encode('## Canonical answer\n\nThe original bounded content remains readable.');
   const owner: TurnProcessView = { conversation_id: current.conversation_id, attempt_id: 'spacing-deferred-attempt', attempt_id_source: null,
@@ -79,13 +80,43 @@ export function chatSpacingFixture(server: Server, current: RuntimeClientSnapsho
   current.attempt = null; current.messages = current.messages.slice(0, 1);
   current.transcript.entries = current.transcript.entries!.slice(0, 1);
   current.message_descriptors = [descriptor];
-  if (kind === 'descriptor-tools') {
+  if (kind !== 'descriptor') {
     owner.message_count = 2; owner.tool_call_count = 1;
     const message_id = 'spacing-deferred-tools', locator = { type: 'by_message_id' as const, message_id };
     current.message_descriptors.unshift({ identity: message_id, locator, role: 'assistant', kind: 'message', block_count: '1', tool_call_count: '1',
       content: [], collections: [], turn_process: owner, tool_calls: [{ assembly_complete: true, committed_result_deferred: false, message_id, block_index: 0,
         call_id: 'spacing-deferred-bash', tool_id: 'tool-bash', name: 'bash', occurrence: { locator, block_index: 0 },
         state: { type: 'settled', arguments: "{\"arguments\":{\"command\":\"pwd\"}}", result: { status: { type: 'success' }, duration_ms: '1', content: [{ type: 'text', text: '/workspace/A' }] } } }] });
+  }
+  if (denied) {
+    const [tools, answer] = current.message_descriptors;
+    const tool = tools.tool_calls[0];
+    const reason = 'Auxiliary permission review denied this write';
+    tools.tool_calls[0] = { ...tool, call_id: 'spacing-denied-write', tool_id: 'tool-write', name: 'write',
+      state: { type: 'settled', arguments: JSON.stringify({ arguments: { path: 'notes.txt', content: 'notes' } }),
+        result: { status: { type: 'denied', reason }, duration_ms: '0', content: [{ type: 'text', text: reason }] } } };
+    current.transcript.deferred_entries = [{ offset: '2', identity: tools.identity!, value: tools, deferred: true, content: [] }];
+    if (kind === 'descriptor-denied-inline') {
+      current.message_descriptors = [tools];
+      current.transcript.entries.push({ cursor: '3', turn_process: owner, completed_response: answer.completed_response,
+        item: { type: 'message', message: { role: 'assistant', id, content: [{ type: 'text', text: new TextDecoder().decode(body) }] } } });
+    } else {
+      current.transcript.deferred_entries.push({ offset: '3', identity: id, value: answer, deferred: true, content: [] });
+    }
+  }
+  if (kind === 'descriptor-approval') {
+    const [tools, answer] = current.message_descriptors;
+    current.transcript.deferred_entries = [tools, answer].map(value => ({
+      offset: value === tools ? '2' : '6', identity: value.identity!, value, deferred: true, content: [],
+    }));
+    const receipt = { attempt_id: owner.attempt_id!, interaction_id: 'approval', timestamp: '2026-11-03T06:42:00Z' };
+    current.transcript.entries.push({ cursor: '3', item: { ...receipt, type: 'interaction_requested', event_id: 'requested',
+      subject: { type: 'approval', invocation_id: { caller: 'agent', call_id: 'spacing-deferred-bash' },
+        tool_id: 'tool-bash', tool_name: 'bash', arguments_digest: 'digest', reason: 'Run command' } } },
+    { cursor: '4', item: { ...receipt, type: 'interaction_settled', event_id: 'settled', settlement: { type: 'approved' } } },
+    { cursor: '5', turn_process: owner, item: { type: 'message', message: { role: 'tool', id: 'bash-result',
+      occurrence: { assistant_message_id: tools.identity!, block_index: 0 }, tool_call_id: 'spacing-deferred-bash',
+      tool_id: 'tool-bash', result: { status: { type: 'success' }, duration_ms: '1', content: [] } } } });
   }
   server.handlers.set('conversation/contentRead', request => {
     if (request.method !== 'conversation/contentRead') throw Error('Expected content read');

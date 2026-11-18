@@ -167,9 +167,13 @@ async fn permission_review_reaches_provider_and_settles_after_completion_or_canc
         let invocation_id = crate::tools::types::ToolInvocationId::Agent {
             call_id: crate::runtime::identity::ToolCallId::new("review-call"),
         };
-        let tool_id = crate::runtime::identity::ToolId::new("bash");
+        let tool_id = crate::runtime::identity::ToolId::new("write");
         let origin = crate::tools::types::ToolOrigin::Builtin;
-        let arguments = serde_json::json!({"command": "npm install"});
+        // Exercise both output strategies with escaped and multibyte content
+        // beyond the old combined prompt limit.
+        let content = format!("{}END OF FILE", "水\n\"".repeat(5_000));
+        let arguments = serde_json::json!({"path": "notes.txt", "content": content});
+        let audit_preview = serde_json::json!({"content": "preview"});
         let task = crate::runtime::permission::PermissionTaskEvidence::canonical(
             &MessageBlock::User(UserMessageBlock {
                 id: MessageId::new("task"),
@@ -177,12 +181,13 @@ async fn permission_review_reaches_provider_and_settles_after_completion_or_canc
                 kind: InboundKind::Message,
                 timestamp: None,
                 content: vec![UserContentBlock::Text(TextBlock {
-                    text: "Install dependencies".into(),
+                    text: "Write notes.txt".into(),
                 })],
             }),
         )
         .unwrap();
-        let view = crate::agent::lifecycle::PreToolView {
+        let oversized = serde_json::json!({"path": "notes.txt", "content": "a".repeat(65_536)});
+        let mut view = crate::agent::lifecycle::PreToolView {
             task: Some(&task),
             conversation_id: &conversation_id,
             execution: crate::runtime::interaction::InteractionExecution::Attempt {
@@ -191,21 +196,46 @@ async fn permission_review_reaches_provider_and_settles_after_completion_or_canc
             },
             invocation_id: &invocation_id,
             tool_id: &tool_id,
-            tool_name: "bash",
+            tool_name: "write",
             origin: &origin,
             mode: crate::tools::types::ToolInvocationMode::Foreground,
-            arguments: &arguments,
-            audit_arguments: &arguments,
+            arguments: &oversized,
+            audit_arguments: &audit_preview,
             elevation_reason: None,
-            workspace_root: None,
-            mutation_target: None,
+            workspace_root: Some(std::path::Path::new("/workspace")),
+            mutation_target: Some(std::path::Path::new("/workspace/notes.txt")),
             resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
         };
-        let review = reviewer.review(&view, "external operation", &cancellation);
+        let rejected = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            reviewer.review(&view, "workspace write", &cancellation),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(rejected, PermissionReviewVerdict::Failed { .. }));
+        assert!(adapter.requests.lock().unwrap().is_empty());
+        view.arguments = &arguments;
+        let review = reviewer.review(&view, "workspace write", &cancellation);
         tokio::pin!(review);
         tokio::select! {
             result = &mut review => panic!("review settled before provider entry: {result:?}"),
             _ = entered(&mut entries) => {}
+        }
+        {
+            let requests = adapter.requests.lock().unwrap();
+            let ModelInputMessage::RequestOnly(
+                crate::model::RequestOnlyModelContext::AuxiliaryQuestion { text },
+            ) = &requests[0].messages[0]
+            else {
+                panic!("expected the frozen review question")
+            };
+            let (_, encoded) = text.split_once("native_facts_json: ").unwrap();
+            let facts: serde_json::Value = serde_json::from_str(encoded).unwrap();
+            assert_eq!(facts["invocation"]["business_arguments"], arguments);
+            assert_eq!(
+                facts["invocation"]["mutation_target"],
+                "/workspace/notes.txt"
+            );
         }
         if cancel {
             cancellation.cancel();

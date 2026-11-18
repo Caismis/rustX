@@ -5,6 +5,61 @@ const gap = async (a: Locator, b: Locator) => {
   // Focus can scroll the mobile reader between separate remote measurements.
   return a.evaluate((first, next) => next!.getBoundingClientRect().top - first.getBoundingClientRect().bottom, await b.elementHandle());
 };
+test('completed disclosure precedes the deferred tool and its approval record', async ({ page }) => {
+  await page.goto(`${origin}/test/fixtures/agent.html?mode=chat-spacing&case=descriptor-approval`);
+  const header = page.locator('[data-turn-process]');
+  const tool = page.locator('[data-tool-call-id="spacing-deferred-bash"]');
+  const approval = page.locator('[data-approval-record]');
+  const answer = page.getByRole('heading', { name: 'Canonical answer' });
+  await expect(header).toHaveCount(1);
+  await expect(answer).toBeVisible();
+  await expect(tool).toBeHidden();
+  await header.click();
+  await expect(tool).toBeVisible();
+  await page.locator('[data-process-activity]:visible').click();
+  await expect(approval).toBeVisible();
+  expect(await gap(header, tool)).toBeGreaterThanOrEqual(0);
+  expect(await gap(tool, approval)).toBeGreaterThanOrEqual(0);
+  expect(await gap(approval, answer)).toBeGreaterThanOrEqual(0);
+  await header.click();
+  await expect(tool).toBeHidden();
+  await expect(approval).toBeHidden();
+  await expect(answer).toBeVisible();
+});
+
+for (const kind of ['descriptor-denied', 'descriptor-denied-inline']) test(`auxiliary denial folds before the final answer without a human receipt (${kind})`, async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
+  await page.goto(`${origin}/test/fixtures/agent.html?mode=chat-spacing&case=${kind}`);
+  await expect(page).toHaveTitle('Session A — rustX');
+  const header = page.locator('button[data-turn-process]');
+  const user = page.getByRole('article', { name: 'Your message' });
+  const answer = page.getByRole('heading', { name: 'Canonical answer' });
+  const tool = page.locator('[data-tool-call-id="spacing-denied-write"]');
+  await expect(header).toHaveCount(1);
+  await expect(header).toHaveAttribute('aria-expanded', 'false');
+  await expect(tool).toBeHidden();
+  await expect(answer).toBeVisible();
+  expect(await gap(user, header)).toBeGreaterThanOrEqual(0);
+  expect(await gap(header, answer)).toBeGreaterThanOrEqual(0);
+  await header.press('Enter');
+  await expect(header).toHaveAttribute('aria-expanded', 'true');
+  await expect(tool).toBeVisible();
+  await tool.locator('[data-disclosure-row]').click();
+  await expect(tool).toContainText('Auxiliary permission review denied this write');
+  expect(await gap(header, tool)).toBeGreaterThanOrEqual(0);
+  expect(await gap(tool, answer)).toBeGreaterThanOrEqual(0);
+  await expect(page.locator('[data-approval-record]')).toHaveCount(0);
+  await page.screenshot({ path: `/tmp/rustx-${kind}-expanded.png` });
+  await header.click();
+  await expect(header).toHaveAttribute('aria-expanded', 'false');
+  await expect(tool).toBeHidden();
+  await expect(answer).toBeVisible();
+  await expect(page.locator('vite-error-overlay')).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
 for (const width of [1440, 390]) test(`steer preserves workflow and background job order at ${width}px`, async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -93,6 +148,8 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
       expect(await gap(page.getByRole('article', { name: 'Your message' }), header)).toBe(16);
       if (kind === 'descriptor-tools') {
         const tool = page.locator('[data-tool-call-id="spacing-deferred-bash"]');
+        await expect(tool).toBeHidden();
+        await header.press('Enter');
         expect(await gap(header, tool)).toBe(16);
         expect(await gap(tool, answer)).toBe(12);
       } else expect(await gap(header, answer)).toBe(16);

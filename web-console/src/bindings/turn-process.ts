@@ -18,6 +18,22 @@ export function isFinalTurnDescriptor(descriptor: RuntimeClientMessageDescriptor
   return descriptor.role==='assistant' && process?.outcome==='completed'
     && process.final_message_locator!=null && sameCanonicalLocator(descriptor.locator,process.final_message_locator);
 }
+/** Approval receipts can precede the first published message of their Attempt.
+ * Use the original conversation and Attempt identity to place them in its process. */
+export function approvalProcessEntries(entries: RuntimeClientTranscriptEntry[], descriptors: readonly RuntimeClientMessageDescriptor[], conversationId: string) {
+  const owners = new Map<string, TurnProcessView>();
+  for (const { turn_process: owner } of [...descriptors, ...entries]) {
+    if (owner?.conversation_id === conversationId && owner.attempt_id && owner.outcome === 'completed') owners.set(owner.attempt_id, owner);
+  }
+  return entries.map(entry => {
+    const item = entry.item;
+    if (entry.turn_process || !(item.type === 'interaction_requested' && item.subject.type === 'approval'
+      || item.type === 'interaction_settled' && (item.settlement.type === 'approved' || item.settlement.type === 'denied'))) return entry;
+    const owner = item.attempt_id ? owners.get(item.attempt_id) : undefined;
+    return owner ? { ...entry, turn_process: owner } : entry;
+  });
+}
+
 /** A whole-turn disclosure cannot span a visible human interruption. Match
  * the process on both sides, or its live continuation at the end of the page. */
 export function steeringBoundaries(entries: readonly RuntimeClientTranscriptEntry[], liveOwner?: string) {
@@ -49,7 +65,7 @@ export function steeringBoundaries(entries: readonly RuntimeClientTranscriptEntr
 /** Only exact native identity is a grouping key. Canonical order is untouched;
  * pagination can add members without changing the disclosure's identity. */
 export type ProcessSeat = { cursor: string; kind: 'entry' } | { cursor: string; kind: 'status'; statusId: string };
-export function turnProcesses(entries: readonly RuntimeClientTranscriptEntry[], placement?: AgentStatusPlacement, conversationId?: string) {
+export function turnProcesses(entries: readonly RuntimeClientTranscriptEntry[], placement?: AgentStatusPlacement, conversationId?: string, descriptors: readonly RuntimeClientMessageDescriptor[] = []) {
   const groups = new Map<string, { seat?: ProcessSeat; tools: number; messages: number; owner: TurnProcessView }>();
   const membership = new Map<string, string>();
   const attempts = new Map<string, string>();
@@ -67,6 +83,15 @@ export function turnProcesses(entries: readonly RuntimeClientTranscriptEntry[], 
     const group = groups.get(key) ?? { tools: process.tool_call_count, messages: process.message_count, owner: process };
     groups.set(key, group);
   }
+  // A completed turn can have only descriptor-backed work and a final reply.
+  // Its first displayed member still owns a functioning process disclosure.
+  for (const descriptor of descriptors) {
+    const owner = descriptor.turn_process;
+    if (owner?.outcome !== 'completed' || !descriptor.tool_calls.length || descriptor.completed_response || isFinalTurnDescriptor(descriptor)) continue;
+    const key = attemptOwnerKey(owner);
+    if (!groups.has(key)) groups.set(key, { tools: owner.tool_call_count, messages: owner.message_count, owner });
+    attempts.set(key, key);
+  }
   // Native membership and Status anchors do not move. Only the disclosure
   // seat follows presentation order (entry body, then its anchored statuses).
   // Index completed owners even when their only member is final text: an exact
@@ -81,7 +106,7 @@ export function turnProcesses(entries: readonly RuntimeClientTranscriptEntry[], 
     for (const status of statusesAt(placement, { cursor: entry.cursor, messageId: entry.item.type === 'message' ? entry.item.message.id : undefined })) {
       const owner = attempts.get(JSON.stringify([conversationId, status.attempt_id]));
       if (!owner) continue;
-      const spec = entries.find(entry => entry.turn_process && attemptOwnerKey(entry.turn_process) === owner)!.turn_process!;
+      const spec = groups.get(owner)?.owner ?? entries.find(entry => entry.turn_process && attemptOwnerKey(entry.turn_process) === owner)!.turn_process!;
       if (spec.outcome !== 'completed') continue;
       const group: { seat?: ProcessSeat; tools: number; messages: number; owner: TurnProcessView } = groups.get(owner) ?? { tools: spec.tool_call_count, messages: spec.message_count, owner: spec };
       group.seat ??= { kind: 'status', cursor: entry.cursor, statusId: statusIdentity(status) };

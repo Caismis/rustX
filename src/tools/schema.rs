@@ -23,7 +23,7 @@ pub const EXECUTION_MODE_FIELD: &str = "execution_mode";
 /// The accepted values of [`EXECUTION_MODE_FIELD`].
 pub const EXECUTION_MODE_VALUES: [&str; 2] = ["foreground", "background"];
 
-/// Optional runtime-owned elevation reason on every model-facing tool schema
+/// Optional runtime-owned elevation reason on tools that support escalation
 /// (Issue #544). Stripped before business-argument validation and never
 /// forwarded to executors.
 pub const ELEVATION_REASON_FIELD: &str = "elevation_reason";
@@ -153,15 +153,16 @@ pub(crate) fn compile_tool_contract(
 ) -> Result<(ModelToolDefinition, Validator), SchemaError> {
     validate_root_shape(&definition.input_schema)?;
     let business = envelope::compile_business_resources(&definition.input_schema)?;
-    let mut properties = json!({
-        "arguments": business.schema,
-        ELEVATION_REASON_FIELD: {"type": ["string", "null"], "maxLength": ELEVATION_REASON_MAX_UTF8_BYTES, "description": ELEVATION_REASON_DESCRIPTION}
-    });
+    let mut properties = json!({"arguments": business.schema});
     let mut required = vec![json!(ARGUMENTS_FIELD)];
     let mut description = format!(
-        "{}\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
+        "{}\n\nPass business tool inputs inside the required arguments object.",
         definition.description
     );
+    if crate::runtime::permission::supports_elevation(definition) {
+        properties[ELEVATION_REASON_FIELD] = json!({"type": ["string", "null"], "maxLength": ELEVATION_REASON_MAX_UTF8_BYTES, "description": ELEVATION_REASON_DESCRIPTION});
+        description.push_str(" Runtime permission metadata belongs outside arguments.");
+    }
     if definition.execution_policy == ToolExecutionPolicy::ModelSelectable {
         properties[EXECUTION_MODE_FIELD] = json!({"type":"string", "enum":EXECUTION_MODE_VALUES, "description":EXECUTION_MODE_DESCRIPTION});
         required.push(json!(EXECUTION_MODE_FIELD));
@@ -214,9 +215,10 @@ pub fn compile_model_definition(
 /// # Errors
 /// Returns the first metadata or envelope violation.
 pub fn resolve_invocation_metadata(
-    policy: ToolExecutionPolicy,
+    definition: &ToolDefinition,
     call: &Value,
 ) -> Result<(ToolInvocationMode, Option<String>, Value), SchemaError> {
+    let policy = definition.execution_policy;
     let object = call.as_object().ok_or_else(|| {
         SchemaError::InvalidArguments(vec![
             "tool call must be an invocation envelope object".into(),
@@ -227,7 +229,8 @@ pub fn resolve_invocation_metadata(
             return Err(SchemaError::ReservedInvocationProperty(name.clone()));
         }
         if name != ARGUMENTS_FIELD
-            && name != ELEVATION_REASON_FIELD
+            && !(name == ELEVATION_REASON_FIELD
+                && crate::runtime::permission::supports_elevation(definition))
             && !(name == EXECUTION_MODE_FIELD && policy == ToolExecutionPolicy::ModelSelectable)
         {
             return Err(SchemaError::InvalidArguments(vec![format!(

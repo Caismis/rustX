@@ -16,7 +16,7 @@ import { useTranslation } from '../../locale/react';
 import { cloneElement, useContext, useMemo, useRef, useState, type ReactElement, type ReactNode } from 'react';
 import { turnPresentation } from '../../bindings/turn-presentation';
 import { compactionPlacement } from '../../bindings/compaction-placement';
-import { isFinalTurnDescriptor, isFinalTurnMessage, steeringBoundaries, turnProcesses } from '../../bindings/turn-process';
+import { approvalProcessEntries, isFinalTurnDescriptor, isFinalTurnMessage, steeringBoundaries, turnProcesses } from '../../bindings/turn-process';
 import { headStepSeatKey, messageStepKey, stepMemberKey, stepActivity, stepGroups, type StepPiece, type StepMember, type StepMessageHead } from '../../bindings/step-groups';
 import { StepGroup } from '../../presentation/agent/StepGroup';
 import { TurnError } from '../../presentation/agent/TurnError';
@@ -140,8 +140,9 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   });
   const auditHeads: RuntimeClientTranscriptEntry[] = history?.window ? [] : publicationHeads.filter(head => head.read_cut.read.conversation_id === snapshot.conversation_id && !loaded.some(entry => entry.cursor === head.transcript_cursor))
     .map(head => ({ cursor: head.transcript_cursor, item: { type: 'publication_audit', audit: head.audit } }));
-  const entries = auditHeads.length ? [...loaded, ...auditHeads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
-  const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], history?.page ?? snapshot.transcript, entries, !!history?.window).filter(descriptor => !isContextInjection(descriptor) && !(descriptor.identity && waitingIds.has(descriptor.identity)));
+  const orderedEntries = auditHeads.length ? [...loaded, ...auditHeads].sort((a,b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1) : loaded;
+  const descriptors = deferredToolDescriptors(snapshot.message_descriptors ?? [], page, orderedEntries, !!history?.window).filter(descriptor => !isContextInjection(descriptor) && !(descriptor.identity && waitingIds.has(descriptor.identity)));
+  const entries = approvalProcessEntries(orderedEntries, descriptors, snapshot.conversation_id);
   // Harness Chat hides system-prompt and ordinary Context rows; committed
   // Tool changes arrive as their own transcript facts, never from requests.
   const requestFeedback = suppliedFeedback ?? noFeedback;
@@ -157,13 +158,6 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       ...descriptors.filter(descriptor => descriptor.turn_process && attemptOwnerKey(descriptor.turn_process) === key).flatMap(descriptor => descriptor.tool_calls)];
     return <>{owner?.attempt_id && <TurnChanges conversationId={owner.conversation_id} attemptId={owner.attempt_id}/>} {!!batches.length && <TurnDeliveries conversationId={history?.page.source_cut?.read.conversation_id ?? snapshot.conversation_id} batches={batches}/>}<CreatedTasks tools={tools}/></>;
   };
-  const descriptorProcessSeats = new Map<string,string>();
-  const loadedProcessOwners = new Set(entries.flatMap(entry=>entry.turn_process?[attemptOwnerKey(entry.turn_process)]:[]));
-  for(const descriptor of descriptors){
-    const owner=descriptor.turn_process;if(!owner)continue;
-    const key=attemptOwnerKey(owner);
-    if(!loadedProcessOwners.has(key)&&!descriptorProcessSeats.has(key))descriptorProcessSeats.set(key,canonicalLocatorKey(descriptor.locator));
-  }
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const [stepsOpen, setStepsOpen] = useState<ReadonlySet<string>>(new Set());
   const [toolOpen, setToolOpen] = useState<ReadonlySet<string>>(new Set());
@@ -185,7 +179,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   // facts each composition carries, never of what this page happens to hold: an
   // anchor outside the loaded transcript simply draws nothing until it is paged in.
   const placement = agentStatusPlacement(snapshot.statuses);
-  const process = turnProcesses(entries, placement, snapshot.conversation_id);
+  const process = turnProcesses(entries, placement, snapshot.conversation_id, descriptors);
   const interactionSubjects = new Map(entries.flatMap(({ item }) => item.type === 'interaction_requested' ? [[JSON.stringify([item.attempt_id, item.interaction_id]), item.subject] as const] : []));
   const questionReply = ({ item }: RuntimeClientTranscriptEntry) => {
     if (item.type !== 'interaction_settled' || item.settlement.type !== 'questionnaire_submitted') return;
@@ -339,8 +333,9 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   const processExpanded = (key: string) => verbose || steering.interrupted.has(key) || expanded.has(key);
   const disclosure = (key: string) => {
     const group = process.groups.get(key)!;
-    const response = entries.find(entry => entry.turn_process && attemptOwnerKey(entry.turn_process) === key && entry.completed_response)?.completed_response;
-    return <><TurnProcess durationMs={response?.timing?.total_duration_ms ?? undefined} id={key} open={processExpanded(key)} tools={group.tools} messages={group.messages} toggle={verbose || steering.interrupted.has(key) ? undefined : () => setExpanded(previous => {
+    const response = entries.find(entry => entry.turn_process && attemptOwnerKey(entry.turn_process) === key && entry.completed_response)?.completed_response
+      ?? descriptors.find(descriptor => descriptor.completed_response && attemptOwnerKey(descriptor.completed_response.origin) === key)?.completed_response;
+    return <><TurnProcess start={group.owner.started_at ?? undefined} end={group.owner.ended_at ?? undefined} durationMs={response?.timing?.total_duration_ms ?? undefined} id={key} open={processExpanded(key)} tools={group.tools} messages={group.messages} toggle={verbose || steering.interrupted.has(key) ? undefined : () => setExpanded(previous => {
       const next = new Set(previous); if (next.has(key)) next.delete(key); else next.add(key); return next;
     })}/>{requestFeedback?.attempts.get(attemptOwnerKey(group.owner))}</>;
   };
@@ -352,11 +347,28 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   const startedAt = runningAttempt && (latestTurn?.attempt_id != null && latestTurn.attempt_id === runningAttempt.attempt_id ? latestTurn.started_at
     : entries.find(entry => entry.turn_process?.conversation_id === snapshot.conversation_id && attemptOwnerKey(entry.turn_process)===attemptOwnerKey({conversation_id:snapshot.conversation_id,...runningAttempt}))?.turn_process?.started_at);
   const startTime = startedAt ? Date.parse(startedAt) : undefined;
-  const descriptorOwner = (descriptor:RuntimeClientMessageDescriptor) => (descriptor.turn_process && descriptorProcessSeats.get(attemptOwnerKey(descriptor.turn_process))===canonicalLocatorKey(descriptor.locator) && <>
-        <TurnProcess id={attemptOwnerKey(descriptor.turn_process)} open tools={descriptor.turn_process.tool_call_count} messages={descriptor.turn_process.message_count}
-          outcome={descriptor.turn_process.outcome} start={descriptor.turn_process.started_at??undefined} end={descriptor.turn_process.ended_at??undefined}/>
-        {requestFeedback.attempts.get(attemptOwnerKey(descriptor.turn_process))}
-      </>);
+  // Inline and deferred members share one disclosure in displayed transcript order.
+  const renderedHeaders = new Set<string>();
+  const firstHeader = (key: string) => {
+    if (renderedHeaders.has(key)) return false;
+    renderedHeaders.add(key);
+    return true;
+  };
+  const descriptorOwner = (descriptor: RuntimeClientMessageDescriptor) => {
+    const owner = descriptor.turn_process;
+    if (!owner) return null;
+    const key = attemptOwnerKey(owner);
+    if ((owner.outcome !== 'completed' && process.attempts.has(key)) || !firstHeader(key)) return null;
+    if (process.groups.has(key)) return disclosure(key);
+    return <><TurnProcess id={key} open tools={owner.tool_call_count} messages={owner.message_count}
+      outcome={owner.outcome} start={owner.started_at ?? undefined} end={owner.ended_at ?? undefined}/>
+      {requestFeedback.attempts.get(key)}</>;
+  };
+  const descriptorCollapsed = (descriptor: RuntimeClientMessageDescriptor) => {
+    const owner = descriptor.turn_process;
+    return owner?.outcome === 'completed' && !descriptor.completed_response && !isFinalTurnDescriptor(descriptor)
+      && process.groups.has(attemptOwnerKey(owner)) && !processExpanded(attemptOwnerKey(owner));
+  };
   const descriptorResponse = (descriptor:RuntimeClientMessageDescriptor) => {
     const cursor = descriptorTranscriptPosition(descriptor, entries, page);
     return descriptor.completed_response && <div className={tailCss.root}>
@@ -432,12 +444,13 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     {withProcessSpacing(nodes.map(node => {
       if (node.kind === 'descriptor') {
         const { descriptor } = node;
+        const collapsed = descriptorCollapsed(descriptor);
         return <section className={`${css.flowItem} ${css.flow}`} data-chat-group-part={descriptor.completed_response || isFinalTurnDescriptor(descriptor) ? 'response' : undefined} key={canonicalLocatorKey(descriptor.locator)} data-canonical-locator={JSON.stringify(descriptor.locator)}>
           {descriptorOwner(descriptor)}
           {requestFeedback.messages.get(descriptor.identity ?? (descriptor.locator.type === 'by_message_id' ? descriptor.locator.message_id : ''))}
-          <DescriptorContent descriptor={descriptor}/>
+          {!collapsed && <DescriptorContent descriptor={descriptor}/>}
           {descriptorResponse(descriptor)}
-          {descriptor.tool_calls.map(tool=><Tool key={`${canonicalLocatorKey(tool.occurrence.locator)}:${tool.block_index}`} tool={tool}/>)}
+          {!collapsed && descriptor.tool_calls.map(tool=><Tool key={`${canonicalLocatorKey(tool.occurrence.locator)}:${tool.block_index}`} tool={tool}/>)}
           {invocationPanels(descriptor.turn_process, descriptor.tool_calls)}
         </section>;
       }
@@ -457,7 +470,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         const response = message.role === 'assistant' && (grouped ? grouped.some(piece => piece.kind === 'reply') : (head.blocks ?? message.content).some(block => block.type === 'text' || block.type === 'refusal'));
         return <div className={`${css.flowItem} ${css.flow}`} data-chat-group-part={response ? 'response' : undefined} data-chat-flow-kind={isUser(message) ? 'user' : undefined} key={`message:${message.id}`}><MessageSeat key="seat" id={`message:${message.id}`} reveal={childUser ? 'always' : undefined}
           prefix={<>{requestFeedback?.messages.get(message.id)}{descriptor && descriptorOwner(descriptor)}</>}
-          message={message.role !== 'assistant' ? message : undefined} tools={tools} actions={childUser && userActions(message)}
+          bodyHidden={descriptor && descriptorCollapsed(descriptor)} message={message.role !== 'assistant' ? message : undefined} tools={tools} actions={childUser && userActions(message)}
           other={message.role === 'assistant' ? grouped ? pieces(undefined, grouped, true, head) : messageSegments(message,head.blocks ?? message.content,tools) : undefined} suffix={descriptor && descriptorResponse(descriptor)}/>{panels}</div>;
       }
       if (node.kind === 'streaming') {
@@ -499,15 +512,15 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       const statusOwner = (status: typeof statuses[number]) => process.attempts.get(JSON.stringify([snapshot.conversation_id, status.attempt_id]));
       const statusRows = statuses.map(status => {
         const owner = statusOwner(status), seat = owner ? process.groups.get(owner)?.seat : undefined;
-        const header = seat?.kind === 'status' && seat.statusId === statusIdentity(status);
+        const header = seat?.kind === 'status' && seat.statusId === statusIdentity(status) && firstHeader(owner!);
         const bodyHidden = !!owner && process.groups.get(owner)?.owner.outcome === 'completed' && !processExpanded(owner);
         return { status, owner, header, bodyHidden, hidden: bodyHidden && !header };
       });
       const visibleStatus = statusRows.some(row => !row.bodyHidden);
       const body = !!reply || hasBody(entry) && !toldByCall(entry);
       const stepped = reply ? undefined : steps.get(entry.cursor);
-      const entrySeat = group?.seat?.kind === 'entry' && group.seat.cursor === entry.cursor;
-      const statusSeat = statuses.some(status => { const owner = statusOwner(status); const seat = owner ? process.groups.get(owner)?.seat : undefined; return seat?.kind === 'status' && seat.statusId === statusIdentity(status); });
+      const entrySeat = group?.seat?.kind === 'entry' && group.seat.cursor === entry.cursor && firstHeader(key!);
+      const statusSeat = statusRows.some(row => row.header);
       const batch = entry.item.type === 'message' ? steering.rows.get(entry.item.message.id) : undefined;
       const runPanels = invocationPanels(entry.turn_process, entry.tool_calls, entry.item.type === 'message' && entry.item.message.role === 'assistant' ? entry.item.message.content : []);
       const feedback = entry.item.type === 'message' ? requestFeedback?.messages.get(entry.item.message.id)
@@ -522,7 +535,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       return <div className={`${css.flowItem} ${css.flow}`} hidden={seatHidden && !feedback && !runPanels.length} data-chat-group-part={response ? 'response' : undefined} data-chat-steering-batch={batch} data-chat-flow-kind={batch ? 'steering' : entry.item.type === 'message' && isUser(entry.item.message) ? 'user' : undefined} data-chat-trailing-process={trailingHeader || undefined} key={entry.item.type === 'publication_audit' ? `message:${entry.item.audit.message_id}` : entryIdentity(entry)} data-chat-anchor-key={entry.turn_process?.outcome==='completed' && entry.turn_process.control_cursor===entry.cursor ? turnAnchor(entry.turn_process) : undefined}><MessageSeat key="seat" id={entryIdentity(entry)} turnOwner={entry.turn_process ? turnAnchor(entry.turn_process) : undefined} hidden={seatHidden && !feedback} owner={key} reveal={entry === latestResponse || entry === latestPartial || entry === latestUser ? 'always' : 'hover'}
         prefix={<>
         {entrySeat && disclosure(key!)}
-        {entry.completed_response && !process.groups.has(process.attempts.get(attemptOwnerKey(entry.completed_response.origin)) ?? '') && <><TurnProcess id={attemptOwnerKey(entry.completed_response.origin)} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(entry.completed_response.origin))}</>}
+        {entry.completed_response && !process.groups.has(process.attempts.get(attemptOwnerKey(entry.completed_response.origin)) ?? '') && firstHeader(attemptOwnerKey(entry.completed_response.origin)) && <><TurnProcess id={attemptOwnerKey(entry.completed_response.origin)} open tools={entry.turn_process?.tool_call_count ?? 0} messages={entry.turn_process?.message_count ?? 0} durationMs={entry.completed_response.timing?.total_duration_ms ?? undefined}/>{requestFeedback?.attempts.get(attemptOwnerKey(entry.completed_response.origin))}</>}
         {feedback}
         </>} bodyHidden={!final && !processOpen}
         message={body && !stepped && entry.item.type === 'message' && entry.item.message.role !== 'assistant' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}

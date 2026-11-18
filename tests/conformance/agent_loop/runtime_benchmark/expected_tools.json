@@ -3,7 +3,7 @@
     "type": "function",
     "function": {
       "name": "read",
-      "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
+      "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.\n\nPass business tool inputs inside the required arguments object.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "urn:rustx:invocation",
@@ -33,14 +33,6 @@
             "required": [
               "path"
             ]
-          },
-          "elevation_reason": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 512,
-            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
@@ -163,7 +155,7 @@
     "type": "function",
     "function": {
       "name": "glob",
-      "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
+      "description": "Find files whose path matches a glob pattern using the in-process traversal. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 1000 and may be larger. Results are plain text, sorted lexically, relative to the search root, and use POSIX separators. Hidden files, ignore-file behavior, and symlink traversal follow rustX's existing policy.\n\nPass business tool inputs inside the required arguments object.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "urn:rustx:invocation",
@@ -191,14 +183,6 @@
             "required": [
               "pattern"
             ]
-          },
-          "elevation_reason": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 512,
-            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
@@ -212,7 +196,7 @@
     "type": "function",
     "function": {
       "name": "grep",
-      "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
+      "description": "Search UTF-8 text files for matching lines using an in-process search engine. Resolve a relative path from the execution cwd; absolute paths are used as host filesystem paths. The optional limit defaults to 100 and may be larger. Results are plain text; long lines are shortened to 500 characters and bounded results include instructions for continuing or refining the search. Hidden files are included and .gitignore behavior is unchanged.\n\nPass business tool inputs inside the required arguments object.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "urn:rustx:invocation",
@@ -259,14 +243,6 @@
             "required": [
               "pattern"
             ]
-          },
-          "elevation_reason": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 512,
-            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [
@@ -280,7 +256,7 @@
     "type": "function",
     "function": {
       "name": "bash",
-      "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.\n\nExecution ownership: every call to this tool must include the top-level \"execution_mode\" field, set to \"foreground\" when the agent needs this call's terminal result before it can continue, or \"background\" when the work should keep running independently while the agent proceeds.",
+      "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. A foreground command still running after 120 seconds, or after its timeout if set, moves to a background job instead of being killed. The optional timeout is in seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.\n\nExecution ownership: every call to this tool must include the top-level \"execution_mode\" field, set to \"foreground\" when the agent needs this call's terminal result before it can continue, or \"background\" when the work should keep running independently while the agent proceeds.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "urn:rustx:invocation",
@@ -305,7 +281,7 @@
                 "type": "integer",
                 "format": "uint64",
                 "minimum": 1,
-                "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                "description": "Foreground wait in seconds before the command moves to a background job\ninstead of being killed. Omitted uses the 120 second default. An explicit\nvalue overrides that budget and is capped at 600 seconds. A background\nexecution has no foreground budget. Cancellation still stops the command."
               }
             },
             "required": [
@@ -341,7 +317,7 @@
     "type": "function",
     "function": {
       "name": "todo",
-      "description": "Track multi-step work as a visible task list the user can see. Open a list before starting anything that takes several steps, and keep it current as you work: create one task per discrete step, mark exactly one task in_progress at a time, and mark a task completed immediately when it is done rather than in batches at the end. Never complete a task whose tests fail or whose work is unfinished — leave it in_progress and add a task for the remaining work. Change a task's status with {\"action\": \"update\", \"id\": N, \"status\": \"...\"}. Use blocked_by/add_blocked_by when one task genuinely cannot start before another finishes. Skip the list entirely for single-step work — it is overhead there. Every reply contains the complete list, so a list action is only needed to re-read it.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
+      "description": "Track multi-step work as a visible task list the user can see. Open a list before starting anything that takes several steps, and keep it current as you work: create one task per discrete step, mark exactly one task in_progress at a time, and mark a task completed immediately when it is done rather than in batches at the end. Never complete a task whose tests fail or whose work is unfinished — leave it in_progress and add a task for the remaining work. Change a task's status with {\"action\": \"update\", \"id\": N, \"status\": \"...\"}. Use blocked_by/add_blocked_by when one task genuinely cannot start before another finishes. Skip the list entirely for single-step work — it is overhead there. Every reply contains the complete list, so a list action is only needed to re-read it.\n\nPass business tool inputs inside the required arguments object.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "urn:rustx:invocation",
@@ -490,14 +466,6 @@
             "required": [
               "action"
             ]
-          },
-          "elevation_reason": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "maxLength": 512,
-            "description": "Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool's business executor."
           }
         },
         "required": [

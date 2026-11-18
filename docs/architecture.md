@@ -2682,8 +2682,8 @@ model Tool call uses one strict invocation envelope:
 
 `arguments` contains only business input. `execution_mode` is declared and
 required only for `ModelSelectable`; fixed policies resolve ownership without
-that outer field. `elevation_reason` is optional permission metadata, never
-approval evidence. Preflight rejects flat calls and unknown envelope fields,
+that outer field. Tools that can require approval expose optional
+`elevation_reason` metadata. Only the human approval grants authority. Preflight rejects flat calls and unknown envelope fields,
 resolves ownership once, normalizes business input, and validates it against
 the captured canonical validator before dispatch. Executors receive only the
 business object. Its properties may be named `execution_mode`,

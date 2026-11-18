@@ -3973,8 +3973,8 @@ Tool execution may be parallel. Runtime completion events may reflect actual com
   retain their own synchronization. Ownership and permission are never combined
   into one axis.
 - Every ordinary model Tool call uses a strict envelope with required
-  `arguments` business input, optional `elevation_reason`, and required
-  `execution_mode` only for `ModelSelectable`. Flat calls, unknown outer fields,
+  `arguments` business input. Tools that can require approval expose optional
+  `elevation_reason`. Only `ModelSelectable` requires `execution_mode`. Flat calls, unknown outer fields,
   reserved `__rustx_*` envelope fields and invalid metadata fail preflight.
   Executors and business normalizers receive only `arguments`.
 - Business schema semantics are independent of runtime metadata. Business
