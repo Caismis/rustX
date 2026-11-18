@@ -382,6 +382,7 @@ impl GoalDomain {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[cfg(test)]
     pub(crate) fn tool_commit_gate(
         &self,

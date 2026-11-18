@@ -168,6 +168,7 @@ pub fn validate_request(
 
 #[cfg(test)]
 thread_local! { static PREFLIGHTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn take_preflights() -> usize {
     PREFLIGHTS.with(|v| v.replace(0))

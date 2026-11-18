@@ -421,6 +421,7 @@ pub(crate) fn take_accounted_bytes() -> u64 {
     ACCOUNTED_BYTES.with(|total| total.replace(0))
 }
 
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn take_estimator_calls() -> u64 {
     ESTIMATOR_CALLS.with(|total| total.replace(0))

@@ -1,5 +1,9 @@
 //! The deterministic scripted contract suites, compiled into the crate's own
-//! test build.
+//! test build **on Linux only**: every `mod` declaration below is
+//! `cfg(target_os = "linux")`. macOS CI never executes these deterministic
+//! contracts, so macOS skips code-generating ~75K lines of suite code while
+//! still compiling `common`/`support` for the boundary suites that share
+//! them. To run a scripted suite, use a Linux checkout or the Linux CI lanes.
 //!
 //! # Semantic class
 //!
@@ -89,16 +93,26 @@ pub(crate) mod common;
 #[path = "../support/mod.rs"]
 pub(crate) mod support;
 
+#[cfg(target_os = "linux")]
 mod agent;
+#[cfg(target_os = "linux")]
 mod background;
+#[cfg(target_os = "linux")]
 mod capability;
 
 #[cfg(target_os = "linux")]
 pub(crate) use capability::exercise_skill_catalog_without_environments;
+#[cfg(target_os = "linux")]
 mod context;
+#[cfg(target_os = "linux")]
 mod extensions;
+#[cfg(target_os = "linux")]
 mod interaction;
+#[cfg(target_os = "linux")]
 mod observation_relocated;
+#[cfg(target_os = "linux")]
 mod runtime_client;
+#[cfg(target_os = "linux")]
 mod sqlite_event_kind;
+#[cfg(target_os = "linux")]
 mod tools;

@@ -434,7 +434,7 @@ summarizes them and the lane check below verifies them against Cargo:
 | Suite / group | Class | Linux lane | macOS |
 | --- | --- | --- | --- |
 | source-module unit tests (`src/**`) | unit | rust-contracts | full |
-| `scripted_suites::` | deterministic contracts | rust-contracts | skipped |
+| `scripted_suites::` | deterministic contracts | rust-contracts | not compiled (`cfg(target_os = "linux")`) |
 | `local_runtime::session_runtime_manager::tests::` | deterministic contracts | rust-contracts | skipped |
 | `boundary_suites::` | boundary conformance | rust-boundaries | full (required) |
 | bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts | bins only |
@@ -917,7 +917,8 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-targets --all-features --lock
 # One domain target:
 cargo test --test durable --all-features
 
-# The in-crate scripted contract suites only:
+# The in-crate scripted contract suites only (Linux only — the suite
+# declarations are cfg(target_os = "linux") and do not compile on macOS):
 cargo test --lib --all-features scripted_suites::
 
 # The App Server contracts under the manager's private test module:

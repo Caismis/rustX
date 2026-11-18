@@ -57,6 +57,7 @@ mod glob;
 mod goal;
 mod schedule;
 pub(crate) use schedule::NAMES as SCHEDULE_TOOL_NAMES;
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) use schedule::registrations as schedule_test_registrations;
 pub(crate) mod jobs;

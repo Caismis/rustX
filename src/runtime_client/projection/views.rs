@@ -1,6 +1,8 @@
 //! Pure views of native registry snapshots (background, agents, interactions, status window).
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 use super::Arc;
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 use super::CapabilityView;
 #[cfg(test)]
@@ -241,6 +243,7 @@ pub(crate) fn agent_source_view(
 /// package order); the source list preserves the deterministic
 /// source-identity order of the authoritative availability map. No
 /// executors, environment paths, or dependency internals ever appear.
+#[cfg(target_os = "linux")]
 #[cfg(test)]
 pub(crate) fn capability_view(
     snapshot: &crate::capabilities::CapabilitySnapshot,
