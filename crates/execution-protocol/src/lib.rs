@@ -1,0 +1,781 @@
+//! Single wire definition for the rustX execution protocol (v1).
+//!
+//! The execution protocol is the physical environment/output channel between
+//! the Agent Server (package `rustx`) and the physical Execution Client
+//! (package `rustx-execution-client`). Every type here is the one serde DTO
+//! both sides speak; nothing in this crate advertises implemented I/O. An
+//! authenticated [`Hello`]/[`Admission`] exchange proves binding ownership
+//! only — environment readiness facts (files, configuration, MCP, Python)
+//! are separate, later reports.
+
+use std::collections::BTreeSet;
+use std::fmt;
+use std::num::NonZeroU64;
+use std::path::{Component, Path, PathBuf};
+use std::str::FromStr;
+use std::time::Duration;
+
+use serde::de::{self, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use thiserror::Error;
+
+pub mod transport;
+
+/// The only protocol revision this implementation speaks. Incompatible
+/// versions are explicitly rejected; there is no implicit downgrade.
+pub const PROTOCOL_VERSION: u16 = 1;
+
+/// Maximum size of one encoded transport frame, envelope included (1 MiB).
+/// Enforcement happens at the transport read/parse boundary before
+/// allocation; raw payload size never relaxes this bound.
+pub const MAX_ENCODED_FRAME_BYTES: usize = 1024 * 1024;
+
+/// Maximum size of one raw content chunk before encoding (64 KiB). Encoding
+/// expansion still counts against [`MAX_ENCODED_FRAME_BYTES`].
+pub const MAX_RAW_CHUNK_BYTES: usize = 64 * 1024;
+
+/// Maximum data records queued or in flight on one connection.
+pub const MAX_DATA_RECORDS_PER_CONNECTION: usize = 8;
+
+/// Maximum control records queued or in flight on one connection. Control
+/// progress is independent of data-record saturation.
+pub const MAX_CONTROL_RECORDS_PER_CONNECTION: usize = 4;
+
+/// Absolute deadline for one optional Server → Client managed-output save.
+/// The save budget is independent of the business-receive budget and never
+/// extends the calling operation's remaining deadline.
+pub const OPTIONAL_SAVE_DEADLINE: Duration = Duration::from_secs(5);
+
+macro_rules! identity_newtype {
+    ($name:ident, $doc:literal) => {
+        #[doc = $doc]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        #[serde(transparent)]
+        pub struct $name(String);
+
+        impl $name {
+            /// Creates the identity from an opaque string value.
+            #[must_use]
+            pub fn new(value: impl Into<String>) -> Self {
+                Self(value.into())
+            }
+
+            /// The identity as a string slice.
+            #[must_use]
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+    };
+}
+
+identity_newtype!(
+    SessionId,
+    "The Session a binding belongs to. One Session has at most one live Execution Client."
+);
+identity_newtype!(
+    EnvironmentId,
+    "The logical execution location. Not a path, and not a machine-isolation promise."
+);
+identity_newtype!(
+    ClientInstanceId,
+    "One physical Client process lifetime. An instance identity is not a credential."
+);
+identity_newtype!(
+    ConnectionId,
+    "One transport connection. A connection is never the execution owner."
+);
+
+/// A canonical decimal `u64` on the wire.
+///
+/// The wire form is exactly one non-negative decimal string: `0` is valid,
+/// but no sign, no leading zero, no padding, and no `u64` overflow. It is
+/// used for offsets and other positions where zero is meaningful;
+/// [`Generation`] is the same wire form with zero excluded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DecimalU64(u64);
+
+impl DecimalU64 {
+    /// Creates the value from a `u64`.
+    #[must_use]
+    pub const fn new(value: u64) -> Self {
+        Self(value)
+    }
+
+    /// The value as a `u64`.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0
+    }
+}
+
+/// The shared canonical-decimal wire rule: digits only, no leading zero
+/// except the single digit `0`, no overflow.
+fn parse_canonical_decimal(text: &str) -> Option<u64> {
+    if text.is_empty()
+        || (text.len() > 1 && text.starts_with('0'))
+        || !text.bytes().all(|b| b.is_ascii_digit())
+    {
+        return None;
+    }
+    text.parse().ok()
+}
+
+/// Failure to parse a canonical decimal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("value must be a canonical decimal string")]
+pub struct DecimalParseError;
+
+impl FromStr for DecimalU64 {
+    type Err = DecimalParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        parse_canonical_decimal(text)
+            .map(Self)
+            .ok_or(DecimalParseError)
+    }
+}
+
+impl From<u64> for DecimalU64 {
+    fn from(value: u64) -> Self {
+        Self(value)
+    }
+}
+
+impl fmt::Display for DecimalU64 {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Serialize for DecimalU64 {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for DecimalU64 {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct DecimalVisitor;
+
+        impl Visitor<'_> for DecimalVisitor {
+            type Value = DecimalU64;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a canonical decimal string")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(DecimalVisitor)
+    }
+}
+
+/// The current binding generation.
+///
+/// Same-instance reconnects keep the generation; an instance replacement
+/// increments it. On the wire a generation is exactly one canonical positive
+/// decimal string: no sign, no leading zero, no padding, no overflow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Generation(NonZeroU64);
+
+impl Generation {
+    /// Creates a generation from a nonzero value.
+    #[must_use]
+    pub const fn new(value: NonZeroU64) -> Self {
+        Self(value)
+    }
+
+    /// The generation as a `u64`.
+    #[must_use]
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
+/// Failure to parse a canonical generation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("generation must be a canonical positive decimal string")]
+pub struct GenerationParseError;
+
+impl FromStr for Generation {
+    type Err = GenerationParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        let value = parse_canonical_decimal(text).ok_or(GenerationParseError)?;
+        Ok(Self(NonZeroU64::new(value).ok_or(GenerationParseError)?))
+    }
+}
+
+impl TryFrom<u64> for Generation {
+    type Error = GenerationParseError;
+
+    fn try_from(value: u64) -> Result<Self, Self::Error> {
+        Ok(Self(NonZeroU64::new(value).ok_or(GenerationParseError)?))
+    }
+}
+
+impl fmt::Display for Generation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl Serialize for Generation {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for Generation {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct GenerationVisitor;
+
+        impl Visitor<'_> for GenerationVisitor {
+            type Value = Generation;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a canonical positive decimal string")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(GenerationVisitor)
+    }
+}
+
+/// A physical environment capability a Client can prove.
+///
+/// The vocabulary is the plan's v1 capability set. Advertising a capability
+/// claims the Client owns the physical responsibility; it never implies the
+/// feature is ready or dispatchable today.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Capability {
+    /// Authenticated connection, identity, health round-trips, binding state.
+    Connection,
+    /// Workspace file I/O: read, write, conditional replace, metadata,
+    /// directory paging, copy/delete, change notifications.
+    Files,
+    /// The one implemented physical operation: bounded revision-checked
+    /// range reads under the binding workspace.
+    ReadRange,
+    /// Data-side bounded glob/grep, conditional edit, document decoding.
+    Search,
+    /// Managed processes under Server-assigned `OperationId`s.
+    Process,
+    /// Workspace `uv` and Managed Python fingerprint environments.
+    Python,
+    /// Client-hosted stdio MCP sessions.
+    StdioMcp,
+    /// Bounded byte-chunk content transfer and upload staging.
+    ContentTransfer,
+    /// Client-owned managed output: private allocation, unpublished
+    /// candidate staging, seal/publish, loser cleanup.
+    ManagedOutput,
+}
+
+/// The binding credential presented in a [`Hello`].
+///
+/// Exactly 32 bytes of OS randomness, carried on the wire as 64 lowercase
+/// hex characters. The secret is never stored on the Server — only its
+/// SHA-256 verifier is — and it is never echoed: `Debug` redacts, there is
+/// no `Display`, and parse errors do not contain the submitted value.
+#[derive(Clone)]
+pub struct BindingCredential([u8; Self::LENGTH]);
+
+impl BindingCredential {
+    /// The credential length in bytes.
+    pub const LENGTH: usize = 32;
+    /// The credential length on the wire in hex characters.
+    pub const HEX_LENGTH: usize = Self::LENGTH * 2;
+
+    /// Wraps raw credential bytes issued by the Server.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; Self::LENGTH]) -> Self {
+        Self(bytes)
+    }
+
+    /// The raw credential bytes, for verifier computation only.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; Self::LENGTH] {
+        &self.0
+    }
+}
+
+/// Failure to parse a wire credential. Never carries the submitted value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("binding credential must be exactly 64 lowercase hex characters")]
+pub struct CredentialParseError;
+
+impl FromStr for BindingCredential {
+    type Err = CredentialParseError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        if text.len() != Self::HEX_LENGTH {
+            return Err(CredentialParseError);
+        }
+        let mut bytes = [0u8; Self::LENGTH];
+        let (pairs, _) = text.as_bytes().as_chunks::<2>();
+        for (slot, &[high, low]) in bytes.iter_mut().zip(pairs) {
+            let high = hex_value(high).ok_or(CredentialParseError)?;
+            let low = hex_value(low).ok_or(CredentialParseError)?;
+            *slot = (high << 4) | low;
+        }
+        Ok(Self(bytes))
+    }
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        _ => None,
+    }
+}
+
+impl fmt::Debug for BindingCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("BindingCredential(REDACTED)")
+    }
+}
+
+impl Serialize for BindingCredential {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut hex = String::with_capacity(Self::HEX_LENGTH);
+        for byte in self.0 {
+            use fmt::Write;
+            write!(hex, "{byte:02x}").expect("string write");
+        }
+        serializer.serialize_str(&hex)
+    }
+}
+
+impl<'de> Deserialize<'de> for BindingCredential {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct CredentialVisitor;
+
+        impl Visitor<'_> for CredentialVisitor {
+            type Value = BindingCredential;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("64 lowercase hex characters")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_str(CredentialVisitor)
+    }
+}
+
+/// The Client's authenticated negotiation request — the first and only
+/// message that may open an execution binding.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Hello {
+    /// Wire protocol revision; must equal [`PROTOCOL_VERSION`].
+    pub version: u16,
+    /// The Session this binding belongs to.
+    pub session: SessionId,
+    /// The logical execution environment.
+    pub environment: EnvironmentId,
+    /// The physical Client instance asserting the binding.
+    pub instance: ClientInstanceId,
+    /// The binding generation asserted for this instance.
+    pub generation: Generation,
+    /// The exact normalized absolute workspace the Client claims.
+    pub workspace: PathBuf,
+    /// The capabilities the Client claims to physically own.
+    pub capabilities: BTreeSet<Capability>,
+    /// The binding credential issued to this reservation.
+    pub credential: BindingCredential,
+}
+
+impl fmt::Debug for Hello {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Hello")
+            .field("version", &self.version)
+            .field("session", &self.session)
+            .field("environment", &self.environment)
+            .field("instance", &self.instance)
+            .field("generation", &self.generation)
+            .field("workspace", &self.workspace)
+            .field("capabilities", &self.capabilities)
+            .field("credential", &self.credential)
+            .finish()
+    }
+}
+
+/// The Server's acceptance of a [`Hello`]: this authenticated connection is
+/// now the one live connection of the binding.
+///
+/// An admission proves connection ownership only. It does not report
+/// workspace, configuration, MCP, or Python readiness, and it does not
+/// grant dispatch by itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Admission {
+    /// The negotiated protocol revision — always [`PROTOCOL_VERSION`] in v1.
+    pub version: u16,
+    /// The bound Session.
+    pub session: SessionId,
+    /// The bound environment.
+    pub environment: EnvironmentId,
+    /// The bound Client instance.
+    pub instance: ClientInstanceId,
+    /// The bound generation.
+    pub generation: Generation,
+    /// The exact workspace the binding is fixed to.
+    pub workspace: PathBuf,
+}
+
+/// The reason a [`Hello`] was rejected.
+///
+/// Wire-stable machine codes. A reject never echoes the submitted credential
+/// or any other secret-bearing field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Error)]
+#[serde(rename_all = "kebab-case")]
+pub enum Reject {
+    /// The protocol revision is not spoken; there is no implicit downgrade.
+    #[error("unsupported protocol version")]
+    UnsupportedVersion,
+    /// The Session does not match this reservation.
+    #[error("session mismatch")]
+    SessionMismatch,
+    /// The environment does not match this reservation.
+    #[error("environment mismatch")]
+    EnvironmentMismatch,
+    /// The Client instance does not match this reservation.
+    #[error("instance mismatch")]
+    InstanceMismatch,
+    /// The generation does not match this reservation.
+    #[error("generation mismatch")]
+    GenerationMismatch,
+    /// The workspace is not exactly the reserved normalized absolute path.
+    #[error("workspace mismatch")]
+    WorkspaceMismatch,
+    /// A required capability is absent from the Hello.
+    #[error("missing required capability")]
+    MissingCapabilities,
+    /// The credential verifier did not match.
+    #[error("invalid credential")]
+    InvalidCredential,
+    /// A different connection is already live on this binding.
+    #[error("binding already has a live connection")]
+    AlreadyConnected,
+    /// The binding detached; re-admission requires live-instance recovery
+    /// proof that this layer does not provide (#577).
+    #[error("binding detached; recovery proof required")]
+    RecoveryRequired,
+    /// The binding was revoked and can never be dispatched again.
+    #[error("binding revoked")]
+    Revoked,
+}
+
+/// The Server's reply to a [`Hello`].
+pub type HelloReply = Result<Admission, Reject>;
+
+/// The Server's one typed request on a live execution connection.
+///
+/// The Server is the only initiator; the Client answers every request with
+/// exactly one [`ClientReply`]. `Ping`/`Pong` is the liveness control flow
+/// and `ReadRange` is the one implemented physical operation — there is no
+/// raw or arbitrary message path.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ClientRequest {
+    /// A liveness probe.
+    Ping,
+    /// A bounded revision-checked range read under the binding workspace.
+    ReadRange {
+        /// The workspace-relative file path: normal components only.
+        relative_path: PathBuf,
+        /// The byte offset to start at.
+        offset: DecimalU64,
+        /// At most [`MAX_RAW_CHUNK_BYTES`] bytes.
+        max_bytes: u32,
+        /// The revision the file must still hold, when checked.
+        expected_revision: Option<String>,
+    },
+}
+
+/// The Client's one typed reply to a [`ClientRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ClientReply {
+    /// The reply to a `Ping`.
+    Pong,
+    /// The verified range the Client physically read.
+    Range {
+        /// The returned bytes, base64. Never exceeds `max_bytes`.
+        data_base64: String,
+        /// The offset the bytes start at — echoes the request.
+        offset: DecimalU64,
+        /// The next offset to read, absent at end of file.
+        next_offset: Option<DecimalU64>,
+        /// The revision the range was verified under.
+        revision: String,
+    },
+    /// The request failed; `kind` carries only the stable reason.
+    Error {
+        /// Why the operation failed — never a raw path or payload.
+        kind: ReadError,
+    },
+}
+
+/// The stable machine reason a physical read failed.
+///
+/// A wire code only: it never carries a raw path, credential, or payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReadError {
+    /// The request was malformed or out of bounds.
+    Invalid,
+    /// The path escapes the workspace or is otherwise not permitted.
+    Denied,
+    /// The path does not exist.
+    NotFound,
+    /// The file changed across the read or no longer holds the expected
+    /// revision.
+    Conflict,
+    /// The read could not be completed for another reason.
+    Unavailable,
+}
+
+/// The server-published bootstrap bundle for one local binding.
+///
+/// It is delivered out of band as exactly one framed record in an
+/// owner-only file: the Client learns the socket endpoint and every
+/// identity it must assert — including its credential — from it. The
+/// bundle deliberately carries no capabilities: the Client constructs its
+/// Hello with the fixed capabilities it actually implements, so a tampered
+/// file can never advertise features the Client does not have.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bootstrap {
+    /// The Unix socket the Client connects to.
+    pub socket_path: PathBuf,
+    /// The protocol revision the Server expects.
+    pub version: u16,
+    /// The Session the binding belongs to.
+    pub session: SessionId,
+    /// The logical execution environment.
+    pub environment: EnvironmentId,
+    /// The physical Client instance that must assert the binding.
+    pub instance: ClientInstanceId,
+    /// The binding generation the instance must assert.
+    pub generation: Generation,
+    /// The exact normalized absolute workspace the binding fixes.
+    pub workspace: PathBuf,
+    /// The binding credential issued to this reservation.
+    pub credential: BindingCredential,
+}
+
+/// Whether `path` is a normalized absolute path.
+///
+/// The check is purely lexical — it never touches the filesystem. Root plus
+/// normal components only: no `.`, `..`, repeated separators, or trailing
+/// separators. This is the workspace form the binding contract fixes.
+#[must_use]
+pub fn is_normalized_absolute_path(path: &Path) -> bool {
+    if !path.is_absolute() {
+        return false;
+    }
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        if matches!(component, Component::CurDir | Component::ParentDir) {
+            return false;
+        }
+        normalized.push(component.as_os_str());
+    }
+    // `Path` equality is component-wise, so the comparison must be on the
+    // exact lexical form to reject redundant separators and trailing `/`.
+    normalized.as_os_str() == path.as_os_str()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn credential() -> BindingCredential {
+        BindingCredential::from_bytes([0x5a; BindingCredential::LENGTH])
+    }
+
+    fn hello() -> Hello {
+        Hello {
+            version: PROTOCOL_VERSION,
+            session: SessionId::new("session-1"),
+            environment: EnvironmentId::new("env-1"),
+            instance: ClientInstanceId::new("instance-1"),
+            generation: Generation::try_from(1).unwrap(),
+            workspace: PathBuf::from("/work/root"),
+            capabilities: BTreeSet::from([Capability::Files, Capability::Process]),
+            credential: credential(),
+        }
+    }
+
+    #[test]
+    fn decimal_u64_accepts_canonical_decimals_including_zero() {
+        for good in ["0", "1", "42", "18446744073709551615"] {
+            assert!(good.parse::<DecimalU64>().is_ok(), "{good}");
+            assert_eq!(
+                serde_json::from_str::<DecimalU64>(&format!("\"{good}\""))
+                    .unwrap()
+                    .get(),
+                good.parse::<u64>().unwrap()
+            );
+        }
+        for bad in [
+            "",
+            "00",
+            "01",
+            "+1",
+            "-1",
+            " 1",
+            "1 ",
+            "1e3",
+            "abc",
+            "18446744073709551616",
+        ] {
+            assert!(bad.parse::<DecimalU64>().is_err(), "{bad}");
+        }
+        assert_eq!(serde_json::to_string(&DecimalU64::new(0)).unwrap(), "\"0\"");
+        assert!(serde_json::from_str::<DecimalU64>("0").is_err());
+    }
+
+    #[test]
+    fn generation_accepts_only_canonical_positive_decimals() {
+        for good in ["1", "7", "42", "18446744073709551615"] {
+            assert!(good.parse::<Generation>().is_ok(), "{good}");
+        }
+        for bad in [
+            "",
+            "0",
+            "00",
+            "01",
+            "007",
+            "+1",
+            "-1",
+            " 1",
+            "1 ",
+            "1_0",
+            "1e3",
+            "abc",
+            "18446744073709551616",
+        ] {
+            assert!(bad.parse::<Generation>().is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn generation_wire_is_a_decimal_string() {
+        let generation = Generation::try_from(7).unwrap();
+        assert_eq!(serde_json::to_string(&generation).unwrap(), "\"7\"");
+        assert!(serde_json::from_str::<Generation>("7").is_err());
+        assert!(serde_json::from_str::<Generation>("\"07\"").is_err());
+        assert_eq!(
+            serde_json::from_str::<Generation>("\"7\"").unwrap(),
+            generation
+        );
+    }
+
+    #[test]
+    fn credential_wire_is_exactly_64_lowercase_hex() {
+        let credential = credential();
+        let json = serde_json::to_string(&credential).unwrap();
+        assert_eq!(json.len(), 66);
+        let decoded: BindingCredential = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.as_bytes(), credential.as_bytes());
+
+        let mut bad = Vec::new();
+        bad.push("A".repeat(64)); // uppercase
+        bad.push("g".repeat(64)); // not hex
+        bad.push("a".repeat(63));
+        bad.push("a".repeat(65));
+        bad.push(String::new());
+        bad.push(format!("{}{}", "a".repeat(62), "+1"));
+        for value in bad {
+            let wire = format!("\"{value}\"");
+            let error = serde_json::from_str::<BindingCredential>(&wire).unwrap_err();
+            assert!(
+                value.is_empty() || !error.to_string().contains(&value),
+                "error echoes submitted credential: {error}"
+            );
+        }
+        assert!(serde_json::from_str::<BindingCredential>("123").is_err());
+    }
+
+    #[test]
+    fn secrets_are_redacted_in_debug_and_errors() {
+        let credential = credential();
+        let hex = serde_json::to_string(&credential)
+            .unwrap()
+            .trim_matches('"')
+            .to_string();
+        assert!(!format!("{credential:?}").contains(&hex));
+        assert!(!format!("{:?}", hello()).contains(&hex));
+        for reject in [
+            Reject::UnsupportedVersion,
+            Reject::InvalidCredential,
+            Reject::AlreadyConnected,
+            Reject::Revoked,
+        ] {
+            assert!(!reject.to_string().contains(&hex));
+        }
+    }
+
+    #[test]
+    fn hello_roundtrips_as_single_wire_dto() {
+        let hello = hello();
+        let json = serde_json::to_value(&hello).unwrap();
+        assert_eq!(json["generation"], serde_json::json!("1"));
+        assert_eq!(
+            json["capabilities"],
+            serde_json::json!(["files", "process"])
+        );
+        let decoded: Hello = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(decoded.generation, hello.generation);
+        assert_eq!(decoded.workspace, hello.workspace);
+
+        let mut wrong_type = json;
+        wrong_type["generation"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<Hello>(wrong_type).is_err());
+    }
+
+    #[test]
+    fn workspace_predicate_is_lexical_and_exact() {
+        for good in ["/", "/work", "/work/root", "/a-b_c.d/e"] {
+            assert!(is_normalized_absolute_path(Path::new(good)), "{good}");
+        }
+        for bad in [
+            "",
+            ".",
+            "..",
+            "work",
+            "work/root",
+            "./work",
+            "/work/",
+            "/work//root",
+            "/work/./root",
+            "/work/../root",
+            "/..",
+        ] {
+            assert!(!is_normalized_absolute_path(Path::new(bad)), "{bad}");
+        }
+    }
+}

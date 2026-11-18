@@ -395,6 +395,7 @@ impl Step {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PackageMetadata {
     package_id: String,
+    package_name: String,
     canonical_manifest: PathBuf,
     targets: Vec<Target>,
     sources: BTreeMap<Target, PathBuf>,
@@ -428,15 +429,44 @@ fn metadata_targets(cargo: &str, root: &Path) -> Result<PackageMetadata, String>
 }
 
 fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, String> {
+    // The workspace can carry extra members (the execution-boundary
+    // crates); the lanes cover exactly the package whose manifest is the
+    // workspace root's.
     let packages = metadata["packages"]
         .as_array()
-        .filter(|packages| packages.len() == 1)
-        .ok_or("cargo metadata must describe exactly the one rustx package")?;
-    let package = &packages[0];
+        .ok_or("cargo metadata has no package list")?;
+    let package = if packages.len() == 1 {
+        &packages[0]
+    } else {
+        let root = metadata["workspace_root"]
+            .as_str()
+            .ok_or("cargo metadata has no workspace root")?;
+        let root_manifest = std::fs::canonicalize(Path::new(root).join("Cargo.toml"))
+            .map_err(|error| format!("cannot canonicalize workspace manifest: {error}"))?;
+        let mut roots = packages.iter().filter(|package| {
+            package["manifest_path"]
+                .as_str()
+                .and_then(|path| std::fs::canonicalize(path).ok())
+                .is_some_and(|path| path == root_manifest)
+        });
+        match (roots.next(), roots.next()) {
+            (Some(package), None) => package,
+            _ => {
+                return Err(String::from(
+                    "cargo metadata must describe exactly the one root package",
+                ));
+            }
+        }
+    };
     let package_id = package["id"]
         .as_str()
         .filter(|id| !id.is_empty())
         .ok_or("cargo metadata package has no id")?
+        .to_owned();
+    let package_name = package["name"]
+        .as_str()
+        .filter(|name| !name.is_empty())
+        .ok_or("cargo metadata package has no name")?
         .to_owned();
     let manifest_path = package["manifest_path"]
         .as_str()
@@ -484,6 +514,7 @@ fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, Strin
     targets.sort();
     Ok(PackageMetadata {
         package_id,
+        package_name,
         canonical_manifest,
         targets,
         sources,
@@ -838,9 +869,14 @@ impl<'a> CargoDiscovery<'a> {
         #[cfg(test)]
         self.acquire_count.set(self.acquire_count.get() + 1);
         let mut command = Command::new(&self.cargo);
+        // `-p` is mandatory: workspace default-members now include the
+        // execution-boundary crates, so a bare selector would list and build
+        // sibling targets that share the kind (for example `--lib`).
         command
             .args([
                 "test",
+                "-p",
+                &self.metadata.package_name,
                 "--locked",
                 "--color",
                 "never",
@@ -880,7 +916,15 @@ impl<'a> CargoDiscovery<'a> {
     ) -> Result<BTreeSet<String>, String> {
         let mut command = Command::new(&self.cargo);
         command
-            .args(["test", "--doc", "--locked", "--color", "never"])
+            .args([
+                "test",
+                "-p",
+                &self.metadata.package_name,
+                "--doc",
+                "--locked",
+                "--color",
+                "never",
+            ])
             .args(features)
             .arg("--")
             .args(libtest)
@@ -2565,6 +2609,7 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
             std::fs::write(path, "").unwrap();
         }
         let metadata = serde_json::json!({"packages": [{
+            "name": "rustx",
             "id": "path+file:///tmp/rustx#rustx@0.1.0",
             "manifest_path": &manifest,
             "targets": [
@@ -2592,6 +2637,7 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
         );
 
         let no_doctest = serde_json::json!({"packages": [{
+            "name": "rustx",
             "id": "path+file:///tmp/rustx#rustx@0.1.0",
             "manifest_path": &manifest,
             "targets": [
@@ -2602,7 +2648,23 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
             parse_metadata(&no_doctest).unwrap().targets,
             [Target::new(Kind::Lib, "rustx")]
         );
+        // Sibling workspace members are ignored; exactly the package at the
+        // workspace root describes the lanes.
+        let members = serde_json::json!({
+            "workspace_root": dir.path(),
+            "packages": [
+                {"name": "member", "id": "p", "manifest_path": dir.path().join("member/Cargo.toml"),
+                 "targets": [{"name": "x", "kind": ["lib"], "src_path": &lib_rs}]},
+                {"name": "rustx", "id": "path+file:///tmp/rustx#rustx@0.1.0", "manifest_path": &manifest,
+                 "targets": [{"name": "rustx", "kind": ["lib"], "doctest": false, "src_path": &lib_rs}]},
+            ]
+        });
+        assert_eq!(
+            parse_metadata(&members).unwrap().targets,
+            [Target::new(Kind::Lib, "rustx")]
+        );
         let proc_macro = serde_json::json!({"packages": [{
+            "name": "rustx",
             "id": "path+file:///tmp/rustx#rustx@0.1.0",
             "manifest_path": &manifest,
             "targets": [
@@ -3031,7 +3093,15 @@ fn flow_runs() {
     }
 
     fn expected_doc_args(features: &[&str], libtest: &[&str], ignored: bool) -> Vec<String> {
-        let mut args = to_strings(&["test", "--doc", "--locked", "--color", "never"]);
+        let mut args = to_strings(&[
+            "test",
+            "-p",
+            "lane_fixture",
+            "--doc",
+            "--locked",
+            "--color",
+            "never",
+        ]);
         args.extend(features.iter().map(|&item| item.to_owned()));
         args.push("--".to_owned());
         args.extend(libtest.iter().map(|&item| item.to_owned()));

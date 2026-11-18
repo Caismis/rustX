@@ -1,3 +1,22 @@
+[workspace]
+members = [
+    "crates/confined-fs",
+    "crates/execution-client",
+    "crates/execution-protocol",
+    "crates/execution-server",
+]
+# A bare `cargo test`/`cargo build` at the root selects every member, so the
+# execution-boundary crates share the default verification surface. `-p`
+# selection keeps working unchanged for scripts that need the root alone.
+default-members = [
+    ".",
+    "crates/confined-fs",
+    "crates/execution-client",
+    "crates/execution-protocol",
+    "crates/execution-server",
+]
+resolver = "3"
+
 [package]
 name = "rustx"
 version = "0.1.0"
@@ -145,6 +164,9 @@ xberg = { version = "1.0.14", default-features = false, features = [
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }
 
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
+# The proven descriptor-relative filesystem primitives the physical
+# Execution Client shares; there is no parallel implementation.
+rustx-confined-fs = { path = "crates/confined-fs" }
 biodivine-lib-bdd = "0.6.3"
 minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }
 minijinja-contrib = { version = "2", features = ["pycompat"] }

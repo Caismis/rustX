@@ -4711,6 +4711,7 @@ dependencies = [
  "rmp-serde",
  "rusqlite",
  "rustix",
+ "rustx-confined-fs",
  "schemars",
  "serde",
  "serde_json",
@@ -4735,6 +4736,53 @@ dependencies = [
  "uv-normalize",
  "xberg",
  "zip",
+]
+
+[[package]]
+name = "rustx-confined-fs"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "nix",
+ "rustix",
+ "schemars",
+ "serde",
+ "sha2 0.10.9",
+ "tempfile",
+]
+
+[[package]]
+name = "rustx-execution-client"
+version = "0.1.0"
+dependencies = [
+ "nix",
+ "rustx-confined-fs",
+ "rustx-execution-protocol",
+ "rustx-execution-server",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "rustx-execution-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "rustx-execution-server"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "constant_time_eq",
+ "getrandom 0.3.4",
+ "nix",
+ "rustx-execution-protocol",
+ "sha2 0.10.9",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,0 +1,20 @@
+[package]
+name = "rustx-execution-protocol"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "Single wire definition for the rustX execution protocol between the Agent Server (rustx) and the physical Execution Client (rustx-execution-client)."
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
+thiserror = "2"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

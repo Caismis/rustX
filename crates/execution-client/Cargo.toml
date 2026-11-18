@@ -1,0 +1,29 @@
+[package]
+name = "rustx-execution-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "The physical rustX Execution Client. This layer implements exactly one authenticated local binding and typed liveness and bounded revision-checked range reads of its workspace — no process, MCP, or Python I/O."
+publish = false
+
+[[bin]]
+name = "rustx-execution-client"
+path = "src/main.rs"
+
+[dependencies]
+rustx-execution-protocol = { path = "../execution-protocol" }
+rustx-confined-fs = { path = "../confined-fs" }
+nix = { version = "0.31.3", default-features = false, features = ["user", "socket"] }
+
+[dev-dependencies]
+rustx-execution-server = { path = "../execution-server" }
+serde_json = "1"
+tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

@@ -242,6 +242,10 @@ class Planning(unittest.TestCase):
         self.assertTrue(run["rust-fast"] and run["rust-platform-core"] and run["web-client"])
         self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"])
         self.assertFalse(run["desktop-macos"])
+        # Execution-boundary member crates are rust surface too.
+        self.assertEqual(v.classify(modified("crates/confined-fs/src/lib.rs"))["surfaces"], ["rust"])
+        run = v.plan("pull_request", [], modified("crates/execution-client/src/main.rs"))["run"]
+        self.assertTrue(run["rust-fast"] and run["rust-platform-core"])
         for path in ("src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"):
             with self.subTest(path=path):
                 self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["desktop-macos"])

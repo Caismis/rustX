@@ -251,9 +251,21 @@ def load_package_metadata(
     elif len(packages) == 1:
         pkg = packages[0]
     else:
-        raise PreparationError(
-            f"expected one package in workspace metadata (pass `-p`), found {len(packages)}"
-        )
+        # The workspace carries execution-boundary member crates; without an
+        # explicit selector this harness prepares exactly the root package —
+        # the one whose manifest is the workspace root's, the same package
+        # `check_test_lanes` covers.
+        root_manifest = (Path(metadata["workspace_root"]) / "Cargo.toml").resolve()
+        roots = [
+            pkg
+            for pkg in packages
+            if Path(pkg["manifest_path"]).resolve() == root_manifest
+        ]
+        if len(roots) != 1:
+            raise PreparationError(
+                f"expected one root package in workspace metadata (pass `-p`), found {len(roots)}"
+            )
+        pkg = roots[0]
 
     pkg_id = pkg["id"]
     manifest_path = Path(pkg["manifest_path"]).resolve()

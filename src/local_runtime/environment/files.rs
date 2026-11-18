@@ -1,16 +1,19 @@
 //! Descriptor-relative, bounded filesystem operations under native root grants.
 use super::{Environment, Root};
 use crate::package_io::PackageDirectory;
-use base64::Engine as _;
 use rustix::fs::{AtFlags, Mode, OFlags};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::fs::File;
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Write};
 #[cfg(test)]
 use std::os::unix::fs::MetadataExt;
 
 use std::path::{Component, Path};
+
+// The physical metadata/chunk contract and its stamping live in
+// `rustx_confined_fs`, shared with the Execution Client; they are re-exported
+// so there is exactly one business type on each side of the workspace.
+pub use rustx_confined_fs::{FileChunk, FileMetadata};
 
 pub const CHUNK_BYTES: usize = 512 * 1024;
 const DIRECTORY_ENTRIES: usize = 4096;
@@ -76,61 +79,6 @@ fn conflict() -> io::Error {
     io::Error::new(io::ErrorKind::AlreadyExists, "filesystem revision conflict")
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileMetadata {
-    pub is_directory: bool,
-    pub is_file: bool,
-    pub is_symlink: bool,
-    pub size: u64,
-    pub revision: String,
-    pub identity: String,
-    pub modified_at_ms: Option<i64>,
-}
-impl FileMetadata {
-    fn of(file: &File) -> io::Result<Self> {
-        Self::stat(&nix::sys::stat::fstat(file)?)
-    }
-    #[allow(clippy::useless_conversion)] // Unix libc time aliases differ by target.
-    fn stat(metadata: &nix::sys::stat::FileStat) -> io::Result<Self> {
-        let stamp = format!(
-            "{}:{}:{}:{}:{}:{}:{}:{}",
-            metadata.st_dev,
-            metadata.st_ino,
-            metadata.st_size,
-            metadata.st_mtime,
-            metadata.st_mtime_nsec,
-            metadata.st_ctime,
-            metadata.st_ctime_nsec,
-            metadata.st_mode
-        );
-        let kind = metadata.st_mode & libc::S_IFMT;
-        Ok(Self {
-            is_directory: kind == libc::S_IFDIR,
-            is_file: kind == libc::S_IFREG,
-            is_symlink: kind == libc::S_IFLNK,
-            size: u64::try_from(metadata.st_size).map_err(|_| invalid("negative file size"))?,
-            revision: format!("{:x}", Sha256::digest(stamp.as_bytes())),
-            identity: format!("{}:{}", metadata.st_dev, metadata.st_ino),
-            modified_at_ms: i64::try_from(metadata.st_mtime)
-                .ok()
-                .and_then(|seconds| seconds.checked_mul(1000))
-                .and_then(|value| {
-                    i64::try_from(metadata.st_mtime_nsec)
-                        .ok()
-                        .and_then(|nanos| value.checked_add(nanos / 1_000_000))
-                }),
-        })
-    }
-}
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct FileChunk {
-    pub data_base64: String,
-    pub offset: u64,
-    pub next_offset: Option<u64>,
-    pub metadata: FileMetadata,
-}
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DirectoryEntry {
@@ -217,6 +165,8 @@ pub(crate) fn watch_source(root: &Root, relative: &Path) -> io::Result<(File, Fi
 
 /// Shared descriptor-relative range reader for native file and Skill sources.
 /// It retains only the requested bytes and verifies descriptor/path identity.
+/// The physical algorithm lives in `rustx_confined_fs`; the opener is the
+/// root's `PackageDirectory::file` so both underlying opens stay instrumented.
 pub(crate) fn read_range(
     directory: &PackageDirectory,
     relative: &Path,
@@ -224,33 +174,14 @@ pub(crate) fn read_range(
     max_bytes: usize,
     expected: Option<&str>,
 ) -> io::Result<FileChunk> {
-    if !(1..=CHUNK_BYTES).contains(&max_bytes) {
-        return Err(invalid("file read exceeds chunk limit"));
-    }
-    let mut file = directory.file(relative)?;
-    let before = FileMetadata::of(&file)?;
-    if offset > before.size {
-        return Err(invalid("file offset exceeds source"));
-    }
-    if expected.is_some_and(|expected| expected != before.revision) {
-        return Err(conflict());
-    }
-    file.seek(SeekFrom::Start(offset))?;
-    let mut bytes = Vec::new();
-    (&mut file).take(max_bytes as u64).read_to_end(&mut bytes)?;
-    if before != FileMetadata::of(&file)? || before != FileMetadata::of(&directory.file(relative)?)?
-    {
-        return Err(conflict());
-    }
-    let end = offset
-        .checked_add(bytes.len() as u64)
-        .ok_or_else(|| invalid("file offset overflow"))?;
-    Ok(FileChunk {
-        data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+    rustx_confined_fs::read_range(
+        relative,
         offset,
-        next_offset: (end < before.size).then_some(end),
-        metadata: before,
-    })
+        max_bytes,
+        CHUNK_BYTES,
+        expected,
+        |relative| directory.file(relative),
+    )
 }
 
 impl Environment {
