@@ -89,7 +89,7 @@ pub(super) fn freeze_indexed_input(
     let history = store.projected_history().unwrap();
     // Query-cost fixtures use the same certified selection as native request
     // assembly; cold freeze and reconstruction have dedicated coverage.
-    let (messages, selected) = crate::model::input::assemble_selected_model_input(
+    let (messages, selected) = crate::model::selected_input::assemble_selected_model_input(
         store.conversation_id(),
         &history.messages,
         &history.input_manifest,

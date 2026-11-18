@@ -2,8 +2,8 @@
 use crate::message::types::{
     AssistantContentBlock, InboundKind, MessageBlock, UserContentBlock, UserSource,
 };
-use crate::runtime::identity::{ConversationId, MessageId, ToolCallId, ToolId};
 use crate::tools::types::ToolExecutionResult;
+use rustx_identity::{ConversationId, MessageId, ToolCallId, ToolId};
 use serde::{Deserialize, Serialize};
 
 /// Immutable source scope, distinct from a projected occurrence.
@@ -35,7 +35,7 @@ impl CanonicalMessageRef {
     }
 }
 /// One native serialization implementation for canonical body authentication.
-pub(crate) fn canonical_body_identity(
+pub fn canonical_body_identity(
     message: &MessageBlock,
 ) -> (usize, sha2::digest::Output<sha2::Sha256>) {
     let mut writer = DigestWriter::default();
@@ -43,7 +43,7 @@ pub(crate) fn canonical_body_identity(
     writer.finish()
 }
 
-pub(crate) struct DigestWriter {
+pub struct DigestWriter {
     digest: sha2::Sha256,
     bytes: usize,
 }
@@ -57,7 +57,7 @@ impl Default for DigestWriter {
     }
 }
 impl DigestWriter {
-    pub(crate) fn finish(self) -> (usize, sha2::digest::Output<sha2::Sha256>) {
+    pub fn finish(self) -> (usize, sha2::digest::Output<sha2::Sha256>) {
         use sha2::Digest;
         (self.bytes, self.digest.finalize())
     }
@@ -67,8 +67,8 @@ impl std::io::Write for DigestWriter {
         use sha2::Digest;
         self.bytes += bytes.len();
         self.digest.update(bytes);
-        #[cfg(test)]
-        super::selected_input::record_hash_work(bytes.len(), 0);
+        #[cfg(any(test, feature = "test-fixtures"))]
+        crate::model::hash_work::record(bytes.len(), 0);
         Ok(bytes.len())
     }
     fn flush(&mut self) -> std::io::Result<()> {
@@ -149,7 +149,7 @@ pub struct DerivedModelMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct CheckpointSourceRef {
     pub conversation_id: ConversationId,
-    pub checkpoint_id: crate::runtime::identity::CheckpointId,
+    pub checkpoint_id: rustx_identity::CheckpointId,
     pub content_digest: String,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -193,7 +193,7 @@ impl<'a> From<&'a MessageBlock> for ModelMessageView<'a> {
 /// Runtime execution metadata and projection provenance never enter this view.
 #[derive(Serialize)]
 #[serde(untagged)]
-pub(crate) enum ModelVisibleMessage<'a> {
+pub enum ModelVisibleMessage<'a> {
     Borrowed(ModelMessageView<'a>),
     Tool {
         role: &'static str,
@@ -201,7 +201,7 @@ pub(crate) enum ModelVisibleMessage<'a> {
     },
 }
 impl<'a> ModelMessageView<'a> {
-    pub(crate) fn model_visible(self) -> Result<ModelVisibleMessage<'a>, &'static str> {
+    pub fn model_visible(self) -> Result<ModelVisibleMessage<'a>, &'static str> {
         match self {
             Self::Tool(id, result) => Ok(ModelVisibleMessage::Tool {
                 role: "tool",

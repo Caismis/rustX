@@ -11,7 +11,7 @@ use crate::model::projected::{
     CheckpointSourceRef, DerivedModelMessage, ModelMessageView, ProjectedMessage,
     SemanticTransformation,
 };
-use crate::runtime::identity::{CheckpointId, MessageId, PublicationStreamId};
+use rustx_identity::{CheckpointId, MessageId, PublicationStreamId};
 
 fn user(index: usize) -> ModelInputMessage {
     ModelInputMessage::Canonical(MessageBlock::User(UserMessageBlock {
@@ -379,8 +379,8 @@ fn empty_snapshot(request: &crate::model::ModelRequest) -> crate::model::Request
     crate::model::RequestSnapshot::new(
         crate::runtime::types::ApprovalMode::FullAccess,
         crate::model::RequestIdentity {
-            attempt_id: crate::runtime::identity::AttemptId::new("selected-budget"),
-            turn: crate::runtime::identity::TurnId::new("1"),
+            attempt_id: rustx_identity::AttemptId::new("selected-budget"),
+            turn: rustx_identity::TurnId::new("1"),
             retry_number: 0,
         },
         crate::context::resources::LedgerFrontier(1),
@@ -391,7 +391,7 @@ fn empty_snapshot(request: &crate::model::ModelRequest) -> crate::model::Request
         128_000,
         None,
         request.tools.clone(),
-        crate::runtime::identity::CapabilityRevision::new(1),
+        rustx_identity::CapabilityRevision::new(1),
         crate::context::assembly::ContextGeneration {
             id: 1,
             contributors: Vec::new(),

@@ -6,7 +6,7 @@ use crate::tools::types::ToolResultContent;
 /// An unchanged projection may retain its provenance; changes must append only
 /// supported request-time transformations and preserve every non-media value.
 #[allow(clippy::too_many_lines)] // One exhaustive pure semantic media transformation validation.
-pub(crate) fn valid(
+pub fn valid(
     expected: &ProjectedMessage,
     actual: &ProjectedMessage,
     prior: &[SemanticTransformation],
@@ -99,7 +99,7 @@ pub(crate) fn valid(
         }
         // Render using only paths extracted from the frozen bytes, never a
         // live resolver. Exact equality below also checks the preserved body.
-        let mut messages = [super::ModelInputMessage::Derived(
+        let mut messages = [crate::model::input::ModelInputMessage::Derived(
             super::projected::DerivedModelMessage {
                 message: rendered.clone(),
                 sources: vec![],
@@ -113,7 +113,7 @@ pub(crate) fn valid(
         {
             return false;
         }
-        let super::ModelInputMessage::Derived(value) = &messages[0] else {
+        let crate::model::input::ModelInputMessage::Derived(value) = &messages[0] else {
             unreachable!()
         };
         rendered = value.message.clone();

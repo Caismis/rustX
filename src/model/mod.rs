@@ -22,7 +22,7 @@ pub use rustx_types::model::finish;
 pub mod frozen;
 pub mod generation;
 pub mod generation_evidence;
-pub mod input;
+pub use rustx_types::model::input;
 pub(crate) use rustx_types::model::inspection;
 pub mod invocation;
 pub mod replay;
@@ -114,12 +114,14 @@ pub(crate) fn chat_protocol() -> ModelProtocol {
     ModelProtocol::OpenAiChatCompletions
 }
 
-pub mod uploads;
+pub use rustx_types::model::uploads;
 
-pub mod images;
+pub use rustx_types::model::images;
+#[cfg(test)]
+mod images_tests;
 pub(crate) mod media;
 
 pub mod occurrence;
-pub mod projected;
+pub use rustx_types::model::projected;
 
-pub(crate) mod transformations;
+pub(crate) use rustx_types::model::transformations;

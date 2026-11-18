@@ -38,12 +38,12 @@ fn escaped_character(character: char) -> Option<&'static str> {
         _ => None,
     }
 }
-pub(crate) fn escaped_len(value: &str) -> Option<usize> {
+pub fn escaped_len(value: &str) -> Option<usize> {
     value.chars().try_fold(0usize, |total, character| {
         total.checked_add(escaped_character(character).map_or(character.len_utf8(), str::len))
     })
 }
-pub(crate) fn escape(value: &str) -> String {
+pub fn escape(value: &str) -> String {
     let mut escaped = String::new();
     for character in value.chars() {
         if let Some(replacement) = escaped_character(character) {
@@ -64,7 +64,7 @@ impl UploadProjection {
     }
 
     /// Validate the same references as rendering without allocating its text.
-    pub(crate) fn validate<'a>(
+    pub fn validate<'a>(
         &self,
         messages: impl IntoIterator<Item = &'a ModelInputMessage>,
     ) -> Result<(), String> {
@@ -90,7 +90,7 @@ impl UploadProjection {
 
     /// Observe only items the upload renderer actually replaces. The observer
     /// borrows the original value before mutation; no history clone is needed.
-    pub(crate) fn apply_with_changes(
+    pub fn apply_with_changes(
         &self,
         messages: &mut [ModelInputMessage],
         mut changed: impl FnMut(usize, &ModelInputMessage),
@@ -170,7 +170,7 @@ impl UploadProjection {
 mod tests {
     use super::*;
     use crate::message::types::{InboundKind, UserMessageBlock, UserSource};
-    use crate::runtime::identity::MessageId;
+    use rustx_identity::MessageId;
     #[test]
     fn escaped_byte_accounting_equals_the_authoritative_renderer() {
         for value in ["plain", "Unicode: λ 雪", "&\"<>'\n\r\t", "/long/file&.txt"] {
@@ -238,7 +238,7 @@ mod tests {
             crate::model::projected::DerivedModelMessage {
                 message: crate::model::projected::ProjectedMessage::from(source),
                 sources: vec![crate::model::projected::CanonicalMessageRef::of(
-                    &crate::runtime::identity::ConversationId::new(
+                    &rustx_identity::ConversationId::new(
                         "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
                     ),
                     source,

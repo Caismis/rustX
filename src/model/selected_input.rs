@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 
 use super::input::ModelInputMessage;
 use super::projected::{CanonicalMessageRef, FrozenModelInput};
-use crate::runtime::identity::ConversationId;
+use crate::message::types::MessageBlock;
+use rustx_identity::ConversationId;
 
 #[cfg(test)]
 mod request_tests;
@@ -22,7 +23,6 @@ thread_local! {
     static PREPARATION_VISITS:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};
     static MATERIALIZED_ITEMS:std::cell::Cell<usize>=const{std::cell::Cell::new(0)};
     static PREFIX_WORK: std::cell::Cell<(usize,usize)> = const {std::cell::Cell::new((0,0))};
-    static HASH_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0,0)) };
 }
 #[cfg(test)]
 pub(crate) fn take_node_work() -> (usize, usize, usize, usize) {
@@ -91,21 +91,9 @@ pub(crate) fn take_prefix_work() -> (usize, usize) {
 }
 #[cfg(test)]
 pub(crate) fn take_hash_work() -> (usize, usize) {
-    HASH_WORK.with(|n| n.replace((0, 0)))
+    rustx_types::model::hash_work::take()
 }
 #[cfg(test)]
-pub(crate) fn record_hash_work(original: usize, semantic: usize) {
-    HASH_WORK.with(|n| {
-        let (a, b) = n.get();
-        n.set((a + original, b + semantic));
-    });
-    crate::agent::execution::attribution::record_native(
-        crate::agent::execution::attribution::NativeWork {
-            hash_bytes: (original + semantic) as u64,
-            ..Default::default()
-        },
-    );
-}
 #[cfg(test)]
 fn record_node_work(kind: usize) {
     NODE_WORK.with(|n| {
@@ -656,7 +644,7 @@ impl SelectedInputManifest {
         }
         selected.semantic.clone_from(&self.semantic);
         if let Some(sha) = &mut selected.semantic {
-            super::types::append_semantic_message(sha, &message);
+            crate::model::types::append_semantic_message(sha, &message);
         }
         let leaf = InputNode::leaf(freeze(scope, &message), Some(message));
         selected.root = Some(self.root.as_ref().map_or_else(
@@ -1595,5 +1583,177 @@ impl SelectedInputManifest {
             baseline: self.root.clone(),
         }));
         self.edits.clear();
+    }
+}
+
+/// Carry the native selection through the exact append and insertion that
+/// construct this request. The historical prefix is not scanned for equality.
+pub(crate) fn assemble_selected_model_input(
+    scope: &rustx_identity::ConversationId,
+    historical: &crate::model::selected_input::SelectedModelInput,
+    manifest: &crate::model::selected_input::SelectedInputManifest,
+    staged: &[MessageBlock],
+    carryover: Option<&crate::model::input::RenderedUnresolvedOutputCarryover>,
+    anchor: Option<&crate::model::input::RequestOnlyInsertionAnchor>,
+) -> Result<
+    (
+        crate::model::selected_input::SelectedModelInput,
+        crate::model::selected_input::SelectedInputManifest,
+    ),
+    String,
+> {
+    #[cfg(test)]
+    let _reads = PreparationReads::new();
+    #[cfg(test)]
+    let _profile = crate::agent::execution::attribution::Timer::new(
+        crate::agent::execution::attribution::Phase::InputAssembly,
+    );
+    if !manifest
+        .messages_with_preparation(historical)
+        .same_input(historical)
+    {
+        return Err("historical input differs from its native manifest".into());
+    }
+    let mut selected = manifest.clone();
+    for message in staged {
+        selected = selected.append(
+            scope,
+            &crate::model::input::ModelInputMessage::Canonical(message.clone()),
+        );
+    }
+    if let Some(carryover) = carryover {
+        let anchor = anchor
+            .ok_or_else(|| "request-only carryover has no frozen insertion anchor".to_owned())?;
+        let position = match anchor {
+            crate::model::input::RequestOnlyInsertionAnchor::AfterCanonical => historical.len(),
+            crate::model::input::RequestOnlyInsertionAnchor::BeforeMessage(id) => selected
+                .messages()
+                .iter()
+                .position(|message| message.canonical_id() == Some(id))
+                .ok_or_else(|| {
+                    format!("request-only carryover anchor message {id} is absent from the request")
+                })?,
+        };
+        selected = selected.insert(
+            scope,
+            position,
+            &crate::model::input::ModelInputMessage::RequestOnly(
+                crate::model::input::RequestOnlyModelContext::UnresolvedOutputCarryover(
+                    carryover.clone(),
+                ),
+            ),
+        );
+    }
+    Ok((selected.messages_with_preparation(historical), selected))
+}
+
+#[cfg(test)]
+mod selected_input_tests {
+    use super::*;
+    use crate::message::{
+        content::TextBlock,
+        types::{InboundKind, UserContentBlock, UserMessageBlock, UserSource},
+    };
+    use crate::model::input::{
+        CarryoverOmissionCounts, RenderedUnresolvedOutputCarryover, RequestOnlyInsertionAnchor,
+        RequestOnlyModelContext, UnresolvedOutputSettlement, assemble_model_input, canonical_input,
+    };
+    use crate::model::projected::FrozenModelInput;
+    use rustx_identity::ConversationId;
+    use rustx_identity::{MessageId, PublicationStreamId};
+
+    fn original(id: &str) -> MessageBlock {
+        MessageBlock::User(UserMessageBlock {
+            id: MessageId::new(id),
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            timestamp: None,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: format!("body {id}"),
+            })],
+        })
+    }
+
+    #[test]
+    fn selected_assembly_carries_exact_inherited_prefix_staged_append_and_actual_request_only_insertion()
+     {
+        let ancestor = ConversationId::generate();
+        let local = ConversationId::generate();
+        let historical = canonical_input(&[original("old-a"), original("old-b")]);
+        let root = crate::model::SelectedInputManifest::from_messages(&ancestor, &historical);
+        let unchanged = serde_json::to_vec(&root).unwrap();
+        let staged = [original("new-a"), original("new-b")];
+        let carryover = RenderedUnresolvedOutputCarryover {
+            source_stream_id: PublicationStreamId::new("original-publication"),
+            source_settlement: UnresolvedOutputSettlement::Unaccepted,
+            records: Vec::new(),
+            omitted_blocks: CarryoverOmissionCounts::default(),
+        };
+        for anchor in [
+            RequestOnlyInsertionAnchor::BeforeMessage(MessageId::new("old-b")),
+            RequestOnlyInsertionAnchor::AfterCanonical,
+        ] {
+            let (messages, selected) = assemble_selected_model_input(
+                &local,
+                &root.messages(),
+                &root,
+                &staged,
+                Some(&carryover),
+                Some(&anchor),
+            )
+            .unwrap();
+            assert_eq!(
+                messages.to_vec(),
+                assemble_model_input(&historical, &staged, Some(&carryover), Some(&anchor))
+                    .unwrap()
+            );
+            let position = if matches!(anchor, RequestOnlyInsertionAnchor::BeforeMessage(_)) {
+                1
+            } else {
+                2
+            };
+            let mut expected: Vec<_> = root.iter().cloned().collect();
+            expected.extend(
+                crate::model::SelectedInputManifest::from_messages(
+                    &local,
+                    &canonical_input(&staged),
+                )
+                .iter()
+                .cloned(),
+            );
+            expected.insert(
+                position,
+                FrozenModelInput::RequestOnly(RequestOnlyModelContext::UnresolvedOutputCarryover(
+                    carryover.clone(),
+                )),
+            );
+            assert_eq!(selected.iter().cloned().collect::<Vec<_>>(), expected);
+            assert_eq!(serde_json::to_vec(&root).unwrap(), unchanged);
+            assert_eq!(selected.len(), 5);
+            assert!(
+                matches!(selected.get(0), Some(FrozenModelInput::Original(source)) if source.conversation_id == ancestor)
+            );
+            assert!(
+                matches!(selected.get(4), Some(FrozenModelInput::Original(source)) if source.conversation_id == local)
+            );
+        }
+        let (same, selected) =
+            assemble_selected_model_input(&local, &root.messages(), &root, &[], None, None)
+                .unwrap();
+        assert_eq!(same.to_vec(), historical);
+        assert_eq!(serde_json::to_vec(&selected).unwrap(), unchanged);
+        assert!(
+            assemble_selected_model_input(
+                &local,
+                &root.messages(),
+                &root,
+                &[],
+                Some(&carryover),
+                Some(&RequestOnlyInsertionAnchor::BeforeMessage(MessageId::new(
+                    "absent"
+                )))
+            )
+            .is_err()
+        );
     }
 }

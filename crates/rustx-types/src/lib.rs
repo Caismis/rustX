@@ -13,10 +13,17 @@ pub mod toml_authoring;
 
 pub mod model {
     pub mod finish;
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub mod hash_work;
+    pub mod images;
+    pub mod input;
     pub mod inspection;
+    pub mod projected;
     pub mod replay;
     pub mod request_params;
+    pub mod transformations;
     pub mod types;
+    pub mod uploads;
     pub mod adapter {
         pub mod response_budget;
         pub mod retry;
