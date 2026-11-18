@@ -27,7 +27,9 @@ use std::process::ExitCode;
 use std::{env, fs};
 
 use rustx_confined_fs::PackageDirectory;
-use rustx_execution_protocol::transport::{read_optional_record, read_record, write_record};
+use rustx_execution_protocol::transport::{
+    Handshake, LOCAL_HANDSHAKE_TIMEOUT, read_optional_record, read_record, write_record,
+};
 use rustx_execution_protocol::{
     Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, Hello, HelloReply,
     MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError, is_normalized_absolute_path,
@@ -108,6 +110,11 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
 
     let mut stream =
         UnixStream::connect(&bootstrap.socket_path).map_err(|_| String::from("unreachable"))?;
+    // One absolute budget armed when the socket is established covers
+    // peer proof, the Hello write, the reply read, and the admission
+    // verification — it never re-arms, so a byte-at-a-time peer cannot
+    // stretch it.
+    let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
     // The credential is sent only to a peer owned by this same euid; a
     // socket planted by another user never sees it.
     require_peer_owner(&stream)?;
@@ -124,10 +131,14 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
         capabilities: BTreeSet::from([Capability::Connection, Capability::ReadRange]),
         credential: bootstrap.credential,
     };
-    write_record(&mut stream, &hello).map_err(|_| String::from("handshake"))?;
-    let reply: HelloReply = read_record(&mut stream).map_err(|_| String::from("reply"))?;
+    let mut handshake = Handshake::new(&mut stream, deadline);
+    write_record(&mut handshake, &hello).map_err(|error| handshake_error(&error))?;
+    let reply: HelloReply = read_record(&mut handshake).map_err(|error| handshake_error(&error))?;
     let admission = reply.map_err(|reject| format!("rejected: {reject}"))?;
     verify_admission(&hello, &admission)?;
+    handshake
+        .finish()
+        .map_err(|error| handshake_error(&error))?;
 
     serve(&mut stream, &root)
 }
@@ -295,6 +306,15 @@ fn read_range(
                 _ => ReadError::Unavailable,
             },
         },
+    }
+}
+
+/// Handshake-phase failures are static, redacted messages; only the
+/// deadline kind earns its own wording.
+fn handshake_error(error: &std::io::Error) -> String {
+    match error.kind() {
+        std::io::ErrorKind::TimedOut => String::from("handshake timed out"),
+        _ => String::from("handshake"),
     }
 }
 

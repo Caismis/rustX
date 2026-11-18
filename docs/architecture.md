@@ -7756,3 +7756,37 @@ existing node header; original values stay in the existing field/content paths.
 Typed Workflow detail retains run and workflow identity even before the first
 node starts, so graph resolution does not depend on display labels or a first
 loaded visit.
+
+## Execution Client boundary (Issue #576)
+
+The Agent stays the canonical authority; physical workspace I/O moves behind a
+separate local process boundary, one layer at a time. See the
+[execution-protocol ADR](execution-protocol.md) for the wire contract and
+current layer status.
+
+- `rustx-execution-protocol` owns the typed records, bounded length-prefixed
+  framing, `Handshake` deadline wrapper, and `LOCAL_HANDSHAKE_TIMEOUT`. It
+  depends on no other workspace crate; both boundary crates depend on it.
+- `rustx-execution-server` is a library for the Agent, not yet wired into
+  it. It owns binding
+  reservation, credential authentication, arbitration, connection lifecycle,
+  and typed request dispatch (`Ping`, `ReadRange`). Binding uniqueness is per
+  `Binding`, not per `Session`: each binding admits at most one live
+  connection, and a `Detached` binding is closed to every new Hello until the
+  live-instance recovery work in #577.
+- `rustx-execution-client` is a standalone binary performing physical
+  workspace/environment I/O inside the workspace view it was launched under.
+  Its production workspace dependencies are the protocol and
+  `rustx-confined-fs` — never on the root
+  crate, canonical store, or model types (the server appears only as a test
+  dev-dependency). Its `--workspace` is local launch policy checked byte for
+  byte against the bootstrap record; the server cannot redirect it.
+- `rustx-confined-fs` holds the proven descriptor-relative primitives factored
+  out of the root package I/O — `PackageDirectory`, `FileMetadata`,
+  `FileChunk`, and the bounded revision-checked `read_range`. Root `rustx`
+  and the client both depend on it; the server does not.
+- The boundary currently serves exactly one physical operation: bounded,
+  revision-checked range reads over the isolated Unix socket. The product's
+  own file reads still use the local path through `rustx`'s delegating
+  `PackageDirectory` wrapper; no runtime path is rewired to the boundary yet,
+  and no second Agent, in-process fallback, or speculative launcher exists.

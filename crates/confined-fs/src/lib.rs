@@ -391,8 +391,9 @@ mod tests {
     #[test]
     fn read_range_reads_a_sparse_file_without_materializing_it() {
         let (temporary, directory) = root();
-        // A sparse file holding only a marker near its 8 MiB end: the read
-        // seeks and takes the bound, never loads the file.
+        // A sparse file whose only extent is a marker ending exactly at the
+        // 8 MiB end: the read seeks and takes the bound, never loads the
+        // file, and reports `next_offset` `None` at the end of file.
         let path = temporary.path().join("blob");
         let marker = b"end-marker";
         let marker_at = 8 * 1024 * 1024 - marker.len() as u64;
@@ -450,7 +451,7 @@ mod tests {
     }
 
     #[test]
-    fn read_range_rejects_stale_revision_and_mid_read_changes() {
+    fn read_range_rejects_stale_revision_and_invalid_ranges() {
         let (temporary, directory) = root();
         let path = temporary.path().join("asset");
         std::fs::write(&path, b"0123456789").unwrap();
@@ -474,7 +475,8 @@ mod tests {
             io::ErrorKind::AlreadyExists
         );
 
-        // Bound, offset, and limit are enforced before touching the file.
+        // Bound and limit are enforced before the file is opened; the offset
+        // is enforced against the opened file's size.
         for (offset, max_bytes) in [(u64::MAX, 1), (0, 0), (0, 9)] {
             assert_eq!(
                 read_range(Path::new("asset"), offset, max_bytes, 8, None, open)
@@ -490,5 +492,31 @@ mod tests {
                 .kind(),
             io::ErrorKind::InvalidInput
         );
+    }
+
+    #[test]
+    fn read_range_conflicts_when_the_path_is_replaced_between_opens() {
+        let (temporary, directory) = root();
+        let path = temporary.path().join("asset");
+        std::fs::write(&path, b"0123456789").unwrap();
+        let opens = std::cell::Cell::new(0_u32);
+        let open = |relative: &Path| {
+            let call = opens.get();
+            opens.set(call + 1);
+            if call == 1 {
+                // The second invocation is the post-read identity recheck:
+                // replace the pathname so it resolves to a different file.
+                std::fs::rename(&path, path.with_extension("retired")).unwrap();
+                std::fs::write(&path, b"swapped!").unwrap();
+            }
+            directory.file(relative)
+        };
+        assert_eq!(
+            read_range(Path::new("asset"), 0, 4, 8, None, open)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::AlreadyExists
+        );
+        assert_eq!(opens.get(), 2);
     }
 }

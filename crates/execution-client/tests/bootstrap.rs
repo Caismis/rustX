@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::io::{self, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::num::NonZeroU64;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use rustx_execution_protocol::transport::{read_record, write_record};
 use rustx_execution_protocol::{
-    BindingCredential, Bootstrap, Capability, ClientInstanceId, EnvironmentId, Generation, Reject,
-    SessionId,
+    BindingCredential, Bootstrap, Capability, ClientInstanceId, EnvironmentId, Generation, Hello,
+    HelloReply, Reject, SessionId,
 };
 use rustx_execution_server::{Binding, BindingPhase, Reservation};
 
@@ -111,6 +111,8 @@ fn accept(rig: &Rig, child: &mut Child) -> UnixStream {
         }
     };
     rig.listener.set_nonblocking(false).unwrap();
+    // BSD accepted streams inherit the listener's nonblocking flag.
+    stream.set_nonblocking(false).unwrap();
     stream
 }
 
@@ -574,4 +576,91 @@ fn clean_eof_is_success_and_a_truncated_record_is_not() {
     drop(raw);
     drop(connection);
     assert!(!child.wait().unwrap().success());
+}
+
+/// A bounded `wait`: the handshake deadline plus slack, then a kill so a
+/// misbehaving client can never hang the suite.
+fn wait_bounded(child: &mut Child) -> std::process::ExitStatus {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().unwrap();
+            return child.wait().unwrap();
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Reads the exited child's bounded stderr diagnostic.
+fn stderr_of(child: &mut Child) -> String {
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    stderr
+}
+
+#[test]
+fn a_missing_handshake_reply_times_out_the_client() {
+    let rig = rig();
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    // The listener reads the client's complete Hello — the barrier that
+    // proves the handshake started — then just holds the socket. The
+    // client's absolute handshake budget expires; it does not hang.
+    let mut stream = accept(&rig, &mut child);
+    let hello: Hello = read_record(&mut stream).unwrap();
+    assert_eq!(hello.session.as_str(), "session-1");
+    assert!(!wait_bounded(&mut child).success());
+    assert_eq!(
+        stderr_of(&mut child),
+        "rustx-execution-client: handshake timed out\n"
+    );
+    drop(stream);
+    // No arbitration ever ran: the binding is untouched.
+    assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
+}
+
+#[test]
+fn a_socket_closed_before_the_reply_fails_the_client() {
+    let rig = rig();
+    let mut child = spawn_client(&rig);
+    // Clean EOF mid-handshake: not an idle stream, a failure.
+    let stream = accept(&rig, &mut child);
+    drop(stream);
+    assert!(!wait_bounded(&mut child).success());
+    assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
+}
+
+#[test]
+fn a_partial_admission_delivery_times_out_the_client() {
+    let rig = rig();
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stream = accept(&rig, &mut child);
+    // The client's Hello arrived in full; the reply is only ever a bare
+    // length prefix. The held socket keeps the client waiting on the
+    // body until the absolute deadline ends the handshake.
+    let hello: Hello = read_record(&mut stream).unwrap();
+    assert_eq!(hello.session.as_str(), "session-1");
+    let mut wire = Vec::new();
+    write_record(&mut wire, &HelloReply::Err(Reject::Revoked)).unwrap();
+    stream.write_all(&wire[..4]).unwrap();
+    assert!(!wait_bounded(&mut child).success());
+    assert_eq!(
+        stderr_of(&mut child),
+        "rustx-execution-client: handshake timed out\n"
+    );
+    drop(stream);
+    assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
 }

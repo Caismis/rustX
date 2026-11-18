@@ -96,9 +96,13 @@ big-endian length prefix followed by exactly one JSON DTO. The
 `MAX_ENCODED_FRAME_BYTES` bound covers the whole frame, prefix included,
 so payloads are limited to `MAX_RECORD_BYTES` (1 MiB − 4). Lengths of
 zero or over the bound are rejected from the prefix alone, before any
-allocation or body read. The writer serializes into a bounded sink that
-fails at the limit — no oversized payload `Vec` is ever allocated and
-nothing reaches the wire until the whole record fits. Parse and length
+allocation or body read. Serialization is split from emission:
+`encode_record` serializes into a bounded sink that fails at the limit
+— no oversized payload `Vec` is ever allocated — and returns an
+`EncodedRecord` whose `write_to` emits the prefix and bytes;
+`write_record` is the composition. Nothing reaches the wire until the
+whole record fits, and a caller that encodes first can fail before
+touching the stream at all. Parse and length
 errors are static messages that never expose payload bytes.
 `read_optional_record` additionally distinguishes the two ends of a
 stream: an EOF before the first prefix byte is a clean idle close
@@ -204,11 +208,21 @@ publishes the trusted-channel bundle:
   it lacks.
 
 `Binding::accept_local(stream)` performs the handshake on one accepted
-`UnixStream`:
+`UnixStream` under the shared `transport::Handshake` wrapper:
 
-- The peer gets `LOCAL_HANDSHAKE_TIMEOUT` (5 s) to present a Hello and
-  to receive the admission: read and write timeouts are both armed for
-  the handshake, and both are cleared after it.
+- One absolute deadline is armed once at accept entry —
+  `Instant::now() + LOCAL_HANDSHAKE_TIMEOUT`, the single shared 5 s
+  constant owned by `rustx-execution-protocol::transport` — and covers
+  the entire handshake: the Hello read and parse, arbitration, the
+  admission write, and clearing the socket timeouts at `finish()`. It
+  is an absolute deadline, not an inactivity timeout: `Handshake`
+  re-arms the socket read/write timeout to the *remaining* budget
+  before each syscall and re-checks the deadline after each I/O, so a
+  stalled or trickling peer consumes the same fixed budget and never
+  re-arms it per byte or per record.
+- The deadline is re-checked inside the binding mutex immediately
+  before the `Reserved → Live` commit: a peer that lets it expire
+  during arbitration gets `TimedOut` and the binding stays `Reserved`.
 - The connection identity is generated fresh per accept from OS
   randomness.
 - The reply is the typed `HelloReply` (`Result<Admission, Reject>`)
@@ -218,13 +232,17 @@ publishes the trusted-channel bundle:
   admission or clearing the timeouts fails, the committed connection is
   disconnected and the stream shut down — a binding never stays live on
   a connection the peer does not know it owns, and never keeps a peer
-  whose post-handshake blocking mode could not be restored.
+  whose post-handshake blocking mode could not be restored. `finish()`
+  clears both socket timeouts only on success; a failed handshake
+  stream is shut down with whatever timeouts remain armed.
 - `LocalConnection` exposes only typed, Server-initiated exchanges —
   `ping()` (`Ping`/`Pong`) and `read_range(...)` (`ReadRange`/`Range`)
   — never a raw message path. `read_range` first consults the
   capabilities the peer actually advertised in its Hello: a connection
   that never claimed `ReadRange` gets `io::ErrorKind::Unsupported` and
-  no request is written. Every exchange re-acquires the binding
+  no request is written. Every exchange serializes the request with
+  `encode_record` *before* the gate, so an unencodable request fails
+  without touching the binding or the wire, then re-acquires the binding
   mutex to prove this connection is still the live one before a byte is
   written: a revocation or detach that wins the mutex first denies the
   exchange outright, so no request can race past a revoke. Exactly one
@@ -303,6 +321,12 @@ physical Client:
   connected peer's euid must equal this process's euid (`SO_PEERCRED`
   on Linux, `getpeereid` on macOS): a socket planted by another user
   never sees the credential.
+- The credential exchange runs under the same `transport::Handshake`
+  budget the Server enforces: one absolute deadline armed once on the
+  established socket (`Instant::now() + LOCAL_HANDSHAKE_TIMEOUT`),
+  covering the Hello write, the `HelloReply` read, admission
+  verification, and `finish()` clearing the timeouts before the client
+  enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
   capability set `{Connection, ReadRange}` — the operations this build
   physically implements — constructed by the client, never read from the

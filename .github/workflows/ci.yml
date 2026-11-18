@@ -224,22 +224,25 @@ jobs:
 
       - name: Run the SQLite store contracts (durable changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:durable']
-        run: 'cargo test --lib --all-features --locked -- durable::sqlite:: --skip ::scale::'
+        run: 'cargo test -p rustx --lib --all-features --locked -- durable::sqlite:: --skip ::scale::'
 
       - name: Run the App Server and Session contracts (App Server or local runtime changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:app-server']
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features --locked -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
+        run: 'cargo test -p rustx --lib --all-features --locked -- local_runtime::session_runtime_manager::tests:: local_runtime::session:: --skip ::scale::'
 
       - name: Run the runtime client response contracts (runtime client changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:runtime-client']
-        run: 'cargo test --lib --all-features --locked -- runtime_client::response:: --skip ::scale::'
+        run: 'cargo test -p rustx --lib --all-features --locked -- runtime_client::response:: --skip ::scale::'
 
       - name: Run the real-process App Server and CLI workflows
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: cargo test --all-features --locked --test process
+
+      - name: Run the Execution Client boundary
+        run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
 
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
@@ -470,7 +473,10 @@ jobs:
       - name: Run the in-crate boundary suites
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
-        run: 'cargo test --lib --all-features --locked -- boundary_suites::'
+        run: 'cargo test -p rustx --lib --all-features --locked -- boundary_suites::'
+
+      - name: Run the Execution Client boundary
+        run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
 
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With
@@ -610,6 +616,9 @@ jobs:
           --test cfg3_catalog
           --test cfg3_managed_output
 
+      - name: Run the Execution Client boundary
+        run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
+
       # Native macOS discovery: every required external target (see
       # REQUIREMENTS in the checker) must execute here.
       - name: Check test lane coverage
@@ -742,6 +751,9 @@ jobs:
           --test conformance
           --test cfg3_catalog
           --test cfg3_managed_output
+
+      - name: Run the Execution Client boundary
+        run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
 
       # Native macOS discovery: both --skip selectors must still exclude
       # tests, and `boundary_suites::` and every external target (see

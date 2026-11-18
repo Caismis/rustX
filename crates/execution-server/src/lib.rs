@@ -12,7 +12,7 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::Instant;
 
 use base64::Engine as _;
 use constant_time_eq::constant_time_eq_32;
@@ -21,13 +21,14 @@ use rustx_execution_protocol::{
     ClientRequest, ConnectionId, DecimalU64, EnvironmentId, Generation, Hello, HelloReply,
     MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError, Reject, SessionId,
     is_normalized_absolute_path,
-    transport::{read_record, write_record},
+    transport::{Handshake, encode_record, read_record, write_record},
 };
 use sha2::{Digest, Sha256};
 
 /// The deadline for a Client to present its Hello on an accepted local
-/// connection.
-pub const LOCAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+/// connection — one shared budget owned by
+/// [`rustx_execution_protocol::transport`].
+pub use rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
 
 /// The fixed identity and requirements of one reserved binding.
 ///
@@ -149,52 +150,79 @@ impl Binding {
     /// Returns the [`Reject`] matching the first failed check. Rejects
     /// never echo the submitted credential.
     pub fn connect(&self, hello: &Hello, connection: ConnectionId) -> Result<Admission, Reject> {
+        match self.connect_gated(hello, connection, None) {
+            Ok(result) => result,
+            Err(_) => unreachable!("no deadline is checked without one"),
+        }
+    }
+
+    /// [`connect`](Self::connect) behind an optional deadline rechecked
+    /// inside the binding mutex, immediately before commit: an expired
+    /// handshake can never become `Live` and consumes nothing — the
+    /// binding stays `Reserved`.
+    fn connect_gated(
+        &self,
+        hello: &Hello,
+        connection: ConnectionId,
+        deadline: Option<Instant>,
+    ) -> io::Result<Result<Admission, Reject>> {
         let mut inner = self.inner();
         let offered: [u8; 32] = Sha256::digest(hello.credential.as_bytes()).into();
         if !constant_time_eq_32(&self.verifier, &offered) {
-            return Err(Reject::InvalidCredential);
+            return Ok(Err(Reject::InvalidCredential));
         }
         if hello.version != PROTOCOL_VERSION {
-            return Err(Reject::UnsupportedVersion);
+            return Ok(Err(Reject::UnsupportedVersion));
         }
         if hello.session != self.reservation.session {
-            return Err(Reject::SessionMismatch);
+            return Ok(Err(Reject::SessionMismatch));
         }
         if hello.environment != self.reservation.environment {
-            return Err(Reject::EnvironmentMismatch);
+            return Ok(Err(Reject::EnvironmentMismatch));
         }
         if hello.instance != self.reservation.instance {
-            return Err(Reject::InstanceMismatch);
+            return Ok(Err(Reject::InstanceMismatch));
         }
         if hello.generation != self.reservation.generation {
-            return Err(Reject::GenerationMismatch);
+            return Ok(Err(Reject::GenerationMismatch));
         }
         if hello.workspace.as_os_str() != self.reservation.workspace.as_os_str() {
-            return Err(Reject::WorkspaceMismatch);
+            return Ok(Err(Reject::WorkspaceMismatch));
         }
         if !self
             .reservation
             .required_capabilities
             .is_subset(&hello.capabilities)
         {
-            return Err(Reject::MissingCapabilities);
+            return Ok(Err(Reject::MissingCapabilities));
         }
         match inner.phase {
             BindingPhase::Reserved => {
+                if let Some(deadline) = deadline {
+                    // The deadline is rechecked under the mutex right
+                    // before commit: a handshake that ran out of budget
+                    // while waiting for arbitration never goes live.
+                    deadline
+                        .checked_duration_since(Instant::now())
+                        .filter(|remaining| !remaining.is_zero())
+                        .ok_or_else(|| {
+                            io::Error::new(io::ErrorKind::TimedOut, "handshake deadline expired")
+                        })?;
+                }
                 inner.phase = BindingPhase::Live;
                 inner.connection = Some(connection);
-                Ok(Admission {
+                Ok(Ok(Admission {
                     version: PROTOCOL_VERSION,
                     session: self.reservation.session.clone(),
                     environment: self.reservation.environment.clone(),
                     instance: self.reservation.instance.clone(),
                     generation: self.reservation.generation,
                     workspace: self.reservation.workspace.clone(),
-                })
+                }))
             }
-            BindingPhase::Detached => Err(Reject::RecoveryRequired),
-            BindingPhase::Live => Err(Reject::AlreadyConnected),
-            BindingPhase::Revoked => Err(Reject::Revoked),
+            BindingPhase::Detached => Ok(Err(Reject::RecoveryRequired)),
+            BindingPhase::Live => Ok(Err(Reject::AlreadyConnected)),
+            BindingPhase::Revoked => Ok(Err(Reject::Revoked)),
         }
     }
 
@@ -295,28 +323,29 @@ impl Binding {
     /// error: it returns `Ok(Err(Reject))`.
     pub fn accept_local(
         &self,
-        mut stream: UnixStream,
+        stream: UnixStream,
     ) -> io::Result<Result<LocalConnection<'_>, Reject>> {
-        stream.set_read_timeout(Some(LOCAL_HANDSHAKE_TIMEOUT))?;
-        stream.set_write_timeout(Some(LOCAL_HANDSHAKE_TIMEOUT))?;
-        let hello: Hello = read_record(&mut stream)?;
+        self.accept_local_deadline(stream, Instant::now() + LOCAL_HANDSHAKE_TIMEOUT)
+    }
+
+    /// `accept_local` against an explicit absolute deadline — one budget
+    /// armed at entry that covers the Hello read, the arbitration, and
+    /// the admission delivery, never re-armed.
+    fn accept_local_deadline(
+        &self,
+        mut stream: UnixStream,
+        deadline: Instant,
+    ) -> io::Result<Result<LocalConnection<'_>, Reject>> {
+        // A stream accepted from a nonblocking listener can inherit that
+        // flag on BSD; the handshake is blocking I/O under socket timeouts.
+        stream.set_nonblocking(false)?;
+        let mut handshake = Handshake::new(&mut stream, deadline);
+        let hello: Hello = read_record(&mut handshake)?;
         let capabilities = hello.capabilities.clone();
         let connection = fresh_connection_id()?;
-        match self.connect(&hello, connection.clone()) {
+        match self.connect_gated(&hello, connection.clone(), Some(deadline))? {
             Ok(admission) => {
-                let delivered = write_record(&mut stream, &HelloReply::Ok(admission.clone()))
-                    .and_then(|()| {
-                        stream.set_read_timeout(None)?;
-                        stream.set_write_timeout(None)
-                    });
-                if let Err(error) = delivered {
-                    // The peer may never learn it owns this connection: it
-                    // is disconnected and its stream shut down, never left
-                    // live or reusable.
-                    self.disconnect(&connection);
-                    let _ = stream.shutdown(std::net::Shutdown::Both);
-                    return Err(error);
-                }
+                self.deliver(&mut handshake, &connection, &admission)?;
                 Ok(Ok(LocalConnection {
                     binding: self,
                     stream,
@@ -327,10 +356,32 @@ impl Binding {
                 }))
             }
             Err(reject) => {
-                write_record(&mut stream, &HelloReply::Err(reject))?;
+                write_record(&mut handshake, &HelloReply::Err(reject))?;
+                handshake.finish()?;
                 Ok(Err(reject))
             }
         }
+    }
+
+    /// Writes the admission and completes the handshake deadline. On any
+    /// failure after the commit — an expired deadline, a transport error,
+    /// or a timeout that cannot be cleared — the committed connection is
+    /// disconnected again and the stream shut down: a binding never stays
+    /// live on a connection the peer does not know it owns.
+    fn deliver(
+        &self,
+        handshake: &mut Handshake<'_>,
+        connection: &ConnectionId,
+        admission: &Admission,
+    ) -> io::Result<()> {
+        let delivered = write_record(handshake, &HelloReply::Ok(admission.clone()))
+            .and_then(|()| handshake.finish());
+        if let Err(error) = delivered {
+            self.disconnect(connection);
+            let _ = handshake.get_mut().shutdown(std::net::Shutdown::Both);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn inner(&self) -> MutexGuard<'_, Inner> {
@@ -418,10 +469,16 @@ impl LocalConnection<'_> {
     }
 
     /// Sends exactly one typed request and consumes its one typed reply.
-    /// Any transport failure retires the connection.
+    /// The request is encoded before the gate so an unencodable request
+    /// fails without touching the binding or the wire; any transport
+    /// failure after the gate retires the connection.
     fn exchange(&mut self, request: &ClientRequest) -> io::Result<ClientReply> {
+        let encoded = encode_record(request)?;
         self.gate()?;
-        match write_record(&mut self.stream, request).and_then(|()| read_record(&mut self.stream)) {
+        match encoded
+            .write_to(&mut self.stream)
+            .and_then(|()| read_record(&mut self.stream))
+        {
             Ok(reply) => Ok(reply),
             Err(error) => Err(self.retire(error)),
         }
@@ -672,9 +729,13 @@ fn invalid_input(message: &'static str) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
     use std::num::NonZeroU64;
     use std::sync::Barrier;
     use std::thread;
+    use std::time::Duration;
+
+    use rustx_execution_protocol::transport::MAX_RECORD_BYTES;
 
     use super::*;
 
@@ -1043,6 +1104,162 @@ mod tests {
         connection.ping().unwrap();
         answer.join().unwrap();
         assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    /// One fully admitted live connection over a real socket pair: the
+    /// Hello is written by the peer, `accept_local` completes, and the
+    /// peer end comes back for scripted replies.
+    fn live<'b>(binding: &'b Binding, hello: &Hello) -> (LocalConnection<'b>, UnixStream) {
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, hello).unwrap();
+        let connection = binding.accept_local(stream).unwrap().unwrap();
+        let reply: HelloReply = read_record(&mut peer).unwrap();
+        assert!(reply.is_ok());
+        (connection, peer)
+    }
+
+    #[test]
+    fn an_unencodable_request_never_reaches_the_wire() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::ReadRange,
+        ]));
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        // A relative path serde cannot encode and a bound-breaking
+        // expected revision both fail at `encode_record`, before the
+        // gate: the request never touches the wire.
+        let error = connection
+            .read_range(
+                Path::new(std::ffi::OsStr::from_bytes(b"name\xff")),
+                0,
+                64,
+                None,
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        let oversized = "a".repeat(MAX_RECORD_BYTES);
+        let error = connection
+            .read_range(Path::new("file"), 0, 64, Some(&oversized))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+
+        // Prove nothing was written: a nonblocking probe reports
+        // WouldBlock, then blocking I/O resumes.
+        peer.set_nonblocking(true).unwrap();
+        let mut probe = [0u8; 1];
+        assert_eq!(
+            peer.read(&mut probe).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        peer.set_nonblocking(false).unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+
+        // The still-live connection answers an exact Ping and then a
+        // valid read.
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadRange { offset, .. } = request else {
+                panic!("expected a range request");
+            };
+            write_record(
+                &mut peer,
+                &ClientReply::Range {
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(b"ab"),
+                    offset,
+                    next_offset: None,
+                    revision: "a".repeat(64),
+                },
+            )
+            .unwrap();
+        });
+        connection.ping().unwrap();
+        let range = connection
+            .read_range(Path::new("file"), 0, 64, None)
+            .unwrap();
+        assert_eq!(range.bytes, b"ab");
+        answer.join().unwrap();
+    }
+
+    #[test]
+    fn a_peer_closing_mid_request_detaches_the_binding() {
+        let (binding, hello) = reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::ReadRange,
+        ]));
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        // The peer reads the request's prefix and then shuts down: the
+        // reply accounting can never be trusted again.
+        let closer = thread::spawn(move || {
+            let mut prefix = [0u8; 4];
+            peer.read_exact(&mut prefix).unwrap();
+            peer.shutdown(std::net::Shutdown::Both).unwrap();
+        });
+        let error = connection
+            .read_range(Path::new("file"), 0, 64, None)
+            .unwrap_err();
+        assert!(matches!(
+            error.kind(),
+            io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::ConnectionReset
+                | io::ErrorKind::BrokenPipe
+        ));
+        closer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn an_expired_deadline_before_commit_keeps_the_reservation() {
+        let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+
+        // A deadline already expired at accept: no Hello is ever read.
+        let (_peer, stream) = UnixStream::pair().unwrap();
+        let Err(error) = binding.accept_local_deadline(stream, Instant::now()) else {
+            panic!("an expired deadline must fail before the Hello");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(binding.status().phase, BindingPhase::Reserved);
+
+        // The same check inside arbitration, right before commit: an
+        // expired budget cannot become Live and consumes nothing.
+        let Err(error) =
+            binding.connect_gated(&hello, ConnectionId::new("conn-1"), Some(Instant::now()))
+        else {
+            panic!("an expired deadline must fail before commit");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(binding.status().phase, BindingPhase::Reserved);
+
+        // The honest Hello still wins the live connection afterwards.
+        assert!(binding.connect(&hello, ConnectionId::new("conn-2")).is_ok());
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn an_expired_deadline_during_delivery_detaches_the_binding() {
+        let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+        let connection = ConnectionId::new("conn-1");
+        let admission = binding.connect(&hello, connection.clone()).unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+
+        // The deadline expires after the commit but before the admission
+        // is delivered: the committed connection is disconnected and the
+        // stream shut down, never left live on a peer that cannot know
+        // it owns the connection.
+        let (_peer, mut stream) = UnixStream::pair().unwrap();
+        let mut handshake = Handshake::new(&mut stream, Instant::now());
+        let error = binding
+            .deliver(&mut handshake, &connection, &admission)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
     }
 
     #[test]

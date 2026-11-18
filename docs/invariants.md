@@ -8528,3 +8528,37 @@ read repair never loads a cold runtime or repeats semantic work. See the
   replacement retire callbacks and fence held successes, held errors and lazy reads.
   Status/paging updates preserve camera and focus;
   explicit current-owner closure alone may restore the opener.
+
+## Execution boundary invariants (Issue #576)
+
+Per the [execution-protocol ADR](execution-protocol.md), for the isolated
+local Execution Protocol over Unix sockets:
+
+- **Uniqueness is per `Binding`, not per `Session`.** One binding admits at
+  most one `Live` connection; arbitration is barrier-provable, and a
+  `Detached` binding answers an otherwise valid further Hello with `RecoveryRequired`
+  until #577's live-instance recovery proof exists.
+- **The handshake is one absolute deadline.** `LOCAL_HANDSHAKE_TIMEOUT` (5 s)
+  is armed once at accept entry (server) and once on the established socket
+  (client), covers the Hello read/write, arbitration, admission delivery and
+  verification, and `finish()` clearing the socket timeouts — never re-armed
+  per byte, per record, or per operation. The server re-checks the deadline
+  inside the binding mutex immediately before `Reserved → Live`: expiry
+  before the commit leaves the binding `Reserved`; a committed connection
+  whose admission delivery fails or expires is disconnected and shut down,
+  leaving the binding `Detached`.
+- **Authentication precedes identity.** The credential verifier runs before
+  any field probe; wrong-field Hellos never consume `Reserved`, and a clean
+  EOF after a successful handshake never permits credential replay.
+- **Requests never bypass the gate.** Only typed exchanges exist (`Ping`,
+  `ReadRange`); the request is encoded before the binding mutex confirms the
+  connection is still live, so an unencodable request touches neither binding
+  nor wire, and a revoke that wins the mutex first denies the exchange. Any
+  transport failure, truncation, malformed or unexpected reply retires the
+  stream (disconnect + shutdown) — it is never reused with untrusted reply
+  accounting.
+- **Confinement is descriptor-relative.** The client opens the workspace root
+  once through `PackageDirectory::open` and serves only normal-component
+  bounded reads; `..`, absolute paths, symlinks, and special files have no
+  addressable path, and a path replaced between the two open/verify calls is
+  an `AlreadyExists` conflict, never silently followed.

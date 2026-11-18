@@ -130,6 +130,33 @@ const REQUIREMENTS: &[Requirement] = &[
         "doc",
         "tools::todo::ConversationTodoList",
     ),
+    // The execution-client boundary suite runs in every profile on both
+    // platforms; a dropped step must fail even where completeness already
+    // covers it.
+    Requirement::new(
+        Profile::Fast,
+        Platform::Linux,
+        "rustx-execution-client:test bootstrap",
+        "",
+    ),
+    Requirement::new(
+        Profile::Full,
+        Platform::Linux,
+        "rustx-execution-client:test bootstrap",
+        "",
+    ),
+    Requirement::new(
+        Profile::Fast,
+        Platform::Macos,
+        "rustx-execution-client:test bootstrap",
+        "",
+    ),
+    Requirement::new(
+        Profile::Full,
+        Platform::Macos,
+        "rustx-execution-client:test bootstrap",
+        "",
+    ),
     // macOS full: the lib test binary's in-crate boundary suites.
     Requirement::new(Profile::Full, Platform::Macos, "lib", "boundary_suites::"),
     // macOS core, in both profiles: every external boundary target.
@@ -188,9 +215,14 @@ fn main() {
         other => fail(&[format!("unsupported host platform {other}")]),
     };
     let metadata = metadata_targets(&cargo, root).unwrap_or_else(|error| fail(&[error]));
+    let scope = TargetScope {
+        targets: metadata.targets.clone(),
+        default_members: metadata.default_members.clone(),
+        packages: metadata.packages.keys().cloned().collect(),
+    };
     let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
         .unwrap_or_else(|error| fail(&[format!("cannot read the CI workflow: {error}")]));
-    let steps = parse_workflow(&workflow, &metadata.targets).unwrap_or_else(|errors| fail(&errors));
+    let steps = parse_workflow(&workflow, &scope).unwrap_or_else(|errors| fail(&errors));
     let discovery = CargoDiscovery::from_metadata(cargo, root, metadata.clone());
     let report = check(
         &steps,
@@ -267,19 +299,43 @@ enum Kind {
     Doc,
 }
 
-/// One Cargo target that `cargo test` can build as a libtest harness or run as doctests.
+/// One Cargo target that `cargo test` can build as a libtest harness or run
+/// as doctests. `package` is the owning package's unique metadata `name` —
+/// the key `cargo -p` selects — so identically named targets of different
+/// packages never conflate. The workspace-root package keeps the legacy
+/// unprefixed display that `Requirement` labels and findings use.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct Target {
+    package: String,
     kind: Kind,
     name: String,
+    root: bool,
 }
 
 impl Target {
-    fn new(kind: Kind, name: &str) -> Self {
+    /// A target of the workspace-root package `package`.
+    fn root_in(package: &str, kind: Kind, name: &str) -> Self {
         Self {
+            package: package.into(),
             kind,
             name: name.into(),
+            root: true,
         }
+    }
+
+    /// A target of a non-root workspace member `package`.
+    fn member(package: &str, kind: Kind, name: &str) -> Self {
+        Self {
+            package: package.into(),
+            kind,
+            name: name.into(),
+            root: false,
+        }
+    }
+
+    #[cfg(test)]
+    fn new(kind: Kind, name: &str) -> Self {
+        Self::root_in(name, kind, name)
     }
 
     fn selector(&self) -> Vec<String> {
@@ -295,14 +351,19 @@ impl Target {
     }
 
     /// Binary and example harnesses may deliberately define no test; they
-    /// stay selected so Cargo discovers a future one.
+    /// stay selected so Cargo discovers a future one. A non-root member's
+    /// doc target may legitimately list zero when the member has no doc
+    /// examples; the root package's doc target never may.
     fn may_be_empty(&self) -> bool {
-        matches!(self.kind, Kind::Bin | Kind::Example)
+        matches!(self.kind, Kind::Bin | Kind::Example) || (self.kind == Kind::Doc && !self.root)
     }
 }
 
 impl fmt::Display for Target {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if !self.root {
+            write!(formatter, "{}:", self.package)?;
+        }
         match self.kind {
             Kind::Lib => formatter.write_str("lib"),
             Kind::Bin => write!(formatter, "bin {}", self.name),
@@ -392,12 +453,30 @@ impl Step {
     }
 }
 
+/// One workspace member's identity, as `cargo -p` and compiler-artifact
+/// receipts bind it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct PackageMetadata {
     package_id: String,
     package_name: String,
     canonical_manifest: PathBuf,
+}
+
+/// Every workspace member's packages and testable targets, and the package
+/// selection rules Cargo itself applies.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceMetadata {
+    /// The package whose manifest is the workspace root's own Cargo.toml;
+    /// its targets keep the legacy unprefixed display.
+    root: String,
+    /// Every workspace member, keyed by its metadata `name`.
+    packages: BTreeMap<String, PackageMetadata>,
+    /// The package names `workspace_default_members` selects when a `cargo
+    /// test` step gives no `-p`.
+    default_members: BTreeSet<String>,
+    /// Every member's testable targets, sorted and unique.
     targets: Vec<Target>,
+    /// Each target's canonical manifest-declared source file.
     sources: BTreeMap<Target, PathBuf>,
 }
 
@@ -408,7 +487,7 @@ fn emit_stderr(stderr: &str, emit: &mut dyn FnMut(&str)) {
     }
 }
 
-fn metadata_targets(cargo: &str, root: &Path) -> Result<PackageMetadata, String> {
+fn metadata_targets(cargo: &str, root: &Path) -> Result<WorkspaceMetadata, String> {
     let output = Command::new(cargo)
         .args(["metadata", "--no-deps", "--format-version", "1", "--locked"])
         .current_dir(root)
@@ -428,100 +507,95 @@ fn metadata_targets(cargo: &str, root: &Path) -> Result<PackageMetadata, String>
     parse_metadata(&metadata)
 }
 
-fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, String> {
-    // The workspace can carry extra members (the execution-boundary
-    // crates); the lanes cover exactly the package whose manifest is the
-    // workspace root's.
+fn parse_metadata(metadata: &serde_json::Value) -> Result<WorkspaceMetadata, String> {
+    // Every workspace member's targets are lane business: a member the
+    // workflow never selects would silently ship untested code. Bare
+    // selectors still reach only `workspace_default_members`.
     let packages = metadata["packages"]
         .as_array()
         .ok_or("cargo metadata has no package list")?;
-    let package = if packages.len() == 1 {
-        &packages[0]
-    } else {
-        let root = metadata["workspace_root"]
+    let member_id_set = member_ids(metadata, "workspace_members")?;
+    let default_ids = member_ids(metadata, "workspace_default_members")?;
+    if !default_ids.is_subset(&member_id_set) {
+        return Err(String::from("unknown default workspace member"));
+    }
+    let workspace_root = metadata["workspace_root"]
+        .as_str()
+        .ok_or("cargo metadata has no workspace_root")?;
+    let root_manifest = std::fs::canonicalize(Path::new(workspace_root).join("Cargo.toml"))
+        .map_err(|error| format!("cannot canonicalize workspace manifest: {error}"))?;
+
+    let mut members = BTreeMap::new();
+    let mut default_members = BTreeSet::new();
+    let mut root = None;
+    let mut targets = Vec::new();
+    let mut sources = BTreeMap::new();
+    for id in &member_id_set {
+        let package = packages
+            .iter()
+            .find(|package| package["id"].as_str() == Some(*id))
+            .ok_or_else(|| format!("workspace member `{id}` is not a metadata package"))?;
+        let package_id = package["id"]
             .as_str()
-            .ok_or("cargo metadata has no workspace root")?;
-        let root_manifest = std::fs::canonicalize(Path::new(root).join("Cargo.toml"))
-            .map_err(|error| format!("cannot canonicalize workspace manifest: {error}"))?;
-        let mut roots = packages.iter().filter(|package| {
-            package["manifest_path"]
-                .as_str()
-                .and_then(|path| std::fs::canonicalize(path).ok())
-                .is_some_and(|path| path == root_manifest)
-        });
-        match (roots.next(), roots.next()) {
-            (Some(package), None) => package,
-            _ => {
+            .filter(|id| !id.is_empty())
+            .ok_or("cargo metadata package has no id")?
+            .to_owned();
+        let package_name = package["name"]
+            .as_str()
+            .filter(|name| !name.is_empty())
+            .ok_or("cargo metadata package has no name")?
+            .to_owned();
+        let manifest_path = package["manifest_path"]
+            .as_str()
+            .ok_or("cargo metadata package has no manifest_path")?;
+        let canonical_manifest = std::fs::canonicalize(manifest_path).map_err(|error| {
+            format!("cannot canonicalize package manifest `{manifest_path}`: {error}")
+        })?;
+        let is_root = canonical_manifest == root_manifest;
+        if is_root {
+            if root.is_some() {
                 return Err(String::from(
                     "cargo metadata must describe exactly the one root package",
                 ));
             }
+            root = Some(package_name.clone());
         }
-    };
-    let package_id = package["id"]
-        .as_str()
-        .filter(|id| !id.is_empty())
-        .ok_or("cargo metadata package has no id")?
-        .to_owned();
-    let package_name = package["name"]
-        .as_str()
-        .filter(|name| !name.is_empty())
-        .ok_or("cargo metadata package has no name")?
-        .to_owned();
-    let manifest_path = package["manifest_path"]
-        .as_str()
-        .ok_or("cargo metadata package has no manifest_path")?;
-    let canonical_manifest = std::fs::canonicalize(manifest_path).map_err(|error| {
-        format!("cannot canonicalize package manifest `{manifest_path}`: {error}")
-    })?;
-    let mut targets = Vec::new();
-    let mut sources = BTreeMap::new();
-    for target in package["targets"]
-        .as_array()
-        .ok_or("cargo metadata has no target list")?
-    {
-        let name = target["name"].as_str().ok_or("a target has no name")?;
-        let kinds: Vec<&str> = target["kind"]
-            .as_array()
-            .ok_or("a target has no kind")?
-            .iter()
-            .filter_map(serde_json::Value::as_str)
-            .collect();
-        let kind = match kinds.as_slice() {
-            ["bin"] => Kind::Bin,
-            ["example"] => Kind::Example,
-            ["test"] => Kind::Test,
-            ["bench"] => Kind::Bench,
-            ["custom-build"] => continue,
-            kinds if kinds.iter().all(|kind| kind.ends_with("lib")) && !kinds.is_empty() => {
-                if target["doctest"].as_bool() != Some(false) {
-                    targets.push(Target::new(Kind::Doc, name));
-                }
-                Kind::Lib
-            }
-            other => return Err(format!("target {name} has unsupported kinds {other:?}")),
-        };
-        let src_path = target["src_path"]
-            .as_str()
-            .ok_or_else(|| format!("target {name} has no src_path"))?;
-        let canonical_src = std::fs::canonicalize(src_path).map_err(|error| {
-            format!("cannot canonicalize source `{src_path}` for target {name}: {error}")
-        })?;
-        let classified = Target::new(kind, name);
-        sources.insert(classified.clone(), canonical_src);
-        targets.push(classified);
+        if default_ids.contains(*id) {
+            default_members.insert(package_name.clone());
+        }
+        classify_targets(&package_name, package, is_root, &mut targets, &mut sources)?;
+        members.insert(
+            package_name.clone(),
+            PackageMetadata {
+                package_id,
+                package_name,
+                canonical_manifest,
+            },
+        );
     }
+    let root = root.ok_or("cargo metadata must describe exactly the one root package")?;
     targets.sort();
-    Ok(PackageMetadata {
-        package_id,
-        package_name,
-        canonical_manifest,
+    targets.dedup();
+    Ok(WorkspaceMetadata {
+        root,
+        packages: members,
+        default_members,
         targets,
         sources,
     })
 }
 
-fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<String>> {
+/// What Cargo target-selector resolution needs from metadata: the target
+/// inventory, which packages a bare selector reaches
+/// (`workspace_default_members`), and which package names `-p` may select.
+#[derive(Clone)]
+struct TargetScope {
+    targets: Vec<Target>,
+    default_members: BTreeSet<String>,
+    packages: BTreeSet<String>,
+}
+
+fn parse_workflow(text: &str, scope: &TargetScope) -> Result<Vec<Step>, Vec<String>> {
     let workflow: serde_yaml_ng::Value = serde_yaml_ng::from_str(text)
         .map_err(|error| vec![format!("malformed workflow: {error}")])?;
     let jobs = workflow["jobs"]
@@ -578,7 +652,7 @@ fn parse_workflow(text: &str, targets: &[Target]) -> Result<Vec<Step>, Vec<Strin
                     )));
                 }
             }
-            match parse_command(run, targets) {
+            match parse_command(run, scope) {
                 // A job in both profiles contributes its steps to each.
                 Ok(command) => steps.extend(profiles.iter().map(|profile| Step {
                     job: id.into(),
@@ -691,10 +765,106 @@ fn mentions_cargo_test(run: &str) -> bool {
     })
 }
 
+/// One `workspace_members`-style package-ID array: present, every entry a
+/// non-empty string, no duplicates.
+fn member_ids<'a>(metadata: &'a serde_json::Value, key: &str) -> Result<BTreeSet<&'a str>, String> {
+    let ids = metadata[key]
+        .as_array()
+        .ok_or_else(|| format!("cargo metadata has no {key} list"))?;
+    let mut set = BTreeSet::new();
+    for id in ids {
+        let id = id
+            .as_str()
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| format!("cargo metadata has a non-string {key} entry"))?;
+        if !set.insert(id) {
+            return Err(format!("cargo metadata has a duplicate {key} entry `{id}`"));
+        }
+    }
+    Ok(set)
+}
+
+/// Classifies one member package's `targets` array into lane targets and
+/// their canonical sources. Build scripts are skipped; a lib target also
+/// produces the package's Doc target unless `doctest = false`.
+fn classify_targets(
+    package_name: &str,
+    package: &serde_json::Value,
+    is_root: bool,
+    targets: &mut Vec<Target>,
+    sources: &mut BTreeMap<Target, PathBuf>,
+) -> Result<(), String> {
+    for target in package["targets"]
+        .as_array()
+        .ok_or("cargo metadata has no target list")?
+    {
+        let name = target["name"].as_str().ok_or("a target has no name")?;
+        let kinds: Vec<&str> = target["kind"]
+            .as_array()
+            .ok_or("a target has no kind")?
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        let kind = match kinds.as_slice() {
+            ["bin"] => Kind::Bin,
+            ["example"] => Kind::Example,
+            ["test"] => Kind::Test,
+            ["bench"] => Kind::Bench,
+            ["custom-build"] => continue,
+            kinds if kinds.iter().all(|kind| kind.ends_with("lib")) && !kinds.is_empty() => {
+                if target["doctest"].as_bool() != Some(false) {
+                    targets.push(if is_root {
+                        Target::root_in(package_name, Kind::Doc, name)
+                    } else {
+                        Target::member(package_name, Kind::Doc, name)
+                    });
+                }
+                Kind::Lib
+            }
+            other => {
+                return Err(format!(
+                    "target {package_name}:{name} has unsupported kinds {other:?}"
+                ));
+            }
+        };
+        let src_path = target["src_path"]
+            .as_str()
+            .ok_or_else(|| format!("target {name} has no src_path"))?;
+        let canonical_src = std::fs::canonicalize(src_path).map_err(|error| {
+            format!("cannot canonicalize source `{src_path}` for target {name}: {error}")
+        })?;
+        let classified = if is_root {
+            Target::root_in(package_name, kind, name)
+        } else {
+            Target::member(package_name, kind, name)
+        };
+        sources.insert(classified.clone(), canonical_src);
+        targets.push(classified);
+    }
+    Ok(())
+}
+
+/// One target selector of a `cargo test` command, resolved against the
+/// package pool after the whole option scan.
+enum Selector<'a> {
+    /// Every pool target of one kind (`--lib`, `--doc`, ...).
+    Kind(Kind),
+    /// Every pool target but doctests (`--all-targets`).
+    AllTargets,
+    /// Every pool target with this kind and name (`--test bootstrap`
+    /// may match identically named targets across the pool).
+    Named(&'a str, Kind, &'a str),
+}
+
 /// Parses one executing or compile-only `cargo test` command, strictly: any
 /// shell construct or option whose selection meaning is not modeled here is
 /// an error rather than a silently different reading.
-fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
+///
+/// `-p`/`--package` scopes every selector to that package's targets, the way
+/// Cargo resolves them; with no `-p`, bare selectors expand only over the
+/// workspace's default members. A named selector may match identically named
+/// targets across the selected packages — the union is sorted and unique.
+fn parse_command(run: &str, scope: &TargetScope) -> Result<Step, String> {
     let lines: Vec<&str> = run.lines().filter(|line| !line.trim().is_empty()).collect();
     let [line] = lines.as_slice() else {
         return Err("a cargo test step must be a single command line".into());
@@ -734,33 +904,36 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
         profile: Profile::Full,
         affected: false,
     };
-    let of = |kind: Kind| targets.iter().filter(move |target| target.kind == kind);
+    // Selectors resolve against the package pool only after the scan: `-p`
+    // narrows every selector of the command no matter where it appears.
+    let mut selectors: Vec<Selector<'_>> = Vec::new();
+    let mut packages: Vec<(&str, &str)> = Vec::new();
     let mut cargo = cargo.iter();
     while let Some(argument) = cargo.next() {
-        let mut named = |kind: Kind| -> Result<Target, String> {
-            let name = cargo
-                .next()
-                .ok_or(format!("{argument} requires a target name"))?;
-            of(kind)
-                .find(|target| target.name == *name)
-                .cloned()
-                .ok_or(format!("{argument} {name} names no Cargo target"))
-        };
         match *argument {
-            "--lib" => step.targets.extend(of(Kind::Lib).cloned()),
-            "--doc" => step.targets.extend(of(Kind::Doc).cloned()),
-            "--bins" => step.targets.extend(of(Kind::Bin).cloned()),
-            "--examples" => step.targets.extend(of(Kind::Example).cloned()),
-            "--all-targets" => step.targets.extend(
-                targets
-                    .iter()
-                    .filter(|target| target.kind != Kind::Doc)
-                    .cloned(),
-            ),
-            "--bin" => step.targets.push(named(Kind::Bin)?),
-            "--example" => step.targets.push(named(Kind::Example)?),
-            "--test" => step.targets.push(named(Kind::Test)?),
-            "--bench" => step.targets.push(named(Kind::Bench)?),
+            "--lib" => selectors.push(Selector::Kind(Kind::Lib)),
+            "--doc" => selectors.push(Selector::Kind(Kind::Doc)),
+            "--bins" => selectors.push(Selector::Kind(Kind::Bin)),
+            "--examples" => selectors.push(Selector::Kind(Kind::Example)),
+            "--all-targets" => selectors.push(Selector::AllTargets),
+            "--bin" | "--example" | "--test" | "--bench" => {
+                let kind = match *argument {
+                    "--bin" => Kind::Bin,
+                    "--example" => Kind::Example,
+                    "--test" => Kind::Test,
+                    _ => Kind::Bench,
+                };
+                let name = cargo
+                    .next()
+                    .ok_or(format!("{argument} requires a target name"))?;
+                selectors.push(Selector::Named(argument, kind, name));
+            }
+            "-p" | "--package" => {
+                let name = cargo
+                    .next()
+                    .ok_or(format!("{argument} requires a package name"))?;
+                packages.push((*argument, *name));
+            }
             "--all-features" | "--no-default-features" => step.features.push((*argument).into()),
             "--features" | "-F" => {
                 let features = cargo
@@ -774,11 +947,7 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
             other => return Err(format!("unsupported cargo test option `{other}`")),
         }
     }
-    if step.targets.is_empty() {
-        return Err("a cargo test step must select its targets explicitly".into());
-    }
-    step.targets.sort();
-    step.targets.dedup();
+    resolve_selectors(&mut step, selectors, &packages, scope)?;
     let mut libtest = libtest.iter();
     while let Some(argument) = libtest.next() {
         match *argument {
@@ -793,6 +962,68 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
         }
     }
     Ok(step)
+}
+
+/// Resolves the collected selectors against the package pool: a bare command
+/// reaches only `workspace_default_members`, `-p` restricts the pool to the
+/// named packages, and a named selector may match identically named targets
+/// across the pool. The union is sorted and unique.
+fn resolve_selectors(
+    step: &mut Step,
+    selectors: Vec<Selector<'_>>,
+    packages: &[(&str, &str)],
+    scope: &TargetScope,
+) -> Result<(), String> {
+    let in_pool = |target: &&Target| -> bool {
+        if packages.is_empty() {
+            scope.default_members.contains(&target.package)
+        } else {
+            packages
+                .iter()
+                .any(|(_, package)| *package == target.package)
+        }
+    };
+    for (flag, package) in packages {
+        if !scope.packages.contains(*package) {
+            return Err(format!("{flag} `{package}` names no workspace package"));
+        }
+    }
+    for selector in selectors {
+        match selector {
+            Selector::Kind(kind) => step.targets.extend(
+                scope
+                    .targets
+                    .iter()
+                    .filter(|target| in_pool(target) && target.kind == kind)
+                    .cloned(),
+            ),
+            Selector::AllTargets => step.targets.extend(
+                scope
+                    .targets
+                    .iter()
+                    .filter(|target| in_pool(target) && target.kind != Kind::Doc)
+                    .cloned(),
+            ),
+            Selector::Named(flag, kind, name) => {
+                let matched: Vec<Target> = scope
+                    .targets
+                    .iter()
+                    .filter(|target| in_pool(target) && target.kind == kind && target.name == name)
+                    .cloned()
+                    .collect();
+                if matched.is_empty() {
+                    return Err(format!("{flag} {name} names no Cargo target"));
+                }
+                step.targets.extend(matched);
+            }
+        }
+    }
+    if step.targets.is_empty() {
+        return Err("a cargo test step must select its targets explicitly".into());
+    }
+    step.targets.sort();
+    step.targets.dedup();
+    Ok(())
 }
 
 /// libtest's own view of one harness.
@@ -827,7 +1058,7 @@ type HarnessKey = (Vec<String>, Target);
 struct CargoDiscovery<'a> {
     cargo: String,
     root: &'a Path,
-    metadata: PackageMetadata,
+    metadata: WorkspaceMetadata,
     #[cfg(test)]
     acquire_count: std::cell::Cell<usize>,
     harnesses: std::cell::RefCell<BTreeMap<HarnessKey, PathBuf>>,
@@ -841,7 +1072,7 @@ impl<'a> CargoDiscovery<'a> {
         Ok(Self::from_metadata(cargo, root, metadata))
     }
 
-    fn from_metadata(cargo: String, root: &'a Path, metadata: PackageMetadata) -> Self {
+    fn from_metadata(cargo: String, root: &'a Path, metadata: WorkspaceMetadata) -> Self {
         Self {
             cargo,
             root,
@@ -856,6 +1087,15 @@ impl<'a> CargoDiscovery<'a> {
     /// Acquires and validates the compiled libtest harness executable once per
     /// `(features, target)` via Cargo `--no-run --message-format=json`, keeping
     /// real compiler errors and metadata-bound artifact identity authoritative.
+    /// The owning package's metadata for `target`, or a hard error — an
+    /// unowned target can never be silently attributed to another package.
+    fn owner(&self, target: &Target) -> Result<&PackageMetadata, String> {
+        self.metadata
+            .packages
+            .get(&target.package)
+            .ok_or_else(|| format!("target {target} names no workspace package"))
+    }
+
     fn acquire_harness(&self, features: &[String], target: &Target) -> Result<PathBuf, String> {
         let key = (features.to_vec(), target.clone());
         if let Some(executable) = self.harnesses.borrow().get(&key) {
@@ -866,17 +1106,17 @@ impl<'a> CargoDiscovery<'a> {
             .sources
             .get(target)
             .ok_or_else(|| format!("target {target} missing source path in cargo metadata"))?;
+        let owner = self.owner(target)?;
         #[cfg(test)]
         self.acquire_count.set(self.acquire_count.get() + 1);
         let mut command = Command::new(&self.cargo);
-        // `-p` is mandatory: workspace default-members now include the
-        // execution-boundary crates, so a bare selector would list and build
-        // sibling targets that share the kind (for example `--lib`).
+        // `-p` names the target's own package: identical target names in
+        // sibling packages can never cross-attribute an artifact.
         command
             .args([
                 "test",
                 "-p",
-                &self.metadata.package_name,
+                &target.package,
                 "--locked",
                 "--color",
                 "never",
@@ -892,8 +1132,8 @@ impl<'a> CargoDiscovery<'a> {
             .output()
             .map_err(|error| format!("cannot run {rendered}: {error}"))?;
         let identity = ArtifactIdentity {
-            package_id: &self.metadata.package_id,
-            canonical_manifest: &self.metadata.canonical_manifest,
+            package_id: &owner.package_id,
+            canonical_manifest: &owner.canonical_manifest,
             canonical_src: expected_src,
             target,
         };
@@ -911,15 +1151,17 @@ impl<'a> CargoDiscovery<'a> {
     fn list_doctests(
         &self,
         features: &[String],
+        target: &Target,
         libtest: &[String],
         ignored: bool,
     ) -> Result<BTreeSet<String>, String> {
+        self.owner(target)?;
         let mut command = Command::new(&self.cargo);
         command
             .args([
                 "test",
                 "-p",
-                &self.metadata.package_name,
+                &target.package,
                 "--doc",
                 "--locked",
                 "--color",
@@ -980,7 +1222,7 @@ impl Discovery for CargoDiscovery<'_> {
             return Ok(BTreeSet::new());
         }
         let listed = if target.kind == Kind::Doc {
-            self.list_doctests(features, libtest, ignored)?
+            self.list_doctests(features, target, libtest, ignored)?
         } else {
             let executable = self.acquire_harness(features, target)?;
             let mut command = Command::new(&executable);
@@ -1307,7 +1549,14 @@ fn parse_doctest_list_with(
         }
     }
 
-    if block_tests != 0 || block_benchmarks != 0 || blocks.is_empty() || !saw_final {
+    // A genuinely empty doctest run prints one `0 tests, 0 benchmarks`
+    // block and no timing line; anything else without the final summary is
+    // truncated output and fails.
+    if block_tests != 0
+        || block_benchmarks != 0
+        || blocks.is_empty()
+        || (!saw_final && blocks != [(0, 0)])
+    {
         return Err(format!(
             "incomplete doctest discovery output (blocks={blocks:?}, saw_final={saw_final})"
         ));
@@ -1718,9 +1967,28 @@ jobs:
         Requirement::new(Profile::Full, Platform::Linux, "doc", "negative::Api"),
     ];
 
+    /// The test miniature's scope: every target's package is a default
+    /// member, the shape the real all-default-members workspace has.
+    fn scope_of(targets: &[Target]) -> TargetScope {
+        let packages: BTreeSet<String> = targets
+            .iter()
+            .map(|target| target.package.clone())
+            .collect();
+        TargetScope {
+            targets: targets.to_vec(),
+            default_members: packages.clone(),
+            packages,
+        }
+    }
+
+    fn scope() -> TargetScope {
+        scope_of(&targets())
+    }
+
     fn run(workflow: &str, host: Platform, fake: &Fake) -> Vec<String> {
-        let steps = parse_workflow(workflow, &targets()).unwrap();
-        check(&steps, &targets(), host, &[], MACOS, fake).findings
+        let scope = scope();
+        let steps = parse_workflow(workflow, &scope).unwrap();
+        check(&steps, &scope.targets, host, &[], MACOS, fake).findings
     }
 
     fn findings_containing(findings: &[String], needle: &str) -> usize {
@@ -1741,8 +2009,8 @@ jobs:
                 ),
             );
             assert_eq!(
-                parse_workflow(&workflow, &targets()).unwrap().len(),
-                parse_workflow(WORKFLOW, &targets()).unwrap().len(),
+                parse_workflow(&workflow, &scope()).unwrap().len(),
+                parse_workflow(WORKFLOW, &scope()).unwrap().len(),
                 "{command}"
             );
         }
@@ -1758,7 +2026,7 @@ jobs:
                 "jobs:\n  j:\n    runs-on: ubuntu-latest\n    if: fromJSON(needs.plan.outputs.run)['j']\n    env:\n      VERIFICATION_PROFILE: full\n    steps:\n      - name: prep\n        run: {}\n",
                 serde_json::to_string(command).unwrap()
             );
-            let steps = parse_workflow(&workflow, &targets()).unwrap();
+            let steps = parse_workflow(&workflow, &scope()).unwrap();
             assert_eq!(steps.len(), 1, "{command}");
             assert!(!steps[0].executes, "{command}");
         }
@@ -1780,14 +2048,230 @@ jobs:
     fn an_unassigned_new_external_target_fails() {
         let mut targets = targets();
         targets.push(Target::new(Kind::Test, "fresh"));
-        let steps = parse_workflow(WORKFLOW, &targets).unwrap();
-        let findings = check(&steps, &targets, Platform::Linux, &[], MACOS, &inventory()).findings;
+        let scope = scope_of(&targets);
+        let steps = parse_workflow(WORKFLOW, &scope).unwrap();
+        let findings = check(
+            &steps,
+            &scope.targets,
+            Platform::Linux,
+            &[],
+            MACOS,
+            &inventory(),
+        )
+        .findings;
         assert_eq!(
             findings,
             [
                 "test fresh is not selected by any executing FULL cargo test step on linux \
               (compile-only --no-run steps and FAST steps do not count); assign it to a lane"
             ]
+        );
+    }
+
+    /// A workspace miniature: the root package and member `memberlib`
+    /// both declare an integration target named `shared`.
+    fn workspace_targets() -> Vec<Target> {
+        let mut targets = targets();
+        targets.extend([
+            Target::root_in("rustx", Kind::Test, "shared"),
+            Target::member("memberlib", Kind::Lib, "memberlib"),
+            Target::member("memberlib", Kind::Test, "shared"),
+            Target::member("memberlib", Kind::Doc, "memberlib"),
+        ]);
+        targets.sort();
+        targets
+    }
+
+    fn workspace_scope() -> TargetScope {
+        scope_of(&workspace_targets())
+    }
+
+    /// The member workflow executes root `shared` through a `-p` selector
+    /// and the rest through default-member expansion — every target but
+    /// `memberlib:test shared` is covered.
+    const MEMBER_WORKFLOW: &str = r"
+jobs:
+  full:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['full']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Units
+        run: cargo test --lib --bins --examples --all-features --locked
+      - name: SharedRoot
+        run: cargo test -p rustx --test shared --all-features --locked
+      - name: External
+        run: cargo test --test durable --test contracts --all-features --locked
+      - name: Doctests
+        run: cargo test --doc --all-features --locked
+";
+
+    fn workspace_inventory() -> Fake {
+        let mut fake = inventory();
+        fake.0.insert(
+            Target::root_in("rustx", Kind::Test, "shared"),
+            vec![("root_shared", false)],
+        );
+        fake.0.insert(
+            Target::member("memberlib", Kind::Lib, "memberlib"),
+            vec![("member_unit", false)],
+        );
+        fake.0.insert(
+            Target::member("memberlib", Kind::Test, "shared"),
+            vec![("member_shared", false)],
+        );
+        // A member crate may genuinely have no doc examples.
+        fake.0
+            .insert(Target::member("memberlib", Kind::Doc, "memberlib"), vec![]);
+        fake
+    }
+
+    #[test]
+    fn same_named_member_targets_need_scoped_selection() {
+        let scope = workspace_scope();
+        let steps = parse_workflow(MEMBER_WORKFLOW, &scope).unwrap();
+        // `-p rustx --test shared` names exactly the root target.
+        let root_step = steps.iter().find(|step| step.name == "SharedRoot").unwrap();
+        assert_eq!(
+            root_step.targets,
+            [Target::root_in("rustx", Kind::Test, "shared")]
+        );
+        // The identically named member target is a distinct assignment: a
+        // root-only lane leaves it unassigned.
+        let findings = check(
+            &steps,
+            &scope.targets,
+            Platform::Linux,
+            &[],
+            &[],
+            &workspace_inventory(),
+        )
+        .findings;
+        assert_eq!(
+            findings,
+            [
+                "memberlib:test shared is not selected by any executing FULL cargo test step \
+                 on linux (compile-only --no-run steps and FAST steps do not count); assign it \
+                 to a lane"
+            ]
+        );
+
+        // Selecting the member by package assigns it — and still names
+        // exactly that package's target.
+        let workflow = MEMBER_WORKFLOW.replace(
+            "      - name: External",
+            "      - name: SharedMember\n        run: cargo test -p memberlib --test shared --all-features --locked\n      - name: External",
+        );
+        let steps = parse_workflow(&workflow, &scope).unwrap();
+        let member_step = steps
+            .iter()
+            .find(|step| step.name == "SharedMember")
+            .unwrap();
+        assert_eq!(
+            member_step.targets,
+            [Target::member("memberlib", Kind::Test, "shared")]
+        );
+        assert!(
+            check(
+                &steps,
+                &scope.targets,
+                Platform::Linux,
+                &[],
+                &[],
+                &workspace_inventory(),
+            )
+            .findings
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn named_selectors_union_across_the_selected_packages() {
+        let scope = workspace_scope();
+        // A bare `--test shared` matches both same-named targets: the
+        // union is sorted and unique.
+        let step = parse_command("cargo test --test shared", &scope).unwrap();
+        assert_eq!(
+            step.targets,
+            [
+                Target::member("memberlib", Kind::Test, "shared"),
+                Target::root_in("rustx", Kind::Test, "shared"),
+            ]
+        );
+        // Explicit `-p` in either form scopes to exactly that package;
+        // repeated `-p` unions.
+        let step = parse_command("cargo test -p memberlib --test shared", &scope).unwrap();
+        assert_eq!(
+            step.targets,
+            [Target::member("memberlib", Kind::Test, "shared")]
+        );
+        let step = parse_command("cargo test --package rustx --test shared", &scope).unwrap();
+        assert_eq!(
+            step.targets,
+            [Target::root_in("rustx", Kind::Test, "shared")]
+        );
+        let step = parse_command("cargo test -p rustx -p memberlib --test shared", &scope).unwrap();
+        assert_eq!(step.targets.len(), 2);
+        // An unknown package fails strictly rather than expanding to the
+        // default members.
+        assert_eq!(
+            parse_command("cargo test -p ghost --test shared", &scope).unwrap_err(),
+            "-p `ghost` names no workspace package"
+        );
+    }
+
+    #[test]
+    fn bare_selectors_expand_only_over_default_members() {
+        let mut scope = workspace_scope();
+        // `memberlib` is a workspace member but not a default member.
+        scope.default_members.remove("memberlib");
+        let step = parse_command("cargo test --lib", &scope).unwrap();
+        assert_eq!(step.targets, [Target::new(Kind::Lib, "rustx")]);
+        let step = parse_command("cargo test -p memberlib --lib", &scope).unwrap();
+        assert_eq!(
+            step.targets,
+            [Target::member("memberlib", Kind::Lib, "memberlib")]
+        );
+        // A named selector outside the default members still does not
+        // reach a non-default package.
+        assert_eq!(
+            parse_command("cargo test --test shared", &scope)
+                .unwrap()
+                .targets,
+            [Target::root_in("rustx", Kind::Test, "shared")]
+        );
+    }
+
+    #[test]
+    fn a_member_doc_target_may_be_empty_but_the_root_one_may_not() {
+        // memberlib:doc is empty in the inventory and a member doc target
+        // may legitimately be; no step selecting it is flagged.
+        let scope = workspace_scope();
+        let steps = parse_workflow(MEMBER_WORKFLOW, &scope).unwrap();
+        let findings = check(
+            &steps,
+            &scope.targets,
+            Platform::Linux,
+            &[],
+            &[],
+            &workspace_inventory(),
+        )
+        .findings;
+        assert_eq!(
+            findings_containing(&findings, "selects no runnable test of memberlib:doc"),
+            0
+        );
+
+        // The root package's doc target never may be: an empty root
+        // doctest inventory fails the selecting step.
+        let mut fake = workspace_inventory();
+        fake.0.insert(Target::new(Kind::Doc, "rustx"), vec![]);
+        let findings = check(&steps, &scope.targets, Platform::Linux, &[], &[], &fake).findings;
+        assert_eq!(
+            findings_containing(&findings, "selects no runnable test of doc"),
+            1
         );
     }
 
@@ -1899,7 +2383,7 @@ jobs:
     #[test]
     fn cross_platform_overlap_is_allowed() {
         // `test durable` and the boundary suites run on both platforms.
-        let steps = parse_workflow(WORKFLOW, &targets()).unwrap();
+        let steps = parse_workflow(WORKFLOW, &scope()).unwrap();
         let durable = Target::new(Kind::Test, "durable");
         let platforms: BTreeSet<Platform> = steps
             .iter()
@@ -1948,7 +2432,7 @@ jobs:
 
     #[test]
     fn a_job_is_checked_only_on_its_native_platform() {
-        let steps = parse_workflow(WORKFLOW, &targets()).unwrap();
+        let steps = parse_workflow(WORKFLOW, &scope()).unwrap();
         let findings = check(
             &steps,
             &targets(),
@@ -2008,17 +2492,17 @@ jobs:
                 "jobs:\n  j:\n    runs-on: ubuntu-latest\n    if: fromJSON(needs.plan.outputs.run)['j']\n    env:\n      VERIFICATION_PROFILE: full\n    steps:\n      - name: s\n        run: {}\n",
                 serde_json::to_string(run).unwrap()
             );
-            let errors = parse_workflow(&workflow, &targets()).unwrap_err();
+            let errors = parse_workflow(&workflow, &scope()).unwrap_err();
             assert!(errors[0].contains(problem), "{run}: {errors:?}");
         }
         let conditional = "jobs:\n  j:\n    runs-on: ubuntu-latest\n    if: fromJSON(needs.plan.outputs.run)['j']\n    env:\n      VERIFICATION_PROFILE: full\n    steps:\n      - name: s\n        if: false\n        run: cargo test --lib\n";
-        assert!(parse_workflow(conditional, &targets()).unwrap_err()[0].contains("`if`"));
+        assert!(parse_workflow(conditional, &scope()).unwrap_err()[0].contains("`if`"));
     }
 
     #[test]
     fn a_test_job_must_declare_its_profile_and_plan_selection() {
         let ungated = WORKFLOW.replace("    if: fromJSON(needs.plan.outputs.run)['fast']\n", "");
-        let errors = parse_workflow(&ungated, &targets()).unwrap_err();
+        let errors = parse_workflow(&ungated, &scope()).unwrap_err();
         assert!(
             errors[0].contains(
                 "must be selected by exactly `if: fromJSON(needs.plan.outputs.run)['fast']`"
@@ -2026,14 +2510,14 @@ jobs:
             "{errors:?}"
         );
         let borrowed = WORKFLOW.replace("run)['fast']", "run)['contracts']");
-        assert!(parse_workflow(&borrowed, &targets()).is_err());
+        assert!(parse_workflow(&borrowed, &scope()).is_err());
         for declared in [
             "VERIFICATION_PROFILE: quick",
             "VERIFICATION_PROFILE: ''",
             "OTHER: fast",
         ] {
             let workflow = WORKFLOW.replacen("VERIFICATION_PROFILE: fast", declared, 1);
-            let errors = parse_workflow(&workflow, &targets()).unwrap_err();
+            let errors = parse_workflow(&workflow, &scope()).unwrap_err();
             assert!(
                 errors[0].contains("must declare `env: VERIFICATION_PROFILE`"),
                 "{declared}: {errors:?}"
@@ -2043,7 +2527,7 @@ jobs:
 
     #[test]
     fn a_job_in_both_profiles_contributes_to_each() {
-        let steps = parse_workflow(WORKFLOW, &targets()).unwrap();
+        let steps = parse_workflow(WORKFLOW, &scope()).unwrap();
         let profiles: BTreeSet<Profile> = steps
             .iter()
             .filter(|step| step.job == "platform")
@@ -2137,7 +2621,7 @@ jobs:
             "      - name: Core\n        run: 'cargo test --lib --all-features -- model:: --skip ::scale::'\n",
             "      - name: Core\n        run: 'cargo test --lib --all-features -- scripted_suites::'\n      - name: Model\n        if: fromJSON(needs.plan.outputs.steps)['fast:model']\n        run: 'cargo test --lib --all-features -- model:: --skip ::scale::'\n",
         );
-        let steps = parse_workflow(&affected, &targets()).unwrap();
+        let steps = parse_workflow(&affected, &scope()).unwrap();
         assert!(
             steps
                 .iter()
@@ -2162,14 +2646,14 @@ jobs:
                 "fromJSON(needs.plan.outputs.steps)['fast:model']",
                 condition,
             );
-            let errors = parse_workflow(&workflow, &targets()).unwrap_err();
+            let errors = parse_workflow(&workflow, &scope()).unwrap_err();
             assert!(errors[0].contains(problem), "{condition}: {errors:?}");
         }
         let full = WORKFLOW.replace(
             "      - name: Pure\n",
             "      - name: Pure\n        if: fromJSON(needs.plan.outputs.steps)['contracts:pure']\n",
         );
-        let errors = parse_workflow(&full, &targets()).unwrap_err();
+        let errors = parse_workflow(&full, &scope()).unwrap_err();
         assert!(errors[0].contains("FULL steps always run"), "{errors:?}");
     }
 
@@ -2608,7 +3092,11 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
         for path in [&manifest, &lib_rs, &main_rs, &tool_rs, &durable_rs] {
             std::fs::write(path, "").unwrap();
         }
-        let metadata = serde_json::json!({"packages": [{
+        let metadata = serde_json::json!({
+            "workspace_root": dir.path(),
+            "workspace_members": ["path+file:///tmp/rustx#rustx@0.1.0"],
+            "workspace_default_members": ["path+file:///tmp/rustx#rustx@0.1.0"],
+            "packages": [{
             "name": "rustx",
             "id": "path+file:///tmp/rustx#rustx@0.1.0",
             "manifest_path": &manifest,
@@ -2624,19 +3112,27 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
         assert_eq!(
             parsed.targets,
             [
-                Target::new(Kind::Lib, "rustx"),
-                Target::new(Kind::Bin, "rustx"),
-                Target::new(Kind::Example, "tool"),
-                Target::new(Kind::Test, "durable"),
-                Target::new(Kind::Doc, "rustx"),
+                Target::root_in("rustx", Kind::Lib, "rustx"),
+                Target::root_in("rustx", Kind::Bin, "rustx"),
+                Target::root_in("rustx", Kind::Example, "tool"),
+                Target::root_in("rustx", Kind::Test, "durable"),
+                Target::root_in("rustx", Kind::Doc, "rustx"),
             ]
         );
         assert_eq!(
-            parsed.sources.get(&Target::new(Kind::Lib, "rustx")),
+            parsed
+                .sources
+                .get(&Target::root_in("rustx", Kind::Lib, "rustx")),
             Some(&std::fs::canonicalize(&lib_rs).unwrap())
         );
+        assert_eq!(parsed.root, "rustx");
+        assert_eq!(parsed.default_members, BTreeSet::from(["rustx".to_owned()]));
 
-        let no_doctest = serde_json::json!({"packages": [{
+        let no_doctest = serde_json::json!({
+            "workspace_root": dir.path(),
+            "workspace_members": ["path+file:///tmp/rustx#rustx@0.1.0"],
+            "workspace_default_members": ["path+file:///tmp/rustx#rustx@0.1.0"],
+            "packages": [{
             "name": "rustx",
             "id": "path+file:///tmp/rustx#rustx@0.1.0",
             "manifest_path": &manifest,
@@ -2646,24 +3142,73 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
         }]});
         assert_eq!(
             parse_metadata(&no_doctest).unwrap().targets,
-            [Target::new(Kind::Lib, "rustx")]
+            [Target::root_in("rustx", Kind::Lib, "rustx")]
         );
-        // Sibling workspace members are ignored; exactly the package at the
-        // workspace root describes the lanes.
+
+        // Every workspace member contributes targets, each annotated with
+        // its own package identity; `workspace_default_members` scopes what
+        // a bare selector reaches. Identically named member targets stay
+        // distinct.
+        std::fs::create_dir_all(dir.path().join("member/tests")).unwrap();
+        let member_manifest = dir.path().join("member/Cargo.toml");
+        let member_lib = dir.path().join("member/src/lib.rs");
+        let member_test = dir.path().join("member/tests/durable.rs");
+        std::fs::create_dir_all(member_lib.parent().unwrap()).unwrap();
+        for path in [&member_manifest, &member_lib, &member_test] {
+            std::fs::write(path, "").unwrap();
+        }
         let members = serde_json::json!({
             "workspace_root": dir.path(),
+            "workspace_members": [
+                "path+file:///tmp/member#member@0.1.0",
+                "path+file:///tmp/rustx#rustx@0.1.0",
+            ],
+            "workspace_default_members": ["path+file:///tmp/rustx#rustx@0.1.0"],
             "packages": [
-                {"name": "member", "id": "p", "manifest_path": dir.path().join("member/Cargo.toml"),
-                 "targets": [{"name": "x", "kind": ["lib"], "src_path": &lib_rs}]},
-                {"name": "rustx", "id": "path+file:///tmp/rustx#rustx@0.1.0", "manifest_path": &manifest,
-                 "targets": [{"name": "rustx", "kind": ["lib"], "doctest": false, "src_path": &lib_rs}]},
+                {"name": "member", "id": "path+file:///tmp/member#member@0.1.0",
+                 "manifest_path": &member_manifest,
+                 "targets": [
+                     {"name": "x", "kind": ["lib"], "src_path": &member_lib},
+                     {"name": "durable", "kind": ["test"], "src_path": &member_test},
+                 ]},
+                {"name": "rustx", "id": "path+file:///tmp/rustx#rustx@0.1.0",
+                 "manifest_path": &manifest,
+                 "targets": [
+                     {"name": "rustx", "kind": ["lib"], "doctest": false, "src_path": &lib_rs},
+                     {"name": "durable", "kind": ["test"], "src_path": &durable_rs},
+                 ]},
             ]
         });
+        let parsed = parse_metadata(&members).unwrap();
         assert_eq!(
-            parse_metadata(&members).unwrap().targets,
-            [Target::new(Kind::Lib, "rustx")]
+            parsed.targets,
+            [
+                Target::member("member", Kind::Lib, "x"),
+                Target::member("member", Kind::Test, "durable"),
+                Target::member("member", Kind::Doc, "x"),
+                Target::root_in("rustx", Kind::Lib, "rustx"),
+                Target::root_in("rustx", Kind::Test, "durable"),
+            ]
         );
-        let proc_macro = serde_json::json!({"packages": [{
+        assert_eq!(parsed.root, "rustx");
+        assert_eq!(parsed.default_members, BTreeSet::from(["rustx".to_owned()]));
+        assert_eq!(parsed.packages.len(), 2);
+        // The two `durable` targets share only a name: display and lookup
+        // stay package-qualified.
+        assert_eq!(
+            Target::member("member", Kind::Test, "durable").to_string(),
+            "member:test durable"
+        );
+        assert_eq!(
+            Target::root_in("rustx", Kind::Test, "durable").to_string(),
+            "test durable"
+        );
+
+        let proc_macro = serde_json::json!({
+            "workspace_root": dir.path(),
+            "workspace_members": ["path+file:///tmp/rustx#rustx@0.1.0"],
+            "workspace_default_members": ["path+file:///tmp/rustx#rustx@0.1.0"],
+            "packages": [{
             "name": "rustx",
             "id": "path+file:///tmp/rustx#rustx@0.1.0",
             "manifest_path": &manifest,
@@ -2672,6 +3217,53 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
             ]
         }]});
         assert!(parse_metadata(&proc_macro).is_err());
+    }
+
+    #[test]
+    fn workspace_membership_is_required_and_typed_strictly() {
+        let package = serde_json::json!({
+            "name": "rustx",
+            "id": "path+file:///tmp/rustx#rustx@0.1.0",
+            "manifest_path": "x",
+            "targets": [],
+        });
+        // Missing, mistyped and duplicated membership is never guessed.
+        for metadata in [
+            serde_json::json!({"packages": [package.clone()]}),
+            serde_json::json!({
+                "workspace_root": "x",
+                "workspace_members": [1],
+                "workspace_default_members": [],
+                "packages": [package.clone()],
+            }),
+            serde_json::json!({
+                "workspace_root": "x",
+                "workspace_members": ["a", "a"],
+                "workspace_default_members": [],
+                "packages": [package.clone()],
+            }),
+            serde_json::json!({
+                "workspace_root": "x",
+                "workspace_members": ["a"],
+                "workspace_default_members": ["b"],
+                "packages": [package],
+            }),
+        ] {
+            assert!(
+                parse_metadata(&metadata).is_err(),
+                "metadata accepted: {metadata}"
+            );
+        }
+        assert_eq!(
+            parse_metadata(&serde_json::json!({
+                "workspace_root": "x",
+                "workspace_members": ["a"],
+                "workspace_default_members": ["b"],
+                "packages": [],
+            }))
+            .unwrap_err(),
+            "unknown default workspace member"
+        );
     }
 
     /// Selects [`real_cargo_discovery_child`] and names the fixture package
@@ -2793,15 +3385,27 @@ fn flow_runs() {
             ("doc ignored", list(&doc, &[], true)),
             (
                 "test flow",
-                list(&Target::new(Kind::Test, "flow"), &[], false),
+                list(
+                    &Target::root_in("lane_fixture", Kind::Test, "flow"),
+                    &[],
+                    false,
+                ),
             ),
             (
                 "bin lane_fixture",
-                list(&Target::new(Kind::Bin, "lane_fixture"), &[], false),
+                list(
+                    &Target::root_in("lane_fixture", Kind::Bin, "lane_fixture"),
+                    &[],
+                    false,
+                ),
             ),
             (
                 "example empty",
-                list(&Target::new(Kind::Example, "empty"), &[], false),
+                list(
+                    &Target::root_in("lane_fixture", Kind::Example, "empty"),
+                    &[],
+                    false,
+                ),
             ),
         ]
         .into_iter()
@@ -3493,7 +4097,7 @@ fn flow_runs() {
 
         let features = to_strings(&["--all-features"]);
         let doc = Target::new(Kind::Doc, "lane_fixture");
-        let flow = Target::new(Kind::Test, "flow");
+        let flow = Target::root_in("lane_fixture", Kind::Test, "flow");
 
         // Populate empty global ignored for both `doc` and `flow`.
         assert_eq!(

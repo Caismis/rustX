@@ -253,8 +253,9 @@ def load_package_metadata(
     else:
         # The workspace carries execution-boundary member crates; without an
         # explicit selector this harness prepares exactly the root package —
-        # the one whose manifest is the workspace root's, the same package
-        # `check_test_lanes` covers.
+        # the one whose manifest is the workspace root's. (`check_test_lanes`
+        # covers every workspace member; this preparer only stages the
+        # binaries the root package's real-process tests spawn.)
         root_manifest = (Path(metadata["workspace_root"]) / "Cargo.toml").resolve()
         roots = [
             pkg

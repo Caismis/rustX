@@ -440,6 +440,7 @@ summarizes them and the lane check below verifies them against Cargo:
 | bin and example harnesses | unit (examples: workload checkers, lane checker) | rust-contracts | bins only |
 | `contracts`, `provider` targets | pure contracts / adapter translation | rust-contracts | no |
 | `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries | core and full (required) |
+| `rustx-execution-client:test bootstrap` | execution-boundary integration | rust-fast and rust-boundaries | core and full (required) |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries | no |
 
 - **quality** (ubuntu) — `cargo fmt --all -- --check`, both default-feature and
@@ -606,7 +607,17 @@ fixture cases (about 7 s). Fixture-based matrices (`trajectory`, `agent`,
 ### The lane check
 
 `examples/check_test_lanes.rs` keeps CI selection honest without becoming a
-second copy of it. Each Rust test lane ends with
+second copy of it. The workspace carries the `rustx` root package plus the
+execution-boundary member crates (`rustx-confined-fs`,
+`rustx-execution-protocol`, `rustx-execution-server`,
+`rustx-execution-client`); every member's targets are inventoried, member
+targets are displayed package-qualified (for example
+`rustx-execution-client:test bootstrap`) so identically named targets never
+conflate, and their `cargo test -p <pkg> ...` subprocesses scope Cargo to the
+owning package. Bare `--lib`/`--bins`/`--examples`/`--all-targets`/`--doc`
+steps expand over `workspace_default_members` — all members today — while a
+`-p`/`--package` flag restricts a step's named and kind selectors to that
+package. Each Rust test lane ends with
 `cargo run --profile test --all-features --locked --example check_test_lanes -- --job <job id>`, which reads the
 workflow's executing `cargo test` steps, acquires the validated libtest harness
 executable once per `(features, target)` via Cargo `--no-run --message-format=json`,
