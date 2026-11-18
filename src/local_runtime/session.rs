@@ -64,6 +64,7 @@ macro_rules! profile_stage {
     };
 }
 
+#[cfg(test)]
 pub use rustx_types::local_runtime::session::create_profile;
 
 /// The persisted native session-catalog schema.

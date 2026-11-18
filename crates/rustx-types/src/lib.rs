@@ -110,6 +110,7 @@ pub mod local_runtime {
 
     pub mod app_server_policy;
     pub mod session {
+        #[cfg(any(test, feature = "test-fixtures"))]
         pub mod create_profile;
         pub mod invalidations;
     }
