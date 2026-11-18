@@ -785,7 +785,12 @@ fn parse_cargo_arguments(
             "--example" => step.targets.push(named(Kind::Example)?),
             "--test" => step.targets.push(named(Kind::Test)?),
             "--bench" => step.targets.push(named(Kind::Bench)?),
-            "--all-features" | "--no-default-features" => step.features.push((*argument).into()),
+            // `--workspace` selects every member crate; it is forwarded
+            // verbatim like a feature flag so doctest discovery covers the
+            // extracted `rustx-*` crates too.
+            "--all-features" | "--no-default-features" | "--workspace" => {
+                step.features.push((*argument).into())
+            }
             "--features" | "-F" => {
                 let features = cargo
                     .next()
@@ -804,10 +809,6 @@ fn parse_cargo_arguments(
                 }
             }
             "--no-run" => step.executes = false,
-            // Selection over every workspace member: forwarded verbatim like
-            // a feature flag so doctest discovery covers the extracted
-            // `rustx-*` crates too.
-            "--workspace" => step.features.push((*argument).into()),
             "--locked" | "--timings" => {}
             other => return Err(format!("unsupported cargo test option `{other}`")),
         }
