@@ -31,7 +31,7 @@ fn resolve<'a>(schema: &'a Value, root: &'a Value) -> &'a Value {
     if schema.is_null() {
         return schema;
     }
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     LOOKUP_WORK.with(|work| {
         let (resolve, child) = work.get();
         work.set((resolve + 1, child));
@@ -59,7 +59,7 @@ fn child<'a>(schema: &'a Value, root: &'a Value, key: Option<&str>) -> &'a Value
     if schema.is_null() {
         return schema;
     }
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     LOOKUP_WORK.with(|work| {
         let (resolve, child) = work.get();
         work.set((resolve, child + 1));
@@ -126,7 +126,7 @@ pub struct BorrowedEncoded<'a, T: ?Sized> {
 #[cfg(any(test, feature = "test-fixtures"))]
 impl<T: Serialize + ?Sized> Serialize for BorrowedEncoded<'_, T> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-#[cfg(any(test, feature = "test-fixtures"))]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if LEGACY_PLAN.with(std::cell::Cell::get) {
             return self.value.serialize(Encoder {
                 serializer,
@@ -584,16 +584,16 @@ fn captured_key<T: Serialize + ?Sized>(key: &T) -> Option<String> {
         std::any::type_name::<T>().trim_start_matches('&'),
         "str" | "alloc::string::String"
     );
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     let builtin_string = builtin_string && !LEGACY_PROPERTY_LOOKUP.with(std::cell::Cell::get);
     if builtin_string {
-#[cfg(any(test, feature = "test-fixtures"))]
+        #[cfg(any(test, feature = "test-fixtures"))]
         STRING_KEY_WORK.with(|work| work.set(work.get() + 1));
         if let Ok(value) = key.serialize(StringSerializer(StringKey)) {
             return value;
         }
     }
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     GENERIC_KEY_WORK.with(|work| work.set(work.get() + 1));
     super::bounded::bounded_bytes(key, 258)
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
@@ -659,7 +659,7 @@ impl<'a, S> Mapping<'a, S> {
         self.ordered_next = 0;
     }
     fn field(&self, key: &str) -> View<'a> {
-#[cfg(any(test, feature = "test-fixtures"))]
+        #[cfg(any(test, feature = "test-fixtures"))]
         PROPERTY_WORK.with(|work| {
             let (ordered, fallback) = work.get();
             work.set((ordered, fallback + 1));
@@ -667,14 +667,14 @@ impl<'a, S> Mapping<'a, S> {
         self.schema.child(Some(key))
     }
     fn struct_field(&mut self, key: &str) -> View<'a> {
-#[cfg(any(test, feature = "test-fixtures"))]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if LEGACY_PROPERTY_LOOKUP.with(std::cell::Cell::get) {
             return self.field(key);
         }
         while let Some((name, schema)) = self.schema.property(self.ordered_next) {
             self.ordered_next += 1;
             if name == key {
-#[cfg(any(test, feature = "test-fixtures"))]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 PROPERTY_WORK.with(|work| {
                     let (ordered, fallback) = work.get();
                     work.set((ordered + 1, fallback));
@@ -690,13 +690,13 @@ impl<S: SerializeMap> SerializeMap for Mapping<'_, S> {
     type Error = S::Error;
     fn serialize_key<T: Serialize + ?Sized>(&mut self, key: &T) -> Result<(), Self::Error> {
         let capture_key = !self.schema.is_null();
-#[cfg(any(test, feature = "test-fixtures"))]
+        #[cfg(any(test, feature = "test-fixtures"))]
         let capture_key = capture_key || LEGACY_PROPERTY_LOOKUP.with(std::cell::Cell::get);
         if !capture_key {
             self.key = None;
             return self.inner.serialize_key(key);
         }
-#[cfg(any(test, feature = "test-fixtures"))]
+        #[cfg(any(test, feature = "test-fixtures"))]
         MAP_KEY_WORK.with(|work| work.set(work.get() + 1));
         self.key = captured_key(key);
         self.inner.serialize_key(key)
@@ -739,7 +739,7 @@ macro_rules! mapping {
                     std::any::type_name::<T>().trim_start_matches('&'),
                     "str" | "alloc::string::String"
                 );
-#[cfg(any(test, feature = "test-fixtures"))]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 let builtin_tag = builtin_tag && !LEGACY_PLAN.with(std::cell::Cell::get);
                 // Generated enum tags are immutable built-in strings. Custom
                 // callbacks retain their original per-candidate invocation.
@@ -750,7 +750,7 @@ macro_rules! mapping {
                         index += 1;
                         if let Some(expected) = branch.tag(key) {
                             let encode = || {
-#[cfg(any(test, feature = "test-fixtures"))]
+                                #[cfg(any(test, feature = "test-fixtures"))]
                                 TAG_VALUE_WORK.with(|work| work.set(work.get() + 1));
                                 serde_json::to_value(value).ok()
                             };
@@ -789,7 +789,7 @@ mapping!(SerializeStructVariant);
 #[derive(Default)]
 struct SchemaOwner {
     plan: std::sync::OnceLock<std::sync::Arc<plan::Plan>>,
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     plan_builds: std::sync::atomic::AtomicUsize,
 }
 #[derive(Default)]
@@ -808,7 +808,7 @@ fn cached_codec<T>(create: impl FnOnce() -> plan::Plan) -> std::sync::Arc<plan::
         .or_insert_with(|| {
             std::sync::Arc::new(SchemaOwner {
                 plan: std::sync::OnceLock::new(),
-#[cfg(any(test, feature = "test-fixtures"))]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 plan_builds: std::sync::atomic::AtomicUsize::new(0),
             })
         })
@@ -816,7 +816,7 @@ fn cached_codec<T>(create: impl FnOnce() -> plan::Plan) -> std::sync::Arc<plan::
     owner
         .plan
         .get_or_init(|| {
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             owner
                 .plan_builds
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -832,9 +832,7 @@ pub fn codec<T: schemars::JsonSchema>() -> std::sync::Arc<plan::Plan> {
         plan::Plan::new(&schema, &schema)
     })
 }
-pub fn codec_from_bytes<T: schemars::JsonSchema>(
-    bytes: &[u8],
-) -> std::sync::Arc<plan::Plan> {
+pub fn codec_from_bytes<T: schemars::JsonSchema>(bytes: &[u8]) -> std::sync::Arc<plan::Plan> {
     cached_codec::<T>(|| plan::Plan::from_bytes(bytes))
 }
 

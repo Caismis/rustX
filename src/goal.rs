@@ -12,7 +12,8 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::durable::{AcceptedInbound, ConversationStore, ConversationStoreError, InboundDraft};
-use crate::runtime::identity::{AttemptId, MessageId};
+use crate::runtime::identity::MessageId;
+pub use rustx_types::goal::{GoalOrigin, GoalPhase, GoalRef, GoalSnapshot};
 
 /// Default number of driver-admitted autonomous rounds.
 pub const DEFAULT_ROUND_BUDGET: u32 = 10;
@@ -20,56 +21,6 @@ pub const DEFAULT_ROUND_BUDGET: u32 = 10;
 pub const MAX_ROUND_BUDGET: u32 = 100;
 /// UTF-8 byte bound for user task data.
 pub const MAX_OBJECTIVE_BYTES: usize = 8192;
-
-/// Exact observation required by every mutation of an existing Goal.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct GoalRef {
-    pub id: String,
-    pub revision: u64,
-}
-
-/// The single durable Goal lifecycle authority.
-///
-/// - `Active`: continuation is authorized when runtime admission is eligible.
-/// - `Paused` / `Blocked`: continuation is not authorized.
-/// - `Complete`: terminal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(schemars::JsonSchema)]
-pub enum GoalPhase {
-    Active,
-    Paused,
-    Blocked,
-    Complete,
-}
-
-/// Trusted origin supplied by runtime, never by model arguments.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub enum GoalOrigin {
-    HumanAttempt {
-        message_id: MessageId,
-        attempt_id: AttemptId,
-    },
-    RuntimeControl,
-}
-
-/// Authoritative bounded durable record.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-#[derive(schemars::JsonSchema)]
-pub struct GoalSnapshot {
-    pub reference: GoalRef,
-    pub objective: String,
-    pub phase: GoalPhase,
-    pub blocked_reason: Option<String>,
-    pub autonomous_round_budget: u32,
-    pub autonomous_rounds_consumed: u32,
-    pub origin: GoalOrigin,
-    pub last_round_message_id: Option<MessageId>,
-}
 
 /// The current read model; observing it never starts or authorizes work.
 ///

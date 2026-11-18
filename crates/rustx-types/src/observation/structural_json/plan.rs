@@ -146,7 +146,7 @@ impl Node {
         })
     }
     fn property<'a>(&self, key: &str, plan: &'a Plan) -> Option<&'a Property> {
-#[cfg(any(test, feature = "test-fixtures"))]
+        #[cfg(any(test, feature = "test-fixtures"))]
         PROPERTY_WORK.with(|count| {
             let (lookups, comparisons) = count.get();
             count.set((lookups + 1, comparisons));
@@ -155,7 +155,7 @@ impl Node {
         let names = self.property_names.slice(&plan.indices);
         let index = names
             .binary_search_by(|index| {
-#[cfg(any(test, feature = "test-fixtures"))]
+                #[cfg(any(test, feature = "test-fixtures"))]
                 PROPERTY_WORK.with(|count| {
                     let (lookups, comparisons) = count.get();
                     count.set((lookups, comparisons + 1));
@@ -334,7 +334,7 @@ pub enum View<'a> {
     Compiled(&'a Plan, u32),
     // The pre-change schema interpreter is a differential oracle, never a
     // runtime fallback or a second encoding format.
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     Interpreted {
         schema: &'a Value,
         root: &'a Value,
@@ -346,7 +346,7 @@ impl<'a> View<'a> {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
                 .property(key, plan)
                 .map(|property| Self::Compiled(plan, property.node)),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)["properties"]
                 .get(key)
                 .map(|schema| Self::Interpreted { schema, root }),
@@ -357,7 +357,7 @@ impl<'a> View<'a> {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
                 .additional
                 .map(|index| Self::Compiled(plan, index)),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)
                 .get("additionalProperties")
                 .filter(|schema| schema.is_object())
@@ -375,7 +375,7 @@ impl<'a> View<'a> {
                     .or(node.items.filter(|_| node.items_object))
                     .map(|index| Self::Compiled(plan, index))
             }
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => {
                 let schema = resolve(schema, root);
                 schema["prefixItems"]
@@ -466,7 +466,7 @@ impl<'a> View<'a> {
                     .filter(|_| node.items_object)
                     .map(|index| Self::Compiled(plan, index))
             }
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)
                 .get("items")
                 .filter(|schema| schema.is_object())
@@ -489,21 +489,21 @@ impl<'a> View<'a> {
     pub fn is_null(self) -> bool {
         match self {
             Self::Compiled(_, index) => index == 0,
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, .. } => schema.is_null(),
         }
     }
     pub fn unsigned(self) -> Unsigned {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize].unsigned,
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => unsigned(resolve(schema, root)),
         }
     }
     pub fn signed_safe(self) -> bool {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize].signed_safe,
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => matches!(
                 resolve(schema, root)["format"].as_str(),
                 Some("int" | "int64")
@@ -522,7 +522,7 @@ impl<'a> View<'a> {
                         Self::Compiled(plan, property.node),
                     )
                 }),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)["properties"]
                 .as_object()?
                 .iter()
@@ -536,7 +536,7 @@ impl<'a> View<'a> {
                 .property(key, plan)?
                 .constant
                 .as_deref(),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => {
                 resolve(schema, root)["properties"][key].get("const")
             }
@@ -548,7 +548,7 @@ impl<'a> View<'a> {
                 .slice(&plan.indices)
                 .get(index)
                 .map(|index| Self::Compiled(plan, *index)),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)
                 [["oneOf", "anyOf", "allOf"][kind]]
                 .as_array()?
@@ -582,7 +582,7 @@ impl<'a> View<'a> {
                 }
                 Self::Compiled(plan, 0)
             }
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => Self::Interpreted {
                 schema: super::child(schema, root, key),
                 root,
@@ -596,7 +596,7 @@ impl<'a> View<'a> {
     pub fn wire_number(self, mut value: WireNumber) -> Result<WireNumber, &'static str> {
         let (plan, index) = match self {
             Self::Compiled(plan, index) => (plan, index),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { .. } => unreachable!("wire encoding uses a compiled schema"),
         };
         let node = &plan.nodes[index as usize];
@@ -642,12 +642,12 @@ impl<'a> View<'a> {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
                 .wire_tags(plan)
                 .binary_search_by(|name| {
-#[cfg(any(test, feature = "test-fixtures"))]
+                    #[cfg(any(test, feature = "test-fixtures"))]
                     TAG_PROBES.with(|count| count.set(count.get() + 1));
                     name.text(&plan.names).cmp(key)
                 })
                 .is_ok(),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { .. } => {
                 for kind in 0..3 {
                     let mut index = 0;
@@ -687,7 +687,7 @@ impl<'a> View<'a> {
     pub fn wire_element(self) -> Self {
         let (plan, index) = match self {
             Self::Compiled(plan, index) => (plan, index),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { .. } => unreachable!("wire encoding uses a compiled schema"),
         };
         let node = &plan.nodes[index as usize];
@@ -715,7 +715,7 @@ impl<'a> View<'a> {
                 .slice(&plan.indices)
                 .get(index)
                 .map_or_else(|| self.child(None), |index| Self::Compiled(plan, *index)),
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => Self::Interpreted {
                 schema: super::element(schema, root, index),
                 root,

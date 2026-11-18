@@ -30,11 +30,8 @@ pub fn bounded_fit(value: &(impl Serialize + ?Sized), limit: usize) -> Option<bo
 /// Conservative admission for native structural encoding without its schema walk.
 /// Treat every integer as opaque: unsafe signed/constrained quantities must
 /// still reach the structural codec, while full-width native u64 may be quoted.
-pub fn bounded_safe_integer_fit(
-    value: &(impl Serialize + ?Sized),
-    limit: usize,
-) -> Option<bool> {
-#[cfg(any(test, feature = "test-fixtures"))]
+pub fn bounded_safe_integer_fit(value: &(impl Serialize + ?Sized), limit: usize) -> Option<bool> {
+    #[cfg(any(test, feature = "test-fixtures"))]
     if STRUCTURAL_ONLY.with(std::cell::Cell::get) {
         return None;
     }
@@ -46,7 +43,7 @@ pub fn required_safe_integer_budget(
     value: &(impl Serialize + ?Sized),
     limit: usize,
 ) -> Option<usize> {
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     if STRUCTURAL_ONLY.with(std::cell::Cell::get) {
         return None;
     }

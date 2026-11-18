@@ -9,6 +9,8 @@ pub mod package_io;
 pub mod model {
     pub mod finish;
     pub mod inspection;
+    pub mod replay;
+    pub mod types;
     pub mod adapter {
         pub mod response_budget;
         pub mod retry;
@@ -55,11 +57,18 @@ pub mod observation {
     pub mod structural_json;
 }
 
+pub mod context {
+    pub mod assembly;
+}
+
+pub mod goal;
+
 pub mod runtime {
     pub use cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
     pub use rustx_identity as identity;
 
     pub mod cancellation;
+    pub mod continuation;
     pub mod monotonic;
     pub mod process_supervision;
     pub mod process_wait;

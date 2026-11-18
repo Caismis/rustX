@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-use crate::skills::package::SKILL_MARKDOWN_FILE;
 use crate::runtime::CancellationSignal;
+use crate::skills::package::SKILL_MARKDOWN_FILE;
 
 pub const IGNORE_FILES: [&str; 3] = [".gitignore", ".ignore", ".fdignore"];
 const MAX_DIRECTORY_ENTRIES: usize = 2048;
