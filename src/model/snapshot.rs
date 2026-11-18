@@ -1166,4 +1166,35 @@ mod tests {
         );
         assert_eq!(snapshot, before);
     }
+
+    #[test]
+    fn auxiliary_request_ids_use_a_distinct_uuid_domain() {
+        #[derive(Debug)]
+        struct FixedUuid(uuid::Uuid);
+        impl crate::runtime::identity::UuidV7Generator for FixedUuid {
+            fn next_uuid(&self) -> uuid::Uuid {
+                self.0
+            }
+        }
+
+        let generator =
+            FixedUuid(uuid::Uuid::parse_str("36524fd8-f674-7fc2-8125-06d01fee0e18").unwrap());
+        let request_id =
+            crate::runtime::identity::RequestId::generate_auxiliary(&generator).unwrap();
+        assert_eq!(
+            request_id.as_str(),
+            "req_36524fd8-f674-7fc2-8125-06d01fee0e18"
+        );
+        let primary = RequestIdentity {
+            attempt_id: crate::runtime::identity::AttemptId::new("attempt-1"),
+            turn: crate::runtime::identity::TurnId::new("turn-1"),
+            retry_number: 0,
+        }
+        .request_id();
+        assert_eq!(primary.as_str(), "request:9:attempt-1:6:turn-1:0");
+        assert_ne!(request_id, primary);
+        assert!(
+            crate::runtime::identity::AuxiliaryCallId::parse(request_id.into_string()).is_err()
+        );
+    }
 }

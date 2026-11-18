@@ -105,6 +105,7 @@ base64 = "0.22"
 # Workspace crates extracted from src/ (bottom-up split).
 rustx-bounded-json = { path = "crates/rustx-bounded-json" }
 rustx-bounded-file = { path = "crates/rustx-bounded-file" }
+rustx-identity = { path = "crates/rustx-identity" }
 # Bounded validation of native managed PNG image outputs.
 png = "0.18.1"
 getrandom = "0.3.4"
@@ -174,6 +175,7 @@ pedantic = "warn"
 rusqlite = { version = "0.40.2", features = ["trace"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
+rustx-identity = { path = "crates/rustx-identity", features = ["test-fixtures"] }
 
 [profile.dev.build-override]
 # Derive and proc-macro expansion dominates the serial front-end of each rustX

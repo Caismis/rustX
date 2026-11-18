@@ -29,7 +29,7 @@ pub mod capability_inspection;
 pub mod configuration_commit;
 pub mod continuation;
 pub mod conversation_runtime;
-pub mod identity;
+pub use rustx_identity as identity;
 pub mod inbound;
 /// The native provider-independent human interaction rendezvous and pending
 /// interaction projection facts (Issue #100). Internal ownership primitives

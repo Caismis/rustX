@@ -1,8 +1,8 @@
 //! Bounded encoding of finite native display values. Allocation depends only on
 //! the selected display budget, never on source size.
-use rustx_bounded_json::encode_capped_bytes;
 #[cfg(test)]
 use crate::observation::capture::{record_capture_work, record_item_work};
+use rustx_bounded_json::encode_capped_bytes;
 use serde::{Serialize, de::DeserializeOwned};
 
 pub const CHECKPOINT_TARGET_BYTES: usize = 786_432;

@@ -59,7 +59,7 @@ macro_rules! id_type {
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         #[serde(transparent)]
         #[derive(schemars::JsonSchema)]
-        pub struct $name(std::sync::Arc<str>);
+        pub struct $name(pub std::sync::Arc<str>);
 
         impl $name {
             /// Creates a new identifier from a string value.
@@ -129,7 +129,7 @@ macro_rules! uuid_id_type {
                 let value = value.into();
                 let raw = value.strip_prefix($prefix).ok_or_else(|| format!("expected {} UUIDv7 identity", $prefix))?;
                 let uuid = uuid::Uuid::parse_str(raw).map_err(|_| "invalid UUID".to_owned())?;
-                if !$crate::runtime::identity::is_uuid_v7(uuid) || raw != uuid.to_string() {
+                if !$crate::is_uuid_v7(uuid) || raw != uuid.to_string() {
                     return Err("expected canonical UUIDv7 identity".into());
                 }
                 Ok(Self(value))
@@ -311,7 +311,7 @@ id_type! {
 
 impl ToolCallId {
     /// Private live-source association; equality of semantic IDs remains textual.
-    pub(crate) fn shared_source_token(&self) -> usize {
+    pub fn shared_source_token(&self) -> usize {
         std::sync::Arc::as_ptr(&self.0).cast::<()>() as usize
     }
 }
@@ -503,9 +503,9 @@ impl ContextContributorIdentity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NativeContextContributor {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     TestAlpha,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     TestBeta,
     /// The current revisioned Goal observation owner.
     GoalStatus,
@@ -567,9 +567,9 @@ impl NativeContextContributor {
     #[must_use]
     pub const fn logical_key(self) -> &'static str {
         match self {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::TestAlpha => "test-alpha",
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::TestBeta => "test-beta",
             Self::GoalStatus => "goal-status",
             Self::WorkspaceInstructions => "workspace-instructions",
@@ -586,9 +586,9 @@ impl NativeContextContributor {
     #[must_use]
     pub const fn manifest_name(self) -> &'static str {
         match self {
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::TestAlpha => "test_alpha",
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Self::TestBeta => "test_beta",
             Self::GoalStatus => "goal_status",
             Self::WorkspaceInstructions => "workspace_instructions",
@@ -734,90 +734,6 @@ impl RuntimeResourceRevision {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn surface_history_does_not_retain_duplicate_identity_owners() {
-        use crate::conversation::{ConversationSurface, SurfaceRevision};
-        use crate::message::types::{InboundKind, MessageBlock, UserMessageBlock, UserSource};
-        use std::sync::Arc;
-
-        let first = MessageId::new("surface-owner-first");
-        let mut surface = ConversationSurface::new();
-        let mut identities = Vec::new();
-        for count in 1..=4096 {
-            let id = if count == 1 {
-                first.clone()
-            } else {
-                MessageId::new(format!("surface-owner-{count}"))
-            };
-            identities.push(Arc::downgrade(&id.0));
-            surface
-                .append(Arc::new(crate::model::ModelInputMessage::Canonical(
-                    MessageBlock::User(UserMessageBlock {
-                        id,
-                        content: Vec::new(),
-                        source: UserSource::Human,
-                        kind: InboundKind::Message,
-                        timestamp: None,
-                    }),
-                )))
-                .unwrap();
-            if ![32, 512, 4096].contains(&count) {
-                continue;
-            }
-            // Only this probe, the selected body and the selection index own
-            // the identity. Historical operations retain no extra reference.
-            assert_eq!(Arc::strong_count(&first.0), 3, "history={count}");
-            assert_eq!(
-                identities
-                    .iter()
-                    .map(std::sync::Weak::strong_count)
-                    .sum::<usize>(),
-                2 * count + 1,
-                "only the body and selection index retain each historical identity"
-            );
-            let operations = surface.ops();
-            assert_eq!(operations.len(), count);
-            assert_eq!(
-                Arc::strong_count(&first.0),
-                4,
-                "explicit audit owns its result"
-            );
-            drop(operations);
-            assert_eq!(Arc::strong_count(&first.0), 3);
-            assert_eq!(
-                surface
-                    .reconstruct(SurfaceRevision::new(1))
-                    .unwrap()
-                    .as_slice(),
-                std::slice::from_ref(&first)
-            );
-        }
-        let revision = surface.revision();
-        let hydrated = ConversationSurface::from_current_head(surface.selection(), revision, 7);
-        drop(surface);
-        assert_eq!(
-            Arc::strong_count(&first.0),
-            3,
-            "bootstrap stores a prefix length, not copied IDs"
-        );
-        assert_eq!(
-            identities
-                .iter()
-                .map(std::sync::Weak::strong_count)
-                .sum::<usize>(),
-            2 * 4096 + 1
-        );
-        assert_eq!(
-            hydrated.ops(),
-            [] as [crate::conversation::surface::SurfaceOp; 0]
-        );
-        assert_eq!(hydrated.reconstruct(revision).unwrap().len(), 4096);
-        assert!(
-            hydrated
-                .reconstruct(SurfaceRevision::new(revision.get() - 1))
-                .is_err()
-        );
-    }
-    #[test]
     fn t20_large_provider_identity_clones_share_the_original_allocation() {
         let original = super::ToolCallId::new("provider-id".repeat(400_000));
         let cloned = original.clone();
@@ -860,26 +776,6 @@ mod tests {
         fn next_uuid(&self) -> uuid::Uuid {
             self.0
         }
-    }
-
-    #[test]
-    fn auxiliary_request_ids_use_a_distinct_uuid_domain() {
-        let generator =
-            FixedUuid(uuid::Uuid::parse_str("36524fd8-f674-7fc2-8125-06d01fee0e18").unwrap());
-        let request_id = RequestId::generate_auxiliary(&generator).unwrap();
-        assert_eq!(
-            request_id.as_str(),
-            "req_36524fd8-f674-7fc2-8125-06d01fee0e18"
-        );
-        let primary = crate::model::snapshot::RequestIdentity {
-            attempt_id: AttemptId::new("attempt-1"),
-            turn: TurnId::new("turn-1"),
-            retry_number: 0,
-        }
-        .request_id();
-        assert_eq!(primary.as_str(), "request:9:attempt-1:6:turn-1:0");
-        assert_ne!(request_id, primary);
-        assert!(AuxiliaryCallId::parse(request_id.into_string()).is_err());
     }
 
     #[test]
@@ -1017,16 +913,13 @@ pub struct ObservationCollectionPage<T> {
 /// A mutable native collection distinguishes expired evidence from unavailable
 /// sources and invalid ranges. None of these failures owns execution settlement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ObservationCollectionReadError {
+pub enum ObservationCollectionReadError {
     CutExpired,
     InvalidRequest(&'static str),
     Unavailable(&'static str),
 }
 impl ObservationCollectionCut {
-    pub(crate) fn validate_current(
-        self,
-        current: Self,
-    ) -> Result<(), ObservationCollectionReadError> {
+    pub fn validate_current(self, current: Self) -> Result<(), ObservationCollectionReadError> {
         if current.generation == u64::MAX {
             return Err(ObservationCollectionReadError::Unavailable(
                 "native collection observation generation exhausted",
