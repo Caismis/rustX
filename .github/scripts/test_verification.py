@@ -467,7 +467,9 @@ class StackedMergeGit(unittest.TestCase):
             (pathlib.Path(repo) / "README.md").write_text("base\n", encoding="utf-8")
             base = self.commit_tree(repo, "base")
 
-            self.git(repo, "checkout", "-b", "head")
+            # A branch literally named `head` makes every `HEAD` lookup
+            # ambiguous on case-insensitive filesystems (macOS APFS).
+            self.git(repo, "checkout", "-b", "stack-head")
             (pathlib.Path(repo) / "README.md").write_text("head\n", encoding="utf-8")
             head = self.commit_tree(repo, "head")
 

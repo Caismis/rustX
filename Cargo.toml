@@ -169,6 +169,12 @@ rusqlite = { version = "0.40.2", features = ["trace"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"
 
+[profile.dev.build-override]
+# Derive and proc-macro expansion dominates the serial front-end of each rustX
+# unit; hosting proc macros and build scripts optimized shortens every rustc
+# invocation that follows, at a one-time cost inside the dependency build.
+opt-level = 2
+
 [profile.test]
 # Bound non-incremental harness compilation on standard runners while
 # preserving file/line backtraces. Match incremental builds' CGU partitioning.

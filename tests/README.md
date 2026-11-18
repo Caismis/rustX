@@ -494,7 +494,7 @@ summarizes them and the lane check below verifies them against Cargo:
   macOS runner-minutes, since that runner compiles the dependencies and the
   ordinary library again. The `--no-run` compile steps separate native
   compile timing from execution and execute nothing; both macOS jobs keep
-  `CARGO_BUILD_JOBS=1`. `contracts`/`provider` and the deterministic
+  `CARGO_BUILD_JOBS=2`. `contracts`/`provider` and the deterministic
   contract majority are Linux-only: they carry no process or filesystem
   semantics. Overlap with Linux is intentional: a macOS boundary test is
   native proof, not a duplicate. A pull request push that touches Rust runs
@@ -692,9 +692,11 @@ cancelled run is diagnostic evidence, not a timing baseline.
 
   Features, `cfg(test)` and dev-dependency feature unification (any test or
   example target in the invocation) each select a different unit. The macOS
-  lane keeps `CARGO_BUILD_JOBS=1`: a single rustX library compilation peaks
-  near 3.5 GB RSS there (`/usr/bin/time -l`), so two concurrent ones would
-  approach the runner's memory.
+  lane keeps `CARGO_BUILD_JOBS=2`: a single rustX library compilation peaks
+  near 3.5 GB RSS there (`/usr/bin/time -l`). The two compile steps hold the
+  ordinary library and the `cfg(test)` harness in separate cargo invocations,
+  so they never overlap; the remaining pairings fit the 7 GB runner while two
+  codegen workers cover the long serial front-end inside each big unit.
 - **Browser acceptance**: each `browser-shard-<i>` artifact holds
   Playwright's JSON report of that shard (`shard-report/report.json`):
   `stats.duration` is the shard's run and each result's `duration` covers one

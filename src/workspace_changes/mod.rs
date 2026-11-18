@@ -194,7 +194,10 @@ impl ChangeRecording {
         })
     }
 
-    #[cfg(test)]
+    // Its only caller is the Linux-only cancellation module in
+    // `attempt::tests::workspace_changes`; compiled under cfg(test) on macOS
+    // it would warn as dead code.
+    #[cfg(all(test, target_os = "linux"))]
     pub(crate) fn hold_final_observation(
         &self,
     ) -> (

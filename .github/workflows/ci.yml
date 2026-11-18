@@ -508,9 +508,15 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "1"
       CARGO_PROFILE_TEST_DEBUG: "1"
       # One rustX compilation peaks near 3.5 GB RSS on this runner
-      # (/usr/bin/time -l), so compiler processes stay serialized; libtest
-      # keeps its existing concurrency, assertions, selectors and deadlines.
-      CARGO_BUILD_JOBS: "1"
+      # (/usr/bin/time -l). -j2 lets rustc run two codegen workers inside the
+      # monolithic lib and lib-test units and overlaps one smaller unit
+      # alongside; the two all-feature library variants still never overlap
+      # because the compile steps keep them in separate cargo invocations, so
+      # the worst pairing stays under the 7 GB runner. The per-step
+      # /usr/bin/time RSS output and the cargo-timings artifact validate it.
+      # libtest keeps its existing concurrency, assertions, selectors and
+      # deadlines.
+      CARGO_BUILD_JOBS: "2"
 
     steps:
       - name: Checkout
@@ -624,9 +630,15 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "1"
       CARGO_PROFILE_TEST_DEBUG: "1"
       # One rustX compilation peaks near 3.5 GB RSS on this runner
-      # (/usr/bin/time -l), so compiler processes stay serialized; libtest
-      # keeps its existing concurrency, assertions, selectors and deadlines.
-      CARGO_BUILD_JOBS: "1"
+      # (/usr/bin/time -l). -j2 lets rustc run two codegen workers inside the
+      # monolithic lib and lib-test units and overlaps one smaller unit
+      # alongside; the two all-feature library variants still never overlap
+      # because the compile steps keep them in separate cargo invocations, so
+      # the worst pairing stays under the 7 GB runner. The per-step
+      # /usr/bin/time RSS output and the cargo-timings artifact validate it.
+      # libtest keeps its existing concurrency, assertions, selectors and
+      # deadlines.
+      CARGO_BUILD_JOBS: "2"
 
     steps:
       - name: Checkout
