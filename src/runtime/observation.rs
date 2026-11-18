@@ -2171,6 +2171,7 @@ pub(crate) fn trace_fact_requires_publication(event: &RuntimeEvent) -> bool {
         // before a later owner may advance the represented prefix past it.
         | RuntimeEvent::InboundTurnAdopted { .. }
         | RuntimeEvent::AssistantMessageCommitted { .. }
+        | RuntimeEvent::ToolCallRequested { .. }
         | RuntimeEvent::ToolExecutionStarted { .. }
         | RuntimeEvent::ToolExecutionCompleted { .. }
         | RuntimeEvent::ToolExecutionFailed { .. }

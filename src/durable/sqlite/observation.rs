@@ -1374,7 +1374,8 @@ pub(super) fn tool_occurrence_receipt(
 ) -> Result<Option<crate::events::types::ToolObservationOccurrence>, ConversationStoreError> {
     use crate::events::types::RuntimeEvent;
     let call = match &event.event {
-        RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
+        RuntimeEvent::ToolCallRequested { tool_call_id, .. }
+        | RuntimeEvent::ToolExecutionStarted { tool_call_id, .. }
         | RuntimeEvent::ToolExecutionProgress { tool_call_id, .. }
         | RuntimeEvent::ToolExecutionCompleted { tool_call_id, .. }
         | RuntimeEvent::ToolExecutionFailed { tool_call_id, .. } => tool_call_id,

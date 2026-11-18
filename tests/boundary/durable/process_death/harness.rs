@@ -369,7 +369,7 @@ impl Lab {
                 }
                 let id = ConversationId::new(conversation.file_name().to_str().unwrap());
                 let durable = Self::durable_at(&id, &database);
-                if durable.canonical().len() == 13 && durable.journal().is_empty() {
+                if durable.canonical().len() == 14 && durable.journal().is_empty() {
                     seeds.push((SessionId::new(session.file_name().to_str().unwrap()), id));
                 }
             }

@@ -21,6 +21,7 @@ use rustx::runtime_client::{
 };
 use rustx::tools::executor::ToolRegistry;
 use rustx::tools::types::{ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
+use support::audit::assert_permission_reminder;
 use support::fake::{
     FakeModel, FakeStep, FakeTool, ScriptedCall, await_started, success_result, tool_call_events,
 };
@@ -206,7 +207,12 @@ async fn submit_idle_admits_and_settles_asynchronously() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert_eq!(snapshot.messages.len(), 3);
+    assert_eq!(snapshot.messages.len(), 4);
+    let reminder = assert_permission_reminder(&snapshot.messages);
+    assert!(requests[0].messages.iter().any(|message| {
+        matches!(message, rustx::model::ModelInputMessage::Canonical(MessageBlock::User(user))
+            if user.id == reminder.id)
+    }));
     assert!(matches!(
         snapshot.attempt.expect("attempt").phase,
         rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }
@@ -766,9 +772,10 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
         .expect("snapshot");
     assert_eq!(
         snapshot.messages.len(),
-        2,
-        "the inbound message and admitted Agent Status fact committed"
+        3,
+        "the inbound message, Agent Status and permission reminder committed"
     );
+    let reminder_id = assert_permission_reminder(&snapshot.messages).id.clone();
     let mut resumed = attachment
         .subscribe_events(cursor)
         .expect("the snapshot cursor is always serviceable");
@@ -834,7 +841,11 @@ async fn stalled_subscriber_resyncs_explicitly_and_never_buffers() {
         .checkpoint()
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot");
-    assert_eq!(final_snapshot.messages.len(), 3);
+    assert_eq!(final_snapshot.messages.len(), 4);
+    assert_eq!(
+        assert_permission_reminder(&final_snapshot.messages).id,
+        reminder_id
+    );
     assert!(matches!(
         final_snapshot.attempt.expect("attempt").phase,
         rustx::runtime_client::RuntimeClientAttemptPhase::Settled { .. }

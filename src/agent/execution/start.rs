@@ -224,12 +224,15 @@ impl AgentExecution<'_> {
         // invoked. Sparse permission reminders are consumed exactly here so
         // pre-start cancellation cannot lose eligibility and retries reuse
         // the same frozen input without duplicating the reminder.
-        if prepared.snapshot.system_sections.iter().any(|section| {
-            section.lane == crate::context::SystemSectionLane::PermissionReminder
-                && section.contributor
-                    == crate::runtime::identity::ContextContributorIdentity::Native(
-                        crate::runtime::identity::NativeContextContributor::PermissionReminder,
-                    )
+        if prepared.snapshot.contributions.iter().any(|contribution| {
+            contribution.producer
+                == crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::PermissionReminder,
+                )
+                && prepared
+                    .snapshot
+                    .request_context_ids
+                    .contains(&contribution.message_id)
         }) {
             self.permission_reminder.consume_after_start_commit();
         }

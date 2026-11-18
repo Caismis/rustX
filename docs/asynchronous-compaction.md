@@ -63,10 +63,12 @@ decrease before the existing atomic checkpoint, activation, completion and
 receipt transaction. Fresh input and accepted request-only context remain
 protected. Installation pricing includes the native permission reminder that
 activation re-arms. The accepted contributors and request-only feedback remain
-frozen; only the native reminder is refreshed after confirmed activation. Idle
-installation resets reminder eligibility after the previous Attempt settles,
-and cancellation before the next primary starts does not consume it. Current owner/source fences, cancellation authorization and Head
-CAS still apply. A proven CAS loss permits a bounded reread/comparison;
+frozen. Confirmed activation stages the reminder as native User context. The
+next actual primary request commits it with the rest of that request's context.
+Idle installation resets reminder eligibility after the previous Attempt settles,
+and cancellation before the next primary starts does not consume it. Current
+owner/source fences, cancellation authorization and Head CAS still apply.
+A proven CAS loss permits a bounded reread/comparison;
 corruption, lost fencing and uncertain commit retain distinct handling.
 Exact receipt reconciliation precedes any interpretation of a write failure.
 

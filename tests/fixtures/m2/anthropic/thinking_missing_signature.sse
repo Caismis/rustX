@@ -10,6 +10,9 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","
 event: content_block_stop
 data: {"type":"content_block_stop","index":0}
 
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}
+
 event: message_stop
 data: {"type":"message_stop"}
 

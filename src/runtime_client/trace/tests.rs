@@ -808,6 +808,151 @@ fn a_proposed_tool_call_does_not_imply_started_execution() {
     assert!(detail.tool.is_none());
 }
 
+#[test]
+fn requested_tool_is_visible_before_execution_and_denial_keeps_the_same_record() {
+    for reason in [
+        "automatic review refused this request",
+        "human denied this request",
+    ] {
+        let store = store("conv_9ab3ee6f-1dcb-71b0-8ac3-1c6e2ad77f40");
+        start(&store);
+        let frozen = request(&store, 0);
+        let call = bash_call("call-denied");
+        propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 4);
+        completion(&store, &frozen, None, None, 4);
+        append(
+            &store,
+            E::ToolCallRequested {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+            5,
+        );
+        let before = TraceProjection::new(&store).unwrap();
+        let pending_page = before.page(None, 32).unwrap();
+        let pending = record_of(&pending_page, TraceKind::Tool);
+        assert_eq!(
+            pending.state,
+            TraceState::Incomplete,
+            "no live actor was supplied"
+        );
+        assert!(!pending.tool.as_ref().unwrap().started);
+        assert_eq!(pending.tool.as_ref().unwrap().name.as_deref(), Some("bash"));
+        assert_eq!(pending.tool.as_ref().unwrap().outcome, None);
+        let id = pending.id.clone();
+        let locator = TraceToolLocator {
+            occurrence: pending.tool.as_ref().unwrap().occurrence.clone().unwrap(),
+            call_id: Some(call.id.clone()),
+            tool_id: Some(call.tool_id.clone()),
+        };
+        let native_tools = store
+            .transcript_tool_headers(
+                &store.observation_read_cut().unwrap(),
+                &locator.occurrence.locator,
+                0,
+                32,
+            )
+            .unwrap();
+        assert!(
+            native_tools.headers[0].started.is_none(),
+            "request audit is never execution proof"
+        );
+        assert_eq!(before.locate_tool(&locator).unwrap().unwrap().record_id, id);
+        let mut denied = crate::scripted_suites::support::fake::success_result("");
+        denied.status = ToolExecutionStatus::Denied {
+            reason: reason.into(),
+        };
+        denied.duration_ms = 0;
+        settle_tool_call(
+            &store,
+            frozen.provisional_message_id.as_str(),
+            "denied-result",
+            &call,
+            denied,
+            8,
+        );
+        let after = TraceProjection::new(&store).unwrap();
+        let denied_page = after.page(None, 32).unwrap();
+        let record = record_of(&denied_page, TraceKind::Tool);
+        assert_eq!(record.id, id);
+        assert_eq!(record.state, TraceState::Denied);
+        let tool = record.tool.as_ref().unwrap();
+        assert!(!tool.started);
+        assert_eq!(tool.outcome, Some(TraceToolOutcome::Denied));
+        assert_eq!(tool.detail.as_ref().unwrap().text, reason);
+        assert_eq!(record.timing.duration_ms, Some(3000));
+        assert!(matches!(
+            after
+                .inspection_head(
+                    &after
+                        .inspection_anchor(record.position.sequence().unwrap())
+                        .unwrap()
+                )
+                .unwrap()
+                .content,
+            super::inspection::TraceInspectionContent::Tool { .. }
+        ));
+        assert_eq!(after.locate_tool(&locator).unwrap().unwrap().record_id, id);
+        assert_eq!(
+            store
+                .observation_trace_total(store.presentation_frontier().unwrap())
+                .unwrap(),
+            denied_page.records.len() as u64
+        );
+        assert_eq!(
+            before.page(None, 32).unwrap(),
+            pending_page,
+            "the captured pre-denial cut is immutable"
+        );
+    }
+}
+
+#[test]
+fn execution_refines_the_request_without_adding_a_second_tool_row() {
+    let store = store("conv_9ab3ee6f-1dcb-71b0-8ac3-1c6e2ad77f40");
+    start(&store);
+    let frozen = request(&store, 0);
+    let call = bash_call("call-started");
+    propose_tool_call(&store, frozen.provisional_message_id.as_str(), &call, 4);
+    completion(&store, &frozen, None, None, 4);
+    append(
+        &store,
+        E::ToolCallRequested {
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+        },
+        5,
+    );
+    let initial = page(&store);
+    let id = record_of(&initial, TraceKind::Tool).id.clone();
+    append(
+        &store,
+        E::ToolExecutionStarted {
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+        },
+        6,
+    );
+    let running = page(&store);
+    assert_eq!(
+        running
+            .records
+            .iter()
+            .filter(|record| record.kind == TraceKind::Tool)
+            .count(),
+        1
+    );
+    let record = record_of(&running, TraceKind::Tool);
+    assert_eq!(record.id, id);
+    assert!(record.tool.as_ref().unwrap().started);
+    assert_eq!(
+        store
+            .observation_trace_total(store.presentation_frontier().unwrap())
+            .unwrap(),
+        running.records.len() as u64
+    );
+}
+
 /// Provider completion is not canonical Assistant acceptance.
 #[test]
 fn provider_completion_does_not_imply_canonical_assistant_acceptance() {
@@ -5260,6 +5405,14 @@ fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bod
     completion(&store, &frozen, None, None, 2);
     append(
         &store,
+        E::ToolCallRequested {
+            tool_call_id: call.id.clone(),
+            tool_id: call.tool_id.clone(),
+        },
+        2,
+    );
+    append(
+        &store,
         E::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("workflow-call"),
             tool_id: ToolId::new("tool-workflow-test_flow"),
@@ -5323,6 +5476,10 @@ fn workflow_node_frontiers_refresh_at_the_original_tool_step_without_reading_bod
     let nodes = store
         .observation_workflow_nodes(&current, root.position.sequence().unwrap(), 0, 32)
         .unwrap();
+    assert_eq!(
+        nodes.parent_sequence,
+        Some(call.position.sequence().unwrap())
+    );
     let Some(TraceFieldSource::Value { domain, path, .. }) = &nodes.nodes[0].input else {
         panic!("original input selector")
     };

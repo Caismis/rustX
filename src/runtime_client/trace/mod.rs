@@ -115,6 +115,7 @@ pub(crate) const ANCHORS: &[&str] = &[
     "inbound_turn_adopted",
     "model_request_started",
     "assistant_message_committed",
+    "tool_call_requested",
     "tool_execution_started",
     "compaction_started",
     "background_execution_committed",

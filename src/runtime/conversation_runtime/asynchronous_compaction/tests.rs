@@ -6,6 +6,32 @@ use crate::context::compaction::{CompactionAttribution, capture_compaction};
 use crate::context::engine::CompactionConstraints;
 use crate::runtime::conversation_runtime::test_support::*;
 
+fn permission_reminder_ids(
+    request: &crate::model::ModelRequest,
+    mode: crate::runtime::ApprovalMode,
+) -> Vec<crate::runtime::identity::MessageId> {
+    let content = crate::context::assembly::permission_reminder_content(
+        &crate::runtime::permission::permission_reminder_text(mode),
+    );
+    request
+        .messages
+        .iter()
+        .filter_map(|message| match message.as_canonical() {
+            Some(MessageBlock::User(user))
+                if user.source == crate::message::types::UserSource::Runtime
+                    && user.kind
+                        == crate::message::types::InboundKind::Context(
+                            crate::message::types::ContextKind::NativeEnvironment,
+                        )
+                    && user.content == content =>
+            {
+                Some(user.id.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 async fn start_background(runtime: &ConversationRuntime) -> CompactionAdmission {
     let (context, revision, tools, prompt) = {
         let mut state = runtime.inner.lock_state();
@@ -221,13 +247,40 @@ async fn ready_background_cancels_and_joins_competing_blocking_scope() {
         1
     );
     let requests = model.requests();
+    let reminder_ids = permission_reminder_ids(&requests[2], mode);
     assert_eq!(
-        requests[2]
-            .effective_system_prompt
-            .matches("Execution permission mode:")
-            .count(),
+        reminder_ids.len(),
         1,
-        "the winning background checkpoint re-arms the current primary reminder"
+        "the winning background checkpoint stages one canonical native reminder"
+    );
+    assert!(
+        !requests[2]
+            .effective_system_prompt
+            .contains("Execution permission mode:")
+    );
+    let snapshots = runtime
+        .inner
+        .store
+        .read_request_snapshots(None, 8)
+        .unwrap()
+        .snapshots;
+    assert_eq!(snapshots.len(), 1);
+    assert_eq!(
+        snapshots[0]
+            .contributions
+            .iter()
+            .filter(|contribution| contribution.producer
+                == crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::PermissionReminder,
+                ))
+            .map(|contribution| contribution.message_id.clone())
+            .collect::<Vec<_>>(),
+        reminder_ids
+    );
+    assert!(
+        reminder_ids
+            .iter()
+            .all(|id| snapshots[0].request_context_ids.contains(id))
     );
     assert_eq!(
         requests.len(),
@@ -509,21 +562,56 @@ async fn late_ready_does_not_rewrite_the_running_primary_request() {
         runtime.child_attempt_settlement(1),
     )
     .await;
+    let after_activation = model.requests()[2].clone();
+    let reminder_ids = permission_reminder_ids(&after_activation, mode);
+    assert_eq!(reminder_ids.len(), 1);
     assert_eq!(
-        model.requests()[2]
-            .effective_system_prompt
-            .matches("Execution permission mode:")
-            .count(),
-        1
+        after_activation.effective_system_prompt,
+        frozen_primary.effective_system_prompt
+    );
+    assert_eq!(
+        runtime.inner.lock_state().last_permission_reminder_mode,
+        Some(mode)
     );
     runtime
         .submit_inbound(text_content("after reminder consumption"))
         .unwrap();
     let _ = within_liveness_guard("subsequent primary", runtime.child_attempt_settlement(2)).await;
+    let subsequent = model.requests()[3].clone();
+    assert_eq!(
+        subsequent.effective_system_prompt,
+        frozen_primary.effective_system_prompt
+    );
+    assert_eq!(
+        permission_reminder_ids(&subsequent, mode),
+        reminder_ids,
+        "the retained canonical reminder is reused as history without another emission"
+    );
+    let snapshots = runtime
+        .inner
+        .store
+        .read_request_snapshots(None, 8)
+        .unwrap()
+        .snapshots;
+    assert_eq!(snapshots.len(), 3);
+    let reminder_owner = crate::runtime::identity::ContextContributorIdentity::Native(
+        crate::runtime::identity::NativeContextContributor::PermissionReminder,
+    );
+    assert_eq!(
+        snapshots[1]
+            .contributions
+            .iter()
+            .filter(|contribution| contribution.producer == reminder_owner)
+            .map(|contribution| contribution.message_id.clone())
+            .collect::<Vec<_>>(),
+        reminder_ids
+    );
     assert!(
-        !model.requests()[3]
-            .effective_system_prompt
-            .contains("Execution permission mode:")
+        snapshots[2]
+            .contributions
+            .iter()
+            .all(|contribution| contribution.producer != reminder_owner),
+        "ordinary start does not stage a second reminder"
     );
     runtime.shutdown().await.unwrap();
 }

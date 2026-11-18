@@ -35,6 +35,38 @@ pub(super) struct LiveTarget<'a> {
     assistant_message_id: Option<&'a MessageId>,
     tool_occurrence: Option<&'a crate::observation::tool::RuntimeClientToolOccurrence>,
     tool_call: Option<(&'a ToolCallId, &'a ToolId)>,
+    tool_started: bool,
+}
+
+impl LiveTarget<'_> {
+    fn foreground_state(
+        &self,
+        foreground: &[crate::observation::tool::ForegroundToolExecution],
+    ) -> Option<TraceState> {
+        foreground.iter().find_map(|current| {
+            let same = self.tool_occurrence.map_or_else(
+                || {
+                    self.tool_call.is_some_and(|(call_id, tool_id)| {
+                        current.call_id.as_ref() == Some(call_id)
+                            && current.tool_id.as_ref() == Some(tool_id)
+                    })
+                },
+                |occurrence| &current.occurrence == occurrence,
+            );
+            if !same {
+                return None;
+            }
+            match current.state {
+                ForegroundToolState::Running { .. } => Some(TraceState::Running),
+                ForegroundToolState::Assembled { .. }
+                    if !self.tool_started && self.tool_occurrence.is_some() =>
+                {
+                    Some(TraceState::Pending)
+                }
+                _ => None,
+            }
+        })
+    }
 }
 
 impl TraceRecord {
@@ -57,6 +89,7 @@ impl TraceRecord {
                 .tool
                 .as_ref()
                 .and_then(|tool| Some((tool.call_id.as_ref()?, tool.tool_id.as_ref()?))),
+            tool_started: self.tool.as_ref().is_some_and(|tool| tool.started),
         }
     }
 }
@@ -81,6 +114,7 @@ impl AnchorFacts {
                 .tool
                 .as_ref()
                 .and_then(|tool| Some((tool.call_id.as_ref()?, tool.tool_id.as_ref()?))),
+            tool_started: self.tool.as_ref().is_some_and(|tool| tool.started),
         }
     }
 }
@@ -239,21 +273,10 @@ fn repair<'a>(targets: impl IntoIterator<Item = LiveTarget<'a>>, snapshot: LiveS
                     *record.state = TraceState::Running;
                 }
             }
-            TraceKind::Tool
-                if attempt.foreground.iter().any(|current| {
-                    let same = record.tool_occurrence.map_or_else(
-                        || {
-                            record.tool_call.is_some_and(|(call_id, tool_id)| {
-                                current.call_id.as_ref() == Some(call_id)
-                                    && current.tool_id.as_ref() == Some(tool_id)
-                            })
-                        },
-                        |occurrence| &current.occurrence == occurrence,
-                    );
-                    same && matches!(current.state, ForegroundToolState::Running { .. })
-                }) =>
-            {
-                *record.state = TraceState::Running;
+            TraceKind::Tool => {
+                if let Some(state) = record.foreground_state(attempt.foreground) {
+                    *record.state = state;
+                }
             }
             _ => {}
         }

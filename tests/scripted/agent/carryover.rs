@@ -1281,12 +1281,12 @@ async fn carryover_degrades_and_is_omitted_before_cannot_fit_or_compaction() {
             "attempt-137-fit-consumer",
             first.result.conversation,
             &model,
-            100,
+            40,
             1,
         ),
         &cancellation,
         &tool_runtime,
-        runtime_with_window(100),
+        runtime_with_window(40),
     )
     .await
     .run()

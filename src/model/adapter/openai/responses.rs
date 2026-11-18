@@ -1140,7 +1140,14 @@ impl ResponsesNormalizer {
         } else {
             derive_completed_finish_reason(response)
         };
-        let continuation = match self.storage_mode {
+        // Compatible services may accept `store` but report that no response
+        // was retained. A response id alone is then not a continuation token.
+        let storage = if response.get("store") == Some(&serde_json::Value::Bool(false)) {
+            ResponsesStorageMode::Stateless
+        } else {
+            self.storage_mode
+        };
+        let continuation = match storage {
             ResponsesStorageMode::Stored => OpenAiResponsesContinuation::Stored {
                 previous_response_id: response_id.to_owned(),
             },
@@ -1310,6 +1317,9 @@ struct WireTool<'a> {
     name: &'a str,
     description: &'a str,
     parameters: &'a serde_json::Value,
+    // Responses otherwise normalizes schemas into strict mode, changing
+    // optional arguments and open objects in the authored tool contract.
+    strict: bool,
 }
 
 #[derive(Serialize)]
@@ -1878,7 +1888,7 @@ fn continuation_input(
                 previous_response_id: id,
             },
         ) => Some(id.as_str()),
-        (ResponsesStorageMode::Stateless, OpenAiResponsesContinuation::Stateless { items }) => {
+        (_, OpenAiResponsesContinuation::Stateless { items }) => {
             let ModelMessageView::Assistant(assistant) = request.messages[boundary].view() else {
                 return Err(invalid_request(
                     "native continuation boundary is not Assistant output",
@@ -1894,11 +1904,6 @@ fn continuation_input(
             // Stateless native output is not the earlier input history. Replay
             // the full context, substituting each exact owned output once.
             return Ok((0, None));
-        }
-        (ResponsesStorageMode::Stored, _) => {
-            return Err(invalid_request(
-                "configured Responses storage mode is Stored but the continuation variant is Stateless",
-            ));
         }
         (ResponsesStorageMode::Stateless, _) => {
             return Err(invalid_request(
@@ -1951,6 +1956,7 @@ fn translate_tools(tools: &[crate::tools::types::ModelToolDefinition]) -> Vec<Wi
             name: &tool.name,
             description: &tool.description,
             parameters: &tool.input_schema,
+            strict: false,
         })
         .collect()
 }
@@ -2037,12 +2043,13 @@ fn retained_stateless_output<'a>(
         .iter()
         .filter(|block| !matches!(block, AssistantContentBlock::Reasoning(_)));
     let mut agrees = true;
+    let mut plaintext_reasoning = false;
+    let mut native_reasoning = String::new();
     for item in items.iter() {
         match item["type"].as_str() {
-            Some("reasoning")
-                if item["encrypted_content"]
-                    .as_str()
-                    .is_some_and(|state| !state.is_empty()) => {}
+            Some("reasoning") => {
+                plaintext_reasoning |= validate_reasoning_replay(item, &mut native_reasoning)?;
+            }
             Some("message") if item["role"] == "assistant" => {
                 let content = item["content"]
                     .as_array()
@@ -2079,6 +2086,18 @@ fn retained_stateless_output<'a>(
             }
         }
     }
+    if plaintext_reasoning {
+        let readable: String = assistant
+            .iter()
+            .filter_map(|block| match block {
+                AssistantContentBlock::Reasoning(reasoning) if reasoning.belongs_to(origin) => {
+                    reasoning.text.as_deref()
+                }
+                _ => None,
+            })
+            .collect();
+        agrees &= readable == native_reasoning;
+    }
     if assistant
         .iter()
         .any(|block| matches!(block, AssistantContentBlock::Image(_)))
@@ -2093,6 +2112,39 @@ fn retained_stateless_output<'a>(
         ));
     }
     Ok(Some(items.as_slice()))
+}
+
+/// Append the original readable parts, returning whether plaintext itself
+/// provides the native replay state rather than an encrypted payload.
+fn validate_reasoning_replay(
+    item: &serde_json::Value,
+    readable: &mut String,
+) -> Result<bool, ModelError> {
+    let encrypted = item["encrypted_content"]
+        .as_str()
+        .is_some_and(|state| !state.is_empty());
+    if !encrypted && !item["content"].is_array() {
+        return Err(unsupported(
+            "stateless output lacks a complete supported native replay unit: reasoning has neither encrypted state nor original plaintext content",
+        ));
+    }
+    for (field, kind) in [("summary", "summary_text"), ("content", "reasoning_text")] {
+        if let Some(parts) = item.get(field).filter(|parts| !parts.is_null()) {
+            let parts = parts.as_array().ok_or_else(|| {
+                unsupported("native reasoning contains incomplete readable content")
+            })?;
+            for part in parts {
+                let text = part["text"]
+                    .as_str()
+                    .filter(|_| part["type"] == kind)
+                    .ok_or_else(|| {
+                        unsupported("native reasoning contains unsupported readable content")
+                    })?;
+                readable.push_str(text);
+            }
+        }
+    }
+    Ok(!encrypted)
 }
 
 /// Encode one request-owned PNG using the SDK input image representation.

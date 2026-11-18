@@ -134,6 +134,16 @@ impl FrozenCarryover {
     }
 }
 
+fn staged_context_failure(error: &crate::conversation::ConversationError) -> Terminal {
+    Terminal::Failed {
+        failure: AttemptFailure::Runtime {
+            error: RuntimeError::ContractViolation {
+                message: format!("staged context cannot be committed: {error}"),
+            },
+        },
+    }
+}
+
 impl AgentExecution<'_> {
     /// Prepares the next model turn without committing anything (Issue #12,
     /// M9b).
@@ -330,7 +340,7 @@ impl AgentExecution<'_> {
         // Stage the request-scoped context: generation, canonical
         // identities, and in-memory validation only. Nothing commits until
         // the start arbitration wins.
-        let staged_context = self.stage_context(accepted)?;
+        let mut staged_context = self.stage_context(accepted)?;
         self.logical_step.context_ids = staged_context.iter().map(|m| m.id().clone()).collect();
         self.freeze_model_media(&staged_context).await?;
         // Select once before staging; a later completion waits for the next
@@ -345,15 +355,14 @@ impl AgentExecution<'_> {
                 delivery,
                 &CompactionInput {
                     request: &staged.request,
-
                     tools: &staged.request.tools,
-                    staged_request_context: &staged_context,
                     estimated_input: staged.estimated_input,
                 },
                 None,
                 false,
             )?;
             if installed {
+                staged_context = self.pending_context()?;
                 staged = self.stage_model_turn(request_ordinal, &staged_context)?;
             }
         }
@@ -385,15 +394,14 @@ impl AgentExecution<'_> {
                 .wait_for_background_compaction(
                     &CompactionInput {
                         request: &staged.request,
-
                         tools: &staged.request.tools,
-                        staged_request_context: &staged_context,
                         estimated_input: staged.estimated_input,
                     },
                     None,
                 )
                 .await?;
             if joined {
+                staged_context = self.pending_context()?;
                 staged = self.stage_model_turn(request_ordinal, &staged_context)?;
                 mandatory = staged.estimated_input > hard_input_limit
                     || staged.projection.estimated_input.input_tokens > hard_input_limit;
@@ -434,9 +442,7 @@ impl AgentExecution<'_> {
             // clears it a second time.
             let compaction_input = CompactionInput {
                 request: &staged.request,
-
                 tools: &staged.request.tools,
-                staged_request_context: &staged_context,
                 estimated_input: staged.estimated_input,
             };
             if !mandatory && self.start_background_compaction(&compaction_input).await? {
@@ -456,8 +462,9 @@ impl AgentExecution<'_> {
                     },
                 )
                 .await?;
-                // Restage over the rewritten Surface: the staged context blocks
-                // are unchanged, the Surface revision and projection are not.
+                // Restage over the activated checkpoint, including its newly
+                // eligible reminder and the unchanged ordinary context records.
+                staged_context = self.pending_context()?;
                 staged = self.stage_model_turn(request_ordinal, &staged_context)?;
             }
         }
@@ -919,10 +926,14 @@ impl AgentExecution<'_> {
                 .clone_from(&frozen.anchor);
         }
         // Recovery retains the first start's accepted Context receipts.
-        snapshot.contributions = self.logical_step.current_input.as_ref().map_or_else(
-            || accepted.request_contributions(staged_context),
-            |input| input.snapshot.contributions.clone(),
-        );
+        snapshot.contributions = self
+            .logical_step
+            .current_input
+            .as_ref()
+            .map_or_else(Vec::new, |input| input.snapshot.contributions.clone());
+        snapshot
+            .contributions
+            .extend(accepted.request_contributions(staged_context));
         if staged.retire_continuation {
             self.retire_continuation();
             self.measurements.withdraw();
@@ -1048,28 +1059,65 @@ impl AgentExecution<'_> {
             .checked_add(1)
             .expect("context generation cannot overflow");
         accepted.generation.id = self.context_generation_serial;
+        let staged = self
+            .stage_accepted_context(&mut accepted)
+            .map_err(|error| staged_context_failure(&error))?;
+        self.logical_step.accepted_context = Some(accepted);
+        Ok(staged)
+    }
+
+    /// Materialize only this frozen batch's uncommitted records. Ledger identity
+    /// lookup keeps retries independent of projected-history size.
+    pub(super) fn pending_context(&self) -> Result<Vec<MessageBlock>, Terminal> {
+        let mut accepted = self.logical_step.accepted_context.clone().ok_or_else(|| {
+            Self::context_failure_terminal(&ContextError::new(
+                ContextErrorKind::Internal,
+                "model request has no accepted context",
+            ))
+        })?;
+        self.stage_accepted_context(&mut accepted)
+            .map_err(|error| staged_context_failure(&error))
+    }
+
+    /// Allocate only newly eligible native records; ordinary contributor IDs and
+    /// the frozen generation survive every compaction and recovery request.
+    pub(super) fn stage_accepted_context(
+        &self,
+        accepted: &mut AcceptedContext,
+    ) -> Result<Vec<MessageBlock>, crate::conversation::ConversationError> {
         let namespace = format!("{}-turn-{}", self.request.attempt_id, self.turn);
         let mut serial = self
             .conversation
             .revision()
             .get()
             .max(self.conversation.ledger().len() as u64);
+        let mut ids = accepted
+            .user_messages
+            .iter()
+            .filter_map(|context| context.message_id.clone())
+            .collect::<Vec<_>>();
         let mut staged = Vec::with_capacity(accepted.user_messages.len());
         for context in &mut accepted.user_messages {
-            let id = loop {
-                let candidate = MessageId::new(format!("rustx-context-{namespace}-{serial}"));
-                serial = serial
-                    .checked_add(1)
-                    .expect("context identity space exhausted");
-                if !self.conversation.ledger().contains(&candidate)
-                    && !staged
-                        .iter()
-                        .any(|message: &MessageBlock| message.id() == &candidate)
-                {
-                    break candidate;
+            let id = if let Some(id) = &context.message_id {
+                if self.conversation.ledger().contains(id) {
+                    continue;
                 }
+                id.clone()
+            } else {
+                let id = loop {
+                    let candidate = MessageId::new(format!("rustx-context-{namespace}-{serial}"));
+                    serial = serial
+                        .checked_add(1)
+                        .expect("context identity space exhausted");
+                    if !self.conversation.ledger().contains(&candidate) && !ids.contains(&candidate)
+                    {
+                        break candidate;
+                    }
+                };
+                ids.push(id.clone());
+                context.message_id = Some(id.clone());
+                id
             };
-            context.message_id = Some(id.clone());
             let block = MessageBlock::User(crate::message::types::UserMessageBlock {
                 id,
                 content: context.content.clone(),
@@ -1077,18 +1125,9 @@ impl AgentExecution<'_> {
                 kind: crate::message::types::InboundKind::Context(context.kind.clone()),
                 timestamp: None,
             });
-            self.conversation
-                .prepare_commit(&block)
-                .map_err(|error| Terminal::Failed {
-                    failure: AttemptFailure::Runtime {
-                        error: RuntimeError::ContractViolation {
-                            message: format!("staged context cannot be committed: {error}"),
-                        },
-                    },
-                })?;
+            self.conversation.prepare_commit(&block)?;
             staged.push(block);
         }
-        self.logical_step.accepted_context = Some(accepted);
         Ok(staged)
     }
 

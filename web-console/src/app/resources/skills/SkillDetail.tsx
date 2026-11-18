@@ -1,17 +1,18 @@
 import {useEffect,useRef,useState} from 'react';
-import type {SourceScope,SourceSettings} from '../../../../../protocol/app-server/v82';
+import type {SkillDisplay,SourceScope,SourceTarget} from '../../../../../protocol/app-server/v82';
 import type {AppServerClient} from '../../../client/app-server';
 import {useTranslation} from '../../../locale/react';
 import {DialogSurface} from '../../../presentation/primitives/DialogSurface';
-import {IconCloseOutline16,IconSkillOutline16} from '../../../presentation/primitives/icons';
+import {IconCloseOutline16} from '../../../presentation/primitives/icons';
 import modal from '../../../presentation/primitives/Modal.module.css';
 import {MarkdownText} from '../../../presentation/markdown/MarkdownText';
 import {splitFrontmatter} from '../../components/workbench-documents/frontmatter';
+import {SkillIcon} from './SkillIcon';
 import css from './SkillDetail.module.css';
 
 /** Read-only native instructions. There is intentionally no editing buffer,
  * file-write port, Save or Delete action on a Skill. */
-export function SkillDetail({client,source,name,close}:{client:AppServerClient;source:SourceSettings;name:string;close:()=>void}) {
+export function SkillDetail({client,target,name,display,close}:{client:AppServerClient;target:SourceTarget;name:string;display?:SkillDisplay|null;close:()=>void}) {
  const tx=useTranslation();
  const [content,setContent]=useState<{text:string;path:string;description:string;owner:SourceScope}>();
  const [error,setError]=useState('');
@@ -25,7 +26,7 @@ export function SkillDetail({client,source,name,close}:{client:AppServerClient;s
    let offset='0',revision:string|undefined,text='';
    const decoder=new TextDecoder();
    do {
-    const {content}=await client.request({method:'skills/read',params:{target:source.target,name,kind:'instructions',offset,max_bytes:65536,expected_revision:revision}},'skill_content',undefined,current);
+    const {content}=await client.request({method:'skills/read',params:{target,name,kind:'instructions',offset,max_bytes:65536,expected_revision:revision}},'skill_content',undefined,current);
     if(!current())return;
     const bytes=Uint8Array.from(atob(content.data_base64),char=>char.charCodeAt(0));
     text+=decoder.decode(bytes,{stream:content.next_offset!=null});
@@ -39,12 +40,13 @@ export function SkillDetail({client,source,name,close}:{client:AppServerClient;s
    } while(current());
   })().catch(error=>{if(current())setError(String(error));});
   return()=>{alive=false;};
- },[client,source,name]);
- return <DialogSurface open title={name} onClose={close} initialFocus={closeButton}
+ },[client,target,name]);
+ const title=display?.authored.display_name??name;
+ return <DialogSurface open title={title} onClose={close} initialFocus={closeButton}
   overlayClassName={`${modal.root} ${modal.scrim} ${css.overlay}`} className={css.dialog}>
   <header className={css.header}>
-   <IconSkillOutline16 size={20}/>
-   <h2>{name}</h2>
+   <SkillIcon icon={display?.icon} size={20}/>
+   <h2>{title}</h2>
    <button ref={closeButton} type="button" className={modal.close} aria-label={tx('resources:close')} onClick={close}><IconCloseOutline16/></button>
   </header>
   <div className={css.body}>

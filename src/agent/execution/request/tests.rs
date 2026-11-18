@@ -459,10 +459,24 @@ async fn complete_staged_pressure_is_mandatory_before_the_first_compaction() {
 
 #[tokio::test]
 async fn a_failed_optional_summary_does_not_reject_exact_hard_limit_equality() {
-    let (result, adapter, summarizer, _) = failed_summary_attempt(2, false, 100).await;
+    use crate::context::TokenEstimator;
+    use crate::scripted_suites::support::context::ScriptedEstimator;
+
+    // Four 50-token history records keep the unchanged request exactly at
+    // admission while permitting a real Summary attempt with its prospective
+    // native reminder. A planning refusal must not stand in for SummaryFailed.
+    let hard_input_limit = 200;
+    let (result, adapter, summarizer, _) = failed_summary_attempt(4, false, hard_input_limit).await;
     assert!(matches!(result.outcome, AttemptOutcome::Completed { .. }));
     assert_eq!(adapter.request_count(), 1);
+    assert_eq!(
+        ScriptedEstimator::new(50, 10, 0).estimate_frozen_request(&adapter.requests()[0]),
+        hard_input_limit
+    );
     assert_eq!(summarizer.requests().len(), 1);
+    assert!(result.event_history.iter().any(|event| matches!(event,
+        crate::events::types::RuntimeEvent::CompactionFailed { error, .. }
+            if error.contains("summary service unavailable"))));
     assert_eq!(
         result.projections,
         [] as [crate::durable::projection::ProjectionCheckpoint; 0]
@@ -1411,7 +1425,11 @@ fn reminder_compaction_runtime(
 }
 
 #[allow(clippy::too_many_lines)]
-async fn automatic_compaction_reminder_case(mandatory: bool, cancel_before_start: bool) {
+async fn automatic_compaction_reminder_case(
+    mandatory: bool,
+    cancel_before_start: bool,
+    initial_reminder: bool,
+) {
     use crate::agent::execution::test_sync::StartBoundaryPause;
     use crate::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
     use std::sync::atomic::Ordering;
@@ -1449,7 +1467,7 @@ async fn automatic_compaction_reminder_case(mandatory: bool, cancel_before_start
         .await
         .into_lease();
     let mut policy = crate::scripted_suites::support::default_execution_policy();
-    policy.last_permission_reminder_mode = Some(policy.approval_mode);
+    policy.last_permission_reminder_mode = (!initial_reminder).then_some(policy.approval_mode);
     let mode = policy.approval_mode;
     let mut execution = AgentExecution::new(
         first,
@@ -1503,12 +1521,23 @@ async fn automatic_compaction_reminder_case(mandatory: bool, cancel_before_start
                 .iter()
                 .filter(|section| section.contributor
                     == ContextContributorIdentity::Native(
-                        NativeContextContributor::PermissionReminder
+                        NativeContextContributor::PermissionReminder,
+                    ))
+                .count(),
+            0,
+        );
+        assert_eq!(snapshot.contributions.len(), 2);
+        assert_eq!(
+            snapshot
+                .contributions
+                .iter()
+                .filter(|contribution| contribution.producer
+                    == ContextContributorIdentity::Native(
+                        NativeContextContributor::PermissionReminder,
                     ))
                 .count(),
             1
         );
-        assert_eq!(snapshot.contributions.len(), 1);
         assert_eq!(snapshot.context_generation.id, 1);
         assert!(
             snapshot
@@ -1519,7 +1548,11 @@ async fn automatic_compaction_reminder_case(mandatory: bool, cancel_before_start
         );
         assert_eq!(
             snapshot.request_context_ids,
-            vec![snapshot.contributions[0].message_id.clone()]
+            snapshot
+                .contributions
+                .iter()
+                .map(|contribution| contribution.message_id.clone())
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             snapshot
@@ -1571,34 +1604,65 @@ async fn automatic_compaction_reminder_case(mandatory: bool, cancel_before_start
         AttemptOutcome::Completed { .. }
     ));
     let requests = adapter.requests();
-    assert_eq!(
-        requests[0]
+    assert!(requests.iter().all(|request| {
+        !request
             .effective_system_prompt
-            .matches("Execution permission mode:")
-            .count(),
-        1
+            .contains("Execution permission mode:")
+    }));
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.effective_system_prompt == requests[0].effective_system_prompt)
     );
+    let reminder_count = |request: &crate::model::ModelRequest| {
+        request
+            .messages
+            .iter()
+            .filter(|message| {
+                matches!(message.as_canonical(), Some(MessageBlock::User(user))
+            if user.content.iter().any(|block| matches!(block, UserContentBlock::Text(text)
+                if text.text.starts_with("<system-reminder>\nExecution permission mode:"))))
+            })
+            .count()
+    };
+    assert_eq!(reminder_count(&requests[0]), 1);
     if cancel_before_start {
         assert_eq!(requests.len(), 1);
     } else {
         assert_eq!(requests.len(), 2);
+        assert_eq!(
+            reminder_count(&requests[1]),
+            1,
+            "the prior canonical reminder remains history"
+        );
+        let snapshots = request_snapshot_history(tool_runtime.durable_store().as_ref());
         assert!(
-            !requests[1]
-                .effective_system_prompt
-                .contains("Execution permission mode:")
+            snapshots[1]
+                .contributions
+                .iter()
+                .all(|contribution| contribution.producer
+                    != ContextContributorIdentity::Native(
+                        NativeContextContributor::PermissionReminder,
+                    )),
+            "the next ordinary start does not stage another reminder"
         );
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_compaction_refreshes_only_the_native_reminder_once() {
-    automatic_compaction_reminder_case(false, false).await;
-    automatic_compaction_reminder_case(true, false).await;
+    automatic_compaction_reminder_case(false, false, false).await;
+    automatic_compaction_reminder_case(true, false, false).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn automatic_compaction_reminder_survives_cancellation_before_start() {
-    automatic_compaction_reminder_case(true, true).await;
+    automatic_compaction_reminder_case(true, true, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn automatic_compaction_reuses_already_staged_native_reminder() {
+    automatic_compaction_reminder_case(true, false, true).await;
 }
 
 #[tokio::test]
@@ -1619,7 +1683,21 @@ async fn prospective_compaction_reminder_is_priced_before_checkpoint_activation(
     let reminder = crate::runtime::permission::permission_reminder_text(
         crate::runtime::ApprovalMode::FullAccess,
     );
-    assert!(estimator.estimate_input(&minimum_candidate, &reminder, &[]) > hard_input_limit);
+    let mut with_reminder = minimum_candidate.clone();
+    with_reminder.push(crate::model::ModelInputMessage::Canonical(
+        MessageBlock::User(crate::message::types::UserMessageBlock {
+            id: crate::runtime::identity::MessageId::new("prospective-native-reminder"),
+            content: vec![UserContentBlock::Text(crate::message::content::TextBlock {
+                text: format!("<system-reminder>\n{reminder}\n</system-reminder>"),
+            })],
+            source: UserSource::Runtime,
+            kind: crate::message::types::InboundKind::Context(
+                crate::message::types::ContextKind::NativeEnvironment,
+            ),
+            timestamp: None,
+        }),
+    ));
+    assert!(estimator.estimate_input(&with_reminder, "", &[]) > hard_input_limit);
     let (result, adapter, summarizer, invocations) = failed_summary_attempt_with_feedback(
         3,
         true,

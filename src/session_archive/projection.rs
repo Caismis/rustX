@@ -467,6 +467,7 @@ fn event(event: &crate::events::types::RuntimeEvent) -> Value {
         | RuntimeEvent::ModelRetryScheduled { .. }
         | RuntimeEvent::InboundTurnAdopted { .. }
         | RuntimeEvent::AssistantMessageCommitted { .. }
+        | RuntimeEvent::ToolCallRequested { .. }
         | RuntimeEvent::ToolExecutionStarted { .. }
         | RuntimeEvent::ToolExecutionProgress { .. }
         | RuntimeEvent::ToolExecutionDeadlineFired { .. }

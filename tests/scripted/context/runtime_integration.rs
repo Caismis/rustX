@@ -135,6 +135,124 @@ fn assert_summary_original_sources(request: &ModelRequest, expected: &[MessageBl
     }
 }
 
+/// Checkpoint activation preserves the frozen contributor batch and adds one
+/// start-owned canonical permission reminder, without moving it into System.
+fn assert_reminder_activation_refresh(
+    before: &rustx::model::snapshot::RequestSnapshot,
+    after: &rustx::model::snapshot::RequestSnapshot,
+    request: &ModelRequest,
+) {
+    use rustx::context::ContributorGeneration;
+    use rustx::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
+
+    let owner = ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder);
+    assert_eq!(before.context_generation.id, after.context_generation.id);
+    assert!(
+        before.canonical_frontier < after.canonical_frontier,
+        "the retry start durably admits its newly armed reminder"
+    );
+    assert!(
+        !before
+            .context_generation
+            .contributors
+            .iter()
+            .any(|entry| entry.identity == owner)
+    );
+    assert_eq!(
+        before.context_generation.contributors,
+        after
+            .context_generation
+            .contributors
+            .iter()
+            .filter(|entry| entry.identity != owner)
+            .cloned()
+            .collect::<Vec<_>>(),
+        "activation preserves all originally accepted contributor metadata",
+    );
+    assert_eq!(
+        after
+            .context_generation
+            .contributors
+            .iter()
+            .filter(|entry| entry.identity == owner)
+            .cloned()
+            .collect::<Vec<_>>(),
+        vec![ContributorGeneration {
+            identity: owner.clone(),
+            attestation: None
+        }],
+    );
+    assert_eq!(before.system_sections, after.system_sections);
+    assert_eq!(
+        before.effective_system_prompt,
+        after.effective_system_prompt
+    );
+    assert!(
+        !after
+            .system_sections
+            .iter()
+            .any(|section| section.contributor == owner)
+    );
+    assert_started_permission_reminder(after, request);
+}
+
+fn assert_started_permission_reminder(
+    after: &rustx::model::snapshot::RequestSnapshot,
+    request: &ModelRequest,
+) {
+    let owner = rustx::runtime::identity::ContextContributorIdentity::Native(
+        rustx::runtime::identity::NativeContextContributor::PermissionReminder,
+    );
+    let reminders = after
+        .contributions
+        .iter()
+        .filter(|entry| entry.producer == owner)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reminders.len(),
+        1,
+        "one reminder belongs to this request start"
+    );
+    let reminder = reminders[0];
+    assert_eq!(reminder.metadata, ContextKind::NativeEnvironment);
+    assert_eq!(reminder.presentation, None);
+    assert_eq!(
+        reminder.emissions,
+        [] as [rustx::message::types::ContributionEmission; 0]
+    );
+    let messages = request
+        .messages
+        .iter()
+        .filter_map(rustx::model::ModelInputMessage::as_canonical)
+        .filter(|message| message.id() == &reminder.message_id)
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 1);
+    let MessageBlock::User(user) = messages[0] else {
+        panic!("the reminder is canonical User context");
+    };
+    assert_eq!(user.source, rustx::message::types::UserSource::Runtime);
+    assert_eq!(
+        user.kind,
+        InboundKind::Context(ContextKind::NativeEnvironment)
+    );
+    assert_eq!(
+        user.content,
+        vec![UserContentBlock::Text(TextBlock {
+            text: format!(
+                "<system-reminder>\n{}\n</system-reminder>",
+                rustx::runtime::permission::permission_reminder_text(after.permission_mode)
+            ),
+        })]
+    );
+    assert_eq!(
+        after
+            .effective_system_prompt
+            .matches("Execution permission mode:")
+            .count(),
+        0
+    );
+}
+
 fn done(reason: ModelFinishReason) -> ModelEvent {
     ModelEvent::Completed {
         finish_reason: reason,
@@ -747,6 +865,20 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
         user("middle", "middle history"),
     ]);
     assert_complete_fragment(&summary_requests[0], &retired);
+    let reminder_id = result.snapshot_history()[0]
+        .contributions
+        .iter()
+        .find(|entry| {
+            entry.producer
+                == rustx::runtime::identity::ContextContributorIdentity::Native(
+                    rustx::runtime::identity::NativeContextContributor::PermissionReminder,
+                )
+        })
+        .unwrap()
+        .message_id
+        .as_str()
+        .to_owned();
+
     assert_eq!(
         result
             .conversation
@@ -754,7 +886,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
             .iter()
             .map(MessageId::as_str)
             .collect::<Vec<_>>(),
-        vec!["recent", "attempt-1-agent-1"]
+        vec!["recent", reminder_id.as_str(), "attempt-1-agent-1"]
     );
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
@@ -770,7 +902,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
     // Inspect the actual provider input, not just the hot conversation's ids:
     // the retired prefix is replaced, while the recent message keeps its exact
     // original body and canonical identity after the summary.
-    assert_eq!(requests[0].messages.len(), 2);
+    assert_eq!(requests[0].messages.len(), 3);
     let ModelInputMessage::Derived(summary) = &requests[0].messages[0] else {
         panic!("the compacted prefix must be a derived summary");
     };
@@ -885,6 +1017,10 @@ async fn proactive_compaction_before_the_next_turn() {
         RuntimeEvent::AssistantMessageCommitted {
             message_id: assistant_message_id(1),
         },
+        RuntimeEvent::ToolCallRequested {
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+        },
         RuntimeEvent::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
@@ -953,7 +1089,8 @@ async fn proactive_compaction_before_the_next_turn() {
         1,
         "first request carries the initial history"
     );
-    assert_eq!(requests[1].messages.len(), 3);
+    assert_eq!(requests[1].messages.len(), 4);
+    assert_started_permission_reminder(&result.snapshot_history()[1], &requests[1]);
     let limits = engine(230, 0, 5, estimator.clone());
     let hard_limit = limits.admissible_input_limit(1).unwrap();
     let proactive_limit = limits.proactive_input_limit(1).unwrap();
@@ -966,20 +1103,21 @@ async fn proactive_compaction_before_the_next_turn() {
         crate::context::planning::minimum_summary(),
         requests[1].messages[1].clone(),
         requests[1].messages[2].clone(),
+        requests[1].messages[3].clone(),
     ];
     let prospective_minimum = estimator.estimate_input(
         &minimum_retaining_pair,
         &requests[1].effective_system_prompt,
         &requests[1].tools,
     );
-    assert_eq!(prospective_minimum, 207);
+    assert_eq!(prospective_minimum, 216);
     assert!(prospective_minimum <= hard_limit);
     assert_eq!(
         requests[1]
             .effective_system_prompt
             .matches("Execution permission mode:")
             .count(),
-        1
+        0
     );
     assert!(
         estimator.estimate_input(
@@ -988,6 +1126,7 @@ async fn proactive_compaction_before_the_next_turn() {
             &requests[1].tools,
         ) <= hard_limit
     );
+
     let ModelInputMessage::Derived(summary) = &requests[1].messages[0] else {
         panic!("first projected message must be the summary");
     };
@@ -1013,8 +1152,8 @@ async fn proactive_compaction_before_the_next_turn() {
         Some(MessageBlock::Tool(tool)) if tool.id.as_str() == "attempt-1-tool-1-0"
     ));
 
-    // The Message Ledger keeps every original fact and gains exactly one
-    // canonical runtime compaction summary; nothing is rewritten.
+    // The Ledger retains every original fact and the post-compaction reminder.
+    // Summaries remain derived checkpoint content.
     assert_eq!(
         result
             .messages()
@@ -1025,6 +1164,7 @@ async fn proactive_compaction_before_the_next_turn() {
             "msg-user-1".to_owned(),
             "attempt-1-agent-1".to_owned(),
             "attempt-1-tool-1-0".to_owned(),
+            "rustx-context-attempt-1-turn-2-3".to_owned(),
             "attempt-1-agent-2".to_owned(),
         ]
     );
@@ -1040,6 +1180,7 @@ async fn proactive_compaction_before_the_next_turn() {
         vec![
             "attempt-1-agent-1".to_owned(),
             "attempt-1-tool-1-0".to_owned(),
+            "rustx-context-attempt-1-turn-2-3".to_owned(),
             "attempt-1-agent-2".to_owned(),
         ],
         "the summary replaced exactly the selected span at its position"
@@ -1247,10 +1388,28 @@ async fn overflow_compact_and_retry_succeeds() {
         requests[1].messages[0],
         ModelInputMessage::Derived(ref message) if message.transformations.contains(&rustx::model::projected::SemanticTransformation::Summary)
     ));
-    assert_eq!(requests[1].messages.len(), 1);
+    assert_eq!(requests[1].messages.len(), 2);
+    assert_reminder_activation_refresh(
+        &result.snapshot_history()[0],
+        &result.snapshot_history()[1],
+        &requests[1],
+    );
+    let reminder_id = result.snapshot_history()[1]
+        .contributions
+        .iter()
+        .find(|entry| {
+            entry.producer
+                == rustx::runtime::identity::ContextContributorIdentity::Native(
+                    rustx::runtime::identity::NativeContextContributor::PermissionReminder,
+                )
+        })
+        .expect("retry reminder contribution")
+        .message_id
+        .as_str()
+        .to_owned();
     assert_eq!(requests[1].continuation, None);
     // Only the successful invocation is committed; the ledger additionally
-    // carries the canonical compaction summary.
+    // carries the retry start's canonical permission reminder.
     assert_eq!(
         result
             .messages()
@@ -1259,14 +1418,15 @@ async fn overflow_compact_and_retry_succeeds() {
             .collect::<Vec<_>>(),
         vec![
             "msg-user-1".to_owned(),
+            reminder_id,
             retry_message_id(1).as_str().to_owned(),
         ]
     );
 }
 
 /// An overflow retry reuses one admitted Context Assembly generation. The
-/// contributor, native context sampling, and ordering are never rerun; only
-/// the historical Surface revision changes because compaction committed.
+/// contributor, native context sampling, and ordering are never rerun. The
+/// retry uses the new Surface activation and admits its native permission reminder.
 /// Issue #12 (M9b): the overflow retry reaches the same start gate. The
 /// compaction commits as its own independent durable fact; cancelling
 /// immediately before the retry's start arbitration is again
@@ -1411,9 +1571,10 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
-    // Sparse Full Access reminder (~51 tokens) must fit the scripted occupancy
-    // that previously assumed an empty system prompt at the prep-compaction gate.
-    let runtime = runtime_with_assembly(310, 0, 5, weighted(100, 10, 0), summarizer, assembly);
+    // Original plus extension context costs 320 tokens, exceeding the 309-token
+    // hard limit; minimum Summary + extensions + canonical reminder costs 306.
+    let estimator = Arc::new(ScriptedEstimator::new(100, 10, 0).with_override("msg-user-1", 120));
+    let runtime = runtime_with_assembly(310, 0, 5, estimator, summarizer, assembly);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
@@ -1579,14 +1740,15 @@ async fn overflow_retry_reuses_the_admitted_context_generation() {
     );
     assert_eq!(invocations.load(Ordering::SeqCst), 1);
     assert_eq!(result.snapshot_history().len(), 2);
-    assert_eq!(
-        result.snapshot_history()[0].context_generation,
-        result.snapshot_history()[1].context_generation
+    assert_reminder_activation_refresh(
+        &result.snapshot_history()[0],
+        &result.snapshot_history()[1],
+        &model.requests()[1],
     );
     assert_ne!(
         result.snapshot_history()[0].history_cut.activation,
         result.snapshot_history()[1].history_cut.activation,
-        "compaction advances projection activation while canonical frontier stays fixed"
+        "compaction advances projection activation and retry start admits its reminder"
     );
     let opened = publication.opened();
     assert_eq!(opened.len(), 2, "each provider request owns one stream");
@@ -1800,10 +1962,10 @@ async fn overflow_retry_preserves_pending_fresh_inbound_and_context_generation()
          policy is not re-evaluated"
     );
     assert_eq!(result.snapshot_history().len(), 2);
-    assert_eq!(
-        result.snapshot_history()[0].context_generation,
-        result.snapshot_history()[1].context_generation,
-        "overflow retry reuses the admitted ContextGeneration"
+    assert_reminder_activation_refresh(
+        &result.snapshot_history()[0],
+        &result.snapshot_history()[1],
+        &model.requests()[1],
     );
     assert_ne!(
         result.snapshot_history()[0].history_cut.activation,
@@ -1998,10 +2160,10 @@ async fn overflow_retry_never_commits_provisional_failed_content() {
     );
     assert_eq!(
         result.messages().len(),
-        2,
-        "input and exactly one real committed Assistant message"
+        3,
+        "input, canonical permission reminder, and exactly one committed Assistant"
     );
-    let MessageBlock::Assistant(assistant) = &result.messages()[1] else {
+    let MessageBlock::Assistant(assistant) = &result.messages()[2] else {
         panic!("the committed message must be the retry Assistant message");
     };
     assert_eq!(
@@ -2092,7 +2254,7 @@ async fn overflow_retry_never_commits_or_executes_failed_tool_calls() {
             .all(|message| !matches!(message, MessageBlock::Tool(_))),
         "no tool message is committed for the failed request's call"
     );
-    let MessageBlock::Assistant(assistant) = &result.messages()[1] else {
+    let MessageBlock::Assistant(assistant) = &result.messages()[2] else {
         panic!("the committed message must be the retry Assistant message");
     };
     assert_eq!(assistant.id, retry_message_id(1));
@@ -2174,7 +2336,7 @@ async fn overflow_retry_budget_is_per_model_turn() {
         },
     );
     // The committed Message Ledger holds both turns, each with the retry
-    // identity of its own turn, plus the two canonical compaction summaries.
+    // identity of its own turn, plus each retry's canonical permission reminder.
     assert_eq!(
         result
             .messages()
@@ -2183,8 +2345,10 @@ async fn overflow_retry_budget_is_per_model_turn() {
             .collect::<Vec<_>>(),
         vec![
             "msg-user-1".to_owned(),
+            "rustx-context-attempt-1-turn-1-1".to_owned(),
             retry_message_id(1).as_str().to_owned(),
             "attempt-1-tool-1-0".to_owned(),
+            "rustx-context-attempt-1-turn-2-4".to_owned(),
             retry_message_id(2).as_str().to_owned(),
         ],
         "compaction preserves canonical history without summary commits"
@@ -2408,7 +2572,9 @@ async fn expired_proactive_compaction_budget_preserves_later_overflow() {
             &cancellation,
             policy,
             runtime_with_assembly(
-                400,
+                // Protected fresh/status/extension/reminder costs 360;
+                // the 46-token minimum Summary must also fit.
+                410,
                 0,
                 0,
                 weighted(100, 10, 0),
@@ -2776,9 +2942,9 @@ async fn proactive_compaction_failure_continues_with_the_frozen_request() {
             &cancellation,
             crate::scripted_suites::support::default_execution_policy(),
             ContextRuntime::with_scripted_summarizer(
-                // Three messages plus the real permission reminder remain below the
-                // hard limit and above proactive pressure, so failure is optional.
-                engine(380, 0, 0, weighted(100, 10, 0)),
+                // The unchanged 300-token request fits the 329-token hard limit
+                // and crosses proactive pressure; failure remains optional.
+                engine(330, 0, 0, weighted(100, 10, 0)),
                 summarizer.clone(),
                 None,
                 CompactionBudgets::new(1, 1, 1_000_000),
@@ -3578,13 +3744,14 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
     let model = parked_two_turn_model(parked.clone());
     let tools = tool_registry_with_alpha();
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
-    // per-message = 100, per-block = 10, window = 400:
+    // per-message = 100, per-block = 10, window = 410:
     // before the drain the projection is 100 tokens (below the threshold);
     // after the drain [u0, agent, A, B, Agent Status] is 410 tokens
-    // (above the hard limit), so compaction must retain the complete fresh
-    // inbound batch and the staged Agent Status in its final fit.
+    // (above the 409-token hard limit), so compaction must retain the complete fresh
+    // inbound batch, staged Agent Status, and canonical permission reminder.
+    // Those protected facts cost 360; the 46-token minimum Summary also fits.
     let summarizer = FakeContextSummarizer::new(vec![FakeSummaryStep::Return("S".to_owned())]);
-    let runtime = runtime_with(400, 0, 0, weighted(100, 10, 0), summarizer);
+    let runtime = runtime_with(410, 0, 0, weighted(100, 10, 0), summarizer);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let mailbox = tool_runtime.mailbox().clone();
     let controller = controller_enqueue_a_and_b(&model, &mailbox, release);
@@ -3639,6 +3806,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
             "rustx-context-attempt-1-turn-2-4".to_owned(),
+            "rustx-context-attempt-1-turn-2-5".to_owned(),
             assistant_message_id(2).to_string(),
         ],
         "the ledger preserves the drained inbound messages without a Summary message"
@@ -3661,6 +3829,7 @@ async fn m4_compaction_after_drain_preserves_canonical_inbound() {
             "msg-inbound-a".to_owned(),
             "msg-inbound-b".to_owned(),
             "rustx-context-attempt-1-turn-2-4".to_owned(),
+            "rustx-context-attempt-1-turn-2-5".to_owned(),
         ],
         "the continuation request uses the compacted projection with the \
          unobserved fresh inbound preserved literally"
@@ -4638,15 +4807,17 @@ async fn mandatory_adapter_preflight_rejects_native_history_without_continuation
         (
             ModelProtocol::AnthropicMessages,
             ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":""})
+                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":123})
                     .into(),
             }),
         ),
         (
             ModelProtocol::OpenAiResponses,
             ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-                items: vec![serde_json::json!({"type":"reasoning","id":"native", "summary":[]})]
-                    .into(),
+                items: vec![
+                    serde_json::json!({"type":"function_call","id":"native", "summary":[]}),
+                ]
+                .into(),
             }),
         ),
     ];

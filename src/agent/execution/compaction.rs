@@ -22,7 +22,6 @@ pub(super) struct CompactionInput<'a> {
     pub(super) request: &'a crate::model::ModelRequest,
 
     pub(super) tools: &'a [ModelToolDefinition],
-    pub(super) staged_request_context: &'a [MessageBlock],
     pub(super) estimated_input: u64,
 }
 
@@ -231,28 +230,52 @@ impl AgentExecution<'_> {
         )))
     }
 
-    /// Price the exact prospective primary input without mutating its frozen
-    /// accepted contributors before a checkpoint activation is confirmed.
+    /// Stage the exact next-start native reminder before pricing activation.
+    /// This clone becomes authoritative only after the checkpoint commits.
     fn compaction_installation_input(
         &self,
-        request: &crate::model::ModelRequest,
-    ) -> Result<(crate::context::AcceptedContext, crate::model::ModelRequest), ContextError> {
+    ) -> Result<(crate::context::AcceptedContext, Vec<MessageBlock>), ContextError> {
         let mut context = self.logical_step.accepted_context.clone().ok_or_else(|| {
             ContextError::new(
                 ContextErrorKind::Internal,
                 "compaction has no accepted primary context",
             )
         })?;
-        context
-            .refresh_permission_reminder(crate::runtime::permission::permission_reminder_text(
-                self.permission_reminder.mode,
-            ))
-            .map_err(|error| ContextError::new(ContextErrorKind::Internal, error.to_string()))?;
-        let mut request = request.clone();
-        request.effective_system_prompt = self.request_effective_system_prompt(
-            crate::context::render_effective_system_prompt(&context.system_sections),
+        let owner = crate::runtime::identity::ContextContributorIdentity::Native(
+            crate::runtime::identity::NativeContextContributor::PermissionReminder,
         );
-        Ok((context, request))
+        let pending = context.user_messages.iter().any(|entry| {
+            entry.producer == owner
+                && entry
+                    .message_id
+                    .as_ref()
+                    .is_none_or(|id| !self.conversation.ledger().contains(id))
+        });
+        if !pending {
+            context
+                .refresh_permission_reminder(&crate::runtime::permission::permission_reminder_text(
+                    self.permission_reminder.mode,
+                ))
+                .map_err(|error| {
+                    ContextError::new(ContextErrorKind::CannotFit, error.to_string())
+                })?;
+        }
+        let staged = self.stage_accepted_context(&mut context).map_err(|error| {
+            ContextError::new(
+                ContextErrorKind::Internal,
+                format!("staged context cannot be committed: {error}"),
+            )
+        })?;
+        Ok((context, staged))
+    }
+
+    fn install_compaction_context(&mut self, context: crate::context::AcceptedContext) {
+        self.logical_step.context_ids = context
+            .user_messages
+            .iter()
+            .filter_map(|entry| entry.message_id.clone())
+            .collect();
+        self.logical_step.accepted_context = Some(context);
     }
 
     /// Start a Session-owned proactive operation without retaining this Attempt
@@ -263,6 +286,10 @@ impl AgentExecution<'_> {
     ) -> Result<bool, Terminal> {
         let Some(coordinator) = self.asynchronous.clone() else {
             return Ok(false);
+        };
+        let (_, staged_request_context) = match self.compaction_installation_input() {
+            Ok(input) => input,
+            Err(error) => return self.background_error(CompactionExecutionError::Context(error)),
         };
         let admission = match coordinator.admit(&self.request.attempt_id) {
             Ok(Some(admission)) => admission,
@@ -313,7 +340,7 @@ impl AgentExecution<'_> {
                 must_cover_through: must_cover.as_ref(),
                 fresh_inbound: fresh.as_ref(),
                 protected_context_ids: &self.logical_step.context_ids,
-                staged_request_context: input.staged_request_context,
+                staged_request_context: &staged_request_context,
                 carryover: carryover.as_ref(),
                 carryover_anchor: anchor,
                 ..CompactionConstraints::default()
@@ -434,9 +461,19 @@ impl AgentExecution<'_> {
                     .map(|_| false);
             }
         };
-        let (activated_context, installation_request) = self
-            .compaction_installation_input(input.request)
-            .map_err(|error| Self::context_failure_terminal(&error))?;
+        let (activated_context, staged_request_context) = match self.compaction_installation_input()
+        {
+            Ok(input) => input,
+            Err(error) if deferrable_proactive_failure(error.kind) => {
+                self.settle_background(
+                    coordinator.as_ref(),
+                    &ready.admission,
+                    CompactionDisposition::Defer(Some(error.message)),
+                )?;
+                return Ok(false);
+            }
+            Err(error) => return Err(Self::context_failure_terminal(&error)),
+        };
         let must_cover = self.continuation_owner.clone();
         let fresh = self.pending_fresh_inbound.clone();
         let anchor = self
@@ -454,7 +491,7 @@ impl AgentExecution<'_> {
             must_cover_through: must_cover.as_ref(),
             fresh_inbound: fresh.as_ref(),
             protected_context_ids: &self.logical_step.context_ids,
-            staged_request_context: input.staged_request_context,
+            staged_request_context: &staged_request_context,
             carryover: carryover.as_ref(),
             carryover_anchor: anchor,
             estimate_correction: correction,
@@ -463,7 +500,7 @@ impl AgentExecution<'_> {
         let signal = self.cancellation.signal();
         let current = CurrentInstallation {
             context: &self.context_runtime,
-            request: &installation_request,
+            request: input.request,
             constraints: &constraints,
             attempt_id: Some(&self.request.attempt_id),
             turn_id: Some(TurnId::new(self.turn.to_string())),
@@ -487,7 +524,7 @@ impl AgentExecution<'_> {
                 if completed.newly_committed {
                     self.record_persisted_event(completed.persisted_event);
                     self.permission_reminder.mark_after_compaction();
-                    self.logical_step.accepted_context = Some(activated_context);
+                    self.install_compaction_context(activated_context);
                 }
                 self.retire_continuation();
                 self.measurements.withdraw();
@@ -559,7 +596,7 @@ impl AgentExecution<'_> {
                 if completed.newly_committed {
                     self.record_persisted_event(completed.persisted_event);
                     self.permission_reminder.mark_after_compaction();
-                    self.logical_step.accepted_context = Some(activated_context);
+                    self.install_compaction_context(activated_context);
                 }
                 self.settle_background(
                     coordinator.as_ref(),
@@ -599,6 +636,11 @@ impl AgentExecution<'_> {
         let Some(admission) = coordinator.active() else {
             return Ok(false);
         };
+        let (_, staged_request_context) = match self.compaction_installation_input() {
+            Ok(input) => input,
+            Err(error) if deferrable_proactive_failure(error.kind) => return Ok(false),
+            Err(error) => return Err(Self::context_failure_terminal(&error)),
+        };
         let anchor = self
             .logical_step
             .frozen_carryover
@@ -614,7 +656,7 @@ impl AgentExecution<'_> {
             must_cover_through: self.continuation_owner.as_ref(),
             fresh_inbound: self.pending_fresh_inbound.as_ref(),
             protected_context_ids: &self.logical_step.context_ids,
-            staged_request_context: input.staged_request_context,
+            staged_request_context: &staged_request_context,
             carryover: carryover.as_ref(),
             carryover_anchor: anchor,
             estimate_correction: correction,
@@ -860,8 +902,7 @@ impl AgentExecution<'_> {
         need: CompactionNeed,
         operation: &dyn crate::context::summarizer::SummaryOperation,
     ) -> Result<CompletedCompaction, ContextError> {
-        let (activated_context, installation_request) =
-            self.compaction_installation_input(input.request)?;
+        let (activated_context, staged_request_context) = self.compaction_installation_input()?;
         let operation_id = operation.budget().operation_id().clone();
         let cancellation = self.cancellation.signal();
         // Resolved before the exclusive borrow of the conversation: the
@@ -913,12 +954,12 @@ impl AgentExecution<'_> {
             self.store.as_ref(),
             input.tools,
             observed.as_ref(),
-            &installation_request.effective_system_prompt,
+            &input.request.effective_system_prompt,
             &CompactionConstraints {
                 must_cover_through,
                 fresh_inbound,
                 protected_context_ids: &self.logical_step.context_ids,
-                staged_request_context: input.staged_request_context,
+                staged_request_context: &staged_request_context,
                 carryover: carryover.as_ref(),
                 carryover_fallbacks: &carryover_fallbacks,
                 carryover_anchor,
@@ -982,8 +1023,7 @@ impl AgentExecution<'_> {
                 .await
                 .map(BlockingRun::Completed);
         };
-        let (activated_context, installation_request) =
-            self.compaction_installation_input(input.request)?;
+        let (activated_context, staged_request_context) = self.compaction_installation_input()?;
         let operation_id = operation.budget().operation_id().clone();
         let attempt_id = self.request.attempt_id.clone();
         let attempt_signal = self.cancellation.signal();
@@ -1022,7 +1062,7 @@ impl AgentExecution<'_> {
             must_cover_through,
             fresh_inbound,
             protected_context_ids: &protected_ids,
-            staged_request_context: input.staged_request_context,
+            staged_request_context: &staged_request_context,
             carryover: carryover.as_ref(),
             carryover_fallbacks: &carryover_fallbacks,
             carryover_anchor: anchor.as_ref(),
@@ -1036,7 +1076,7 @@ impl AgentExecution<'_> {
             store.as_ref(),
             input.tools,
             observed.as_ref(),
-            &installation_request.effective_system_prompt,
+            &input.request.effective_system_prompt,
             &constraints,
             blocking_cancellation,
             CompactionAttribution {
@@ -1094,7 +1134,7 @@ impl AgentExecution<'_> {
             CompetitionWinner::Background(Some(CompactionDelivery::Ready(ready))) => {
                 let current = CurrentInstallation {
                     context: &self.context_runtime,
-                    request: &installation_request,
+                    request: input.request,
                     constraints: &constraints,
                     attempt_id: Some(&attempt_id),
                     turn_id: Some(TurnId::new(self.turn.to_string())),
@@ -1218,7 +1258,7 @@ impl AgentExecution<'_> {
                 if completed.newly_committed {
                     self.record_persisted_event(completed.persisted_event);
                     self.permission_reminder.mark_after_compaction();
-                    self.logical_step.accepted_context = Some(activated_context);
+                    self.install_compaction_context(activated_context);
                 }
                 self.install_committed_carryover(completed.carryover_level)?;
                 self.durable_failure_kind = Some(DurableFailureKind::Compaction);
@@ -1252,7 +1292,7 @@ impl AgentExecution<'_> {
             // Successful activated compaction arms the next request's sparse
             // permission reminder (Issue #544 §10).
             self.permission_reminder.mark_after_compaction();
-            self.logical_step.accepted_context = Some(activated_context);
+            self.install_compaction_context(activated_context);
         }
         self.install_committed_carryover(completed.carryover_level)?;
         Ok(CompletedCompaction {

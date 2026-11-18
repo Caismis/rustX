@@ -140,6 +140,94 @@ async fn entered(receiver: &mut tokio::sync::mpsc::UnboundedReceiver<usize>) -> 
         .unwrap()
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn permission_review_reaches_provider_and_settles_after_completion_or_cancellation() {
+    use crate::runtime::permission::review::{
+        AuxiliaryPermissionReviewer, PermissionReviewPort, PermissionReviewVerdict,
+    };
+    for (native, cancel) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (fixture, adapter, mut entries, _) = structured_fixture(
+            native,
+            vec![completion(
+                r#"{"decision":"allow","explanation":"requested"}"#,
+            )],
+            AuxiliaryOutputFormat::Text,
+        );
+        drop(fixture.reservation);
+        let cancellation = CancellationSignal::new();
+        let reviewer = AuxiliaryPermissionReviewer::new(
+            fixture.executor.clone(),
+            fixture.frozen.invocation.clone(),
+            ModelTimeoutPolicy::default(),
+            7,
+            cancellation.child(),
+        );
+        let conversation_id = ConversationId::generate();
+        let attempt_id = crate::runtime::identity::AttemptId::new("review-attempt");
+        let invocation_id = crate::tools::types::ToolInvocationId::Agent {
+            call_id: crate::runtime::identity::ToolCallId::new("review-call"),
+        };
+        let tool_id = crate::runtime::identity::ToolId::new("bash");
+        let origin = crate::tools::types::ToolOrigin::Builtin;
+        let arguments = serde_json::json!({"command": "npm install"});
+        let task = crate::runtime::permission::PermissionTaskEvidence::canonical(
+            &MessageBlock::User(UserMessageBlock {
+                id: MessageId::new("task"),
+                source: UserSource::Human,
+                kind: InboundKind::Message,
+                timestamp: None,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: "Install dependencies".into(),
+                })],
+            }),
+        )
+        .unwrap();
+        let view = crate::agent::lifecycle::PreToolView {
+            task: Some(&task),
+            conversation_id: &conversation_id,
+            execution: crate::runtime::interaction::InteractionExecution::Attempt {
+                attempt_id,
+                turn: 1,
+            },
+            invocation_id: &invocation_id,
+            tool_id: &tool_id,
+            tool_name: "bash",
+            origin: &origin,
+            mode: crate::tools::types::ToolInvocationMode::Foreground,
+            arguments: &arguments,
+            audit_arguments: &arguments,
+            elevation_reason: None,
+            workspace_root: None,
+            mutation_target: None,
+            resource_permission: crate::runtime::permission::ResourcePermissionValue::Default,
+        };
+        let review = reviewer.review(&view, "external operation", &cancellation);
+        tokio::pin!(review);
+        tokio::select! {
+            result = &mut review => panic!("review settled before provider entry: {result:?}"),
+            _ = entered(&mut entries) => {}
+        }
+        if cancel {
+            cancellation.cancel();
+        } else {
+            adapter.release.notify_one();
+        }
+        let result = tokio::time::timeout(std::time::Duration::from_secs(10), review)
+            .await
+            .unwrap();
+        if cancel {
+            assert!(matches!(result, PermissionReviewVerdict::Failed { .. }));
+        } else {
+            assert!(
+                matches!(result, PermissionReviewVerdict::Allow { .. }),
+                "{result:?}"
+            );
+        }
+        assert!(adapter.exited.load(Ordering::SeqCst));
+        assert!(!fixture.executor.with_activity(|active| active).unwrap());
+    }
+}
+
 struct CallbackConsumer {
     visible_limit: usize,
     registered: AtomicUsize,

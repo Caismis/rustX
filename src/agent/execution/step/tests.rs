@@ -389,6 +389,10 @@ fn expected_trace(adopted: Option<&str>) -> Vec<crate::events::types::RuntimeEve
         RuntimeEvent::AssistantMessageCommitted {
             message_id: MessageId::new("attempt-1-agent-1"),
         },
+        RuntimeEvent::ToolCallRequested {
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+        },
         RuntimeEvent::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),

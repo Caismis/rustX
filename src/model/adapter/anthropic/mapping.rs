@@ -1037,16 +1037,17 @@ fn validate_thinking_unit(
         Some("thinking") => {
             let thinking = state.opaque["thinking"]
                 .as_str()
-                .ok_or_else(|| unsupported("signed thinking is missing native text"))?;
-            if state.opaque["signature"].as_str().is_none_or(str::is_empty)
+                .ok_or_else(|| unsupported("thinking is missing native text"))?;
+            if state
+                .opaque
+                .get("signature")
+                .is_some_and(|value| !value.is_string())
                 || reasoning
                     .text
                     .as_deref()
                     .is_some_and(|text| text != thinking)
             {
-                return Err(unsupported(
-                    "changed or incomplete Anthropic signed thinking unit",
-                ));
+                return Err(unsupported("changed or incomplete Anthropic thinking unit"));
             }
         }
         Some("redacted_thinking")

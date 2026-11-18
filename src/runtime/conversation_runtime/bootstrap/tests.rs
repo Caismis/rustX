@@ -5,6 +5,18 @@ use crate::durable::ProjectionStore;
 use crate::durable::RequestStore;
 use crate::runtime::conversation_runtime::test_support::*;
 
+fn has_permission_reminder(snapshot: &crate::model::RequestSnapshot) -> bool {
+    snapshot.contributions.iter().any(|contribution| {
+        snapshot
+            .request_context_ids
+            .contains(&contribution.message_id)
+            && contribution.producer
+                == crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::PermissionReminder,
+                )
+    })
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn permission_task_never_promotes_an_initial_runtime_notice_into_authority() {
     let dir = tempfile::tempdir().unwrap();
@@ -743,7 +755,7 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
             runtime.inner.lock_state().last_permission_reminder_mode,
             Some(ApprovalMode::FullAccess)
         );
-        let (runtime, model, after) = if reopen {
+        let (runtime, _model, after) = if reopen {
             runtime.shutdown().await.unwrap();
             drop(runtime);
             drop(model);
@@ -759,14 +771,11 @@ async fn permission_reminder_ignores_modes_that_never_reached_a_request_start() 
             .unwrap();
         await_settled_ledger(&runtime, after).await;
         assert!(
-            !model
-                .requests()
-                .last()
-                .unwrap()
-                .effective_system_prompt
-                .contains(&crate::runtime::permission::permission_reminder_text(
-                    ApprovalMode::FullAccess
-                )),
+            !has_permission_reminder(
+                request_snapshots(&runtime.request_history())
+                    .last()
+                    .unwrap()
+            ),
             "unconsumed A-to-B-to-A changes must stay quiet, cancel={cancel}, reopen={reopen}"
         );
         runtime.shutdown().await.unwrap();
@@ -850,7 +859,7 @@ async fn permission_reminder_survives_compaction_then_cancel_or_failed_request_s
             runtime.inner.lock_state().last_permission_reminder_mode,
             None
         );
-        let (runtime, model, after) = if reopen {
+        let (runtime, _model, after) = if reopen {
             let shutdown = runtime.shutdown().await;
             if cancel {
                 shutdown.unwrap();
@@ -885,14 +894,11 @@ async fn permission_reminder_survives_compaction_then_cancel_or_failed_request_s
             .unwrap();
         await_settled_ledger(&runtime, after).await;
         assert!(
-            model
-                .requests()
-                .last()
-                .unwrap()
-                .effective_system_prompt
-                .contains(&crate::runtime::permission::permission_reminder_text(
-                    ApprovalMode::FullAccess
-                )),
+            has_permission_reminder(
+                request_snapshots(&runtime.request_history())
+                    .last()
+                    .unwrap()
+            ),
             "committed compaction must remain eligible, cancel={cancel}, reopen={reopen}"
         );
         runtime.shutdown().await.unwrap();
@@ -919,17 +925,12 @@ async fn permission_reminder_reconstructs_from_primary_request_and_context_activ
                     .unwrap();
                 await_settled_ledger(&runtime, attempt).await;
             }
-            let reminder =
-                crate::runtime::permission::permission_reminder_text(ApprovalMode::FullAccess);
-            assert!(
-                model.requests()[0]
-                    .effective_system_prompt
-                    .contains(&reminder)
-            );
-            assert!(
-                !model.requests()[1]
-                    .effective_system_prompt
-                    .contains(&reminder)
+            let snapshots = request_snapshots(&runtime.request_history());
+            assert!(has_permission_reminder(&snapshots[0]));
+            assert!(!has_permission_reminder(&snapshots[1]));
+            assert_eq!(
+                model.requests()[0].effective_system_prompt,
+                model.requests()[1].effective_system_prompt
             );
             if compact {
                 runtime.compact_context(None, None).await.unwrap();
@@ -942,7 +943,7 @@ async fn permission_reminder_reconstructs_from_primary_request_and_context_activ
             } else {
                 ApprovalMode::FullAccess
             };
-            let (reopened, model) = headless_runtime_with_options(
+            let (reopened, _model) = headless_runtime_with_options(
                 &dir,
                 vec![one_turn_script()],
                 None,
@@ -967,9 +968,11 @@ async fn permission_reminder_reconstructs_from_primary_request_and_context_activ
                 .unwrap();
             await_settled_ledger(&reopened, 0).await;
             assert_eq!(
-                model.requests()[0]
-                    .effective_system_prompt
-                    .contains(&crate::runtime::permission::permission_reminder_text(mode)),
+                has_permission_reminder(
+                    request_snapshots(&reopened.request_history())
+                        .last()
+                        .unwrap()
+                ),
                 compact || changed_mode
             );
             assert_eq!(
@@ -1904,38 +1907,29 @@ async fn default_system_prompt_is_frozen_without_optional_instructions() {
         crate::runtime::ApprovalMode::FullAccess,
     );
     let expected = format!(
-        "{}\n\nCurrent working directory: {}\n\n{reminder}",
+        "{}\n\nCurrent working directory: {}",
         crate::context::DEFAULT_SYSTEM_PROMPT,
         runtime.tool_runtime().workspace().root().display()
     );
     for (index, (request, snapshot)) in requests.iter().zip(&snapshots).enumerate() {
-        let expected = if index == 0 {
-            expected.clone()
-        } else {
-            expected
-                .strip_suffix(&format!("\n\n{reminder}"))
-                .unwrap()
-                .to_owned()
-        };
         assert_eq!(request.effective_system_prompt, expected);
         assert_eq!(
             snapshot.effective_system_prompt,
             request.effective_system_prompt
         );
-        assert_eq!(
-            snapshot.system_sections.len(),
-            if index == 0 { 2 } else { 1 }
-        );
+        assert_eq!(snapshot.system_sections.len(), 1);
         assert_eq!(
             snapshot.system_sections[0].lane,
             crate::context::SystemSectionLane::CoreRuntimeIdentity
         );
-        if index == 0 {
-            assert_eq!(
-                snapshot.system_sections[1].lane,
-                crate::context::SystemSectionLane::PermissionReminder
-            );
-        }
+        assert_eq!(has_permission_reminder(snapshot), index == 0);
+        assert_eq!(
+            serde_json::to_string(&request.messages)
+                .unwrap()
+                .matches(&reminder)
+                .count(),
+            1
+        );
     }
     let ledger = runtime.coordinator_ledger().unwrap();
     assert!(
@@ -1978,11 +1972,8 @@ async fn agent_and_project_instructions_extend_default_system_authority() {
         .submit_inbound(text_content("delegated task"))
         .expect("delegated inbound");
     let _ = await_settled_ledger(&runtime, 0).await;
-    let reminder = crate::runtime::permission::permission_reminder_text(
-        crate::runtime::ApprovalMode::FullAccess,
-    );
     let expected = format!(
-        "{}\n\nCurrent working directory: {}\n\n{persona}\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>\n\n{reminder}",
+        "{}\n\nCurrent working directory: {}\n\n{persona}\n\nProject-specific instructions and guidelines:\n\n<project_instructions path=\"{}\">\n{project}\n</project_instructions>",
         crate::context::DEFAULT_SYSTEM_PROMPT,
         runtime.tool_runtime().workspace().root().display(),
         dir.path().join("workspace/AGENTS.md").display()
@@ -2001,7 +1992,6 @@ async fn agent_and_project_instructions_extend_default_system_authority() {
             crate::context::SystemSectionLane::CoreRuntimeIdentity,
             crate::context::SystemSectionLane::AgentProfile,
             crate::context::SystemSectionLane::WorkspaceInstructions,
-            crate::context::SystemSectionLane::PermissionReminder,
         ]
     );
     let ledger = serde_json::to_string(&runtime.coordinator_ledger().unwrap()).unwrap();

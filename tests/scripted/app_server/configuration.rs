@@ -17,6 +17,7 @@ mod desired_sources;
 mod mcp_readiness;
 mod preparation;
 mod session_creation;
+mod skill_transfer;
 mod source_documents;
 mod sources;
 

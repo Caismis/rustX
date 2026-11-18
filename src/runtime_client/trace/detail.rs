@@ -9,6 +9,7 @@ use super::request::{RequestOutcome, request_detail};
 use super::tool::{historical_definition, tool_detail};
 use super::{ADOPTED_MESSAGE_LIMIT, STEP_JOIN_LIMIT, TraceProjection};
 use crate::durable::ConversationStoreError;
+use crate::durable::observation::TraceFactKind;
 use crate::durable::presentation::FactScope;
 use crate::events::types::{RuntimeEvent as E, RuntimeEventEnvelope};
 use crate::message::types::{AssistantContentBlock, MessageBlock};
@@ -121,12 +122,20 @@ impl TraceProjection<'_> {
                         > crate::observation::trace::bounds::TRACE_DETAIL_BLOCKS;
                 }
             }
-            E::ToolExecutionStarted {
+            E::ToolCallRequested {
+                tool_call_id,
+                tool_id,
+            }
+            | E::ToolExecutionStarted {
                 tool_call_id,
                 tool_id,
             } => {
                 detail.kind = TraceKind::Tool;
-                detail.tool = self.tool_call_detail(anchor, tool_call_id, tool_id, true)?;
+                let started = matches!(anchor.event, E::ToolExecutionStarted { .. })
+                    || self
+                        .ending(anchor.sequence, &[TraceFactKind::ToolExecutionStarted])?
+                        .is_some();
+                detail.tool = self.tool_call_detail(anchor, tool_call_id, tool_id, started)?;
                 detail.truncated = detail.tool.is_none();
             }
             E::AttemptStarted { .. } => detail.kind = TraceKind::Attempt,

@@ -160,6 +160,9 @@ fn assert_no_pattern(value: &Value) {
 }
 
 fn text_parts(content: &Value) -> String {
+    if let Some(text) = content.as_str() {
+        return text.to_owned();
+    }
     content
         .as_array()
         .expect("protocol text-part array")

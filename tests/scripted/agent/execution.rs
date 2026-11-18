@@ -692,6 +692,10 @@ fn expected_single_tool_trace() -> Vec<RuntimeEvent> {
         RuntimeEvent::AssistantMessageCommitted {
             message_id: assistant_message_id(1),
         },
+        RuntimeEvent::ToolCallRequested {
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+        },
         RuntimeEvent::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),

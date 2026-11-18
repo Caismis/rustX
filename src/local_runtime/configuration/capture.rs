@@ -679,9 +679,7 @@ impl UserConfigManager {
         // A scope enables only the files it owns: a Global entry never
         // enables the Workspace file that shadows it, nor the reverse.
         config.agent.workflows.retain(|id| {
-            workflows.locations.get(id).is_some_and(|location| {
-                scoped_workflows[usize::from(location.scope == SourceScope::Workspace)].contains(id)
-            })
+            workflows.enabled_by_owning_scope(id, &scoped_workflows[0], &scoped_workflows[1])
         });
         let discover_skills = || {
             self.discover_skills(Some(&locations.workspace))

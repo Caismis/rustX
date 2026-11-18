@@ -48,7 +48,7 @@ function catalogPage(names: string[], next_offset: number | null = null): Skills
   return { type: 'skills', page: { revision: 'catalog-1', next_offset, diagnostics: [], diagnostics_truncated: false,
     data: names.map(name => ({ catalog: { name, description: `Skill ${name}`, location: `/skills/${name}/SKILL.md` },
       provenance: { name, source: 'user', location: `/skills/${name}/SKILL.md`, shadowed: [] },
-      metadata_revision: 'skill-1', disable_model_invocation: false })) } };
+      metadata_revision: 'skill-1', disable_model_invocation: false, enabled_by_default: true })) } };
 }
 
 it.each(['loading', 'failed', 'page-failed'] as const)('cannot freeze all from a %s catalog, while explicit None stays available', async state => {

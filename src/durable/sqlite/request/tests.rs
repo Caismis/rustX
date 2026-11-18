@@ -43,6 +43,7 @@ mod header_capture;
 mod manifest_store;
 mod owner;
 mod probe;
+mod reminder;
 mod retry;
 mod snapshot_validation;
 mod span;

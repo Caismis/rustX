@@ -625,7 +625,11 @@ pub(in crate::durable::sqlite) fn validate_event_reference_with_requests(
         // Every Tool Plane transition that names a proposal uses the same
         // semantic owner. This includes execution starts/progress/outcomes
         // and detached background authorization.
-        RuntimeEvent::ToolExecutionStarted {
+        RuntimeEvent::ToolCallRequested {
+            tool_call_id,
+            tool_id,
+        }
+        | RuntimeEvent::ToolExecutionStarted {
             tool_call_id,
             tool_id,
         }

@@ -158,7 +158,8 @@ impl super::TraceProjection<'_> {
         let mut record = self.record(anchor)?;
         super::record::bound_record(&mut record);
         let content = match &anchor.fact {
-            TraceFactData::ToolStart { occurrence, .. } => TraceInspectionContent::Tool {
+            TraceFactData::ToolStart { occurrence, .. }
+            | TraceFactData::ToolRequest { occurrence, .. } => TraceInspectionContent::Tool {
                 definition: match occurrence {
                     Some(occurrence) => match self
                         .store

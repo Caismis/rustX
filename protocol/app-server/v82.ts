@@ -2236,6 +2236,22 @@ export type SourceMutation =
       kind: 'agent';
     }
   | {
+      name: string;
+      authored: SkillDisplayWrite;
+      upload?: SkillIconUpload | null;
+      kind: 'skill_display';
+    }
+  | {
+      name: string;
+      kind: 'skill_delete';
+    }
+  | {
+      from: SourceScope;
+      operation: TransferOperation;
+      resource: ResourceTransfer;
+      kind: 'resource_transfer';
+    }
+  | {
       id: WorkflowId;
       edit: WorkflowEdit;
       kind: 'workflow';
@@ -2426,9 +2442,10 @@ export type ChatToolProtocol = 'native' | 'qwen_xml';
 /**
  * How the `OpenAI` Responses protocol operates with provider storage.
  *
- * This is continuation *structure*, not a wire value: Stored continues by
- * `previous_response_id`, Stateless continues by preserved output items and
- * requires the encrypted-reasoning `include` value.
+ * Stored requests provider retention and continues by `previous_response_id`.
+ * If the response reports `store: false`, the original output items are used
+ * instead. Stateless always continues by preserved output items (encrypted
+ * reasoning or a provider's original plaintext reasoning).
  *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "ResponsesStorageMode".
@@ -2546,6 +2563,41 @@ export type IdleLiveness =
  * via the `definition` "ExecutionPermissionMode".
  */
 export type ExecutionPermissionMode = 'plan' | 'automatic' | 'full_access';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillIconMediaType".
+ */
+export type SkillIconMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/svg+xml';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TransferOperation".
+ */
+export type TransferOperation = 'copy' | 'move';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ResourceTransfer".
+ */
+export type ResourceTransfer =
+  | {
+      source: WorkflowId;
+      destination: WorkflowId;
+      family: 'workflow';
+    }
+  | {
+      source: SubagentName;
+      destination: SubagentName;
+      family: 'agent';
+    }
+  | {
+      source: McpServerId;
+      destination: McpServerId;
+      family: 'mcp';
+    }
+  | {
+      source: string;
+      destination: string;
+      family: 'skill';
+    };
 /**
  * One whole-file Workflow mutation of the exact file the mutation names.
  *
@@ -3092,6 +3144,20 @@ export type MethodResult =
   | {
       projection: BoundedSessionSettings;
       type: 'settings';
+    };
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillDisplayIcon".
+ */
+export type SkillDisplayIcon =
+  | {
+      media_type: SkillIconMediaType;
+      data_base64: string;
+      kind: 'asset';
+    }
+  | {
+      name: string;
+      kind: 'iconify';
     };
 /**
  * One typed generation-scoped Skill discovery fact.
@@ -6819,6 +6885,10 @@ export type ErrorData =
       kind: 'source_conflict';
     }
   | {
+      reason: TransferRejection;
+      kind: 'resource_transfer_rejected';
+    }
+  | {
       expected: string;
       actual: string;
       kind: 'stale_settings';
@@ -6912,6 +6982,12 @@ export type SessionArchivePrepareError =
   | 'corrupt_authority'
   | 'storage'
   | 'cancelled';
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "TransferRejection".
+ */
+export type TransferRejection =
+  'name_taken' | 'name_enabled' | 'protected_mcp_values' | 'same_directory';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "Notification".
@@ -10569,6 +10645,25 @@ export interface GoalExtensionDocument1 {
   enabled?: boolean;
 }
 /**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillDisplayWrite".
+ */
+export interface SkillDisplayWrite {
+  display_name?: string | null;
+  short_description?: string | null;
+  icon_small?: string | null;
+  icon_large?: string | null;
+  icon?: string | null;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillIconUpload".
+ */
+export interface SkillIconUpload {
+  media_type: SkillIconMediaType;
+  data_base64: string;
+}
+/**
  * How people see the Workflow in the library and editor. Never part of the
  * program: models only read the definition's own `description`.
  *
@@ -10632,6 +10727,9 @@ export interface SkillDescriptor {
   provenance: SkillProvenance;
   metadata_revision: string;
   disable_model_invocation: boolean;
+  enabled_by_default: boolean;
+  operation_revision?: string | null;
+  display?: SkillDisplay | null;
 }
 /**
  * One model-visible Skill catalog entry: standard metadata plus the host
@@ -10699,6 +10797,18 @@ export interface ShadowedSkill {
    * The shadowed package's `SKILL.md` location.
    */
   location: string;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SkillDisplay".
+ */
+export interface SkillDisplay {
+  authored: SkillDisplayWrite;
+  icon?: SkillDisplayIcon | null;
+  /**
+   * An exact write fence when this package has an editable sidecar.
+   */
+  revision?: string | null;
 }
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema

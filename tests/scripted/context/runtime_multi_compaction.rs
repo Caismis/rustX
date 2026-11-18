@@ -398,6 +398,17 @@ fn is_agent_status(message: &MessageBlock) -> bool {
     )
 }
 
+fn is_permission_reminder(message: &MessageBlock) -> bool {
+    matches!(message, MessageBlock::User(user)
+    if user.source == rustx::message::types::UserSource::Runtime
+        && user.kind == InboundKind::Context(ContextKind::NativeEnvironment)
+        && user.content == vec![UserContentBlock::Text(TextBlock {
+            text: format!("<system-reminder>\n{}\n</system-reminder>",
+                rustx::runtime::permission::permission_reminder_text(
+                    rustx::runtime::ApprovalMode::FullAccess)),
+        })])
+}
+
 /// Every tool call in one message list has its result, every result follows
 /// its call, and neither ever appears without the other.
 fn assert_tool_units_complete(messages: &rustx::model::SelectedModelInput, context: &str) {
@@ -431,14 +442,22 @@ fn assert_tool_units_complete(messages: &rustx::model::SelectedModelInput, conte
     }
 }
 
-/// A checkpoint reprojects only the activation-dependent native reminder;
-/// the admitted generation and every original contributor remain exact.
-fn assert_reminder_activation_refresh(before: &RequestSnapshot, after: &RequestSnapshot) {
-    use rustx::context::{ContributorGeneration, SystemSectionLane};
+/// Checkpoint activation preserves the frozen contributor batch and adds one
+/// start-owned canonical permission reminder, without moving it into System.
+fn assert_reminder_activation_refresh(
+    before: &rustx::model::snapshot::RequestSnapshot,
+    after: &rustx::model::snapshot::RequestSnapshot,
+    request: &ModelRequest,
+) {
+    use rustx::context::ContributorGeneration;
     use rustx::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
 
     let owner = ContextContributorIdentity::Native(NativeContextContributor::PermissionReminder);
     assert_eq!(before.context_generation.id, after.context_generation.id);
+    assert!(
+        before.canonical_frontier < after.canonical_frontier,
+        "the retry start durably admits its newly armed reminder"
+    );
     assert!(
         !before
             .context_generation
@@ -470,40 +489,64 @@ fn assert_reminder_activation_refresh(before: &RequestSnapshot, after: &RequestS
             attestation: None
         }],
     );
+    assert_eq!(before.system_sections, after.system_sections);
     assert_eq!(
-        before.system_sections,
-        after
+        before.effective_system_prompt,
+        after.effective_system_prompt
+    );
+    assert!(
+        !after
             .system_sections
             .iter()
-            .filter(|section| section.contributor != owner)
-            .cloned()
-            .collect::<Vec<_>>(),
-        "activation preserves all other accepted system sections",
+            .any(|section| section.contributor == owner)
     );
-    let sections = after
-        .system_sections
+    let reminders = after
+        .contributions
         .iter()
-        .filter(|section| section.contributor == owner)
+        .filter(|entry| entry.producer == owner)
         .collect::<Vec<_>>();
-    assert_eq!(sections.len(), 1);
-    assert_eq!(sections[0].lane, SystemSectionLane::PermissionReminder);
     assert_eq!(
-        sections[0].content,
-        rustx::runtime::permission::permission_reminder_text(after.permission_mode)
+        reminders.len(),
+        1,
+        "one reminder belongs to this request start"
+    );
+    let reminder = reminders[0];
+    assert_eq!(reminder.metadata, ContextKind::NativeEnvironment);
+    assert_eq!(reminder.presentation, None);
+    assert_eq!(
+        reminder.emissions,
+        [] as [rustx::message::types::ContributionEmission; 0]
+    );
+    let messages = request
+        .messages
+        .iter()
+        .filter_map(rustx::model::ModelInputMessage::as_canonical)
+        .filter(|message| message.id() == &reminder.message_id)
+        .collect::<Vec<_>>();
+    assert_eq!(messages.len(), 1);
+    let MessageBlock::User(user) = messages[0] else {
+        panic!("the reminder is canonical User context");
+    };
+    assert_eq!(user.source, rustx::message::types::UserSource::Runtime);
+    assert_eq!(
+        user.kind,
+        InboundKind::Context(ContextKind::NativeEnvironment)
     );
     assert_eq!(
-        after
-            .effective_system_prompt
-            .matches(sections[0].content.as_str())
-            .count(),
-        1
+        user.content,
+        vec![UserContentBlock::Text(TextBlock {
+            text: format!(
+                "<system-reminder>\n{}\n</system-reminder>",
+                rustx::runtime::permission::permission_reminder_text(after.permission_mode)
+            ),
+        })]
     );
     assert_eq!(
         after
             .effective_system_prompt
             .matches("Execution permission mode:")
             .count(),
-        1
+        0
     );
 }
 
@@ -653,7 +696,7 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert!(r1_wire.contains("Current time:"));
     assert_eq!(mixed_compaction_summaries(&requests[0].messages), 0);
 
-    assert_eq!(requests[2].messages.len(), 2, "[sum1, in2]");
+    assert_eq!(requests[2].messages.len(), 3, "[sum1, in2, permission]");
     assert_eq!(mixed_compaction_summaries(&requests[2].messages), 1);
     let r2_wire = request_wire(&requests[2].messages);
     assert!(r2_wire.contains("SUMMARY-ONE covers filler one"));
@@ -664,7 +707,11 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert!(r2_wire.contains("turn two"));
     assert!(!r2_wire.contains("Current time:"));
 
-    assert_eq!(requests[4].messages.len(), 3, "[sum2, in3, st3]");
+    assert_eq!(
+        requests[4].messages.len(),
+        4,
+        "[sum2, in3, st3, permission]"
+    );
     assert_eq!(mixed_compaction_summaries(&requests[4].messages), 1);
     let r3_wire = request_wire(&requests[4].messages);
     assert!(r3_wire.contains("SUMMARY-TWO supersedes summary one"));
@@ -713,8 +760,8 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     // The Message Ledger retains everything; the active surface exclusions
     // above came from Surface revisions, never from destructive rewrites.
     // Commit order per attempt: the fresh inbound commits at turn start, the
-    // proactive compaction's summary commits before status admission, and
-    // the assistant message commits at turn completion.
+    // proactive compaction's summary belongs to its checkpoint, admitted
+    // context commits at request start, and the assistant commits at completion.
     let ledger = await_ledger(
         host,
         fixture.runtime.tool_runtime().durable_store().as_ref(),
@@ -722,21 +769,25 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     .await;
     assert_eq!(
         ledger.len(),
-        8,
-        "3 inbounds + 2 status facts + 3 assistants; summaries belong to checkpoints"
+        11,
+        "3 inbounds + 2 status facts + 3 permission reminders + 3 assistants; summaries belong to checkpoints"
     );
-    assert!(matches!(&ledger[0], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(is_agent_status(&ledger[1]));
-    assert!(matches!(&ledger[2], MessageBlock::Assistant(_)));
-    assert!(matches!(&ledger[3], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    for index in [0, 4, 7] {
+        assert!(matches!(&ledger[index], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    }
+    for index in [1, 8] {
+        assert!(is_agent_status(&ledger[index]));
+    }
+    for index in [2, 5, 9] {
+        assert!(is_permission_reminder(&ledger[index]));
+    }
+    for index in [3, 6, 10] {
+        assert!(matches!(&ledger[index], MessageBlock::Assistant(_)));
+    }
     assert_eq!(
         projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
         2
     );
-    assert!(matches!(&ledger[4], MessageBlock::Assistant(_)));
-    assert!(matches!(&ledger[5], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(is_agent_status(&ledger[6]));
-    assert!(matches!(&ledger[7], MessageBlock::Assistant(_)));
     let ledger_wire = wire(&ledger);
     assert!(
         ledger_wire.contains("FILLER-ONE-MARKER"),
@@ -995,9 +1046,9 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     }
 
     // Compaction #1 retired the continuation-owning tool unit completely:
-    // the retry observes only the summary — neither the call nor its result.
+    // the retry observes the summary and its newly admitted native reminder.
     let retry_two = request_wire(&requests[4].messages);
-    assert_eq!(requests[4].messages.len(), 1, "[sum1]");
+    assert_eq!(requests[4].messages.len(), 2, "[sum1, permission]");
     assert!(retry_two.contains("SUMMARY-ONE covers the tool turn"));
     assert!(!retry_two.contains("call-1"));
     assert!(!retry_two.contains("TOOL-RESULT-OK"));
@@ -1013,16 +1064,27 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         summary_two.contains("SUMMARY-ONE covers the tool turn"),
         "the second compaction incorporated the first summary"
     );
-    assert!(summary_two.contains("recovered after one"));
+    assert!(
+        summary_two.contains("Execution permission mode: full_access."),
+        "the second compaction retires the preceding canonical reminder as new source"
+    );
 
-    // The second retry observes [sum2, in3, st3]: the new summary, the fresh
-    // inbound, and its admitted status fact — nothing retired.
+    // The second retry observes the new summary, retained preceding answer,
+    // fresh inbound, admitted status, and new native permission reminder.
     let retry_three = request_wire(&requests[7].messages);
-    assert_eq!(requests[7].messages.len(), 3, "[sum2, in3, st3]");
+    assert_eq!(
+        requests[7].messages.len(),
+        5,
+        "[sum2, recovered1, in3, st3, permission]"
+    );
     assert!(retry_three.contains("SUMMARY-TWO supersedes summary one"));
     assert!(!retry_three.contains("SUMMARY-ONE covers the tool turn"));
     assert!(!retry_three.contains("call-1"));
     assert!(!retry_three.contains("TOOL-RESULT-OK"));
+    assert!(
+        retry_three.contains("recovered after one"),
+        "the shorter complete retirement retains the original preceding answer"
+    );
     assert!(retry_three.contains("turn three"));
     assert!(retry_three.contains("Current time:"));
 
@@ -1065,7 +1127,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
     // generation (modules never recaptured or reevaluated) but rebuilds from its own
     // post-compaction Surface revision.
     assert_eq!(snapshots[2].identity.turn, snapshots[3].identity.turn);
-    assert_reminder_activation_refresh(&snapshots[2], &snapshots[3]);
+    assert_reminder_activation_refresh(&snapshots[2], &snapshots[3], &requests[4]);
     assert_ne!(
         snapshots[1].context_generation, snapshots[2].context_generation,
         "a new primary step admits a new context generation"
@@ -1075,7 +1137,7 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         "compaction changes projection activation independently of canonical growth"
     );
     assert_eq!(snapshots[4].identity.turn, snapshots[5].identity.turn);
-    assert_reminder_activation_refresh(&snapshots[4], &snapshots[5]);
+    assert_reminder_activation_refresh(&snapshots[4], &snapshots[5], &requests[7]);
     assert_ne!(
         snapshots[4].history_cut.activation,
         snapshots[5].history_cut.activation
@@ -1104,19 +1166,25 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         );
     }
 
-    // The ledger retains the retired tool unit and both summaries verbatim.
+    // The ledger retains the retired tool unit and canonical reminders;
+    // both summaries belong exclusively to checkpoints.
     let ledger = await_ledger(
         host,
         fixture.runtime.tool_runtime().durable_store().as_ref(),
     )
     .await;
-    assert_eq!(ledger.len(), 10);
+    assert_eq!(ledger.len(), 13);
     assert!(
-        matches!(&ledger[4], MessageBlock::Assistant(assistant)
+        matches!(&ledger[5], MessageBlock::Assistant(assistant)
             if assistant.content.iter().any(|block| matches!(block, AssistantContentBlock::ToolCall(_)))),
         "the retired continuation-owning tool call stays in the ledger"
     );
-    assert!(matches!(&ledger[5], MessageBlock::Tool(_)));
+    assert!(matches!(&ledger[6], MessageBlock::Tool(_)));
+    assert_eq!(
+        requests[7].messages[1].as_canonical(),
+        Some(&ledger[8]),
+        "the shorter second retirement preserves the preceding answer's exact canonical identity and body"
+    );
     assert_eq!(
         projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
         2
@@ -1241,7 +1309,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     .await;
     assert_eq!(
         detached_ledger.len(),
-        5,
+        7,
         "summary projection adds no canonical message"
     );
     assert_eq!(
@@ -1270,7 +1338,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot without attachments");
     assert_eq!(detached_snapshot.context.compaction_count, 1);
-    assert_eq!(detached_snapshot.messages.len(), 5);
+    assert_eq!(detached_snapshot.messages.len(), 7);
 
     // A fresh attachment is a new projection binding over the same
     // continuous truth — never a transfer of semantic ownership.
@@ -1308,16 +1376,19 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     .await;
     assert_eq!(
         ledger.len(),
-        7,
-        "three inbounds, one status, and three outputs"
+        10,
+        "three inbounds, one status, three permission reminders, and three outputs"
     );
-    assert!(matches!(&ledger[0], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    for index in [0, 4, 7] {
+        assert!(matches!(&ledger[index], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    }
     assert!(is_agent_status(&ledger[1]));
-    assert!(matches!(&ledger[2], MessageBlock::Assistant(_)));
-    assert!(matches!(&ledger[3], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(matches!(&ledger[4], MessageBlock::Assistant(_)));
-    assert!(matches!(&ledger[5], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(matches!(&ledger[6], MessageBlock::Assistant(_)));
+    for index in [2, 5, 8] {
+        assert!(is_permission_reminder(&ledger[index]));
+    }
+    for index in [3, 6, 9] {
+        assert!(matches!(&ledger[index], MessageBlock::Assistant(_)));
+    }
     let checkpoint = host.checkpoint().expect("bounded checkpoint");
     let snapshot = &checkpoint.snapshot;
     assert_eq!(snapshot.context.compaction_count, 2);
@@ -1332,8 +1403,8 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     );
     assert_eq!(
         snapshot.messages.len(),
-        ledger.len(),
-        "bounded canonical display head"
+        8,
+        "bounded eight-message canonical display head"
     );
     let keys = canonical_keys(&attachment_b, &checkpoint);
     assert_eq!(
@@ -1384,7 +1455,11 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             .iter()
             .map(MessageBlock::id)
             .collect::<Vec<_>>(),
-        ledger.iter().map(MessageBlock::id).collect::<Vec<_>>()
+        ledger
+            .iter()
+            .skip(ledger.len() - snapshot.messages.len())
+            .map(MessageBlock::id)
+            .collect::<Vec<_>>()
     );
 }
 

@@ -296,6 +296,17 @@ impl ScriptedEstimator {
     pub fn message_estimate(&self, message: &MessageBlock) -> u64 {
         if let Some(weight) = self.overrides.get(message_id(message).as_str()) {
             *weight
+        } else if let MessageBlock::User(user) = message
+            && matches!(user.kind, rustx::message::types::InboundKind::Context(rustx::message::types::ContextKind::NativeEnvironment))
+            && user.content.iter().any(|block| matches!(block, rustx::message::types::UserContentBlock::Text(text) if text.text.starts_with("<system-reminder>\nExecution permission mode:")))
+        {
+            // Charge the runtime's fixed guidance by its actual text size,
+            // just as it was charged in the system prompt. Scripted weights
+            // continue to control the workload's ordinary messages.
+            user.content.iter().filter_map(|block| match block {
+                rustx::message::types::UserContentBlock::Text(text) => Some(text.text.len() as u64),
+                _ => None,
+            }).sum::<u64>().div_ceil(4)
         } else if let MessageBlock::Assistant(assistant) = message {
             assistant.content.len() as u64 * self.per_block
         } else {

@@ -6,7 +6,7 @@ import {
   returnHome, connectRemote, openSettingsPage, openWorkspaceSettings, selectedSettingsPage,
 } from './shell-actions';
 import { expect, test } from '@playwright/test';
-import { appendFileSync, existsSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { startDogfood, stopDogfoodPage } from './dogfood-server';
@@ -50,21 +50,36 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await returnHome(page);
     await openWorkspaceSettings(page, 'Workspace A'); await expandModelAuthoring(page);
     settings=await openResourceModule(page,'mcp','Workspace A');
-    await settings.getByRole('button',{name:'MCP local-fixture',exact:true}).click();
-    // Viewing the inherited User definition is not Workspace authoring: its
-    // safe native facts are shown read-only, nothing can be saved or removed,
-    // and nothing is written.
+    const globalMcp = settings.getByRole('group', { name: 'Available from Global', exact: true });
+    const installedMcp = settings.getByRole('group', { name: 'Installed', exact: true });
+    const globalMcpFile = join(fixture.directory, 'home/rustx/.agents/mcp.toml');
+    const workspaceMcpFile = join(fixture.workspaceA, '.agents/mcp.toml');
+    await globalMcp.getByRole('button',{name:'MCP local-fixture',exact:true}).click();
+    // Opening a Global card from a Workspace keeps the Global authoring target.
+    await expect(settings.getByRole('form', { name: 'Edit MCP server', exact: true }).getByText('Global', { exact: true })).toBeVisible();
     await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('python3');
-    await expect(settings.getByLabel('Command', { exact: true })).toBeDisabled();
+    await expect(settings.getByLabel('Command', { exact: true })).toBeEnabled();
     await expect(settings.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
     await expect(settings.getByRole('button', { name: 'Use global default MCP local-fixture', exact: true })).toHaveCount(0);
-    // Only the explicit override begins a Workspace definition. It replaces the
-    // whole User one when saved, against the real native Workspace document.
+    await settings.getByLabel('Command', { exact: true }).fill('global-fixture-command');
+    await settings.getByRole('button', { name: 'Save', exact: true }).click();
+    await expect(globalMcp.getByRole('listitem', { name: 'local-fixture', exact: true })).toContainText('global-fixture-command');
+    expect(readFileSync(globalMcpFile, 'utf8')).toContain('global-fixture-command');
+    expect(existsSync(workspaceMcpFile)).toBe(false);
+    // Only the explicit Workspace override begins a Workspace definition.
+    await globalMcp.getByRole('button', { name: 'Actions for local-fixture', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Override in Workspace', exact: true }).click();
+    await expect(settings.getByRole('form', { name: 'Edit MCP server', exact: true }).getByText('Workspace A', { exact: true })).toBeVisible();
+    await expect(settings.getByLabel('Command', { exact: true })).toHaveValue('global-fixture-command');
+    await expect(settings.getByLabel('Command', { exact: true })).toBeDisabled();
     await settings.getByRole('button', { name: 'Override', exact: true }).click();
     await settings.getByLabel('Command', { exact: true }).fill('unused-workspace-command');
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
-    await settings.getByRole('button', { name: 'MCP local-fixture', exact: true }).click();
+    await expect(installedMcp.getByRole('listitem', { name: 'local-fixture', exact: true })).toContainText('unused-workspace-command');
+    expect(readFileSync(workspaceMcpFile, 'utf8')).toContain('unused-workspace-command');
+    expect(readFileSync(globalMcpFile, 'utf8')).toContain('global-fixture-command');
+    expect(readFileSync(globalMcpFile, 'utf8')).not.toContain('unused-workspace-command');
+    await installedMcp.getByRole('button', { name: 'MCP local-fixture', exact: true }).click();
     await settings.getByLabel('Command', { exact: true }).fill('preserved-draft');
     // The reviewed draft must be submitted before the external edit. An edit
     // before clicking can instead invalidate a publication-owned read and
@@ -77,7 +92,7 @@ test('CFG3 structured source authoring, inert definitions, CAS and automatic no-
     await settings.screenshot({ path: test.info().outputPath('cfg3-cas-conflict.png') });
     await settings.getByRole('button', { name: 'Use latest setting', exact: true }).click();
     await settings.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(settings.getByRole('listitem', { name: 'local-fixture', exact: true })).toBeVisible();
+    await expect(installedMcp.getByRole('listitem', { name: 'local-fixture', exact: true })).toContainText('preserved-draft');
     settings=await openResourceModule(page,'subagents','Workspace A');
     await newSubagent(settings,'reviewer');
     await settings.getByLabel('Description', { exact: true }).fill('Independent review profile');

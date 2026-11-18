@@ -230,8 +230,9 @@ impl AgentExecution<'_> {
         request_ordinal: u32,
         next_request_ordinal: &mut u32,
     ) -> Result<ModelInvocation, Terminal> {
-        let staged = self.stage_model_turn(request_ordinal, &[])?;
-        let prepared = self.finalize_model_turn(&[], staged)?;
+        let context = self.pending_context()?;
+        let staged = self.stage_model_turn(request_ordinal, &context)?;
+        let prepared = self.finalize_model_turn(&context, staged)?;
         let started = self.start_actual_model_request(prepared, next_request_ordinal)?;
         self.consume_invocation(started).await
     }
@@ -384,9 +385,7 @@ impl AgentExecution<'_> {
             .unwrap_or(EstimateCorrection::UNQUANTIFIED);
         let compaction_input = CompactionInput {
             request: &request,
-
             tools: &tools,
-            staged_request_context: &[],
             estimated_input,
         };
         let joined = self
@@ -435,9 +434,9 @@ impl AgentExecution<'_> {
         if let Some(terminal) = self.durable_failure_terminal_from_state() {
             return Err(terminal);
         }
-        // The retry is another actual provider request: it stages no new
-        // request-scoped context (the original request's start transaction
-        // already committed it), freezes its own Request Snapshot, and
+        // The retry is another actual provider request: it stages only the
+        // newly eligible native reminder; ordinary context stays committed
+        // under its original identities. It freezes its own Request Snapshot and
         // passes through the one cancellation-vs-start arbitration exactly
         // like the first request of the turn.
         self.start_recovered_model_turn(retry_number, next_request_ordinal)

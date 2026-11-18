@@ -31,8 +31,48 @@ materialization root. `rustx.python-dependencies` and
 uninterpreted text.
 `SkillSnapshot` publishes immutable catalog metadata, bindings, provenance and
 diagnostics. `all`, `exact` and `none` remain visibility choices, never filesystem
-ACLs. Bodies and resource files are read or executed only by normal Tools, at the
-actual host paths and under their existing authorization rules.
+ACLs. During agent execution, normal Tools read or execute bodies and resource
+files at their host paths under the existing authorization rules.
+
+## Skill display information
+
+Add an optional `agents/openai.yaml` inside a skill directory to customize its
+card in the Web UI.
+
+```yaml
+interface:
+  display_name: PDF Toolkit
+  short_description: Extract and review PDF content
+  icon_small: ./assets/pdf.svg
+  icon: lucide:file-text
+```
+
+Images use paths relative to the skill directory under `assets/`. The card
+tries `icon_small`, then `icon_large`, then the RustX `icon` field with a
+bundled Iconify Lucide icon. Images can be SVG, PNG, JPEG, or WebP up to 32 KiB.
+When display fields are missing, the card uses the skill's name and description
+from `SKILL.md` and the default icon.
+
+For skills installed in the global or workspace skill directory, open the card
+menu and choose **Edit display information**. **Upload image** previews a local
+image in the editor. On save, rustX stores it in the skill's `assets/` directory
+and sets `interface.icon_small` to its relative path. Identical uploads reuse
+the same asset. Saving preserves other metadata and leaves existing asset
+files in place. The skill's identifier, instructions, and runtime description
+come from `SKILL.md`.
+
+In the Web UI's Workspace skill list, a directory skill's menu can copy or
+move the package between the current Workspace and Global. The operation
+includes all authored files and directories, including the presentation
+sidecar and assets. A changed destination name updates the `name` in
+`SKILL.md`. Copies also set `metadata.rustx-default-disabled: true`, so
+automatic selection leaves the copy off until it is explicitly selected.
+An unchanged-name move preserves the instruction file verbatim. **Delete**
+removes the confirmed directory from its own scope.
+
+Package transfer accepts regular files and directories, with limits of
+4,096 entries, 64 nested levels, and 256 MiB of files. Symlinked installs
+and standalone Markdown files remain browseable.
 
 ## Version and configuration semantics
 
