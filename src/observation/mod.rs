@@ -46,6 +46,3 @@ pub mod turn;
 pub(crate) mod workflow_source;
 
 pub mod metadata;
-
-#[cfg(test)]
-mod relocated_tests;
