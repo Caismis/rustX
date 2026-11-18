@@ -18,7 +18,6 @@
   background: var(--dsw-alias-bg-base);
   border-left: 0.5px solid var(--dsw-alias-border-l3);
 }
-
 /* The resize edge straddles the navigator's left rule. */
 .separator {
   position: absolute;
@@ -30,7 +29,6 @@
   cursor: col-resize;
   touch-action: none;
 }
-
 /* A row narrower than FileNavigator `FILL_BELOW`. */
 .fill {
   position: absolute;
@@ -40,11 +38,11 @@
   height: auto;
   border-left: 0;
 }
-
 /* Covered content stays laid out but cannot receive keyboard focus. */
 :has(> .navigator.fill) > :not(.navigator) {
   visibility: hidden;
 }
+
 
 /* navigator-layout `FULLSCREEN_QUERY`: every layout fills the row. */
 @media (width < 768px) {
@@ -65,6 +63,7 @@
     display: none;
   }
 }
+
 
 /* Beside a preview in a row from FileNavigator `FILL_BELOW` on, the navigator
    is a raised card inset by the tree body's own 8px so its corners show, with
@@ -117,7 +116,6 @@
     margin: var(--dsw-radius-lg) 2px;
   }
 }
-
 .dragging {
   cursor: col-resize;
   user-select: none;
