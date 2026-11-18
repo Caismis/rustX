@@ -7,11 +7,11 @@
 //! There is exactly one generic cancellation model in the runtime.
 //!
 //! The signal itself is semantics-free: it does not own an attempt reason,
-//! a background lifecycle, or any execution ownership. [`AgentCancellation`]
+//! a background lifecycle, or any execution ownership. `AgentCancellation`
 //! wraps it with the attempt cancellation reason, and the background
 //! registry owns its own background cancellation state.
 //!
-//! [`AgentCancellation`]: crate::agent::cancellation::AgentCancellation
+//! `AgentCancellation`: crate::agent::cancellation::AgentCancellation
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -51,7 +51,7 @@ impl CancellationSignal {
 
     /// Publish the owner's cause and signal under the same checkpoint-grant gate.
     /// No observer can accept cancellation before a concurrently granted commit.
-    pub(crate) fn cancel_with<T>(&self, publish_cause: impl FnOnce() -> T) -> T {
+    pub fn cancel_with<T>(&self, publish_cause: impl FnOnce() -> T) -> T {
         let _gate = self.commit_gate.lock().expect("cancellation commit gate");
         let result = publish_cause();
         self.token.cancel();
@@ -60,14 +60,14 @@ impl CancellationSignal {
 
     /// A short native grant shares the ancestor cancellation boundary. The
     /// closure must not await, write SQL or recursively use this signal.
-    pub(crate) fn with_active<T>(&self, grant: impl FnOnce() -> T) -> Option<T> {
+    pub fn with_active<T>(&self, grant: impl FnOnce() -> T) -> Option<T> {
         let _gate = self.commit_gate.lock().expect("cancellation commit gate");
         (!self.token.is_cancelled()).then(grant)
     }
 
-    pub(crate) fn authorize_compaction_commit_with(
+    pub fn authorize_compaction_commit_with(
         &self,
-        operation_id: crate::runtime::identity::CompactionOperationId,
+        operation_id: rustx_identity::CompactionOperationId,
         eligible: impl FnOnce() -> bool,
     ) -> Option<CompactionCommitGrant> {
         self.with_active(|| eligible().then_some(CompactionCommitGrant { operation_id }))
@@ -92,7 +92,7 @@ impl CancellationSignal {
     /// A poisoned runtime arbitration mutex indicates an internal invariant violation.
     pub fn authorize_compaction_commit(
         &self,
-        operation_id: crate::runtime::identity::CompactionOperationId,
+        operation_id: rustx_identity::CompactionOperationId,
     ) -> Option<CompactionCommitGrant> {
         let _gate = self.commit_gate.lock().expect("cancellation commit gate");
         (!self.token.is_cancelled()).then_some(CompactionCommitGrant { operation_id })
@@ -113,10 +113,10 @@ impl CancellationSignal {
 /// A one-operation authorization from the cancellation owner; store code cannot manufacture it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompactionCommitGrant {
-    operation_id: crate::runtime::identity::CompactionOperationId,
+    operation_id: rustx_identity::CompactionOperationId,
 }
 impl CompactionCommitGrant {
-    pub(crate) fn operation_id(&self) -> &crate::runtime::identity::CompactionOperationId {
+    pub fn operation_id(&self) -> &rustx_identity::CompactionOperationId {
         &self.operation_id
     }
 }
@@ -177,13 +177,13 @@ struct NativeCancellationAuthority {
     parent: ExecutionCancellation,
 }
 
-pub(crate) struct ExecutionCancellationTrigger {
+pub struct ExecutionCancellationTrigger {
     signal: CancellationSignal,
     authority: Arc<NativeCancellationAuthority>,
 }
 
 impl ExecutionCancellationTrigger {
-    pub(crate) fn cancel(&self, cause: crate::tools::deadline::ToolCancellationCause) {
+    pub fn cancel(&self, cause: crate::tools::deadline::ToolCancellationCause) {
         // Semantic linearization point. The absorbing cause is visible before
         // any child can observe the locally requested cancellation signal.
         let _ = self.authority.winner.set(cause);
@@ -202,7 +202,7 @@ impl std::fmt::Debug for ExecutionCancellation {
 }
 
 impl ExecutionCancellation {
-    pub(crate) fn with_active<T>(&self, admit: impl FnOnce() -> T) -> Option<T> {
+    pub fn with_active<T>(&self, admit: impl FnOnce() -> T) -> Option<T> {
         self.signal.with_active(admit)
     }
     /// Binds one runtime cancellation signal to the authority that owns its
@@ -221,7 +221,7 @@ impl ExecutionCancellation {
     /// marker. The marker is shared by cloned execution views and never
     /// becomes a durable or routable authority.
     #[must_use]
-    pub(crate) fn with_interaction_failure(
+    pub fn with_interaction_failure(
         mut self,
         interaction_failure: InteractionFailureSignal,
     ) -> Self {
@@ -265,7 +265,7 @@ impl ExecutionCancellation {
     /// `reason()` remains the attempt/background reason for physical adapters;
     /// native owners must use this view when classifying execution outcomes.
     #[must_use]
-    pub(crate) fn native_cause(&self) -> crate::tools::deadline::ToolCancellationCause {
+    pub fn native_cause(&self) -> crate::tools::deadline::ToolCancellationCause {
         self.native_cause.as_ref().map_or_else(
             || crate::tools::deadline::ToolCancellationCause::Attempt(self.reason()),
             |authority| {
@@ -278,7 +278,7 @@ impl ExecutionCancellation {
         )
     }
 
-    pub(crate) fn native_status(
+    pub fn native_status(
         &self,
         phase: crate::tools::types::ToolCancellationPhase,
     ) -> crate::tools::types::ToolExecutionStatus {
@@ -323,7 +323,7 @@ impl ExecutionCancellation {
     /// The trigger cannot change the attempt authority. Physical adapters may
     /// still read `reason()`; native terminal arbitration uses `native_cause()`.
     #[must_use]
-    pub(crate) fn child_execution(&self) -> (ExecutionCancellationTrigger, ExecutionCancellation) {
+    pub fn child_execution(&self) -> (ExecutionCancellationTrigger, ExecutionCancellation) {
         let signal = self.signal.child();
         let authority = Arc::new(NativeCancellationAuthority {
             winner: std::sync::OnceLock::new(),
@@ -341,7 +341,7 @@ impl ExecutionCancellation {
     /// Marks the owning attempt as unable to continue because its semantic
     /// interaction control path failed. This does not request cancellation or
     /// choose an interaction outcome.
-    pub(crate) fn mark_interaction_failure(&self) {
+    pub fn mark_interaction_failure(&self) {
         self.interaction_failure.mark();
     }
 }
@@ -350,17 +350,17 @@ impl ExecutionCancellation {
 /// path. It is process-local execution state, not durable interaction
 /// authority and not a second lifecycle/cancellation state machine.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct InteractionFailureSignal {
+pub struct InteractionFailureSignal {
     failed: Arc<AtomicBool>,
 }
 
 impl InteractionFailureSignal {
-    pub(crate) fn mark(&self) {
+    pub fn mark(&self) {
         self.failed.store(true, Ordering::Release);
     }
 
     #[must_use]
-    pub(crate) fn is_marked(&self) -> bool {
+    pub fn is_marked(&self) -> bool {
         self.failed.load(Ordering::Acquire)
     }
 }

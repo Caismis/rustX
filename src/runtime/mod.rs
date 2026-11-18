@@ -22,7 +22,7 @@
 
 pub mod agent_profile;
 pub mod auxiliary;
-pub mod cancellation;
+pub use rustx_types::runtime::cancellation;
 pub mod capability_inspection;
 /// Native configuration-adoption contracts: prepared candidates, adoption
 /// eligibility/refusal, admitted Attempt configuration, and cache impact.

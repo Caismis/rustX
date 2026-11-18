@@ -39,6 +39,7 @@ pub mod capabilities {
 }
 
 pub mod runtime {
+    pub mod cancellation;
     pub mod monotonic;
     pub mod process_supervision;
     pub mod process_wait;

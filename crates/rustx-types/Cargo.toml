@@ -14,6 +14,7 @@ nix = { version = "0.31.3", features = ["signal", "process", "fs"] }
 rustx-identity = { path = "../rustx-identity" }
 base64 = "0.22"
 tokio = { version = "1", features = ["macros", "sync"] }
+tokio-util = { version = "0.7", features = ["rt", "codec"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 sha2 = "0.10"
 thiserror = "2"
