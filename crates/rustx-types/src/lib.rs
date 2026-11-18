@@ -93,5 +93,6 @@ pub mod runtime {
     pub mod workflow;
     pub mod permission {
         pub mod mode;
+        pub mod resource;
     }
 }

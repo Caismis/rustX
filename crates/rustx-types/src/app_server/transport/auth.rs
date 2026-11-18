@@ -14,7 +14,7 @@ pub struct Credential(Mode);
 
 #[derive(Clone)]
 enum Mode {
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     Clock(
         Box<Credential>,
         std::sync::Arc<std::sync::atomic::AtomicI64>,
@@ -48,7 +48,7 @@ fn invalid(message: &'static str) -> io::Error {
 }
 
 impl Credential {
-#[cfg(any(test, feature = "test-fixtures"))]
+    #[cfg(any(test, feature = "test-fixtures"))]
     pub fn with_clock(self, clock: std::sync::Arc<std::sync::atomic::AtomicI64>) -> Self {
         Self(Mode::Clock(Box::new(self), clock))
     }
@@ -129,7 +129,7 @@ impl Credential {
 
     fn validate_at(&self, token: &str, now: i64) -> bool {
         match &self.0 {
-#[cfg(any(test, feature = "test-fixtures"))]
+            #[cfg(any(test, feature = "test-fixtures"))]
             Mode::Clock(policy, clock) => {
                 policy.validate_at(token, clock.load(std::sync::atomic::Ordering::Acquire))
             }
@@ -204,11 +204,7 @@ fn valid_capability(token: &str) -> bool {
 }
 
 /// Reject ambiguous carriers before validating either. No fallback on failure.
-pub fn authorize(
-    credential: &Credential,
-    headers: &http::HeaderMap,
-    offered: &[&str],
-) -> bool {
+pub fn authorize(credential: &Credential, headers: &http::HeaderMap, offered: &[&str]) -> bool {
     if offered
         .iter()
         .any(|value| value.starts_with("rustx-") && !value.starts_with("rustx-token."))
