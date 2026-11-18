@@ -44,7 +44,7 @@ def main():
     def git(*argv):
         return subprocess.check_output(['git', *argv], cwd=repo, text=True).strip()
     def clean_source():
-        if git('status', '--porcelain', '--', 'src', 'Cargo.toml', 'Cargo.lock'):
+        if git('status', '--porcelain', '--', 'src', 'crates', 'Cargo.toml', 'Cargo.lock'):
             raise ValueError('production source or Cargo inputs have uncommitted changes')
     clean_source()
     harness = [repo / 'tests/common/provider_emulator.rs',
