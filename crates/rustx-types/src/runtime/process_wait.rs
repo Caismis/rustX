@@ -64,10 +64,10 @@ mod macos {
 }
 
 #[cfg(target_os = "macos")]
-pub use macos::{waitid, Id};
+pub use macos::{Id, waitid};
 
 #[cfg(not(target_os = "macos"))]
-pub use nix::sys::wait::{waitid, Id};
+pub use nix::sys::wait::{Id, waitid};
 
 #[cfg(all(test, target_os = "macos"))]
 #[allow(unsafe_code)] // test-local fork/pipe/_exit shims, mirroring the seccomp regressions
@@ -83,7 +83,7 @@ mod macos_waitid_tests {
     //! pipe until the parent releases it, so the parent can observe a
     //! deterministic `StillAlive` state before forcing the transition.
 
-    use super::{waitid, Id};
+    use super::{Id, waitid};
     use nix::errno::Errno;
     use nix::sys::signal::Signal;
     use nix::sys::wait::{WaitPidFlag, WaitStatus};
@@ -194,9 +194,9 @@ pub fn observe_stopped_child(pid: nix::unistd::Pid) -> nix::Result<nix::sys::wai
 
 #[cfg(test)]
 mod stopped_observation_tests {
-    use super::{observe_stopped_child, waitid, Id};
+    use super::{Id, observe_stopped_child, waitid};
     use nix::sys::{
-        signal::{kill, Signal},
+        signal::{Signal, kill},
         wait::{WaitPidFlag, WaitStatus},
     };
     use nix::unistd::Pid;

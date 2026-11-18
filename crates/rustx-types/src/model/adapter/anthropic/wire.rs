@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 /// A parse failure of one stream event.
 #[derive(Debug)]
-pub(crate) enum WireParseError {
+pub enum WireParseError {
     /// The event payload was not valid JSON or did not fit its wire shape.
     Json(serde_json::Error),
     /// A content-block event carried no `index` field.
@@ -47,7 +47,7 @@ impl From<serde_json::Error> for WireParseError {
 
 /// One parsed stream event, decoded from the SSE `data` payload.
 #[derive(Debug, Clone)]
-pub(crate) enum WireEvent {
+pub enum WireEvent {
     MessageStart {
         message: WireMessage,
     },
@@ -81,7 +81,7 @@ pub(crate) enum WireEvent {
 /// Content-block events require a valid non-negative `index`; a missing,
 /// negative, non-integer, or overflowing index is a provider protocol error,
 /// never silently reinterpreted as `0`.
-pub(crate) fn parse_event(data: &str) -> Result<WireEvent, WireParseError> {
+pub fn parse_event(data: &str) -> Result<WireEvent, WireParseError> {
     let value: serde_json::Value = serde_json::from_str(data)?;
     let event_type = value.get("type").and_then(serde_json::Value::as_str);
     match event_type {
@@ -166,7 +166,7 @@ fn required_index(value: &serde_json::Value, event: &'static str) -> Result<u32,
 /// The `message` object of `message_start`.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)] // fields preserved for provider wire-shape fidelity
-pub(crate) struct WireMessage {
+pub struct WireMessage {
     #[serde(default)]
     pub id: Option<String>,
     #[serde(default)]
@@ -183,7 +183,7 @@ pub(crate) struct WireMessage {
 /// (the provider wire field); no synthetic field is invented.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)] // `input` preserved for wire-shape fidelity
-pub(crate) struct WireContentBlock {
+pub struct WireContentBlock {
     #[serde(rename = "type", default)]
     pub block_type: Option<String>,
     #[serde(default)]
@@ -207,7 +207,7 @@ pub(crate) struct WireContentBlock {
 
 /// The `delta` object of `content_block_delta`.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct WireDelta {
+pub struct WireDelta {
     #[serde(rename = "type", default)]
     pub delta_type: Option<String>,
     #[serde(default)]
@@ -224,7 +224,7 @@ pub(crate) struct WireDelta {
 /// carried by refusal terminations.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)] // `sequence` preserved for wire-shape fidelity
-pub(crate) struct WireMessageDelta {
+pub struct WireMessageDelta {
     #[serde(default, rename = "stop_reason")]
     pub reason: Option<String>,
     #[serde(default, rename = "stop_sequence")]
@@ -240,7 +240,7 @@ pub(crate) struct WireMessageDelta {
 /// carries a human-readable, not-stable explanation.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(dead_code)] // `category`/`stop_details_type` preserved for wire fidelity
-pub(crate) struct WireStopDetails {
+pub struct WireStopDetails {
     #[serde(rename = "type", default)]
     pub stop_details_type: Option<String>,
     #[serde(default)]
@@ -255,7 +255,7 @@ pub(crate) struct WireStopDetails {
 // `cache_creation_input_tokens` preserved for wire-shape fidelity; the field
 // names mirror the provider wire schema by design.
 #[allow(dead_code, clippy::struct_field_names)]
-pub(crate) struct WireUsage {
+pub struct WireUsage {
     #[serde(default)]
     pub input_tokens: Option<u64>,
     #[serde(default)]
@@ -270,14 +270,14 @@ pub(crate) struct WireUsage {
 
 /// The `output_tokens_details` object reported by current models.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct WireOutputTokensDetails {
+pub struct WireOutputTokensDetails {
     #[serde(default)]
     pub thinking_tokens: Option<u64>,
 }
 
 /// The `error` object of an `error` stream event.
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct WireError {
+pub struct WireError {
     #[serde(rename = "type", default)]
     pub error_type: Option<String>,
     /// `OpenRouter`'s stable cross-protocol error classification.

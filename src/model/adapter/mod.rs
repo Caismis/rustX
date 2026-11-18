@@ -22,14 +22,14 @@ pub mod openai;
 #[cfg(feature = "issue-387-profile")]
 pub(crate) mod profile;
 pub(crate) mod proposal;
-pub(crate) mod retry;
-pub(crate) mod structured;
+pub(crate) use rustx_types::model::adapter::retry;
+pub mod structured;
 pub mod traits;
-mod transport;
+pub(crate) use rustx_types::model::adapter::transport;
 pub mod validation;
 
 pub use traits::{
     ModelAdapter, ModelStream, ModelStreamItem, ModelStreamProgress, model_stream_of_failure,
 };
 
-pub(crate) mod response_budget;
+pub(crate) use rustx_types::model::adapter::response_budget;

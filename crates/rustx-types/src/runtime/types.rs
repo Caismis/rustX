@@ -5,7 +5,7 @@
 //! are plain runtime-owned data and never reference provider SDK or storage
 //! types.
 
-use std::sync::atomic::{AtomicU64, AtomicU8, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 
 use chrono::{DateTime, Utc};

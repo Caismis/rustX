@@ -5,8 +5,8 @@ use std::io::{self, Read};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-use nix::fcntl::{open, openat, AtFlags, OFlag};
-use nix::sys::stat::{fstat, fstatat, Mode};
+use nix::fcntl::{AtFlags, OFlag, open, openat};
+use nix::sys::stat::{Mode, fstat, fstatat};
 use serde::{Deserialize, Serialize};
 
 pub mod preview;
@@ -435,10 +435,12 @@ mod tests {
             vec![b'x'; SESSION_FILE_MAX_BYTES + 1],
         )
         .unwrap();
-        assert!(read_authorized(&root, &file, || Ok(()))
-            .unwrap_err()
-            .to_string()
-            .contains("512 KiB"));
+        assert!(
+            read_authorized(&root, &file, || Ok(()))
+                .unwrap_err()
+                .to_string()
+                .contains("512 KiB")
+        );
         std::fs::remove_file(root.join(&file.path)).unwrap();
         assert_eq!(
             read_authorized(&root, &file, || Ok(())).unwrap_err().kind(),

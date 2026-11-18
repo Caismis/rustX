@@ -4,7 +4,7 @@ use std::time::{Duration, SystemTime};
 
 /// RFC 9110 Retry-After accepts delay seconds or an HTTP date. Keep the full
 /// provider wait; the execution owner decides whether its finite policy admits it.
-pub(crate) fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+pub fn retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     parse_retry_after(
         headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?,
         SystemTime::now(),

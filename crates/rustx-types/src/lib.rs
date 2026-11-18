@@ -4,6 +4,23 @@
 //! `runtime::permission::mode`, `tools::deadline`, ...) so moved items
 //! resolve at the same absolute path inside this crate.
 
+pub mod model {
+    pub mod finish;
+    pub mod inspection;
+    pub mod adapter {
+        pub mod response_budget;
+        pub mod retry;
+        pub mod transport;
+        pub mod anthropic {
+            pub mod config;
+            pub mod wire;
+        }
+        pub mod openai {
+            pub mod config;
+        }
+    }
+}
+
 pub mod message {
     pub mod content;
 }

@@ -262,8 +262,8 @@ pub fn deadline_after(now_millis: u64, duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        deadline_after, ToolDeadlineKind, ToolExecutionDeadlinePolicy, ToolProgressCapability,
-        DEFAULT_TOOL_HARD_DEADLINE, TOOL_SETTLEMENT_CONTROL_GUARD,
+        DEFAULT_TOOL_HARD_DEADLINE, TOOL_SETTLEMENT_CONTROL_GUARD, ToolDeadlineKind,
+        ToolExecutionDeadlinePolicy, ToolProgressCapability, deadline_after,
     };
     use std::time::Duration;
 

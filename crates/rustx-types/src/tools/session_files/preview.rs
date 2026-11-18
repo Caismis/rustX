@@ -1,5 +1,5 @@
 //! Descriptor-authorized preview reads. File budgets are independent of RPC framing.
-use super::{invalid, open_file, SessionFileReadFailure, SessionFileReference};
+use super::{SessionFileReadFailure, SessionFileReference, invalid, open_file};
 use serde::{Deserialize, Serialize};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom};
 use std::os::unix::fs::MetadataExt;
@@ -313,15 +313,17 @@ mod tests {
             600 * 1024
         );
         std::fs::write(root.join("file.txt"), vec![b'x'; PAGE_BYTES + 1]).unwrap();
-        assert!(read_authorized(
-            &root,
-            &file,
-            &ReadOptions::Text {
-                offset: 1,
-                limit: 5000
-            },
-            || Ok(())
-        )
-        .is_err());
+        assert!(
+            read_authorized(
+                &root,
+                &file,
+                &ReadOptions::Text {
+                    offset: 1,
+                    limit: 5000
+                },
+                || Ok(())
+            )
+            .is_err()
+        );
     }
 }

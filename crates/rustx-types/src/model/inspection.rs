@@ -11,7 +11,7 @@
 ///
 /// This is a typed allowlist, not a secret scanner: a key is shown because
 /// it is on this list, never because its value looked harmless.
-pub(crate) const REQUEST_OPTION_ALLOWLIST: &[&str] = &[
+pub const REQUEST_OPTION_ALLOWLIST: &[&str] = &[
     "frequency_penalty",
     "logit_bias",
     "logprobs",

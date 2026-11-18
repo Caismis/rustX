@@ -2,9 +2,9 @@
 //! A total response budget also bounds a frame with no terminating delimiter.
 use futures_util::StreamExt;
 
-pub(crate) const AUXILIARY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
+pub const AUXILIARY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 
-pub(crate) fn bounded(response: reqwest::Response, limit: usize) -> reqwest::Response {
+pub fn bounded(response: reqwest::Response, limit: usize) -> reqwest::Response {
     let status = response.status();
     let version = response.version();
     let headers = response.headers().clone();
