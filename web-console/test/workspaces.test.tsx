@@ -1064,3 +1064,82 @@ it.each(['native diagnostic', 'missing diagnostic'] as const)('explains settled 
   expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', 'Keep this draft through configuration repair');
   expect(submissions()).toEqual([]);
 });
+
+it('sidebar rows retain confirmed status across transient resync contention and recover without flashing unavailable', async () => {
+  const host = await mount();
+  const rowA = () => screen.getByRole('button', { name: 'Open Session A' }).closest('[role="treeitem"]')!;
+  const flashes: string[] = [];
+  const observer = new MutationObserver(() => {
+    if (rowA().textContent?.includes('Observation unavailable')) flashes.push(rowA().textContent ?? '');
+  });
+  observer.observe(rowA(), { childList: true, subtree: true, characterData: true });
+  try {
+    expect(rowA().textContent).not.toContain('Observation unavailable');
+    server.handlers.set('session/list', () => ({
+      type: 'sessions',
+      sessions: [{ ...server.summary('A'), thread_status: null }, server.summary('B')].map(row => summaryFor(row)),
+      next_offset: null,
+    }));
+    server.handlers.set('thread/read', request => {
+      if (request.method === 'thread/read' && request.params.threadId === 'conversation-A') {
+        throw new RpcFailure({ code: -32000, message: 'Native activity observation unavailable', data: { kind: 'observation_unavailable', diagnostic: 'metadata busy' } });
+      }
+      return { type: 'thread', thread: { id: 'conversation-B', sessionId: 'B', nodeId: 'node-B', name: null, archived: false, dynamicTools: [], status: { type: 'idle' }, statusRevision: '2', runtimeIncarnation: null } };
+    });
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        server.socket.deliver({ jsonrpc: '2.0', method: 'thread/status/resyncRequired', params: {} });
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(server.client.getSnapshot().threadStatusSynchronized).toBe(true);
+      expect(server.client.getSnapshot().sessions.find(row => row.id === 'A')?.thread_status).toBeUndefined();
+      expect(rowA().textContent).not.toContain('Observation unavailable');
+
+      // Recovery notification arrives before the grace window expires.
+      await act(async () => {
+        server.socket.deliver({ jsonrpc: '2.0', method: 'thread/status/changed', params: { threadId: 'conversation-A', status: { type: 'active', activeFlags: [] }, revision: '99', runtimeIncarnation: null } });
+      });
+      expect(rowA().textContent).toContain('Running');
+      expect(flashes).toEqual([]);
+
+      // Unrecovered missing status after synchronization still surfaces unavailability after the grace window.
+      await act(async () => {
+        server.socket.deliver({ jsonrpc: '2.0', method: 'thread/status/resyncRequired', params: {} });
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(rowA().textContent).not.toContain('Observation unavailable');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(750);
+      });
+      expect(rowA().textContent).toContain('Observation unavailable');
+    } finally {
+      vi.useRealTimers();
+    }
+  } finally {
+    observer.disconnect();
+  }
+  expect(host.listWorkspaces).toHaveBeenCalled();
+});
+
+it('sidebar rows preserve immediate disconnected, systemError, and unconfirmed unavailable indications', async () => {
+  server.handlers.set('session/list', () => ({
+    type: 'sessions',
+    sessions: [{ ...server.summary('A'), thread_status: null }, server.summary('B')].map(row => summaryFor(row)),
+    next_offset: null,
+  }));
+  await mount();
+  const rowA = () => screen.getByRole('button', { name: 'Open Session A' }).closest('[role="treeitem"]')!;
+  const rowB = () => screen.getByRole('button', { name: 'Open Session B' }).closest('[role="treeitem"]')!;
+  expect(rowA().textContent).toContain('Observation unavailable');
+  expect(rowB().textContent).not.toContain('Observation unavailable');
+
+  await act(async () => {
+    server.socket.deliver({ jsonrpc: '2.0', method: 'thread/status/changed', params: { threadId: 'conversation-A', status: { type: 'systemError' }, revision: '10', runtimeIncarnation: null } });
+  });
+  expect(rowA().textContent).toContain('System error');
+
+  await act(async () => { await server.client.disconnect(); });
+  expect(rowA().textContent).toContain('Observation unavailable');
+  expect(rowB().textContent).toContain('Observation unavailable');
+});

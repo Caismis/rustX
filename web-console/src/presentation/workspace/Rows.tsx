@@ -281,14 +281,14 @@ interface SessionStatus {
 function sessionStatuses(
   node: Pick<SessionNode, 'pendingInteraction' | 'running' | 'runningSubagentCount' | 'forking' | 'runtimeStatus' | 'statusUnavailable'>,
   t: RowTranslate,
-): readonly [SessionStatus, ...SessionStatus[]] {
+): readonly SessionStatus[] {
   if(node.statusUnavailable)return [{state:'warning',label:t('common:session-product.observation-unavailable')}];
-  if(node.runtimeStatus?.labels.length) return node.runtimeStatus.labels.map(label=>({state:node.runtimeStatus!.state,label})) as [SessionStatus,...SessionStatus[]];
-  return [{state:'warning',label:t('common:session-product.observation-unavailable')}];
+  if(node.runtimeStatus?.labels.length) return node.runtimeStatus.labels.map(label=>({state:node.runtimeStatus!.state,label}));
+  return [];
 }
 
 /** Primary status dot plus every status's screen-reader label, shared by the search and session rows. */
-function SessionStatusDots({ statuses }: { statuses: readonly [SessionStatus, ...SessionStatus[]] }) {
+function SessionStatusDots({ statuses }: { statuses: readonly SessionStatus[] }) {
   return (
     <>
       <StateDot state={statuses[0].state} />
@@ -352,7 +352,7 @@ export function SearchResultItem({ result, currentId, onOpen, t }: {
     >
       <span className={css.searchResultHeading}>
         <span className={css.slot}>
-          {(primaryStatus.state !== 'done') && (
+          {primaryStatus && primaryStatus.state !== 'done' && (
             <SessionStatusDots statuses={statuses} />
           )}
         </span>
@@ -420,7 +420,7 @@ export function SessionNodeItem({
   const selected = node.id === currentId
   const statuses = sessionStatuses(node, t)
   const primaryStatus = statuses[0]
-  const showStatus = primaryStatus.state !== 'done'
+  const showStatus = !!primaryStatus && primaryStatus.state !== 'done'
   const [menuOpen, setMenuOpen] = useState(false)
   const titleRef = useRef<HTMLSpanElement>(null)
   const marquee = useTitleMarquee(titleRef)

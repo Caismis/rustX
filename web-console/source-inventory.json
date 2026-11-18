@@ -3142,7 +3142,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "03d0d6d9fc590c2adeffb11380b73c793fbd7137f6dee738244162b3a281e083",
+      "local_sha256": "9a7352ec8e057e34434533555dcbe632bf8b471ec32945e21f3f086bcc8e2d4d",
       "classification": "B",
       "additional_sources": [
         {
@@ -3303,7 +3303,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "326e1668b7721d5d3c043de26034cb797dbf25b9fd2943c7c25550f1603c90ba"
+      "local_sha256": "bdddad8dc636367c30a7353c40c7205238875231c10194b97d4b5858882f06f2"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -4028,7 +4028,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "60956a45043358bfc90fce4596209b46e158fd9359d62ddd7a98fc093a2a2793"
+      "local_sha256": "b9adeda7a274a9a8f808c48ed0c221ba4f021dba557031c8fce16c214f68dba6"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
