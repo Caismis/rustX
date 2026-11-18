@@ -18,7 +18,21 @@ contracts that lower layers need without pulling in the monolith:
 model and message contracts at their original module paths),
 `rustx-bounded-json` and `rustx-bounded-file` (bounded readers), and
 `rustx-publication` (the durable user-facing publication plane: carryover
-accounting, coalescer and frame records). The
+accounting, coalescer and frame records). `rustx-conversation` owns the
+mutable conversation hot state: `ConversationState` is the single mutable
+authority, holding the canonical `MessageLedger` (identity-deduped,
+allocation-owning history), the `ConversationSurface` (the mutable active
+working set), `CanonicalSelection` and `CanonicalBodies` (the bounded weak-lease
+registry of canonical `ModelInputMessage` allocations shared by the Ledger, the
+Surface and selected-input manifests). Its prepare→install primitives
+(`bind_bodies`, `append_after_validation`, `append_shared_after_validation`,
+`shared`, `CanonicalBodies::admit`, Surface append) are `pub(crate)`-narrowed:
+cross-crate callers go through `ConversationState` entry points
+(`commit`, `prepare_owned_commit`/`prepare_owned_batch`, `install_prepared`,
+`from_shared_durable_head`, `bind_bodies`) and read accessors; the only
+`pub` primitives that remain are `CanonicalBodies::share` (durable projection
+leases bodies into `SelectedInputManifest`s) and `CanonicalSelection::append`
+(the status surface rebuilds one exact selection). The
 monolith re-exports each moved item at its original `crate::` path, so
 consumer paths do not change; extracted crates never depend back on `rustx`
 and keep dependencies pointing inward toward rustX-owned contracts.

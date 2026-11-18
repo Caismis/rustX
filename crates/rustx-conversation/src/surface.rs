@@ -366,7 +366,8 @@ impl ConversationSurface {
     ///
     /// # Panics
     /// Panics if the supplied body is not canonical.
-    pub fn append(
+    #[cfg(test)]
+    pub(crate) fn append(
         &mut self,
         message: Arc<rustx_types::model::input::ModelInputMessage>,
     ) -> Result<SurfaceRevision, SurfaceError> {
@@ -384,7 +385,7 @@ impl ConversationSurface {
     /// Applies an append after the caller has validated the current Surface
     /// under exclusive ownership. This is infallible so an ordinary Ledger
     /// append cannot be followed by a recoverable Surface error.
-    pub fn append_after_validation(
+    pub(crate) fn append_after_validation(
         &mut self,
         message: Arc<rustx_types::model::input::ModelInputMessage>,
     ) -> SurfaceRevision {

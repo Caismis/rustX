@@ -16,7 +16,7 @@ pub struct CanonicalBodies {
 }
 
 impl CanonicalBodies {
-    pub fn admit(&self, body: Arc<ModelInputMessage>) -> Arc<ModelInputMessage> {
+    pub(crate) fn admit(&self, body: Arc<ModelInputMessage>) -> Arc<ModelInputMessage> {
         let message = body.as_canonical().expect("native canonical body");
         let key = body_key(message);
         let mut recent = self.recent.lock().expect("canonical body registry");
@@ -88,7 +88,7 @@ mod tests {
     }
 
     #[test]
-    fn canonical_ledger_surface_and_actual_lease_the_same_body_at_8_64_512_4096() {
+    fn canonical_ledger_surface_and_shared_lease_the_same_body_at_8_64_512_4096() {
         let bodies = Arc::new(CanonicalBodies::default());
         let mut state = ConversationState::new();
         state.bind_bodies(Arc::clone(&bodies));

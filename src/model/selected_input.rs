@@ -1742,6 +1742,68 @@ mod selected_input_tests {
                 .unwrap();
         assert_eq!(same.to_vec(), historical);
         assert_eq!(serde_json::to_vec(&selected).unwrap(), unchanged);
+    }
+
+    /// The cross-domain lease contract: bodies the registry shares into a
+    /// `SelectedInputManifest` must be the very allocations owned by the
+    /// canonical Ledger and the active Surface, at the same history sizes the
+    /// registry occupancy proof covers.
+    #[test]
+    fn manifest_ledger_and_surface_lease_the_same_body_at_8_64_512_4096() {
+        let bodies = std::sync::Arc::new(crate::conversation::bodies::CanonicalBodies::default());
+        let mut state = crate::conversation::ConversationState::new();
+        state.bind_bodies(std::sync::Arc::clone(&bodies));
+        let scope = ConversationId::generate();
+        let mut manifest = crate::model::SelectedInputManifest::default();
+        let mut leases = Vec::new();
+        for h in 1..=4096usize {
+            let message = original(&format!("m{h}"));
+            let id = state.commit(message.clone()).unwrap();
+            let lease = bodies.share(message);
+            leases.push(std::sync::Arc::clone(&lease));
+            manifest = manifest.append_shared(&scope, lease);
+            if ![8, 64, 512, 4096].contains(&h) {
+                continue;
+            }
+            let selected = manifest.messages();
+            for (i, lease) in leases.iter().enumerate() {
+                let shared = selected.shared(i);
+                assert!(std::sync::Arc::ptr_eq(&shared, lease));
+                let actual = shared.as_canonical().unwrap();
+                assert!(std::ptr::eq(
+                    actual,
+                    state.ledger().get(actual.id()).unwrap()
+                ));
+                assert!(std::ptr::eq(
+                    actual,
+                    state
+                        .freeze_active_surface()
+                        .messages
+                        .get(actual.id())
+                        .unwrap()
+                ));
+            }
+            assert!(std::ptr::eq(
+                selected.shared(h - 1).as_canonical().unwrap(),
+                state.ledger().get(&id).unwrap()
+            ));
+            // Re-binding the registry must not disturb already-leased bodies.
+            state.bind_bodies(std::sync::Arc::clone(&bodies));
+        }
+    }
+
+    #[test]
+    fn assembly_rejects_an_absent_carryover_anchor() {
+        let local = ConversationId::generate();
+        let ancestor = ConversationId::generate();
+        let historical = canonical_input(&[original("old-a"), original("old-b")]);
+        let root = crate::model::SelectedInputManifest::from_messages(&ancestor, &historical);
+        let carryover = RenderedUnresolvedOutputCarryover {
+            source_stream_id: PublicationStreamId::new("original-publication"),
+            source_settlement: UnresolvedOutputSettlement::Unaccepted,
+            records: Vec::new(),
+            omitted_blocks: CarryoverOmissionCounts::default(),
+        };
         assert!(
             assemble_selected_model_input(
                 &local,

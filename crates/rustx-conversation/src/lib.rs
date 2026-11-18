@@ -218,14 +218,14 @@ pub struct ConversationSurfaceSnapshot {
 /// a read model over it and never mutates it.
 ///
 /// ```compile_fail
-/// use rustx::conversation::ConversationState;
+/// use rustx_conversation::ConversationState;
 ///
 /// let state = ConversationState::new();
 /// let _competing_authority = state.clone();
 /// ```
 ///
 /// ```rust
-/// use rustx::conversation::{ConversationState, SurfaceRevision};
+/// use rustx_conversation::{ConversationState, SurfaceRevision};
 ///
 /// let state = ConversationState::new();
 /// assert_eq!(state.revision(), SurfaceRevision::INITIAL);

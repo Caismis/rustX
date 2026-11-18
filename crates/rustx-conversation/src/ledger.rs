@@ -107,7 +107,7 @@ impl MessageLedger {
         Self::default()
     }
 
-    pub fn bind_bodies(&mut self, bodies: Arc<super::bodies::CanonicalBodies>) {
+    pub(crate) fn bind_bodies(&mut self, bodies: Arc<super::bodies::CanonicalBodies>) {
         if Arc::ptr_eq(&self.bodies, &bodies) {
             return;
         }
@@ -145,7 +145,8 @@ impl MessageLedger {
     /// Returns [`LedgerError::DuplicateMessageId`] when the identity was
     /// already committed. Identity is unique and deterministic within one
     /// conversation state.
-    pub fn append(&mut self, message: MessageBlock) -> Result<MessageId, LedgerError> {
+    #[cfg(test)]
+    pub(crate) fn append(&mut self, message: MessageBlock) -> Result<MessageId, LedgerError> {
         let id = message_id_of(&message);
         if self.index.contains_key(&id) {
             return Err(LedgerError::DuplicateMessageId(id));
@@ -160,11 +161,11 @@ impl MessageLedger {
     /// seam (Issue #63): once a caller has validated the Ledger and Surface
     /// identities against the current state, the ordinary [`MessageLedger::append`]
     /// failure can no longer occur.
-    pub fn append_after_validation(&mut self, message: MessageBlock) -> MessageId {
+    pub(crate) fn append_after_validation(&mut self, message: MessageBlock) -> MessageId {
         self.append_shared_after_validation(self.bodies.share(message))
     }
 
-    pub fn append_shared_after_validation(
+    pub(crate) fn append_shared_after_validation(
         &mut self,
         message: Arc<rustx_types::model::input::ModelInputMessage>,
     ) -> MessageId {
@@ -197,7 +198,7 @@ impl MessageLedger {
     }
 
     /// Share the immutable Ledger allocation with the canonical Surface.
-    pub fn shared(
+    pub(crate) fn shared(
         &self,
         id: &MessageId,
     ) -> Option<Arc<rustx_types::model::input::ModelInputMessage>> {
