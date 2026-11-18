@@ -27,10 +27,15 @@ fn truncate_wal(store: &super::SqliteConversationStore) {
 }
 
 fn measure(tool: bool) -> (TurnWork, BTreeMap<(&'static str, String), PhaseWork>) {
+    // Physical page writes require stable bytes as well as stable SQL work.
+    // The override is current-thread-only and restores the ordinary clock on Drop.
+    let _adoption_time = crate::durable::inbox::adoption_time::scoped(
+        chrono::DateTime::from_timestamp(1_786_104_000, 123_456_789).unwrap(),
+    );
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("conversation.sqlite");
     let store = super::SqliteConversationStore::open(
-        crate::runtime::identity::ConversationId::generate(),
+        crate::runtime::identity::ConversationId::new("conv_36524fd8-f674-7fc2-8125-06d01fee0e18"),
         &path,
     )
     .unwrap();

@@ -1092,7 +1092,11 @@ pub(crate) fn append_completed_turns(
             .unwrap();
         phase("commit_model_turn_start");
         store
-            .commit_model_turn_start(&[], &snapshot, Utc::now())
+            .commit_model_turn_start(
+                &[],
+                &snapshot,
+                chrono::DateTime::from_timestamp(1_786_104_000, 123_456_789).unwrap(),
+            )
             .unwrap();
         phase("event:model_request_completed");
         let mut event = envelope(
