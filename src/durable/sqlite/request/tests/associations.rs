@@ -748,7 +748,7 @@ fn large_assistant_origin_set_is_shared_across_reload_retry_continuation_and_arc
         crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
             snapshot.request_id.clone(),
             store.conversation_id(),
-            &request.messages,
+            request.messages.semantic_fingerprint(),
             &output,
         )
         .unwrap();

@@ -790,7 +790,7 @@ mod tests {
                                     AcceptedOutputContinuationSource::from_accepted_output(
                                         RequestId::new("accepted-request"),
                                         &scope,
-                                        &request.messages,
+                                        request.messages.semantic_fingerprint(),
                                         &assistant,
                                     )
                                     .unwrap(),

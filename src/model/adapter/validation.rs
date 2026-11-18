@@ -904,7 +904,7 @@ mod tests {
             let source = AcceptedOutputContinuationSource::from_accepted_output(
                 RequestId::new("actual-request"),
                 &ConversationId::generate(),
-                &input.messages,
+                input.messages.semantic_fingerprint(),
                 &output,
             )
             .unwrap();

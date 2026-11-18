@@ -793,7 +793,7 @@ impl<'a> AgentExecution<'a> {
                 .expect("accepted Assistant is committed");
             Some(crate::runtime::continuation::AcceptedOutputContinuationSource::from_accepted_output(
                 input.snapshot.request_id.clone(), &self.request.conversation_id,
-                &input.request.input().messages, output,
+                input.request.input().messages.semantic_fingerprint(), output,
             ).expect("canonical accepted output is Assistant"))
         } else {
             None

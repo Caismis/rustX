@@ -249,8 +249,8 @@ pub(super) fn fingerprint_metadata(fields: &impl Serialize) -> String {
 }
 #[cfg(test)]
 pub(crate) use rustx_types::model::types::SemanticView;
+pub(crate) use rustx_types::model::types::append_semantic_message;
 pub use rustx_types::model::types::semantic_messages_fingerprint;
-pub(crate) use rustx_types::model::types::{append_semantic_message, semantic_view_fingerprint};
 
 #[cfg(test)]
 mod tests {
@@ -450,7 +450,7 @@ mod continuation_work_tests {
         let source = AcceptedOutputContinuationSource::from_accepted_output(
             RequestId::new("previous"),
             &scope,
-            &request.messages,
+            request.messages.semantic_fingerprint(),
             &output,
         )
         .unwrap();
