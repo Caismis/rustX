@@ -46,12 +46,12 @@
 //! the effective committed executable set changes — never because a
 //! diagnostic reason changed.
 
-mod availability;
+pub(crate) use rustx_types::capabilities::availability;
 pub mod source;
 pub use source::ToolSourceId;
 mod coordinator;
 mod error;
-pub mod selected;
+pub use rustx_types::capabilities::selected;
 pub mod selection;
 mod snapshot;
 mod tools;

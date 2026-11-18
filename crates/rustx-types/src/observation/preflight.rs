@@ -2,13 +2,13 @@
 use serde::ser::{self, SerializeMap, SerializeSeq, SerializeStruct};
 use serde::{Serialize, Serializer};
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 thread_local! {
     static STRUCTURAL_ONLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-#[cfg(test)]
-pub(crate) fn with_structural_admission_only<T>(work: impl FnOnce() -> T) -> T {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn with_structural_admission_only<T>(work: impl FnOnce() -> T) -> T {
     struct Restore(bool);
     impl Drop for Restore {
         fn drop(&mut self) {
@@ -19,22 +19,22 @@ pub(crate) fn with_structural_admission_only<T>(work: impl FnOnce() -> T) -> T {
     work()
 }
 
-pub(crate) fn fits(value: &(impl Serialize + ?Sized), limit: usize) -> bool {
+pub fn fits(value: &(impl Serialize + ?Sized), limit: usize) -> bool {
     bounded_fit(value, limit).unwrap_or(true)
 }
 /// A successful conservative walk proves the JSON byte bound. Unusual map
 /// keys still require the capped encoder to establish JSON representability.
-pub(crate) fn bounded_fit(value: &(impl Serialize + ?Sized), limit: usize) -> Option<bool> {
+pub fn bounded_fit(value: &(impl Serialize + ?Sized), limit: usize) -> Option<bool> {
     checked_fit(value, limit, is_opaque_json(value))
 }
 /// Conservative admission for native structural encoding without its schema walk.
 /// Treat every integer as opaque: unsafe signed/constrained quantities must
 /// still reach the structural codec, while full-width native u64 may be quoted.
-pub(crate) fn bounded_safe_integer_fit(
+pub fn bounded_safe_integer_fit(
     value: &(impl Serialize + ?Sized),
     limit: usize,
 ) -> Option<bool> {
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
     if STRUCTURAL_ONLY.with(std::cell::Cell::get) {
         return None;
     }
@@ -42,11 +42,11 @@ pub(crate) fn bounded_safe_integer_fit(
 }
 /// A reusable sufficient charge for the same safe-integer admission walk.
 /// Unknown map keys and unsafe quantities cannot produce a certificate.
-pub(crate) fn required_safe_integer_budget(
+pub fn required_safe_integer_budget(
     value: &(impl Serialize + ?Sized),
     limit: usize,
 ) -> Option<usize> {
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
     if STRUCTURAL_ONLY.with(std::cell::Cell::get) {
         return None;
     }
@@ -83,7 +83,7 @@ fn checked_fit(value: &(impl Serialize + ?Sized), limit: usize, opaque_json: boo
 }
 /// The exact conservative threshold of the existing admission walk. A prepared
 /// immutable DTO also retains its actual capped JSON size and representability.
-pub(crate) fn required_budget(value: &(impl Serialize + ?Sized), limit: usize) -> Option<usize> {
+pub fn required_budget(value: &(impl Serialize + ?Sized), limit: usize) -> Option<usize> {
     let mut left = limit;
     let mut uncertain = false;
     value

@@ -2,37 +2,37 @@
 use super::{Value, resolve};
 use std::collections::HashMap;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 thread_local! {
     static TAG_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static PROPERTY_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
 }
 
-#[cfg(test)]
-pub(crate) fn take_tag_probes() -> usize {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn take_tag_probes() -> usize {
     TAG_PROBES.with(|count| count.replace(0))
 }
 
-#[cfg(test)]
-pub(crate) fn take_property_work() -> (usize, usize) {
+#[cfg(any(test, feature = "test-fixtures"))]
+pub fn take_property_work() -> (usize, usize) {
     PROPERTY_WORK.with(|count| count.replace((0, 0)))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
-pub(crate) enum Unsigned {
+pub enum Unsigned {
     Plain,
     Decimal,
     Safe,
 }
 
-pub(crate) enum WireNumber {
+pub enum WireNumber {
     Native(Value),
     Decimal(u64),
 }
 
 /// The numeric domain is derived once from the Rust-owned schema, including
 /// the explicit bound that distinguishes exact identities from safe quantities.
-pub(crate) fn unsigned(schema: &Value) -> Unsigned {
+pub fn unsigned(schema: &Value) -> Unsigned {
     match schema["format"].as_str() {
         Some("uint64")
             if schema["maximum"]
@@ -146,7 +146,7 @@ impl Node {
         })
     }
     fn property<'a>(&self, key: &str, plan: &'a Plan) -> Option<&'a Property> {
-        #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
         PROPERTY_WORK.with(|count| {
             let (lookups, comparisons) = count.get();
             count.set((lookups + 1, comparisons));
@@ -155,7 +155,7 @@ impl Node {
         let names = self.property_names.slice(&plan.indices);
         let index = names
             .binary_search_by(|index| {
-                #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
                 PROPERTY_WORK.with(|count| {
                     let (lookups, comparisons) = count.get();
                     count.set((lookups, comparisons + 1));
@@ -168,7 +168,7 @@ impl Node {
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
-pub(crate) struct Plan {
+pub struct Plan {
     nodes: Box<[Node]>,
     properties: Box<[Property]>,
     indices: Box<[u32]>,
@@ -186,14 +186,14 @@ struct Builder {
     shapes: HashMap<String, u32>,
 }
 impl Plan {
-    pub(crate) fn from_bytes(bytes: &[u8]) -> Self {
+    pub fn from_bytes(bytes: &[u8]) -> Self {
         rmp_serde::from_slice(bytes).expect("generated numeric codec descriptor")
     }
-    pub(crate) fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Vec<u8> {
         rmp_serde::to_vec(self).expect("numeric codec descriptor")
     }
 
-    pub(crate) fn new(schema: &Value, root: &Value) -> Self {
+    pub fn new(schema: &Value, root: &Value) -> Self {
         let mut builder = Builder {
             nodes: vec![Node::default()],
             properties: Vec::new(),
@@ -211,7 +211,7 @@ impl Plan {
             root,
         }
     }
-    pub(crate) fn root(&self) -> View<'_> {
+    pub fn root(&self) -> View<'_> {
         View::Compiled(self, self.root)
     }
 }
@@ -330,41 +330,41 @@ impl Builder {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum View<'a> {
+pub enum View<'a> {
     Compiled(&'a Plan, u32),
     // The pre-change schema interpreter is a differential oracle, never a
     // runtime fallback or a second encoding format.
-    #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
     Interpreted {
         schema: &'a Value,
         root: &'a Value,
     },
 }
 impl<'a> View<'a> {
-    pub(crate) fn property_named(self, key: &str) -> Option<Self> {
+    pub fn property_named(self, key: &str) -> Option<Self> {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
                 .property(key, plan)
                 .map(|property| Self::Compiled(plan, property.node)),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)["properties"]
                 .get(key)
                 .map(|schema| Self::Interpreted { schema, root }),
         }
     }
-    pub(crate) fn additional(self) -> Option<Self> {
+    pub fn additional(self) -> Option<Self> {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
                 .additional
                 .map(|index| Self::Compiled(plan, index)),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)
                 .get("additionalProperties")
                 .filter(|schema| schema.is_object())
                 .map(|schema| Self::Interpreted { schema, root }),
         }
     }
-    pub(crate) fn array_item(self, index: usize) -> Option<Self> {
+    pub fn array_item(self, index: usize) -> Option<Self> {
         match self {
             Self::Compiled(plan, node) => {
                 let node = &plan.nodes[node as usize];
@@ -375,7 +375,7 @@ impl<'a> View<'a> {
                     .or(node.items.filter(|_| node.items_object))
                     .map(|index| Self::Compiled(plan, index))
             }
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => {
                 let schema = resolve(schema, root);
                 schema["prefixItems"]
@@ -385,7 +385,7 @@ impl<'a> View<'a> {
             }
         }
     }
-    pub(crate) fn matches_tagged(self, value: &Value) -> bool {
+    pub fn matches_tagged(self, value: &Value) -> bool {
         let mut tagged = false;
         let mut index = 0;
         while let Some((key, _)) = self.property(index) {
@@ -399,7 +399,7 @@ impl<'a> View<'a> {
         }
         tagged
     }
-    pub(crate) fn convert_wire(self, value: &mut Value, encode: bool) -> Result<(), &'static str> {
+    pub fn convert_wire(self, value: &mut Value, encode: bool) -> Result<(), &'static str> {
         if value.is_null() {
             return Ok(());
         }
@@ -466,7 +466,7 @@ impl<'a> View<'a> {
                     .filter(|_| node.items_object)
                     .map(|index| Self::Compiled(plan, index))
             }
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)
                 .get("items")
                 .filter(|schema| schema.is_object())
@@ -486,31 +486,31 @@ impl<'a> View<'a> {
         }
         Ok(())
     }
-    pub(crate) fn is_null(self) -> bool {
+    pub fn is_null(self) -> bool {
         match self {
             Self::Compiled(_, index) => index == 0,
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, .. } => schema.is_null(),
         }
     }
-    pub(crate) fn unsigned(self) -> Unsigned {
+    pub fn unsigned(self) -> Unsigned {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize].unsigned,
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => unsigned(resolve(schema, root)),
         }
     }
-    pub(crate) fn signed_safe(self) -> bool {
+    pub fn signed_safe(self) -> bool {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize].signed_safe,
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => matches!(
                 resolve(schema, root)["format"].as_str(),
                 Some("int" | "int64")
             ),
         }
     }
-    pub(crate) fn property(self, index: usize) -> Option<(&'a str, Self)> {
+    pub fn property(self, index: usize) -> Option<(&'a str, Self)> {
         match self {
             Self::Compiled(plan, node) => plan.nodes[node as usize]
                 .properties
@@ -522,7 +522,7 @@ impl<'a> View<'a> {
                         Self::Compiled(plan, property.node),
                     )
                 }),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)["properties"]
                 .as_object()?
                 .iter()
@@ -530,25 +530,25 @@ impl<'a> View<'a> {
                 .map(|(name, schema)| (name.as_str(), Self::Interpreted { schema, root })),
         }
     }
-    pub(crate) fn tag(self, key: &str) -> Option<&'a Value> {
+    pub fn tag(self, key: &str) -> Option<&'a Value> {
         match self {
             Self::Compiled(plan, node) => plan.nodes[node as usize]
                 .property(key, plan)?
                 .constant
                 .as_deref(),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => {
                 resolve(schema, root)["properties"][key].get("const")
             }
         }
     }
-    pub(crate) fn branch(self, kind: usize, index: usize) -> Option<Self> {
+    pub fn branch(self, kind: usize, index: usize) -> Option<Self> {
         match self {
             Self::Compiled(plan, node) => plan.nodes[node as usize].branches[kind]
                 .slice(&plan.indices)
                 .get(index)
                 .map(|index| Self::Compiled(plan, *index)),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => resolve(schema, root)
                 [["oneOf", "anyOf", "allOf"][kind]]
                 .as_array()?
@@ -556,7 +556,7 @@ impl<'a> View<'a> {
                 .map(|schema| Self::Interpreted { schema, root }),
         }
     }
-    pub(crate) fn child(self, key: Option<&str>) -> Self {
+    pub fn child(self, key: Option<&str>) -> Self {
         match self {
             Self::Compiled(plan, index) => {
                 let node = &plan.nodes[index as usize];
@@ -582,7 +582,7 @@ impl<'a> View<'a> {
                 }
                 Self::Compiled(plan, 0)
             }
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => Self::Interpreted {
                 schema: super::child(schema, root, key),
                 root,
@@ -593,10 +593,10 @@ impl<'a> View<'a> {
     // App Server's Value codec visits untagged numeric alternatives even when
     // the union itself has no format (notably RequestId). Scalars are tiny;
     // preserving that order needs no intermediate record/object tree.
-    pub(crate) fn wire_number(self, mut value: WireNumber) -> Result<WireNumber, &'static str> {
+    pub fn wire_number(self, mut value: WireNumber) -> Result<WireNumber, &'static str> {
         let (plan, index) = match self {
             Self::Compiled(plan, index) => (plan, index),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { .. } => unreachable!("wire encoding uses a compiled schema"),
         };
         let node = &plan.nodes[index as usize];
@@ -637,17 +637,17 @@ impl<'a> View<'a> {
         }
         Ok(value)
     }
-    pub(crate) fn has_wire_tag(self, key: &str) -> bool {
+    pub fn has_wire_tag(self, key: &str) -> bool {
         match self {
             Self::Compiled(plan, index) => plan.nodes[index as usize]
                 .wire_tags(plan)
                 .binary_search_by(|name| {
-                    #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
                     TAG_PROBES.with(|count| count.set(count.get() + 1));
                     name.text(&plan.names).cmp(key)
                 })
                 .is_ok(),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { .. } => {
                 for kind in 0..3 {
                     let mut index = 0;
@@ -662,10 +662,10 @@ impl<'a> View<'a> {
             }
         }
     }
-    pub(crate) fn wire_variant(self, key: &str, value: &Value) -> Option<Self> {
+    pub fn wire_variant(self, key: &str, value: &Value) -> Option<Self> {
         self.wire_variant_matching(key, &|expected| expected == value)
     }
-    pub(crate) fn wire_variant_str(self, key: &str, value: &str) -> Option<Self> {
+    pub fn wire_variant_str(self, key: &str, value: &str) -> Option<Self> {
         self.wire_variant_matching(key, &|expected| expected.as_str() == Some(value))
     }
     fn wire_variant_matching(self, key: &str, matches: &impl Fn(&Value) -> bool) -> Option<Self> {
@@ -684,10 +684,10 @@ impl<'a> View<'a> {
         }
         None
     }
-    pub(crate) fn wire_element(self) -> Self {
+    pub fn wire_element(self) -> Self {
         let (plan, index) = match self {
             Self::Compiled(plan, index) => (plan, index),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { .. } => unreachable!("wire encoding uses a compiled schema"),
         };
         let node = &plan.nodes[index as usize];
@@ -708,14 +708,14 @@ impl<'a> View<'a> {
         }
         Self::Compiled(plan, 0)
     }
-    pub(crate) fn element(self, index: usize) -> Self {
+    pub fn element(self, index: usize) -> Self {
         match self {
             Self::Compiled(plan, node) => plan.nodes[node as usize]
                 .prefix
                 .slice(&plan.indices)
                 .get(index)
                 .map_or_else(|| self.child(None), |index| Self::Compiled(plan, *index)),
-            #[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
             Self::Interpreted { schema, root } => Self::Interpreted {
                 schema: super::element(schema, root, index),
                 root,

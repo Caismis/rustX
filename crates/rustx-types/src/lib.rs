@@ -42,8 +42,16 @@ pub mod skills {
 }
 
 pub mod capabilities {
+    pub mod availability;
+    pub mod selected;
     pub mod source;
     pub use source::ToolSourceId;
+}
+
+pub mod observation {
+    pub mod bounded;
+    pub mod preflight;
+    pub mod structural_json;
 }
 
 pub mod runtime {
