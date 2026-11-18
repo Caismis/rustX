@@ -870,6 +870,77 @@ async fn stateless_fresh_request_preserves_opaque_items() {
     );
 }
 
+/// A stateless service's plaintext output is complete replay state, even when
+/// the caller requested server retention. No stored-response id is invented.
+#[tokio::test]
+async fn stateless_plaintext_reasoning_is_preserved() {
+    let server = crate::common::FixtureServer::start(|_, _| {
+        sse_fixture("openai_responses", "stateless_plaintext.sse")
+    })
+    .await;
+    let mut request = simple_request(ModelProtocol::OpenAiResponses, "deepseek-flash", "Think");
+    let events = collect_events(&adapter(&server), request.clone()).await;
+    assert!(
+        matches!(events.last(), Some(ModelEvent::Completed { .. })),
+        "{events:?}"
+    );
+    let reasoning: String = events
+        .iter()
+        .filter_map(|event| match event {
+            ModelEvent::ReasoningDelta { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reasoning, "Original reasoning.");
+    let Some(ModelEvent::ContinuationState {
+        state:
+            ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless { items }),
+        ..
+    }) = events.get(events.len() - 2)
+    else {
+        panic!("expected original stateless output");
+    };
+    assert_eq!(items[0]["content"][0]["text"], reasoning);
+    assert!(items[0].get("encrypted_content").is_none());
+    let state =
+        ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
+            items: items.clone(),
+        });
+    request.messages.push(
+        MessageBlock::Assistant(rustx::message::types::AssistantMessageBlock {
+            id: rustx::runtime::identity::MessageId::new("plaintext-output"),
+            content: vec![
+                AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    origin: request.invocation.replay_origin(),
+                    text: Some(reasoning),
+                    provider_state: None,
+                }),
+                AssistantContentBlock::Text(TextBlock {
+                    text: "Answer.".into(),
+                }),
+                AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                    origin: request.invocation.replay_origin(),
+                    text: None,
+                    provider_state: Some(state.clone()),
+                }),
+            ],
+        })
+        .into(),
+    );
+    request.continuation = Some(state);
+    crate::common::bind_accepted_continuation_source(&mut request, 1);
+    let events = collect_events(&adapter(&server), request).await;
+    assert!(
+        matches!(events.last(), Some(ModelEvent::Completed { .. })),
+        "{events:?}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&server.request_body(1)).unwrap();
+    assert!(body.get("previous_response_id").is_none());
+    let input = body["input"].as_array().unwrap();
+    assert_eq!(input[0]["content"][0]["text"], "Think");
+    assert_eq!(&input[1..], items.as_ref());
+}
+
 /// Stateless continuation preserves earlier inputs and tool results, substituting
 /// the exact native output once at its original chronological position.
 #[tokio::test]
@@ -1141,10 +1212,9 @@ async fn stored_continuation_rejects_omitted_remote_coverage_and_changed_output(
     assert_eq!(server.attempt_count(), 0);
 }
 
-/// Storage mode and continuation variant contradictions are rejected before
-/// the network.
+/// Native continuation without accepted coverage is rejected before dispatch.
 #[tokio::test]
-async fn storage_mode_continuation_contradiction_is_rejected() {
+async fn continuation_without_accepted_native_coverage_is_rejected() {
     let server = crate::common::FixtureServer::start(|_attempt, _head| {
         sse_fixture("openai_responses", "plain_text.sse")
     })
@@ -1413,97 +1483,118 @@ async fn reasoning_with_provider_state_replays_items_verbatim() {
 async fn complete_stateless_output_replays_text_and_calls_once_and_rejects_edits() {
     use rustx::message::types::{AssistantMessageBlock, ToolCallOccurrenceRef, ToolMessageBlock};
     use rustx::runtime::identity::{MessageId, ToolCallId, ToolId};
-    let server = crate::common::FixtureServer::start(|_, _| {
-        sse_fixture("openai_responses", "plain_text.sse")
-    })
-    .await;
-    let native = vec![
-        serde_json::json!({"type":"reasoning", "id":"reasoning-original", "summary":[], "encrypted_content":"opaque-original", "future_field":"retained"}),
-        serde_json::json!({"type":"message", "role":"assistant", "id":"native-original", "content":[{"type":"output_text", "text":"accepted text", "annotations":[]}]}),
-        serde_json::json!({"type":"function_call", "id":"native-call", "call_id":"call-original", "name":"read", "arguments":"{}"}),
-    ];
-    let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Continue");
-    request.messages.insert(
-        0,
-        rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
-            AssistantMessageBlock {
-                id: MessageId::new("accepted-output"),
-                content: vec![
-                    AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
-                        origin: request.invocation.replay_origin(),
-                        text: None,
-                        provider_state: Some(ProviderContinuationState::OpenAiResponses(
-                            OpenAiResponsesContinuation::Stateless {
-                                items: native.clone().into(),
-                            },
-                        )),
-                    }),
-                    AssistantContentBlock::Text(TextBlock {
-                        text: "accepted text".into(),
-                    }),
-                    AssistantContentBlock::ToolCall(rustx::tools::types::ToolCall {
-                        id: ToolCallId::new("call-original"),
-                        tool_id: ToolId::new("tool-read"),
-                        name: "read".into(),
-                        arguments: serde_json::json!({}),
-                    }),
-                ],
+    for plaintext in [false, true] {
+        let server = crate::common::FixtureServer::start(|_, _| {
+            sse_fixture("openai_responses", "plain_text.sse")
+        })
+        .await;
+        let native = vec![
+            if plaintext {
+                serde_json::json!({"type":"reasoning", "id":"reasoning-original", "summary":[], "content":[{"type":"reasoning_text", "text":"Original reasoning."}], "future_field":"retained"})
+            } else {
+                serde_json::json!({"type":"reasoning", "id":"reasoning-original", "summary":[], "encrypted_content":"opaque-original", "future_field":"retained"})
             },
-        )),
-    );
-    request.messages.insert(
-        1,
-        rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
-            id: MessageId::new("actual-result"),
-            occurrence: ToolCallOccurrenceRef::new(
-                MessageId::new("accepted-output"),
-                ContentBlockIndex::new(2),
-            ),
-            tool_call_id: ToolCallId::new("call-original"),
-            tool_id: ToolId::new("tool-read"),
-            result: rustx::tools::types::ToolExecutionResult {
-                workflow: None,
-                status: rustx::tools::types::ToolExecutionStatus::Success,
-                content: Vec::new(),
-                duration_ms: 0,
-                exit_code: None,
-                artifacts: Vec::new(),
-                deliveries: Vec::new(),
-                truncation: None,
-                managed_output: None,
-            }
-            .into(),
-        })),
-    );
-    let events = collect_events(&adapter(&server), request.clone()).await;
-    assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
-    let wire: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
-    let items = wire["input"].as_array().unwrap();
-    assert_eq!(
-        items.len(),
-        5,
-        "complete native bundle, result and fresh user"
-    );
-    assert_eq!(&items[..3], native.as_slice());
-    assert_eq!(
-        items
-            .iter()
-            .filter(|item| item["type"] == "function_call")
-            .count(),
-        1
-    );
-    let rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) =
-        &mut request.messages[0]
-    else {
-        unreachable!()
-    };
-    let AssistantContentBlock::Text(text) = &mut assistant.content[1] else {
-        unreachable!()
-    };
-    text.text = "edited after native output capture".into();
-    let events = collect_events(&adapter(&server), request).await;
-    assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
-    assert_eq!(server.attempt_count(), 1, "edited replay never dispatches");
+            serde_json::json!({"type":"message", "role":"assistant", "id":"native-original", "content":[{"type":"output_text", "text":"accepted text", "annotations":[]}]}),
+            serde_json::json!({"type":"function_call", "id":"native-call", "call_id":"call-original", "name":"read", "arguments":"{}"}),
+        ];
+        let mut request = simple_request(ModelProtocol::OpenAiResponses, "gpt-test", "Continue");
+        request.messages.insert(
+            0,
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(
+                AssistantMessageBlock {
+                    id: MessageId::new("accepted-output"),
+                    content: vec![
+                        AssistantContentBlock::Reasoning(rustx::message::types::ReasoningBlock {
+                            origin: request.invocation.replay_origin(),
+                            text: plaintext.then(|| "Original reasoning.".into()),
+                            provider_state: Some(ProviderContinuationState::OpenAiResponses(
+                                OpenAiResponsesContinuation::Stateless {
+                                    items: native.clone().into(),
+                                },
+                            )),
+                        }),
+                        AssistantContentBlock::Text(TextBlock {
+                            text: "accepted text".into(),
+                        }),
+                        AssistantContentBlock::ToolCall(rustx::tools::types::ToolCall {
+                            id: ToolCallId::new("call-original"),
+                            tool_id: ToolId::new("tool-read"),
+                            name: "read".into(),
+                            arguments: serde_json::json!({}),
+                        }),
+                    ],
+                },
+            )),
+        );
+        request.messages.insert(
+            1,
+            rustx::model::ModelInputMessage::Canonical(MessageBlock::Tool(ToolMessageBlock {
+                id: MessageId::new("actual-result"),
+                occurrence: ToolCallOccurrenceRef::new(
+                    MessageId::new("accepted-output"),
+                    ContentBlockIndex::new(2),
+                ),
+                tool_call_id: ToolCallId::new("call-original"),
+                tool_id: ToolId::new("tool-read"),
+                result: rustx::tools::types::ToolExecutionResult {
+                    workflow: None,
+                    status: rustx::tools::types::ToolExecutionStatus::Success,
+                    content: Vec::new(),
+                    duration_ms: 0,
+                    exit_code: None,
+                    artifacts: Vec::new(),
+                    deliveries: Vec::new(),
+                    truncation: None,
+                    managed_output: None,
+                }
+                .into(),
+            })),
+        );
+        let events = collect_events(&adapter(&server), request.clone()).await;
+        assert!(matches!(events.last(), Some(ModelEvent::Completed { .. })));
+        let wire: serde_json::Value = serde_json::from_str(&server.request_body(0)).unwrap();
+        let items = wire["input"].as_array().unwrap();
+        assert_eq!(
+            items.len(),
+            5,
+            "complete native bundle, result and fresh user"
+        );
+        assert_eq!(&items[..3], native.as_slice());
+        assert_eq!(
+            items
+                .iter()
+                .filter(|item| item["type"] == "function_call")
+                .count(),
+            1
+        );
+        if plaintext {
+            let mut edited = request.clone();
+            let rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) =
+                &mut edited.messages[0]
+            else {
+                unreachable!()
+            };
+            let AssistantContentBlock::Reasoning(reasoning) = &mut assistant.content[0] else {
+                unreachable!()
+            };
+            reasoning.text = Some("changed reasoning after capture".into());
+            let events = collect_events(&adapter(&server), edited).await;
+            assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
+            assert_eq!(server.attempt_count(), 1);
+        }
+        let rustx::model::ModelInputMessage::Canonical(MessageBlock::Assistant(assistant)) =
+            &mut request.messages[0]
+        else {
+            unreachable!()
+        };
+        let AssistantContentBlock::Text(text) = &mut assistant.content[1] else {
+            unreachable!()
+        };
+        text.text = "edited after native output capture".into();
+        let events = collect_events(&adapter(&server), request).await;
+        assert_terminal_failed(&events, &ModelErrorKind::Unsupported);
+        assert_eq!(server.attempt_count(), 1, "edited replay never dispatches");
+    }
 }
 
 /// The serialized fresh request carries only model-facing tool fields, and no
@@ -1724,6 +1815,10 @@ async fn model_selectable_execution_mode_schema_reaches_the_provider_verbatim() 
         serde_json::from_str(&server.request_body(0)).expect("request body is JSON");
     let tool = &body["tools"][0];
     assert_eq!(tool["name"], "bash");
+    assert_eq!(
+        tool["strict"], false,
+        "authored optional parameters must keep their meaning"
+    );
     assert!(
         tool["description"]
             .as_str()

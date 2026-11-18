@@ -12,7 +12,7 @@ mod query_work;
 // Journal cut. In particular, missing I/O and terminal facts do not scan
 // later visits or unrelated runs to prove absence.
 pub(super) const TOOL_START_SQL: &str = concat!(
-    "SELECT sequence FROM events INDEXED BY events_observation_tool_idx WHERE event_tool_call_id=?1 AND attempt_key = ",
+    "SELECT observation_trace_owner FROM events INDEXED BY events_observation_tool_idx WHERE event_tool_call_id=?1 AND attempt_key = ",
     crate::durable::sqlite::event_owner_key::attempt_parameter!("?2"),
     " AND event_kind='tool_execution_started' AND sequence<=?3 LIMIT 2"
 );
@@ -181,6 +181,8 @@ pub(super) fn page(
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| storage(error.to_string()))?;
     }
+    // Execution proves the Workflow's tool ownership; its captured Trace owner
+    // identifies the request record that remains visible across authorization.
     let parent_sequence = (parents.len() == 1).then(|| parents[0]);
     let through = run_through(connection, &run, start, cut.read.journal)?;
     let total: u64 = connection

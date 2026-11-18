@@ -306,6 +306,7 @@ fn prepare(
         Err(error) if transaction.is_autocommit() => return Err(error),
         Err(_) => false,
     };
+    event.tool_occurrence = observation::tool_occurrence_receipt(transaction, event)?;
     let aggregate_required = observation_statistics::is_trace_anchor(&event.event)
         || observation_statistics::requires_statistics(event)
         || observation_members::requires_members(event);
@@ -343,7 +344,6 @@ fn prepare(
         } else {
             None
         };
-    event.tool_occurrence = observation::tool_occurrence_receipt(transaction, event)?;
     let execution_required = observation_execution::required(event);
     let execution = execution_required
         .then(|| {
@@ -492,8 +492,23 @@ fn insert(
     let source = row.source.as_ref();
     let turn = row.turn.as_ref();
     let occurrence = event.tool_occurrence.as_ref();
+    // An execution phase owned by an already recorded request is not a
+    // second global Tool row. Keep its header available to owner-scoped reads.
+    let trace_fact_required = observation_trace::required(event)
+        && !(matches!(event.event, RuntimeEvent::ToolExecutionStarted { .. })
+            && row
+                .trace
+                .as_ref()
+                .and_then(|trace| trace.owner)
+                .is_some_and(|owner| owner != event.sequence));
+    let trace_anchor = aggregate.map_or_else(
+        || observation_statistics::is_trace_anchor(&event.event),
+        |value| value.statistics.trace_anchor,
+    );
     let phase = match event.event {
-        RuntimeEvent::ToolExecutionStarted { .. } => Some(1),
+        RuntimeEvent::ToolCallRequested { .. } | RuntimeEvent::ToolExecutionStarted { .. } => {
+            Some(1)
+        }
         RuntimeEvent::ToolExecutionCompleted { .. } | RuntimeEvent::ToolExecutionFailed { .. } => {
             Some(2)
         }
@@ -510,7 +525,7 @@ fn insert(
         observation_transcript,observation_turn_header,observation_turn_anchor,observation_turn_ordinal,observation_turn_prompt,observation_turn_prompt_positive,observation_unavailable)
         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24,?25,?26,?27,?28,?29,?30,?31,?32,?33,?34,?35,?36,?37,?38)",
         params![event.sequence,event.event_id.as_str(),i64::from(event.schema_version),event.conversation_id.as_str(),event.attempt_id.as_ref().map(ToString::to_string),event.turn_id.as_ref().map(ToString::to_string),json,event.timestamp.to_rfc3339(),
-            observation_statistics::is_trace_anchor(&event.event),observation_statistics::requires_statistics(event),Some(observation_event::native_kind(&event.event)),observation_members::requires_members(event),observation_turn::required(event),observation_trace::required(event),observation_execution::required(event),
+            trace_anchor,observation_statistics::requires_statistics(event),Some(observation_event::native_kind(&event.event)),observation_members::requires_members(event),observation_turn::required(event),trace_fact_required,observation_execution::required(event),
             !row.readiness,aggregate.and_then(|value|value.statistics.trace_total),aggregate.and_then(|value|value.statistics.statistics.as_ref()).map(|value|&value.bytes),aggregate.and_then(|value|value.members.as_ref()).map(|value|&value.bytes),aggregate.and_then(append_facts::Aggregates::member_anchor),
             row.assistant_ledger,occurrence.map(|value|value.ledger_position),occurrence.map(|value|value.block_index.get()),occurrence.and(phase),row.execution.as_ref().map(|value|&value.capture.bytes),row.execution.as_ref().map(|value|value.owner),
             row.occupancy,source.and_then(|value|value.inline_source.as_ref()),source.map(|value|&value.witness.bytes),row.trace.as_ref().map(|value|&value.bytes),row.trace.as_ref().and_then(|value|value.owner),

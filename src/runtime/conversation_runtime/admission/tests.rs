@@ -57,8 +57,8 @@ async fn headless_full_turn_without_any_runtime_client() {
         .collect();
     assert_eq!(
         roles,
-        vec!["user", "user", "assistant"],
-        "inbound + admitted Agent Status + assistant reply"
+        vec!["user", "user", "user", "assistant"],
+        "inbound + Agent Status + permission reminder + assistant reply"
     );
     // The real provider path observed the inbound message.
     let requests = fixture.model.requests();
@@ -255,7 +255,7 @@ async fn headless_tool_cycle_with_zero_attachments() {
         .collect();
     assert_eq!(
         roles,
-        vec!["user", "user", "assistant", "tool", "assistant"],
+        vec!["user", "user", "user", "assistant", "tool", "assistant"],
         "inbound + status + tool call + canonical tool result + final reply"
     );
     // The canonical ToolResult commits under the real call identity.
@@ -299,37 +299,24 @@ async fn headless_tool_cycle_with_zero_attachments() {
         "tool continuation retains the attempt capability revision"
     );
     assert_eq!(snapshots[0].tool_definitions, snapshots[1].tool_definitions);
-    // Sparse §10 permission reminders appear only on the first successful
-    // request-start of an attempt (and again after compaction). Strip them so
-    // the tool-continuation request is compared on the frozen native prompt.
-    let without_permission_reminder = |prompt: &str| -> String {
-        const MARKER: &str = "Execution permission mode:";
-        if let Some(index) = prompt.find("\n\nExecution permission mode:") {
-            prompt[..index].to_owned()
-        } else if let Some(index) = prompt.find(&format!("\n{MARKER}")) {
-            prompt[..index].to_owned()
-        } else if prompt.starts_with(MARKER) {
-            String::new()
-        } else {
-            prompt.to_owned()
-        }
-    };
     assert_eq!(
-        without_permission_reminder(&snapshots[0].effective_system_prompt),
-        without_permission_reminder(&snapshots[1].effective_system_prompt)
+        snapshots[0].effective_system_prompt,
+        snapshots[1].effective_system_prompt
     );
-    assert!(
-        snapshots[0]
-            .effective_system_prompt
-            .contains("Execution permission mode: full_access."),
-        "inert Full Access admits a first-request sparse reminder"
-    );
-    assert!(
-        !snapshots[1]
-            .effective_system_prompt
-            .contains("Execution permission mode:"),
-        "tool continuation does not re-emit the sparse reminder"
-    );
+    for (index, snapshot) in snapshots.iter().enumerate() {
+        assert!(
+            !snapshot
+                .effective_system_prompt
+                .contains("Execution permission mode:")
+        );
+        assert_eq!(
+            snapshot.contributions.iter().any(|entry| entry.producer
+                == crate::runtime::identity::ContextContributorIdentity::Native(
+                    crate::runtime::identity::NativeContextContributor::PermissionReminder
+                )),
+            index == 0
+        );
+    }
     // The coordinator owns the one authoritative ConversationState
     // again: the runtime keeps no second derived read model to reset.
     assert!(runtime.coordinator_ledger().is_some());

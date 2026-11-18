@@ -318,6 +318,8 @@ impl RuntimeClientProjection {
         event: &RuntimeEvent,
     ) -> Vec<RuntimeClientEvent> {
         match event {
+            // Request auditing does not cross the execution-start frontier.
+            RuntimeEvent::ToolCallRequested { .. } => Vec::new(),
             RuntimeEvent::ModelRequestStarted {
                 owner: crate::model::snapshot::ModelRequestOwner::Auxiliary { .. },
                 ..

@@ -688,6 +688,19 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
         vec!["old", "middle"],
         "the full frozen System authority makes the one-message candidate fail"
     );
+    let reminder_id = result.snapshot_history()[0]
+        .contributions
+        .iter()
+        .find(|entry| {
+            entry.producer
+                == rustx::runtime::identity::ContextContributorIdentity::Native(
+                    rustx::runtime::identity::NativeContextContributor::PermissionReminder,
+                )
+        })
+        .unwrap()
+        .message_id
+        .as_str()
+        .to_owned();
     assert_eq!(
         result
             .conversation
@@ -695,7 +708,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
             .iter()
             .map(MessageId::as_str)
             .collect::<Vec<_>>(),
-        vec!["recent", "attempt-1-agent-1"]
+        vec!["recent", reminder_id.as_str(), "attempt-1-agent-1"]
     );
     let requests = model.requests();
     assert_eq!(requests.len(), 1);
@@ -707,7 +720,7 @@ async fn proactive_compaction_accounts_for_frozen_extension_system_sections() {
     // Inspect the actual provider input, not just the hot conversation's ids:
     // the retired prefix is replaced, while the recent message keeps its exact
     // original body and canonical identity after the summary.
-    assert_eq!(requests[0].messages.len(), 2);
+    assert_eq!(requests[0].messages.len(), 3);
     let ModelInputMessage::Derived(summary) = &requests[0].messages[0] else {
         panic!("the compacted prefix must be a derived summary");
     };
@@ -818,6 +831,10 @@ async fn proactive_compaction_before_the_next_turn() {
         RuntimeEvent::AssistantMessageCommitted {
             message_id: assistant_message_id(1),
         },
+        RuntimeEvent::ToolCallRequested {
+            tool_call_id: ToolCallId::new("call-1"),
+            tool_id: ToolId::new("tool-alpha"),
+        },
         RuntimeEvent::ToolExecutionStarted {
             tool_call_id: ToolCallId::new("call-1"),
             tool_id: ToolId::new("tool-alpha"),
@@ -886,7 +903,7 @@ async fn proactive_compaction_before_the_next_turn() {
         1,
         "first request carries the initial history"
     );
-    assert_eq!(requests[1].messages.len(), 3);
+    assert_eq!(requests[1].messages.len(), 4);
     let ModelInputMessage::Derived(summary) = &requests[1].messages[0] else {
         panic!("first projected message must be the summary");
     };
@@ -912,8 +929,8 @@ async fn proactive_compaction_before_the_next_turn() {
         Some(MessageBlock::Tool(tool)) if tool.id.as_str() == "attempt-1-tool-1-0"
     ));
 
-    // The Message Ledger keeps every original fact and gains exactly one
-    // canonical runtime compaction summary; nothing is rewritten.
+    // The Ledger retains every original fact and the post-compaction reminder.
+    // Summaries remain derived checkpoint content.
     assert_eq!(
         result
             .messages()
@@ -924,6 +941,7 @@ async fn proactive_compaction_before_the_next_turn() {
             "msg-user-1".to_owned(),
             "attempt-1-agent-1".to_owned(),
             "attempt-1-tool-1-0".to_owned(),
+            "rustx-context-attempt-1-turn-2-3".to_owned(),
             "attempt-1-agent-2".to_owned(),
         ]
     );
@@ -939,6 +957,7 @@ async fn proactive_compaction_before_the_next_turn() {
         vec![
             "attempt-1-agent-1".to_owned(),
             "attempt-1-tool-1-0".to_owned(),
+            "rustx-context-attempt-1-turn-2-3".to_owned(),
             "attempt-1-agent-2".to_owned(),
         ],
         "the summary replaced exactly the selected span at its position"
@@ -1306,9 +1325,8 @@ async fn cancellation_after_preparation_compaction_keeps_it_and_discards_staged_
     let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
     let summarizer =
         FakeContextSummarizer::new(vec![FakeSummaryStep::Return("summary-1".to_owned())]);
-    // Sparse Full Access reminder (~51 tokens) must fit the scripted occupancy
-    // that previously assumed an empty system prompt at the prep-compaction gate.
-    let runtime = runtime_with_assembly(310, 0, 5, weighted(100, 10, 0), summarizer, assembly);
+    // The staged context reaches the soft limit before request admission.
+    let runtime = runtime_with_assembly(300, 0, 5, weighted(100, 10, 0), summarizer, assembly);
     let tool_runtime = common::tool_runtime("conv_36524fd8-f674-7fc2-8125-06d01fee0e18");
     let capability = common::capability_lease(tools, &tool_runtime).await;
     let (pause, pre_start, _) = StartBoundaryPause::install(true, false);
@@ -4471,15 +4489,17 @@ async fn mandatory_adapter_preflight_rejects_native_history_without_continuation
         (
             ModelProtocol::AnthropicMessages,
             ProviderContinuationState::Anthropic(AnthropicContinuation {
-                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":""})
+                opaque: serde_json::json!({"type":"thinking","thinking":"native", "signature":123})
                     .into(),
             }),
         ),
         (
             ModelProtocol::OpenAiResponses,
             ProviderContinuationState::OpenAiResponses(OpenAiResponsesContinuation::Stateless {
-                items: vec![serde_json::json!({"type":"reasoning","id":"native", "summary":[]})]
-                    .into(),
+                items: vec![
+                    serde_json::json!({"type":"function_call","id":"native", "summary":[]}),
+                ]
+                .into(),
             }),
         ),
     ];

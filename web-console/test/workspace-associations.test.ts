@@ -544,3 +544,23 @@ it('normalized-equal endpoints confirm one Host scope; a different port replaces
   expect(first.current()).toBe(false); expect(accepted).toHaveBeenCalledTimes(2);
   f.stop();
 });
+
+it('publishes newer catalog metadata without retiring the Host or replaying an older read', async () => {
+  const held = heldCatalogs(), f = await fixture(held.list, false);
+  const catalogChanged = vi.fn(), authorityChanged = vi.fn();
+  const releaseCatalog = f.authority.subscribeCatalog(catalogChanged);
+  const releaseAuthority = f.authority.subscribe(authorityChanged);
+  const baseline = catalog('host-1');
+  held.lists[0].resolve(baseline);
+  await f.observed(1);
+  const old = f.authority.observe(), fresh = f.authority.observe();
+  const renamed = { ...baseline, workspaces: baseline.workspaces.map(row => ({ ...row, displayName: 'Renamed ' + row.id })) };
+  held.lists[2].resolve(renamed);
+  await fresh;
+  held.lists[1].resolve(baseline);
+  expect((await old).current()).toBe(true);
+  expect(f.authority.getCatalog()).toBe(renamed);
+  expect(catalogChanged).toHaveBeenCalledTimes(2);
+  expect(authorityChanged).toHaveBeenCalledTimes(1);
+  releaseCatalog(); releaseAuthority(); f.stop();
+});

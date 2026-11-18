@@ -9,3 +9,4 @@
 - Make architectural decisions for the long term. Do not accept a stopgap that only works for now and is meant to be replaced later.
 - Study how established products solve the problem before designing a solution. Adopt their proven patterns and conventions rather than inventing an approach from scratch.
 - After completing changes and passing the relevant checks, commit and push them to the corresponding remote branch.
+- When waiting for PR CI, use a background listener script instead of repeatedly polling from the agent. Have the script report failures and completion, and proactively inspect CI only when it reports a failure or after 30 minutes without a message. Keep routine polling and unchanged status output inside the script to avoid wasting tokens.

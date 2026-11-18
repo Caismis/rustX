@@ -411,7 +411,7 @@ pub enum ChatMaxTokensField {
     /// The current `max_completion_tokens` field.
     #[default]
     MaxCompletionTokens,
-    /// The legacy `max_tokens` field.
+    /// The `max_tokens` field used by `DeepSeek`, GLM, Kimi and Qwen APIs.
     MaxTokens,
 }
 
@@ -428,14 +428,15 @@ impl ChatMaxTokensField {
 
 /// How the `OpenAI` Responses protocol operates with provider storage.
 ///
-/// This is continuation *structure*, not a wire value: Stored continues by
-/// `previous_response_id`, Stateless continues by preserved output items and
-/// requires the encrypted-reasoning `include` value.
+/// Stored requests provider retention and continues by `previous_response_id`.
+/// If the response reports `store: false`, the original output items are used
+/// instead. Stateless always continues by preserved output items (encrypted
+/// reasoning or a provider's original plaintext reasoning).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(schemars::JsonSchema)]
 pub enum ResponsesStorageMode {
-    /// Provider-side storage enabled (`store: true`).
+    /// Request provider-side storage (`store: true`).
     #[default]
     Stored,
     /// Zero provider retention (`store: false`).
@@ -645,6 +646,9 @@ impl ModelCompat {
                 self.chat_max_tokens_field = super::compat::chat_max_tokens_field(model, base_url);
             }
             self.chat_reasoning_replay = Some(self.chat_reasoning_replay.unwrap_or_default());
+        }
+        if protocol == ModelProtocol::OpenAiResponses && !self.responses_storage_is_explicit() {
+            self.responses_storage = super::compat::responses_storage(base_url);
         }
         self
     }
@@ -2554,9 +2558,59 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)] // endpoint matrix also verifies frozen overrides
     fn built_in_chat_policy_is_frozen_and_explicit_overrides_win() {
         use crate::model::invocation::ModelSelection;
         let cases = [
+            ("https://api.deepseek.com", "deepseek-flash", "max_tokens"),
+            (
+                "https://api.deepseek.com/v1/",
+                "deepseek-v4-pro",
+                "max_tokens",
+            ),
+            ("https://api.z.ai/api/paas/v4", "GLM-5.3", "max_tokens"),
+            (
+                "https://api.z.ai/api/coding/paas/v4/",
+                "glm-5.3",
+                "max_tokens",
+            ),
+            (
+                "https://open.bigmodel.cn/api/paas/v4",
+                "glm-5.3",
+                "max_tokens",
+            ),
+            ("https://api.moonshot.cn/v1", "kimi-k3", "max_tokens"),
+            ("https://api.kimi.ai/coding/v1", "k3", "max_tokens"),
+            (
+                "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "qwen3.8-max",
+                "max_tokens",
+            ),
+            (
+                "https://coding.dashscope.aliyuncs.com/v1",
+                "qwen3.7-plus",
+                "max_tokens",
+            ),
+            (
+                "https://workspace.cn-beijing.maas.aliyuncs.com/compatible-mode/v1/",
+                "qwen4-max",
+                "max_tokens",
+            ),
+            (
+                "https://api.deepseek.com.evil.example/v1",
+                "deepseek-flash",
+                "max_completion_tokens",
+            ),
+            (
+                "https://api.z.ai/unrelated/v1",
+                "glm-5.3",
+                "max_completion_tokens",
+            ),
+            (
+                "http://localhost:8000/v1",
+                "vllm-model",
+                "max_completion_tokens",
+            ),
             (
                 "https://service.example/v1",
                 "deepseek-v4-flash",
@@ -2639,6 +2693,49 @@ mod tests {
                 explicit.compat.chat_tool_protocol,
                 ChatToolProtocol::QwenXml
             );
+        }
+    }
+
+    #[test]
+    fn responses_storage_defaults_follow_endpoint_and_preserve_overrides() {
+        use crate::model::invocation::ModelSelection;
+        for (endpoint, expected) in [
+            ("https://api.deepseek.com", ResponsesStorageMode::Stateless),
+            (
+                "https://api.deepseek.com/v1/",
+                ResponsesStorageMode::Stateless,
+            ),
+            ("https://api.x.ai/v1", ResponsesStorageMode::Stored),
+            ("http://localhost:8000/v1", ResponsesStorageMode::Stored),
+            (
+                "https://api.deepseek.com.evil.example",
+                ResponsesStorageMode::Stored,
+            ),
+        ] {
+            let mut value = document();
+            value["providers"]["p"]["protocol"] = "openai_responses".into();
+            value["providers"]["p"]["baseUrl"] = endpoint.into();
+            value["models"]["chosen"]
+                .as_object_mut()
+                .unwrap()
+                .remove("compat");
+            let frozen = registry(value.clone())
+                .freeze(&ModelSelection::of(selected()))
+                .unwrap();
+            assert_eq!(frozen.compat.responses_storage, expected, "{endpoint}");
+            let restored: crate::model::frozen::FrozenModelInvocation =
+                serde_json::from_value(serde_json::to_value(&frozen).unwrap()).unwrap();
+            assert_eq!(restored.compat, frozen.compat);
+            for (mode, expected) in [
+                ("stored", ResponsesStorageMode::Stored),
+                ("stateless", ResponsesStorageMode::Stateless),
+            ] {
+                value["models"]["chosen"]["compat"] = json!({"responsesStorage": mode});
+                let frozen = registry(value.clone())
+                    .freeze(&ModelSelection::of(selected()))
+                    .unwrap();
+                assert_eq!(frozen.compat.responses_storage, expected);
+            }
         }
     }
 

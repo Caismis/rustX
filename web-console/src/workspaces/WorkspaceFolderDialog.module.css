@@ -1,0 +1,25 @@
+.dialog[role="dialog"] { width: min(520px, 100%); }
+.path { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 12px; }
+.path button { flex: none; }
+.path code { min-width: 0; font-size: 12px; line-height: 18px; overflow-wrap: anywhere; }
+.folders { max-height: 280px; overflow: auto; border: 1px solid var(--dsw-alias-border-l3); border-radius: 10px; }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: none;
+  color: var(--dsw-alias-label-primary);
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.row:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
+.row:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: -2px; }
+.row svg { flex: none; }
+.notice { margin: 8px 10px; font-size: 13px; color: var(--dsw-alias-label-secondary); overflow-wrap: anywhere; }

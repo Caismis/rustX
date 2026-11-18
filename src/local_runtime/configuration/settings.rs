@@ -15,6 +15,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+mod transfer;
+pub use transfer::{ResourceTransfer, TransferOperation, TransferRejection};
+
 /// Native source authority. A Session is never an authoring target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -345,6 +348,23 @@ pub enum SourceMutation<D = Box<crate::workflow_file::WorkflowFileDocument>> {
         name: crate::runtime::subagent::SubagentName,
         authored: Option<super::super::config::NamedAgentProfileDocument>,
     },
+    /// Edit the named Skill's presentation sidecar in its owning source.
+    SkillDisplay {
+        name: String,
+        authored: super::super::skill_management::SkillDisplayWrite,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        upload: Option<super::super::skill_management::SkillIconUpload>,
+    },
+    SkillDelete {
+        name: String,
+    },
+    /// Copy or move a resource between User and the addressed Workspace.
+    /// The expected revision belongs to the source resource document.
+    ResourceTransfer {
+        from: SourceScope,
+        operation: TransferOperation,
+        resource: ResourceTransfer,
+    },
     /// One whole-file edit of exactly `<scope>/.agents/workflows/<id>.yaml`
     /// (Issue #491). The expected revision is that file's.
     Workflow {
@@ -369,6 +389,7 @@ pub enum SettingsError {
     /// A Workflow candidate the native parser or compiler rejected, with its
     /// bounded diagnostic. Nothing was staged.
     InvalidWorkflow(Box<super::super::workflow_authoring::WorkflowDiagnostic>),
+    TransferRejected(TransferRejection),
     Io,
     Committed,
 }
@@ -401,6 +422,24 @@ fn reread(
 }
 fn revision(bytes: Option<&[u8]>) -> String {
     super::super::settings::revision(bytes)
+}
+
+/// Workflow ids authored in one admitted document. Absence is an empty
+/// selection. An unreadable document is `Io`; a document that does not parse
+/// is `Invalid`.
+fn raw_workflow_selection(
+    document: &super::super::settings::AdmittedSource,
+    workspace: bool,
+) -> Result<Vec<crate::runtime::workflow::WorkflowId>, SettingsError> {
+    let Some(bytes) = document.read().map_err(|_| SettingsError::Io)? else {
+        return Ok(Vec::new());
+    };
+    let layer = super::capture::parse_layer(document.path(), &bytes, workspace)
+        .map_err(|_| SettingsError::Invalid)?;
+    Ok(layer
+        .agent
+        .and_then(|agent| agent.workflows)
+        .unwrap_or_default())
 }
 /// The prospective composition's native semantics, as Session resolution and
 /// automatic repair decide them; safe text only.
@@ -1034,6 +1073,29 @@ impl UserConfigManager {
         })
     }
 
+    /// Raw Workflow selections of the admitted User and Workspace documents.
+    /// These are not the merged list: each scope enables only files it owns.
+    pub(super) fn scoped_workflow_selections(
+        &self,
+        workspace: &SourceTarget,
+    ) -> Result<
+        (
+            Vec<crate::runtime::workflow::WorkflowId>,
+            Vec<crate::runtime::workflow::WorkflowId>,
+        ),
+        SettingsError,
+    > {
+        self.with_source_documents(workspace, |user, workspace_document| {
+            Ok((
+                raw_workflow_selection(user, false)?,
+                workspace_document
+                    .map(|document| raw_workflow_selection(document, true))
+                    .transpose()?
+                    .unwrap_or_default(),
+            ))
+        })
+    }
+
     /// Registered Model choices depend only on authored configuration documents.
     /// Keep their source fence without scanning unrelated package assets.
     pub(in crate::local_runtime) fn capture_authored_settings(
@@ -1340,6 +1402,29 @@ impl UserConfigManager {
             SourceMutation::Workflow { id, .. } => {
                 super::super::workflow_authoring::file_path(self, target, id)
             }
+            SourceMutation::SkillDisplay {
+                name,
+                authored,
+                upload,
+            } => {
+                return self.write_skill_display(
+                    target,
+                    name,
+                    expected,
+                    authored.clone(),
+                    upload.as_ref(),
+                );
+            }
+            SourceMutation::SkillDelete { name } => {
+                return self.delete_skill(target, name, expected);
+            }
+            SourceMutation::ResourceTransfer {
+                from,
+                operation,
+                resource,
+            } => {
+                return self.transfer_resource(target, *from, *operation, resource, expected);
+            }
         };
         // The physical source of this transaction, created when missing and
         // confirmed durable by `publish_locked`. A target redirected since
@@ -1462,6 +1547,11 @@ impl UserConfigManager {
                         scope,
                     )?
                 }
+                SourceMutation::ResourceTransfer { .. }
+                | SourceMutation::SkillDisplay { .. }
+                | SourceMutation::SkillDelete { .. } => {
+                    unreachable!()
+                }
             };
             committed_revision = revision(candidate.as_deref());
             self.publish_locked(
@@ -1523,7 +1613,7 @@ impl UserConfigManager {
             reason = "the owner carries the test I/O fault hooks"
         )
     )]
-    pub(super) fn publish_locked(
+    pub(in crate::local_runtime) fn publish_locked(
         &self,
         source: &SourceDirectory,
         name: &std::ffi::OsStr,

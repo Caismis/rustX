@@ -23,6 +23,7 @@ use rustx::runtime_client::{
     RuntimeClientRequest, RuntimeClientResponse,
 };
 
+use support::audit::assert_permission_reminder;
 use support::fake::FakeStep;
 
 /// The complete set of operations a future transport performs.
@@ -719,17 +720,21 @@ async fn a_full_session_needs_no_out_of_band_semantic_operation() {
     assert_eq!(expected, reattached.read_cut.revision);
     assert_eq!(
         reattached.snapshot.messages.len(),
-        3,
-        "one inbound message, one admitted Agent Status fact, and one agent reply"
+        4,
+        "one inbound message, Agent Status, permission reminder, and one agent reply"
+    );
+    let reminder_id = assert_permission_reminder(&reattached.snapshot.messages)
+        .id
+        .clone();
+    let native = host.checkpoint().expect("native checkpoint");
+    assert_eq!(
+        native.snapshot.messages.len(),
+        4,
+        "the framed view matches the independent native projection"
     );
     assert_eq!(
-        host.checkpoint()
-            .expect("native checkpoint")
-            .snapshot
-            .messages
-            .len(),
-        3,
-        "the framed view matches the independent native projection"
+        assert_permission_reminder(&native.snapshot.messages).id,
+        reminder_id
     );
 }
 

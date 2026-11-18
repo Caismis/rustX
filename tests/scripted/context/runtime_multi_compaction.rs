@@ -543,7 +543,11 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert!(r1_wire.contains("Current time:"));
     assert_eq!(mixed_compaction_summaries(&requests[0].messages), 0);
 
-    assert_eq!(requests[2].messages.len(), 3, "[sum1, in2, st2]");
+    assert_eq!(
+        requests[2].messages.len(),
+        4,
+        "[sum1, in2, st2, permission]"
+    );
     assert_eq!(mixed_compaction_summaries(&requests[2].messages), 1);
     let r2_wire = request_wire(&requests[2].messages);
     assert!(r2_wire.contains("SUMMARY-ONE covers filler one"));
@@ -554,7 +558,11 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     assert!(r2_wire.contains("turn two"));
     assert!(r2_wire.contains("Current time:"));
 
-    assert_eq!(requests[4].messages.len(), 3, "[sum2, in3, st3]");
+    assert_eq!(
+        requests[4].messages.len(),
+        4,
+        "[sum2, in3, st3, permission]"
+    );
     assert_eq!(mixed_compaction_summaries(&requests[4].messages), 1);
     let r3_wire = request_wire(&requests[4].messages);
     assert!(r3_wire.contains("SUMMARY-TWO supersedes summary one"));
@@ -612,22 +620,21 @@ async fn repeated_proactive_compaction_preserves_canonical_evidence_through_the_
     .await;
     assert_eq!(
         ledger.len(),
-        9,
-        "3 inbounds + 3 status facts + 3 assistants; summaries belong to checkpoints"
+        12,
+        "3 inbounds + 3 status facts + 3 permission reminders + 3 assistants; summaries belong to checkpoints"
     );
-    assert!(matches!(&ledger[0], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(is_agent_status(&ledger[1]));
-    assert!(matches!(&ledger[2], MessageBlock::Assistant(_)));
-    assert!(matches!(&ledger[3], MessageBlock::User(u) if u.kind == InboundKind::Message));
+    for index in [0, 4, 8] {
+        assert!(matches!(&ledger[index], MessageBlock::User(u) if u.kind == InboundKind::Message));
+        assert!(is_agent_status(&ledger[index + 1]));
+        assert!(
+            matches!(&ledger[index + 2], MessageBlock::User(u) if matches!(u.kind, InboundKind::Context(ContextKind::NativeEnvironment)))
+        );
+        assert!(matches!(&ledger[index + 3], MessageBlock::Assistant(_)));
+    }
     assert_eq!(
         projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
         2
     );
-    assert!(is_agent_status(&ledger[4]));
-    assert!(matches!(&ledger[5], MessageBlock::Assistant(_)));
-    assert!(matches!(&ledger[6], MessageBlock::User(u) if u.kind == InboundKind::Message));
-    assert!(is_agent_status(&ledger[7]));
-    assert!(matches!(&ledger[8], MessageBlock::Assistant(_)));
     let ledger_wire = wire(&ledger);
     assert!(
         ledger_wire.contains("FILLER-ONE-MARKER"),
@@ -998,13 +1005,13 @@ async fn repeated_overflow_compaction_invalidates_continuation_once_and_retires_
         fixture.runtime.tool_runtime().durable_store().as_ref(),
     )
     .await;
-    assert_eq!(ledger.len(), 10);
+    assert_eq!(ledger.len(), 11);
     assert!(
-        matches!(&ledger[4], MessageBlock::Assistant(assistant)
+        matches!(&ledger[5], MessageBlock::Assistant(assistant)
             if assistant.content.iter().any(|block| matches!(block, AssistantContentBlock::ToolCall(_)))),
         "the retired continuation-owning tool call stays in the ledger"
     );
-    assert!(matches!(&ledger[5], MessageBlock::Tool(_)));
+    assert!(matches!(&ledger[6], MessageBlock::Tool(_)));
     assert_eq!(
         projection_count(fixture.runtime.tool_runtime().durable_store().as_ref()),
         2
@@ -1128,7 +1135,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     .await;
     assert_eq!(
         detached_ledger.len(),
-        5,
+        6,
         "summary projection adds no canonical message"
     );
     assert_eq!(
@@ -1157,7 +1164,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         .map(|checkpoint| (checkpoint.snapshot, checkpoint.cursor))
         .expect("snapshot without attachments");
     assert_eq!(detached_snapshot.context.compaction_count, 1);
-    assert_eq!(detached_snapshot.messages.len(), 5);
+    assert_eq!(detached_snapshot.messages.len(), 6);
 
     // A fresh attachment is a new projection binding over the same
     // continuous truth — never a transfer of semantic ownership.
@@ -1203,7 +1210,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
     let keys = canonical_keys(&attachment_b, &checkpoint);
     assert_eq!(
         keys.len(),
-        8,
+        9,
         "bounded pages retain the whole canonical directory"
     );
 
@@ -1232,7 +1239,7 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
         fixture.runtime.tool_runtime().durable_store().as_ref(),
     )
     .await;
-    assert_eq!(ledger.len(), 8);
+    assert_eq!(ledger.len(), 9);
     let canonical = serde_json::to_string(&ledger).unwrap();
     assert!(
         !canonical.contains("SUMMARY-ONE") && !canonical.contains("SUMMARY-TWO"),
@@ -1255,7 +1262,11 @@ async fn compaction_and_canonical_truth_survive_client_detach_and_reattach() {
             .iter()
             .map(MessageBlock::id)
             .collect::<Vec<_>>(),
-        ledger.iter().map(MessageBlock::id).collect::<Vec<_>>()
+        ledger
+            .iter()
+            .skip(ledger.len() - snapshot.messages.len())
+            .map(MessageBlock::id)
+            .collect::<Vec<_>>()
     );
 }
 

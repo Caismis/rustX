@@ -513,6 +513,8 @@ export function describeRpcError(error: RpcError): string {
       return `the configured model is not in the published catalog; choose one with /model (${data.diagnostic})`;
     case "source_conflict":
       return `${data.scope} source changed (expected ${data.expected}, found ${data.actual})`;
+    case "resource_transfer_rejected":
+      return `resource transfer rejected: ${data.reason}`;
     case "stale_settings":
       return `settings changed underneath this edit (expected revision ${data.expected}, found ${data.actual})`;
     case "workflow_invalid":

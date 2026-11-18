@@ -100,7 +100,7 @@ test('Web creates one token/config, passes the bound endpoint, and cleanup waits
   await h.count(2);
   const web = h.calls[1], configFile = web.spec.env!.RUSTX_WORKSPACE_HOST_CONFIG!;
   const config = JSON.parse(readFileSync(configFile, 'utf8'));
-  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, ...workspaceRegistry(f.args.workspaces, f.args.forwarded, join(f.directory, 'state')) });
+  assert.deepEqual(config, { nativeFilesystem: 'shared' as const, terminalSupervisor: join(nativeDirectory, 'interactive-supervisor'), endpoint: 'ws://127.0.0.1:4242/', transportToken: readFileSync(tokenFile, 'utf8'), productHostToken: readFileSync(productHostTokenFile, 'utf8'), picker: true, nativePicker: true, browsePicker: true, ...workspaceRegistry(f.args.workspaces, f.args.forwarded, join(f.directory, 'state')) });
   assert.deepEqual(readdirSync(scratch).sort(), ['host-config.json', 'product-host-token', 'transport-token', 'web-bootstrap.json']);
   const bootstrapFile = web.spec.env!.RUSTX_WEB_BOOTSTRAP_CONFIG!;
   const bootstrap = JSON.parse(readFileSync(bootstrapFile, 'utf8'));

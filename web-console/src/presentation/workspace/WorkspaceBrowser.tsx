@@ -11,7 +11,7 @@ import css from './WorkspaceBrowser.module.css';
 
 /** Native adapters supply facts/gestures. This component owns only visual state. */
 export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected, draft, query, search, open, rename, fork, remove, pin, copyId, closeView, closeAllViews,
-  selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, refresh, previous, next, notices, renderSession = (_node, render) => render(_node) }: {
+  selectWorkspace, create, renameWorkspace, removeWorkspace, workspaceSettings, addWorkspace, addingWorkspace, refresh, previous, next, notices, renderSession = (_node, render) => render(_node) }: {
   draft?: DraftConversation;
   unclassified?: readonly string[];
   renderSession?: (node: SessionNode, render: (node: SessionNode) => ReactNode) => ReactNode;
@@ -23,7 +23,7 @@ export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected
   closeAllViews?: () => void;
   fork: (id: string) => void; remove: (id: string) => void; selectWorkspace: (id: string) => void; create: (id: string) => void;
   renameWorkspace: (id: string, title: string) => void; removeWorkspace: (id: string, title: string) => void;
-  addWorkspace?: () => void; refresh: () => void; previous?: () => void; next?: () => void; notices?: ReactNode;
+  addWorkspace?: () => void; addingWorkspace?: boolean; refresh: () => void; previous?: () => void; next?: () => void; notices?: ReactNode;
 }) {
   const tx = useTranslation();
   const [searchExpanded, setSearchExpanded] = useState(false), [flat, setFlat] = useState(false), [menu, setMenu] = useState(false);
@@ -54,7 +54,7 @@ export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected
             ...(closeView && sessions.some(node => node.viewOpen) ? [{ id: 'close-view', label: tx('workspace:workspace-browser.close-view'), submenu: sessions.filter(node => node.viewOpen).map(node => ({ id: `close:${node.id}`, label: node.title })) }] : []),
             ...(closeAllViews ? [{ id: 'close-views', label: tx('workspace:workspace-browser.close-all-views') }] : [])]}
           onSelect={id => { setMenu(false); if (id === 'group') setFlat(!flat); else if (id === 'close-views') closeAllViews?.(); else if (id.startsWith('close:')) closeView?.(id.slice(6)); else refresh(); }} />}
-        {addWorkspace && <Tooltip label={tx('workspace:workspace-navigation.add-workspace')}><button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-navigation.add-workspace')} onClick={addWorkspace}><IconProjectAddOutline16 size={16} /></button></Tooltip>}
+        {addWorkspace && <Tooltip label={tx('workspace:workspace-navigation.add-workspace')}><button type="button" className={css.iconButton} aria-label={tx('workspace:workspace-navigation.add-workspace')} disabled={addingWorkspace} aria-busy={addingWorkspace || undefined} onClick={addWorkspace}><IconProjectAddOutline16 size={16} /></button></Tooltip>}
       </div>
     </div>
 
