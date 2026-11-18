@@ -712,6 +712,9 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
         affected: false,
     };
     let of = |kind: Kind| targets.iter().filter(move |target| target.kind == kind);
+    // `targets` holds only the root `rustx` package's targets; a `-p` step that
+    // names other packages selects none of them and contributes no coverage.
+    let (mut names_rustx, mut names_other) = (false, false);
     let mut cargo = cargo.iter();
     while let Some(argument) = cargo.next() {
         let mut named = |kind: Kind| -> Result<Target, String> {
@@ -746,10 +749,34 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
                 step.features
                     .extend([(*argument).into(), (*features).into()]);
             }
+            "-p" | "--package" => {
+                let name = cargo
+                    .next()
+                    .ok_or(format!("{argument} requires a package name"))?;
+                if *name == "rustx" {
+                    names_rustx = true;
+                } else {
+                    names_other = true;
+                }
+            }
             "--no-run" => step.executes = false,
             "--locked" | "--timings" => {}
             other => return Err(format!("unsupported cargo test option `{other}`")),
         }
+    }
+    if names_other && !names_rustx {
+        // The step exercises only extracted `rustx-*` packages.
+        if step.targets.is_empty() {
+            // It covers none of the root package's targets, so the lanes
+            // ignore it.
+            return Ok(step);
+        }
+        // Its target selections would claim root-package coverage it does
+        // not run; reject rather than misread the command.
+        return Err(
+            "target selections alongside `-p` for other packages claim root coverage they do not run"
+                .into(),
+        );
     }
     if step.targets.is_empty() {
         return Err("a cargo test step must select its targets explicitly".into());
