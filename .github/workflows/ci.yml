@@ -241,6 +241,12 @@ jobs:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: cargo test --all-features --locked --test process
 
+
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run the extracted packages once.
+      - name: Run extracted workspace crate tests
+        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
 
@@ -360,6 +366,11 @@ jobs:
       - name: Run doctests
         run: cargo test --doc --all-features --locked
 
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run the extracted packages once.
+      - name: Run extracted workspace crate tests
+        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+
       # Cargo/libtest discovery of this lane's targets against every Linux
       # step that selects them: an unassigned target, a stale filter or
       # --skip, or a Linux test no lane executes fails here. The checker's own
@@ -455,6 +466,11 @@ jobs:
         env:
           RUSTX_REQUIRE_PROVIDER_EMULATOR: "1"
         run: 'cargo test --lib --all-features --locked -- boundary_suites::'
+
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run the extracted packages once.
+      - name: Run extracted workspace crate tests
+        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
 
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With
@@ -601,6 +617,12 @@ jobs:
 
       # Native macOS discovery: every required external target (see
       # REQUIREMENTS in the checker) must execute here.
+
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run the extracted packages once.
+      - name: Run extracted workspace crate tests
+        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-platform-core
 
@@ -737,6 +759,12 @@ jobs:
           --test conformance
           --test cfg3_catalog
           --test cfg3_managed_output
+
+      # Unit tests of the extracted workspace crates (rustx-*): the lanes
+      # select only the root package, so run the extracted packages once.
+      - name: Run extracted workspace crate tests
+        run: cargo test -p rustx-types -p rustx-identity -p rustx-bounded-json -p rustx-bounded-file --all-features --locked
+
 
       # Native macOS discovery: both --skip selectors must still exclude
       # tests, and `boundary_suites::` and every external target (see

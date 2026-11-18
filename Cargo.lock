@@ -4746,6 +4746,7 @@ name = "rustx-bounded-file"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "nix",
  "serde",
  "serde_json",
  "tempfile",
@@ -4785,6 +4786,7 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
 ]
 

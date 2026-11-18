@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 schemars = { version = "1", features = ["chrono04"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
@@ -14,13 +14,14 @@ nix = { version = "0.31.3", features = ["signal", "process", "fs"] }
 rustx-identity = { path = "../rustx-identity" }
 base64 = "0.22"
 tokio = { version = "1", features = ["macros", "sync"] }
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
 http = "1"
 httpdate = "1"
 
 [dev-dependencies]
-serde_json = "1"
+tempfile = "3"
+serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 
 [features]
 # Monolith cfg(test) call sites reach the test-only lifecycle helpers
