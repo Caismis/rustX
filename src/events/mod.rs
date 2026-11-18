@@ -7,8 +7,8 @@
 //! progress projection for detached background work; it is not a second
 //! durable journal.
 
-pub mod interaction;
-pub mod review;
+pub use rustx_types::events::interaction;
+pub use rustx_types::events::review;
 pub mod types;
 
 /// The narrow optional non-durable execution-fact projection of the tool

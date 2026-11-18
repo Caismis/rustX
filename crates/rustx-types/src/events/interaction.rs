@@ -138,7 +138,7 @@ const DIGEST_HEX_CHARS: usize = 64;
 /// ```
 ///
 /// It is deliberately orthogonal to
-/// [`InteractionSource`](crate::runtime::interaction::InteractionSource):
+/// `InteractionSource` (`rustx::runtime::interaction::InteractionSource`):
 /// *where* an interaction came from (primary or subagent) and *who* requested
 /// it (native tool or MCP server) are two independent facts and are never
 /// collapsed into one field.
@@ -274,7 +274,7 @@ pub struct TextAnswerSpecification {
 /// # Why binary64, and why exactly one domain
 ///
 /// MCP types an elicitation `number` bound as a binary64 —
-/// [`rmcp::model::NumberSchema`]'s `minimum` and `maximum` are `Option<f64>` —
+/// `rmcp::model::NumberSchema`'s `minimum` and `maximum` are `Option<f64>` —
 /// and a JavaScript `number` is a binary64 as well. Binary64 is therefore not
 /// a convenience: it is the widest value *every* stage of the pipeline can
 /// hold without rounding, so it is the one domain all of them share.
@@ -564,7 +564,7 @@ impl<'de> Deserialize<'de> for FiniteNumber {
 /// # Why `i64`, and why a string on the wire
 ///
 /// MCP types an elicitation `integer` bound as an `i64`
-/// ([`rmcp::model::IntegerSchema`]'s `minimum` and `maximum` are
+/// (`rmcp::model::IntegerSchema`'s `minimum` and `maximum` are
 /// `Option<i64>`), so `i64` is exactly the domain the protocol hands rustX. No
 /// MCP integer schema can name a bound outside it, which is why refusing an
 /// out-of-domain integer schema is vacuous here rather than missing.

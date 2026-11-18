@@ -8,6 +8,7 @@ publish = false
 serde_path_to_error = "0.1"
 toml = "0.8"
 toml_edit = "0.22"
+url = "2.5"
 jsonschema = { version = "0.60.2", default-features = false, features = ["macros"] }
 croner = "=4.0.2"
 chrono-tz = "0.10"
