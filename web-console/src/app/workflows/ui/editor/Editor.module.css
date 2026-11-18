@@ -48,7 +48,7 @@
 @media (hover: hover) {
   .iconButton:hover,
     .moreButton:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .iconButton:focus-visible, .moreButton:focus-visible, .tool:focus-visible, .smallButton:focus-visible, .linkButton:focus-visible, .chip:focus-visible, .zoom button:focus-visible {
@@ -114,7 +114,7 @@
 .zoom button { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: var(--dsw-radius-xs); background: none; color: inherit; cursor: pointer; }
 @media (hover: hover) {
   .zoom button:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .zoom .zoomLevel { width: auto; min-width: 44px; padding: 0 4px; color: var(--dsw-alias-label-primary); font: inherit; }
@@ -148,7 +148,7 @@
 .chooserTab { min-height: 31px; padding: 0 12px; border: 0; border-radius: var(--dsw-radius-sm); background: none; color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; cursor: pointer; }
 @media (hover: hover) {
   .chooserTab:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .chooserTabActive { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-state-business-primary); font-weight: 500; }
@@ -191,14 +191,14 @@
 @media (hover: hover) {
   .nextRemove:hover,
     .nextTarget:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .nextAdd { display: flex; align-items: center; gap: 7px; width: 100%; min-height: 36px; padding: 5px 8px; border: 0.5px dashed var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); background: color-mix(in srgb, var(--dsw-alias-bg-layer-1) 45%, transparent); color: var(--dsw-alias-label-tertiary); font: inherit; font-size: 11.5px; text-align: left; cursor: pointer; }
 .nextAdd[aria-expanded='true'] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); }
 @media (hover: hover) {
   .nextAdd:hover {
-     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary); 
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-secondary);
   }
 }
 .nextAdd:focus-visible, .nextTarget:focus-visible, .nextRemove:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
@@ -297,14 +297,14 @@ name. */
 .nodeSelected .handleAdd { opacity: 1; pointer-events: auto; }
 @media (hover: hover) {
   .node:hover .handleAdd {
-     opacity: 1; pointer-events: auto; 
+     opacity: 1; pointer-events: auto;
   }
 }
 .handleTip { position: absolute; bottom: calc(100% + 6px); left: 50%; z-index: 10; display: none; flex-direction: column; gap: 2px; padding: 6px 8px; transform: translateX(-50%); border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); font-size: 11px; color: var(--dsw-alias-label-tertiary); white-space: nowrap; pointer-events: none; }
 .handleTip b { margin-right: 2px; font-weight: 500; color: var(--dsw-alias-label-secondary); }
 @media (hover: hover) {
   .handle:hover .handleTip {
-     display: flex; 
+     display: flex;
   }
 }
 .edgeAdd { position: absolute; width: 16px; height: 16px; opacity: 0; pointer-events: none; transition: opacity 0.15s ease; }
@@ -381,7 +381,7 @@ name. */
 }
 @media (hover: hover) {
   .smallButton:hover:not(:disabled) {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .smallButton:disabled { opacity: 0.45; cursor: default; }
@@ -403,7 +403,7 @@ name. */
 .branchKey:focus { border-color: var(--dsw-alias-border-l3); }
 @media (hover: hover) {
   .branchKey:hover {
-     border-color: var(--dsw-alias-border-l3); 
+     border-color: var(--dsw-alias-border-l3);
   }
 }
 .keyField { grid-column: 1; display: grid; gap: 4px; min-width: 0; }
@@ -426,7 +426,7 @@ name. */
 .nodeSelected .nodeMenu { opacity: 1; }
 @media (hover: hover) {
   .node:hover .nodeMenu {
-     opacity: 1; 
+     opacity: 1;
   }
 }
 .nodeFields { display: grid; gap: 2px; margin-top: 10px; font-size: 11px; }
@@ -446,7 +446,7 @@ name. */
 .addBlockButton { display: flex; align-items: center; gap: 4px; height: 32px; padding: 0 12px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
 @media (hover: hover) {
   .addBlockButton:hover {
-     background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-primary); 
+     background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-primary);
   }
 }
 .addBlockButton:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
@@ -455,7 +455,7 @@ name. */
 .bodyStartIcon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 50%; background: var(--dsw-alias-state-business-primary); color: var(--dsw-alias-label-primary-inverted); }
 @media (hover: hover) {
   .bodyStart:hover .handleAdd {
-     opacity: 1; pointer-events: auto; 
+     opacity: 1; pointer-events: auto;
   }
 }
 .inspector { position: relative; width: var(--inspector-width, 392px); max-width: 55%; }
@@ -484,13 +484,13 @@ name. */
 @media (hover: hover) {
   .contextMenu > button:hover:not(:disabled),
     .nodeSearch button:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .contextMenu > button:disabled { opacity: 0.45; cursor: default; }
 @media (hover: hover) {
   .contextDanger:hover:not(:disabled) {
-     color: var(--dsw-alias-state-error-primary); 
+     color: var(--dsw-alias-state-error-primary);
   }
 }
 .contextSeparator { display: block; height: 0.5px; margin: 4px -4px; background: var(--dsw-alias-border-l2); }
@@ -508,7 +508,7 @@ name. */
 .variableChoice:focus-visible { background: var(--dsw-alias-interactive-bg-hover); outline: 1px solid var(--dsw-alias-state-business-primary); }
 @media (hover: hover) {
   .variableChoice:hover {
-     background: var(--dsw-alias-interactive-bg-hover); outline: 1px solid var(--dsw-alias-state-business-primary); 
+     background: var(--dsw-alias-interactive-bg-hover); outline: 1px solid var(--dsw-alias-state-business-primary);
   }
 }
 .variableChoice:disabled { cursor: default; color: var(--dsw-alias-label-tertiary); }
@@ -554,7 +554,7 @@ name. */
 }
 @media (hover: hover) {
   .bareTextarea:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .bareTextarea::placeholder { color: var(--dsw-alias-label-tertiary); }
@@ -596,7 +596,7 @@ name. */
 @media (hover: hover) {
   .branchRemoveCase:hover,
     .branchRemoveCondition:hover {
-     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); 
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);
   }
 }
 .branchAddCase { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-height: 32px; margin: 14px 0; border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-secondary); font-size: 12px; cursor: pointer; }
@@ -613,7 +613,7 @@ name. */
 .branchLogicToggle svg { width: 12px; height: 12px; }
 @media (hover: hover) {
   .branchLogicToggle:hover {
-     background: var(--dsw-alias-interactive-bg-hover-solid); 
+     background: var(--dsw-alias-interactive-bg-hover-solid);
   }
 }
 .branchLogicToggle:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
@@ -636,7 +636,7 @@ name. */
 .branchOperatorItem[data-highlighted] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 @media (hover: hover) {
   .branchOperatorItem:hover {
-     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); 
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);
   }
 }
 .branchConditionValue { min-height: 31px; padding: 3px 8px; border-top: 0.5px solid var(--dsw-alias-border-l2); }
@@ -662,7 +662,7 @@ name. */
 .modelTrigger[aria-expanded='true'] { background: var(--dsw-alias-interactive-bg-hover); }
 @media (hover: hover) {
   .modelTrigger:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .modelTrigger:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
@@ -689,7 +689,7 @@ name. */
 .promptTool[aria-pressed='true'] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); }
 @media (hover: hover) {
   .promptTool:hover:not(:disabled) {
-     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); 
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);
   }
 }
 .promptTool:disabled { opacity: .45; cursor: default; }
@@ -710,7 +710,7 @@ name. */
 .promptRole[data-popup-open] { background: var(--dsw-alias-interactive-bg-hover); }
 @media (hover: hover) {
   .promptRole:hover {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .promptRole svg { width: 12px; height: 12px; }
@@ -718,7 +718,7 @@ name. */
 .promptAddMessage { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; min-height: 32px; border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover-solid); color: var(--dsw-alias-label-secondary); font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
 @media (hover: hover) {
   .promptAddMessage:hover:not(:disabled) {
-     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary); 
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-label-primary);
   }
 }
 .promptAddMessage:disabled { opacity: .5; cursor: default; }
@@ -767,7 +767,7 @@ name. */
 .reviewAction .routeIdInput { height: 32px; padding: 0 10px; border-color: transparent; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 13px; }
 @media (hover: hover) {
   .reviewAction .routeIdInput:hover {
-     border-color: var(--dsw-alias-border-l3); 
+     border-color: var(--dsw-alias-border-l3);
   }
 }
 .reviewActionId, .reviewActionTitle { min-width: 0; }
@@ -780,7 +780,7 @@ name. */
 .endOutput .routeIdInput { height: 32px; padding: 0 10px; border-color: transparent; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-interactive-bg-hover-solid); font-size: 13px; }
 @media (hover: hover) {
   .endOutput .routeIdInput:hover {
-     border-color: var(--dsw-alias-border-l3); 
+     border-color: var(--dsw-alias-border-l3);
   }
 }
 .endOutputName { flex: 0 0 32%; min-width: 0; }
@@ -847,7 +847,7 @@ name. */
 .templateInput { position: relative; display: flex; align-items: flex-start; gap: 6px; min-height: 32px; box-sizing: border-box; padding: 4px 8px; border: 1px solid transparent; border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-2); }
 @media (hover: hover) {
   .templateInput:hover {
-     border-color: var(--dsw-alias-border-l3); 
+     border-color: var(--dsw-alias-border-l3);
   }
 }
 .templateInput:focus-within { border-color: var(--dsw-alias-state-business-primary); }
@@ -859,7 +859,7 @@ name. */
 .typeSwitch button { display: flex; align-items: center; justify-content: center; width: 30px; height: 28px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: none; color: var(--dsw-alias-label-tertiary); font: inherit; font-family: var(--ds-font-family-code); font-size: 12px; cursor: pointer; }
 @media (hover: hover) {
   .typeSwitch button:hover {
-     color: var(--dsw-alias-label-primary); 
+     color: var(--dsw-alias-label-primary);
   }
 }
 .typeSwitch .typeSwitchActive { background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary); box-shadow: 0 1px 2px rgba(0,0,0,.18); }
@@ -867,7 +867,7 @@ name. */
 .chooserProvider { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 3px 8px; border: 0; border-radius: var(--dsw-radius-sm); background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; font-weight: 500; text-align: left; cursor: pointer; }
 @media (hover: hover) {
   .chooserProvider:hover:not(:disabled) {
-     background: var(--dsw-alias-interactive-bg-hover); 
+     background: var(--dsw-alias-interactive-bg-hover);
   }
 }
 .chooserProvider:disabled { cursor: default; }
@@ -898,42 +898,42 @@ name. */
 .typeBadge { padding: 0 5px; border: 0.5px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-xs); color: var(--dsw-alias-label-tertiary); font-size: 10px; font-weight: 500; line-height: 16px; }
 /* Dify's checklist: a header button with a warning count, and a popover of
  * the nodes with problems. */
-.checklistButton { position: relative; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-specific-menu); color: var(--dsw-alias-label-secondary); cursor: pointer; }
-.checklistButton[data-popup-open] { background: var(--dsw-specific-menu); color: var(--dsw-alias-state-business-primary); }
+.checklistButton { position: relative; display: flex; align-items: center; justify-content: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: var(--dsw-radius-sm); background: none; color: var(--dsw-alias-label-secondary); cursor: pointer; }
+.checklistButton[data-popup-open] { background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-state-business-primary); }
 @media (hover: hover) {
   .checklistButton:hover {
-     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-state-business-primary); 
+     background: var(--dsw-alias-interactive-bg-hover); color: var(--dsw-alias-state-business-primary);
   }
 }
 .checklistButton:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
-.checklistCount { position: absolute; top: -6px; right: -6px; display: flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; box-sizing: border-box; border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-specific-menu); color: var(--dsw-alias-label-primary-inverted); font-size: 11px; font-weight: 500; }
+.checklistCount { position: absolute; top: -6px; right: -6px; display: flex; align-items: center; justify-content: center; min-width: 18px; height: 18px; padding: 0 4px; box-sizing: border-box; border: 0; border-radius: 999px; corner-shape: round; background: var(--dsw-alias-state-warn-primary); color: var(--dsw-alias-label-primary-inverted); font-size: 11px; font-weight: 500; }
 .checklistPositioner { z-index: 60; }
 .checklist { width: 420px; max-width: calc(100vw - 32px); max-height: calc(2 / 3 * 100vh); overflow-y: auto; box-sizing: border-box; padding: 14px 16px 16px; border: 0; border-radius: var(--dsw-radius-lg); background: var(--dsw-specific-menu); color: var(--dsw-alias-label-primary); box-shadow: var(--dsw-elevation-prominent); outline: none; }
 .checklistHead { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
 .checklistTitle { margin: 0; font-size: 16px; font-weight: 500; line-height: 24px; }
 .checklistDescription { margin: 2px 0 8px; font-size: 12px; color: var(--dsw-alias-label-tertiary); }
 .checklistItems { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
-.checklistNode { overflow: hidden; border-radius: var(--dsw-radius-md); background: var(--dsw-specific-menu); }
+.checklistNode { overflow: hidden; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover); }
 .checklistNodeHead { display: flex; align-items: center; gap: 8px; padding: 8px 8px 0; }
-.checklistIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-sm); background: var(--dsw-specific-menu); color: var(--dsw-alias-label-primary-inverted); }
+.checklistIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-sm); background: var(--node-kind-color, var(--dsw-alias-state-business-primary)); color: var(--dsw-alias-label-primary-inverted); }
 .checklistNodeTitle { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
-.checklistMessage { display: flex; align-items: center; gap: 8px; width: calc(100% - 8px); margin: 4px; padding: 0 4px; border: 0; border-radius: var(--dsw-radius-sm); background: var(--dsw-specific-menu); color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.checklistMessage { display: flex; align-items: center; gap: 8px; width: calc(100% - 8px); margin: 4px; padding: 0 4px; border: 0; border-radius: var(--dsw-radius-sm); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 @media (hover: hover) {
   .checklistMessage:hover {
-     background: var(--dsw-alias-interactive-bg-active); 
+     background: var(--dsw-alias-interactive-bg-active);
   }
 }
 .checklistMessage:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); }
 /* The timeline dot of Dify's ItemIndicator. */
 .checklistDot { position: relative; flex: none; width: 20px; height: 24px; }
-.checklistDot::before { content: ''; position: absolute; left: 9.5px; top: 0; bottom: 0; width: 1px; background: var(--dsw-specific-menu); }
-.checklistDot::after { content: ''; position: absolute; left: 5px; top: 7px; width: 7px; height: 7px; border: 0; border-radius: 50%; background: var(--dsw-specific-menu); }
+.checklistDot::before { content: ''; position: absolute; left: 9.5px; top: 0; bottom: 0; width: 1px; background: var(--dsw-alias-border-l2); }
+.checklistDot::after { content: ''; position: absolute; left: 5px; top: 7px; width: 7px; height: 7px; border: 1.5px solid var(--dsw-alias-bg-layer-1); border-radius: 50%; corner-shape: round; background: var(--dsw-alias-state-warn-primary); }
 .checklistText { flex: 1; min-width: 0; overflow: hidden; font-size: 12px; line-height: 16px; color: var(--dsw-alias-state-warn-primary); text-overflow: ellipsis; white-space: nowrap; }
 .checklistGo { display: flex; flex: none; align-items: center; gap: 2px; font-size: 12px; font-weight: 500; color: var(--dsw-alias-state-business-primary); opacity: 0; transition: opacity 150ms; }
 .checklistMessage:focus-visible .checklistGo { opacity: 1; }
 @media (hover: hover) {
   .checklistMessage:hover .checklistGo {
-     opacity: 1; 
+     opacity: 1;
   }
 }
 .checklistArrow { transform: scaleX(-1); }
