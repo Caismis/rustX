@@ -877,9 +877,16 @@ block:
         );
     }
 
-    #[test]
-    fn copy_allows_a_disabled_workspace_shadow_and_rejects_the_enabled_owner() {
-        let (_temporary, manager, workspace) = fixture();
+    /// Global `pipeline` is enabled and does not reference the copy. The
+    /// Workspace file of the same name does, and is not selected.
+    fn disabled_workspace_shadow() -> (
+        tempfile::TempDir,
+        UserConfigManager,
+        SourceTarget,
+        PathBuf,
+        PathBuf,
+    ) {
+        let (temporary, manager, workspace) = fixture();
         let workspace_dir = workspace.workspace().unwrap();
         let user_root = manager.resource_root(&SourceTarget::User);
         let user_config = user_root.parent().unwrap().join("rustx.toml");
@@ -901,18 +908,35 @@ block:
             "[mcp_servers.review]\nurl = 'https://example.invalid/mcp'\n",
         )
         .unwrap();
-        let quiet = NESTED_WORKFLOW.replace("profile: review-copy", "profile: reviewer").replace(
-            "selector: {origin: source, source_id: review-copy, name: inspect}",
-            "selector: {origin: builtin, name: read}",
-        );
+        let quiet = NESTED_WORKFLOW
+            .replace("profile: review-copy", "profile: reviewer")
+            .replace(
+                "selector: {origin: source, source_id: review-copy, name: inspect}",
+                "selector: {origin: builtin, name: read}",
+            );
         let global_workflow = user_root.join("workflows/pipeline.yaml");
         fs::create_dir_all(global_workflow.parent().unwrap()).unwrap();
         fs::write(&global_workflow, &quiet).unwrap();
         install_workflow_at(&global_workflow, &quiet);
         fs::create_dir_all(workspace_dir.join(".agents/agents")).unwrap();
-        fs::write(workspace_dir.join(".agents/agents/reviewer.toml"), "description = 'Review'\ninstructions = 'Review input'\n").unwrap();
+        fs::write(
+            workspace_dir.join(".agents/agents/reviewer.toml"),
+            "description = 'Review'\ninstructions = 'Review input'\n",
+        )
+        .unwrap();
         install_workflow(workspace_dir, NESTED_WORKFLOW);
-        fs::write(workspace_dir.join("rustx.toml"), "[agent]\nworkflows = []\n").unwrap();
+        fs::write(
+            workspace_dir.join("rustx.toml"),
+            "[agent]\nworkflows = []\n",
+        )
+        .unwrap();
+        (temporary, manager, workspace, source_agent, user_mcp)
+    }
+
+    #[test]
+    fn copy_allows_a_disabled_workspace_shadow() {
+        let (_temporary, manager, workspace, source_agent, user_mcp) = disabled_workspace_shadow();
+        let workspace_dir = workspace.workspace().unwrap();
         let agent_destination = workspace_dir.join(".agents/agents/review-copy.toml");
         let mcp_destination = workspace_dir.join(".agents/mcp.toml");
         copy(
@@ -923,7 +947,6 @@ block:
         )
         .expect("a disabled Workspace shadow is not a consumer");
         assert!(agent_destination.is_file());
-        fs::remove_file(&agent_destination).unwrap();
         copy(
             &manager,
             &workspace,
@@ -936,9 +959,24 @@ block:
                 .unwrap()
                 .contains("review-copy")
         );
-        assert!(!fs::read_to_string(workspace_dir.join("rustx.toml")).unwrap().contains("pipeline"));
-        fs::write(workspace_dir.join("rustx.toml"), "[agent]\nworkflows = ['pipeline']\n").unwrap();
-        fs::remove_file(&mcp_destination).unwrap();
+        assert!(
+            !fs::read_to_string(workspace_dir.join("rustx.toml"))
+                .unwrap()
+                .contains("pipeline")
+        );
+    }
+
+    #[test]
+    fn copy_rejects_a_workspace_shadow_enabled_by_its_owner() {
+        let (_temporary, manager, workspace, source_agent, user_mcp) = disabled_workspace_shadow();
+        let workspace_dir = workspace.workspace().unwrap();
+        fs::write(
+            workspace_dir.join("rustx.toml"),
+            "[agent]\nworkflows = ['pipeline']\n",
+        )
+        .unwrap();
+        let agent_destination = workspace_dir.join(".agents/agents/review-copy.toml");
+        let mcp_destination = workspace_dir.join(".agents/mcp.toml");
         assert_name_enabled(
             &copy(
                 &manager,
