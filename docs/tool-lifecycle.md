@@ -125,8 +125,11 @@ an external effect, not a still-running rustX worker.
 The foreground settlement guard remains a typed control-plane failure, separate
 from executor-returned unconfirmed evidence. It never proves physical
 termination. Executors must retain all local cleanup within their ownership
-contract. No automatic retry, ambiguous replay, or foreground-to-background
-switch is introduced.
+contract. The settlement guard does not retry, replay, or switch a call from
+foreground to background. Native Bash promotion is a tool-layer handoff: the
+process runs privately until the foreground budget, and only a still-running
+process is adopted into the conversation-owned registry. It is not a
+settlement-guard switch.
 
 The cooperative handle consumes its operation on completion, so a repeated poll
 cannot execute it or produce another terminal winner. Invocation panics are

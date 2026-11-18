@@ -610,6 +610,8 @@ pub enum BackgroundDispatchOutcome {
         /// `execution_id`, `state`, and the tool.
         result: ToolExecutionResult,
     },
+    /// A staged foreground process finished at the handoff boundary.
+    ForegroundFinished(ToolExecutionResult),
     /// Attempt cancellation won before the ownership commit: the prepared
     /// dispatch was rolled back, no execution is detached, and no accepted
     /// result exists.
@@ -728,6 +730,81 @@ impl Drop for PreparedBackgroundDispatch {
     }
 }
 
+/// A Bash process running before any background job is visible.
+pub(crate) struct PrivateBashStage {
+    registry: ConversationBackgroundRegistry,
+    execution_id: ToolExecutionId,
+    dispatch: PreparedBackgroundDispatch,
+    progress_rx: tokio::sync::mpsc::Receiver<ToolProgress>,
+    settled: Arc<Notify>,
+}
+
+impl PrivateBashStage {
+    pub(crate) fn cancel(&self, reason: CancellationReason) {
+        let mut state = self.registry.state();
+        if let Some(prepared) = state.prepared.get_mut(&self.execution_id) {
+            prepared.record.cancel_reason.get_or_insert(reason);
+            prepared.record.cancellation.cancel();
+        }
+    }
+
+    pub(crate) async fn wait_event(&mut self) -> Option<ToolProgress> {
+        if let Ok(progress) = self.progress_rx.try_recv() {
+            return Some(progress);
+        }
+        tokio::select! {
+            biased;
+            progress = self.progress_rx.recv() => progress,
+            () = self.settled.notified() => {
+                self.progress_rx.try_recv().ok()
+            }
+        }
+    }
+
+    pub(crate) fn take_result(&self) -> Option<ToolExecutionResult> {
+        let mut state = self.registry.state();
+        state
+            .prepared
+            .get_mut(&self.execution_id)
+            .and_then(|prepared| prepared.private_result.take())
+    }
+
+    /// Drops the private stage without publishing a job or a terminal inbound.
+    pub(crate) fn release_finished(mut self, result: ToolExecutionResult) -> ToolExecutionResult {
+        self.registry.state().prepared.remove(&self.execution_id);
+        self.dispatch.committed = true;
+        self.registry.notify_state_change();
+        self.registry.resources.mailbox.wake().notify_one();
+        self.registry
+            .finish_private_output(&self.execution_id, result)
+    }
+
+    pub(crate) async fn adopt(
+        self,
+        cancellation: &CancellationSignal,
+    ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
+        let outcome = self
+            .registry
+            .commit_dispatch_owned(self.dispatch, cancellation)
+            .await;
+        // A refused handoff still owns a real shell. Its cancellation settles
+        // the process group before the foreground call returns.
+        if !matches!(
+            outcome,
+            Ok(BackgroundDispatchOutcome::Accepted { .. }
+                | BackgroundDispatchOutcome::ForegroundFinished(_))
+        ) && self
+            .registry
+            .state()
+            .prepared
+            .contains_key(&self.execution_id)
+        {
+            self.settled.notified().await;
+        }
+        outcome
+    }
+}
+
 /// A failure of the `ConversationToolRuntime -> ConversationRuntime`
 /// ownership transfer.
 ///
@@ -829,6 +906,13 @@ struct PreparedRecord {
     record: BackgroundRecord,
     gate: Arc<Notify>,
     runner: tokio::task::JoinHandle<()>,
+    /// A foreground Bash stage. The process may run before ownership commit,
+    /// but the record stays out of listing and publishes no terminal inbound
+    /// until [`ConversationBackgroundRegistry::commit_dispatch_owned`].
+    private_stage: bool,
+    settled: Arc<Notify>,
+    private_result: Option<ToolExecutionResult>,
+    progress_tx: Option<tokio::sync::mpsc::Sender<ToolProgress>>,
 }
 
 /// The synchronized registry state.
@@ -1247,6 +1331,10 @@ impl ConversationBackgroundRegistry {
             },
             gate,
             runner,
+            private_stage: false,
+            settled: Arc::new(Notify::new()),
+            private_result: None,
+            progress_tx: None,
         };
         state.prepared.insert(execution_id.clone(), prepared);
         drop(state);
@@ -1264,12 +1352,21 @@ impl ConversationBackgroundRegistry {
     /// reclaim conversation-owned execution or discard a terminal fact.
     pub(crate) fn abort_prepared_for_drain(&self) {
         let mut state = self.state();
-        for (execution_id, prepared) in state.prepared.drain() {
+        state.prepared.retain(|execution_id, prepared| {
+            if prepared.private_stage {
+                prepared
+                    .record
+                    .cancel_reason
+                    .get_or_insert(CancellationReason::RuntimeShutdown);
+                prepared.record.cancellation.cancel();
+                return true;
+            }
             prepared.runner.abort();
             self.resources
                 .tool_output
-                .discard_background_output(&execution_id);
-        }
+                .discard_background_output(execution_id);
+            false
+        });
         drop(state);
         self.notify_state_change();
     }
@@ -1450,10 +1547,16 @@ impl ConversationBackgroundRegistry {
                 prepared.committed = true;
                 return Ok(BackgroundDispatchOutcome::RolledBack);
             }
-            let Some(prepared_record) = state.prepared.remove(&prepared.execution_id) else {
+            let Some(mut prepared_record) = state.prepared.remove(&prepared.execution_id) else {
                 prepared.committed = true;
                 return Ok(BackgroundDispatchOutcome::RolledBack);
             };
+            if let Some(result) = prepared_record.private_result.take() {
+                prepared.committed = true;
+                return Ok(BackgroundDispatchOutcome::ForegroundFinished(
+                    self.finish_private_output(&prepared.execution_id, result),
+                ));
+            }
             // Issue #12 (M9a): the durable ownership fact commits **before**
             // the runner's start gate is released, so a detached external
             // side effect can never begin without durable evidence of its
@@ -1475,10 +1578,10 @@ impl ConversationBackgroundRegistry {
             {
                 Ok(committed) => committed,
                 Err(error) => {
-                    prepared_record.runner.abort();
-                    self.resources
-                        .tool_output
-                        .discard_background_output(&prepared.execution_id);
+                    state
+                        .prepared
+                        .insert(prepared.execution_id.clone(), prepared_record);
+                    self.discard_prepared_record(&mut state, &prepared.execution_id);
                     prepared.committed = true;
                     return Err(BackgroundDispatchError::Durable {
                         detail: error.to_string(),
@@ -1499,6 +1602,10 @@ impl ConversationBackgroundRegistry {
             );
             let execution_id = prepared.execution_id.clone();
             let gate = prepared_record.gate.clone();
+            if prepared_record.private_stage {
+                prepared_record.record.executor_started = true;
+                prepared_record.record.lifecycle = BackgroundLifecycle::Running;
+            }
             let next_index = state.records.len();
             state.index.insert(execution_id.clone(), next_index);
             state.records.push(prepared_record.record);
@@ -1548,6 +1655,71 @@ impl ConversationBackgroundRegistry {
             }),
             Ok(result) => result,
         }
+    }
+
+    /// Absolute live-output path allocated for one background execution.
+    /// Stages one Bash invocation privately and starts its single process.
+    ///
+    /// The record stays out of [`Self::listing`] and commits no ownership fact
+    /// and no terminal inbound. [`PrivateBashStage::adopt`] is the only path
+    /// that publishes the job, and only while the process is still running.
+    pub(crate) fn stage_private(
+        &self,
+        invocation: &ToolInvocation,
+        executor: &Arc<dyn ToolExecutor>,
+        environment: ToolEnvironment,
+        mcp_leases: McpRuntimeLeaseSet,
+    ) -> Result<PrivateBashStage, BackgroundDispatchError> {
+        let dispatch =
+            self.prepare_dispatch_with_mcp_leases(invocation, executor, environment, mcp_leases)?;
+        let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(32);
+        let settled = {
+            let mut state = self.state();
+            let prepared = state
+                .prepared
+                .get_mut(&dispatch.execution_id)
+                .ok_or_else(|| BackgroundDispatchError::ConversationInactive {
+                    conversation_id: self.conversation_id.clone(),
+                })?;
+            prepared.private_stage = true;
+            prepared.progress_tx = Some(progress_tx);
+            let settled = prepared.settled.clone();
+            prepared.gate.notify_one();
+            settled
+        };
+        Ok(PrivateBashStage {
+            registry: self.clone(),
+            execution_id: dispatch.execution_id.clone(),
+            dispatch,
+            progress_rx,
+            settled,
+        })
+    }
+
+    fn finish_private_output(
+        &self,
+        id: &ToolExecutionId,
+        mut result: ToolExecutionResult,
+    ) -> ToolExecutionResult {
+        let storage = &self.resources.tool_output;
+        if result
+            .truncation
+            .as_ref()
+            .is_some_and(|state| state.truncated)
+            || matches!(
+                result.managed_output.as_deref(),
+                Some(
+                    crate::tools::types::ManagedOutputContinuation::Partial { .. }
+                        | crate::tools::types::ManagedOutputContinuation::Unavailable { .. }
+                )
+            )
+        {
+            storage.settle_background_output(id);
+        } else {
+            storage.discard_background_output(id);
+            result.managed_output = None;
+        }
+        result
     }
 
     /// Requests cancellation of one execution and returns the canonical
@@ -2334,7 +2506,18 @@ impl ConversationBackgroundRegistry {
     /// foreground path uses. Only the current/latest bounded progress
     /// snapshot is retained; no unbounded progress history exists in the
     /// registry. Progress of a terminal execution is ignored.
+    fn forward_private_progress(&self, execution_id: &ToolExecutionId, progress: &ToolProgress) {
+        let state = self.state();
+        let Some(prepared) = state.prepared.get(execution_id) else {
+            return;
+        };
+        if let Some(sender) = &prepared.progress_tx {
+            let _ = sender.try_send(bound_tool_progress(progress.clone()));
+        }
+    }
+
     pub fn report_progress(&self, execution_id: &ToolExecutionId, progress: ToolProgress) {
+        self.forward_private_progress(execution_id, &progress);
         let Ok(_settlement) = self.resources.mailbox.begin_settlement_admission() else {
             return;
         };
@@ -2382,6 +2565,13 @@ impl ConversationBackgroundRegistry {
     /// A record already claimed by cancellation intent stays `Cancelling`.
     fn mark_running(&self, execution_id: &ToolExecutionId) {
         let mut state = self.state();
+        if let Some(prepared) = state.prepared.get_mut(execution_id) {
+            prepared.record.executor_started = true;
+            if prepared.record.lifecycle == BackgroundLifecycle::Starting {
+                prepared.record.lifecycle = BackgroundLifecycle::Running;
+            }
+            return;
+        }
         let Some(index) = state.index.get(execution_id).copied() else {
             return;
         };
@@ -2496,6 +2686,16 @@ impl ConversationBackgroundRegistry {
         state: &mut BackgroundRegistryState,
         execution_id: &ToolExecutionId,
     ) -> bool {
+        if let Some(prepared) = state.prepared.get_mut(execution_id)
+            && prepared.private_stage
+            && prepared.private_result.is_none()
+        {
+            // Detach the caller's progress receiver and let the running shell
+            // complete its normal TERM/KILL/reap settlement.
+            prepared.progress_tx.take();
+            prepared.record.cancellation.cancel();
+            return true;
+        }
         if let Some(prepared) = state.prepared.remove(execution_id) {
             prepared.runner.abort();
             self.resources
@@ -2599,8 +2799,34 @@ impl ConversationBackgroundRegistry {
                 result = completion.as_mut() => result,
                 }
             };
-            registry.settle_terminal(&execution_id, &result);
+            registry.deliver_runner_result(&execution_id, result);
         })
+    }
+
+    /// Stores a private-stage result without a terminal inbound, or publishes
+    /// the normal terminal once the record has been adopted into the listing.
+    fn deliver_runner_result(&self, execution_id: &ToolExecutionId, result: ToolExecutionResult) {
+        let mut state = self.state();
+        if let Some(prepared) = state.prepared.get_mut(execution_id)
+            && prepared.private_stage
+        {
+            let settled = prepared.settled.clone();
+            if prepared.progress_tx.is_some() {
+                prepared.private_result = Some(result);
+            } else {
+                state.prepared.remove(execution_id);
+                self.resources
+                    .tool_output
+                    .discard_background_output(execution_id);
+            }
+            drop(state);
+            settled.notify_one();
+            self.notify_state_change();
+            self.resources.mailbox.wake().notify_one();
+            return;
+        }
+        drop(state);
+        self.settle_terminal(execution_id, &result);
     }
 }
 
@@ -2623,6 +2849,12 @@ impl crate::runtime::cancellation::CancellationCause for BackgroundCancellationC
             .index
             .get(&self.execution_id)
             .and_then(|index| state.records[*index].cancel_reason)
+            .or_else(|| {
+                state
+                    .prepared
+                    .get(&self.execution_id)
+                    .and_then(|p| p.record.cancel_reason)
+            })
             .unwrap_or(BACKGROUND_CANCEL_REASON)
     }
 }
@@ -3097,6 +3329,180 @@ mod tests {
             workflow: None,
             managed_output: None,
         }
+    }
+
+    struct RecordingProgress;
+
+    impl crate::tools::executor::ProgressReporter for RecordingProgress {
+        fn report(&self, _progress: ToolProgress) {}
+    }
+
+    fn stage_bash(
+        fixture: &TestRegistry,
+        executor: &Arc<dyn ToolExecutor>,
+    ) -> crate::tools::background::PrivateBashStage {
+        fixture
+            .registry
+            .stage_private(
+                &background_invocation("bash"),
+                executor,
+                ToolEnvironment::new(),
+                crate::tools::mcp::McpRuntimeLeaseSet::default(),
+            )
+            .expect("private stage")
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn foreground_budget_hides_a_short_command_from_the_registry() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e611");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let stage = stage_bash(&fixture, &executor);
+        started.wait_for(|started| *started).await.unwrap();
+        assert_eq!(
+            fixture.registry.listing(false, 16).matched,
+            0,
+            "a private stage must not list a job before the deadline"
+        );
+        release.send_replace(true);
+        let result = crate::tools::native::drive_private_bash(
+            stage,
+            std::time::Duration::from_secs(5),
+            &crate::runtime::CancellationSignal::new(),
+            crate::runtime::types::CancellationReason::UserRequested,
+            &RecordingProgress,
+        )
+        .await;
+        assert_eq!(result.status, ToolExecutionStatus::Success);
+        assert_eq!(fixture.registry.listing(false, 16).matched, 0);
+        assert!(
+            fixture.mailbox.select_pending_batch().unwrap().is_none(),
+            "a short foreground command publishes no terminal inbound"
+        );
+    }
+
+    struct CollectProgress(std::sync::Mutex<Vec<String>>);
+
+    impl crate::tools::executor::ProgressReporter for CollectProgress {
+        fn report(&self, progress: ToolProgress) {
+            if let Some(message) = progress.message {
+                self.0.lock().expect("progress").push(message);
+            }
+        }
+    }
+
+    struct PrintingExecutor {
+        started: watch::Sender<bool>,
+    }
+
+    impl ToolExecutor for PrintingExecutor {
+        fn start<'a>(
+            &'a self,
+            _invocation: ToolInvocation,
+            context: ToolExecutionContext<'a>,
+        ) -> crate::tools::executor::ToolExecutionHandle<'a> {
+            let cancellation = context.cancellation.clone();
+            let started = self.started.clone();
+            crate::tools::executor::ToolExecutionHandle::settled_by_operation(
+                Box::pin(async move {
+                    context.progress.report(ToolProgress {
+                        message: Some("printing".to_owned()),
+                        completed: None,
+                        total: None,
+                    });
+                    started.send_replace(true);
+                    context.cancellation.cancelled().await;
+                    ToolExecutionResult {
+                        deliveries: Vec::new(),
+                        status: ToolExecutionStatus::Cancelled {
+                            reason: context.cancellation.reason(),
+                            phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+                        },
+                        content: Vec::new(),
+                        duration_ms: 0,
+                        exit_code: None,
+                        artifacts: Vec::new(),
+                        truncation: None,
+                        workflow: None,
+                        managed_output: None,
+                    }
+                }),
+                cancellation,
+            )
+        }
+
+        fn progress_capability(&self) -> ToolProgressCapability {
+            ToolProgressCapability::None
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn foreground_budget_prints_progress_and_cancels_without_listing_a_job() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e613");
+        let (started_tx, mut started) = watch::channel(false);
+        let executor: Arc<dyn ToolExecutor> = Arc::new(PrintingExecutor {
+            started: started_tx,
+        });
+        let stage = stage_bash(&fixture, &executor);
+        started.wait_for(|started| *started).await.unwrap();
+        assert_eq!(fixture.registry.listing(false, 16).matched, 0);
+        let cancellation = crate::runtime::CancellationSignal::new();
+        let progress = CollectProgress(std::sync::Mutex::new(Vec::new()));
+        let cancel = cancellation.clone();
+        let drive = crate::tools::native::drive_private_bash(
+            stage,
+            std::time::Duration::from_secs(30),
+            &cancellation,
+            crate::runtime::types::CancellationReason::UserRequested,
+            &progress,
+        );
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
+            cancel.cancel();
+            drive.await
+        })
+        .await
+        .expect("cancellation settles the private stage");
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Cancelled { .. }
+        ));
+        assert_eq!(fixture.registry.listing(false, 16).matched, 0);
+        assert!(fixture.mailbox.select_pending_batch().unwrap().is_none());
+        assert_eq!(
+            progress.0.lock().expect("progress").as_slice(),
+            ["printing"]
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn foreground_budget_adopts_a_still_running_command_at_the_deadline() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e612");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let stage = stage_bash(&fixture, &executor);
+        started.wait_for(|started| *started).await.unwrap();
+        assert_eq!(fixture.registry.listing(false, 16).matched, 0);
+        let result = crate::tools::native::drive_private_bash(
+            stage,
+            std::time::Duration::from_millis(30),
+            &crate::runtime::CancellationSignal::new(),
+            crate::runtime::types::CancellationReason::UserRequested,
+            &RecordingProgress,
+        )
+        .await;
+        assert!(
+            matches!(result.content.first(), Some(ToolResultContent::Json { value }) if value["tool"] == "bash" && value["job_id"].is_string())
+        );
+        assert_eq!(fixture.registry.listing(true, 16).matched, 1);
+        release.send_replace(true);
+        let listed = fixture.registry.listing(false, 16);
+        let execution_id = listed.snapshots[0].execution_id.clone();
+        fixture
+            .registry
+            .wait_until_terminal(&execution_id)
+            .await
+            .unwrap();
+        assert!(fixture.mailbox.select_pending_batch().unwrap().is_some());
     }
 
     // --- The background domain's own bounded discovery read model (#180) ---

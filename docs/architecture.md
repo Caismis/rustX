@@ -1683,12 +1683,16 @@ ordered `ToolExecutionStarted`, the retained progress facts,
 `ToolExecutionCompleted` last; the journal is observational evidence and the
 canonical ToolResult remains the only outcome authority.
 
-The Bash tool's explicit model-requested `timeout` is tool-owned business
-input below this lifecycle: the executor settles it physically (process-group
-kill, wait, reap) and reports the proven `TimedOut` itself. There is no
-implicit executor-local default timeout — a foreground Bash invocation
-without an explicit timeout is bounded by the generic hard deadline, which
-drives the same proven physical settlement through cancellation.
+When Bash permits both execution modes, a foreground call starts one process
+privately and waits for the foreground budget. The budget is 120 seconds when `timeout` is omitted, matching the
+DeepSeek Harness executor default, and an explicit `timeout` overrides it,
+capped at 600 seconds. A command that finishes within the budget returns a
+normal foreground result: no background job is listed and no terminal inbound
+is published. A command still running at the budget is adopted into the
+conversation-owned registry and the call returns the handoff. Cancellation of
+the call still kills that one process. Progress reported while the call waits
+stays on the foreground progress path. If Goal admission temporarily excludes a new job,
+Bash runs in the foreground with that budget as its execution timeout.
 
 The real `ConversationRuntime::shutdown()` path is covered by a deterministic
 regression: it observes the Runtime Client pending event, linearizes
@@ -3083,7 +3087,7 @@ projection presents exactly once; the result's `artifacts` stay empty — text
 overflow is not an artifact),
 `TERM -> BASH_TERM_GRACE -> KILL` cancellation driven by the supervisor,
 typed result semantics (zero exit success, non-zero exit failed with the
-code preserved, timeout as `TimedOut`, cancellation as `Cancelled`),
+code preserved, an explicit executor kill timeout as `TimedOut`, cancellation as `Cancelled`),
 explicit spill-capture failures (a spill that cannot be allocated or
 written fails the invocation explicitly rather than silently losing full
 output), and explicit process-control failures (supervisor setup, shell

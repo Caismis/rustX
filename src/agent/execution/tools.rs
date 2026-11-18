@@ -126,6 +126,22 @@ fn concurrent_group_end(slots: &[CallSlot], index: usize) -> usize {
     end
 }
 
+fn promotes_native_bash(registry: &ToolRegistry, prepared: &PreparedInvocation) -> bool {
+    prepared.invocation.tool_name == crate::tools::native::BASH_TOOL_NAME
+        && matches!(prepared.origin, ToolOrigin::Builtin)
+        && registry
+            .definition_ordinal(&prepared.invocation.tool_id)
+            .and_then(|ordinal| registry.definition_at(ordinal))
+            .is_some_and(|definition| {
+                definition.execution_policy
+                    == crate::tools::types::ToolExecutionPolicy::ModelSelectable
+            })
+}
+
+fn explicit_bash_timeout(arguments: &serde_json::Value) -> Option<u64> {
+    arguments.get("timeout").and_then(serde_json::Value::as_u64)
+}
+
 /// A failed tool result.
 fn failed_result(error: &str) -> ToolExecutionResult {
     ToolExecutionResult {
@@ -1030,6 +1046,12 @@ impl AgentExecution<'_> {
         environment: ToolEnvironment,
     ) -> (usize, ToolExecutionResult, Vec<RuntimeEvent>) {
         let (result, facts) = match prepared.invocation.mode {
+            ToolInvocationMode::Foreground
+                if promotes_native_bash(self.tool_registry(), &prepared) =>
+            {
+                self.run_bash_foreground_handoff(&prepared, todos, &occurrence, environment)
+                    .await
+            }
             ToolInvocationMode::Foreground => {
                 self.run_foreground(&prepared, todos, &occurrence, environment)
                     .await
@@ -1271,6 +1293,77 @@ impl AgentExecution<'_> {
         (result, events)
     }
 
+    /// Stages Bash privately, prints progress, and adopts a job only at the budget.
+    async fn run_bash_foreground_handoff(
+        &self,
+        prepared: &PreparedInvocation,
+        todos: Option<crate::tools::todo::TodoWriter>,
+        occurrence: &crate::message::types::ToolCallOccurrenceRef,
+        environment: ToolEnvironment,
+    ) -> (ToolExecutionResult, Vec<RuntimeEvent>) {
+        let budget = crate::tools::limits::bash_foreground_budget(explicit_bash_timeout(
+            &prepared.invocation.arguments,
+        ));
+        let mut invocation = prepared.invocation.clone();
+        invocation.mode = ToolInvocationMode::Background;
+        if let Some(object) = invocation.arguments.as_object_mut() {
+            object.remove("timeout");
+        }
+        let executor = self.tool_registry().executor(&invocation.tool_id);
+        let Some(mcp_leases) = self.capability.mcp_leases() else {
+            return (
+                failed_result("the admitted MCP generation is already physically retired"),
+                Vec::new(),
+            );
+        };
+        let stage = match self.tool_runtime.background().stage_private(
+            &invocation,
+            &executor,
+            environment.clone(),
+            mcp_leases,
+        ) {
+            Ok(stage) => stage,
+            Err(crate::tools::background::BackgroundDispatchError::GoalAdmissionInProgress) => {
+                let mut killing = prepared.clone();
+                if let Some(object) = killing.invocation.arguments.as_object_mut() {
+                    object.insert(
+                        "timeout".to_owned(),
+                        serde_json::json!(budget.as_secs().max(1)),
+                    );
+                }
+                return self
+                    .run_foreground(&killing, todos, occurrence, environment)
+                    .await;
+            }
+            Err(crate::tools::background::BackgroundDispatchError::ConversationInactive {
+                ..
+            }) => {
+                return (cancelled_result(self.cancellation.reason()), Vec::new());
+            }
+            Err(error) => return (failed_result(&error.to_string()), Vec::new()),
+        };
+        let call_id = invocation
+            .id
+            .canonical_call_id()
+            .expect("Agent-owned invocation")
+            .clone();
+        let buffer = ForegroundProgressBuffer::new(call_id, invocation.tool_id.clone());
+        let fanout = ForegroundProgressFanout {
+            buffer: &buffer,
+            observer: self.observer,
+            attempt_id: &self.request.attempt_id,
+        };
+        let result = crate::tools::native::drive_private_bash(
+            stage,
+            budget,
+            &self.cancellation.signal(),
+            self.cancellation.reason(),
+            &fanout,
+        )
+        .await;
+        (result, buffer.take())
+    }
+
     /// Dispatches one background invocation through the conversation-owned
     /// background registry.
     ///
@@ -1303,7 +1396,10 @@ impl AgentExecution<'_> {
                     .commit_dispatch_owned(prepared, &self.cancellation.signal())
                     .await
                 {
-                    Ok(BackgroundDispatchOutcome::Accepted { result, .. }) => result,
+                    Ok(
+                        BackgroundDispatchOutcome::Accepted { result, .. }
+                        | BackgroundDispatchOutcome::ForegroundFinished(result),
+                    ) => result,
                     // A rolled-back dispatch (attempt cancellation won at
                     // the ownership boundary) or a refused commit (the
                     // owning conversation runtime is not activated) both
