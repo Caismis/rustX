@@ -676,7 +676,10 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     assert_eq!(before.ledger_through, 0);
     assert_eq!(before.transcript_total, 0);
     let transcript = store.transcript_header_page(&before, None, 32).unwrap();
-    assert!(transcript.headers.is_empty());
+    assert_eq!(
+        transcript.headers,
+        [] as [crate::durable::observation::TranscriptHeader; 0]
+    );
     assert_eq!(before.read.pending_total, 1);
     let heads = store.pending_header_page(&before.read, None, 32).unwrap();
     assert_eq!(heads.headers.len(), 1);
@@ -684,7 +687,10 @@ fn t09_t12_pending_edits_never_alias_immutable_canonical_content() {
     assert_eq!(heads.headers[0].revision, 0);
     assert!(heads.headers[0].message.transcript_cursor.is_none());
     assert!(heads.headers[0].message.deferred);
-    assert!(heads.headers[0].message.content.is_empty());
+    assert_eq!(
+        heads.headers[0].message.content,
+        [] as [crate::observation::cut::ContentBinding; 0]
+    );
     let mut bytes = Vec::new();
     let mut offset = 0;
     loop {

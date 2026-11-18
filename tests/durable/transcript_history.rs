@@ -428,7 +428,7 @@ fn requirement_01_adoption_is_the_transcript_visibility_frontier() {
     let page = store
         .load_transcript_page(None, 10)
         .expect("page after acceptance");
-    assert!(page.entries.is_empty());
+    assert_eq!(page.entries, [] as [rustx::durable::TranscriptEntry; 0]);
     assert_eq!(store.load_pending().expect("pending").len(), 1);
     store
         .adopt_pending_batch(accepted.sequence, None)
@@ -1187,7 +1187,10 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
         .accept_inbound(inbound_draft(shared_id, "same opaque id"))
         .expect("accepted message");
     assert!(accepted.transcript_cursor.is_none());
-    assert!(all_entries(&store, 10).is_empty());
+    assert_eq!(
+        all_entries(&store, 10),
+        [] as [rustx::durable::TranscriptEntry; 0]
+    );
     let batch = store
         .select_pending_batch()
         .expect("select pending")

@@ -183,9 +183,8 @@ fn inbound_from_pending(item: crate::durable::PendingInboundItem) -> InboundItem
 /// One finite watermark-bounded pending batch.
 ///
 /// A batch is non-empty, belongs to exactly one [`ConversationId`], contains
-/// items in strictly increasing [`InboundSequence`] order, and its watermark
-/// equals the sequence of the final/highest selected item; no item sequence
-/// exceeds the watermark. One pending item still produces a one-item batch,
+/// items in model delivery order, and its watermark equals the highest selected
+/// acceptance sequence. One pending item still produces a one-item batch,
 /// and every item remains a separate canonical `UserMessageBlock`. An empty
 /// inbox produces `None`, never an empty batch.
 #[derive(Debug, Clone, PartialEq)]
@@ -208,7 +207,7 @@ impl InboundBatch {
         self.watermark
     }
 
-    /// The batch items in strictly increasing inbound sequence order.
+    /// The batch items in model delivery order.
     #[must_use]
     pub fn items(&self) -> &[InboundItem] {
         &self.items

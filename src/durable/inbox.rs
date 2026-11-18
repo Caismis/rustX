@@ -195,16 +195,16 @@ pub struct PendingInboundItem {
 
 /// One finite watermark-bounded pending batch.
 ///
-/// A batch is non-empty, its items are in strictly increasing
-/// [`InboundSequence`] order, and its watermark equals the highest selected
-/// sequence. Items accepted after the watermark belong to the next batch.
+/// A batch is non-empty, its items are in model delivery order, and its
+/// watermark equals the highest selected acceptance sequence. Items accepted
+/// after the watermark belong to the next batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingBatch {
     /// The conversation the batch belongs to.
     pub conversation_id: ConversationId,
     /// The watermark: the highest selected inbound sequence.
     pub watermark: InboundSequence,
-    /// The selected items in strict sequence order.
+    /// The selected items in model delivery order.
     pub items: Vec<PendingInboundItem>,
 }
 

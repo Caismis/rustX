@@ -245,7 +245,7 @@ export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoa
     ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
       records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={completeHistoryThrough(cache.page.records, selected.id, cache.page.next_cursor, cache.gaps)} onOpen={openRecord}
-      onOpenWorkflowCanvas={inspectorOpenCanvas} />
+      onOpenWorkflowCanvas={inspectorOpenCanvas} messageHistory={messageHistory} />
     : unresolvedWorkflow ? <WorkflowNodeReadInspector node={unresolvedWorkflow.instance} error={workflowNodes.get(selection!.owner_record_id)?.error}
       onRetry={() => retryWorkflowNodes(selection!.owner_record_id)} onClose={close} /> : null;
   const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;

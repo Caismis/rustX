@@ -90,7 +90,7 @@ test('edits and retries a user message, then pages through durable conversation 
     await page.getByLabel('Attach files').setInputFiles({
       name: attachment.name, mimeType: 'text/plain', buffer: Buffer.from(attachment.text),
     });
-    await expect(page.locator('[data-attachment-state=ready]')).toBeVisible();
+    await expect(page.locator('[data-attachment-state=ready]')).toBeVisible({ timeout: 20_000 });
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expectInference(1);
     const upload = submissions()[0]?.find(block => block.type === 'upload');

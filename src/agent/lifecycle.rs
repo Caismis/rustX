@@ -1037,6 +1037,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Compare all policy outcomes against the same prepared invocation.
     async fn permission_mode_changes_only_the_execution_decision() {
         let conversation_id = ConversationId::new("conv_6ae353db-f482-746d-8f8d-b42ad2fef7a7");
         let attempt_id = AttemptId::new("approval-policy-attempt");

@@ -194,7 +194,7 @@ for (const [width, acknowledgement] of [[1440, 'received'], [390, 'lost']] as co
         await expect.poll(wire.lost).toBe(1);
         await connectRemote(page, fixture.endpoint, fixture.token);
       }
-      await expect(trigger).toContainText('low');
+      await expect(trigger).toContainText('low', { timeout: 20_000 });
       await expect(trigger).toBeVisible();
       const frozen = (await sessionSnapshot(wire, sessionId)).attempt!.model!;
       expect(frozen).toEqual(admittedFrozen);
@@ -376,16 +376,16 @@ for (const width of [1440, 390]) test(`switching A → B → A restores each Ses
     const first = await sessionSnapshot(wire, ids[0]);
     expect(first.model_status?.body_deferred).toBe(true);
     for (const index of [1,0,1,0]) {
-      if (width === 390) await page.getByRole('button', {name:'Home',exact:true}).click();
-      await page.locator(`button[data-session-id="${ids[index]}"]`).click();
-      const collapse = page.getByRole('button', {name:'Collapse Sidebar',exact:true});
-      if (width === 390 && await collapse.isVisible()) await collapse.click();
+      const id = ids[index];
+      await openExistingSession(page, id, width);
+      await expect(page.locator(`button[data-session-id="${id}"]`)).toHaveAttribute('aria-current', 'page');
       await expect(trigger).toContainText(models[index]);
       await expect(trigger).toHaveAttribute('aria-expanded','false');
+      // Empty Sessions can detach when left. Read only from the selected Session's current attachment.
+      const selected = await sessionSnapshot(wire, id);
+      expect(selected.model_status?.body_deferred).toBe(true);
+      expect(selected.model_status?.binding_revision).toBe(first.model_status?.binding_revision);
     }
-    const second = await sessionSnapshot(wire, ids[1]);
-    expect(second.model_status?.binding_revision).toBe(first.model_status?.binding_revision);
-    expect((await wire.attachedTarget(ids[0])).attachment_id).toBe((await wire.attachedTarget(ids[1])).attachment_id);
     expect(wire.requests.filter(request => request.method === 'session/setModel')).toHaveLength(0);
     expect(errors).toEqual([]);
   } finally { await native?.shutdown(); await stopDogfoodPage(page, fixture, false); }

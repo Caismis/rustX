@@ -141,6 +141,7 @@ async fn entered(receiver: &mut tokio::sync::mpsc::UnboundedReceiver<usize>) -> 
 }
 
 #[tokio::test(flavor = "current_thread")]
+#[allow(clippy::too_many_lines)] // Keep the prepared request and both physical settlement paths in one scenario.
 async fn permission_review_reaches_provider_and_settles_after_completion_or_cancellation() {
     use crate::runtime::permission::review::{
         AuxiliaryPermissionReviewer, PermissionReviewPort, PermissionReviewVerdict,

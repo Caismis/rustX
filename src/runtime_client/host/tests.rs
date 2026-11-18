@@ -2769,6 +2769,7 @@ async fn incremental_projection_independent_snapshot_capture() {
 /// is accepted, not finished; the attempt settles and the canonical
 /// history is committed.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[allow(clippy::too_many_lines)] // Compare admission, canonical publication, and reconstruction for the same request.
 async fn submit_when_idle_admits_and_runs_the_attempt() {
     let (adapter, fixture) =
         host_fixture(vec![one_turn_stop()], ToolRegistry::new(), status_engine()).await;

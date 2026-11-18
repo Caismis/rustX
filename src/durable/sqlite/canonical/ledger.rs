@@ -459,6 +459,7 @@ fn human_activity_max(
     Ok(previous.unwrap_or(current).max(current))
 }
 
+#[allow(clippy::too_many_lines)] // Identity, canonical append, and observation capture share one transaction.
 fn append_message_ledger_with_capture(
     transaction: &Transaction<'_>,
     message: &MessageBlock,

@@ -898,7 +898,7 @@ async fn explicit_operator_limit_can_hot_toggle_between_uncapped_and_bounded() {
     use crate::local_runtime::configuration::settings::{
         ConfigMutation, SourceMutation, SourceTarget,
     };
-    bounded(async {
+    Box::pin(bounded(async {
         let f = Fixture::with_session_count(None, 3).await;
         assert_eq!(f.manager.policy().max_resident_runtimes, None);
         f.load(0).await.unwrap().unwrap();
@@ -956,6 +956,6 @@ async fn explicit_operator_limit_can_hot_toggle_between_uncapped_and_bounded() {
         f.load(2).await.unwrap().unwrap();
         assert_eq!(f.manager.diagnostics().loaded, 3);
         f.close().await;
-    })
+    }))
     .await;
 }

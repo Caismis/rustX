@@ -949,6 +949,7 @@ pub(super) fn load_pending_until(
 }
 
 impl SqliteConversationStore {
+    #[allow(clippy::too_many_lines)] // CAS, body mutation and observation receipt share one transaction.
     pub(super) fn mutate_pending(
         &self,
         expected: &crate::durable::PendingInboundRef,
