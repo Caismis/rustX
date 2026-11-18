@@ -515,7 +515,8 @@ jobs:
     needs: plan
     if: fromJSON(needs.plan.outputs.run)['rust-platform-core']
     runs-on: macos-latest
-    timeout-minutes: 45
+    # Run 44312137236 exhausted 45 minutes during compilation, before tests.
+    timeout-minutes: 75
     env:
       VERIFICATION_PROFILE: fast
       # Job-local build metadata only: assertions, overflow checks, unwind,
