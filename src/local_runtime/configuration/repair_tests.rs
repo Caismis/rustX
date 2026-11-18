@@ -4156,6 +4156,7 @@ impl OpenWatch {
         Self()
     }
 
+    #[cfg_attr(not(target_os = "linux"), allow(clippy::unused_self))]
     fn opened(&self) -> bool {
         #[cfg(target_os = "linux")]
         match self.0.read_events() {
