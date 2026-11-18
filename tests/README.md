@@ -485,7 +485,7 @@ summarizes them and the lane check below verifies them against Cargo:
   targets compiled and staged first, then `--lib --bins --test durable` compiled
   and staged (reusing the fresh ordinary library and binaries from the first
   step without compiling a third library copy), then `cargo test --lib --bins --all-features
-  -- --skip scripted_suites:: --skip local_runtime::session_runtime_manager::tests::`
+  -- --skip local_runtime::session_runtime_manager::tests::`
   (unit tests — including the boundary-owning bash/uv modules, whose
   primitives differ across OSes — plus the in-crate boundary suites) and the
   external targets, both with `RUSTX_REQUIRE_PROVIDER_EMULATOR=1`. Running
@@ -902,7 +902,6 @@ RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked -- bo
 python3 test-support/prepare_native_tests.py -- \
   cargo test --lib --bins --test durable --all-features --locked --no-run
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features --locked -- \
-  --skip scripted_suites:: \
   --skip local_runtime::session_runtime_manager::tests::
 
 # Lane coverage for one CI job on its own platform, or every target here
