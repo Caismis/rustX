@@ -5,11 +5,13 @@
 //! resolve at the same absolute path inside this crate.
 
 pub mod package_io;
+pub mod toml_authoring;
 
 pub mod model {
     pub mod finish;
     pub mod inspection;
     pub mod replay;
+    pub mod request_params;
     pub mod types;
     pub mod adapter {
         pub mod response_budget;

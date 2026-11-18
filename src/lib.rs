@@ -25,7 +25,9 @@ pub mod runtime_client;
 pub mod scheduler;
 pub mod session_archive;
 pub mod skills;
-pub mod toml_authoring;
+pub mod toml_authoring {
+    pub use rustx_types::toml_authoring::*;
+}
 pub mod tools;
 pub mod workflow_file;
 pub mod workspace_changes;
