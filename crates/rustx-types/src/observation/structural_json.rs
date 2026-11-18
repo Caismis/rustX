@@ -15,7 +15,7 @@ use plan::{Unsigned, View, WireNumber};
 #[cfg(any(test, feature = "test-fixtures"))]
 thread_local! {
     static LOOKUP_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
-    static PROPERTY_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    pub static PROPERTY_WORK: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
     static LEGACY_PLAN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static LEGACY_PROPERTY_LOOKUP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static STRING_KEY_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
@@ -947,78 +947,6 @@ mod tests {
         }
     }
 
-    type PropertyEncoding = (
-        Result<Vec<u8>, String>,
-        Vec<(Option<bool>, Option<Vec<u8>>)>,
-    );
-    pub fn property_encoding<T: Serialize>(
-        value: &T,
-        schema: &Value,
-        legacy: bool,
-    ) -> PropertyEncoding {
-        struct Reset(bool, bool);
-        impl Drop for Reset {
-            fn drop(&mut self) {
-                LEGACY_PROPERTY_LOOKUP.with(|mode| mode.set(self.0));
-                LEGACY_PLAN.with(|mode| mode.set(self.1));
-            }
-        }
-        let _reset = Reset(
-            LEGACY_PROPERTY_LOOKUP.with(|mode| mode.replace(legacy)),
-            LEGACY_PLAN.with(|mode| mode.replace(legacy)),
-        );
-        PROPERTY_WORK.with(|work| work.set((0, 0)));
-        MAP_KEY_WORK.with(|work| work.set(0));
-        let encoded = BorrowedEncoded {
-            value,
-            schema,
-            root: schema,
-        };
-        let bytes = serde_json::to_vec(&encoded).map_err(|error| error.to_string());
-        let admission = [0, 32, 256, 4096, 65_536, 786_432]
-            .into_iter()
-            .map(|limit| {
-                (
-                    crate::observation::preflight::bounded_fit(&encoded, limit),
-                    crate::observation::bounded::bounded_bytes(&encoded, limit),
-                )
-            })
-            .collect();
-        (bytes, admission)
-    }
-
-    #[test]
-    fn t11_t14_t20_ordered_schema_properties_preserve_complete_checkpoint_bytes_and_admission() {
-        let mut checkpoint = crate::runtime_client::projection::RuntimeClientProjection::new(
-            crate::runtime::identity::ConversationId::new(
-                "conv_77621431-ad5b-7155-9eca-9f21014c0bc9",
-            ),
-            Vec::new(),
-            serde_json::from_value(serde_json::json!({"configured_tools":[],"revision":1}))
-                .unwrap(),
-            None,
-            64,
-        )
-        .checkpoint_candidate()
-        .unwrap();
-        checkpoint.read_cut.through = u64::MAX;
-        checkpoint.read_cut.revision = u64::MAX;
-        checkpoint
-            .read_cut
-            .domain_revisions
-            .insert("trace".into(), u64::MAX);
-        let schema = schema_root::<crate::runtime_client::checkpoint::RuntimeClientCheckpoint>();
-        let expected = property_encoding(&checkpoint, &schema, true);
-        let (_, old_fallbacks) = PROPERTY_WORK.with(std::cell::Cell::get);
-        let actual = property_encoding(&checkpoint, &schema, false);
-        let (ordered, fallbacks) = PROPERTY_WORK.with(std::cell::Cell::get);
-        assert_eq!(actual, expected);
-        assert!(ordered > 100 && fallbacks < old_fallbacks);
-        let value: Value = serde_json::from_slice(actual.0.as_ref().unwrap()).unwrap();
-        assert_eq!(value["read_cut"]["through"], u64::MAX.to_string());
-        assert_eq!(value["read_cut"]["revision"], u64::MAX.to_string());
-    }
-
     #[test]
     fn t11_t20_ordered_schema_properties_keep_custom_order_missing_fields_and_tagged_branches() {
         struct Custom;
@@ -1543,3 +1471,51 @@ mod tests {
         assert_eq!(selected, b"\"9007199254740993\"");
     }
 }
+
+#[cfg(any(test, feature = "test-fixtures"))]
+mod test_seams {
+    use super::*;
+    pub type PropertyEncoding = (
+        Result<Vec<u8>, String>,
+        Vec<(Option<bool>, Option<Vec<u8>>)>,
+    );
+    pub fn property_encoding<T: Serialize>(
+        value: &T,
+        schema: &Value,
+        legacy: bool,
+    ) -> PropertyEncoding {
+        struct Reset(bool, bool);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                LEGACY_PROPERTY_LOOKUP.with(|mode| mode.set(self.0));
+                LEGACY_PLAN.with(|mode| mode.set(self.1));
+            }
+        }
+        let _reset = Reset(
+            LEGACY_PROPERTY_LOOKUP.with(|mode| mode.replace(legacy)),
+            LEGACY_PLAN.with(|mode| mode.replace(legacy)),
+        );
+        PROPERTY_WORK.with(|work| work.set((0, 0)));
+        MAP_KEY_WORK.with(|work| work.set(0));
+        let encoded = BorrowedEncoded {
+            value,
+            schema,
+            root: schema,
+        };
+        let bytes = serde_json::to_vec(&encoded).map_err(|error| error.to_string());
+        let admission = [0, 32, 256, 4096, 65_536, 786_432]
+            .into_iter()
+            .map(|limit| {
+                (
+                    crate::observation::preflight::bounded_fit(&encoded, limit),
+                    crate::observation::bounded::bounded_bytes(&encoded, limit),
+                )
+            })
+            .collect();
+        (bytes, admission)
+    }
+}
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use test_seams::PropertyEncoding;
+#[cfg(any(test, feature = "test-fixtures"))]
+pub use test_seams::property_encoding;

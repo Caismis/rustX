@@ -20,6 +20,7 @@ pub mod compaction_budget;
 pub(crate) mod compaction_metadata;
 pub mod engine;
 pub mod error;
+mod images;
 pub mod occupancy;
 pub mod projection;
 pub mod resources;

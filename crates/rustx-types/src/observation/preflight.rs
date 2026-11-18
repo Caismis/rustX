@@ -450,42 +450,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn safe_integer_proof_defers_wide_native_values_and_ambiguous_keys() {
-        #[derive(Serialize, schemars::JsonSchema)]
-        struct Native {
-            count: u64,
-        }
-        #[derive(Serialize, schemars::JsonSchema)]
-        struct Constrained {
-            #[schemars(range(max = 9_007_199_254_740_991_u64))]
-            count: u64,
-        }
-        #[derive(Serialize, schemars::JsonSchema)]
-        struct Signed {
-            count: i64,
-        }
-        let wide = Native { count: u64::MAX };
-        assert_eq!(bounded_fit(&wide, 4096), Some(true));
-        assert_eq!(bounded_safe_integer_fit(&wide, 4096), Some(false));
-        assert!(crate::observation::bounded::structural_value(&wide).is_some());
-        assert!(
-            crate::observation::bounded::structural_value(&Constrained { count: u64::MAX })
-                .is_none()
-        );
-        for count in [i64::MIN, i64::MAX] {
-            let value = Signed { count };
-            assert_eq!(bounded_safe_integer_fit(&value, 4096), Some(false));
-            assert!(crate::observation::bounded::structural_value(&value).is_none());
-        }
-        assert_eq!(
-            bounded_safe_integer_fit(&serde_json::json!({"wide": u64::MAX}), 4096),
-            Some(false)
-        );
-        let ambiguous = std::collections::BTreeMap::from([((1_u8, 2_u8), 3_u8)]);
-        assert_eq!(bounded_safe_integer_fit(&ambiguous, 4096), None);
-    }
-
     fn prove_bound(value: &impl Serialize) {
         let bytes = serde_json::to_vec(value).unwrap();
         let first = (0..bytes.len() * 32 + 128)

@@ -80,7 +80,6 @@ pub mod local_runtime {
 
 pub mod context {
     pub mod assembly;
-    pub mod images;
     pub mod system_prompt;
 }
 

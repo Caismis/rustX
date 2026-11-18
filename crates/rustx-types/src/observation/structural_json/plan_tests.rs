@@ -1,4 +1,4 @@
-use super::tests::property_encoding;
+use super::property_encoding;
 use super::*;
 
 #[test]
