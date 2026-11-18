@@ -588,7 +588,8 @@ fn wait_bounded(child: &mut Child) -> std::process::ExitStatus {
         }
         if Instant::now() >= deadline {
             child.kill().unwrap();
-            return child.wait().unwrap();
+            let status = child.wait().unwrap();
+            panic!("client did not exit within 15 seconds; killed and reaped: {status}");
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -632,11 +633,15 @@ fn a_missing_handshake_reply_times_out_the_client() {
 #[test]
 fn a_socket_closed_before_the_reply_fails_the_client() {
     let rig = rig();
-    let mut child = spawn_client(&rig);
-    // Clean EOF mid-handshake: not an idle stream, a failure.
-    let stream = accept(&rig, &mut child);
+    let mut child = client(&rig.bundle, &rig.workspace_path)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stream = accept(&rig, &mut child);
+    let _: Hello = read_record(&mut stream).unwrap();
     drop(stream);
-    assert!(!wait_bounded(&mut child).success());
+    assert_eq!(wait_bounded(&mut child).code(), Some(1));
+    assert_eq!(stderr_of(&mut child), "rustx-execution-client: handshake\n");
     assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
 }
 
