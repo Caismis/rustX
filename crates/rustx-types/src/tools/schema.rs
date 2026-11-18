@@ -128,7 +128,7 @@ fn validate_root_shape(schema: &Value) -> Result<(), SchemaError> {
 /// owner. A schema URI identifies a resource; it never authorizes file or
 /// network access. Bundled resources and the engine's built-in metaschemas
 /// remain available, while missing resources fail before any host I/O.
-pub(crate) fn build_validator(
+pub fn build_validator(
     schema: &Value,
 ) -> Result<Validator, Box<jsonschema::ValidationError<'static>>> {
     jsonschema::options()
@@ -148,7 +148,7 @@ pub fn validate_canonical_schema(schema: &Value) -> Result<(), SchemaError> {
 
 /// Compiles an owner-supplied, self-contained definition and its frozen
 /// canonical validator. Compilation, observation and calls do no schema I/O.
-pub(crate) fn compile_tool_contract(
+pub fn compile_tool_contract(
     definition: &ToolDefinition,
 ) -> Result<(ModelToolDefinition, Validator), SchemaError> {
     validate_root_shape(&definition.input_schema)?;
@@ -275,7 +275,7 @@ pub fn validate_business_arguments(schema: &Value, arguments: &Value) -> Result<
     validate_with(&validator, arguments)
 }
 
-pub(crate) fn validate_with(validator: &Validator, arguments: &Value) -> Result<(), SchemaError> {
+pub fn validate_with(validator: &Validator, arguments: &Value) -> Result<(), SchemaError> {
     let errors: Vec<_> = validator
         .iter_errors(arguments)
         .map(|error| error.to_string())

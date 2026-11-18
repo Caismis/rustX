@@ -30,7 +30,7 @@ pub mod content;
 pub mod cut;
 pub mod delivery;
 pub mod failure;
-pub mod goal;
+pub use rustx_types::observation::goal;
 pub mod head;
 pub mod interaction;
 pub mod occupancy;

@@ -33,12 +33,12 @@ struct Observer {
     retired: AtomicBool,
     _capacity: OwnedSemaphorePermit,
 }
-pub(crate) struct AuxiliarySubscription {
+pub struct AuxiliarySubscription {
     observer: Arc<Observer>,
     receiver: tokio::sync::Mutex<mpsc::Receiver<AuxiliarySegment>>,
 }
 impl AuxiliarySubscription {
-    pub(crate) async fn next(&self) -> AuxiliarySegment {
+    pub async fn next(&self) -> AuxiliarySegment {
         let mut receiver = self.receiver.lock().await;
         if let Some(segment) = receiver.recv().await {
             return segment;
@@ -52,9 +52,9 @@ impl Drop for AuxiliarySubscription {
     }
 }
 #[derive(Default)]
-pub(crate) struct StreamOwner(Mutex<Vec<Weak<Observer>>>);
+pub struct StreamOwner(Mutex<Vec<Weak<Observer>>>);
 impl StreamOwner {
-    pub(crate) fn subscribe(&self) -> Option<AuxiliarySubscription> {
+    pub fn subscribe(&self) -> Option<AuxiliarySubscription> {
         static PROCESS: OnceLock<Arc<Semaphore>> = OnceLock::new();
         let permit = PROCESS
             .get_or_init(|| Arc::new(Semaphore::new(PROCESS_OBSERVERS_MAX)))
@@ -78,7 +78,7 @@ impl StreamOwner {
             receiver: tokio::sync::Mutex::new(receiver),
         })
     }
-    pub(crate) fn publish(&self, segment: &AuxiliarySegment) {
+    pub fn publish(&self, segment: &AuxiliarySegment) {
         let mut observers = self.0.lock().expect("auxiliary observers");
         observers.retain(|observer| {
             let Some(observer) = observer.upgrade() else {

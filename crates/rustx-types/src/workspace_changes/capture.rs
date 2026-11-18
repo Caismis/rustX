@@ -6,17 +6,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub(super) const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_FILE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum Capture {
+pub enum Capture {
     Missing,
     Blob(PathBuf),
     Oversized,
 }
 
 impl Capture {
-    pub(super) fn read(path: &Path, directory: &Path) -> Result<Option<Self>, String> {
+    pub fn read(path: &Path, directory: &Path) -> Result<Option<Self>, String> {
         match std::fs::metadata(path) {
             Ok(metadata) if !metadata.is_file() => return Ok(None),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -62,7 +62,7 @@ impl Capture {
         Ok(Some(Self::Blob(blob)))
     }
 
-    pub(super) fn bytes(&self) -> Result<Option<Vec<u8>>, String> {
+    pub fn bytes(&self) -> Result<Option<Vec<u8>>, String> {
         match self {
             Self::Missing => Ok(Some(Vec::new())),
             Self::Blob(path) => std::fs::read(path)

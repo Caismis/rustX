@@ -62,14 +62,14 @@ pub struct AutomaticSkillRoot {
 }
 
 impl AutomaticSkillRoot {
-    pub(crate) fn user(home: &Path) -> Self {
+    pub fn user(home: &Path) -> Self {
         Self {
             source: SkillSource::User,
             root: home.join("rustx").join(SKILLS_DIRECTORY).join(SKILLS_ROOT),
         }
     }
 
-    pub(crate) fn workspace(workspace: &Path) -> Self {
+    pub fn workspace(workspace: &Path) -> Self {
         Self {
             source: SkillSource::Workspace,
             root: workspace.join(SKILLS_DIRECTORY).join(SKILLS_ROOT),

@@ -13,7 +13,7 @@ const OWNER: &[u8] = b"rustX workspace change snapshots\n";
 // before another local recorder attempts to open the new namespace.
 static INITIALIZATION: Mutex<()> = Mutex::new(());
 
-pub(super) struct SnapshotDirectory {
+pub struct SnapshotDirectory {
     root: PathBuf,
     directory: tempfile::TempDir,
 }

@@ -49,7 +49,7 @@ fn is_runtime_owned_git_key(key: &str) -> bool {
 /// Debug output reports only the entry count. Values stay on the invocation
 /// clone and are not written to journals or model context by this type.
 #[derive(Clone, PartialEq, Eq)]
-pub(crate) enum PreparedCommand {
+pub enum PreparedCommand {
     /// The exact environment the supervisor will apply.
     Entries(std::sync::Arc<Vec<(String, String)>>),
     /// A bounded composition failure; never proceed with an unguarded host PATH.
@@ -191,17 +191,17 @@ impl ToolEnvironment {
 
     /// Attaches a frozen Bash command environment to this invocation clone.
     #[must_use]
-    pub(crate) fn with_prepared_command(mut self, prepared: PreparedCommand) -> Self {
+    pub fn with_prepared_command(mut self, prepared: PreparedCommand) -> Self {
         self.prepared = Some(prepared);
         self
     }
 
-    pub(crate) fn prepared_command(&self) -> Option<&PreparedCommand> {
+    pub fn prepared_command(&self) -> Option<&PreparedCommand> {
         self.prepared.as_ref()
     }
 
     #[cfg(test)]
-    pub(crate) fn path_prefixes(&self) -> &[String] {
+    pub fn path_prefixes(&self) -> &[String] {
         &self.path_prefixes
     }
 
@@ -266,7 +266,7 @@ impl ToolEnvironment {
 /// Deterministic child defaults, not a proof that a Git command is read-only.
 /// In particular, clean filters, textconv, external diff and signing helpers
 /// remain repository-configurable and require normal permission admission.
-pub(crate) fn apply_git_execution_environment(entries: &mut Vec<(String, String)>) {
+pub fn apply_git_execution_environment(entries: &mut Vec<(String, String)>) {
     const GUARDS: &[(&str, &str)] = &[
         ("GIT_CONFIG_COUNT", "5"),
         ("GIT_CONFIG_KEY_0", "core.useBuiltinFSMonitor"),

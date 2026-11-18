@@ -5,7 +5,7 @@
 //! bounded connection cache before this helper returns.
 use rusqlite::{Connection, Params, Result, Row};
 
-pub(super) trait FixedStatements {
+pub trait FixedStatements {
     fn query_row_cached<T, P, F>(&self, sql: &'static str, params: P, map: F) -> Result<T>
     where
         P: Params,

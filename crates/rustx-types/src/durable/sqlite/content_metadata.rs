@@ -2,7 +2,7 @@
 use crate::message::types::{AssistantContentBlock, ContentBlockIndex, MessageBlock};
 use crate::runtime::identity::{ToolCallId, ToolId};
 use serde::{Serialize, Serializer, ser::SerializeMap as _};
-pub(super) struct MessageMetadata<'a>(pub &'a MessageBlock);
+pub struct MessageMetadata<'a>(pub &'a MessageBlock);
 impl Serialize for MessageMetadata<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
@@ -58,7 +58,7 @@ impl Serialize for ResultMetadata<'_> {
         map.end()
     }
 }
-pub(super) struct AssistantMetadata<'a>(pub &'a AssistantContentBlock);
+pub struct AssistantMetadata<'a>(pub &'a AssistantContentBlock);
 impl Serialize for AssistantMetadata<'_> {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         let mut map = serializer.serialize_map(None)?;
@@ -83,13 +83,13 @@ impl Serialize for AssistantMetadata<'_> {
     }
 }
 #[derive(Serialize)]
-pub(super) struct PublicationMetadata<'a> {
+pub struct PublicationMetadata<'a> {
     pub id: &'a ToolCallId,
     pub tool_id: &'a ToolId,
     pub name: &'a str,
 }
 impl PublicationMetadata<'_> {
-    pub(super) fn tagged(&self) -> TaggedPublication<'_> {
+    pub fn tagged(&self) -> TaggedPublication<'_> {
         TaggedPublication {
             kind: "tool_call",
             metadata: self,
@@ -97,14 +97,14 @@ impl PublicationMetadata<'_> {
     }
 }
 #[derive(Serialize)]
-pub(super) struct TaggedPublication<'a> {
+pub struct TaggedPublication<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
     #[serde(flatten)]
     metadata: &'a PublicationMetadata<'a>,
 }
 #[derive(Serialize)]
-pub(super) struct AuditMetadata<'a> {
+pub struct AuditMetadata<'a> {
     pub block_index: &'a ContentBlockIndex,
     pub call_id: &'a ToolCallId,
     pub tool_id: &'a ToolId,
@@ -112,7 +112,7 @@ pub(super) struct AuditMetadata<'a> {
     pub complete: &'a bool,
 }
 impl AuditMetadata<'_> {
-    pub(super) fn tagged(&self) -> TaggedAudit<'_> {
+    pub fn tagged(&self) -> TaggedAudit<'_> {
         TaggedAudit {
             kind: "proposed_tool_call",
             metadata: self,
@@ -120,7 +120,7 @@ impl AuditMetadata<'_> {
     }
 }
 #[derive(Serialize)]
-pub(super) struct TaggedAudit<'a> {
+pub struct TaggedAudit<'a> {
     #[serde(rename = "type")]
     kind: &'static str,
     #[serde(flatten)]

@@ -13,7 +13,7 @@ mod classify;
 mod decision;
 mod matrix;
 pub use rustx_types::runtime::permission::mode;
-mod reminder;
+pub use rustx_types::runtime::permission::reminder;
 mod task;
 pub use task::PermissionTaskEvidence;
 pub(crate) mod review;

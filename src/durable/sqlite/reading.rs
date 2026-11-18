@@ -97,7 +97,7 @@ const OWNERS: &str = concat!(
     SELECT 1,sequence
     FROM events INDEXED BY events_kind_idx
     WHERE sequence<=?1 AND ",
-    crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+    rustx_types::sql!("event_kind"),
     "=x'0002'",
     "
 ) "
@@ -190,7 +190,7 @@ fn adoption_prompt_sql(eligible: &str) -> String {
            AND sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx
              WHERE sequence<?2 AND "
             ),
-            crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+            rustx_types::sql!("event_kind"),
             "=x'0002'",
             ")
         )

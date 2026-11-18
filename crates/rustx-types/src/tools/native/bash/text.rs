@@ -32,7 +32,7 @@
 /// split across arbitrary read boundaries decodes exactly once, at the
 /// chunk boundary where its final byte arrives.
 #[derive(Debug, Default)]
-pub(super) struct IncrementalUtf8Decoder {
+pub struct IncrementalUtf8Decoder {
     /// The held incomplete trailing sequence; at most three bytes.
     pending: Vec<u8>,
 }
@@ -41,7 +41,7 @@ impl IncrementalUtf8Decoder {
     /// Decodes one read chunk, returning the decoded text. An incomplete
     /// trailing sequence is held for the next chunk; invalid sequences
     /// decode to U+FFFD.
-    pub(super) fn push(&mut self, bytes: &[u8]) -> String {
+    pub fn push(&mut self, bytes: &[u8]) -> String {
         if bytes.is_empty() {
             return String::new();
         }
@@ -52,7 +52,7 @@ impl IncrementalUtf8Decoder {
 
     /// Flushes the decoder at end-of-stream: an incomplete held sequence
     /// decodes deterministically to U+FFFD.
-    pub(super) fn finish(&mut self) -> String {
+    pub fn finish(&mut self) -> String {
         let pending = std::mem::take(&mut self.pending);
         if pending.is_empty() {
             return String::new();

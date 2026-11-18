@@ -2,6 +2,7 @@
 //! Codes follow commit groups, so final-settlement kinds share neighboring leaves.
 use rusqlite::types::Value;
 
+#[macro_export]
 macro_rules! sql {
     ($value:literal) => {
         concat!(
@@ -26,12 +27,10 @@ macro_rules! sql {
         )
     };
 }
-pub(super) use sql;
+pub const NATIVE: &str = sql!("event_kind");
+pub const OBSERVATION: &str = sql!("observation_kind");
 
-pub(super) const NATIVE: &str = sql!("event_kind");
-pub(super) const OBSERVATION: &str = sql!("observation_kind");
-
-pub(super) fn parameter(kind: &str) -> Value {
+pub fn parameter(kind: &str) -> Value {
     let code = match kind {
         "inbound_turn_adopted" => 1,
         "attempt_started" => 2,
@@ -45,6 +44,3 @@ pub(super) fn parameter(kind: &str) -> Value {
     };
     Value::Blob(vec![0, code])
 }
-
-#[cfg(test)]
-mod tests;

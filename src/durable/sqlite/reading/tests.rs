@@ -1040,13 +1040,13 @@ fn historical_opening_prompt_lookup_ignores_unrelated_future_turns() {
                         "SELECT m.value FROM events e INDEXED BY events_kind_idx,json_each(e.event_json,'$.event.message_ids') m
                     JOIN message_ledger l ON l.message_id=m.value
                     WHERE ",
-                        crate::durable::sqlite::event_kind_key::sql!(
+                        rustx_types::sql!(
                             "e.event_kind"
                         ),
                         "=x'0001'",
                         " AND e.sequence<=?3
                     AND e.sequence>(SELECT COALESCE(MAX(sequence),0) FROM events INDEXED BY events_kind_idx WHERE sequence<?2 AND ",
-                        crate::durable::sqlite::event_kind_key::sql!(
+                        rustx_types::sql!(
                             "event_kind"
                         ),
                         "=x'0002'",

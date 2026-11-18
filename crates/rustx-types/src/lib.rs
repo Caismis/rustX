@@ -19,6 +19,7 @@ pub mod model {
             pub mod config;
             pub mod wire;
         }
+        pub mod block_index;
         pub mod openai {
             pub mod config;
             pub mod qwen_xml;
@@ -37,12 +38,25 @@ pub mod tools {
     pub mod python;
     pub mod session_files;
     pub mod types;
+
+    pub mod native {
+        pub mod bash {
+            pub mod text;
+        }
+    }
+    pub mod output {
+        pub mod stdout;
+    }
+    pub mod schema;
 }
 
 pub mod skills {
     pub mod discovery;
     pub mod frontmatter;
     pub mod package;
+
+    pub mod identity;
+    pub mod source;
 }
 
 pub mod capabilities {
@@ -57,6 +71,8 @@ pub mod observation {
     pub mod bounded;
     pub mod preflight;
     pub mod structural_json;
+
+    pub mod goal;
 }
 
 pub mod agent {
@@ -76,6 +92,12 @@ pub mod app_server {
 pub mod local_runtime {
     #[cfg(any(test, feature = "test-fixtures"))]
     pub mod static_effects;
+
+    pub mod app_server_policy;
+    pub mod session {
+        pub mod create_profile;
+        pub mod invalidations;
+    }
 }
 
 pub mod context {
@@ -98,6 +120,26 @@ pub mod runtime {
     pub mod workflow;
     pub mod permission {
         pub mod mode;
+        pub mod reminder;
         pub mod resource;
     }
+
+    pub mod auxiliary {
+        pub mod capacity;
+        pub mod observer;
+    }
+}
+pub mod durable {
+    pub mod sqlite {
+        pub mod content_metadata;
+        pub mod event_kind_key;
+        pub mod statements;
+    }
+}
+pub mod scheduler {
+    pub mod calendar;
+}
+
+pub mod workspace_changes {
+    pub mod capture;
 }

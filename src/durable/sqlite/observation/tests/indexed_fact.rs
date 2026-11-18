@@ -260,11 +260,11 @@ mod scale {
         assert_eq!(execution_cost(&connection, &message(cut)).0, 1);
         for predicate in [
             concat!(
-                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+                rustx_types::sql!("event_kind"),
                 " = x'0005' AND json_type(event_json, '$.event.usage') = 'object'"
             ),
             concat!(
-                crate::durable::sqlite::event_kind_key::sql!("event_kind"),
+                rustx_types::sql!("event_kind"),
                 " = x'0006' AND event_message_id = 'target'"
             ),
         ] {

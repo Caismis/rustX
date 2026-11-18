@@ -15,7 +15,7 @@
 //! [`ModelRequest`]: crate::model::types::ModelRequest
 
 pub mod anthropic;
-pub mod block_index;
+pub use rustx_types::model::adapter::block_index;
 pub(crate) mod cache;
 pub(crate) mod correlation;
 pub mod openai;

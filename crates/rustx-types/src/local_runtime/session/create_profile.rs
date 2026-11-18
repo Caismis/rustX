@@ -20,19 +20,19 @@ use std::time::{Duration, Instant};
 /// only the separate `initialize_lineage(seed)` call. The two stages are
 /// not "connection open" and "schema + seed".
 #[derive(Debug, Default, Clone, Copy)]
-pub(crate) struct StageTimes {
-    pub(crate) catalog_snapshot_ns: u64,
-    pub(crate) reserve_ns: u64,
-    pub(crate) allocation_dir_ns: u64,
-    pub(crate) sqlite_bootstrap_ns: u64,
-    pub(crate) lineage_initialize_ns: u64,
-    pub(crate) catalog_document_clone_ns: u64,
-    pub(crate) catalog_serialize_ns: u64,
-    pub(crate) temp_write_ns: u64,
-    pub(crate) file_fsync_ns: u64,
-    pub(crate) rename_ns: u64,
-    pub(crate) dir_fsync_ns: u64,
-    pub(crate) creates: u64,
+pub struct StageTimes {
+    pub catalog_snapshot_ns: u64,
+    pub reserve_ns: u64,
+    pub allocation_dir_ns: u64,
+    pub sqlite_bootstrap_ns: u64,
+    pub lineage_initialize_ns: u64,
+    pub catalog_document_clone_ns: u64,
+    pub catalog_serialize_ns: u64,
+    pub temp_write_ns: u64,
+    pub file_fsync_ns: u64,
+    pub rename_ns: u64,
+    pub dir_fsync_ns: u64,
+    pub creates: u64,
 }
 
 /// The sum of every exclusive leaf stage. Inclusive parent totals are
@@ -40,7 +40,7 @@ pub(crate) struct StageTimes {
 /// boundary and treat the difference as the unattributed remainder.
 impl StageTimes {
     #[must_use]
-    pub(crate) fn exclusive_total_ns(&self) -> u64 {
+    pub fn exclusive_total_ns(&self) -> u64 {
         self.catalog_snapshot_ns
             .saturating_add(self.reserve_ns)
             .saturating_add(self.allocation_dir_ns)
@@ -71,16 +71,16 @@ static TIMES: Mutex<StageTimes> = Mutex::new(StageTimes {
     creates: 0,
 });
 
-pub(crate) fn enable() {
+pub fn enable() {
     *TIMES.lock().expect("create profile lock") = StageTimes::default();
     ENABLED.store(true, Ordering::Relaxed);
 }
 
-pub(crate) fn disable() {
+pub fn disable() {
     ENABLED.store(false, Ordering::Relaxed);
 }
 
-pub(crate) fn enabled() -> bool {
+pub fn enabled() -> bool {
     ENABLED.load(Ordering::Relaxed)
 }
 
@@ -98,7 +98,7 @@ fn record_field(select: impl FnOnce(&mut StageTimes) -> &mut u64, duration: Dura
     *slot = slot.saturating_add(elapsed);
 }
 
-pub(crate) fn count_create() {
+pub fn count_create() {
     if !enabled() {
         return;
     }
@@ -106,10 +106,7 @@ pub(crate) fn count_create() {
     times.creates = times.creates.saturating_add(1);
 }
 
-pub(crate) fn timed<T>(
-    select: impl FnOnce(&mut StageTimes) -> &mut u64,
-    body: impl FnOnce() -> T,
-) -> T {
+pub fn timed<T>(select: impl FnOnce(&mut StageTimes) -> &mut u64, body: impl FnOnce() -> T) -> T {
     if !enabled() {
         return body();
     }
@@ -119,6 +116,6 @@ pub(crate) fn timed<T>(
     value
 }
 
-pub(crate) fn snapshot() -> StageTimes {
+pub fn snapshot() -> StageTimes {
     *TIMES.lock().expect("create profile lock")
 }

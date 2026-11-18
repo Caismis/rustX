@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 use super::{SchemaError, build_validator};
 
 /// A canonical validator and its closed model-facing resource graph.
-pub(super) struct CompiledBusiness {
+pub struct CompiledBusiness {
     pub root_uri: String,
     pub resources: Value,
     pub validator: jsonschema::Validator,
@@ -23,9 +23,7 @@ pub(super) struct CompiledBusiness {
 /// unchanged canonical validator. Both use only resource bytes supplied in the
 /// document. Missing resources fail without file or network access, including
 /// during registration; URI contents cannot grant host resource authority.
-pub(super) fn compile_business_resources(
-    canonical: &Value,
-) -> Result<CompiledBusiness, SchemaError> {
+pub fn compile_business_resources(canonical: &Value) -> Result<CompiledBusiness, SchemaError> {
     // Validate the unchanged document, including structural errors in siblings
     // ignored by legacy $ref evaluation. Both compilations are strictly no-I/O.
     let validator = build_validator(canonical).map_err(invalid_schema)?;
@@ -61,7 +59,7 @@ pub(super) fn compile_business_resources(
 /// Validate a declaration's schema structure without resolving its references.
 /// Catalog observation uses this check; admitting an executable registration
 /// additionally compiles the complete business contract above.
-pub(super) fn validate_declaration(schema: &Value) -> Result<(), SchemaError> {
+pub fn validate_declaration(schema: &Value) -> Result<(), SchemaError> {
     // Generated draft validators check the declaration only. They do not resolve
     // external resources, so this path cannot retain bundled meta-schema trees
     // or fetch a dialect URI.

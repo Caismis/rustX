@@ -13,7 +13,7 @@
 //! line addressing, slicing, the 2000-line/50KB bounds, continuation
 //! diagnostics, and result semantics.
 
-mod document;
+pub mod document;
 mod input;
 #[cfg(test)]
 mod testdata;

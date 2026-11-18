@@ -7,7 +7,7 @@ use croner::{
     parser::{CronParser, Seconds, Year},
 };
 
-pub(crate) const LAST_CRON_UTC_YEAR: i32 = croner::YEAR_UPPER_LIMIT - 2;
+pub const LAST_CRON_UTC_YEAR: i32 = croner::YEAR_UPPER_LIMIT - 2;
 fn cutoff() -> DateTime<Utc> {
     Utc.with_ymd_and_hms(LAST_CRON_UTC_YEAR, 12, 31, 23, 59, 59)
         .single()
@@ -66,7 +66,7 @@ fn next(cron: &Cron, zone: Tz, now: DateTime<Utc>) -> Result<Option<DateTime<Utc
         ),
     )
 }
-pub(super) fn prepare(
+pub fn prepare(
     expression: &str,
     zone: &str,
     now: DateTime<Utc>,
@@ -76,7 +76,7 @@ pub(super) fn prepare(
         .ok_or_else(|| "Cron has no future occurrence through UTC year 4998".to_owned())?;
     Ok((normalized, zone.to_string(), first))
 }
-pub(super) fn occurrence(
+pub fn occurrence(
     expression: &str,
     zone: &str,
     saved_due: DateTime<Utc>,

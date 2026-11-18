@@ -29,7 +29,7 @@ pub mod native;
 pub(crate) mod output;
 pub mod python;
 pub mod runtime;
-pub mod schema;
+pub use rustx_types::tools::schema;
 pub use rustx_types::tools::session_files;
 pub mod todo;
 pub use rustx_types::tools::types;

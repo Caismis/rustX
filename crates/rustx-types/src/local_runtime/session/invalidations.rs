@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 /// publication is once-only per Session, that map gains at most one entry per
 /// Session for the life of the process.
 #[derive(Debug, Default)]
-pub(crate) struct SessionSummaryInvalidations {
+pub struct SessionSummaryInvalidations {
     state: std::sync::Mutex<SummaryInvalidationState>,
 }
 
@@ -58,11 +58,11 @@ impl SessionSummaryInvalidations {
     /// Records a published display projection, after its Catalog visibility
     /// point. Never blocks on a client, a socket, or an acknowledgement: it
     /// takes one uncontended `std::sync::Mutex` and wakes parked observers.
-    pub(crate) fn record(&self, session_id: &SessionId) {
+    pub fn record(&self, session_id: &SessionId) {
         self.record_change(session_id, false);
     }
 
-    pub(super) fn record_change(&self, session_id: &SessionId, catalog_changed: bool) {
+    pub fn record_change(&self, session_id: &SessionId, catalog_changed: bool) {
         let mut state = self.state.lock().expect("summary invalidation log lock");
         state.sequence += 1;
         let sequence = state.sequence;
@@ -78,7 +78,7 @@ impl SessionSummaryInvalidations {
 
     /// A committed deletion or active-node replacement retires Host execution
     /// ownership, independently of ordinary metadata/activity invalidations.
-    pub(super) fn retire_ownership(&self, id: &SessionId, retired_through: u64) {
+    pub fn retire_ownership(&self, id: &SessionId, retired_through: u64) {
         let mut state = self.state.lock().expect("summary invalidation log lock");
         state.sequence += 1;
         let sequence = state.sequence;
@@ -90,7 +90,7 @@ impl SessionSummaryInvalidations {
         }
     }
 
-    pub(crate) fn next_ownership_after(&self, delivered: u64) -> Option<(u64, SessionId, u64)> {
+    pub fn next_ownership_after(&self, delivered: u64) -> Option<(u64, SessionId, u64)> {
         self.state
             .lock()
             .expect("summary invalidation log lock")
@@ -104,7 +104,7 @@ impl SessionSummaryInvalidations {
     /// The current frontier. A new observer starts here, so publications that
     /// predate it are not re-announced: any read that observer makes already
     /// reflects them.
-    pub(crate) fn frontier(&self) -> u64 {
+    pub fn frontier(&self) -> u64 {
         self.state
             .lock()
             .expect("summary invalidation log lock")
@@ -113,7 +113,7 @@ impl SessionSummaryInvalidations {
 
     /// The next invalidation after `delivered`, in publication order, or
     /// `None` when the observer is current.
-    pub(crate) fn next_after(&self, delivered: u64) -> Option<(u64, SessionId, bool)> {
+    pub fn next_after(&self, delivered: u64) -> Option<(u64, SessionId, bool)> {
         let state = self.state.lock().expect("summary invalidation log lock");
         state
             .published
@@ -132,7 +132,7 @@ impl SessionSummaryInvalidations {
 
     /// A wake-up source for a parked observer. The value carried is the
     /// frontier; observers use it only as a change signal.
-    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+    pub fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
         let mut state = self.state.lock().expect("summary invalidation log lock");
         let sequence = state.sequence;
         state
@@ -143,8 +143,8 @@ impl SessionSummaryInvalidations {
 
     /// How many invalidations this log has recorded. Tests assert exact
     /// counts; production only ever compares cursors.
-    #[cfg(test)]
-    pub(crate) fn recorded(&self) -> u64 {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn recorded(&self) -> u64 {
         self.frontier()
     }
 }

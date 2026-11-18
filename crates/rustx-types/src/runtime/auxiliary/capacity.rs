@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 /// Shared bound for physical Calls, required writers and independent retirement.
-pub(super) const PROCESS_CALL_LIMIT: usize = 32;
+pub const PROCESS_CALL_LIMIT: usize = 32;
 
 /// The precise nonblocking reservation that refused admission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +55,7 @@ impl ProcessCapacity {
         })
     }
 
-    pub(crate) fn shared_process() -> Arc<Self> {
+    pub fn shared_process() -> Arc<Self> {
         static PROCESS: OnceLock<Arc<ProcessCapacity>> = OnceLock::new();
         PROCESS.get_or_init(Self::new).clone()
     }
@@ -67,9 +67,9 @@ impl ProcessCapacity {
             process: self.clone(),
             total: Arc::new(Semaphore::new(4)),
             general: Arc::new(Semaphore::new(3)),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             after_process_general: Arc::default(),
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-fixtures"))]
             reservation_contended: Arc::default(),
         }
     }
@@ -81,13 +81,13 @@ pub struct ConversationCapacity {
     process: Arc<ProcessCapacity>,
     total: Arc<Semaphore>,
     general: Arc<Semaphore>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     after_process_general: Arc<Mutex<Option<ReservationHook>>>,
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fixtures"))]
     reservation_contended: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>>,
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 #[derive(Debug)]
 struct ReservationHook {
     entered: tokio::sync::oneshot::Sender<()>,
@@ -95,15 +95,15 @@ struct ReservationHook {
 }
 
 /// Dropping the release sender also unblocks a held test reservation.
-#[cfg(test)]
-pub(crate) struct CapacityReservationGate {
-    pub(crate) entered: tokio::sync::oneshot::Receiver<()>,
-    pub(crate) release: std::sync::mpsc::Sender<()>,
+#[cfg(any(test, feature = "test-fixtures"))]
+pub struct CapacityReservationGate {
+    pub entered: tokio::sync::oneshot::Receiver<()>,
+    pub release: std::sync::mpsc::Sender<()>,
 }
 
 impl ConversationCapacity {
-    #[cfg(test)]
-    pub(crate) fn hold_after_process_general_for_test(&self) -> CapacityReservationGate {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn hold_after_process_general_for_test(&self) -> CapacityReservationGate {
         let (entered, observed) = tokio::sync::oneshot::channel();
         let (release, held) = std::sync::mpsc::channel();
         *self
@@ -119,8 +119,8 @@ impl ConversationCapacity {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn reservation_contention_for_test(&self) -> tokio::sync::oneshot::Receiver<()> {
+    #[cfg(any(test, feature = "test-fixtures"))]
+    pub fn reservation_contention_for_test(&self) -> tokio::sync::oneshot::Receiver<()> {
         let (entered, observed) = tokio::sync::oneshot::channel();
         *self
             .reservation_contended
@@ -129,7 +129,7 @@ impl ConversationCapacity {
         observed
     }
 
-    pub(crate) fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+    pub fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.process.changed.subscribe()
     }
     /// Reserves ordinary auxiliary work without borrowing protected capacity.
@@ -142,7 +142,7 @@ impl ConversationCapacity {
     }
 
     // Only native Runtime/Compaction code can select this admission class.
-    pub(crate) fn reserve_compaction(&self) -> Result<CallPermit, AuxiliaryBusy> {
+    pub fn reserve_compaction(&self) -> Result<CallPermit, AuxiliaryBusy> {
         self.reserve(true)
     }
 
@@ -157,7 +157,7 @@ impl ConversationCapacity {
         } else {
             Some(take(&self.process.general, CapacityDomain::ProcessGeneral)?)
         };
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         if !compaction {
             let hook = self
                 .after_process_general
@@ -187,7 +187,7 @@ impl ConversationCapacity {
     }
 
     fn reservation_guard(&self) -> MutexGuard<'_, ()> {
-        #[cfg(test)]
+        #[cfg(any(test, feature = "test-fixtures"))]
         match self.process.reservation.try_lock() {
             Ok(guard) => return guard,
             Err(std::sync::TryLockError::WouldBlock) => {

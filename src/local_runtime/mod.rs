@@ -96,7 +96,7 @@ pub use configuration::{
     UserConfigSources,
 };
 
-pub mod app_server_policy;
+pub use rustx_types::local_runtime::app_server_policy;
 
 #[cfg(test)]
 mod mcp_tests;
