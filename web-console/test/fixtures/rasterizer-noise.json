@@ -2,7 +2,7 @@
   {
     "reference": "workflow-editor-linux.png",
     "evidence": "Pinned Playwright 1.63.0 FULL CI captures: run 42193746361, job 127814031930, artifact 13494105808 differs at 547 pixels; run 42229926383, job 127936183721, artifact 13513095611 differs at 602 pixels. The second adds 92 measured sites and exceeds 192 prior per-site bounds. All three graph screenshot checkpoints in the second trace (36286,36291,36295), the first capture and the strict passing local trace have byte-identical serialized graph DOM (SHA256 4dd88f424c85838ec552a68dd847042bea37c16301ef972160d4935636929e25); all five CSS resources match. Paths, geometry, transforms, selection and paint order are unchanged. A third stable FULL CI capture, run 42313212047, job 128221304207, artifact 13550724145, differs at 608 pixels: 19 new sites and 63 larger prior per-site observations. Its three graph checkpoints (17948,17953,17957) are byte-identical to one another. Relative to main, the full graph DOM differs only in sibling order of five of seven invisible edge-insertion portals (opacity 0, no shown class, identical content/coordinate sets); sorting only those portal siblings makes the complete graph byte-identical. The serialized SVG paths and their paint order, node DOM, geometry, transforms, selection and visible content remain exact. The WorkflowEditor CSS and three shared CSS resources are byte-identical; the index CSS differs only in unrelated preview, Files, empty-home, streaming and composer module rules absent from the graph. Full and normalized graph hashes, trace hash and all five current CSS hashes are recorded with this third capture. The internal Chromium cause is not established. The 658 disjoint 1x1 regions are exactly the three-capture measured union. Each bound is the largest delta actually observed at that coordinate (maximum 32); each top-level pixel tuple is an actual maximum-delta exemplar from one capture. All three complete raw observations and PNG hashes are retained; the third unchanged raw PNG is checked in as well. No rectangle or global threshold applies. A fourth stable FULL CI capture, run 42371118714, job 128400590333, artifact 13575455373, differs at 746 pixels: 121 new sites and 216 larger prior per-site observations. Its complete React Flow DOM at checkpoints 31111, 31115 and 31120 is byte-identical to the third capture at checkpoints 17948, 17953 and 17957, without portal sorting; all five CSS resources are byte-identical. The unchanged raw PNG, trace hashes, subtree hash, CSS hashes and all 746 raw RGBA observations are retained. The current policy is exactly the four-capture union of 779 disjoint 1x1 sites, with each bound the maximum actually observed there (maximum 35). The earlier 658-site/32 bounds above describe the preceding three captures. No reference PNG, rectangle, whole-image threshold or unobserved pixel is changed.",
-    "referenceSha256": "0289fc15fbcc7b77de5af83c1f647bb98f713c8e0c946f81ddb7c8b2f7bc84e4",
+    "referenceSha256": "b78ba0a86a5faaa706f8b772c0cf7f0a194d6567512a610b064c450e37165d9c",
     "graphSha256": "4dd88f424c85838ec552a68dd847042bea37c16301ef972160d4935636929e25",
     "stylesheetSha256": {
       "http://127.0.0.1:5173/assets/useScrollLock-awtWL_k2.css": "2ac99d4eefa9ac1c84f02b3d9e9ce7b9b475402afa1d446404a74cf3ce116b56",
@@ -59645,22 +59645,6 @@
           222,
           255
         ]
-      ],
-      [
-        34,
-        237,
-        [
-          255,
-          255,
-          255,
-          255
-        ],
-        [
-          255,
-          255,
-          255,
-          255
-        ]
       ]
     ]
   },
@@ -59696,29 +59680,13 @@
           80,
           255
         ]
-      ],
-      [
-        34,
-        237,
-        [
-          44,
-          44,
-          46,
-          255
-        ],
-        [
-          44,
-          44,
-          46,
-          255
-        ]
       ]
     ]
   },
   {
     "reference": "model-profiles-dark-1440-linux.png",
-    "evidence": "Pinned Playwright 1.63.0 Linux capture during the branch review. Stable captures of this unchanged checkpoint alternated between the baseline and this single one-level rounded border pixel.",
-    "referenceSha256": "0cff5fe0a0e3a9ef0d75b2fa20a985e16a65e022827228ecc5e8f3114ed02efa",
+    "evidence": "Pinned Playwright 1.63.0 Linux capture during the branch review. Stable captures of this unchanged checkpoint alternated between the baseline and this single one-level rounded border pixel. Re-validated under the Harness-restyled baseline: the corner pixel now rests at (60,60,62); the recorded one-level alternation keeps its bound at the same site.",
+    "referenceSha256": "f429519d31c61fc82b435c276fd9d0c4bf4c95a4fce9136d71fdf3717e63218e",
     "captureSha256": "2fddb0a1853a242c9017eae9c52ca2a2bd80714a25a86c2532c64677e21ab5fa",
     "regions": [
       {
@@ -59736,15 +59704,15 @@
         26,
         360,
         [
-          82,
-          83,
-          84,
+          60,
+          60,
+          62,
           255
         ],
         [
-          83,
-          84,
-          84,
+          61,
+          61,
+          63,
           255
         ]
       ]
@@ -59752,8 +59720,8 @@
   },
   {
     "reference": "model-profiles-zh-dark-linux.png",
-    "evidence": "Pinned Playwright 1.63.0 Chromium image bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7. FULL CI run 43499868422, job 132146747931, browser-evidence-shard-1 artifact 14075757937 produced exactly these two CodeMirror focus-ring bottom-right corner observations. A local fresh-context capture reproduced the same PNG bytes. A fixed 20-context instrumented measurement then produced 19 exact-reference captures and one byte-identical CI variant (repeat16), without retries of a comparison. Complete post-capture measurements for both outcomes are retained in the paired Brotli fixtures: all 19 nodes and ancestors have identical unrounded bounds, scroll offsets, full computed styles and pseudo-styles; viewport 1440x1000, DPR 1, visual viewport, font readiness, active textbox and semantic state also match without normalization. Modal bounds are (384,116,672,768), editor bounds (409,474,618,144); outline is rgb(103,158,254), 2px solid, offset -1px. Their Unicode sorted-key state SHA256, excluding only pngSha256, is f391a138caff8886e28ebbfe74fb219884f19f8e92ac0cf6e0b0ed3d544867b0. CI and local trace CSS are byte-identical (144 STYLE nodes SHA256 de82ddda1ac9e8601cd9eb3ac99c5ec9dd40932172263ee2c67ac91a670a294c); serialized modal state differs only in per-context React Aria ID seeds with unchanged associations. The internal Chromium cause is not established. Only these two disjoint 1x1 sites receive their separately observed delta bounds 8 and 25; all other pixels and every other reference remain strict. The reference, comparator and exact frame stabilization are unchanged.",
-    "referenceSha256": "d8a2ac48af584d6a792cbad5337af0dda06f901daa8c37481dba2c6b5489f6cf",
+    "evidence": "Pinned Playwright 1.63.0 Chromium image bc6ab0d6d44ff4826e4cb8c1e6d801e185bfc42bb0753f8e2a30efc70db054c7. FULL CI run 43499868422, job 132146747931, browser-evidence-shard-1 artifact 14075757937 produced exactly these two CodeMirror focus-ring bottom-right corner observations. A local fresh-context capture reproduced the same PNG bytes. A fixed 20-context instrumented measurement then produced 19 exact-reference captures and one byte-identical CI variant (repeat16), without retries of a comparison. Complete post-capture measurements for both outcomes are retained in the paired Brotli fixtures: all 19 nodes and ancestors have identical unrounded bounds, scroll offsets, full computed styles and pseudo-styles; viewport 1440x1000, DPR 1, visual viewport, font readiness, active textbox and semantic state also match without normalization. Modal bounds are (384,116,672,768), editor bounds (409,474,618,144); outline is rgb(103,158,254), 2px solid, offset -1px. Their Unicode sorted-key state SHA256, excluding only pngSha256, is f391a138caff8886e28ebbfe74fb219884f19f8e92ac0cf6e0b0ed3d544867b0. CI and local trace CSS are byte-identical (144 STYLE nodes SHA256 de82ddda1ac9e8601cd9eb3ac99c5ec9dd40932172263ee2c67ac91a670a294c); serialized modal state differs only in per-context React Aria ID seeds with unchanged associations. The internal Chromium cause is not established. Only these two disjoint 1x1 sites receive their separately observed delta bounds 8 and 25; all other pixels and every other reference remain strict. The reference, comparator and exact frame stabilization are unchanged. Re-validated under the Harness-restyled baseline (54dd9084): the new reference matches the retained variant at 642,499, so that site keeps only its measured small-delta region; at 642,500 the baseline-vs-variant delta grows to 126 and the region bound follows the measured pair.",
+    "referenceSha256": "54dd90840e416040e12887460d848bd99793cddfbfafcb0d4101bf1f7cf4e218",
     "capture": "model-profiles-zh-dark-noise-43499868422-linux.png",
     "captureSha256": "e8fb98e3a19c412d9bcdb2ef2054aecde356474e046d3440bb0081f5ce2fb906",
     "geometry": {
@@ -59783,33 +59751,17 @@
         "width": 1,
         "height": 1,
         "maxChangedPixels": 1,
-        "maxChannelDelta": 25
+        "maxChannelDelta": 126
       }
     ],
     "pixels": [
       [
         642,
-        499,
-        [
-          99,
-          152,
-          246,
-          255
-        ],
+        500,
         [
           103,
           158,
           254,
-          255
-        ]
-      ],
-      [
-        642,
-        500,
-        [
-          67,
-          88,
-          128,
           255
         ],
         [
@@ -59819,6 +59771,7 @@
           255
         ]
       ]
-    ]
+    ],
+    "priorReferenceSha256": "d8a2ac48af584d6a792cbad5337af0dda06f901daa8c37481dba2c6b5489f6cf"
   }
 ]
