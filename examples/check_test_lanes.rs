@@ -1286,9 +1286,11 @@ fn parse_doctest_list_with(
         .lines()
         .filter(|line| line.trim_start().starts_with("Doc-tests "))
         .count();
-    if running != 0 || doc_banners != 1 {
+    // `--workspace` emits one `Doc-tests <crate>` banner per member library;
+    // crates without doctests still count.
+    if running != 0 || doc_banners == 0 {
         return Err(format!(
-            "expected one Doc-tests banner and no unit harness in doctest stderr \
+            "expected Doc-tests banners and no unit harness in doctest stderr \
              (running={running}, doc_banners={doc_banners}):\n{stderr}"
         ));
     }
@@ -1297,14 +1299,12 @@ fn parse_doctest_list_with(
     let mut blocks = Vec::new();
     let mut block_tests = 0usize;
     let mut block_benchmarks = 0usize;
-    let mut saw_final = false;
+    // One `all doctests ran in` line terminates each doctest-bearing crate's
+    // block; member crates without doctests emit their `(0, 0)` summary with
+    // no timing line, so later blocks legitimately follow a final line.
+    let mut finals = 0usize;
 
     for line in stdout.lines().filter(|line| !line.trim().is_empty()) {
-        if saw_final {
-            return Err(format!(
-                "unexpected doctest output after final summary `{line}`"
-            ));
-        }
         if let Some((summary_tests, summary_benchmarks)) = parse_doctest_block_summary(line) {
             if (summary_tests, summary_benchmarks) != (block_tests, block_benchmarks) {
                 return Err(format!(
@@ -1322,7 +1322,7 @@ fn parse_doctest_list_with(
                      {block_benchmarks} benchmarks)"
                 ));
             }
-            saw_final = true;
+            finals += 1;
         } else if let Some(name) = line.strip_suffix(": test") {
             block_tests += 1;
             tests.insert(name.to_owned());
@@ -1333,9 +1333,9 @@ fn parse_doctest_list_with(
         }
     }
 
-    if block_tests != 0 || block_benchmarks != 0 || blocks.is_empty() || !saw_final {
+    if block_tests != 0 || block_benchmarks != 0 || blocks.is_empty() || finals == 0 {
         return Err(format!(
-            "incomplete doctest discovery output (blocks={blocks:?}, saw_final={saw_final})"
+            "incomplete doctest discovery output (blocks={blocks:?}, finals={finals})"
         ));
     }
     Ok(DoctestDiscovery { tests, blocks })
@@ -2267,6 +2267,29 @@ all doctests ran in 1.40s; merged doctests compilation took 1.38s
         assert_eq!(
             parse_doctest_list(true, zero, banner).unwrap().blocks,
             vec![(0, 0), (0, 0)]
+        );
+        // `--workspace`: every member library prints a `Doc-tests` banner;
+        // crates carrying doctests end with a timing line while empty crates
+        // only emit their `(0, 0)` summary between them.
+        let workspace_stdout = "\
+src/a.rs - a::Pos (line 10): test
+1 test, 0 benchmarks
+all doctests ran in 0.20s; merged doctests compilation took 0.20s
+0 tests, 0 benchmarks
+0 tests, 0 benchmarks
+src/b.rs - b::Neg (line 20): test
+1 test, 0 benchmarks
+all doctests ran in 0.10s; merged doctests compilation took 0.10s
+";
+        let workspace_banner = "   Doc-tests rustx\n   Doc-tests rustx_types\n";
+        let workspace_parsed =
+            parse_doctest_list(true, workspace_stdout, workspace_banner).unwrap();
+        assert_eq!(
+            workspace_parsed.tests,
+            BTreeSet::from([
+                "src/a.rs - a::Pos (line 10)".to_owned(),
+                "src/b.rs - b::Neg (line 20)".to_owned(),
+            ])
         );
         // Unit harness stdout/stderr (`Running ...`), missing timing summary, count mismatch,
         // or garbage lines must fail closed.
