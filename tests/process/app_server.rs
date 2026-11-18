@@ -185,6 +185,85 @@ async fn app_server_stdio_real_process_shared_conformance() {
 }
 
 #[tokio::test]
+async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
+    bounded(async {
+        use rustx::app_server::protocol::*;
+        let f = Fixture::new().await;
+        // Both recorded Session cwds become missing directories.
+        for name in ["a", "b"] {
+            std::fs::rename(
+                f.root.path().join(name),
+                f.root.path().join(format!("{name}-retired")),
+            )
+            .unwrap();
+        }
+        // A binary with no sibling helpers: the bare Server executable in
+        // its own directory (hardlink, copied across mount boundaries).
+        let bin = f.root.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        let rustx = bin.join("rustx");
+        std::fs::hard_link(env!("CARGO_BIN_EXE_rustx"), &rustx)
+            .or_else(|_| std::fs::copy(env!("CARGO_BIN_EXE_rustx"), &rustx).map(|_| ()))
+            .unwrap();
+        let mut child = Command::new(&rustx)
+            .current_dir(f.root.path())
+            .env_clear()
+            .env("HOME", f.root.path().join("home"))
+            .env("PATH", &bin)
+            .args(["app-server", "--runtime-root"])
+            .arg(f.root.path().join("runtime"))
+            .args(["--listen", "stdio"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        let MethodResult::Sessions { sessions, .. } = result(
+            &client,
+            Method::SessionList {
+                query: None,
+                offset: 0,
+                limit: 32,
+            },
+        )
+        .await
+        else {
+            panic!("catalog")
+        };
+        for session in &f.sessions {
+            assert!(
+                sessions.iter().any(|summary| summary.id == *session),
+                "cold Session {session:?} not listed"
+            );
+        }
+        client.close().await;
+        terminate(&child);
+        let output = child.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Neither recorded cwd was resurrected, and nothing was needed or
+        // created beside the executable.
+        for name in ["a", "b"] {
+            assert!(!f.root.path().join(name).exists());
+        }
+        assert_eq!(
+            std::fs::read_dir(&bin)
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect::<Vec<_>>(),
+            ["rustx"]
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn app_server_websocket_real_process_shared_conformance_and_listener_survives() {
     bounded(Box::pin(async {
         let f = Fixture::new().await;

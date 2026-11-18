@@ -325,7 +325,7 @@ for (const missing of ['bash-supervisor', 'interactive-supervisor', 'workflow-re
     const h = harness(), launcher = new Launcher(root, h.spawn);
     const messages: string[] = [];
     t.mock.method(process.stderr, 'write', (message: string) => { messages.push(message); return true; });
-    await launcher.start(parseArguments(['app-server', '--binary', join(directory, 'rustx')], root));
+    await launcher.start(parseArguments(['tui', '--binary', join(directory, 'rustx')], root));
     assert.equal(await launcher.done, 1);
     assert.equal(h.calls.length, 0);
     assert.ok(messages.join('').includes(join(directory, missing)));
@@ -339,7 +339,24 @@ test('symlinked native binary resolves helpers beside its real executable', asyn
   const binary = join(directory, 'rustx');
   symlinkSync(nativeBinary, binary);
   const h = harness(), launcher = new Launcher(root, h.spawn);
-  await launcher.start(parseArguments(['app-server', '--binary', binary], root));
+  await launcher.start(parseArguments(['tui', '--binary', binary], root));
   assert.equal(h.calls.length, 1);
   const stopping = launcher.settle(0); h.calls[0].reap.resolve(); await stopping;
+});
+
+test('app-server launches the bare native executable without helper siblings', async t => {
+  const directory = mkdtempSync(join(tmpdir(), 'rustx-standalone-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const binary = join(directory, 'rustx');
+  writeFileSync(binary, '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  const h = harness(), launcher = new Launcher(root, h.spawn);
+  await launcher.start(parseArguments(['app-server', '--binary', binary], root));
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].spec.command, binary);
+  assert.deepEqual(h.calls[0].spec.args, ['app-server', '--listen', 'stdio']);
+  assert.equal(h.calls[0].spec.component, 'app-server');
+  // Nothing was needed or created beside the executable: no Client,
+  // Python, or native helper.
+  assert.deepEqual(readdirSync(directory), ['rustx']);
+  const terminal = launcher.settle(0); h.calls[0].reap.resolve(); await terminal;
 });
