@@ -3435,40 +3435,80 @@ async fn image_tool_round_trip_and_text_model_switch() {
     assert!(!body_text(&requests[5]).contains("read_image"));
     assert!(driver.canonical_history().contains(&canonical_image));
 
-    // Manual compaction invokes the production summary request builder and
-    // adapter over the image-bearing canonical span, not a helper-only mock.
-    // Attempt settlement is logical; the coordinator may still own its tail.
-    // A Busy refusal admits nothing, so retry until the native owner returns.
-    tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        loop {
-            match driver.compact_context().await {
-                Err(error)
-                    if matches!(
-                        error.data,
-                        Some(rustx::app_server::protocol::ErrorData::InvalidState)
-                    ) =>
-                {
-                    tokio::task::yield_now().await;
+    // The first shortest valid prefix covers ingress context. A second real
+    // compaction advances over the image ToolCall/result and retained Summary.
+    // Both invoke the production summary builder and provider adapter.
+    let canonical_before_compaction = driver.canonical_history();
+    for settled_provider_count in [7, 8] {
+        // Logical Attempt settlement can precede its physical tail. Busy admits
+        // no provider call; every error after an invocation is substantive.
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let result = if settled_provider_count == 7 {
+                    driver.compact_context().await
+                } else {
+                    // A new operation needs its own idempotency key.
+                    rpc(
+                        &driver.connection,
+                        Method::CompactContext {
+                            target: driver.target.clone(),
+                            request_id: "conformance-image-compact".to_owned().try_into().unwrap(),
+                            instructions: None,
+                        },
+                    )
+                    .await
+                };
+                match result {
+                    Err(error)
+                        if matches!(
+                            error.data,
+                            Some(rustx::app_server::protocol::ErrorData::InvalidState)
+                        ) && emulator.requests().await.len() == settled_provider_count =>
+                    {
+                        tokio::task::yield_now().await;
+                    }
+                    Ok(result) => break result,
+                    Err(error) => panic!(
+                        "admitted manual compaction failed: {error:?}; {}; summary requests: {:?}",
+                        emulator.diagnostics(),
+                        emulator
+                            .requests()
+                            .await
+                            .iter()
+                            .skip(7)
+                            .map(body_text)
+                            .collect::<Vec<_>>()
+                    ),
                 }
-                result => break result.unwrap(),
             }
-        }
-    })
-    .await
-    .expect("native idle owners must return after the delegated Attempt settles");
+        })
+        .await
+        .expect("native idle owners must return after logical settlement");
+        assert_eq!(emulator.requests().await.len(), settled_provider_count + 1);
+        assert_eq!(
+            driver.canonical_history(),
+            canonical_before_compaction,
+            "each prefix compaction preserves the exact canonical ledger"
+        );
+    }
     let requests = emulator.requests().await;
-    assert_eq!(requests.len(), 8);
-    let summary = body_text(&requests[7]);
-    assert!(summary.contains("retired-conversation"));
-    assert!(summary.contains("artifact_1"));
-    assert!(!summary.contains(&data));
-    assert!(!summary.contains("image/png"));
-    assert!(!summary.contains("\"type\":\"image\""));
-    assert!(!summary.contains("image_url"));
-    assert!(
-        driver.canonical_history().contains(&canonical_image),
-        "compaction preserves the canonical ledger"
-    );
+    assert_eq!(requests.len(), 9);
+    let ingress_summary = body_text(&requests[7]);
+    assert!(ingress_summary.contains("retired-conversation"));
+    assert!(ingress_summary.contains("read the image"));
+    assert!(!ingress_summary.contains("artifact_1"));
+    let image_summary = body_text(&requests[8]);
+    assert!(image_summary.contains("retired-conversation"));
+    assert!(image_summary.contains("Image ingress retained."));
+    assert!(image_summary.contains("artifact_1"));
+    assert!(image_summary.contains("call-image"));
+    for summary in [&ingress_summary, &image_summary] {
+        assert!(!summary.contains(&data));
+        assert!(!summary.contains("image/png"));
+        assert!(!summary.contains("\"type\":\"image\""));
+        assert!(!summary.contains("image_url"));
+    }
+    assert!(driver.canonical_history().contains(&canonical_image));
     assert_eq!(
         driver
             .artifacts()
@@ -3611,6 +3651,43 @@ async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, P
     Some((driver, emulator))
 }
 
+fn assert_overflow_reminder_replay(snapshots: &[rustx::model::snapshot::RequestSnapshot]) {
+    let reminder_owner = rustx::runtime::identity::ContextContributorIdentity::Native(
+        rustx::runtime::identity::NativeContextContributor::PermissionReminder,
+    );
+    let refreshed = snapshots[3]
+        .contributions
+        .iter()
+        .filter(|contribution| {
+            contribution.producer == reminder_owner
+                && snapshots[3]
+                    .request_context_ids
+                    .contains(&contribution.message_id)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        refreshed.len(),
+        1,
+        "overflow stages exactly one new native reminder"
+    );
+    assert_eq!(
+        snapshots[3].request_context_ids,
+        vec![refreshed[0].message_id.clone()]
+    );
+    assert!(
+        refreshed[0].opportunities.post_tool_batch.is_some(),
+        "the post-tool opportunity survives durable snapshot decoding"
+    );
+    assert_eq!(
+        snapshots[3].contributions, snapshots[4].contributions,
+        "transient retry keeps every immutable contribution receipt"
+    );
+    assert!(
+        snapshots[4].request_context_ids.is_empty(),
+        "transient retry introduces no context"
+    );
+}
+
 #[tokio::test]
 async fn retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_retry() {
     let Some((driver, emulator)) = image_coverage_driver(
@@ -3721,11 +3798,7 @@ async fn retired_native_coverage_does_not_anchor_overflow_compaction_or_frozen_r
             );
         }
     }
-    assert!(
-        snapshots[3..]
-            .iter()
-            .all(|s| s.request_context_ids.is_empty())
-    );
+    assert_overflow_reminder_replay(&snapshots);
     emulator.finish().await;
 }
 

@@ -3003,14 +3003,48 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
         snapshots[2].context_generation.contributors, expected_contributors,
         "compaction adds only its native reminder to the frozen contributors"
     );
+    assert_eq!(snapshots[1].system_sections, snapshots[2].system_sections);
     assert_eq!(
+        snapshots[1].effective_system_prompt,
+        snapshots[2].effective_system_prompt
+    );
+    assert!(
         snapshots[2]
             .system_sections
             .iter()
-            .filter(|section| section.contributor == reminder_owner)
-            .count(),
+            .all(|section| section.contributor != reminder_owner)
+    );
+    let reminders = snapshots[2]
+        .contributions
+        .iter()
+        .filter(|contribution| {
+            contribution.producer == reminder_owner
+                && snapshots[2]
+                    .request_context_ids
+                    .contains(&contribution.message_id)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reminders.len(),
         1,
-        "the retried request contains exactly one activated permission reminder"
+        "one new native reminder belongs to the retry start"
+    );
+    let reminder_id = &reminders[0].message_id;
+    assert_eq!(snapshots[2].request_context_ids, vec![reminder_id.clone()]);
+    assert!(
+        !snapshots[1]
+            .contributions
+            .iter()
+            .any(|entry| &entry.message_id == reminder_id)
+    );
+    assert_eq!(
+        &snapshots[2].contributions[..snapshots[1].contributions.len()],
+        &snapshots[1].contributions,
+        "ordinary receipts retain their exact identities and metadata"
+    );
+    assert_ne!(
+        snapshots[1].semantic_input_fingerprint,
+        snapshots[2].semantic_input_fingerprint
     );
     assert_ne!(
         snapshots[1].history_cut.activation, snapshots[2].history_cut.activation,
@@ -3036,6 +3070,58 @@ async fn settled_host_retains_distinct_overflow_request_snapshots() {
             *request
         );
     }
+    let retry = fixture
+        .host
+        .reconstruct_request(&snapshots[2].identity)
+        .unwrap();
+    let messages = retry
+        .messages
+        .iter()
+        .filter_map(|message| message.as_canonical())
+        .filter(|message| message.id() == reminder_id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages.len(),
+        1,
+        "Tail and staged input select the new reminder once"
+    );
+    let MessageBlock::User(reminder) = messages[0] else {
+        panic!("the native reminder must be a canonical User message");
+    };
+    assert_eq!(reminder.source, UserSource::Runtime);
+    assert_eq!(
+        reminder.kind,
+        crate::message::types::InboundKind::Context(
+            crate::message::types::ContextKind::NativeEnvironment,
+        )
+    );
+    assert_eq!(
+        reminder.content,
+        crate::context::assembly::permission_reminder_content(
+            &crate::runtime::permission::permission_reminder_text(snapshots[2].permission_mode),
+        )
+    );
+    assert_eq!(
+        fixture
+            .host
+            .reconstruct_request(&snapshots[2].identity)
+            .unwrap(),
+        retry
+    );
+    assert_eq!(
+        history.get(&snapshots[2].identity).unwrap(),
+        Some(snapshots[2].clone())
+    );
+    assert_eq!(
+        request_snapshots(&history).len(),
+        3,
+        "reads introduce no snapshot replay"
+    );
+    assert_eq!(
+        adapter.requests().len(),
+        4,
+        "reads invoke no provider request"
+    );
     assert!(
         provider_requests[3].messages.iter().any(|message| {
             matches!(

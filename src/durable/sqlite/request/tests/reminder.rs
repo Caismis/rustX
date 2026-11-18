@@ -1,7 +1,7 @@
 //! Native reminder rearm extends only the approved retry context lane.
 use super::*;
 use crate::context::contribution::ContributionStart;
-use crate::context::{ContributionOpportunities, ContributorGeneration};
+use crate::context::{ContributionOpportunities, ContributorGeneration, PostToolBatchOpportunity};
 use crate::runtime::identity::{ContextContributorIdentity, NativeContextContributor};
 use crate::scripted_suites::support::context::{checkpoint_commit_fixture, checkpoint_fixture};
 
@@ -49,8 +49,11 @@ fn refresh_snapshot(
         metadata: ContextKind::NativeEnvironment,
         presentation: None,
         emissions: vec![],
-        opportunities: ContributionOpportunities::default(),
-        post_tool_batch_anchor: None,
+        opportunities: ContributionOpportunities {
+            fresh_inbound: None,
+            post_tool_batch: Some(PostToolBatchOpportunity {}),
+        },
+        post_tool_batch_anchor: Some(crate::durable::TranscriptCursor::new(1)),
     });
     freeze_test_input(store, &mut snapshot, std::slice::from_ref(&message));
     (snapshot, message)
@@ -96,6 +99,9 @@ fn reminder_rearm_retries_preserve_receipts_and_atomic_start_reconstruction() {
         store.load_head().unwrap().revision.next(),
         vec![ordinary.id().clone()],
     );
+    original.contributions[0].opportunities.post_tool_batch = Some(PostToolBatchOpportunity {});
+    original.contributions[0].post_tool_batch_anchor =
+        Some(crate::durable::TranscriptCursor::new(1));
     freeze_test_input(&store, &mut original, std::slice::from_ref(&ordinary));
     store
         .commit_model_turn_start(std::slice::from_ref(&ordinary), &original, Utc::now())

@@ -6,6 +6,9 @@ use crate::context::compaction::{CompactionAttribution, capture_compaction};
 use crate::context::engine::CompactionConstraints;
 use crate::runtime::conversation_runtime::test_support::*;
 
+mod cancellation;
+mod idle_fit;
+
 fn permission_reminder_ids(
     request: &crate::model::ModelRequest,
     mode: crate::runtime::ApprovalMode,

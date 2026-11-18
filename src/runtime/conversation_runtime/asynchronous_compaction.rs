@@ -34,6 +34,10 @@ struct Work {
     publication: Mutex<()>,
     #[cfg(test)]
     ready_publication_gate: Mutex<Option<ReadyPublicationGate>>,
+    #[cfg(test)]
+    defer_settlement_gate: Mutex<Option<ArbitrationTestGate>>,
+    #[cfg(test)]
+    cancellation_request_gate: Mutex<Option<ArbitrationTestGate>>,
     changed: tokio::sync::Notify,
     join: Mutex<Option<tokio::task::JoinHandle<()>>>,
     exit_announced: AtomicBool,
@@ -45,6 +49,24 @@ struct Work {
 struct ReadyPublicationGate {
     entered: tokio::sync::oneshot::Sender<()>,
     release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+struct ArbitrationTestGate {
+    entered: tokio::sync::oneshot::Sender<()>,
+    release: std::sync::mpsc::Receiver<()>,
+}
+
+#[cfg(test)]
+fn wait_for_arbitration_test_gate(slot: &Mutex<Option<ArbitrationTestGate>>) {
+    let gate = slot
+        .lock()
+        .expect("compaction arbitration test gate")
+        .take();
+    if let Some(gate) = gate {
+        let _ = gate.entered.send(());
+        let _ = gate.release.recv();
+    }
 }
 
 // Publication, supersession, cancellation and retry are independent facts;
@@ -381,28 +403,35 @@ impl RuntimeInner {
             }
         }
         let (accepted, publish) = work.admission.cancellation.cancel_with(|| {
-            let mut state = work.state.lock().expect("asynchronous compaction state");
-            if state.superseded
-                || state.cancel_requested
-                || work.admission.cancellation.is_cancelled()
-            {
-                (false, false)
-            } else if matches!(&state.phase, Phase::Ready(_)) {
-                state.cancel_requested = true;
-                state.phase = Phase::Terminal;
-                state.status.phase = CompactionOperationPhase::Cancelled;
-                state.status.waiting_attempt_id = None;
-                state.status.diagnostic = None;
-                (true, true)
-            } else if matches!(
-                &state.phase,
-                Phase::Capturing | Phase::Generating | Phase::Installing(_)
-            ) {
-                state.cancel_requested = true;
-                (true, false)
-            } else {
-                (false, false)
+            let decision = {
+                let mut state = work.state.lock().expect("asynchronous compaction state");
+                if state.superseded
+                    || state.cancel_requested
+                    || work.admission.cancellation.is_cancelled()
+                {
+                    (false, false)
+                } else if matches!(&state.phase, Phase::Ready(_)) {
+                    state.cancel_requested = true;
+                    state.phase = Phase::Terminal;
+                    state.status.phase = CompactionOperationPhase::Cancelled;
+                    state.status.waiting_attempt_id = None;
+                    state.status.diagnostic = None;
+                    (true, true)
+                } else if matches!(
+                    &state.phase,
+                    Phase::Capturing | Phase::Generating | Phase::Installing(_)
+                ) {
+                    state.cancel_requested = true;
+                    (true, false)
+                } else {
+                    (false, false)
+                }
+            };
+            #[cfg(test)]
+            if decision.0 {
+                wait_for_arbitration_test_gate(&work.cancellation_request_gate);
             }
+            decision
         });
         if publish && let Err(error) = self.publish_async_status(&work) {
             self.fail_async_durability(&error);
@@ -505,7 +534,7 @@ impl RuntimeInner {
     #[allow(clippy::too_many_lines)] // The checked-out conversation and every installation settlement share one boundary.
     pub(super) async fn install_ready_async_when_idle(self: &Arc<Self>) {
         let coordinator = RuntimeCompactionCoordinator(Arc::downgrade(self));
-        let (ready, mut conversation, mut context, mut request) = {
+        let (ready, mut conversation, mut context, mut request, staged_request_context) = {
             let mut state = self.lock_state();
             if !self.lifecycle.is_running()
                 || self.durability_gate.is_failed()
@@ -535,10 +564,7 @@ impl RuntimeInner {
             ) else {
                 return;
             };
-            let mut native = resources.native_system_input();
-            native.permission_reminder = Some(
-                crate::runtime::permission::permission_reminder_text(state.effective_approval_mode),
-            );
+            let native = resources.native_system_input();
             let Ok(sections) = resources.context_assembly().system_sections(&native) else {
                 return;
             };
@@ -562,6 +588,27 @@ impl RuntimeInner {
                 CompactionDelivery::Ready(ready) => ready,
                 CompactionDelivery::Failed(_) => return,
             };
+            // Idle activation rearms the next start's canonical User reminder.
+            // This operation-scoped identity prices that staged context only;
+            // the actual start remains its sole allocation and commit owner.
+            let staged_request_context = [crate::message::types::MessageBlock::User(
+                crate::message::types::UserMessageBlock {
+                    id: crate::runtime::identity::MessageId::new(format!(
+                        "rustx-context-idle-{}-permission-reminder",
+                        ready.admission.operation_id,
+                    )),
+                    content: crate::context::assembly::permission_reminder_content(
+                        &crate::runtime::permission::permission_reminder_text(
+                            state.effective_approval_mode,
+                        ),
+                    ),
+                    source: crate::message::types::UserSource::Runtime,
+                    kind: crate::message::types::InboundKind::Context(
+                        crate::message::types::ContextKind::NativeEnvironment,
+                    ),
+                    timestamp: None,
+                },
+            )];
             if !matches!(state.conversation.hydrate(self.store.as_ref()), Ok(Some(_))) {
                 // A failed hydration leaves the durable head authoritative.
                 // Return this selected result to Ready after releasing the
@@ -587,6 +634,7 @@ impl RuntimeInner {
                 conversation,
                 context.with_runtime_resources(&resources),
                 request,
+                staged_request_context,
             )
         };
         let result = async {
@@ -608,7 +656,10 @@ impl RuntimeInner {
                 .materialize_selected_media(&mut request.messages, &history.input_manifest)
                 .map_err(CompactionExecutionError::Context)?;
             request.images = images;
-            let constraints = crate::context::engine::CompactionConstraints::default();
+            let constraints = crate::context::engine::CompactionConstraints {
+                staged_request_context: &staged_request_context,
+                ..crate::context::engine::CompactionConstraints::default()
+            };
             crate::context::compaction::activate_generated(
                 &ready.generated,
                 &mut conversation,
@@ -828,6 +879,10 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
             publication: Mutex::new(()),
             #[cfg(test)]
             ready_publication_gate: Mutex::new(None),
+            #[cfg(test)]
+            defer_settlement_gate: Mutex::new(None),
+            #[cfg(test)]
+            cancellation_request_gate: Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             join: Mutex::new(None),
             exit_announced: AtomicBool::new(false),
@@ -1259,9 +1314,11 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
         let work = inner.async_work(admission).ok_or_else(|| {
             ContextError::new(ContextErrorKind::Cancelled, "compaction no longer exists")
         })?;
-        let deferred = matches!(&outcome, CompactionDisposition::Defer(_))
-            && !work.admission.cancellation.is_cancelled();
-        {
+        let deferred = {
+            #[cfg(test)]
+            if matches!(&outcome, CompactionDisposition::Defer(_)) {
+                wait_for_arbitration_test_gate(&work.defer_settlement_gate);
+            }
             let mut state = work.state.lock().expect("asynchronous compaction state");
             let Phase::Installing(generated) = &state.phase else {
                 return Err(ContextError::new(
@@ -1270,6 +1327,11 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
                 ));
             };
             let generated = generated.clone();
+            // Cancellation can publish its owner flag before its token. Read
+            // both under the same lock that returns Installing work to Ready.
+            let deferred = matches!(&outcome, CompactionDisposition::Defer(_))
+                && !state.cancel_requested
+                && !work.admission.cancellation.is_cancelled();
             state.status.waiting_attempt_id = None;
             match outcome {
                 CompactionDisposition::Defer(diagnostic) if deferred => {
@@ -1313,7 +1375,8 @@ impl CompactionCoordinator for RuntimeCompactionCoordinator {
                     state.status.diagnostic = Some(error.chars().take(256).collect());
                 }
             }
-        }
+            deferred
+        };
         if let Err(error) = inner.publish_async_status(&work) {
             inner.fail_async_durability(&error);
             return Err(error);

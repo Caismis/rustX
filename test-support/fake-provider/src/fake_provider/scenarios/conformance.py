@@ -872,7 +872,11 @@ def image_tool_round_trip() -> Scenario:
                     body_excludes=("image/png", "image_url")),
              Stream(Text("text-safe delegation complete"), Finish("stop"))),
         Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL, no_direct_tools=True,
-                    body_contains=("retired-conversation", "artifact_1"),
+                    body_contains=("retired-conversation", "read the image", "Execution permission mode:"),
+                    body_excludes=("artifact_1", "call-image", "image/png", "image_url")),
+             Stream(Text(summary_json("Image ingress retained.")), Finish("stop"))),
+        Step(Expect(protocol=OPENAI_CHAT_COMPLETIONS, model=CHAT_MODEL, no_direct_tools=True,
+                    body_contains=("retired-conversation", "Image ingress retained.", "artifact_1", "call-image"),
                     body_excludes=("image/png", "image_url")),
              Stream(Text(summary_json("Image read and text-only delegation completed.")), Finish("stop"))),
     )

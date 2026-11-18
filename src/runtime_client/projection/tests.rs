@@ -924,7 +924,7 @@ fn post_tool_batch_status(
         turn,
         ContributionOpportunities {
             fresh_inbound: None,
-            post_tool_batch: Some(PostToolBatchOpportunity),
+            post_tool_batch: Some(PostToolBatchOpportunity {}),
         },
         Some(crate::durable::TranscriptCursor::new(batch_cursor)),
     )
@@ -1809,7 +1809,7 @@ fn agent_status_opportunity_view_publishes_one_combined_observation() {
             fresh_inbound: Some(FreshInboundOpportunity {
                 target_message_id: MessageId::new("fresh-inbound"),
             }),
-            post_tool_batch: Some(PostToolBatchOpportunity),
+            post_tool_batch: Some(PostToolBatchOpportunity {}),
         },
         post_tool_batch_anchor: Some(crate::durable::TranscriptCursor::new(6)),
         status: AgentStatus {
