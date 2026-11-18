@@ -36,6 +36,14 @@ counting, `agent::execution::attribution`) is compiled under
 `cfg(any(test, feature = "test-fixtures"))`, which the monolith enables only
 through its dev-dependency edge, so production builds never carry it.
 
+`rustx-types` also owns the continuation contract under `runtime`:
+`runtime::continuation` holds `ProviderContinuationState` (the provider
+boundary), `OpenAiResponsesContinuation`, `AnthropicContinuation` and
+`AcceptedOutputContinuationSource`. `from_accepted_output` takes the covered
+input's semantic fingerprint as a `String` rather than `&SelectedModelInput`,
+so the contract does not pull request selection back into the types crate;
+callers in the monolith pass `input.semantic_fingerprint()` explicitly.
+
 ## App Server environment services (#533)
 
 The v77 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).
