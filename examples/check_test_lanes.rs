@@ -195,6 +195,7 @@ fn main() {
     let report = check(
         &steps,
         &metadata.targets,
+        &metadata.members,
         host,
         &jobs,
         REQUIREMENTS,
@@ -370,9 +371,24 @@ struct Step {
     filters: Vec<String>,
     skips: Vec<String>,
     exact: bool,
+    /// `--workspace`: the step selects every member not in `member_excludes`.
+    workspace: bool,
+    /// Extracted (`rustx-*`) packages named by `-p` selectors.
+    member_packages: Vec<String>,
+    /// Packages dropped by `--exclude` selectors.
+    member_excludes: Vec<String>,
+    /// Target kinds the step selects for extracted packages; empty means the
+    /// command selects every non-doc kind (a bare `-p`/`--workspace` step).
+    member_kinds: BTreeSet<Kind>,
 }
 
 impl Step {
+    /// Whether the step runs tests of extracted workspace members rather
+    /// than the root package.
+    fn member_step(&self) -> bool {
+        !self.member_packages.is_empty()
+            || (self.workspace && self.member_excludes.iter().any(|name| name == "rustx"))
+    }
     fn label(&self) -> String {
         format!(
             "{} {} job `{}` step `{}`",
@@ -398,6 +414,10 @@ struct PackageMetadata {
     canonical_manifest: PathBuf,
     targets: Vec<Target>,
     sources: BTreeMap<Target, PathBuf>,
+    /// Extracted workspace members (`rustx-*`): name → their target kinds
+    /// (Doc excluded). A member target no lane selects fails the member
+    /// coverage check.
+    members: BTreeMap<String, BTreeSet<Kind>>,
 }
 
 fn emit_stderr(stderr: &str, emit: &mut dyn FnMut(&str)) {
@@ -441,6 +461,48 @@ fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, Strin
             .find(|package| package["name"].as_str() == Some("rustx"))
             .ok_or("cargo metadata has no rustx package")?
     };
+    let mut members = BTreeMap::new();
+    for member in packages.iter().filter(|package| {
+        package["name"].as_str().is_some_and(|name| name != "rustx")
+    }) {
+        let name = member["name"].as_str().ok_or("a package has no name")?;
+        let mut kinds = BTreeSet::new();
+        for target in member["targets"]
+            .as_array()
+            .ok_or("a member package has no target list")?
+        {
+            let target_kinds: Vec<&str> = target["kind"]
+                .as_array()
+                .ok_or("a member target has no kind")?
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect();
+            match target_kinds.as_slice() {
+                ["bin"] => {
+                    kinds.insert(Kind::Bin);
+                }
+                ["example"] => {
+                    kinds.insert(Kind::Example);
+                }
+                ["test"] => {
+                    kinds.insert(Kind::Test);
+                }
+                ["bench"] => {
+                    kinds.insert(Kind::Bench);
+                }
+                ["custom-build"] => {}
+                all_lib if all_lib.iter().all(|kind| kind.ends_with("lib"))
+                    && !all_lib.is_empty() =>
+                {
+                    kinds.insert(Kind::Lib);
+                }
+                other => {
+                    return Err(format!("member {name} target has unsupported kinds {other:?}"));
+                }
+            }
+        }
+        members.insert(name.to_owned(), kinds);
+    }
     let package_id = package["id"]
         .as_str()
         .filter(|id| !id.is_empty())
@@ -495,6 +557,7 @@ fn parse_metadata(metadata: &serde_json::Value) -> Result<PackageMetadata, Strin
         canonical_manifest,
         targets,
         sources,
+        members,
     })
 }
 
@@ -708,34 +771,16 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
         filters: Vec::new(),
         skips: Vec::new(),
         exact: false,
+        workspace: false,
+        member_packages: Vec::new(),
+        member_excludes: Vec::new(),
+        member_kinds: BTreeSet::new(),
         profile: Profile::Full,
         affected: false,
     };
     let (names_rustx, names_other) = parse_cargo_arguments(&mut step, cargo, targets)?;
     parse_libtest_arguments(&mut step, libtest)?;
-    if names_other && !names_rustx {
-        // The step exercises only extracted `rustx-*` packages.
-        if !step.targets.is_empty() {
-            // Its target selections would claim root-package coverage it
-            // does not run; reject rather than misread the command.
-            return Err(
-                "target selections alongside `-p` for other packages claim root coverage they do not run"
-                    .into(),
-            );
-        }
-        if !step.filters.is_empty() || !step.skips.is_empty() || step.exact {
-            // The lanes model only the root package's tests, so a filter or
-            // skip here is unverifiable and could silently run zero tests.
-            return Err(
-                "a `-p` step for other packages must not carry libtest selections the lanes cannot verify"
-                    .into(),
-            );
-        }
-        // It covers none of the root package's targets, so the lanes
-        // ignore it.
-        return Ok(step);
-    }
-    if names_other {
+    if names_other && names_rustx {
         // `rustx` and extracted packages selected together: per-package
         // feature and target resolution is not modeled, so reject instead
         // of silently dropping the other selectors.
@@ -743,6 +788,34 @@ fn parse_command(run: &str, targets: &[Target]) -> Result<Step, String> {
             "a `cargo test` step mixing `rustx` with other `-p` packages is not modeled by the lanes"
                 .into(),
         );
+    }
+    if names_rustx && step.member_excludes.iter().any(|name| name == "rustx") {
+        return Err("a `cargo test` step cannot both select and exclude `rustx`".into());
+    }
+    if step.member_step() {
+        // The step exercises extracted `rustx-*` packages, not the root.
+        if !step.filters.is_empty() || !step.skips.is_empty() || step.exact {
+            // The lanes model only the root package's tests, so a filter or
+            // skip here is unverifiable and could silently run zero tests.
+            return Err(
+                "a member-package step must not carry libtest selections the lanes cannot verify"
+                    .into(),
+            );
+        }
+        // Kind selectors (`--lib` &c) resolved against the root package's
+        // targets; they name kinds the member packages share, not root
+        // coverage. Move them so the root lanes never claim them.
+        if step.targets.is_empty() {
+            // A bare `-p`/`--workspace --exclude rustx` step selects every
+            // non-doc kind each member has.
+            step.member_kinds
+                .extend([Kind::Lib, Kind::Bin, Kind::Example, Kind::Test, Kind::Bench]);
+        } else {
+            step.member_kinds
+                .extend(step.targets.iter().map(|target| target.kind));
+            step.targets.clear();
+        }
+        return Ok(step);
     }
     if step.targets.is_empty() {
         return Err("a cargo test step must select its targets explicitly".into());
@@ -788,8 +861,18 @@ fn parse_cargo_arguments(
             // `--workspace` selects every member crate; it is forwarded
             // verbatim like a feature flag so doctest discovery covers the
             // extracted `rustx-*` crates too.
-            "--all-features" | "--no-default-features" | "--workspace" => {
+            "--workspace" => {
+                step.workspace = true;
                 step.features.push((*argument).into());
+            }
+            "--all-features" | "--no-default-features" => {
+                step.features.push((*argument).into());
+            }
+            "--exclude" => {
+                let name = cargo
+                    .next()
+                    .ok_or(format!("{argument} requires a package name"))?;
+                step.member_excludes.push((*name).into());
             }
             "--features" | "-F" => {
                 let features = cargo
@@ -806,6 +889,7 @@ fn parse_cargo_arguments(
                     names_rustx = true;
                 } else {
                     names_other = true;
+                    step.member_packages.push((*name).into());
                 }
             }
             "--no-run" => step.executes = false,
@@ -1352,6 +1436,7 @@ struct Report {
 fn check(
     steps: &[Step],
     targets: &[Target],
+    members: &BTreeMap<String, BTreeSet<Kind>>,
     host: Platform,
     jobs: &[String],
     requirements: &[Requirement],
@@ -1393,6 +1478,43 @@ fn check(
                     report.findings.push(format!(
                         "required suite {} is selected by no executing cargo test step",
                         requirement.describe()
+                    ));
+                }
+            }
+        }
+    }
+    // Extracted member coverage: on every platform where the workflow runs
+    // cargo test at all, each workspace member's targets must be selected by
+    // an executing member step. A new crate no lane selects fails closed.
+    for step in &executing {
+        for name in &step.member_packages {
+            if !members.contains_key(name) {
+                report.findings.push(format!(
+                    "{} names workspace member `{name}` that cargo metadata does not list",
+                    step.label()
+                ));
+            }
+        }
+    }
+    let test_platforms: BTreeSet<Platform> =
+        executing.iter().map(|step| step.platform).collect();
+    for (member, kinds) in members {
+        for platform in &test_platforms {
+            let covered: BTreeSet<Kind> = executing
+                .iter()
+                .filter(|step| step.platform == *platform && step.member_step())
+                .filter(|step| {
+                    step.member_packages.iter().any(|name| name == member)
+                        || (step.workspace
+                            && !step.member_excludes.iter().any(|name| name == member))
+                })
+                .flat_map(|step| step.member_kinds.iter().copied())
+                .collect();
+            for kind in kinds {
+                if !covered.contains(kind) {
+                    report.findings.push(format!(
+                        "workspace member `{member}` {kind:?} tests are selected by no executing \
+                         member step on {platform}; assign them to a lane"
                     ));
                 }
             }
@@ -1747,7 +1869,7 @@ jobs:
 
     fn run(workflow: &str, host: Platform, fake: &Fake) -> Vec<String> {
         let steps = parse_workflow(workflow, &targets()).unwrap();
-        check(&steps, &targets(), host, &[], MACOS, fake).findings
+        check(&steps, &targets(), &BTreeMap::new(), host, &[], MACOS, fake).findings
     }
 
     fn findings_containing(findings: &[String], needle: &str) -> usize {
@@ -1808,7 +1930,16 @@ jobs:
         let mut targets = targets();
         targets.push(Target::new(Kind::Test, "fresh"));
         let steps = parse_workflow(WORKFLOW, &targets).unwrap();
-        let findings = check(&steps, &targets, Platform::Linux, &[], MACOS, &inventory()).findings;
+        let findings = check(
+            &steps,
+            &targets,
+            &BTreeMap::new(),
+            Platform::Linux,
+            &[],
+            MACOS,
+            &inventory(),
+        )
+        .findings;
         assert_eq!(
             findings,
             [
@@ -1974,11 +2105,106 @@ jobs:
     }
 
     #[test]
+    fn an_unassigned_workspace_member_target_fails() {
+        const MEMBER_WORKFLOW: &str = r"
+jobs:
+  linux-lane:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['linux-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+  macos-lane:
+    runs-on: macos-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['macos-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+";
+        let members = BTreeMap::from([(
+            "rustx-foo".to_owned(),
+            BTreeSet::from([Kind::Lib, Kind::Test]),
+        )]);
+        let steps = parse_workflow(MEMBER_WORKFLOW, &targets()).unwrap();
+        let findings = check(
+            &steps,
+            &targets(),
+            &members,
+            Platform::Linux,
+            &[],
+            MACOS,
+            &inventory(),
+        )
+        .findings;
+        // `--lib` selects the member's lib on both platforms but never its
+        // integration target.
+        assert!(!findings.iter().any(|finding| {
+            finding.contains("workspace member `rustx-foo` Lib")
+        }));
+        assert_eq!(
+            findings
+                .iter()
+                .filter(|finding| {
+                    finding.contains("workspace member `rustx-foo` Test tests are selected")
+                })
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn a_workspace_step_excluding_rustx_covers_members() {
+        const MEMBER_WORKFLOW: &str = r"
+jobs:
+  linux-lane:
+    runs-on: ubuntu-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['linux-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+  macos-lane:
+    runs-on: macos-latest
+    needs: plan
+    if: fromJSON(needs.plan.outputs.run)['macos-lane']
+    env:
+      VERIFICATION_PROFILE: full
+    steps:
+      - name: Members
+        run: cargo test --workspace --exclude rustx --lib --all-features --locked
+";
+        let members = BTreeMap::from([("rustx-foo".to_owned(), BTreeSet::from([Kind::Lib]))]);
+        let steps = parse_workflow(MEMBER_WORKFLOW, &targets()).unwrap();
+        let findings = check(
+            &steps,
+            &targets(),
+            &members,
+            Platform::Linux,
+            &[],
+            MACOS,
+            &inventory(),
+        )
+        .findings;
+        assert!(!findings.iter().any(|finding| {
+            finding.contains("workspace member `rustx-foo`")
+        }));
+    }
+
+    #[test]
     fn a_job_is_checked_only_on_its_native_platform() {
         let steps = parse_workflow(WORKFLOW, &targets()).unwrap();
         let findings = check(
             &steps,
             &targets(),
+            &BTreeMap::new(),
             Platform::Linux,
             &["platform".into()],
             MACOS,
