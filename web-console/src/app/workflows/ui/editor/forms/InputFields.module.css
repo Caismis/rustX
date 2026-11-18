@@ -61,6 +61,12 @@
      display: inline-flex;
   }
 }
+@media (hover: none) {
+  /* No pointer hover and no durable focus after the edit dialog closes on
+     touch: keep the actions (and not the type they replace) always visible. */
+  .rowActions { display: inline-flex; }
+  .type { display: none; }
+}
 .row:focus-within .type { display: none; }
 @media (hover: hover) {
   .row:hover .type {

@@ -161,7 +161,7 @@
 .chooserOption { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 32px; padding: 3px 8px; border: 0; border-radius: var(--dsw-radius-sm); background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12.5px; text-align: left; cursor: pointer; }
 .chooserActive { background: var(--dsw-alias-interactive-bg-hover); }
 .chooserLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chooserIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: var(--dsw-radius-xs); background: var(--node-kind-color, var(--dsw-alias-label-tertiary)); color: var(--dsw-alias-label-primary-inverted); }
+.chooserIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 21px; height: 21px; border-radius: var(--dsw-radius-xs); background: var(--node-kind-color, var(--dsw-static-neutral-bluish-700)); color: var(--dsw-static-neutral-bluish-00); }
 .chooserEmpty { margin: 18px 8px; color: var(--dsw-alias-label-tertiary); font-size: 12px; }
 .chooserPreview { position: absolute; left: calc(100% + 12px); z-index: 1; width: 220px; box-sizing: border-box; padding: 12px 14px; border: 0; border-radius: var(--dsw-radius-md); background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); pointer-events: none; }
 .chooserPreviewLeft { right: calc(100% + 12px); left: auto; }
@@ -175,7 +175,7 @@
 .nextHint { margin: 1px 0 11px; color: var(--dsw-alias-label-tertiary); font-size: 11.5px; line-height: 16px; }
 .nextFlow { display: flex; align-items: flex-start; min-width: 0; }
 .nextSource { display: flex; flex: none; align-items: center; justify-content: center; width: 34px; height: 34px; box-sizing: border-box; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-1); }
-.nextSource svg { padding: 2px; border-radius: var(--dsw-radius-xs); background: var(--node-kind-color); color: var(--dsw-alias-label-primary-inverted); }
+.nextSource svg { padding: 2px; border-radius: var(--dsw-radius-xs); background: var(--node-kind-color); color: var(--dsw-static-neutral-bluish-00); }
 .nextLine { flex: none; overflow: visible; }
 .nextLine path { fill: none; stroke: var(--dsw-alias-border-l2); stroke-width: 1; }
 .nextLine rect { fill: var(--dsw-alias-label-tertiary); }
@@ -185,7 +185,7 @@
 .nextConnected { display: flex; align-items: center; gap: 2px; min-height: 34px; margin-bottom: 2px; padding: 0 4px 0 1px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-sm); background: var(--dsw-alias-bg-layer-1); }
 .nextTarget { display: flex; flex: 1; min-width: 0; align-items: center; gap: 7px; height: 33px; padding: 0 6px; border: 0; background: none; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
 .nextTarget > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.nextTargetIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-xs); background: var(--node-kind-color, var(--dsw-alias-label-tertiary)); color: var(--dsw-alias-label-primary-inverted); }
+.nextTargetIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-xs); background: var(--node-kind-color, var(--dsw-static-neutral-bluish-700)); color: var(--dsw-static-neutral-bluish-00); }
 .nextRemove { display: flex; flex: none; align-items: center; justify-content: center; width: 24px; height: 24px; border: 0; border-radius: var(--dsw-radius-xs); background: none; color: var(--dsw-alias-label-tertiary); cursor: pointer; }
 .nextRemove:focus-visible, .nextTarget:focus-visible { background: var(--dsw-alias-interactive-bg-hover); }
 @media (hover: hover) {
@@ -231,8 +231,8 @@
   width: 30px;
   height: 30px;
   border-radius: var(--dsw-radius-sm);
-  background: var(--node-kind-color, color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent));
-  color: var(--dsw-alias-label-primary-inverted);
+  background: var(--node-kind-color, var(--dsw-static-neutral-bluish-700));
+  color: var(--dsw-static-neutral-bluish-00);
 }
 .kind_agent { --node-kind-color: #7964ec; }
 .kind_model { --node-kind-color: #6554e8; }
@@ -647,14 +647,10 @@ name. */
 .branchNextFlow .nextPort { padding: 6px 6px 6px 10px; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover-solid); }
 .branchNextFlow .nextPortLabel { margin: 0 0 4px; font-size: 10px; }
 .branchVariablePopup { z-index: 100; width: 328px; max-width: calc(100vw - 24px); max-height: min(380px, calc(100vh - 24px)); box-sizing: border-box; background: var(--dsw-specific-menu); box-shadow: var(--dsw-elevation-prominent); }
-.branchVariablePopup .variableGroup legend code { display: none;
-  box-shadow: var(--dsw-elevation-prominent);}
-.branchVariablePopup .variableChoice > span { display: flex; align-items: center; gap: 8px;
-  box-shadow: var(--dsw-elevation-prominent);}
-.branchVariablePopup .variableChoice > span::before { content: '{x}'; color: var(--dsw-alias-state-business-primary); font-family: var(--ds-font-family-code);
-  box-shadow: var(--dsw-elevation-prominent);}
-.branchVariablePopup .variableChoice code { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-size: 10px;
-  box-shadow: var(--dsw-elevation-prominent);}
+.branchVariablePopup .variableGroup legend code { display: none; }
+.branchVariablePopup .variableChoice > span { display: flex; align-items: center; gap: 8px; }
+.branchVariablePopup .variableChoice > span::before { content: '{x}'; color: var(--dsw-alias-state-business-primary); font-family: var(--ds-font-family-code); }
+.branchVariablePopup .variableChoice code { margin-left: auto; color: var(--dsw-alias-label-tertiary); font-size: 10px; }
 /* Dify's LLM panel: the model trigger and its parameter popup, prompt
    message cards, and the structured-output switch. */
 .required { margin: 0 auto 0 3px; color: var(--dsw-alias-state-error-primary); }
@@ -667,7 +663,7 @@ name. */
 }
 .modelTrigger:focus-visible { outline: 2px solid var(--dsw-alias-state-business-primary); outline-offset: 1px; }
 .modelTrigger[aria-invalid='true'] { box-shadow: inset 0 0 0 1px var(--dsw-alias-state-warn-primary); }
-.modelTriggerIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-xs); background: var(--node-kind-color, color-mix(in srgb, var(--dsw-alias-state-business-primary) 8%, transparent)); color: var(--dsw-alias-label-primary-inverted); }
+.modelTriggerIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-xs); background: var(--node-kind-color, var(--dsw-static-neutral-bluish-700)); color: var(--dsw-static-neutral-bluish-00); }
 .modelTriggerName { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .modelTriggerBadge { flex: none; max-width: 30%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0 5px; border: 0.5px solid var(--dsw-alias-border-l2); border-radius: var(--dsw-radius-xs); color: var(--dsw-alias-label-secondary); font-size: 10px; line-height: 16px; text-transform: uppercase; }
 .modelTriggerSettings { display: flex; flex: none; align-items: center; justify-content: center; width: 28px; height: 28px; margin-left: auto; border-left: 0.5px solid var(--dsw-alias-border-l2); color: var(--dsw-alias-label-secondary); }
@@ -915,7 +911,7 @@ name. */
 .checklistItems { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .checklistNode { overflow: hidden; border-radius: var(--dsw-radius-md); background: var(--dsw-alias-interactive-bg-hover); }
 .checklistNodeHead { display: flex; align-items: center; gap: 8px; padding: 8px 8px 0; }
-.checklistIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-sm); background: var(--node-kind-color, var(--dsw-alias-state-business-primary)); color: var(--dsw-alias-label-primary-inverted); }
+.checklistIcon { display: flex; flex: none; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: var(--dsw-radius-sm); background: var(--node-kind-color, var(--dsw-static-neutral-bluish-700)); color: var(--dsw-static-neutral-bluish-00); }
 .checklistNodeTitle { min-width: 0; overflow: hidden; font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .checklistMessage { display: flex; align-items: center; gap: 8px; width: calc(100% - 8px); margin: 4px; padding: 0 4px; border: 0; border-radius: var(--dsw-radius-sm); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 @media (hover: hover) {

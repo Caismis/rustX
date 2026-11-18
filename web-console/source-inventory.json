@@ -5829,7 +5829,7 @@
         "Harness Cordis runtime, slots and resource transport"
       ],
       "retained_dependencies": [],
-      "local_sha256": "5a546a0c90a89f8c55485afdab327b86ed9d718f5abe5b4d4510241fa44603b2"
+      "local_sha256": "94ac2c0d99cd0be05236453321b8a616756c5dec92da3586a1f66fba4296086e"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/zoom/ZoomControls.tsx",
