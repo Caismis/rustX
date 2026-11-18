@@ -202,20 +202,44 @@ Agent tool selection and runtime permissions determine which tools are available
 The obsolete `capabilities.tool_calls` field and `rustx init --tool-calls` flag are
 not accepted; remove them from existing configuration and launch commands.
 No `compat` declaration is required, including with `rustx init`. Like ZCode's
-OpenAI-compatible path, Chat Completions defaults to `max_completion_tokens`,
+site rules, built-in defaults match the actual protocol and endpoint, not the
+user's provider name. DeepSeek, GLM, Kimi and DashScope Chat endpoints use
+`max_tokens`; other Chat endpoints default to `max_completion_tokens`,
 `stream_options.include_usage = true`, native `tool_calls`, and replay of exposed
 assistant thinking through `reasoning_content`. The Chat response parser accepts
 either `reasoning_content` or `reasoning`; replay concatenates plaintext thinking blocks
 in order and skips opaque blocks that have no Chat representation. These rules
 do not enable thinking or synthesize reasoning request parameters. Profiles
 continue to own the exact provider parameters that control generation.
+Explicit compat overrides take precedence and all effective defaults are frozen
+with the invocation. Unknown or self-hosted endpoints keep protocol defaults.
+
+Chat assistant text and tool results use string content. Tool-result images
+are projected into user messages after the complete consecutive tool-result
+group, keeping the original image order. Responses function tools explicitly
+use `strict: false` so the provider cannot silently change optional parameters
+or open objects in the authored schema.
+The compiled invocation envelope keeps single-use business schemas inline;
+only shared or recursive references retain root `$defs`. This preserves
+free-form JSON metadata without introducing unnecessary reference boundaries
+that MFJS services can reject. Canonical business validation is unchanged.
+
+Anthropic endpoints accept either an API root or a root ending in `/v1`, and
+send both `x-api-key` and Bearer authentication for compatible services. Native
+thinking units retain their exact empty, absent, or nonempty signature; streaming
+signature fragments are concatenated. Missing native replay state remains an
+error. DeepSeek Responses endpoints default to stateless continuation, preserving
+their original plaintext reasoning items alongside the rest of the output.
+For any Responses endpoint, a provider response reporting `store: false` takes
+precedence over requested retention: subsequent requests replay the validated
+native output and full input history instead of using a nonexistent stored id.
 
 Switching from Chat Completions back to Responses keeps the conversation's
 answers and tool calls/results. Readable reasoning without a native Responses
 replay unit is sent as ordinary assistant history (`output_text`), following
 pi's cross-model conversion. Foreign opaque state and inactive stored-response
 pointers are not sent. Complete stateless Responses output, including encrypted
-reasoning, remains a validated native replay unit. These wire conversions
+or plaintext reasoning, remains a validated native replay unit. These wire conversions
 never rewrite the saved conversation.
 
 History can switch in either direction among Chat Completions, Responses and
@@ -255,7 +279,8 @@ is an explicit failure and never triggers an extra prompt-mode request.
 
 Optional `compat` declares the adapter behavior: `chat_max_tokens_field`,
 `chat_stream_usage`, `chat_reasoning_replay`, `chat_tool_protocol`, and
-`responses_storage` (Responses defaults to `stored`). Explicit overrides win
+`responses_storage` (Responses defaults to `stored`, with `stateless` for
+official DeepSeek endpoints). Explicit overrides win
 over built-in rules. The Provider editor exposes its shared API format. The
 Model dialog exposes limits, capabilities, profiles and request parameters;
 compatibility overrides belong to source configuration. When changing a

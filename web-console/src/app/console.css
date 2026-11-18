@@ -1,3 +1,6 @@
+/* Leaving Home collapses its columns. Animating that grid moves the
+   destination page's tabs under a click aimed at them. Snap the tracks. */
+[data-harness-frame][data-primary-page="page"] { transition: none; }
 body {
   --dsh-composer-side-clearance: 18px; --dsh-chat-content-width: 820px; --dsh-composer-card-max-width: 852px;
   --dsh-composer-text-max-height: 280px; }

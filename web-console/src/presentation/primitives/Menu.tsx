@@ -48,6 +48,18 @@ function isLabel(entry: MenuEntry): entry is MenuLabel {
   return 'type' in entry && entry.type === 'label'
 }
 
+/** Whether this pointerup is still on the pressed row.
+ * A laid-out row uses the release point: touch implicitly captures the row,
+ * so `event.target` stays the row even when the finger has left it. A row
+ * with no box (jsdom) uses the event target. */
+function releasedOnRow(event: PointerEvent, row: HTMLElement): boolean {
+  const box = row.getBoundingClientRect()
+  if (box.width > 0 || box.height > 0) {
+    return event.clientX >= box.left && event.clientX <= box.right && event.clientY >= box.top && event.clientY <= box.bottom
+  }
+  return event.target instanceof Node && row.contains(event.target)
+}
+
 /** Distance a floating menu surface keeps from the viewport edges. */
 const VIEWPORT_MARGIN = 12
 
@@ -273,6 +285,24 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
    * card has focused its first enabled row.
    */
   const [submenu, setSubmenu] = useState<{ id: string; entering: boolean } | null>(null)
+  // A primary press on one of this menu's own rows. Idle renders follow `items`.
+  // The snapshot exists only so a refresh cannot replace that row before its click.
+  const pressRef = useRef<{ pointerId: number; id: string; row: HTMLButtonElement; onSelect: (id: string) => void } | null>(null)
+  // Touch implicitly captures the pressed row, so a finger released outside
+  // still delivers pointerup and may synthesize click on that row. The flag
+  // is only that following click; the next press clears it.
+  const releasedOutside = useRef(false)
+  const [heldItems, setHeldItems] = useState<readonly MenuEntry[] | null>(null)
+  const releasePress = () => {
+    pressRef.current = null
+    setHeldItems(null)
+  }
+  useEffect(() => {
+    if (open) return
+    pressRef.current = null
+    releasedOutside.current = false
+    setHeldItems(null)
+  }, [open])
   /** The open submenu's card, while it is mounted. */
   const submenuRef = useRef<HTMLDivElement | null>(null)
   /**
@@ -546,11 +576,22 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
     const onWindowBlur = () => {
       if (!anchorHiddenRef.current && document.activeElement instanceof HTMLIFrameElement) onClose()
     }
+    const endPress = (event: PointerEvent) => {
+      const press = pressRef.current
+      if (!press || event.pointerId !== press.pointerId) return
+      if (event.type !== 'pointercancel' && releasedOnRow(event, press.row)) return
+      if (event.type !== 'pointercancel') releasedOutside.current = true
+      releasePress()
+    }
     document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('pointerup', endPress)
+    document.addEventListener('pointercancel', endPress)
     document.addEventListener('keydown', onKeyDown, true)
     window.addEventListener('blur', onWindowBlur)
     return () => {
       document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('pointerup', endPress)
+      document.removeEventListener('pointercancel', endPress)
       document.removeEventListener('keydown', onKeyDown, true)
       window.removeEventListener('blur', onWindowBlur)
     }
@@ -606,6 +647,12 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
           data-menu-item-id={entry.id}
           className={clsx(css.item, selected && (selection === 'fill' ? css.selectedFill : css.selected), entry.danger === true && css.danger)}
           disabled={entry.disabled}
+          onPointerDown={(event) => {
+            if (hasSub || event.button !== 0 || event.isPrimary === false || entry.disabled) return
+            releasedOutside.current = false
+            pressRef.current = { pointerId: event.pointerId, id: entry.id, row: event.currentTarget, onSelect }
+            setHeldItems(items)
+          }}
           // The selection marker is also announced: a row shown as selected is
           // the current one, never a visual-only state.
           aria-current={selected ? 'true' : undefined}
@@ -618,6 +665,9 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
           onFocus={(e) => { if (!(e.relatedTarget instanceof Node && submenuRef.current?.contains(e.relatedTarget) === true)) showSubmenu(hasSub ? entry.id : null) }}
           onClick={(e) => {
             if (hasSub) {
+              // A parent row opens its submenu. It is not a selection, and a
+              // press started on it must not keep the opened rows.
+              releasePress()
               // A keyboard activation (Enter, Space, Tab, ArrowRight: no
               // pointer detail) also moves the keyboard into the submenu.
               if (e.detail === 0) {
@@ -631,7 +681,13 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
               showSubmenu(entry.id)
               return
             }
-            onSelect(entry.id)
+            if (releasedOutside.current && e.detail !== 0) {
+              releasedOutside.current = false
+              return
+            }
+            const press = pressRef.current
+            releasePress()
+            ;(press?.id === entry.id ? press.onSelect : onSelect)(entry.id)
             refocusAfterSelection()
           }}
         >
@@ -665,7 +721,7 @@ export function Menu({ open: requestedOpen, anchor, items, selectedId, selectedI
       onClick={(e) => { e.stopPropagation() }}
     >
       <div className={css.viewport} role="presentation">
-        {items.map(renderEntry)}
+        {(heldItems ?? items).map(renderEntry)}
       </div>
       {footer !== undefined && footer.length > 0 && (
         <div className={css.footer} role="presentation">

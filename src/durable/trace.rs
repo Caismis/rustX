@@ -40,6 +40,7 @@ pub enum TraceFactKind {
     InteractionRequested,
     InteractionSettled,
     ConfigurationApplied,
+    ToolCallRequested,
 }
 #[derive(Debug, Clone)]
 pub enum TraceFactScope {
@@ -146,6 +147,11 @@ pub enum TraceFactData {
         ledger_position: u64,
     },
     Terminal(TraceTerminalHeader),
+    ToolRequest {
+        occurrence: Option<crate::events::types::ToolObservationOccurrence>,
+        call_id: Option<crate::runtime::identity::ToolCallId>,
+        tool_id: Option<crate::runtime::identity::ToolId>,
+    },
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TraceAdoptionClass {

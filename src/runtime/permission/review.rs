@@ -130,6 +130,9 @@ pub fn accept_permission_review(text: &str) -> Result<PermissionReviewVerdict, &
     }
     let answer: ReviewAnswer =
         serde_json::from_str(trimmed).map_err(|_| "permission review returned invalid JSON")?;
+    if answer.explanation.trim().is_empty() {
+        return Err("permission review requires a nonblank explanation");
+    }
     let explanation = bound_explanation(&answer.explanation);
     match answer.decision.as_str() {
         "allow" => Ok(PermissionReviewVerdict::Allow { explanation }),
@@ -158,7 +161,7 @@ fn truncate_utf8(text: &str, max_bytes: usize) -> String {
     format!("{}…", &text[..end])
 }
 
-fn review_schema() -> ResponseSchema {
+fn review_schema() -> Result<ResponseSchema, crate::model::ModelError> {
     ResponseSchema::new(
         "permission_review".into(),
         serde_json::json!({
@@ -172,14 +175,12 @@ fn review_schema() -> ResponseSchema {
                 },
                 "explanation": {
                     "type": "string",
-                    "minLength": 1,
-                    "maxLength": 512
+                    "description": "A nonblank explanation of the decision, at most 512 bytes."
                 }
             }
         }),
         2048,
     )
-    .expect("static permission review schema")
 }
 
 /// Maximum serialized business-argument bytes the reviewer may inspect.
@@ -304,7 +305,15 @@ async fn review_with_auxiliary(
         Ok(prompt) => prompt,
         Err(explanation) => return PermissionReviewVerdict::Failed { explanation },
     };
-    let request = match AuxiliaryOutputFormat::JsonSchema(review_schema()).prepare(ModelRequest {
+    let schema = match review_schema() {
+        Ok(schema) => schema,
+        Err(error) => {
+            return PermissionReviewVerdict::Failed {
+                explanation: format!("permission review schema invalid: {error:?}"),
+            };
+        }
+    };
+    let request = match AuxiliaryOutputFormat::JsonSchema(schema).prepare(ModelRequest {
         response_schema: None,
         response_byte_limit: Some(crate::model::adapter::response_budget::AUXILIARY_RESPONSE_BYTES),
         images: crate::model::images::ResolvedImages::new(),
@@ -536,6 +545,7 @@ mod tests {
     fn reject_prose_and_unknown_decision() {
         assert!(accept_permission_review("allow it").is_err());
         assert!(accept_permission_review(r#"{"decision":"maybe","explanation":"x"}"#).is_err());
+        assert!(accept_permission_review(r#"{"decision":"allow","explanation":"  "}"#).is_err());
     }
 
     #[test]

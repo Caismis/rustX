@@ -500,7 +500,10 @@ fn pending_trace_total(
     event: &RuntimeEventEnvelope,
     pending: &super::append_facts::PendingEvent<'_>,
 ) -> Result<Option<u64>, ConversationStoreError> {
-    if super::observation_statistics::is_trace_anchor(&event.event) {
+    if pending.statistics.map_or_else(
+        || super::observation_statistics::is_trace_anchor(&event.event),
+        |statistics| statistics.trace_anchor,
+    ) {
         Ok(pending
             .statistics
             .and_then(|statistics| statistics.trace_total))
@@ -965,7 +968,11 @@ fn identity_fields(
             value["outcome"] =
                 serde_json::to_value(outcome).map_err(|error| storage(error.to_string()))?;
         }
-        Event::ToolExecutionStarted {
+        Event::ToolCallRequested {
+            tool_call_id,
+            tool_id,
+        }
+        | Event::ToolExecutionStarted {
             tool_call_id,
             tool_id,
         }

@@ -2,6 +2,7 @@ use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
+use crate::scripted_suites::support::audit::assert_permission_reminder;
 mod compaction_head_tests;
 mod delivery_tests;
 mod initial_cut_tests;
@@ -891,6 +892,17 @@ fn append_durable_history(
             ),
         )
         .expect("assistant commit");
+    store
+        .append_event(durable_event(
+            conversation_id,
+            "child-tool-requested",
+            &attempt_id,
+            RuntimeEvent::ToolCallRequested {
+                tool_call_id: call.id.clone(),
+                tool_id: call.tool_id.clone(),
+            },
+        ))
+        .expect("tool request");
     store
         .append_event(durable_event(
             conversation_id,
@@ -2825,9 +2837,14 @@ async fn submit_when_idle_admits_and_runs_the_attempt() {
     let (snapshot, _) = checkpoint_state(&fixture.host);
     assert_eq!(
         snapshot.messages.len(),
-        3,
-        "user message + admitted Agent Status + Assistant message"
+        4,
+        "user message + Agent Status + permission reminder + Assistant message"
     );
+    let reminder = assert_permission_reminder(&snapshot.messages);
+    assert!(requests[0].messages.iter().any(|message| {
+        matches!(message, crate::model::ModelInputMessage::Canonical(MessageBlock::User(user))
+            if user.id == reminder.id)
+    }));
     assert!(matches!(
         snapshot.attempt.expect("attempt view").phase,
         RuntimeClientAttemptPhase::Settled { .. }
@@ -4039,9 +4056,10 @@ async fn canonical_history_has_one_owner_at_a_time() {
         .expect("snapshot");
     assert_eq!(
         mirror.messages.len(),
-        3,
+        4,
         "the projection mirrors the attempt's committed history"
     );
+    let reminder_id = assert_permission_reminder(&mirror.messages).id.clone();
     assert!(fixture.host.has_current_attempt());
 
     // An inbound message arriving now stays mailbox-owned: the runtime
@@ -4139,6 +4157,10 @@ async fn canonical_history_has_one_owner_at_a_time() {
             MessageBlock::Tool(_) => "tool",
         })
         .collect();
+    assert_eq!(
+        assert_permission_reminder(&final_snapshot.messages).id,
+        reminder_id
+    );
     assert_eq!(
         roles,
         vec![

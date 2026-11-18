@@ -102,9 +102,9 @@ fn report(tool: bool, phases: &BTreeMap<(&'static str, String), PhaseWork>) {
 /// Set `RUSTX_TURN_WORK` to print the per-phase, per-statement breakdown.
 #[test]
 fn warmed_turn_write_work_is_fixed() {
-    // Schema 114 includes exact adoption provenance in the recovery frontier
-    // and Workflow agent-node indexing. Keep the integrated statement/page
-    // baseline exact rather than hiding these costs behind a tolerance.
+    // Include the bounded occurrence seeks that distinguish a requested tool
+    // from actual execution, alongside adoption and Workflow indexing. Keep
+    // the integrated baseline exact rather than using a tolerance.
     let expected = [
         TurnWork {
             calls: 622,
@@ -115,9 +115,9 @@ fn warmed_turn_write_work_is_fixed() {
             event_index_entries: 58,
         },
         TurnWork {
-            calls: 1393,
+            calls: 1397,
             prepares: 38,
-            steps: 45_410,
+            steps: 45_612,
             commits: 13,
             wal_frames: 555,
             event_index_entries: 112,

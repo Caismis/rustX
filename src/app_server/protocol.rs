@@ -1459,6 +1459,9 @@ pub enum ErrorData {
         expected: String,
         actual: String,
     },
+    ResourceTransferRejected {
+        reason: crate::local_runtime::configuration::settings::TransferRejection,
+    },
     StaleSettings {
         expected: u64,
         actual: u64,

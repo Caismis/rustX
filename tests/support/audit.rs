@@ -11,8 +11,41 @@
 //! - exact recorded traces ([`assert_trace`]).
 
 use rustx::events::types::{AttemptOutcome, RuntimeEvent};
+use rustx::message::types::{
+    ContextKind, InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
+};
 
 use crate::scripted_suites::common::DurableExecutionAudit;
+
+/// One permission reminder is an admitted Runtime User fact in canonical history.
+pub(crate) fn assert_permission_reminder(messages: &[MessageBlock]) -> &UserMessageBlock {
+    let reminders = messages
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::User(user)
+                if user.content.iter().any(|block| {
+                    matches!(block, UserContentBlock::Text(text)
+                if text.text.starts_with("<system-reminder>\nExecution permission mode:"))
+                }) =>
+            {
+                Some(user)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(reminders.len(), 1, "one canonical permission reminder");
+    let reminder = reminders[0];
+    assert_eq!(reminder.source, UserSource::Runtime);
+    assert_eq!(
+        reminder.kind,
+        InboundKind::Context(ContextKind::NativeEnvironment)
+    );
+    let [UserContentBlock::Text(text)] = reminder.content.as_slice() else {
+        panic!("the permission reminder is one native text block");
+    };
+    assert!(text.text.ends_with("\n</system-reminder>"));
+    reminder
+}
 
 /// The terminal events of an attempt.
 pub(crate) fn terminal_events(events: &[RuntimeEvent]) -> Vec<&RuntimeEvent> {

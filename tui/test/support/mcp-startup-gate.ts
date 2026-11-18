@@ -114,14 +114,18 @@ export async function mcpStartupGate(workspace: string, signal: AbortSignal, too
   };
 }
 
-/** Exact model-facing envelope; the MCP business schema keeps its own resource. */
+/** Exact model-facing envelope; single-use MCP business schemas remain inline. */
 export const startupToolSchema = {
   $id: 'urn:rustx:invocation',
-  $schema: 'http://json-schema.org/draft-07/schema#',
+  $schema: 'https://json-schema.org/draft/2020-12/schema',
   type: 'object',
   additionalProperties: false,
   properties: {
-    arguments: { $ref: 'json-schema:///' },
+    arguments: {
+      type: 'object',
+      properties: { message: { type: 'string' } },
+      required: ['message'],
+    },
     elevation_reason: {
       type: ['string', 'null'],
       maxLength: 512,
@@ -130,23 +134,4 @@ export const startupToolSchema = {
     },
   },
   required: ['arguments'],
-  definitions: {
-    'json-schema:///': {
-      $id: 'json-schema:///',
-      $schema: 'https://json-schema.org/draft/2020-12/schema',
-      allOf: [{ $ref: 'json-schema:///#/definitions/schema0' }],
-      definitions: {
-        schema0: { allOf: [{ $ref: 'json-schema:///#/x-rustx-schema-nodes/schema0' }] },
-        schema1: { allOf: [{ $ref: 'json-schema:///#/x-rustx-schema-nodes/schema1' }] },
-      },
-      'x-rustx-schema-nodes': {
-        schema0: {
-          type: 'object',
-          properties: { message: { $ref: 'json-schema:///#/definitions/schema1' } },
-          required: ['message'],
-        },
-        schema1: { type: 'string' },
-      },
-    },
-  },
 };

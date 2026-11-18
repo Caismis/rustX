@@ -339,7 +339,7 @@
         },
         {
           "const": "max_tokens",
-          "description": "The legacy `max_tokens` field.",
+          "description": "The `max_tokens` field used by `DeepSeek`, GLM, Kimi and Qwen APIs.",
           "type": "string"
         }
       ]
@@ -835,11 +835,11 @@
       "type": "string"
     },
     "ResponsesStorageMode": {
-      "description": "How the `OpenAI` Responses protocol operates with provider storage.\n\nThis is continuation *structure*, not a wire value: Stored continues by\n`previous_response_id`, Stateless continues by preserved output items and\nrequires the encrypted-reasoning `include` value.",
+      "description": "How the `OpenAI` Responses protocol operates with provider storage.\n\nStored requests provider retention and continues by `previous_response_id`.\nIf the response reports `store: false`, the original output items are used\ninstead. Stateless always continues by preserved output items (encrypted\nreasoning or a provider's original plaintext reasoning).",
       "oneOf": [
         {
           "const": "stored",
-          "description": "Provider-side storage enabled (`store: true`).",
+          "description": "Request provider-side storage (`store: true`).",
           "type": "string"
         },
         {

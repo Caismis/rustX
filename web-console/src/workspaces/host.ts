@@ -6,7 +6,10 @@ import type { DocumentRequest, DocumentResult } from '../../shared/documents.ts'
 import type { FileBytes, FileReadOptions } from '../../shared/file-preview.ts';
 export interface DeliveryRead { agent_id?: string; target: AttachmentTarget; locator: CanonicalContentLocator; delivery_index: number; read?: FileReadOptions }
 export interface DeliveryBytes extends FileBytes { file: SessionFileReference }
-export type WorkspaceConfigurationOperation = ({ kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'model_probe'; model: string; source: ModelProbeSource } | { kind: 'write'; expected_revision: string; mutation: SourceMutation }) & { expected_directory?: string };
+export type ResourceTransferMutation = Extract<SourceMutation, { kind: 'resource_transfer' }>;
+export type WorkspaceConfigurationOperation =
+  | (({ kind: 'read' | 'reconcile' } | { kind: 'mcp_probe'; id: string; expected_revision: string } | { kind: 'model_probe'; model: string; source: ModelProbeSource } | { kind: 'write'; expected_revision: string; mutation: SourceMutation }) & { expected_directory?: string })
+  | { kind: 'transfer'; scope: WorkspaceAuthorityScope; native: string; expected_directory: string; expected_revision: string; mutation: ResourceTransferMutation };
 /** The separate authoritative read attempted after a confirmed write. It may
  * succeed or fail without changing the fact that the write committed. */
 export type WorkspaceConfigurationReread =
@@ -23,6 +26,7 @@ export interface WorkspaceConfigurationCommit {
  * authoritative reread stay distinct facts for a write, so a failed reread can
  * never be mistaken for an uncommitted write. */
 export type WorkspaceConfigurationResult =
+  | { kind: 'transfer' }
   | { kind: 'mcp_probe'; result: McpProbeResult }
   | { kind: 'model_probe'; outcome: ModelProbeOutcome }
   | { kind: 'read' | 'reconcile'; projection: SourceSettings }
@@ -62,10 +66,12 @@ export interface WorkspaceAuthorityScope {
   /** With authorityId, the authority scope; compared only by normalized identity. */
   readonly endpoint: string;
 }
+export interface WorkspaceFolderSelection { path: string; revision: string }
+export interface WorkspaceFolderListing { displayPath: string; folders: string[]; revision: string }
 export interface WorkspaceCatalog extends WorkspaceAuthorityScope {
   workspaces: ProductHostWorkspace[];
   preferredWorkspace?: string;
-  picker: { kind: 'configured'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
+  picker: { kind: 'native' } | { kind: 'configured' | 'browser'; locations: { id: string; displayName: string }[] } | { kind: 'unavailable'; reason: string };
 }
 export interface WorkspaceSelectionIntent { client: string; sequence: number }
 export type SessionLocation = { authorized: false; reason: 'denied' | 'unavailable' } | { authorized: true; workspaceId?: string };
@@ -141,6 +147,10 @@ export interface ProductHostWorkspaces {
    * and before dispatching anything. */
   workflowWorkspace?(scope: WorkspaceAuthorityScope, native: string, id: string, operation: WorkflowHostOperation): Promise<WorkflowHostResult>;
   listWorkspaces(signal?: AbortSignal): Promise<WorkspaceCatalog>;
+  /** The Host obtains the path from its desktop chooser. Null means canceled. */
+  pickWorkspace?(scope: WorkspaceAuthorityScope, signal?: AbortSignal): Promise<string | null>;
+  browseWorkspace?(scope: WorkspaceAuthorityScope, location: string, path: string, signal?: AbortSignal): Promise<WorkspaceFolderListing>;
+  registerWorkspaceFolder?(scope: WorkspaceAuthorityScope, location: string, selection: WorkspaceFolderSelection): Promise<string>;
   /** Each metadata write must validate this expected scope at execution, before changing registrations. */
   adoptWorkspace(scope: WorkspaceAuthorityScope, location: string): Promise<void>;
   renameWorkspace(scope: WorkspaceAuthorityScope, id: string, displayName: string): Promise<void>;
