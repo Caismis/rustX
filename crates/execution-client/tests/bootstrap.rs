@@ -89,7 +89,10 @@ fn client(bundle: &Path, workspace: &Path) -> Command {
 }
 
 fn spawn_client(rig: &Rig) -> Child {
-    client(&rig.bundle, &rig.workspace_path).spawn().unwrap()
+    client(&rig.bundle, &rig.workspace_path)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap()
 }
 
 /// Accepts the client's connection with a deadline, reporting an early
@@ -102,7 +105,10 @@ fn accept(rig: &Rig, child: &mut Child) -> UnixStream {
             Ok((stream, _)) => break stream,
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                 if let Some(status) = child.try_wait().unwrap() {
-                    panic!("client exited {status} before connecting");
+                    panic!(
+                        "client exited {status} before connecting: {}",
+                        stderr_of(child)
+                    );
                 }
                 assert!(Instant::now() < deadline, "client never connected");
                 std::thread::sleep(Duration::from_millis(10));
@@ -143,7 +149,7 @@ fn handshake_ping_pong_and_clean_shutdown() {
     // closes the socket; the client observes EOF and exits by itself.
     drop(connection);
     assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -154,7 +160,7 @@ fn credential_replay_after_eof_never_reconnects() {
     let stream = accept(&rig, &mut child);
     let connection = rig.binding.accept_local(stream).unwrap().unwrap();
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
     assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
 
     // The same owner-only file is still valid input, but the binding is
@@ -245,7 +251,7 @@ fn rejected_hello_consumes_nothing_and_the_client_does_not_retry() {
     let stream = accept(&rig, &mut child);
     let connection = rig.binding.accept_local(stream).unwrap().unwrap();
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -313,7 +319,7 @@ fn read_range_serves_verified_bytes_at_a_sparse_file_boundary() {
     assert_eq!(range.metadata.revision, expected.revision);
 
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -340,7 +346,7 @@ fn a_fully_consumed_empty_file_is_a_valid_read() {
 
     connection.ping().unwrap();
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -365,7 +371,7 @@ fn stale_expected_revision_is_a_conflict_not_a_read() {
     // The connection survives an ordinary typed error reply.
     connection.ping().unwrap();
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -397,7 +403,7 @@ fn symlink_parent_and_outside_paths_are_denied() {
     }
 
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -417,7 +423,7 @@ fn oversized_and_zero_requests_are_invalid_not_reads() {
     }
 
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -455,7 +461,7 @@ fn revocation_linearizes_before_any_new_request() {
     assert!(connection.ping().is_err());
 
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -564,7 +570,7 @@ fn range_read_from_private_mount_view() {
         .env_clear()
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stderr(Stdio::piped());
     let mut child = command.spawn().unwrap();
 
     let stream = accept(&rig, &mut child);
@@ -594,7 +600,7 @@ fn range_read_from_private_mount_view() {
     );
 
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 }
 
 #[test]
@@ -606,7 +612,7 @@ fn clean_eof_is_success_and_a_truncated_record_is_not() {
     let stream = accept(&rig, &mut child);
     let connection = rig.binding.accept_local(stream).unwrap().unwrap();
     drop(connection);
-    assert!(child.wait().unwrap().success());
+    expect_success(&mut child);
 
     // A truncated record mid-stream is a protocol failure, not an idle EOF.
     let fresh = rig_with(BTreeSet::from([Capability::Connection]));
@@ -649,6 +655,17 @@ fn stderr_of(child: &mut Child) -> String {
         .read_to_string(&mut stderr)
         .unwrap();
     stderr
+}
+
+/// Waits for the honest child bounded and reports its redacted stderr
+/// diagnostic when it failed where success was the contract.
+fn expect_success(child: &mut Child) {
+    let status = wait_bounded(child);
+    assert!(
+        status.success(),
+        "client exited {status}: {}",
+        stderr_of(child)
+    );
 }
 
 #[test]

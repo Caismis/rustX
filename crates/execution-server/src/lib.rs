@@ -336,10 +336,9 @@ impl Binding {
         mut stream: UnixStream,
         deadline: Instant,
     ) -> io::Result<Result<LocalConnection<'_>, Reject>> {
-        // A stream accepted from a nonblocking listener can inherit that
-        // flag on BSD; the handshake is blocking I/O under socket timeouts.
-        stream.set_nonblocking(false)?;
-        let mut handshake = Handshake::new(&mut stream, deadline);
+        // The handshake wrapper itself normalizes the stream to
+        // nonblocking mode, whatever flag an accept inherited.
+        let mut handshake = Handshake::new(&mut stream, deadline)?;
         let hello: Hello = read_record(&mut handshake)?;
         let capabilities = hello.capabilities.clone();
         let connection = fresh_connection_id()?;
@@ -365,9 +364,9 @@ impl Binding {
 
     /// Writes the admission and completes the handshake deadline. On any
     /// failure after the commit — an expired deadline, a transport error,
-    /// or a timeout that cannot be cleared — the committed connection is
-    /// disconnected again and the stream shut down: a binding never stays
-    /// live on a connection the peer does not know it owns.
+    /// or blocking mode that cannot be restored — the committed connection
+    /// is disconnected again and the stream shut down: a binding never
+    /// stays live on a connection the peer does not know it owns.
     fn deliver(
         &self,
         handshake: &mut Handshake<'_>,
@@ -1272,7 +1271,7 @@ mod tests {
         // stream shut down, never left live on a peer that cannot know
         // it owns the connection.
         let (_peer, mut stream) = UnixStream::pair().unwrap();
-        let mut handshake = Handshake::new(&mut stream, Instant::now());
+        let mut handshake = Handshake::new(&mut stream, Instant::now()).unwrap();
         let error = binding
             .deliver(&mut handshake, &connection, &admission)
             .unwrap_err();

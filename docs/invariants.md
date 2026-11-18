@@ -8544,7 +8544,7 @@ local Execution Protocol over Unix sockets:
 - **The handshake is one absolute deadline.** `LOCAL_HANDSHAKE_TIMEOUT` (5 s)
   is armed once at accept entry (server) and once on the established socket
   (client), covers the Hello read/write, arbitration, admission delivery and
-  verification, and `finish()` clearing the socket timeouts — never re-armed
+  verification, and `finish()` restoring blocking mode — never re-armed
   per byte, per record, or per operation. The server re-checks the deadline
   inside the binding mutex immediately before `Reserved → Live`: expiry
   before the commit leaves the binding `Reserved`; a committed connection

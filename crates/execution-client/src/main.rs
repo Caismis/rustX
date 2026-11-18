@@ -132,7 +132,8 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
         capabilities: BTreeSet::from([Capability::Connection, Capability::ReadRange]),
         credential: bootstrap.credential,
     };
-    let mut handshake = Handshake::new(&mut stream, deadline);
+    let mut handshake =
+        Handshake::new(&mut stream, deadline).map_err(|error| handshake_error(&error))?;
     write_record(&mut handshake, &hello).map_err(|error| handshake_error(&error))?;
     let reply: HelloReply = read_record(&mut handshake).map_err(|error| handshake_error(&error))?;
     let admission = reply.map_err(|reject| format!("rejected: {reject}"))?;

@@ -12,6 +12,12 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
 thiserror = "2"
 
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["poll"] }
+
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.31.3", default-features = false, features = ["fs"] }
+
 [lints.rust]
 unsafe_code = "deny"
 

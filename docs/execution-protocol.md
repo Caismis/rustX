@@ -214,12 +214,19 @@ publishes the trusted-channel bundle:
   `Instant::now() + LOCAL_HANDSHAKE_TIMEOUT`, the single shared 5 s
   constant owned by `rustx-execution-protocol::transport` — and covers
   the entire handshake: the Hello read and parse, arbitration, the
-  admission write, and clearing the socket timeouts at `finish()`. It
+  admission write, and restoring blocking mode at `finish()`. It
   is an absolute deadline, not an inactivity timeout: `Handshake`
-  re-arms the socket read/write timeout to the *remaining* budget
-  before each syscall and re-checks the deadline after each I/O, so a
-  stalled or trickling peer consumes the same fixed budget and never
-  re-arms it per byte or per record.
+  runs the stream nonblocking for the handshake's duration — every
+  I/O is attempted directly and a `WouldBlock` waits in `poll` for
+  at most the *remaining* budget, re-checking the deadline after each
+  I/O and each wait, so a stalled or trickling peer consumes the same
+  fixed budget and never re-arms it per byte or per record. Socket
+  timeouts are deliberately not the mechanism: `poll` readiness alone
+  never ends a record — `POLLHUP` is answered by a real `read`, so a
+  peer that closes immediately after delivering the final frame still
+  drains buffered bytes and then reports honest clean EOF, which a
+  `setsockopt` on an already fully closed socket cannot express on
+  every platform.
 - The deadline is re-checked inside the binding mutex immediately
   before the `Reserved → Live` commit: a peer that lets it expire
   during arbitration gets `TimedOut` and the binding stays `Reserved`.
@@ -229,12 +236,12 @@ publishes the trusted-channel bundle:
   written as one framed record.
 - On success the committed connection returns as `LocalConnection`,
   an RAII guard whose drop disconnects the binding; if writing the
-  admission or clearing the timeouts fails, the committed connection is
+  admission or restoring blocking mode fails, the committed connection is
   disconnected and the stream shut down — a binding never stays live on
   a connection the peer does not know it owns, and never keeps a peer
   whose post-handshake blocking mode could not be restored. `finish()`
-  clears both socket timeouts only on success; a failed handshake
-  stream is shut down with whatever timeouts remain armed.
+  restores blocking mode only on success; a failed handshake
+  stream is shut down still nonblocking.
 - `LocalConnection` exposes only typed, Server-initiated exchanges —
   `ping()` (`Ping`/`Pong`) and `read_range(...)` (`ReadRange`/`Range`)
   — never a raw message path. `read_range` first consults the
@@ -336,7 +343,7 @@ physical Client:
   budget the Server enforces: one absolute deadline armed once on the
   established socket (`Instant::now() + LOCAL_HANDSHAKE_TIMEOUT`),
   covering the Hello write, the `HelloReply` read, admission
-  verification, and `finish()` clearing the timeouts before the client
+  verification, and `finish()` restoring blocking mode before the client
   enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
   capability set `{Connection, ReadRange}` — the operations this build

@@ -7,8 +7,14 @@
 //! parse errors never expose payload bytes.
 
 use std::io::{self, Read, Write};
+#[cfg(unix)]
+use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use nix::errno::Errno;
+#[cfg(unix)]
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -168,19 +174,25 @@ fn invalid(message: &'static str) -> io::Error {
 
 /// One absolute-deadline I/O budget over a local handshake socket.
 ///
-/// Every read and write arms the socket timeout with the *remaining*
-/// budget — the deadline is armed once when the socket is established and
-/// never re-arms, so a record delivered byte by byte consumes the same
-/// budget as one sent at once. A syscall that returns `WouldBlock` or
-/// `TimedOut` with the deadline exhausted reports `TimedOut`; the
-/// deadline is also rechecked after a successful syscall so a peer cannot
-/// slide just under the wire with a stalled prefix.
+/// [`new`](Self::new) puts the stream into nonblocking mode: every read
+/// and write is attempted directly, and a `WouldBlock` waits in `poll`
+/// for at most the *remaining* budget — the deadline is armed once when
+/// the socket is established and never re-arms, so a record delivered
+/// byte by byte consumes the same budget as one sent at once. The
+/// deadline is re-checked after each I/O and each wait, so a peer
+/// cannot slide just under the wire with a stalled prefix. Readiness
+/// flags alone never end a record: `POLLHUP` is not treated as EOF —
+/// the following `read` decides whether buffered bytes remain or the
+/// stream truly ended, so a peer that closes right after delivering a
+/// complete frame is an honest clean EOF, not an error.
 ///
 /// [`check`](Self::check) tests the deadline without I/O;
-/// [`finish`](Self::finish) is the success path: it rechecks the deadline
-/// and clears both socket timeouts so the stream returns to ordinary
-/// blocking I/O. It is only ever called on a completed handshake — a
-/// failed handshake stream is shut down, never returned to service.
+/// [`finish`](Self::finish) is the success path: it rechecks the
+/// deadline and restores blocking mode — a file-status flag, not a
+/// socket option, so it still applies when the peer has already fully
+/// closed — so the stream returns to ordinary blocking I/O. It is only
+/// ever called on a completed handshake — a failed handshake stream is
+/// shut down, never returned to service.
 #[cfg(unix)]
 pub struct Handshake<'a> {
     stream: &'a mut std::os::unix::net::UnixStream,
@@ -191,13 +203,21 @@ pub struct Handshake<'a> {
 #[cfg(unix)]
 impl<'a> Handshake<'a> {
     /// Wraps `stream` with the absolute `deadline` every handshake I/O
-    /// must finish inside.
-    pub fn new(stream: &'a mut std::os::unix::net::UnixStream, deadline: Instant) -> Self {
-        Self {
+    /// must finish inside, switching it to nonblocking mode.
+    ///
+    /// # Errors
+    ///
+    /// Returns the socket error if nonblocking mode could not be set.
+    pub fn new(
+        stream: &'a mut std::os::unix::net::UnixStream,
+        deadline: Instant,
+    ) -> io::Result<Self> {
+        stream.set_nonblocking(true)?;
+        Ok(Self {
             stream,
             deadline,
             now: Instant::now,
-        }
+        })
     }
 
     /// Access to the wrapped stream, for shutdown on a failed handshake.
@@ -206,7 +226,7 @@ impl<'a> Handshake<'a> {
     }
 
     /// The budget left before `deadline`; an expired or zero budget is a
-    /// `TimedOut` error, never a zero or negative socket timeout.
+    /// `TimedOut` error, never a zero or negative wait.
     fn remaining(&self) -> io::Result<Duration> {
         deadline_remaining(self.deadline, self.now)
     }
@@ -220,19 +240,41 @@ impl<'a> Handshake<'a> {
         self.remaining().map(|_| ())
     }
 
-    /// Ends a completed handshake: clears both socket timeouts so the
-    /// stream returns to blocking I/O for the session that follows. The
-    /// deadline covers the cleanup too: it is checked before and after
-    /// the clears.
+    /// Waits for `events` for at most the remaining budget. `poll`
+    /// reports `POLLHUP`/`POLLERR` as readiness like any other flag —
+    /// the next actual I/O decides whether buffered bytes remain or the
+    /// peer closed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::TimedOut`] when the budget is exhausted,
+    /// or the poll error.
+    fn wait(&self, events: PollFlags) -> io::Result<()> {
+        loop {
+            let remaining = self.remaining()?;
+            let ms = i32::try_from(remaining.as_nanos().div_ceil(1_000_000)).unwrap_or(i32::MAX);
+            let timeout = PollTimeout::try_from(ms).expect("positive remaining budget");
+            let mut fds = [PollFd::new(self.stream.as_fd(), events)];
+            match poll(&mut fds, timeout) {
+                // A lapsed wait or a signal retries against the budget.
+                Ok(0) | Err(Errno::EINTR) => {}
+                Ok(_) => return self.check(),
+                Err(error) => return Err(error.into()),
+            }
+        }
+    }
+
+    /// Ends a completed handshake: restores blocking mode so the stream
+    /// returns to ordinary I/O for the session that follows. The
+    /// deadline covers the cleanup too: it is checked before and after.
     ///
     /// # Errors
     ///
     /// Returns `TimedOut` when the budget is exhausted, or the socket
-    /// error if a timeout could not be cleared.
+    /// error if blocking mode could not be restored.
     pub fn finish(&mut self) -> io::Result<()> {
         self.check()?;
-        self.stream.set_read_timeout(None)?;
-        self.stream.set_write_timeout(None)?;
+        self.stream.set_nonblocking(false)?;
         self.check()
     }
 }
@@ -240,23 +282,36 @@ impl<'a> Handshake<'a> {
 #[cfg(unix)]
 impl Read for Handshake<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        self.stream.set_read_timeout(Some(self.remaining()?))?;
-        let outcome = self.stream.read(buffer);
-        // A result may still have arrived after the deadline — including a
-        // `WouldBlock`/`TimedOut` socket timeout: the absolute check
-        // decides, not the syscall's clock.
-        self.check()?;
-        outcome
+        loop {
+            self.check()?;
+            let outcome = self.stream.read(buffer);
+            // A result may still have arrived after the deadline: the
+            // absolute check decides, not the syscall's clock.
+            self.check()?;
+            match outcome {
+                Err(ref error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    self.wait(PollFlags::POLLIN)?;
+                }
+                other => return other,
+            }
+        }
     }
 }
 
 #[cfg(unix)]
 impl Write for Handshake<'_> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.stream.set_write_timeout(Some(self.remaining()?))?;
-        let outcome = self.stream.write(buffer);
-        self.check()?;
-        outcome
+        loop {
+            self.check()?;
+            let outcome = self.stream.write(buffer);
+            self.check()?;
+            match outcome {
+                Err(ref error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    self.wait(PollFlags::POLLOUT)?;
+                }
+                other => return other,
+            }
+        }
     }
 
     fn flush(&mut self) -> io::Result<()> {
@@ -404,6 +459,7 @@ mod tests {
         }
 
         fn stub_handshake(stream: &mut UnixStream, budget: Duration) -> Handshake<'_> {
+            stream.set_nonblocking(true).unwrap();
             Handshake {
                 stream,
                 deadline: stub_now() + budget,
@@ -447,10 +503,10 @@ mod tests {
         #[test]
         fn a_socket_timeout_maps_to_the_deadline_error() {
             let (_peer, mut stream) = UnixStream::pair().unwrap();
-            // A real (non-stub) tiny budget: the socket timeout fires and
-            // the exhausted deadline reports it as TimedOut.
+            // A real (non-stub) tiny budget: the poll wait lapses and the
+            // exhausted deadline reports it as TimedOut.
             let mut handshake =
-                Handshake::new(&mut stream, Instant::now() + Duration::from_millis(30));
+                Handshake::new(&mut stream, Instant::now() + Duration::from_millis(30)).unwrap();
             let mut buf = [0u8; 1];
             assert_eq!(
                 handshake.read(&mut buf).unwrap_err().kind(),
@@ -459,16 +515,60 @@ mod tests {
         }
 
         #[test]
-        fn finish_clears_both_socket_timeouts() {
+        fn finish_restores_blocking_inside_the_deadline() {
+            use nix::fcntl::{FcntlArg, OFlag, fcntl};
             let (mut peer, mut stream) = UnixStream::pair().unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
-            let mut handshake = Handshake::new(&mut stream, deadline);
+            let mut handshake = Handshake::new(&mut stream, deadline).unwrap();
+            // The handshake drives the socket nonblocking...
+            let flags =
+                OFlag::from_bits_truncate(fcntl(handshake.get_mut(), FcntlArg::F_GETFL).unwrap());
+            assert!(flags.contains(OFlag::O_NONBLOCK));
             peer.write_all(b"x").unwrap();
             let mut buf = [0u8; 1];
             handshake.read_exact(&mut buf).unwrap();
+            // ...and a finish inside the deadline restores blocking mode.
             handshake.finish().unwrap();
-            assert_eq!(stream.read_timeout().unwrap(), None);
-            assert_eq!(stream.write_timeout().unwrap(), None);
+            let flags = OFlag::from_bits_truncate(fcntl(&stream, FcntlArg::F_GETFL).unwrap());
+            assert!(!flags.contains(OFlag::O_NONBLOCK));
+        }
+
+        #[test]
+        fn peer_closes_after_complete_handshake_frame() {
+            let (mut peer, mut stream) = UnixStream::pair().unwrap();
+            write_record(&mut peer, &ClientRequest::Ping).unwrap();
+            // The peer is fully closed before the wrapper exists. The
+            // buffered frame still drains as a complete record — HUP is
+            // never mistaken for EOF — and the next read reports honest
+            // clean EOF.
+            drop(peer);
+            let mut handshake =
+                Handshake::new(&mut stream, Instant::now() + Duration::from_secs(5)).unwrap();
+            assert_eq!(
+                read_record::<ClientRequest>(&mut handshake).unwrap(),
+                ClientRequest::Ping
+            );
+            handshake.finish().unwrap();
+            assert_eq!(
+                read_optional_record::<ClientRequest>(&mut stream).unwrap(),
+                None
+            );
+        }
+
+        #[test]
+        fn peer_closing_mid_frame_is_a_truncated_record() {
+            let (mut peer, mut stream) = UnixStream::pair().unwrap();
+            peer.write_all(&10_u32.to_be_bytes()).unwrap();
+            peer.write_all(b"{\"pi").unwrap();
+            drop(peer);
+            let mut handshake =
+                Handshake::new(&mut stream, Instant::now() + Duration::from_secs(5)).unwrap();
+            assert_eq!(
+                read_record::<ClientRequest>(&mut handshake)
+                    .unwrap_err()
+                    .kind(),
+                io::ErrorKind::UnexpectedEof
+            );
         }
     }
 }
