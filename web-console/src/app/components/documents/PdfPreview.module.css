@@ -107,7 +107,7 @@
   display: contents;
 }
 .text ::selection {
-  background: var(--dsw-alias-bg-multi-select);
+  background: color-mix(in srgb, var(--dsw-alias-state-business-primary) 25%, transparent);
   color: transparent;
 }
 .text br::selection {
