@@ -21,6 +21,21 @@ monolith re-exports each moved item at its original `crate::` path, so
 consumer paths do not change; extracted crates never depend back on `rustx`
 and keep dependencies pointing inward toward rustX-owned contracts.
 
+Under `rustx-types`, `model` holds the model contract plane:
+`input` (`ModelInputMessage`, canonical/request-only context, carryover
+rendering), `projected` (model-visible views, canonical body identity),
+`images` (frozen image payloads and PNG measurement), `transformations`
+(provider payload rewrites) and `uploads` (attachment upload accounting),
+plus the semantic-fingerprint cluster in `types`. Request selection stays
+with the monolith: `model::selected_input` owns manifest assembly and
+`assemble_selected_model_input` because they depend on Durable projection,
+the request cache and context token accounting, and `model::structured`,
+`auxiliary`, `occurrence`, `snapshot` and `media` remain on the same side of
+that line. Test-only instrumentation (`model::hash_work`, image decode
+counting, `agent::execution::attribution`) is compiled under
+`cfg(any(test, feature = "test-fixtures"))`, which the monolith enables only
+through its dev-dependency edge, so production builds never carry it.
+
 ## App Server environment services (#533)
 
 The v77 App Server routes independent argv/PTY execution to the existing native Bash supervision kernel, filesystem operations to instance-granted descriptor-relative native roots, and management to the existing source/catalog/Skills/MCP owners. Connection-owned processes and watches are separate from server-owned Agent work. No Agent Attempt, canonical journal, configuration database or second supervisor is introduced. See [the environment and management contract](app-server/environment-services.md) and [whole-plan delivery evidence](issue-533/README.md).
