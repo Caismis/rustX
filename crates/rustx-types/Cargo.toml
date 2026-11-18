@@ -33,7 +33,6 @@ base64 = "0.22"
 tokio = { version = "1", features = ["macros", "sync"] }
 tokio-util = { version = "0.7", features = ["rt", "codec"] }
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
-imbl = { version = "7.0.0", features = ["serde"] }
 png = "0.18.1"
 rustix = { version = "1.1.4", features = ["fs", "termios", "pty"] }
 sha2 = "0.10"
@@ -46,8 +45,6 @@ rmcp = { git = "https://github.com/Caismis/rust-sdk.git", rev = "cd83bcbb8e0a251
 [dev-dependencies]
 toml = "0.8"
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order", "raw_value"] }
-imbl = { version = "7.0.0", features = ["serde"] }
-png = "0.18.1"
 
 [features]
 # Monolith cfg(test) call sites reach the test-only lifecycle helpers
