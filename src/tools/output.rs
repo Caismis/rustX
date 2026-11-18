@@ -25,7 +25,7 @@ use crate::tools::limits::FOREGROUND_TOOL_RESULT_PREVIEW_BYTES;
 use crate::tools::managed_output::{BackgroundOutput, ManagedToolOutput, ResultSpill};
 use crate::tools::types::{ManagedOutputContinuation, TruncationState};
 
-pub use rustx_types::tools::output::stdout;
+pub(crate) use rustx_types::tools::output::stdout;
 pub(crate) use stdout::BoundedStdoutCapture;
 
 /// Test-only observation seam for committed background appends.

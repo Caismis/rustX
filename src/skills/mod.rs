@@ -37,7 +37,7 @@ mod catalog;
 mod diagnostics;
 pub(crate) use rustx_types::skills::discovery;
 pub(crate) use rustx_types::skills::frontmatter;
-pub use rustx_types::skills::identity;
+pub(crate) use rustx_types::skills::identity;
 pub(crate) mod package;
 pub use rustx_types::skills::source;
 

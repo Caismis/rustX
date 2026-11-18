@@ -1268,7 +1268,7 @@ mod tests;
 
 mod content;
 mod content_encoding;
-pub use rustx_types::durable::sqlite::content_metadata;
+pub(crate) use rustx_types::durable::sqlite::content_metadata;
 mod observation;
 
 mod observation_identity;
@@ -1415,7 +1415,7 @@ mod event_heads;
 
 mod event_holes;
 
-pub use rustx_types::durable::sqlite::statements;
+pub(crate) use rustx_types::durable::sqlite::statements;
 
 mod observation_checkpoint;
 
@@ -1428,7 +1428,7 @@ mod append_facts;
 mod attempt_start;
 
 mod event_insert;
-pub use rustx_types::durable::sqlite::event_kind_key;
+pub(crate) use rustx_types::durable::sqlite::event_kind_key;
 mod event_owner_key;
 
 mod associations;

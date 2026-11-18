@@ -1,6 +1,6 @@
 //! Actual per-attempt workspace changes. Private snapshots and file captures live
 //! with the runtime, never enter model input, and never mutate the user's index.
-pub use rustx_types::workspace_changes::capture;
+pub(crate) use rustx_types::workspace_changes::capture;
 mod command;
 mod comparison;
 use comparison::FileContents;

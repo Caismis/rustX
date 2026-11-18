@@ -156,7 +156,7 @@
 mod capture;
 mod executor;
 mod input;
-pub use rustx_types::tools::native::bash::text;
+pub(crate) use rustx_types::tools::native::bash::text;
 // The supervisor is not a separate tool: it is an implementation detail of
 // Bash execution ownership, owned by this module.
 #[cfg(unix)]
