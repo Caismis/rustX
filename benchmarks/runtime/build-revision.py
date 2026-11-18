@@ -15,17 +15,29 @@ def digest(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
-def workspace_members(repo, env):
+def workspace_libraries(repo, env):
+    """Package name -> library target name for every workspace member with a lib target.
+
+    Package names (rustx-types) differ from the target names Cargo puts on
+    compiler artifacts (rustx_types): `cargo clean -p` needs the former and
+    artifact matching needs the latter.
+    """
     metadata = subprocess.check_output(
         ['cargo', 'metadata', '--format-version', '1', '--no-deps'],
         cwd=repo, env=env, text=True)
-    return sorted(package['name'] for package in json.loads(metadata)['packages'])
+    libraries = {}
+    for package in json.loads(metadata)['packages']:
+        for target in package['targets']:
+            if target['kind'] == ['lib']:
+                libraries[package['name']] = target['name']
+                break
+    return libraries
 
 
-def checked_artifacts(records, repo, members):
+def checked_artifacts(records, repo, libraries):
     artifacts = [row for row in records if row.get('reason') == 'compiler-artifact'
                  and (row['target']['kind'] == ['lib']
-                      and row.get('target', {}).get('name') in members
+                      and row.get('target', {}).get('name') in libraries.values()
                       or row['target']['name'] == 'conformance')]
     library = next(row for row in artifacts if row['target']['name'] == 'rustx')
     benchmark = next(row for row in artifacts if row['target']['name'] == 'conformance')
@@ -34,8 +46,8 @@ def checked_artifacts(records, repo, members):
             raise ValueError('workspace libraries and conformance must all be freshly compiled')
         if not str(Path(row['target']['src_path']).resolve()).startswith(str(repo) + '/'):
             raise ValueError('compiler artifact belongs to a different checkout')
-    missing = [name for name in members
-               if not any(row['target']['name'] == name for row in artifacts)]
+    missing = [package for package, target in libraries.items()
+               if not any(row['target']['name'] == target for row in artifacts)]
     if missing:
         raise ValueError('no fresh artifacts for workspace libraries: ' + ', '.join(missing))
     return artifacts, library, benchmark
@@ -73,11 +85,11 @@ def main():
                                       if key in ('RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_JOBS')
                                       or key.startswith('CARGO_PROFILE_RELEASE_')}}
     try:
-        members = workspace_members(repo, env)
-        identity['workspace_members'] = members
+        libraries = workspace_libraries(repo, env)
+        identity['workspace_libraries'] = libraries
         for name, command in (
             ('clean', ['cargo', 'clean', '--release']
-                      + ['--package=' + name for name in members]),
+                      + ['--package=' + name for name in libraries]),
             ('build', ['cargo', 'test', '--release', '--locked', '--test',
                        'conformance', '--no-run', '--message-format=json']),
         ):
@@ -90,7 +102,7 @@ def main():
             result.check_returncode()
         records = [json.loads(line) for line in (output / 'build.stdout').read_text().splitlines()
                    if line.startswith('{')]
-        artifacts, library, benchmark = checked_artifacts(records, repo, members)
+        artifacts, library, benchmark = checked_artifacts(records, repo, libraries)
         identity['root_artifacts'] = [
             {'name': row['target']['name'], 'kind': row['target']['kind'],
              'source_path': row['target']['src_path'], 'fresh': row['fresh']}
