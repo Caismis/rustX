@@ -163,7 +163,8 @@ test('paired STEP preview from production Workbench', async () => {
   const repetitions = config.repetitions ?? 3, diagnosticRepetitions = config.diagnosticRepetitions ?? 1;
   if (!config.fixtures.length || config.fixtures.some(fixture => !/^[a-z0-9-]+$/.test(fixture.id))
     || new Set(config.fixtures.map(fixture => fixture.id)).size !== config.fixtures.length
-    || !Number.isSafeInteger(repetitions) || repetitions < 1 || !Number.isSafeInteger(diagnosticRepetitions) || diagnosticRepetitions < 0)
+    || !Number.isSafeInteger(repetitions) || repetitions < 0 || !Number.isSafeInteger(diagnosticRepetitions) || diagnosticRepetitions < 0
+    || repetitions + diagnosticRepetitions === 0)
     throw new Error('Invalid STEP benchmark manifest');
   const cases = await Promise.all(config.fixtures.map(async fixture => ({ id: fixture.id, control: !!fixture.control,
     bytes: statSync(fixture.path).size, sha256: await sha256(fixture.path) })));
@@ -174,6 +175,8 @@ test('paired STEP preview from production Workbench', async () => {
     return { build, asset: files[0]!, sha256: await sha256(join(assets, files[0]!)) };
   }));
   if (buildAssets[0]?.sha256 === buildAssets[1]?.sha256) throw new Error('The two builds contain the same CAD WASM');
+  const graphicsArgs = config.softwareWebGL ? ['--use-angle=swiftshader', '--enable-unsafe-swiftshader']
+    : config.softwareWebGL === false && platform() === 'linux' ? ['--enable-gpu', '--use-gl=angle', '--use-angle=gl'] : [];
   const fixture = await startDogfood();
   const servers: Awaited<ReturnType<typeof serve>>[] = [];
   const report = { cpu: cpus()[0]?.model, os: `${platform()} ${release()}`, browser: '', cases, buildAssets,
@@ -195,12 +198,13 @@ test('paired STEP preview from production Workbench', async () => {
           if (model.control && round > 0) continue;
           for (const variant of (round + index) % 2 ? [1, 0] : [0, 1]) {
             const build = variant ? 'lexer' : 'baseline';
-            const browser = await chromium.launch({ executablePath: config.executablePath, args: config.softwareWebGL ?
-              ['--use-angle=swiftshader', '--enable-unsafe-swiftshader'] : [] });
+            const browser = await chromium.launch({ executablePath: config.executablePath, args: graphicsArgs });
             try {
               report.browser = browser.version();
               const page = await browser.newPage({ locale: 'en-US', viewport: { width: 1440, height: 1000 },
                 storageState: { cookies: [], origins: [{ origin: servers[variant]!.origin, localStorage: [{ name: 'rustx-locale-v1', value: 'en' }] }] } });
+              page.setDefaultTimeout(20_000);
+              page.setDefaultNavigationTimeout(20_000);
               await instrument(page, diagnostic ? 'native' : true);
               await observeUploads(page);
               await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -214,6 +218,8 @@ test('paired STEP preview from production Workbench', async () => {
                 const name = `${model.id}-${mode}.step`;
                 try {
                   const value = await sample(page, name, model.bytes, mode === 'warm', diagnostic);
+                  if (config.softwareWebGL === false && !value.error)
+                    expect(value.gpu, 'Requested hardware WebGL').toMatch(/^(?!.*(?:SwiftShader|llvmpipe|softpipe)).+$/i);
                   report.rows.push({ model: model.id, build, mode, round, diagnostic, ...value });
                   persist();
                   console.log(`${model.id} ${build} ${mode} ${diagnostic ? 'diagnostic' : round}: ${value.error ?? `${value.first.displayProxyMs.toFixed(1)} ms`}`);
@@ -231,6 +237,9 @@ test('paired STEP preview from production Workbench', async () => {
                   break;
                 }
               }
+            } catch (error) {
+              report.failures.push({ model: model.id, build, mode: 'cold', round, diagnostic, error: String(error) });
+              persist();
             } finally { await browser.close(); }
           }
         }

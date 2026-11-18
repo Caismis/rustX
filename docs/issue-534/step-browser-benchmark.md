@@ -36,7 +36,8 @@ RUSTX_STEP_BROWSER_BENCHMARK=/absolute/path/to/manifest.json \
 ```
 
 Set `executablePath` to use a locally installed Chrome. Set `softwareWebGL`
-when the test machine requires SwiftShader and report that backend with the
+to `true` for SwiftShader or `false` to require hardware WebGL. On Linux the
+hardware option selects ANGLE OpenGL. Report the actual renderer with the
 results. Keep the machine free of benchmark-owned build and test activity
 during the timed comparison.
 
@@ -51,7 +52,8 @@ during the timed comparison.
   the time to instantiate the module and initialize the importer.
 - Primary rows leave native profiling off. Diagnostic repetitions enable
   existing bounded native phase spans for parse, document transfer and
-  healing, coarse and final tessellation. Inclusive spans may overlap.
+  healing, coarse and final tessellation. Inclusive spans may overlap. Use
+  `repetitions: 0` for a diagnostic-only pass.
 - Upload observations record submitted WebGL buffer bytes and time spent in
   upload API calls. The fence after a whole-model draw includes queued GPU
   work and drawing. The subsequent animation frame is a presentation proxy.
