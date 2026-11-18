@@ -282,8 +282,8 @@ export class RequestPipeline {
       const operation = pending.request;
       if (operation.method === 'turn/start' || operation.method === 'turn/steer' || operation.method === 'inbound/queue') {
         const target = operation.params.target;
-        const accepted = 'result' in value && (value.result.type === 'inbound_accepted' || value.result.type === 'turn_input_accepted') && sameTarget(this.port.state().views[target.session_id]?.target, target)
-          ? { messageId: value.result.message_id, content: operation.params.content, submittedWhileRunning: pending.submittedWhileRunning } : undefined;
+        const accepted: Submission | undefined = 'result' in value && (value.result.type === 'inbound_accepted' || value.result.type === 'turn_input_accepted') && sameTarget(this.port.state().views[target.session_id]?.target, target)
+          ? { messageId: value.result.message_id, content: operation.params.content, placement: value.result.type === 'turn_input_accepted' ? (value.result.disposition === 'steered' ? 'steering' : 'transcript') : pending.submittedWhileRunning ? 'queued' : 'transcript' } : undefined;
         // One publication hands request ownership to exact acknowledged identity.
         // Never publish a zero count before publishing the accepted MessageId.
         this.port.inboundAnswered(target.session_id, accepted);

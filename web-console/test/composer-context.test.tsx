@@ -117,6 +117,9 @@ describe('Todo dock binds only the composed native Todo projection', () => {
     // Native order and statuses; the tombstone is not current work.
     expect(rows.map(row => [row.getAttribute('data-task-id'), row.getAttribute('data-status')])).toEqual([['1', 'completed'], ['2', 'in_progress'], ['4', 'pending']]);
     expect(rows[1].textContent).toContain('Writing two');
+    for (const [index, label, dot] of [[0, 'Completed', 'done'], [1, 'In progress', 'ongoing'], [2, 'Pending', 'idle']] as const) {
+      expect(within(rows[index]).getByRole('img', { name: label }).firstElementChild?.getAttribute('data-state')).toBe(dot);
+    }
     // A dependency is secondary relation text, not a fourth status.
     expect(rows[2].textContent).toContain('after #2');
     expect(rows[2].getAttribute('data-status')).toBe('pending');
@@ -573,6 +576,20 @@ describe('Queue dock binds the native inbound mailbox', () => {
     expect(echo.textContent).toContain('Queued · updating…');
     expect(server.client.getSnapshot().views.A.submissions?.map(item => item.messageId)).toEqual(['accepted-user']);
   });
+  it('seats an acknowledged steer after the live reply, outside the queue, until exact observation', async () => {
+    const state = running(withQueue([inbound('1', 'Next turn')]));
+    state.attempt!.in_flight = { message_id: 'reply', blocks: [{ type: 'text', block_index: 0, text: 'Still answering' }] };
+    const ui = await mount(state);
+    await act(async () => { await server.client.send('A', 'Change direction', [], 'steer'); });
+    const echo = ui.container.querySelector('[data-chat-flow-kind="steering"][data-provisional-message-id="accepted-user"]');
+    expect(echo?.textContent).toContain('Change direction');
+    expect(screen.getByText('Still answering').compareDocumentPosition(echo!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(dock('Queue').textContent).not.toContain('Change direction');
+    const message = { ...inbound('2', 'Change direction', { id: 'accepted-user' }).message, role: 'user' as const };
+    await update({ ...state, messages: [message], transcript: { entries: [{ cursor: '2', item: { type: 'message', message } }] } });
+    expect(ui.container.querySelector('[data-provisional-message-id]')).toBeNull();
+    expect(screen.getAllByText('Change direction')).toHaveLength(1);
+  });
   it('an accepted echo settles only by its exact MessageId', async () => {
     await mount(running());
     await sendQueued('Queued draft');
@@ -726,9 +743,9 @@ describe('exact pending QueueDock mutations', () => {
     expect(edit).toHaveBeenCalledWith({ sequence: '7', revision: '0' }, 'after');
     expect(screen.getByRole('region', { name: 'Queue' }).getAttribute('aria-busy')).toBe('true');
     expect(screen.queryByText('Updating queue…')).toBeNull();
-    expect(screen.getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', true);
+    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
     await act(async () => finish({ status: 'known', outcome: { status: 'applied' ,read_cut:readCut()}, observed: false }));
-    expect(screen.getByText('before')).toBeTruthy();
+    expect(screen.getByRole('textbox').closest('[data-inbound-sequence]')?.getAttribute('data-inbound-sequence')).toBe('7');
     expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
     ui.rerender(<QueueDock rows={[{ ...row(), revision: '1', message: { ...row().message, content: [{ type: 'text', text: 'after' }] } }]} observation={snapshot()} submissions={[]} running edit={edit} remove={vi.fn()} />);
     expect(screen.getByText('after')).toBeTruthy();
@@ -764,7 +781,7 @@ describe('exact pending QueueDock mutations', () => {
   });
   it('omits provisional controls and disables unsafe typed-content editing', () => {
     const mixed = { ...row(), message: { ...row().message, content: [{ type: 'text' as const, text: 'one' }, { type: 'uploaded_file' as const, batch_id: 'owned-batch', name: 'report.pdf' }] } };
-    const ui = render(<QueueDock rows={[]} submissions={[{ messageId: 'echo', content: [{ type: 'text', text: 'provisional' }], submittedWhileRunning: true }]} running edit={vi.fn()} remove={vi.fn()} />);
+    const ui = render(<QueueDock rows={[]} submissions={[{ messageId: 'echo', content: [{ type: 'text', text: 'provisional' }], placement: 'queued' }]} running edit={vi.fn()} remove={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Edit' })).toBeNull();
     ui.rerender(<QueueDock rows={[mixed]} submissions={[]} running edit={vi.fn()} remove={vi.fn()} />);
     expect(screen.getByRole('button', { name: 'Edit' })).toHaveProperty('disabled', true);

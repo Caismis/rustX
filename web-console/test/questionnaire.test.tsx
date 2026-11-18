@@ -22,6 +22,32 @@ function flow(questions: QuestionSpecification[]) {
 }
 const primary = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
 
+it('seeds all marked multi-choice indices and Enter submits the draft rather than the focused option', () => {
+  const result = flow([choice('Checks', ['First（推荐）', 'Unmarked', 'Third (Recommended)'], true)]);
+  const unmarked = screen.getByRole('checkbox', { name: 'Unmarked' });
+  expect(screen.getByRole('checkbox', { name: 'Third' }).getAttribute('aria-checked')).toBe('true');
+  expect(document.getElementById(unmarked.getAttribute('aria-describedby')!)?.textContent).toBe('Unmarked trade-off');
+  fireEvent.keyDown(unmarked, { key: 'Enter' });
+  expect(result.submitted).toEqual({ answers: [{ question_index: 0, answer: { type: 'options', value: { option_indices: [0, 2] } } }] });
+});
+
+it('renders a submitted ask_user receipt at settlement with native labels and skipped questions visible', () => {
+  const current = snapshot();
+  const receipt = { attempt_id: 'attempt', turn_id: 'turn', interaction_id: 'ask', timestamp: '2026-11-03T06:44:00Z' };
+  current.transcript.entries = [
+    { cursor: '1', item: { ...receipt, type: 'interaction_requested', event_id: 'ask-start', subject: { type: 'questionnaire',
+      invocation_id: { caller: 'agent', call_id: 'call' }, requester: { tool_id: 'tool-ask-user', tool_name: 'ask_user', origin: 'builtin' },
+      questionnaire: { questions: [choice('Skipped', ['A']), choice('Checks', ['Browser', 'Unit'], true)] } } } },
+    { cursor: '2', item: { ...receipt, type: 'interaction_settled', event_id: 'ask-end', settlement: { type: 'questionnaire_submitted',
+      submission: { answers: [{ question_index: 1, answer: { type: 'options', value: { option_indices: [1, 0] } } }] } } } },
+  ];
+  render(<AgentTranscript snapshot={current}/>);
+  const bubble = screen.getByRole('article', { name: 'Recorded answers' });
+  expect(Array.from(bubble.querySelectorAll('dd'), answer => answer.textContent)).toEqual(['Not answered', 'Unit, Browser']);
+  expect(bubble.querySelector('time')?.dateTime).toBe(receipt.timestamp);
+  expect(bubble.querySelector('[aria-expanded]')).toBeNull();
+});
+
 it('a recommended first choice is the implicit draft and a single choice advances to the next question', () => {
   const result = flow([choice('Direction', ['Keep (Recommended)', 'Drop']), choice('Coverage', ['Unit', 'Browser'], true)]);
   expect(screen.getByRole('radio', { name: 'Keep' }).getAttribute('aria-checked')).toBe('true');

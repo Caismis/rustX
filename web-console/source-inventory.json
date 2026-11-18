@@ -310,7 +310,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "760bd15d9da1ba97578830585d80f049fc131f551b18bd226339457e22b00eaa",
+      "local_sha256": "b1a658cb26a1d89e165e536d6b62df17a91a40876e719a2f7eaf6ec2d5ec5ecf",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
@@ -502,7 +502,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e0201639551250852d0b818ff25f3090e1cc0ca6d704e72e26f6ca820b4e64e8"
+      "local_sha256": "a046ea01343063e290bdebcc59838b59a6ecbdb85e73b9e153b6ea66f829de5b"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -528,7 +528,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "aeebcdcf17dce4b5038230f5a958bfa85c3d32c464036f6978314c5f66233a35"
+      "local_sha256": "1129163426cc11407d9097e23a5ca3d5eb773c7ed33b552f7e5fcccf72ef7d90"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -542,7 +542,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "01526ffe224e9f892b417f41ec992e8e0d990c509807f99c1d05563e09ae5c98"
+      "local_sha256": "09af7ca9c33b002dbfb9d88ce3c6fecbef1f80fb0b90ebc1c273d2cdaa305919"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
@@ -554,6 +554,7 @@
         "../../bindings/composer-context",
         "../../locale/react",
         "../../locale/translation",
+        "../../presentation/primitives/StateDot",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
         "react"
@@ -566,7 +567,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "568a2403353969212627cc14e532d58aac23d42d5e59a48df5ff57aabbaf5686"
+      "local_sha256": "e64665808d56947ba58fce44d32e58f1d975271456eff28e18300e043527f3c8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -1541,7 +1542,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "692ce461cd4bcf7d970e67195e1d2c41622fcce417452b633d68c77daf9382af",
+      "local_sha256": "67b9821f071cf290a590d90e33ba0b9dc9671c6f654a9c8de10a5d35d4490fb6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.module.css",
@@ -1672,7 +1673,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "eed5f1961645e45a02d349da7769ad29c23a8dd7b045fcac6bdf54fa1e6215e0",
+      "local_sha256": "aaf8b4df7daacca9670ceb0cde9a5de8f89dd30dc8ed39549e3ebfafa0b9b133",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -2766,7 +2767,7 @@
       "treatment": "Adapted header, bounded scrolling text and wrap styling; excludes Host filesystem, slots, registry and automatic reload. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Preview sidebar alignment: two 38px rows, shared dockkit file chips and icon chrome; header visibility is independent of docked layout.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "792d87ed962b3fcbe39a50fca6f29faf4ca92dec4b63b6b260b14b74378e1e82",
-      "local_sha256": "6a46037edf5d7d0c489a372df4bfc3e84b5a09a4640e3331cd80a564884f3250",
+      "local_sha256": "de2478bdf849f8218c643df3530fbb98c9bbde8bbc75acc82320d79cc8b3e6c9",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -4100,7 +4101,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "91a17583365a40622c88976e1e09da92ebd47d461db5ea5b41338acd7de3aa74"
+      "local_sha256": "bdb06ae4c5c24813ab34850d88ad83f65990cc2a6759fc1e4fd5d01d1390b98a"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4130,7 +4131,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "b2d1eb92527a5c759a6e3da41cf573fab06160532756245e5373908f74c56a8e"
+      "local_sha256": "f1104d0cef17716a28eee101d2204300911e2f11d789f8023ffab218782f0991"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4220,7 +4221,7 @@
           "treatment": "Use the localized read-family image title."
         }
       ],
-      "local_sha256": "60cd0c5fb6218b3a4e993f8a50908f33588a6759b244b40a02fe2e5dbb2e708f"
+      "local_sha256": "4355700518253b57200a77dffbe2a3733e9546aae019786dbc905b8b3c4fd647"
     },
     {
       "upstream": "packages/client/ui-sidebar/src/client/locales.ts",
@@ -4988,6 +4989,7 @@
         "./documents/GeometryLoading",
         "./documents/errors",
         "./workbench-documents/DocumentBody",
+        "./workbench-documents/ViewerMenu",
         "./workbench-documents/definitions",
         "react"
       ],
@@ -5011,7 +5013,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "f9bcee3e71fe10e241dbc13347eb3e51b70d578b69926cca6cbbd5e0093513c9"
+      "local_sha256": "d1a98b481a5db30b91eb6f7a488eef30d2a69a8fd63b2413c78bccc46338a00c"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5907,7 +5909,7 @@
         "./bytes.ts",
         "dompurify"
       ],
-      "local_sha256": "d26fa97343159acf7f75c8d87019059438e566c0f0b5e8cba44e9bb312be2162"
+      "local_sha256": "ac0a016d8679c3b37d5e73ce4c394c024b59f90108b30cc09a22bcc97d95b117"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/bytes.ts",
@@ -5966,24 +5968,21 @@
         "../../../locale/dictionaries/workbench-excel",
         "../../../locale/react",
         "../../../presentation/markdown/DocumentResources",
-        "../../../presentation/markdown/MarkdownText",
         "../../../presentation/primitives/LoadingIndicator",
         "../WorkbenchFiles",
         "../documents/GeometryDocument",
         "../documents/ImagePreview",
         "../documents/PdfPreview",
-        "./MarkdownBody.module.css",
+        "./MarkdownBody",
         "./definitions",
         "./dependencies",
         "./excel/excel",
         "./excel/format",
-        "./frontmatter",
-        "./frontmatter-fields",
         "./html/HtmlBody",
         "./resources",
         "react"
       ],
-      "local_sha256": "65d2d3f72851d4d6e4f3b51e8c7e5144ce65f442947576b0850e9dff31cc2c85"
+      "local_sha256": "fb297e7bd868ff4d2d2e5991a3b373950a7e497adeae4766b35a791b5f7b0ab4"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",
@@ -6222,7 +6221,7 @@
         "./preferences",
         "react"
       ],
-      "local_sha256": "e05a134458efc40193f9456611dfa2f2b02ba17da8e778586752cfb3ac593674"
+      "local_sha256": "cec74f9891aa7bd26519c1d29ff935971d54e42edf5def18fb6ef2e5db25bc6f"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/HtmlBody.module.css",
@@ -6965,7 +6964,7 @@
         "Harness tool execution models",
         "File navigation and recursive detail grouping"
       ],
-      "local_sha256": "a47d3505ff142ff2a2c1eccb1ac65e7b51af2a412dbaaa754f5b9d485befb948"
+      "local_sha256": "e4b2bbccf574ba6f4ae6a4d6bf347ef7cf5dfcdd47626c33649f57de07e58aec"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",

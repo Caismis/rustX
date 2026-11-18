@@ -126,7 +126,7 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
         await panel.getByText('第二页', { exact: true }).click();
         await expect(panel.getByText('第二页', { exact: true })).toBeVisible();
       } else if (name.endsWith('.html')) {
-        await expect(panel.getByTitle('Isolated HTML preview')).toHaveAttribute('sandbox', '');
+        await expect(panel.locator('[data-html-preview]')).toHaveAttribute('sandbox', '');
         const frame = panel.frameLocator('iframe'); await expect(frame.getByRole('heading')).toBeVisible();
         if (name === 'hostile.html') {
           await frame.getByText('External', { exact: true }).click();
@@ -141,10 +141,11 @@ test('real authorized advanced documents, isolated hostile HTML and original dow
           expect(await page.evaluate(() => (window as any).PWNED)).toBeUndefined();
           expect(external).toEqual([]); expect(popups).toEqual([]);
         }
-        await panel.getByRole('button', { name: 'Source', exact: true }).click();
-        await expect(panel.locator('pre')).toHaveText(readFileSync(join(fixture.workspaceA, name), 'utf8'));
-        await expect(panel.locator('pre *')).toHaveCount(0);
-        await panel.getByRole('button', { name: 'Rendered preview', exact: true }).click();
+        await panel.getByRole('button', { name: 'View as' }).click();
+        await page.getByRole('menuitem', { name: 'Text', exact: true }).click();
+        await expect(panel.locator('[data-textpreview-plain]')).toHaveText(readFileSync(join(fixture.workspaceA, name), 'utf8'));
+        await panel.getByRole('button', { name: 'View as' }).click();
+        await page.getByRole('menuitem', { name: 'HTML', exact: true }).click();
       } else if (name === 'malformed.pdf') {
         await expect(panel.getByRole('alert')).toContainText('malformed');
       } else if (name === 'encrypted.pdf') {

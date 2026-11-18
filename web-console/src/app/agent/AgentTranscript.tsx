@@ -2,7 +2,7 @@ import {isPlainMessageKind} from '../../../../protocol/app-server/message-kind';
 import { ConfigurationChangeRow, hasConfigurationChangeRow } from './ConfigurationChangeRow';
 import { WorkflowRunPanel } from './WorkflowRunPanel';
 import { workflowKey } from '../../bindings/workflow-children';
-import { InteractionAudit } from './InteractionAudit';
+import { InteractionAudit, RecordedQuestionReply } from './InteractionAudit';
 import { TurnUsage } from './UsageStats';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import { sameToolOccurrence } from '../../../../protocol/app-server/projection';
@@ -57,14 +57,6 @@ const hasInlineBody = (entry: RuntimeClientTranscriptEntry) => entry.item.type =
   ? entry.item.audit.content.some(block => block.kind !== 'proposed_tool_call' && block.text.trim() !== '')
   : entry.item.type === 'configuration_applied' ? hasConfigurationChangeRow(entry.item.change)
     : entry.item.type !== 'message' || entry.item.message.role !== 'tool' && !isContextInjection(entry.item.message);
-/** A native `ask_user` questionnaire is already told by its call's question row
- * (Harness shows no separate interaction record), so its request and settlement
- * audits keep their transcript positions without a body of their own. Other
- * questionnaires (MCP elicitation) keep their audits: their call rows are generic. */
-function askUserAudits(entries: readonly RuntimeClientTranscriptEntry[]) {
-  const asked = new Set(entries.flatMap(entry => entry.item.type === 'interaction_requested' && entry.item.subject.type === 'questionnaire' && entry.item.subject.requester.tool_id === 'tool-ask-user' ? [entry.item.interaction_id] : []));
-  return (entry: RuntimeClientTranscriptEntry) => (entry.item.type === 'interaction_requested' || entry.item.type === 'interaction_settled') && asked.has(entry.item.interaction_id);
-}
 function MessageSeat({ id, hidden, owner, turnOwner, reveal, prefix, suffix, bodyHidden, message, tools, actions, blocks, streaming, reasoningHidden, other }: {
   id: string; hidden?: boolean; owner?: string; turnOwner?: string; reveal?: string; prefix?: ReactNode; suffix?: ReactNode; bodyHidden?: boolean;
   message?: MessageBlock; tools?: ForegroundToolExecution[]; actions?: ReactNode; blocks?: InFlightBlock[]; streaming?: boolean; reasoningHidden?: boolean; other?: ReactNode;
@@ -188,12 +180,17 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   // anchor outside the loaded transcript simply draws nothing until it is paged in.
   const placement = agentStatusPlacement(snapshot.statuses);
   const process = turnProcesses(entries, placement, snapshot.conversation_id);
-  const isAskAudit = askUserAudits(entries);
-  const settledRequest = (entry: RuntimeClientTranscriptEntry) => {
-    const item = entry.item;
-    return item.type === 'interaction_settled' && entries.some(request => request.item.type === 'interaction_requested' && request.item.attempt_id === item.attempt_id && request.item.interaction_id === item.interaction_id);
+  const interactionSubjects = new Map(entries.flatMap(({ item }) => item.type === 'interaction_requested' ? [[JSON.stringify([item.attempt_id, item.interaction_id]), item.subject] as const] : []));
+  const questionReply = ({ item }: RuntimeClientTranscriptEntry) => {
+    if (item.type !== 'interaction_settled' || item.settlement.type !== 'questionnaire_submitted') return;
+    const subject = interactionSubjects.get(JSON.stringify([item.attempt_id, item.interaction_id]));
+    if (subject?.type === 'questionnaire' && subject.requester.tool_id === 'tool-ask-user') return { questions: subject.questionnaire.questions, answers: item.settlement.submission.answers, time: item.timestamp };
   };
-  const toldByCall = (entry: RuntimeClientTranscriptEntry) => isAskAudit(entry) || settledRequest(entry);
+  const toldByCall = (entry: RuntimeClientTranscriptEntry) => {
+    const item = entry.item;
+    return item.type === 'interaction_requested' ? item.subject.type === 'questionnaire' && item.subject.requester.tool_id === 'tool-ask-user'
+      : item.type === 'interaction_settled' && interactionSubjects.has(JSON.stringify([item.attempt_id, item.interaction_id]));
+  };
   const runs = workflows?.runs.filter(run => run.id.conversation_id === snapshot.conversation_id) ?? [];
   const workflowSeats = new Map<string, typeof runs>();
   const unseated = runs.filter(run => {
@@ -258,7 +255,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
   }
   const headsById = new Map(heads.map(head => [head.message.id, head]));
   const steps = stepGroups(entries, entry => hasBody(entry) && !toldByCall(entry),
-    entry => compactionBoundaries.has(entry.cursor) || entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id),
+    entry => !!questionReply(entry) || compactionBoundaries.has(entry.cursor) || entry.item.type === 'message' && !!requestFeedback?.messages.has(entry.item.message.id),
     (id, index, text) => {
       const binding = messageContentBinding(presentation, id, index);
       return !!binding && binding.content_ref.readable_end > 0
@@ -379,7 +376,9 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     const at = nodes.findIndex(node => node.kind === 'streaming'
       || node.kind === 'head' && snapshot.attempt && node.head.owner && attemptOwnerKey(node.head.owner) === attemptOwnerKey({ conversation_id: snapshot.conversation_id, ...snapshot.attempt })
       || node.kind === 'process' && node.process.outcome === 'running');
-    nodes.splice(at < 0 ? nodes.length : at, 0, ...accepted.filter(value => !durableIds.has(value.messageId) && !messages.some(message => message.id === value.messageId)).map(submission => ({ kind: 'accepted' as const, submission })));
+    const echoes = accepted.filter(value => !durableIds.has(value.messageId) && !messages.some(message => message.id === value.messageId)).map(submission => ({ kind: 'accepted' as const, submission }));
+    nodes.splice(at < 0 ? nodes.length : at, 0, ...echoes.filter(node => node.submission.placement === 'transcript'));
+    nodes.push(...echoes.filter(node => node.submission.placement === 'steering'));
   }
   const continuation = history?.window?.newer_cursor;
   if (continuation != null && loadLater) {
@@ -397,7 +396,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         if (!value.content) return null; // Identity-only repair cannot invent a provisional body.
         const files = value.content.filter(block => block.type === 'upload').length;
         const text = value.content.flatMap(block => block.type === 'text' ? [block.text] : []).join('\n');
-        return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
+        return <div key={'message:' + value.messageId} className={css.flowItem} data-pending-message="" data-chat-flow-kind={value.placement === 'steering' ? 'steering' : 'user'} data-provisional-message-id={value.messageId}><MessageSeat key="seat" id={'message:' + value.messageId}
           other={<UserMessage label={tx('agent:message.your-message')} attachments={files ? <MessageFile name={tx(files === 1 ? 'agent:attachments.one' : 'agent:attachments.other', { n: files })}/> : undefined}>{text !== '' ? <div className={pendingCss.text}>{text}</div> : undefined}</UserMessage>}/></div>;
       }
       if (node.kind === 'compaction') return <div className={css.flowItem} key={`compaction:${node.marker.head.activation_id}`} data-chat-anchor-key={`compaction:${node.marker.head.activation_id}`} data-compaction-anchor={node.marker.head.transcript_anchor}>{node.marker.content}</div>;
@@ -448,7 +447,9 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
       const key = process.membership.get(entry.cursor);
       const group = key ? process.groups.get(key) : undefined;
       const processOpen = verbose || !group || group.owner.outcome !== 'completed' || expanded.has(key!);
-      const final = isFinalTurnMessage(entry);
+      const recorded = questionReply(entry);
+      const reply = recorded && <RecordedQuestionReply {...recorded}/>;
+      const final = !!reply || isFinalTurnMessage(entry);
       const statusOwner = (status: typeof statuses[number]) => process.attempts.get(JSON.stringify([snapshot.conversation_id, status.attempt_id]));
       const statusRows = statuses.map(status => {
         const owner = statusOwner(status), seat = owner ? process.groups.get(owner)?.seat : undefined;
@@ -457,8 +458,8 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         return { status, owner, header, bodyHidden, hidden: bodyHidden && !header };
       });
       const visibleStatus = statusRows.some(row => !row.bodyHidden);
-      const body = hasBody(entry) && !toldByCall(entry);
-      const stepped = steps.get(entry.cursor);
+      const body = !!reply || hasBody(entry) && !toldByCall(entry);
+      const stepped = reply ? undefined : steps.get(entry.cursor);
       const entrySeat = group?.seat?.kind === 'entry' && group.seat.cursor === entry.cursor;
       const statusSeat = statuses.some(status => { const owner = statusOwner(status); const seat = owner ? process.groups.get(owner)?.seat : undefined; return seat?.kind === 'status' && seat.statusId === statusIdentity(status); });
       const runPanels = workflowPanels(workflowSeats.get(entry.cursor) ?? []);
@@ -480,7 +481,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
         message={body && !stepped && entry.item.type === 'message' && entry.item.message.role !== 'assistant' ? entry.item.message : undefined} reasoningHidden={final && !processOpen}
         actions={entry.item.type === 'message' && userActions(entry.item.message)}
         tools={toolsOf(entry)}
-        other={stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry))}
+        other={reply ?? (stepped ? pieces(entry, stepped, processOpen) : body && (entry.item.type === 'message' && entry.item.message.role === 'assistant' ? messageSegments(entry.item.message, entry.item.message.content, toolsOf(entry)) : audit(entry)))}
         suffix={<>{statusRows.map(({ status, owner, header, bodyHidden, hidden }) => {
           // Keep the native anchor, while sharing its exact completed Attempt's
           // disclosure. Never borrow the adjacent row's ownership for a status.

@@ -1,11 +1,8 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Source-derived; see PROVENANCE.md. */
-/* Adapted from DeepSeek Harness ui-conversation QueueDock.module.css. The card
-   is standalone (not tucked under the input card) so the composer's own
-   attachment rail keeps its geometry; the column is shared with Todo and Goal. */
 .dock {
   box-sizing: border-box;
   flex: none;
-  margin: 0 auto;
+  margin: 0 auto calc(0px - var(--dsh-composer-stack-gap) - 3px);
   width: calc(100% - 2 * var(--dsh-composer-side-clearance) - 4 * var(--dsh-composer-dock-inset));
   max-width: calc(var(--dsh-composer-card-max-width) - 4 * var(--dsh-composer-dock-inset));
 }
@@ -15,8 +12,10 @@
   width: 100%;
   padding: 2px 0;
   border: 0.5px solid var(--dsw-alias-border-l1);
-  border-radius: 12px;
-  background: var(--dsw-specific-tip);
+  border-bottom: 0;
+  border-radius: var(--dsw-radius-lg) var(--dsw-radius-lg) 0 0;
+  background: var(--dsw-specific-menu);
+  backdrop-filter: var(--dsw-menu-backdrop-filter);
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
 }
 
@@ -103,11 +102,14 @@
 /* Harness row actions adapted to explicit native CAS controls. */
 .actions { display: flex; flex: none; align-items: center; gap: 6px; flex-wrap: wrap; }
 .action { min-height: 32px; padding: 4px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-primary); font: inherit; font-size: 12px; cursor: pointer; }
+.action[aria-label] { display: grid; place-items: center; width: 28px; height: 28px; min-height: 0; padding: 0; border-radius: 50%; color: var(--dsw-alias-label-tertiary); }
 .action:hover:not(:disabled) { background: var(--dsw-alias-interactive-bg-hover); }
 .action:disabled { opacity: .45; cursor: default; }
 .action:focus-visible { outline: 2px solid var(--dsw-alias-label-tertiary); }
 .editPanel, .notice { padding: 8px 12px; font-size: 13px; }
-.editor { box-sizing: border-box; width: 100%; min-height: 32px; margin: 6px 0; border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); }
+.row .editPanel { display: flex; align-items: center; flex: 1; gap: 8px; flex-wrap: wrap; padding: 0; }
+.row .editPanel label { flex: 1; min-width: 0; font-size: 0; }
+.editor { font: var(--dsw-font-xs-13); box-sizing: border-box; width: 100%; min-height: 32px; margin: 6px 0; border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); }
 @media (max-width: 600px) {
   .row { flex-wrap: wrap; gap: 6px; }
   .preview { flex-basis: 65%; }

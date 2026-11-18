@@ -1032,7 +1032,7 @@ export class AppServerClient {
             const view=this.state.views[id],submissions=view.submissions??[];
             // Acceptance proof takes over lost transport ownership atomically;
             // only a native observation of the exact MessageId can release it.
-            this.publish({uncertain:this.state.uncertain.filter(value=>value.id!==operation.id),views:{...this.state.views,[id]:{...view,submissions:submissions.some(value=>value.messageId===acceptance.message_id)?submissions:[...submissions,{messageId:acceptance.message_id,submittedWhileRunning:false}]}}});
+            this.publish({uncertain:this.state.uncertain.filter(value=>value.id!==operation.id),views:{...this.state.views,[id]:{...view,submissions:submissions.some(value=>value.messageId===acceptance.message_id)?submissions:[...submissions,{messageId:acceptance.message_id,placement:'transcript'}]}}});
             this.settleSubmissions(id);
           }
         }).catch(()=>{}).finally(()=>this.inputRepairs.delete(operation.id));

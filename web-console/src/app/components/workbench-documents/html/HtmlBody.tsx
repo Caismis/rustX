@@ -17,7 +17,7 @@ export function HtmlBody(props: Props) {
   const [interactive] = useInteractiveHtml();
   return interactive ? <HtmlFrame {...props}/> : <BasicHtmlFrame data={props.data}/>;
 }
-function BasicHtmlFrame({ data }: Pick<Props, 'data'>) {
+export function BasicHtmlFrame({ data }: Pick<Props, 'data'>) {
   const tx = useTranslation();
   const html = useMemo(() => { try { return createBasicHtmlDocument(data); } catch { return undefined; } }, [data]);
   if (html === undefined) return <p role="alert">{tx('artifacts:workbench.html-failed')}</p>;

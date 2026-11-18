@@ -10,7 +10,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
 import type { InboundControlOutcome, Submission } from '../../client/contracts';
-import { IconChevronDownOutline14, IconQueueOutline14 } from '../../presentation/primitives/icons';
+import { IconChevronDownOutline14, IconEditOutline16, IconQueueOutline14, IconTrashOutline16, IconCheckOutline14, IconCloseOutline16 } from '../../presentation/primitives/icons';
 import type { PendingInboundRef } from '../../../../protocol/app-server/v80';
 import css from './QueueDock.module.css';
 
@@ -71,57 +71,62 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   };
   // The caller places only submissions dispatched during an active attempt
   // here. Keep them until exact observation, including after that attempt ends.
-  const echoes = submissions;
+  const admitted = new Set(rows.map(row => row.message.id));
+  const echoes = submissions.filter(item => !admitted.has(item.messageId));
   const count = rows.length + echoes.length;
   useEffect(() => { if (count === 0) setCollapsed(true); }, [count]);
   if (count === 0 && !draft && !notice) return null;
   const listed = count === 1 || !collapsed || !!draft || !!operation;
   const status = running ? tx('agent:copy.queued') : tx('agent:copy.waiting-to-start');
   const hiddenEchoes = !listed && echoes.length > 0;
-  return <section className={css.dock} aria-label={tx('agent:queue-dock.queue')} aria-busy={operation?.status === 'pending'} data-queue-dock="">
-    <div className={css.panel}>
-      {count > 1 && <button type="button" className={css.header} aria-expanded={listed} disabled={!!draft || !!operation} aria-controls={listed ? listId : undefined} onClick={() => setCollapsed(value => !value)}>
-        <QueueGlyph /><span className={css.count}>{count} {tx('agent:queue-dock.queued')}</span>
-        {/* A collapsed header keeps accepted provisional submissions visible. */}
-        <span className={css.status} role={hiddenEchoes ? 'status' : undefined}>{hiddenEchoes ? tx('agent:queue-dock.value-value', { p0: echoes.length, p1: ACCEPTED.toLowerCase() }) : status}</span>
-        <span className={css.chevron} data-collapsed={collapsed} aria-hidden><IconChevronDownOutline14 /></span>
-      </button>}
-      {listed && <ul id={listId} className={css.list}>
-        {rows.map(row => {
-          const origin = inboundOrigin(tx, row.message);
-          return <li key={`inbound:${row.sequence}`} className={css.row} data-inbound-sequence={row.sequence} data-message-id={row.message.id}>
-            {count === 1 && <QueueGlyph />}
-            <span className={css.preview} title={contentPreview(tx, row.message.content)}>{contentPreview(tx, row.message.content)}</span>
-            {origin && <span className={css.status}>{origin}</span>}
-            {row.message.source === 'human' && isPlainMessageKind(row.message.kind) && <div className={css.actions}>
-              <button type="button" className={css.action} disabled={locked || !edit || row.deferred || row.message.content.length !== 1 || row.message.content[0].type !== 'text'}
-                title={row.deferred ? tx('common:activity.loading') : row.message.content.length !== 1 || row.message.content[0].type !== 'text' ? tx('agent:queue-dock.non-text-or-multiple-content-blocks-cannot-be-safely-edited-here') : tx('agent:queue-dock.edit-queued-message')}
-                onClick={() => { setDraft({ expected: expected(row), messageId:row.message.id, text: row.message.content[0].type === 'text' ? row.message.content[0].text : '' }); setNotice(''); }}>{tx('agent:queue-dock.edit')}</button>
-              <button type="button" className={css.action} disabled={locked || !remove} onClick={() => { if (remove) void apply(() => remove(expected(row))); }}>{tx('agent:queue-dock.remove')}</button>
-            </div>}
-            {count === 1 && <span className={css.status}>{status}</span>}
-          </li>;
-        })}
-        {echoes.map(submission => <li key={`accepted:${submission.messageId}`} className={`${css.row} ${css.pendingRow}`} data-submission-echo="" data-accepted-message-id={submission.messageId}>
-          {count === 1 && <QueueGlyph />}
-          <span className={css.preview}>{contentPreview(tx, submission.content ?? [])}</span>
-          <span className={css.status} role="status">{ACCEPTED}</span>
-        </li>)}
-      </ul>}
-      {draft && <div className={css.editPanel}>
-        <label>{tx('agent:queue-dock.edit-queued-message')}<input className={css.editor} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={locked}
+  const editor = draft && <div className={css.editPanel}>
+        <label>{tx('agent:queue-dock.edit-queued-message')}<input className={css.editor} autoFocus aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={locked}
           onChange={event => setDraft({ ...draft, text: event.currentTarget.value })}
           onKeyDown={event => {
             if (event.key === 'Escape' && !locked) setDraft(undefined);
             if (event.key === 'Enter' && !event.nativeEvent.isComposing && !locked && !staleDraft && draft.text.trim() && edit) { event.preventDefault(); void apply(() => edit(draft.expected, draft.text), true); }
           }} /></label>
         <div className={css.actions}>
-          <button type="button" className={css.action} disabled={locked || staleDraft || !draft.text.trim() || !edit} onClick={() => { if (edit) void apply(() => edit(draft.expected, draft.text), true); }}>{tx('agent:queue-dock.save')}</button>
-          <button type="button" className={css.action} disabled={locked} onClick={() => { setDraft(undefined); setNotice(''); }}>{tx('agent:queue-dock.cancel-edit')}</button>
+          <button aria-label={tx('agent:queue-dock.save')} title={tx('agent:queue-dock.save')} type="button" className={css.action} disabled={locked || staleDraft || !draft.text.trim() || !edit} onClick={() => { if (edit) void apply(() => edit(draft.expected, draft.text), true); }}><IconCheckOutline14 size={14}/></button>
+          <button aria-label={tx('agent:queue-dock.cancel-edit')} title={tx('agent:queue-dock.cancel-edit')} type="button" className={css.action} disabled={locked} onClick={() => { setDraft(undefined); setNotice(''); }}><IconCloseOutline16 size={14}/></button>
           {staleDraft && currentDraft && <button type="button" className={css.action} disabled={locked} onClick={() => setDraft({ ...draft, expected: expected(currentDraft),messageId:currentDraft.message.id })}>{tx('agent:queue-dock.use-latest-version')}</button>}
         </div>
         {staleDraft && <p role="status">{currentDraft ? tx('agent:queue-dock.this-queued-message-changed-review-the-latest-version-before-sav') : tx('agent:queue-dock.this-message-is-no-longer-queued')}</p>}
-      </div>}
+      </div>;
+  return <section className={css.dock} aria-label={tx('agent:queue-dock.queue')} aria-busy={operation?.status === 'pending'} data-queue-dock="">
+    <div className={css.panel}>
+      {count > 1 && <button type="button" className={css.header} aria-expanded={listed} disabled={!!draft || !!operation} aria-controls={listId} onClick={() => setCollapsed(value => !value)}>
+        <QueueGlyph /><span className={css.count}>{count} {tx('agent:queue-dock.queued')}</span>
+        {/* A collapsed header keeps accepted provisional submissions visible. */}
+        <span className={css.status} role={hiddenEchoes ? 'status' : undefined}>{hiddenEchoes ? tx('agent:queue-dock.value-value', { p0: echoes.length, p1: ACCEPTED.toLowerCase() }) : status}</span>
+        <span className={css.chevron} data-collapsed={!listed} aria-hidden><IconChevronDownOutline14 /></span>
+      </button>}
+      <ul id={listId} className={css.list} hidden={!listed}>
+        {listed && rows.map(row => {
+          const origin = inboundOrigin(tx, row.message);
+          return <li key={`inbound:${row.sequence}`} className={css.row} data-inbound-sequence={row.sequence} data-message-id={row.message.id}>
+            {count === 1 && <QueueGlyph />}
+            {currentDraft === row && !staleDraft ? editor : <>
+            <span className={css.preview} title={contentPreview(tx, row.message.content)}>{contentPreview(tx, row.message.content)}</span>
+            {origin && <span className={css.status}>{origin}</span>}
+            {row.message.source === 'human' && isPlainMessageKind(row.message.kind) && <div className={css.actions}>
+              <button aria-label={tx('agent:queue-dock.edit')} type="button" className={css.action} disabled={locked || !edit || row.deferred || row.message.content.length !== 1 || row.message.content[0].type !== 'text'}
+                title={row.deferred ? tx('common:activity.loading') : row.message.content.length !== 1 || row.message.content[0].type !== 'text' ? tx('agent:queue-dock.non-text-or-multiple-content-blocks-cannot-be-safely-edited-here') : tx('agent:queue-dock.edit-queued-message')}
+                onClick={() => { setDraft({ expected: expected(row), messageId:row.message.id, text: row.message.content[0].type === 'text' ? row.message.content[0].text : '' }); setNotice(''); }}><IconEditOutline16 size={14}/></button>
+              <button aria-label={tx('agent:queue-dock.remove')} title={tx('agent:queue-dock.remove')} type="button" className={css.action} disabled={locked || !remove} onClick={() => { if (remove) void apply(() => remove(expected(row))); }}><IconTrashOutline16 size={14}/></button>
+            </div>}
+            {count === 1 && <span className={css.status}>{status}</span>}
+            </>}
+            {currentDraft === row && staleDraft && editor}
+          </li>;
+        })}
+        {listed && echoes.map(submission => <li key={`accepted:${submission.messageId}`} className={`${css.row} ${css.pendingRow}`} data-submission-echo="" data-accepted-message-id={submission.messageId}>
+          {count === 1 && <QueueGlyph />}
+          <span className={css.preview}>{contentPreview(tx, submission.content ?? [])}</span>
+          <span className={css.status} role="status">{ACCEPTED}</span>
+        </li>)}
+      </ul>
+      {!currentDraft && editor}
       {notice && <p className={css.notice} role="status">{notice}</p>}
     </div>
   </section>;
