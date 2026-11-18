@@ -789,7 +789,7 @@ fn parse_cargo_arguments(
             // verbatim like a feature flag so doctest discovery covers the
             // extracted `rustx-*` crates too.
             "--all-features" | "--no-default-features" | "--workspace" => {
-                step.features.push((*argument).into())
+                step.features.push((*argument).into());
             }
             "--features" | "-F" => {
                 let features = cargo
