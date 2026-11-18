@@ -835,6 +835,20 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
+    "method": "job/output",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "job_id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
     "method": "agent/statistics",
     "params": {
       "target": {
@@ -1007,6 +1021,15 @@ export const fixtures = [
         "mime_type": "text/markdown"
       },
       "data": "IyBSZXBvcnQK"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "job_output",
+      "text": "live output",
+      "truncated": false
     }
   },
   {

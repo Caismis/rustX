@@ -734,6 +734,27 @@ impl ClientInner {
         Ok(background_view(&snapshot))
     }
 
+    pub(crate) fn job_output(
+        &self,
+        id: &ToolExecutionId,
+    ) -> Result<(String, bool), RuntimeClientError> {
+        let registry = self
+            .runtime
+            .as_ref()
+            .map(crate::runtime::conversation_runtime::ConversationRuntime::background_registry)
+            .filter(|registry| registry.contains_execution(id))
+            .ok_or_else(|| RuntimeClientError::UnknownBackgroundExecution {
+                execution_id: id.clone(),
+            })?;
+        registry
+            .resources()
+            .tool_output
+            .live_tail(id)
+            .map_err(|error| RuntimeClientError::ObservationUnavailable {
+                message: error.to_string(),
+            })
+    }
+
     pub(crate) fn job_status_page(
         &self,
         id: &ToolExecutionId,

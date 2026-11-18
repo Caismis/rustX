@@ -66,6 +66,7 @@ impl Family<'_> {
             | Method::Transcript { target, .. }
             | Method::ConversationTurns { target, .. }
             | Method::Goal { target, .. }
+            | Method::JobOutput { target, .. }
             | Method::JobStatus { target, .. }
             | Method::JobList { target, .. }
             | Method::JobWait { target, .. }

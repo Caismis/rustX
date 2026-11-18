@@ -145,6 +145,7 @@ export const METHOD_POLICY: Readonly<Record<MethodName, MethodPolicy>> = Object.
   'schedule/command': { effect: 'side_effecting' },
   'schedule/recoverStorage': { effect: 'side_effecting' },
   'goal/control': { effect: 'side_effecting', readWhen: request => request.method === 'goal/control' && request.params.control.action === 'show' },
+  'job/output': { effect: 'read' },
   'job/status': { effect: 'read' },
   'job/list': { effect: 'read' },
   'job/wait': { effect: 'read', unbounded: true },

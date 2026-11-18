@@ -511,6 +511,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'job/output';
+      params: {
+        target: AttachmentTarget;
+        job_id: ToolExecutionId;
+      };
+    }
+  | {
       method: 'job/status';
       params: {
         target: AttachmentTarget;
@@ -2910,6 +2917,11 @@ export type MethodResult =
   | {
       reference?: GoalRef | null;
       type: 'goal_mutation';
+    }
+  | {
+      text: string;
+      truncated: boolean;
+      type: 'job_output';
     }
   | {
       job_id: ToolExecutionId;

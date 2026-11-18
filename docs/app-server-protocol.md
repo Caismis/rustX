@@ -910,7 +910,7 @@ clears it. Superseded source completions cannot publish stale tools or failures.
 | `configuration/sourcesRead`, `configuration/sourceWrite` | Native structured User/Workspace documents and exact revisions; bounded semantic-unit CAS writes |
 | `session/effectiveConfiguration`, `configuration/reconcile` | Authoritative application state and native rescan/retry |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
-| `job/list`, `job/status`, `job/wait`, `job/cancel` | ConversationBackgroundRegistry: bounded finite Jobs, immediate status and cancellation-intent receipt; the separate exact terminal wait reaches physical settlement or typed publication abandonment |
+| `job/list`, `job/status`, `job/output`, `job/wait`, `job/cancel` | ConversationBackgroundRegistry: bounded finite Jobs, immediate status and cancellation-intent receipt; the separate exact terminal wait reaches physical settlement or typed publication abandonment |
 | `agent/statistics` | Parent `AttachmentTarget` → exact parent registry Agent ownership → existing child store → incremental native usage, timing and occupancy; read-only, no child activation |
 | `agent/transcript`, `agent/turns` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `AgentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
 | `agent/list`, `agent/status`, `agent/sendMessage`, `agent/wait`, `agent/interrupt` | Durable Agent owner: atomic message/resume arbitration, captured activation wait and finite intent receipt for interruption of that exact reserved/current activation |
@@ -2247,6 +2247,8 @@ mutations.
 
 
 ## Exact Job and Agent synchronization (v52)
+
+`job/output` reads the last 16 KiB of live output for a committed job on the attached conversation. The response carries UTF-8 text and a truncation flag. Terminal output comes from the job result.
 
 Job status is non-blocking and `job/wait` waits on the registry's exact finite
 Job ID through physical settlement. No client poll loop discovers completion;

@@ -9151,6 +9151,27 @@
         {
           "type": "object",
           "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "job_output"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text",
+            "truncated"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "job_id": {
               "$ref": "#/$defs/ToolExecutionId"
             },
@@ -36234,6 +36255,35 @@
               "required": [
                 "target",
                 "control"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "job/output"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "job_id": {
+                  "$ref": "#/$defs/ToolExecutionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "job_id"
               ]
             }
           },

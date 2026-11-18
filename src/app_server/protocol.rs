@@ -503,6 +503,11 @@ pub enum Method {
         target: AttachmentTarget,
         control: crate::goal::GoalControl,
     },
+    #[serde(rename = "job/output")]
+    JobOutput {
+        target: AttachmentTarget,
+        job_id: crate::runtime::identity::ToolExecutionId,
+    },
     #[serde(rename = "job/status")]
     JobStatus {
         target: AttachmentTarget,
@@ -1252,6 +1257,7 @@ impl Method {
             | Self::ModelGet { .. }
             | Self::ModelCatalog { .. }
             | Self::Capability { .. }
+            | Self::JobOutput { .. }
             | Self::JobStatus { .. }
             | Self::JobList { .. }
             | Self::JobWait { .. }
@@ -1772,6 +1778,7 @@ pub enum MethodResult {
     GoalMutation {
         reference: Option<crate::goal::GoalRef>,
     },
+    JobOutput { text: String, truncated: bool },
     JobCancellationAccepted { job_id: crate::runtime::identity::ToolExecutionId },
     AgentInterruptionAccepted { agent_id: crate::runtime::identity::AgentId, activation_id: Option<crate::runtime::identity::SubagentId> },
     JobOutcome {

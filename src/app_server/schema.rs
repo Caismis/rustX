@@ -504,6 +504,12 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 through: crate::runtime::inbound::InboundSequence::new(EXACT),
             },
         },
+        Method::JobOutput {
+            target: target.clone(),
+            job_id: crate::runtime::identity::ToolExecutionId::new(
+                "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+            ),
+        },
         Method::AgentStatistics {
             target: target.clone(),
             agent_id: crate::runtime::identity::AgentId::new("agent-fixture"),
@@ -587,6 +593,10 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 mime_type: "text/markdown".into(),
             },
             data: "IyBSZXBvcnQK".into(),
+        },
+        MethodResult::JobOutput {
+            text: "live output".into(),
+            truncated: false,
         },
         MethodResult::DomainPage {
             page: crate::runtime_client::checkpoint::CheckpointPage {
