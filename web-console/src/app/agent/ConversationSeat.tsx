@@ -3,7 +3,7 @@ import { Toast } from '../../presentation/primitives/Toast';
 import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { actionError } from '../../bindings/action-error';
 import { useTranslation } from '../../locale/react';
-import { useState } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { UploadFailure } from '../../client/uploads';
 import type { AppServerClient } from '../../client/app-server';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
@@ -17,6 +17,7 @@ import { goalDock } from '../../bindings/composer-context';
 import { deriveSessionProductState, type SessionRecovery, type SessionTransition } from '../../bindings/session-product';
 import { SessionStatus } from '../SessionStatus';
 import { ConversationComposer } from '../new-conversation/ConversationComposer';
+import { firstSubmissions } from '../new-conversation/first-submit';
 import { ConversationDocks, ConversationTotals } from './ConversationLive';
 import { Interactions } from './Interactions';
 import type { CommandId } from '../commands/registry';
@@ -26,10 +27,12 @@ import { RecordedQuestionPanel, useQuestionPanels } from './QuestionPanels';
 
 export function ConversationStatus({ client, sessionId, recover, transition }: { client: AppServerClient; sessionId: string; recover: (action: SessionRecovery) => void; transition?: SessionTransition }) {
   const tx = useTranslation();
+  const submissions = firstSubmissions(client);
+  const attaching = useSyncExternalStore(submissions.subscribe, () => submissions.session(sessionId)?.phase === 'attaching');
   const product = useClientSelector(client, state => deriveSessionProductState(tx, state, state.views[sessionId], sessionId, transition), sameValue);
   // Physical connection feedback has one owner beside Settings. Session-owned
   // uncertainty, storage failures and a lost attachment remain actionable here.
-  if (product.status === 'reconnect' && product.recovery?.action === 'connect'
+  if (product.status === 'reconnect' && (product.recovery?.action === 'connect' || attaching && product.recovery?.action === 'open')
     || product.status === 'failure' && product.recovery?.action === 'connection-settings') return null;
   return <SessionStatus product={product} recover={recover}/>;
 }

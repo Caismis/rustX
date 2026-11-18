@@ -66,14 +66,14 @@ export function TaskManagerPage({ client, host, authority, openSession }: { clie
       </div></div>
       {!connected && <p className={css.notice} role="status">{t('connection.disconnected')}</p>}
       {issue && <div className={css.notice} role="alert"><p>{t('list.partial')}</p><Button size="sm" disabled={!connected || loading} onClick={() => void model.refresh()}>{t('list.retry')}</Button></div>}
-      {loading && <p role="status" className={extra.loading}>{t(records.length ? 'list.refreshing' : 'list.loading')}</p>}
-      {searching && <p role="status" className={extra.loading}>{t('search.content-loading')}</p>}
+      {loading && !records.length && <p role="status" className={extra.loading}>{t('list.loading')}</p>}
+      {searching && !rows.length && <p role="status" className={extra.loading}>{t('search.content-loading')}</p>}
       {searchFailed && <p role="alert" className={extra.loading}>{t('search.content-error')}</p>}
       {!loading && !searching && rows.length === 0 && <div className={css.empty}><span className={css.emptyGlyph}><IconClockOutline16 size={32}/></span>
         <h2>{t(search ? 'list.noMatches' : filter === 'disabled' ? 'list.paused-empty' : filter === 'completed' ? 'list.ended-empty' : 'list.empty')}</h2>
         {!search && <Button className={css.emptyAction} onClick={newTask}>{t('empty.action')}</Button>}
       </div>}
-      <ul className={css.listRows} aria-label={t('list.label')} aria-busy={loading} style={{ height: virtual.getTotalSize(), position: 'relative' }}>
+      <ul className={css.listRows} aria-label={t('list.label')} aria-busy={loading || searching} style={{ height: virtual.getTotalSize(), position: 'relative' }}>
         {virtual.getVirtualItems().map(item => { const row = rows[item.index], key = taskKey(taskRef(row)), next = row.state === 'enabled' && row.next_due_utc && displayInstant(row.next_due_utc, locale, now);
           return <li key={key} ref={virtual.measureElement} data-index={item.index} style={{ position: 'absolute', top: 0, left: 0, width: '100%', transform: 'translateY(' + item.start + 'px)' }}>
             <Button className={clsx(css.row, selectedKey === key && css.selectedRow, row.state !== 'enabled' && css.endedRow)} aria-expanded={selectedKey === key}

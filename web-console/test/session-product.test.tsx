@@ -14,6 +14,13 @@ const base = (): SessionView => ({ threadStatus:{...activeStatus,status:{type:'i
 const running = () => ({ attempt_id: 'private-attempt', phase: { type: 'running' as const }, turn: 1 });
 const uncertain = { id: 'lost-request', method: 'turn/interrupt' as const, sessionId: 'A', generation: 7 };
 
+it('missing thread status is not evidence of a failed observation', () => {
+  const view = { ...base(), threadStatus: undefined };
+  const project = (observationState: SessionView['observationState']) => deriveSessionProductState(translator('en'), connected, { ...view, observationState });
+  expect(project('following').label).toBeUndefined();
+  expect(project('unavailable')).toMatchObject({ severity: 'warning', label: 'Observation unavailable' });
+});
+
 it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progress while retaining real failures', transition => {
   const tx = translator('en'), view: SessionView = { ...base(), target: undefined, attachment: 'detached', attachmentIntent: 'released' };
   const project = (state: Pick<ClientView, 'connection' | 'uncertain'> = connected, source = view) => deriveSessionProductState(tx, state, source, 'A', transition);
@@ -27,6 +34,10 @@ it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progres
 });
 
 it.each([
+  ['awaiting first checkpoint', { threadStatus: undefined, observationState: 'attached' }, {}, 'connecting', undefined],
+  ['loading checkpoint', { threadStatus: undefined, observationState: 'checkpointLoading' }, {}, 'connecting', undefined],
+  ['awaiting subscription', { threadStatus: undefined, observationState: 'subscribePending' }, {}, 'connecting', undefined],
+  ['missing status after subscription', { threadStatus: undefined, observationState: 'following' }, {}, 'unavailable', undefined],
   ['idle', {}, {}, 'idle', undefined],
   ['working', { threadStatus:activeStatus, snapshot: { ...snapshot(), attempt: running() } }, {}, 'working', undefined],
   ['queued accepted input', { submissions: [{ messageId: 'accepted', content: [], submittedWhileRunning: true }] }, {}, 'idle', undefined],

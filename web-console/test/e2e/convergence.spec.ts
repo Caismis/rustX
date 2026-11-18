@@ -86,12 +86,16 @@ test('Harness New Conversation, permission, model, native process and Models con
     const noAdmission = () => { expect(wire.requests.filter(r => r.method === 'thread/start' || r.method === 'inbound/queue')).toHaveLength(0); };
     await expect(send).toBeDisabled();
     await page.getByRole('textbox', { name: 'Message', exact: true }).press('Enter'); noAdmission();
-    await expect(page.getByText('Applying Workspace permission…', { exact: true })).toBeVisible();
+    const permissionSeat = page.locator('[aria-busy="true"]').filter({ has: permissions }).last();
+    await expect(permissionSeat).toHaveAttribute('aria-busy', 'true');
+    await expect(permissionSeat.locator('small')).toHaveCount(0);
+    await expect(page.getByText('Applying Workspace permission…', { exact: true })).toHaveCount(0);
     await shot('05-permission-write-pending');
     releaseWrite.resolve(); await observedWrite.promise;
     // Native write and Host reread have completed, but their authoritative
     // result has not reached the Settings actor. Admission must remain closed.
     await expect(send).toBeDisabled();
+    await expect(page.getByText('Saved; awaiting authoritative observation.', { exact: true })).toHaveCount(0);
     await page.getByRole('textbox', { name: 'Message', exact: true }).press('Enter'); noAdmission();
     releaseObservation.resolve();
     await expect(permissions).toContainText('Full access');
@@ -106,6 +110,14 @@ test('Harness New Conversation, permission, model, native process and Models con
     // Hold the real creation acknowledgement until the fixture's native manual
     // label commits. The browser still performs all creation/admission work.
     wire.holdNext('thread/start');
+    const startupBanners = await page.evaluateHandle(() => {
+      const labels = new Set<string>();
+      const observer = new MutationObserver(() => {
+        document.querySelectorAll('#session-view [aria-label="Session status"], #session-view [aria-label="Session configuration"]').forEach(node => labels.add(node.textContent ?? ''));
+      });
+      observer.observe(document.querySelector('#session-view')!, { subtree: true, childList: true, characterData: true });
+      return () => { observer.disconnect(); return [...labels]; };
+    });
     await page.getByRole('button', { name: 'Send', exact: true }).click();
     await expect.poll(() => wire.held()).toBe(1);
     const created = wire.responses.find(row => row.method === 'thread/start')!.result.session;
@@ -140,6 +152,7 @@ test('Harness New Conversation, permission, model, native process and Models con
     try { expect((await completed).outcome).toMatchObject({ type: 'completed', finish_reason: { type: 'stop' } }); }
     finally { observeNotification = undefined; observeRetirement = undefined; }
     await expect(page.getByRole('heading', { name: 'Workspace ready' })).toBeVisible();
+    expect(await startupBanners.evaluate(finish => finish())).toEqual([]);
     expect(await residentInput!.evaluate(node => node === document.querySelector('textarea[aria-label="Message"]'))).toBe(true);
     expect(await residentSeat!.evaluate(node => node === document.querySelector('[data-resident-composer]'))).toBe(true);
     await expect(page.getByLabel('Session location', { exact: true })).toHaveCount(0);

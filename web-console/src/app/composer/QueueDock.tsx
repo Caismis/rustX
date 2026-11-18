@@ -78,7 +78,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   const listed = count === 1 || !collapsed || !!draft || !!operation;
   const status = running ? tx('agent:copy.queued') : tx('agent:copy.waiting-to-start');
   const hiddenEchoes = !listed && echoes.length > 0;
-  return <section className={css.dock} aria-label={tx('agent:queue-dock.queue')} data-queue-dock="">
+  return <section className={css.dock} aria-label={tx('agent:queue-dock.queue')} aria-busy={operation?.status === 'pending'} data-queue-dock="">
     <div className={css.panel}>
       {count > 1 && <button type="button" className={css.header} aria-expanded={listed} disabled={!!draft || !!operation} aria-controls={listed ? listId : undefined} onClick={() => setCollapsed(value => !value)}>
         <QueueGlyph /><span className={css.count}>{count} {tx('agent:queue-dock.queued')}</span>
@@ -122,7 +122,6 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
         </div>
         {staleDraft && <p role="status">{currentDraft ? tx('agent:queue-dock.this-queued-message-changed-review-the-latest-version-before-sav') : tx('agent:queue-dock.this-message-is-no-longer-queued')}</p>}
       </div>}
-      {operation?.status === 'pending' && <p className={css.notice} role="status">{tx('agent:queue-dock.updating-queue')}</p>}
       {notice && <p className={css.notice} role="status">{notice}</p>}
     </div>
   </section>;

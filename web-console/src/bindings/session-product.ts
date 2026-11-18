@@ -61,6 +61,8 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
       case 'active':return {status:entry.status.activeFlags.length?'waiting':'working',severity:'quiet',label:entry.status.activeFlags.length?entry.status.activeFlags.map(flag=>tx(flag==='waitingOnApproval'?'workspace:status.waitingApproval':'workspace:status.waitingAnswer')).join(' · '):undefined};
     }
   }
-  return {status:'unavailable',severity:'warning',label:tx('common:session-product.observation-unavailable')};
+  if (view && !view.error && (view.observationState === 'attached' || view.observationState === 'checkpointLoading' || view.observationState === 'subscribePending')) return { status: 'connecting', severity: 'quiet' };
+  if (view?.error || view?.observationState === 'unavailable' || view?.observationState === 'resyncRequired') return { status: 'unavailable', severity: 'warning', label: tx('common:session-product.observation-unavailable') };
+  return { status: 'unavailable', severity: 'quiet' };
 
 }

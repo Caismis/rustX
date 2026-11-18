@@ -528,7 +528,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "9c696da68703b40dc72db4aefdaa65c993f619bcac76ab34ffbfbbe3e3af29eb"
+      "local_sha256": "aeebcdcf17dce4b5038230f5a958bfa85c3d32c464036f6978314c5f66233a35"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -3556,7 +3556,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "e96665d112971663a4c63ccea7567ae60682b3ca2f655c071c6346b172a80ef8",
+      "local_sha256": "9803094f3388a9eeb168fedfc97c171719a7b3fae9cf4e6dd1bb3a4022b8b251",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -8138,7 +8138,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "c6ca4e5449b6249e72d44612e14acfac22e21cb911ff0a78ce082f9961e73707"
+      "local_sha256": "ecc8d68d0c257da37c6e78e957bd5333b4981d1995d96a7ddca1c469425dcc92"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",

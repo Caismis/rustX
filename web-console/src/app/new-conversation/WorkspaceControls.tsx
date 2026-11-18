@@ -44,20 +44,21 @@ export function WorkspacePermission({ source, approval, disabled = false }: { so
   const mutation = approvalMutation;
   const blocked = disabled || !source?.prospective_approval_mode || !unit.admitted || unit.busy || unit.awaitingObservation || unit.reviewNeeded;
   const outcome = unit.outcome;
-  return <div><PermissionSelect value={source?.prospective_approval_mode ?? undefined} disabled={blocked} choose={value => {
+  const saving = unit.busy || outcome.kind === 'committed';
+  return <div aria-busy={saving}><PermissionSelect value={source?.prospective_approval_mode ?? undefined} disabled={blocked} choose={value => {
     unit.edit(value);
     actor.send({ type: 'UNIT.SUBMIT', identity: unit.identity, selector: revisionSelector(mutation(null)), revision, mutation: mutation(value) });
-  }}/>
+  }}/>{!saving && <>
     {unit.draft && <small>{tx('workspace:workspace-controls.requested')}{' '}{unit.displayed === 'full_access' ? tx('workspace:workspace-controls.full-access') : unit.displayed === 'automatic' ? tx('workspace:workspace-controls.automatic') : tx('workspace:workspace-controls.plan')}</small>}
     {outcome.kind === 'conflict' && <small role="alert">{tx('workspace:workspace-controls.workspace-changed-your-selection-is-preserved')}</small>}
     {outcome.kind === 'rejected' && <small role="alert">{outcome.detail}</small>}
     {outcome.kind === 'uncertain' && <small role="alert">{tx('workspace:workspace-controls.outcome-uncertain-reread-before-another-change-no-replay')}</small>}
-    {(outcome.kind === 'committed' || outcome.kind === 'saved' && !outcome.observed) && <small role="status">{tx('workspace:workspace-controls.saved-awaiting-authoritative-observation')}</small>}
+    {outcome.kind === 'saved' && !outcome.observed && <small role="status">{tx('workspace:workspace-controls.saved-awaiting-authoritative-observation')}</small>}
     {unit.intent && !unit.busy && <Button size="sm" onClick={unit.discard}>{tx('workspace:workspace-controls.discard-requested-permission')}</Button>}
     {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('workspace:workspace-controls.review-current-revision')}</Button>}
     {unit.draft && !blocked && <Button size="sm" onClick={() => unit.submit()}>{tx('workspace:workspace-controls.apply-requested-permission')}</Button>}
     {(unit.awaitingObservation || outcome.kind === 'uncertain' || outcome.kind === 'conflict') && <Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-permissions')}</Button>}
-  </div>;
+  </>}</div>;
 }
 /** The native catalog a Session created in this Workspace binds. Its choices
  * are draft Session intent, never Workspace configuration or Session state. */

@@ -724,6 +724,8 @@ describe('exact pending QueueDock mutations', () => {
     fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'after' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(edit).toHaveBeenCalledWith({ sequence: '7', revision: '0' }, 'after');
+    expect(screen.getByRole('region', { name: 'Queue' }).getAttribute('aria-busy')).toBe('true');
+    expect(screen.queryByText('Updating queue…')).toBeNull();
     expect(screen.getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', true);
     await act(async () => finish({ status: 'known', outcome: { status: 'applied' ,read_cut:readCut()}, observed: false }));
     expect(screen.getByText('before')).toBeTruthy();
