@@ -35,12 +35,19 @@ pub mod tools {
     pub mod types;
 }
 
+pub mod skills {
+    pub mod frontmatter;
+}
+
 pub mod capabilities {
     pub mod source;
     pub use source::ToolSourceId;
 }
 
 pub mod runtime {
+    pub use rustx_identity as identity;
+    pub use cancellation::{CancellationCause, CancellationSignal, ExecutionCancellation};
+
     pub mod cancellation;
     pub mod monotonic;
     pub mod process_supervision;

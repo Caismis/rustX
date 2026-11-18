@@ -5,17 +5,17 @@ use std::path::Path;
 use crate::runtime::CancellationSignal;
 
 /// Bound the metadata read independently of the size of the body.
-pub(crate) const MAX_FRONTMATTER_BYTES: usize = 2 * 1024 * 1024;
+pub const MAX_FRONTMATTER_BYTES: usize = 2 * 1024 * 1024;
 const BUFFER_BYTES: usize = 4096;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fixtures"))]
 thread_local! {
-    pub(crate) static ON_CHUNK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-    pub(crate) static AFTER_PREFIX: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
-    pub(crate) static READ_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    pub static ON_CHUNK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    pub static AFTER_PREFIX: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = const { std::cell::RefCell::new(None) };
+    pub static READ_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
-pub(crate) fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
+pub fn read(path: &Path, signal: &CancellationSignal) -> Result<Vec<u8>, String> {
     let parent = path.parent().ok_or("Skill file has no parent directory")?;
     let name = path.file_name().ok_or("Skill file has no name")?;
     let directory = crate::package_io::PackageDirectory::open(parent).map_err(|e| e.to_string())?;
