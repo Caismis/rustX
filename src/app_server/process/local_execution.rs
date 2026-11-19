@@ -90,37 +90,65 @@ pub(super) async fn launch(
         .kill_on_drop(true)
         .spawn()
         .map_err(|error| format!("local execution: client spawn failed: {error}"))?;
-    // One bounded admission: an early Client exit is a failure, and the
-    // accept wait is capped by the shared handshake deadline.
-    let stream = match tokio::select! {
-        status = child.wait() => Err(format!(
-            "local execution: client exited before admission ({status:?})"
-        )),
-        accepted = tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, listener.accept()) => {
-            match accepted {
-                Ok(Ok((stream, _))) => Ok(stream),
-                Ok(Err(error)) => Err(format!("local execution: client accept failed: {error}")),
-                Err(_) => Err(
-                    "local execution: client did not connect within the handshake deadline".into(),
-                ),
+    // One bounded paired admission: the data lane's `Hello` earns a
+    // pairing challenge and `Pending`; the Client's control lane — a
+    // second connection carrying `ControlHello` with the challenge
+    // nonce — commits the pair `Live`. Both lanes share one absolute
+    // budget armed at the first accept, and an early Client exit fails
+    // the launch at any point.
+    let mut deadline = None;
+    loop {
+        let accept = match deadline {
+            // The budget is armed the instant the first stream exists —
+            // the same `Instant` forwarded into the binding — never one
+            // deadline per lane.
+            Some(deadline) => {
+                tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), listener.accept())
             }
-        }
-    } {
-        Ok(stream) => stream,
-        Err(error) => {
-            reap_failed(&mut child).await;
-            return Err(error);
-        }
-    };
-    // The handshake budget is armed the instant the stream exists, before
-    // the admission task can wait in the blocking pool's unbounded queue.
-    let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-    let admitted = admit(endpoint, stream, deadline).await;
-    match admitted {
-        Ok(()) => Ok(child),
-        Err(error) => {
-            reap_failed(&mut child).await;
-            Err(error)
+            None => tokio::time::timeout(LOCAL_HANDSHAKE_TIMEOUT, listener.accept()),
+        };
+        let stream = match tokio::select! {
+            status = child.wait() => Err(format!(
+                "local execution: client exited before admission ({status:?})"
+            )),
+            accepted = accept => {
+                match accepted {
+                    Ok(Ok((stream, _))) => Ok(stream),
+                    Ok(Err(error)) => {
+                        Err(format!("local execution: client accept failed: {error}"))
+                    }
+                    Err(_) => Err(
+                        "local execution: client did not connect within the handshake deadline"
+                            .into(),
+                    ),
+                }
+            }
+        } {
+            Ok(stream) => stream,
+            Err(error) => {
+                reap_failed(&mut child).await;
+                return Err(error);
+            }
+        };
+        let deadline =
+            *deadline.get_or_insert_with(|| std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT);
+        match admit(endpoint.clone(), stream, deadline).await {
+            Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Live) => {
+                return Ok(child);
+            }
+            // Data half held — the pairing control lane is still to come
+            // inside the same budget.
+            Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Pending) => {}
+            Ok(crate::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
+                reject,
+            )) => {
+                reap_failed(&mut child).await;
+                return Err(format!("local execution: admission rejected: {reject}"));
+            }
+            Err(error) => {
+                reap_failed(&mut child).await;
+                return Err(error);
+            }
         }
     }
 }
@@ -133,7 +161,7 @@ async fn admit(
     endpoint: Arc<LocalExecutionEndpoint>,
     stream: tokio::net::UnixStream,
     deadline: std::time::Instant,
-) -> Result<(), String> {
+) -> Result<crate::local_runtime::session_runtime_manager::EndpointAdmission, String> {
     let outcome = tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
         tokio::task::spawn_blocking(move || {
@@ -142,8 +170,7 @@ async fn admit(
     )
     .await;
     match outcome {
-        Ok(Ok(Ok(Ok(())))) => Ok(()),
-        Ok(Ok(Ok(Err(reject)))) => Err(format!("local execution: admission rejected: {reject}")),
+        Ok(Ok(Ok(admission))) => Ok(admission),
         Ok(Ok(Err(error))) => Err(format!("local execution: admission failed: {error}")),
         Ok(Err(error)) => Err(format!("local execution: admission task failed: {error}")),
         Err(_) => Err("local execution: admission exceeded the handshake deadline".into()),
@@ -268,10 +295,15 @@ async fn accept_remote(
                         return;
                     }
                     let Ok(stream) = stream.into_std() else { return };
-                    let admitted_peer = endpoint
+                    let committed = endpoint
                         .admit_websocket_stream_deadline(stream, deadline)
-                        .is_ok_and(|result| result.is_ok());
-                    if admitted_peer {
+                        .is_ok_and(|admission| {
+                            matches!(
+                                admission,
+                                crate::local_runtime::session_runtime_manager::EndpointAdmission::Live
+                            )
+                        });
+                    if committed {
                         let _ = admitted.send(());
                     }
                 });

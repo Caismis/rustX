@@ -94,6 +94,23 @@ enum ExecutionTransport {
     WebSocket,
 }
 
+/// The outcome of one accepted connection on the endpoint.
+///
+/// `Pending` is a real half-admission — the pairing challenge is out —
+/// but nothing is dispatchable and no connection is stored: the caller
+/// keeps accepting for the control lane inside the same budget. `Live`
+/// is the committed, stored pair. `Rejected` delivered the typed reject
+/// on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndpointAdmission {
+    /// The data half was admitted; the pairing control lane is awaited.
+    Pending,
+    /// The pair committed and the connection is stored.
+    Live,
+    /// The peer was refused; the reject was delivered.
+    Rejected(Reject),
+}
+
 /// The single live listener of one reserved endpoint — exactly one mode,
 /// never both.
 pub enum ExecutionListener {
@@ -239,7 +256,7 @@ impl LocalExecutionEndpoint {
     /// # Panics
     ///
     /// Panics if the connection mutex is poisoned.
-    pub fn admit_local_stream(&self, stream: UnixStream) -> io::Result<Result<(), Reject>> {
+    pub fn admit_local_stream(&self, stream: UnixStream) -> io::Result<EndpointAdmission> {
         self.admit_local_stream_deadline(
             stream,
             std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT,
@@ -263,7 +280,7 @@ impl LocalExecutionEndpoint {
         &self,
         stream: UnixStream,
         deadline: std::time::Instant,
-    ) -> io::Result<Result<(), Reject>> {
+    ) -> io::Result<EndpointAdmission> {
         let admitted = self.binding.accept_local_deadline(stream, deadline)?;
         Ok(self.store(admitted))
     }
@@ -289,25 +306,38 @@ impl LocalExecutionEndpoint {
         &self,
         stream: std::net::TcpStream,
         deadline: std::time::Instant,
-    ) -> io::Result<Result<(), Reject>> {
+    ) -> io::Result<EndpointAdmission> {
         let channel = rustx_execution_transport::accept(stream, deadline)?;
         let admitted = self.binding.accept_channel_deadline(channel, deadline)?;
         Ok(self.store(admitted))
     }
 
     /// Stores the one admitted connection — at most one, never replaced.
-    fn store(&self, admitted: Result<LocalConnection, Reject>) -> Result<(), Reject> {
+    /// A pending data half is held inside the binding itself; only a
+    /// committed pair lands in the endpoint's connection slot.
+    fn store(&self, admitted: rustx_execution_server::ChannelAccept) -> EndpointAdmission {
         match admitted {
-            Ok(connection) => {
+            rustx_execution_server::ChannelAccept::Pending => EndpointAdmission::Pending,
+            rustx_execution_server::ChannelAccept::Live(connection) => {
                 let mut slot = self.connection.lock().expect("endpoint connection");
                 assert!(
                     slot.replace(connection).is_none(),
                     "a binding admits at most one live connection"
                 );
-                Ok(())
+                EndpointAdmission::Live
             }
-            Err(reject) => Err(reject),
+            rustx_execution_server::ChannelAccept::Rejected(reject) => {
+                EndpointAdmission::Rejected(reject)
+            }
         }
+    }
+
+    /// The live pair's cloneable control handle — health, mutation
+    /// cancellation, and revocation independent of the data lane's
+    /// dispatch lock. `None` while no pair is live.
+    #[must_use]
+    pub fn control(&self) -> Option<rustx_execution_server::ControlHandle> {
+        self.binding.control()
     }
 
     /// One bounded, revision-checked range read through the admitted
@@ -665,10 +695,11 @@ impl LocalExecutionEndpoint {
         data: OwnedSemaphorePermit,
         _writer: OwnedSemaphorePermit,
         admit: impl Fn() -> io::Result<()>,
+        sent: impl Fn(),
     ) -> io::Result<rustx_confined_fs::FileMetadata> {
         self.with_connection(Some(data), true, |connection| {
             connection
-                .commit_prepared(prepared, Some(deadline), &admit)
+                .commit_prepared(prepared, Some(deadline), &admit, &sent)
                 .map(project_stamp)
         })
     }
@@ -753,7 +784,7 @@ impl LocalExecutionEndpoint {
     /// raw shutdown instead; this never waits on the connection's data
     /// lock, so a stuck peer can never stall a fence or a drain.
     fn fence_connection(&self) {
-        let shutdown = self.binding.fence();
+        let fenced = self.binding.fence();
         match self.connection.try_lock() {
             Ok(mut guard) => match guard.as_mut() {
                 // An idle stored connection earns the orderly Close.
@@ -761,23 +792,15 @@ impl LocalExecutionEndpoint {
                 // already-fenced binding.
                 Some(connection) => connection.close(),
                 // Committed but not yet stored — or never stored: the
-                // seized handle interrupts the physical stream itself.
-                None => {
-                    if let Some(shutdown) = shutdown {
-                        shutdown.shutdown();
-                    }
-                }
+                // seized handles interrupt the physical lanes.
+                None => fenced.shutdown(),
             },
             // A live exchange holds the data lock: interrupt the
-            // physical stream so the dispatch's next I/O fails and the
+            // physical lanes so the dispatch's next I/O fails and the
             // connection retires on its own. Never wait on the mutex;
             // a poisoned guard gets the same treatment — the peer is
             // interrupted either way.
-            Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => {
-                if let Some(shutdown) = shutdown {
-                    shutdown.shutdown();
-                }
-            }
+            Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => fenced.shutdown(),
         }
     }
 
@@ -1317,7 +1340,13 @@ impl SessionExecutionScope {
     }
 
     /// The commit of one ticketed preparation — the publish crossing.
-    /// A `WriteOutcomeUnknown`-downcastable error means the outcome
+    ///
+    /// Once the `CommitWrite` frame starts on the data wire, a listener
+    /// on the invocation's cancellation forwards `CancelMutation` over
+    /// the paired control lane — an independent physical path the data
+    /// exchange cannot jam. A `CommitCancelled`-downcastable result is
+    /// the Client's proven clean pre-publish cancel; a
+    /// `WriteOutcomeUnknown`-downcastable error means the outcome
     /// cannot be known and must be reported honestly, never retried and
     /// never overridden by a racing cancellation.
     pub(crate) async fn commit_prepared(
@@ -1326,17 +1355,69 @@ impl SessionExecutionScope {
         cancellation: &ExecutionCancellation,
     ) -> io::Result<rustx_confined_fs::FileMetadata> {
         let prepared = prepared.clone();
-        self.dispatch_settled(
-            cancellation,
-            move |endpoint, data, writer, deadline, worker_cancellation| {
-                endpoint.commit_prepared_admitted(&prepared, deadline, data, writer, move || {
-                    worker_cancellation
-                        .with_active(|| ())
-                        .ok_or_else(cancelled_before_dispatch)
-                })
-            },
-        )
-        .await
+        let ticket = prepared.ticket;
+        // The listener arms only once the request is on the wire (`sent`
+        // fires the start gate), runs on the paired control lane, and is
+        // awaited to physical settlement — a racing cancellation is
+        // never dropped mid-command.
+        let control = self.endpoint().ok().and_then(|endpoint| endpoint.control());
+        let (started_send, mut started_recv) = tokio::sync::oneshot::channel::<()>();
+        let (done_send, mut done_recv) = tokio::sync::oneshot::channel::<()>();
+        let started_send = std::sync::Mutex::new(Some(started_send));
+        let sent = move || {
+            if let Some(send) = started_send.lock().expect("commit start gate").take() {
+                let _ = send.send(());
+            }
+        };
+        let watcher = control.map(|control| {
+            let signal = cancellation.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    _ = &mut started_recv => {
+                        tokio::select! {
+                            biased;
+                            () = signal.cancelled() => {
+                                let _ = tokio::task::spawn_blocking(move || {
+                                    control.cancel_mutation(ticket)
+                                })
+                                .await;
+                            }
+                            _ = &mut done_recv => {}
+                        }
+                    }
+                    _ = &mut done_recv => {}
+                }
+            })
+        });
+        let result = self
+            .dispatch_settled(
+                cancellation,
+                move |endpoint, data, writer, deadline, worker_cancellation| {
+                    endpoint.commit_prepared_admitted(
+                        &prepared,
+                        deadline,
+                        data,
+                        writer,
+                        move || {
+                            worker_cancellation
+                                .with_active(|| ())
+                                .ok_or_else(cancelled_before_dispatch)
+                        },
+                        sent,
+                    )
+                },
+            )
+            .await;
+        // Settlement: releasing `done_send` disarms the listener; when
+        // cancellation already fired, awaiting the watcher waits out the
+        // in-flight `cancel_mutation` — its reply is the Client-side
+        // arbitration, while the CommitWrite reply carried in `result`
+        // is the authoritative Server-side verdict.
+        drop(done_send);
+        if let Some(watcher) = watcher {
+            let _ = watcher.await;
+        }
+        result
     }
 
     /// The abort of one ticketed preparation — removes the Client-side
@@ -1999,12 +2080,14 @@ impl SessionRuntimeManager {
 #[cfg(test)]
 mod tests {
     use std::io::Read;
+    use std::time::Duration;
 
     use base64::Engine as _;
     use rustx_execution_protocol::transport::{read_record, write_record};
     use rustx_execution_protocol::{
-        Bootstrap, BootstrapEndpoint, ClientReply, ClientRequest, DecimalU64, FileStamp, Hello,
-        HelloReply, MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError,
+        Bootstrap, BootstrapEndpoint, ClientReply, ClientRequest, ControlHelloReply, ControlPoll,
+        ControlReply, ControlRequest, ControlTurn, DataHelloReply, DecimalU64, FileStamp, Hello,
+        MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, PeerHello, ReadError,
     };
     use rustx_execution_server::BindingPhase;
 
@@ -2351,8 +2434,85 @@ mod tests {
         client
     }
 
-    /// Admits a scripted peer through the endpoint's typed path: a valid
-    /// Hello from the published bundle, then the admission reply.
+    /// The client-side `ControlHello` a paired test lane carries: the
+    /// data Hello's exact identity plus the challenge the Server issued.
+    fn control_peer_hello(
+        hello: &Hello,
+        challenge: rustx_execution_protocol::PairingNonce,
+    ) -> PeerHello {
+        PeerHello::Control(rustx_execution_protocol::ControlHello {
+            version: hello.version,
+            session: hello.session.clone(),
+            environment: hello.environment.clone(),
+            instance: hello.instance.clone(),
+            generation: hello.generation,
+            workspace: hello.workspace.clone(),
+            credential: hello.credential.clone(),
+            connection_nonce: challenge,
+        })
+    }
+
+    /// The minimal control-lane loop a scripted peer runs so the paired
+    /// binding stays live: each `ControlPoll` carries a fresh nonce and
+    /// the receipt for the previous request; `Health` echoes, `Revoke`
+    /// acknowledges, and `CancelMutation` answers `Unknown` — these
+    /// scripted peers stage no local mutations. The loop ends with the
+    /// lane.
+    fn control_peer_loop(mut peer: UnixStream) {
+        let mut sequence = 1_u64;
+        let mut receipt: Option<ControlReply> = None;
+        loop {
+            let health = DecimalU64::new(sequence);
+            if write_record(
+                &mut peer,
+                &ControlPoll {
+                    sequence: DecimalU64::new(sequence),
+                    receipt: receipt.take(),
+                    health,
+                },
+            )
+            .is_err()
+            {
+                return;
+            }
+            let Ok(turn) = read_record::<ControlTurn>(&mut peer) else {
+                return;
+            };
+            if turn.sequence != DecimalU64::new(sequence) || turn.health != health {
+                return;
+            }
+            sequence += 1;
+            let Some(request) = turn.request else {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            };
+            let done = matches!(request, ControlRequest::Revoke);
+            receipt = Some(match request {
+                ControlRequest::Health { nonce } => ControlReply::Healthy { nonce },
+                ControlRequest::CancelMutation { ticket } => ControlReply::MutationCancelled {
+                    ticket,
+                    disposition: rustx_execution_protocol::CancelDisposition::Unknown,
+                },
+                ControlRequest::Revoke => ControlReply::Revoked,
+            });
+            if done {
+                let _ = write_record(
+                    &mut peer,
+                    &ControlPoll {
+                        sequence: DecimalU64::new(sequence),
+                        receipt,
+                        health: DecimalU64::new(sequence),
+                    },
+                );
+                return;
+            }
+        }
+    }
+
+    /// Admits a scripted peer through the endpoint's paired typed path:
+    /// the data Hello earns `Pending` and the challenge, a second
+    /// socket carries `ControlHello`, and the committed pair replies
+    /// `Live`; the control peer then polls on its own thread.
     fn admit(endpoint: &LocalExecutionEndpoint, client: &mut UnixStream) {
         let published = bundle(endpoint);
         let hello = Hello {
@@ -2373,15 +2533,31 @@ mod tests {
             ExecutionListener::Unix(listener) => listener.accept().unwrap(),
             ExecutionListener::WebSocket(_) => panic!("unix endpoint expected"),
         };
-        write_record(client, &hello).unwrap();
+        write_record(client, &PeerHello::Data(hello.clone())).unwrap();
         assert!(matches!(
             endpoint.admit_local_stream(accepted).unwrap(),
-            Ok(())
+            EndpointAdmission::Pending
         ));
+        let reply: DataHelloReply = read_record(client).unwrap();
+        let Ok(data) = reply else {
+            panic!("the scripted Hello is admitted");
+        };
+
+        // The pairing control lane: a second real connection carrying
+        // the challenge — mandatory, never optional.
+        let mut control = UnixStream::connect(socket_path(&bundle(endpoint))).unwrap();
+        let (accepted, _) = match endpoint.listener() {
+            ExecutionListener::Unix(listener) => listener.accept().unwrap(),
+            ExecutionListener::WebSocket(_) => panic!("unix endpoint expected"),
+        };
+        write_record(&mut control, &control_peer_hello(&hello, data.challenge)).unwrap();
         assert!(matches!(
-            read_record::<HelloReply>(client).unwrap(),
-            HelloReply::Ok(_)
+            endpoint.admit_local_stream(accepted).unwrap(),
+            EndpointAdmission::Live
         ));
+        let reply: ControlHelloReply = read_record(&mut control).unwrap();
+        assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
+        std::thread::spawn(move || control_peer_loop(control));
     }
 
     /// Asserts the peer socket holds no further bytes.
@@ -2680,15 +2856,28 @@ mod tests {
             ExecutionListener::Unix(listener) => listener.accept().unwrap(),
             ExecutionListener::WebSocket(_) => panic!("unix endpoint expected"),
         };
-        write_record(&mut client, &hello).unwrap();
+        write_record(&mut client, &PeerHello::Data(hello.clone())).unwrap();
         assert!(matches!(
             endpoint.admit_local_stream(accepted).unwrap(),
-            Ok(())
+            EndpointAdmission::Pending
         ));
+        let reply: DataHelloReply = read_record(&mut client).unwrap();
+        let Ok(data) = reply else {
+            panic!("the scripted Hello is admitted");
+        };
+        let mut control = UnixStream::connect(socket_path(&bundle(&endpoint))).unwrap();
+        let (accepted, _) = match endpoint.listener() {
+            ExecutionListener::Unix(listener) => listener.accept().unwrap(),
+            ExecutionListener::WebSocket(_) => panic!("unix endpoint expected"),
+        };
+        write_record(&mut control, &control_peer_hello(&hello, data.challenge)).unwrap();
         assert!(matches!(
-            read_record::<HelloReply>(&mut client).unwrap(),
-            HelloReply::Ok(_)
+            endpoint.admit_local_stream(accepted).unwrap(),
+            EndpointAdmission::Live
         ));
+        let reply: ControlHelloReply = read_record(&mut control).unwrap();
+        assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
+        std::thread::spawn(move || control_peer_loop(control));
         (registry, session, endpoint, client, workspace, dir)
     }
 
@@ -2751,7 +2940,7 @@ mod tests {
         let published = bundle(&endpoint);
         write_record(
             &mut second,
-            &Hello {
+            &PeerHello::Data(Hello {
                 version: PROTOCOL_VERSION,
                 session: published.session.clone(),
                 environment: published.environment.clone(),
@@ -2760,13 +2949,13 @@ mod tests {
                 workspace: published.workspace.clone(),
                 capabilities: BTreeSet::from([Capability::Connection]),
                 credential: published.credential.clone(),
-            },
+            }),
         )
         .unwrap();
-        assert_eq!(
+        assert!(matches!(
             endpoint.admit_local_stream(accepted).unwrap(),
-            Err(rustx_execution_protocol::Reject::Revoked)
-        );
+            EndpointAdmission::Rejected(rustx_execution_protocol::Reject::Revoked)
+        ));
         fencer.join().unwrap();
         drop(dir);
         drop(registry);
@@ -2970,6 +3159,104 @@ mod tests {
         // The registry's claim slot also holds an Arc to the endpoint —
         // both must go before the connection closes and the peer's
         // blocking read sees EOF.
+        drop(registry);
+        drop(endpoint);
+        let mut client = peer.join().unwrap();
+        wire_is_closed(&mut client);
+    }
+
+    /// The independent control lane is never charged against the data
+    /// budget: eight real `read_page` futures own every data permit —
+    /// one exchange parked on the wire, seven waiting — a ninth
+    /// dispatch is `WouldBlock`, and *while that stands* fresh
+    /// bidirectional health proofs and a real cancel receipt still
+    /// round-trip on the paired control lane, before any data drains.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_control_lane_progresses_while_every_data_permit_is_parked() {
+        let (registry, session, endpoint, mut client, _workspace, _dir) = admitted_lines_endpoint();
+        // The parked peer: each request's path is reported, the reply is
+        // held until the test releases it — every data permit stays
+        // genuinely occupied by a live exchange.
+        let (arrived_tx, mut arrived_rx) = tokio::sync::mpsc::unbounded_channel::<PathBuf>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let peer = std::thread::spawn(move || {
+            while let Ok(request) = read_record::<ClientRequest>(&mut client) {
+                let ClientRequest::ReadLines { relative_path, .. } = request else {
+                    panic!("expected a lines request");
+                };
+                arrived_tx.send(relative_path.clone()).unwrap();
+                if release_rx.recv().is_err() {
+                    break;
+                }
+                write_record(&mut client, &lines_reply(&relative_path)).unwrap();
+            }
+            client
+        });
+
+        let reason = crate::runtime::types::CancellationReason::UserRequested;
+        let mut tasks = Vec::new();
+        for index in 0..MAX_DATA_RECORDS_PER_CONNECTION {
+            let scope = scope_for(&registry, &session);
+            let cancellation = crate::runtime::ExecutionCancellation::detached(
+                crate::runtime::CancellationSignal::new(),
+                reason,
+            );
+            let path = PathBuf::from(format!("p{index}"));
+            tasks.push(tokio::spawn(async move {
+                scope.read_page(&path, 1, None, false, &cancellation).await
+            }));
+        }
+        // All eight permits held by real in-flight exchanges; the ninth
+        // is refused — the budget is real, not a semaphore claim.
+        wait_data_slots(&endpoint, 0).await;
+        let first = arrived_rx
+            .recv()
+            .await
+            .expect("one exchange is on the wire");
+        assert_eq!(endpoint.data_slots.available_permits(), 0);
+        let ninth_scope = scope_for(&registry, &session);
+        let ninth_cancellation = crate::runtime::ExecutionCancellation::detached(
+            crate::runtime::CancellationSignal::new(),
+            reason,
+        );
+        let error = ninth_scope
+            .read_page(Path::new("p9"), 1, None, false, &ninth_cancellation)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "{error}");
+
+        // The paired control lane — a separate physical socket — is
+        // not charged to that budget: fresh health proofs and a cancel
+        // receipt advance while every data permit stays parked.
+        let control = endpoint
+            .control()
+            .expect("a live pair has a control handle");
+        control.health().unwrap();
+        assert_eq!(
+            control.cancel_mutation(DecimalU64::new(41)).unwrap(),
+            rustx_execution_protocol::CancelDisposition::Unknown
+        );
+        control.health().unwrap();
+        assert_eq!(endpoint.data_slots.available_permits(), 0);
+
+        // Drain every exchange in arrival order — the budget unwinds
+        // exactly, one reply per held request.
+        release_tx.send(()).unwrap();
+        let mut served = vec![first];
+        while served.len() < MAX_DATA_RECORDS_PER_CONNECTION {
+            let arrived =
+                tokio::time::timeout(std::time::Duration::from_secs(30), arrived_rx.recv())
+                    .await
+                    .expect("queued dispatches proceed")
+                    .expect("peer stays live");
+            release_tx.send(()).unwrap();
+            served.push(arrived);
+        }
+        for task in tasks {
+            assert!(task.await.unwrap().is_ok(), "each exchange completes");
+        }
+        drop(arrived_rx);
+        drop(release_tx);
         drop(registry);
         drop(endpoint);
         let mut client = peer.join().unwrap();

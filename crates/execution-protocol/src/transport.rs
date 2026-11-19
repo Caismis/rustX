@@ -31,6 +31,31 @@ pub const MAX_RECORD_BYTES: usize = MAX_ENCODED_FRAME_BYTES - PREFIX_BYTES;
 /// re-armed. Server and Client share exactly this budget.
 pub const LOCAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The Client's idle poll period on the paired control lane: how often
+/// a quiet lane exchanges one `ControlPoll`/`ControlTurn` pair, and the
+/// bound on how soon a queued Server command can be delivered. A poll
+/// carrying a receipt or following a delivered request polls
+/// immediately — the period only paces idle traffic, so it is never a
+/// busy-loop and never blocks commands behind a sleep.
+pub const CONTROL_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// The per-frame deadline on the Server's control-lane read: a Client
+/// that stops polling for this long has lost the lane outright, at
+/// roughly forty idle periods of slack — far beyond scheduling jitter,
+/// far inside any useful liveness signal.
+pub const CONTROL_FRAME_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// The maximum count of queued plus in-flight control commands —
+/// probes included — before a new command is refused immediately.
+pub const MAX_CONTROL_COMMANDS: usize = 4;
+
+/// The absolute bound on one control command's round trip: queue wait,
+/// poll delivery, client handling, and the acknowledging poll. A
+/// control lane healthy enough to deliver within this window settles
+/// every waiter well inside it; a lane that cannot is torn down by the
+/// frame timeout long before waiters meaningfully accumulate.
+pub const CONTROL_COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The absolute deadline for one bounded logical page exchange —
 /// `ReadLines`/`ReadDocument` — on the Server side of an admitted local
 /// connection, armed once by the dispatching caller and covering the

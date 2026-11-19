@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 use rustx_execution_protocol::transport::{read_record, write_record};
 use rustx_execution_protocol::{
     BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply, ClientRequest,
-    EditRefusal, EntryKind, EnvironmentId, Generation, Hello, HelloReply, LineEnd,
-    MAX_EDIT_FILE_BYTES, Reject, SessionId, TextReplacement,
+    DataHelloReply, EditRefusal, EntryKind, EnvironmentId, Generation, LineEnd,
+    MAX_EDIT_FILE_BYTES, PeerHello, Reject, SessionId, TextReplacement,
 };
 use rustx_execution_server::{Binding, BindingPhase, RefusedEdit, Reservation};
 
@@ -126,6 +126,32 @@ fn accept(rig: &Rig, child: &mut Child) -> UnixStream {
 
 /// The client must not have connected at all: nothing was admitted, spawned,
 /// or written.
+/// Runs the mandatory paired admission for one spawned client: the
+/// first accept is the data half (`Pending`), the second is the
+/// control lane carrying the pairing challenge (`Live`).
+fn admit_pair(rig: &Rig, child: &mut Child) -> rustx_execution_server::LocalConnection {
+    let stream = accept(rig, child);
+    admit_pair_stream(rig, child, stream)
+}
+
+/// The paired admission when the data stream is already in hand — for
+/// tests that inspect or clone the data lane itself.
+fn admit_pair_stream(
+    rig: &Rig,
+    child: &mut Child,
+    stream: UnixStream,
+) -> rustx_execution_server::LocalConnection {
+    match rig.binding.accept_local(stream).unwrap() {
+        rustx_execution_server::ChannelAccept::Pending => {}
+        _ => panic!("expected a pending data half"),
+    }
+    let control = accept(rig, child);
+    match rig.binding.accept_local(control).unwrap() {
+        rustx_execution_server::ChannelAccept::Live(connection) => connection,
+        _ => panic!("expected a committed pair"),
+    }
+}
+
 fn assert_never_connected(rig: &Rig) {
     rig.listener.set_nonblocking(true).unwrap();
     assert_eq!(
@@ -140,8 +166,7 @@ fn handshake_ping_pong_and_clean_shutdown() {
     let rig = rig();
     let mut child = spawn_client(&rig);
 
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
     assert_eq!(connection.admission().session.as_str(), "session-1",);
     assert_eq!(rig.binding.status().phase, BindingPhase::Live);
 
@@ -159,8 +184,7 @@ fn credential_replay_after_eof_never_reconnects() {
     let rig = rig();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let connection = admit_pair(&rig, &mut child);
     drop(connection);
     expect_success(&mut child);
     assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
@@ -170,7 +194,10 @@ fn credential_replay_after_eof_never_reconnects() {
     let mut replay = spawn_client(&rig);
     let stream = accept(&rig, &mut replay);
     let outcome = rig.binding.accept_local(stream).unwrap();
-    assert!(matches!(outcome, Err(Reject::RecoveryRequired)));
+    assert!(matches!(
+        outcome,
+        rustx_execution_server::ChannelAccept::Rejected(Reject::RecoveryRequired)
+    ));
     assert!(!replay.wait().unwrap().success());
     assert_eq!(rig.binding.status().phase, BindingPhase::Detached);
 }
@@ -232,7 +259,10 @@ fn rejected_hello_consumes_nothing_and_the_client_does_not_retry() {
     let mut child = spawn_client(&rig);
     let stream = accept(&rig, &mut child);
     let outcome = rig.binding.accept_local(stream).unwrap();
-    assert!(matches!(outcome, Err(Reject::InvalidCredential)));
+    assert!(matches!(
+        outcome,
+        rustx_execution_server::ChannelAccept::Rejected(Reject::InvalidCredential)
+    ));
     assert!(!child.wait().unwrap().success());
 
     // The reject consumed nothing: reservation stands, the client did not
@@ -250,8 +280,7 @@ fn rejected_hello_consumes_nothing_and_the_client_does_not_retry() {
     rig.listener.set_nonblocking(false).unwrap();
     fs::write(&rig.bundle, &original).unwrap();
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let connection = admit_pair(&rig, &mut child);
     drop(connection);
     expect_success(&mut child);
 }
@@ -260,8 +289,7 @@ fn rejected_hello_consumes_nothing_and_the_client_does_not_retry() {
 fn caller_controls_client_shutdown_without_orphan() {
     let rig = rig();
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let connection = admit_pair(&rig, &mut child);
     assert_eq!(rig.binding.status().phase, BindingPhase::Live);
 
     // The caller can always terminate and reap the client; no detached
@@ -288,8 +316,7 @@ fn read_range_serves_verified_bytes_at_a_sparse_file_boundary() {
         rustx_confined_fs::FileMetadata::of(&std::fs::File::open(&path).unwrap()).unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     let range = connection
         .read_range(Path::new("blob"), marker_at, 64, None)
@@ -333,8 +360,7 @@ fn a_fully_consumed_empty_file_is_a_valid_read() {
         rustx_confined_fs::FileMetadata::of(&std::fs::File::open(&path).unwrap()).unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     let range = connection
         .read_range(Path::new("empty"), 0, 64, None)
@@ -358,8 +384,7 @@ fn stale_expected_revision_is_a_conflict_not_a_read() {
     fs::write(&path, b"first").unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     let range = connection
         .read_range(Path::new("asset"), 0, 64, None)
@@ -391,8 +416,7 @@ fn read_lines_pages_a_large_file_in_single_bounded_exchanges() {
         rustx_confined_fs::FileMetadata::of(&std::fs::File::open(&path).unwrap()).unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // The early page returns only the requested window and a counted
     // total over the whole — still-validated — source.
@@ -440,8 +464,7 @@ fn read_lines_reports_end_reasons_and_keeps_stable_semantics() {
     fs::write(&path, &bytes).unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     let page = connection
         .read_lines(Path::new("big-line"), 1, None, None)
@@ -481,8 +504,7 @@ fn read_lines_stale_revision_is_a_conflict_not_a_read() {
     fs::write(&path, b"first\n").unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     let page = connection
         .read_lines(Path::new("asset"), 1, None, None)
@@ -506,8 +528,7 @@ fn read_lines_refuses_non_utf8_and_keeps_the_connection_live() {
     fs::write(&path, b"text\xFFtail").unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // A non-UTF-8 source is a semantic refusal — InvalidData, never a
     // fabrication — and it never retires the connection.
@@ -577,8 +598,7 @@ fn read_document_decodes_every_whitelisted_format() {
         ),
     ];
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     for (fixture, fragments) in fixtures {
         let target = copy_document_fixture(&rig, fixture);
@@ -618,8 +638,7 @@ fn read_document_serves_deterministic_pages_and_stale_revisions_conflict() {
     let name = target.file_name().unwrap().to_owned();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // One bounded exchange pages the decoded text: a limited window is a
     // typed page, never the whole projection or the binary source.
@@ -669,8 +688,7 @@ fn read_document_refuses_unsupported_corrupt_oversized_and_textless() {
     copy_document_fixture(&rig, "pdf/scanned-no-text.pdf");
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     for path in [Path::new("notes.md"), Path::new("legacy.doc")] {
         let error = connection.read_document(path, 1, None, None).unwrap_err();
@@ -718,8 +736,7 @@ fn symlink_parent_and_outside_paths_are_denied() {
     std::os::unix::fs::symlink(&outside.1, rig.workspace_path.join("escape")).unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     for path in [
         PathBuf::from("link"),
@@ -746,8 +763,7 @@ fn oversized_and_zero_requests_are_invalid_not_reads() {
     fs::write(rig.workspace_path.join("asset"), b"bytes").unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     for max_bytes in [0, 64 * 1024 + 1] {
         let error = connection
@@ -772,8 +788,7 @@ fn metadata_and_directory_cover_root_and_leaf_symlinks() {
     std::os::unix::fs::symlink(&outside.1, rig.workspace_path.join("escape")).unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // The root itself answers with a directory stamp and pages its names
     // sorted, leaf symlinks reported — never followed.
@@ -863,8 +878,7 @@ fn directory_pages_bound_the_listing_and_reject_stale_revisions() {
     }
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // A bound smaller than the directory pages with a continuation
     // cursor; resuming returns the remainder and no cursor.
@@ -926,8 +940,7 @@ fn revocation_linearizes_before_any_new_request() {
     fs::write(rig.workspace_path.join("asset"), b"bytes").unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
     connection
         .read_range(Path::new("asset"), 0, 64, None)
         .unwrap();
@@ -951,7 +964,10 @@ fn a_tampered_bundle_cannot_advertise_capabilities_the_client_lacks() {
     let mut child = spawn_client(&rig);
     let stream = accept(&rig, &mut child);
     let outcome = rig.binding.accept_local(stream).unwrap();
-    assert!(matches!(outcome, Err(Reject::MissingCapabilities)));
+    assert!(matches!(
+        outcome,
+        rustx_execution_server::ChannelAccept::Rejected(Reject::MissingCapabilities)
+    ));
     assert!(!child.wait().unwrap().success());
     assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
 
@@ -1052,8 +1068,7 @@ fn range_read_from_private_mount_view() {
         .stderr(Stdio::piped());
     let mut child = command.spawn().unwrap();
 
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // Server side: the bound workspace path holds no marker before the RPC.
     let server_marker = rig.workspace_path.join("marker");
@@ -1088,8 +1103,7 @@ fn clean_eof_is_success_and_a_truncated_record_is_not() {
 
     // Clean EOF: the server closes an idle admitted connection.
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let connection = admit_pair(&rig, &mut child);
     drop(connection);
     expect_success(&mut child);
 
@@ -1098,7 +1112,7 @@ fn clean_eof_is_success_and_a_truncated_record_is_not() {
     let mut child = spawn_client(&fresh);
     let stream = accept(&fresh, &mut child);
     let mut raw = stream.try_clone().unwrap();
-    let connection = fresh.binding.accept_local(stream).unwrap().unwrap();
+    let connection = admit_pair_stream(&fresh, &mut child, stream);
     // Promise a record body that never arrives.
     raw.write_all(&10_u32.to_be_bytes()).unwrap();
     raw.write_all(b"{\"pi").unwrap();
@@ -1158,7 +1172,9 @@ fn a_missing_handshake_reply_times_out_the_client() {
     // proves the handshake started — then just holds the socket. The
     // client's absolute handshake budget expires; it does not hang.
     let mut stream = accept(&rig, &mut child);
-    let hello: Hello = read_record(&mut stream).unwrap();
+    let PeerHello::Data(hello) = read_record(&mut stream).unwrap() else {
+        panic!("the first lane declares the data half");
+    };
     assert_eq!(hello.session.as_str(), "session-1");
     assert!(!wait_bounded(&mut child).success());
     assert_eq!(
@@ -1178,7 +1194,7 @@ fn a_socket_closed_before_the_reply_fails_the_client() {
         .spawn()
         .unwrap();
     let mut stream = accept(&rig, &mut child);
-    let _: Hello = read_record(&mut stream).unwrap();
+    let _: PeerHello = read_record(&mut stream).unwrap();
     drop(stream);
     assert_eq!(wait_bounded(&mut child).code(), Some(1));
     assert_eq!(stderr_of(&mut child), "rustx-execution-client: handshake\n");
@@ -1196,10 +1212,12 @@ fn a_partial_admission_delivery_times_out_the_client() {
     // The client's Hello arrived in full; the reply is only ever a bare
     // length prefix. The held socket keeps the client waiting on the
     // body until the absolute deadline ends the handshake.
-    let hello: Hello = read_record(&mut stream).unwrap();
+    let PeerHello::Data(hello) = read_record(&mut stream).unwrap() else {
+        panic!("the first lane declares the data half");
+    };
     assert_eq!(hello.session.as_str(), "session-1");
     let mut wire = Vec::new();
-    write_record(&mut wire, &HelloReply::Err(Reject::Revoked)).unwrap();
+    write_record(&mut wire, &DataHelloReply::Err(Reject::Revoked)).unwrap();
     stream.write_all(&wire[..4]).unwrap();
     assert!(!wait_bounded(&mut child).success());
     assert_eq!(
@@ -1219,8 +1237,7 @@ fn a_conditional_write_commits_reads_back_and_conflicts_on_stale_revision() {
     fs::write(rig.workspace_path.join("file"), b"before").unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // The authorized gate runs on the prepared original: a real stamp,
     // never a re-stat by the Server.
@@ -1282,8 +1299,7 @@ fn a_denied_gate_aborts_the_stage_and_leaves_the_target_untouched() {
     fs::write(rig.workspace_path.join("file"), b"before").unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // The prepare must succeed first: expected the real revision so the
     // staged preparation exists when the gate denies it.
@@ -1342,8 +1358,7 @@ fn a_revoked_binding_after_prepare_leaves_no_stage_and_no_commit() {
     fs::write(rig.workspace_path.join("file"), b"before").unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // The caller gate revokes the binding after the prepare but before
     // the commit is dispatched: zero commit frames cross, the physical
@@ -1400,8 +1415,7 @@ fn a_conditional_edit_commits_bom_crlf_and_multiple_edits() {
     .unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     let published = connection
         .edit_file(
@@ -1454,8 +1468,7 @@ fn parallel_prepared_mutations_commit_and_abort_independently() {
     .unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
     let deadline = Instant::now() + Duration::from_secs(10);
 
     let write = connection
@@ -1485,7 +1498,7 @@ fn parallel_prepared_mutations_commit_and_abort_independently() {
 
     // Commit one, abort the other — neither decision leaks across tickets.
     let published = connection
-        .commit_prepared(&write, Some(deadline), &|| Ok(()))
+        .commit_prepared(&write, Some(deadline), &|| Ok(()), &|| ())
         .unwrap();
     connection
         .abort_prepared(&edit, Some(deadline), &|| Ok(()), &|| ())
@@ -1525,8 +1538,7 @@ fn a_write_over_the_chunk_limit_prepares_and_commits() {
 "
     .repeat(10_000); // ~156 KiB > 64 KiB
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     let published = connection
         .write_file(Path::new("big"), payload.as_bytes(), None, |_| Ok(()))
@@ -1556,8 +1568,7 @@ fn edit_refusals_are_typed_and_the_connection_stays_live() {
     fs::write(rig.workspace_path.join("binary"), [0xffu8, 0xfe, 0x00]).unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
     let edit = |old: &str, new: &str| TextReplacement {
         old_text: old.to_owned(),
         new_text: new.to_owned(),
@@ -1653,8 +1664,7 @@ fn a_denied_edit_gate_aborts_and_a_replaced_target_conflicts() {
     .unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
     let edit = || TextReplacement {
         old_text: "before".to_owned(),
         new_text: "after".to_owned(),
@@ -1766,7 +1776,7 @@ fn a_malformed_edit_request_is_an_error_not_a_stage() {
     // reaches the real Client's dispatch without a LocalConnection
     // framing it.
     let mut peer = stream.try_clone().unwrap();
-    let connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let connection = admit_pair_stream(&rig, &mut child, stream);
 
     write_record(
         &mut peer,
@@ -1825,8 +1835,7 @@ fn search_serves_the_shared_universe_and_never_follows_links_outside() {
     .unwrap();
 
     let mut child = spawn_client(&rig);
-    let stream = accept(&rig, &mut child);
-    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let mut connection = admit_pair(&rig, &mut child);
 
     // Glob: sorted lexical order, hidden files visible, links absent.
     let page = connection

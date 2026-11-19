@@ -113,6 +113,57 @@ impl ChannelShutdown {
             let _ = stream.shutdown(Shutdown::Both);
         }
     }
+
+    /// Whether the duplicated handle became poll-readable before
+    /// `deadline` — buffered peer bytes and a peer close both wake the
+    /// poll. EINTR retries against the same absolute deadline so a
+    /// signal can never stretch or reset the wait.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `poll(2)` error other than `EINTR`.
+    pub fn readable(&self, deadline: Instant) -> io::Result<bool> {
+        use std::os::fd::AsFd;
+
+        let fd = self
+            .unix
+            .as_ref()
+            .map(AsFd::as_fd)
+            .or_else(|| self.tcp.as_ref().map(AsFd::as_fd))
+            .ok_or_else(|| io::Error::other("shutdown handle holds no stream"))?;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(false);
+            }
+            let timeout: nix::poll::PollTimeout = match remaining.try_into() {
+                Ok(timeout) => timeout,
+                Err(_) => nix::poll::PollTimeout::MAX,
+            };
+            let mut fds = [nix::poll::PollFd::new(fd, nix::poll::PollFlags::POLLIN)];
+            match nix::poll::poll(&mut fds, timeout) {
+                Ok(0) => return Ok(false),
+                Ok(_) => {
+                    return Ok(fds[0].revents().is_some_and(|events| !events.is_empty()));
+                }
+                Err(nix::errno::Errno::EINTR) => {}
+                Err(error) => return Err(io::Error::from(error)),
+            }
+        }
+    }
+    /// The raw transport descriptor behind the handle — read-only
+    /// access for socket options and peeks (`MSG_PEEK`,
+    /// `setsockopt(2)`): a duplicated descriptor configures and
+    /// observes the shared socket. The handle itself never reads or
+    /// writes.
+    #[must_use]
+    pub fn as_fd(&self) -> Option<std::os::fd::BorrowedFd<'_>> {
+        use std::os::fd::AsFd;
+        self.unix
+            .as_ref()
+            .map(AsFd::as_fd)
+            .or_else(|| self.tcp.as_ref().map(AsFd::as_fd))
+    }
 }
 
 /// One typed execution record channel.

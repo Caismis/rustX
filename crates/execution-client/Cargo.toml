@@ -18,6 +18,7 @@ rustx-confined-fs = { path = "../confined-fs" }
 rustx-text-edit = { path = "../text-edit" }
 rustx-document-reader = { path = "../document-reader" }
 base64 = "0.22"
+getrandom = { version = "0.3.4", features = ["std"] }
 nix = { version = "0.31.3", default-features = false, features = ["fs", "user", "socket"] }
 # The bounded glob/grep engines of the Search exchange — the same crates
 # the Agent Server's pre-migration search used, never a spawned `rg`.

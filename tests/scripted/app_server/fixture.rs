@@ -427,12 +427,27 @@ impl Fixture {
             .spawn()
             .unwrap();
         bounded(async {
-            let (stream, _) = listener.accept().await?;
-            tokio::task::spawn_blocking(move || endpoint.admit_local_stream(stream.into_std()?))
-                .await?
+            let deadline = std::time::Instant::now()
+                + rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
+            loop {
+                let (stream, _) = listener.accept().await?;
+                let endpoint = endpoint.clone();
+                match tokio::task::spawn_blocking(move || {
+                    endpoint.admit_local_stream_deadline(stream.into_std()?, deadline)
+                })
+                .await??
+                {
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Live => {
+                        break Ok::<_, std::io::Error>(());
+                    }
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Pending => {}
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
+                        reject,
+                    ) => panic!("execution client rejected: {reject:?}"),
+                }
+            }
         })
         .await
-        .unwrap()
         .unwrap();
         child
     }

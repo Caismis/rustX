@@ -208,13 +208,9 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
             .unwrap();
         }
         // A binary with no sibling helpers: the bare Server executable in
-        // its own directory (hardlink, copied across mount boundaries).
-        let bin = f.root.path().join("bin");
-        std::fs::create_dir(&bin).unwrap();
-        let rustx = bin.join("rustx");
-        std::fs::hard_link(env!("CARGO_BIN_EXE_rustx"), &rustx)
-            .or_else(|_| std::fs::copy(env!("CARGO_BIN_EXE_rustx"), &rustx).map(|_| ()))
-            .unwrap();
+        // its own directory (hard link on the source's own filesystem).
+        let (bin_dir, rustx) = isolated_server_bin();
+        let bin = bin_dir.path().to_path_buf();
         // A stale handoff left behind under HOME must never be consumed: the
         // missing workspace path it names stays missing and the file stays put.
         let missing = f.root.path().join("a");
@@ -225,7 +221,8 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
         std::fs::create_dir_all(&admit).unwrap();
         let stale = admit.join("stale.txt");
         std::fs::write(&stale, format!("{}\n", missing.display())).unwrap();
-        let mut child = Command::new(&rustx)
+        let mut command = Command::new(&rustx);
+        command
             .current_dir(f.root.path())
             .env_clear()
             .env("HOME", f.root.path().join("home"))
@@ -236,9 +233,8 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+            .kill_on_drop(true);
+        let mut child = command.spawn().expect("spawn staged server");
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
         let MethodResult::Sessions { sessions, .. } = result(
@@ -287,26 +283,43 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
     .await;
 }
 
-fn isolated_server_bin(root: &std::path::Path) -> PathBuf {
-    let bin = root.join("bin-only");
-    std::fs::create_dir(&bin).unwrap();
-    let rustx = bin.join("rustx");
-    std::fs::hard_link(env!("CARGO_BIN_EXE_rustx"), &rustx)
-        .or_else(|_| std::fs::copy(env!("CARGO_BIN_EXE_rustx"), &rustx).map(|_| ()))
+/// A fresh staging directory on the *same filesystem as the staged
+/// sources* so staging is a hard link — no write, so the staged inode
+/// can never still be counted as written at execve. (A tmpfs copy of
+/// the ~600 MB Server binary has a real transient ETXTBSY window under
+/// parallel load: the kernel still counts the just-closed writer when
+/// execve runs.) The returned guard owns the directory; it must outlive
+/// the spawned children.
+fn staged_bin_dir() -> tempfile::TempDir {
+    let base = std::path::Path::new(env!("CARGO_BIN_EXE_rustx"))
+        .parent()
         .unwrap();
-    rustx
+    tempfile::tempdir_in(base).unwrap()
 }
 
-fn isolated_server_pair(root: &std::path::Path) -> PathBuf {
-    let bin = root.join("bin-pair");
-    std::fs::create_dir(&bin).unwrap();
-    let stage = |name: &str, source: &std::path::Path| {
-        let destination = bin.join(name);
-        std::fs::hard_link(source, &destination)
-            .or_else(|_| std::fs::copy(source, &destination).map(|_| ()))
-            .unwrap();
-        destination
-    };
+fn stage_binary(bin: &std::path::Path, name: &str, source: &std::path::Path) -> PathBuf {
+    let destination = bin.join(name);
+    // Hard link required: the staging directory intentionally shares the
+    // source filesystem — a copy would reintroduce the exec/write race
+    // `staged_bin_dir` exists to avoid.
+    std::fs::hard_link(source, &destination).unwrap_or_else(|error| {
+        panic!("staged directory must share the source filesystem: {error}")
+    });
+    destination
+}
+
+fn isolated_server_bin() -> (tempfile::TempDir, PathBuf) {
+    let bin = staged_bin_dir();
+    let rustx = stage_binary(
+        bin.path(),
+        "rustx",
+        std::path::Path::new(env!("CARGO_BIN_EXE_rustx")),
+    );
+    (bin, rustx)
+}
+
+fn isolated_server_pair() -> (tempfile::TempDir, PathBuf) {
+    let bin = staged_bin_dir();
     // The Client is only ever the artifact preparation staged beside this
     // harness — never a runtime build, a PATH lookup, or a fallback path.
     let client = std::env::current_exe()
@@ -316,8 +329,13 @@ fn isolated_server_pair(root: &std::path::Path) -> PathBuf {
         client.is_file(),
         "staged Execution Client is absent: {client:?}"
     );
-    stage("rustx-execution-client", &client);
-    stage("rustx", std::path::Path::new(env!("CARGO_BIN_EXE_rustx")))
+    stage_binary(bin.path(), "rustx-execution-client", &client);
+    let rustx = stage_binary(
+        bin.path(),
+        "rustx",
+        std::path::Path::new(env!("CARGO_BIN_EXE_rustx")),
+    );
+    (bin, rustx)
 }
 
 fn local_exec_command(
@@ -458,12 +476,12 @@ async fn local_execution_rejects_a_workspace_that_is_not_the_reserved_one() {
         let f = Fixture::new().await;
         // The sibling Client is absent, so a workspace error proves the
         // check fires before anything is spawned.
-        let rustx = isolated_server_bin(f.root.path());
+        let (_bin, rustx) = isolated_server_bin();
         // The fixture root is a normalized absolute path but is not the
         // Session's recorded workspace.
         let child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), f.root.path())
             .spawn()
-            .unwrap();
+            .expect("spawn staged server");
         let output = child.wait_with_output().await.unwrap();
         assert!(!output.status.success(), "unexpected success");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -479,11 +497,11 @@ async fn local_execution_rejects_a_workspace_that_is_not_the_reserved_one() {
 async fn local_execution_fails_exactly_when_the_sibling_client_is_absent() {
     bounded(async {
         let f = Fixture::new().await;
-        let rustx = isolated_server_bin(f.root.path());
+        let (_bin, rustx) = isolated_server_bin();
         let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
         let child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
             .spawn()
-            .unwrap();
+            .expect("spawn staged server");
         let output = child.wait_with_output().await.unwrap();
         assert!(!output.status.success(), "unexpected success");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -499,7 +517,7 @@ async fn local_execution_fails_exactly_when_the_sibling_client_is_absent() {
 async fn local_execution_rejects_an_unknown_session() {
     bounded(async {
         let f = Fixture::new().await;
-        let rustx = isolated_server_bin(f.root.path());
+        let (_bin, rustx) = isolated_server_bin();
         let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
         let child = local_exec_command(
             &rustx,
@@ -508,7 +526,7 @@ async fn local_execution_rejects_an_unknown_session() {
             &workspace,
         )
         .spawn()
-        .unwrap();
+        .expect("spawn staged server");
         let output = child.wait_with_output().await.unwrap();
         assert!(!output.status.success(), "unexpected success");
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -561,11 +579,11 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
         std::fs::write(f.root.path().join("b/marker"), b"decoy").unwrap();
         std::os::unix::fs::symlink("marker", f.root.path().join("a/link")).unwrap();
 
-        let rustx = isolated_server_pair(f.root.path());
+        let (_bin, rustx) = isolated_server_pair();
         let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
         let mut child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
             .spawn()
-            .unwrap();
+            .expect("spawn staged server");
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
         // Readiness proves the Client connected and was admitted before
@@ -756,14 +774,14 @@ async fn remote_execution_serves_session_reads_over_websocket() {
         let marker = "remote ws payload — déjà vu".as_bytes();
         std::fs::write(workspace.join("marker"), marker).unwrap();
 
-        let rustx = isolated_server_bin(f.root.path());
+        let (_bin, rustx) = isolated_server_bin();
         let private = f.root.path().join("private");
         std::fs::create_dir(&private).unwrap();
         std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
         let bundle = private.join("bootstrap");
         let mut server = remote_exec_command(&rustx, &f, f.sessions[0].as_str(), &bundle)
             .spawn()
-            .unwrap();
+            .expect("spawn staged server");
         let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
         initialize_client(&client).await;
         // Readiness implies the reservation published: the bundle is the
@@ -1124,10 +1142,10 @@ async fn seeded_transcript_over_unix() -> Vec<String> {
     grant_environment_roots(&f, std::slice::from_ref(&workspace));
     seed_workspace(&workspace, &f.root.path().join("b"));
 
-    let rustx = isolated_server_pair(f.root.path());
+    let (_bin, rustx) = isolated_server_pair();
     let mut server = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
         .spawn()
-        .unwrap();
+        .expect("spawn staged server");
     let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
     initialize_client(&client).await;
     let transcript = seeded_operations(
@@ -1159,14 +1177,14 @@ async fn seeded_transcript_over_websocket() -> Vec<String> {
     grant_environment_roots(&f, std::slice::from_ref(&workspace));
     seed_workspace(&workspace, &f.root.path().join("b"));
 
-    let rustx = isolated_server_bin(f.root.path());
+    let (_bin, rustx) = isolated_server_bin();
     let private = f.root.path().join("private");
     std::fs::create_dir(&private).unwrap();
     std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
     let bundle = private.join("bootstrap");
     let mut server = remote_exec_command(&rustx, &f, f.sessions[0].as_str(), &bundle)
         .spawn()
-        .unwrap();
+        .expect("spawn staged server");
     let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
     initialize_client(&client).await;
     let execution = staged_client_command(&bundle, &workspace).spawn().unwrap();
@@ -1254,8 +1272,8 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
         // path inside the Client's mount namespace.
         let decoy = workspace.join("server-only");
         std::fs::write(&decoy, b"server-side only").unwrap();
-        let rustx = isolated_server_bin(f.root.path());
-        let bin = f.root.path().join("bin-only");
+        let (bin_dir, rustx) = isolated_server_bin();
+        let bin = bin_dir.path();
         // The staged sibling is the only trusted source for the real
         // Client — never a runtime build, PATH lookup, or fallback.
         let staged = std::env::current_exe()
@@ -1265,9 +1283,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
             staged.is_file(),
             "staged Execution Client is absent: {staged:?}"
         );
-        std::fs::hard_link(&staged, bin.join("client-real"))
-            .or_else(|_| std::fs::copy(&staged, bin.join("client-real")).map(|_| ()))
-            .unwrap();
+        stage_binary(bin, "client-real", &staged);
         let physical = bin.join("physical");
         std::fs::create_dir(&physical).unwrap();
         let marker = b"mount-view proof marker";
@@ -1293,7 +1309,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
 
         let mut child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
             .spawn()
-            .unwrap();
+            .expect("spawn staged server");
         let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
         initialize_client(&client).await;
 

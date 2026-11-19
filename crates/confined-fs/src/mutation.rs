@@ -592,7 +592,29 @@ impl StagedWrite {
     /// since preparation, [`io::ErrorKind::PermissionDenied`] when the
     /// staging name was replaced, a downcastable [`CommitUnknown`] when a
     /// post-crossing step fails, and the underlying `*at` error otherwise.
-    pub fn publish(mut self) -> io::Result<PublishedWrite> {
+    pub fn publish(self) -> io::Result<PublishedWrite> {
+        self.publish_with_gate(|cross| cross())
+    }
+
+    /// Publishes like [`Self::publish`], except `gate` owns the crossing:
+    /// every pre-crossing verification runs first, then `gate` receives
+    /// the one closure that performs the `linkat`/`renameat` (or the
+    /// subtree `NOREPLACE` rename) itself. A caller runs that closure
+    /// inside its arbitration — under the per-ticket lock — so a won
+    /// cancellation refuses before the syscall runs and `Crossed` is
+    /// recorded iff the crossing actually succeeded. `self.published` is
+    /// set the moment the crossing succeeds, before `gate`'s own verdict
+    /// is trusted, so a refusal or a failed syscall unwinds the private
+    /// stage exactly like a pre-crossing error.
+    ///
+    /// # Errors
+    ///
+    /// Identical to [`Self::publish`]; a `gate` refusal surfaces `gate`'s
+    /// own error and the staged write cleans itself on drop.
+    pub fn publish_with_gate<G>(mut self, gate: G) -> io::Result<PublishedWrite>
+    where
+        G: FnOnce(&mut dyn FnMut() -> io::Result<()>) -> io::Result<()>,
+    {
         self.parent.verify()?;
         recheck(
             &self.parent,
@@ -600,7 +622,7 @@ impl StagedWrite {
             self.original.as_ref().map(|(_, metadata)| metadata),
         )?;
         if self.staging.is_some() {
-            return self.publish_subtree();
+            return self.publish_subtree_with_gate(gate);
         }
         let staging = nix::sys::stat::fstatat(
             self.parent.descriptor(),
@@ -614,15 +636,33 @@ impl StagedWrite {
                 "staging file replaced",
             ));
         }
+        // The crossing alone runs inside the caller's gate: `crossed`
+        // records the physical truth before `gate`'s verdict is read, so
+        // a refused gate never hides a crossing that already happened.
+        let mut crossed = false;
+        let verdict = gate(&mut || -> io::Result<()> {
+            if self.original.is_none() {
+                rustix::fs::linkat(
+                    self.parent.descriptor(),
+                    self.name.as_os_str(),
+                    self.parent.descriptor(),
+                    self.leaf.as_os_str(),
+                    rustix::fs::AtFlags::empty(),
+                )?;
+            } else {
+                rustix::fs::renameat(
+                    self.parent.descriptor(),
+                    self.name.as_os_str(),
+                    self.parent.descriptor(),
+                    self.leaf.as_os_str(),
+                )?;
+            }
+            crossed = true;
+            Ok(())
+        });
+        self.published |= crossed;
+        verdict?;
         if self.original.is_none() {
-            rustix::fs::linkat(
-                self.parent.descriptor(),
-                self.name.as_os_str(),
-                self.parent.descriptor(),
-                self.leaf.as_os_str(),
-                rustix::fs::AtFlags::empty(),
-            )?;
-            self.published = true;
             rustix::fs::unlinkat(
                 self.parent.descriptor(),
                 self.name.as_os_str(),
@@ -630,13 +670,6 @@ impl StagedWrite {
             )
             .map_err(|error| unknown(error.into()))?;
         } else {
-            rustix::fs::renameat(
-                self.parent.descriptor(),
-                self.name.as_os_str(),
-                self.parent.descriptor(),
-                self.leaf.as_os_str(),
-            )?;
-            self.published = true;
             // The private stage was 0600; the published replacement now
             // takes the verified original's mode on the published
             // descriptor. Post-crossing, so a failure is an unknown
@@ -679,7 +712,10 @@ impl StagedWrite {
     /// the published name is re-proven against the staging descriptor —
     /// a locator that no longer resolves to it reports [`CommitUnknown`],
     /// never certainty either way.
-    fn publish_subtree(mut self) -> io::Result<PublishedWrite> {
+    fn publish_subtree_with_gate<G>(mut self, gate: G) -> io::Result<PublishedWrite>
+    where
+        G: FnOnce(&mut dyn FnMut() -> io::Result<()>) -> io::Result<()>,
+    {
         let first = self.missing[0].clone();
         // The staged name must still be absent in the retained parent —
         // anything that claimed it since staging is a conflict, not a
@@ -691,17 +727,24 @@ impl StagedWrite {
             .as_ref()
             .expect("subtree publish requires its staging directory")
             .verify(&self.parent, &self.name)?;
-        // One atomic crossing: the staging directory itself becomes
-        // `parent/first` — `NOREPLACE` so a concurrent claim can never be
-        // overwritten. The staged interior is never re-resolved by name.
-        renameat_with(
-            self.parent.descriptor(),
-            self.name.as_os_str(),
-            self.parent.descriptor(),
-            first.as_os_str(),
-            RenameFlags::NOREPLACE,
-        )?;
-        self.published = true;
+        // One atomic crossing, inside the caller's gate: the staging
+        // directory itself becomes `parent/first` — `NOREPLACE` so a
+        // concurrent claim can never be overwritten. The staged
+        // interior is never re-resolved by name.
+        let mut crossed = false;
+        let verdict = gate(&mut || -> io::Result<()> {
+            renameat_with(
+                self.parent.descriptor(),
+                self.name.as_os_str(),
+                self.parent.descriptor(),
+                first.as_os_str(),
+                RenameFlags::NOREPLACE,
+            )?;
+            crossed = true;
+            Ok(())
+        });
+        self.published |= crossed;
+        verdict?;
         // Receipt revalidation: the published name must now resolve to
         // the exact staging inode. A same-euid swap across the crossing
         // leaves the outcome unknowable — never claim certainty.

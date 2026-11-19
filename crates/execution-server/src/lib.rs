@@ -6,13 +6,14 @@
 //! Agent, and not a transport. This layer performs no dispatch and no
 //! spawn; it proves authenticated connection ownership only.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::io;
 use std::net::TcpListener;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use base64::Engine as _;
@@ -20,15 +21,20 @@ use constant_time_eq::constant_time_eq_32;
 #[cfg(test)]
 use rustx_execution_protocol::transport::read_record;
 use rustx_execution_protocol::{
-    Admission, BindingCredential, Bootstrap, BootstrapEndpoint, Capability, ClientInstanceId,
-    ClientReply, ClientRequest, ConnectionId, DecimalU64, EditRefusal, EntryStamp, EnvironmentId,
-    FileStamp, Generation, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES,
-    MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES,
-    MAX_EDIT_FILE_BYTES, MAX_EDIT_REPLACEMENTS, MAX_EDIT_REQUEST_BYTES, MAX_RAW_CHUNK_BYTES,
-    MAX_SEARCH_CONTEXT_LINES, MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES,
-    MAX_WRITE_BYTES, PROTOCOL_VERSION, PageEntry, ReadError, Reject, SearchSpec, SessionId,
-    TextReplacement, WriteExpectation, is_normalized_absolute_path,
-    transport::{PAGE_REQUEST_TIMEOUT, encode_record, write_record},
+    Admission, BindingCredential, Bootstrap, BootstrapEndpoint, CancelDisposition, Capability,
+    ClientInstanceId, ClientReply, ClientRequest, ConnectionId, ControlHello, ControlHelloReply,
+    ControlPoll, ControlReply, ControlRequest, ControlTurn, DataAdmission, DataHelloReply,
+    DecimalU64, EditRefusal, EntryStamp, EnvironmentId, FileStamp, Generation, Hello, LineEnd,
+    MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES,
+    MAX_DOCUMENT_SOURCE_BYTES, MAX_EDIT_FILE_BYTES, MAX_EDIT_REPLACEMENTS, MAX_EDIT_REQUEST_BYTES,
+    MAX_RAW_CHUNK_BYTES, MAX_SEARCH_CONTEXT_LINES, MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES,
+    MAX_TEXT_LINES, MAX_WRITE_BYTES, PROTOCOL_VERSION, PageEntry, PairingNonce, PeerHello,
+    ReadError, Reject, SearchSpec, SessionId, TextReplacement, WriteExpectation,
+    is_normalized_absolute_path,
+    transport::{
+        CONTROL_COMMAND_TIMEOUT, CONTROL_FRAME_TIMEOUT, MAX_CONTROL_COMMANDS, PAGE_REQUEST_TIMEOUT,
+        encode_record, write_record,
+    },
 };
 use rustx_execution_transport::{ChannelShutdown, RecordChannel};
 use sha2::{Digest, Sha256};
@@ -84,6 +90,10 @@ pub struct BindingStatus {
     pub phase: BindingPhase,
     /// The live connection, present only in [`BindingPhase::Live`].
     pub connection: Option<ConnectionId>,
+    /// Whether a pairing attempt is still negotiating — a pending half
+    /// is never dispatchable: the binding only reports `Live` once the
+    /// pair committed.
+    pub pending: bool,
 }
 
 /// One execution binding: the single arbitration point where Hellos,
@@ -100,38 +110,212 @@ pub struct Binding {
 /// live connection linearize under one mutex, reached identically
 /// through the binding and through any [`LocalConnection`] it already
 /// handed out — a `LocalConnection` owns a share, it does not borrow.
-struct ConnectionOwner(Mutex<Inner>);
+struct ConnectionOwner {
+    /// The one binding state lock — phase, the live pair, and the
+    /// single pending attempt all linearize here.
+    inner: Mutex<Inner>,
+    /// Wakes a verified [`ControlHello`] whose correct nonce arrived
+    /// while its data lane's channel was still being stored — the
+    /// challenge reply is already on the wire, so an honest peer can
+    /// legitimately beat the store; it parks here, bounded by the
+    /// attempt's own deadline, never holding the state lock.
+    pair_ready: Condvar,
+}
 
 impl ConnectionOwner {
     fn inner(&self) -> MutexGuard<'_, Inner> {
-        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Ends the live connection identified by `connection`.
+    /// Ends the live pair identified by its data lane.
     ///
-    /// Only the currently live connection can detach the binding: a stale
-    /// or foreign disconnect — for example the late EOF of a connection an
-    /// admitted reconnect already replaced — is ignored.
-    fn disconnect(&self, connection: &ConnectionId) {
+    /// Only the currently live data connection can detach the binding:
+    /// a stale or foreign disconnect is ignored. The seized shutdown
+    /// handles of both lanes are returned for the caller to invoke
+    /// after locks release — a detached pair's control lane dies with
+    /// its data lane, never lingers answering polls.
+    fn disconnect(&self, connection: &ConnectionId) -> FencedHandles {
         let mut inner = self.inner();
         if inner.phase == BindingPhase::Live && inner.connection.as_ref() == Some(connection) {
             inner.phase = BindingPhase::Detached;
             inner.connection = None;
-            inner.stream = None;
+            FencedHandles(
+                inner
+                    .stream
+                    .take()
+                    .into_iter()
+                    .chain(inner.control.take().map(|control| control.shutdown))
+                    .collect(),
+            )
+        } else {
+            FencedHandles::EMPTY
         }
+    }
+
+    /// Ends the live pair identified by its *control* lane — the lane
+    /// ended or lied. The pair detaches identically to a data-lane
+    /// loss: never a release, never a replacement — and the seized data
+    /// handle lets the caller interrupt a data exchange that may be
+    /// blocked mid-read.
+    fn detach_control(&self, connection: &ConnectionId) -> FencedHandles {
+        let mut inner = self.inner();
+        if inner.phase == BindingPhase::Live
+            && inner
+                .control
+                .as_ref()
+                .is_some_and(|control| &control.connection == connection)
+        {
+            inner.phase = BindingPhase::Detached;
+            inner.connection = None;
+            FencedHandles(
+                inner
+                    .stream
+                    .take()
+                    .into_iter()
+                    .chain(inner.control.take().map(|control| control.shutdown))
+                    .collect(),
+            )
+        } else {
+            FencedHandles::EMPTY
+        }
+    }
+
+    /// The fence half of [`Binding::fence`] on the shared owner:
+    /// terminal `Revoked`, every lane's handle seized.
+    fn fence(&self) -> FencedHandles {
+        let mut inner = self.inner();
+        inner.phase = BindingPhase::Revoked;
+        inner.connection = None;
+        inner.pending = None;
+        self.pair_ready.notify_all();
+        FencedHandles(
+            inner
+                .stream
+                .take()
+                .into_iter()
+                .chain(inner.control.take().map(|control| control.shutdown))
+                .collect(),
+        )
+    }
+
+    /// Discards the pending pairing attempt `attempt` — a watchdog's
+    /// deadline expiry or peer-signal discard. A committed attempt is
+    /// untouched; the reservation stays `Reserved` either way. Dropping
+    /// the attempt closes its watchdog's cancel pipe, and every parked
+    /// verifier is woken to judge the now-empty slot.
+    fn discard_pending(&self, attempt: u64) {
+        let mut inner = self.inner();
+        if inner
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.attempt == attempt)
+        {
+            inner.pending = None;
+            self.pair_ready.notify_all();
+        }
+    }
+
+    /// Drops a pending attempt whose absolute deadline has passed —
+    /// lazily, inside whatever lock hold observes it — waking parked
+    /// verifiers so they judge the now-empty slot. Returns whether a
+    /// pending attempt remains.
+    fn pending_alive(&self, inner: &mut Inner) -> bool {
+        if inner
+            .pending
+            .as_ref()
+            .is_some_and(|pending| Instant::now() >= pending.deadline)
+        {
+            inner.pending = None;
+            self.pair_ready.notify_all();
+        }
+        inner.pending.is_some()
     }
 }
 
 struct Inner {
     phase: BindingPhase,
     connection: Option<ConnectionId>,
-    /// A shutdown-capable duplicate of the live connection's transport —
-    /// the Unix socket for a local binding or the raw TCP socket behind a
-    /// WebSocket. It is never written or read: it exists so
-    /// [`Binding::revoke`] can close the physical stream and wake a peer
-    /// that no dispatch thread currently holds, without waiting on the
-    /// data lock.
+    /// A shutdown-capable duplicate of the live data connection's
+    /// transport — the Unix socket for a local binding or the raw TCP
+    /// socket behind a WebSocket. It is never written or read: it exists
+    /// so [`Binding::revoke`] can close the physical stream and wake a
+    /// peer that no dispatch thread currently holds, without waiting on
+    /// the data lock.
     stream: Option<ChannelShutdown>,
+    /// The live control lane, committed atomically with the pair: its
+    /// identity for lane-loss arbitration, its own shutdown duplicate,
+    /// and the cloneable [`ControlHandle`] the endpoint hands out.
+    control: Option<LiveControl>,
+    /// The pairing half under negotiation — only ever while
+    /// `phase == Reserved`. It holds the data lane's physical channel
+    /// and shutdown handle so a pending half survives the accept worker
+    /// returning, and never becomes dispatchable: nothing can send on it
+    /// until the control lane commits the pair.
+    pending: Option<PendingPair>,
+    /// The monotonic pairing-attempt identity — incremented per data
+    /// admission so a stale watchdog or a replaced half can never touch
+    /// the attempt that superseded it.
+    next_attempt: u64,
+}
+
+/// The live control lane the pair committed.
+struct LiveControl {
+    /// The lane's own connection identity.
+    connection: ConnectionId,
+    /// Its shutdown duplicate — fencing wakes a blocked control read.
+    shutdown: ChannelShutdown,
+    /// The command path independent of the data lane's lock.
+    handle: ControlHandle,
+}
+
+/// One pairing attempt under negotiation: the data lane validated and
+/// answered, the control lane not yet proven.
+struct PendingPair {
+    /// The unique attempt identity — watchdogs and channel stores match
+    /// on it, so a superseded attempt dies cleanly.
+    attempt: u64,
+    /// SHA-256 verifier of the issued challenge; the nonce itself is
+    /// never stored.
+    verifier: [u8; 32],
+    /// The absolute pairing deadline — the one 5-second budget armed at
+    /// the data lane's accept, covering every lane's wait.
+    deadline: Instant,
+    /// The data lane's connection identity, reserved for the commit.
+    connection: ConnectionId,
+    /// The capabilities the data Hello claimed.
+    capabilities: BTreeSet<Capability>,
+    /// The held data channel — `None` only in the narrow window between
+    /// pending allocation and the worker storing the stream, a state a
+    /// replacement or fence can still discard safely.
+    channel: Option<RecordChannel>,
+    /// The data lane's shutdown duplicate — a fence or discard closes
+    /// the physical stream — stored with the channel.
+    shutdown: Option<ChannelShutdown>,
+    /// The watchdog's cancel pipe write end — `None` until
+    /// `watch_pending` installs it. Dropping the attempt — commit,
+    /// discard, or fence — hangs the read end up so the parked watcher
+    /// exits immediately instead of sleeping until data traffic or the
+    /// deadline arrives.
+    wake: Option<std::os::fd::OwnedFd>,
+}
+
+/// The physical shutdown handles a fence, detach, or disconnect seized.
+/// The caller invokes [`Self::shutdown`] after every lock is released;
+/// the struct itself performs no I/O.
+pub struct FencedHandles(Vec<ChannelShutdown>);
+
+impl FencedHandles {
+    /// The empty seizure — nothing live to interrupt.
+    const EMPTY: Self = Self(Vec::new());
+
+    /// Shuts every seized lane down. Idempotent and best-effort: an
+    /// already-dead lane's shutdown errors are discarded inside
+    /// [`ChannelShutdown::shutdown`].
+    pub fn shutdown(&self) {
+        for handle in &self.0 {
+            handle.shutdown();
+        }
+    }
 }
 
 impl Binding {
@@ -160,125 +344,343 @@ impl Binding {
         let binding = Self {
             reservation,
             verifier,
-            inner: Arc::new(ConnectionOwner(Mutex::new(Inner {
-                phase: BindingPhase::Reserved,
-                connection: None,
-                stream: None,
-            }))),
+            inner: Arc::new(ConnectionOwner {
+                inner: Mutex::new(Inner {
+                    phase: BindingPhase::Reserved,
+                    connection: None,
+                    stream: None,
+                    control: None,
+                    pending: None,
+                    next_attempt: 0,
+                }),
+                pair_ready: Condvar::new(),
+            }),
         };
         Ok((binding, credential))
     }
 
-    /// Validates a [`Hello`] against the reservation and, on success,
-    /// commits exactly one live connection.
+    /// Commits a live pair-less connection directly — the synthetic
+    /// arbitration surface the phase tests exercise. The product path
+    /// never reaches it: admission is always the paired
+    /// [`PeerHello::Data`]/[`PeerHello::Control`] handshake.
     ///
-    /// The credential verifier is checked first so no identity field can
-    /// be probed without valid authentication; then every field must
-    /// match the reservation exactly — the workspace by literal
-    /// `OsStr` bytes, so `/work//root` never aliases `/work/root`. All
-    /// checks and the phase transition happen under one mutex hold, so
-    /// concurrent Hellos linearize and exactly one can win the live slot.
-    /// A failed Hello consumes nothing: a `Reserved` binding stays
-    /// `Reserved` and a `Live` binding stays `Live`.
+    /// # Errors
     ///
-    /// `Detached` rejects every Hello with
-    /// [`Reject::RecoveryRequired`]: EOF never reopens the reservation and
-    /// re-admission needs live-instance recovery proof (#577), which this
-    /// layer does not provide. A static credential file therefore can
-    /// never be replayed into a new session.
+    /// Returns the typed [`Reject`] the paired path would deliver on
+    /// the wire.
+    #[cfg(test)]
+    pub fn connect(&self, hello: &Hello, connection: ConnectionId) -> Result<Admission, Reject> {
+        let mut inner = self.inner();
+        self.check_identity(
+            &hello.credential,
+            hello.version,
+            &hello.session,
+            &hello.environment,
+            &hello.instance,
+            hello.generation,
+            &hello.workspace,
+            Some(&hello.capabilities),
+        )?;
+        match inner.phase {
+            BindingPhase::Reserved => {
+                inner.phase = BindingPhase::Live;
+                inner.connection = Some(connection);
+                Ok(self.admission())
+            }
+            BindingPhase::Detached => Err(Reject::RecoveryRequired),
+            BindingPhase::Live => Err(Reject::AlreadyConnected),
+            BindingPhase::Revoked => Err(Reject::Revoked),
+        }
+    }
+
+    /// The reserved identity every lane's Hello must echo — the
+    /// [`Admission`] both pairing replies deliver.
+    fn admission(&self) -> Admission {
+        Admission {
+            version: PROTOCOL_VERSION,
+            session: self.reservation.session.clone(),
+            environment: self.reservation.environment.clone(),
+            instance: self.reservation.instance.clone(),
+            generation: self.reservation.generation,
+            workspace: self.reservation.workspace.clone(),
+        }
+    }
+
+    /// The shared identity gate both lanes pass: the credential verifier
+    /// is checked first so no identity field can be probed without valid
+    /// authentication; then every field must match the reservation
+    /// exactly — the workspace by literal `OsStr` bytes, so
+    /// `/work//root` never aliases `/work/root`. The data lane
+    /// additionally proves the required capability subset.
     ///
     /// # Errors
     ///
     /// Returns the [`Reject`] matching the first failed check. Rejects
     /// never echo the submitted credential.
-    pub fn connect(&self, hello: &Hello, connection: ConnectionId) -> Result<Admission, Reject> {
-        match self.connect_gated(hello, connection, None, None) {
-            Ok(result) => result,
-            Err(_) => unreachable!("no deadline is checked without one"),
+    #[allow(clippy::too_many_arguments)] // one Hello's fixed field set
+    fn check_identity(
+        &self,
+        credential: &BindingCredential,
+        version: u16,
+        session: &SessionId,
+        environment: &EnvironmentId,
+        instance: &ClientInstanceId,
+        generation: Generation,
+        workspace: &Path,
+        capabilities: Option<&BTreeSet<Capability>>,
+    ) -> Result<(), Reject> {
+        let offered: [u8; 32] = Sha256::digest(credential.as_bytes()).into();
+        if !constant_time_eq_32(&self.verifier, &offered) {
+            return Err(Reject::InvalidCredential);
+        }
+        if version != PROTOCOL_VERSION {
+            return Err(Reject::UnsupportedVersion);
+        }
+        if session != &self.reservation.session {
+            return Err(Reject::SessionMismatch);
+        }
+        if environment != &self.reservation.environment {
+            return Err(Reject::EnvironmentMismatch);
+        }
+        if instance != &self.reservation.instance {
+            return Err(Reject::InstanceMismatch);
+        }
+        if generation != self.reservation.generation {
+            return Err(Reject::GenerationMismatch);
+        }
+        if workspace.as_os_str() != self.reservation.workspace.as_os_str() {
+            return Err(Reject::WorkspaceMismatch);
+        }
+        if let Some(capabilities) = capabilities
+            && !self
+                .reservation
+                .required_capabilities
+                .is_subset(capabilities)
+        {
+            return Err(Reject::MissingCapabilities);
+        }
+        Ok(())
+    }
+
+    /// The phase check every lane's commit shares — under one mutex
+    /// hold with the identity checks, so concurrent Hellos linearize.
+    /// `Reserved` admits the attempt; `Detached` rejects every Hello
+    /// with [`Reject::RecoveryRequired`] — EOF never reopens the
+    /// reservation and re-admission needs live-instance recovery proof
+    /// (#577), which this layer does not provide.
+    fn check_phase(inner: &Inner) -> Result<(), Reject> {
+        match inner.phase {
+            BindingPhase::Reserved => Ok(()),
+            BindingPhase::Detached => Err(Reject::RecoveryRequired),
+            BindingPhase::Live => Err(Reject::AlreadyConnected),
+            BindingPhase::Revoked => Err(Reject::Revoked),
         }
     }
 
-    /// [`connect`](Self::connect) behind an optional deadline rechecked
-    /// inside the binding mutex, immediately before commit: an expired
-    /// handshake can never become `Live` and consumes nothing — the
-    /// binding stays `Reserved`. `stream`, when given, is the shutdown-only
-    /// duplicate of the admitted transport stored in the live slot as the
-    /// revoke handle — identical for Unix and WebSocket channels.
-    fn connect_gated(
+    /// Allocates one pending pairing attempt for a validated data
+    /// [`Hello`]: a fresh single-attempt challenge nonce, the attempt
+    /// identity, and the absolute pairing deadline — the same 5-second
+    /// budget the caller armed at accept time, covering every lane's
+    /// wait. An attempt consumes nothing: `phase` stays `Reserved`
+    /// until the control lane commits the pair, and a second data Hello
+    /// while an attempt is live is refused — never a supersession — so
+    /// a dead first half can hold the reservation only until its own
+    /// bounded deadline expires it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the [`Reject`] matching the first failed check.
+    fn allocate_pending(
         &self,
         hello: &Hello,
         connection: ConnectionId,
-        deadline: Option<Instant>,
-        stream: Option<ChannelShutdown>,
-    ) -> io::Result<Result<Admission, Reject>> {
+        deadline: Instant,
+    ) -> io::Result<Result<(PairingNonce, u64, Admission), Reject>> {
         let mut inner = self.inner();
-        let offered: [u8; 32] = Sha256::digest(hello.credential.as_bytes()).into();
-        if !constant_time_eq_32(&self.verifier, &offered) {
-            return Ok(Err(Reject::InvalidCredential));
+        if let Err(reject) = self.check_identity(
+            &hello.credential,
+            hello.version,
+            &hello.session,
+            &hello.environment,
+            &hello.instance,
+            hello.generation,
+            &hello.workspace,
+            Some(&hello.capabilities),
+        ) {
+            return Ok(Err(reject));
         }
-        if hello.version != PROTOCOL_VERSION {
-            return Ok(Err(Reject::UnsupportedVersion));
+        if let Err(reject) = Self::check_phase(&inner) {
+            return Ok(Err(reject));
         }
-        if hello.session != self.reservation.session {
-            return Ok(Err(Reject::SessionMismatch));
+        if deadline.saturating_duration_since(Instant::now()).is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "handshake deadline expired",
+            ));
         }
-        if hello.environment != self.reservation.environment {
-            return Ok(Err(Reject::EnvironmentMismatch));
+        // Expire a stale attempt before judging liveness; a live one is
+        // never superseded — a second authenticated data claim while a
+        // negotiation is underway is refused outright, so the honest
+        // pair's half cannot be evicted and at most one pending attempt
+        // (and one watchdog) ever exists per Session.
+        if self.inner.pending_alive(&mut inner) {
+            return Ok(Err(Reject::AlreadyConnected));
         }
-        if hello.instance != self.reservation.instance {
-            return Ok(Err(Reject::InstanceMismatch));
-        }
-        if hello.generation != self.reservation.generation {
-            return Ok(Err(Reject::GenerationMismatch));
-        }
-        if hello.workspace.as_os_str() != self.reservation.workspace.as_os_str() {
-            return Ok(Err(Reject::WorkspaceMismatch));
-        }
-        if !self
-            .reservation
-            .required_capabilities
-            .is_subset(&hello.capabilities)
-        {
-            return Ok(Err(Reject::MissingCapabilities));
-        }
-        match inner.phase {
-            BindingPhase::Reserved => {
-                if let Some(deadline) = deadline {
-                    // The deadline is rechecked under the mutex right
-                    // before commit: a handshake that ran out of budget
-                    // while waiting for arbitration never goes live.
-                    deadline
-                        .checked_duration_since(Instant::now())
-                        .filter(|remaining| !remaining.is_zero())
-                        .ok_or_else(|| {
-                            io::Error::new(io::ErrorKind::TimedOut, "handshake deadline expired")
-                        })?;
-                }
-                inner.phase = BindingPhase::Live;
-                inner.connection = Some(connection);
-                inner.stream = stream;
-                Ok(Ok(Admission {
-                    version: PROTOCOL_VERSION,
-                    session: self.reservation.session.clone(),
-                    environment: self.reservation.environment.clone(),
-                    instance: self.reservation.instance.clone(),
-                    generation: self.reservation.generation,
-                    workspace: self.reservation.workspace.clone(),
-                }))
+        let mut secret = [0u8; PairingNonce::LENGTH];
+        getrandom::fill(&mut secret).map_err(io::Error::other)?;
+        let nonce = PairingNonce::from_bytes(secret);
+        let verifier: [u8; 32] = Sha256::digest(secret).into();
+        inner.next_attempt += 1;
+        let attempt = inner.next_attempt;
+        inner.pending = Some(PendingPair {
+            attempt,
+            verifier,
+            deadline,
+            connection,
+            capabilities: hello.capabilities.clone(),
+            channel: None,
+            shutdown: None,
+            wake: None,
+        });
+        Ok(Ok((nonce, attempt, self.admission())))
+    }
+
+    /// Stores the answered data lane's channel and shutdown handle into
+    /// the pending attempt — the second half of
+    /// [`Self::allocate_pending`] after the challenge reply is on the
+    /// wire — and wakes any verified `ControlHello` already parked on
+    /// [`ConnectionOwner::pair_ready`] waiting for exactly this. A dead
+    /// attempt refuses the store: its channel is the caller's to close,
+    /// and the peer's stale nonce can never pair.
+    fn store_pending_channel(
+        &self,
+        attempt: u64,
+        channel: RecordChannel,
+        shutdown: ChannelShutdown,
+    ) -> bool {
+        let mut inner = self.inner();
+        match inner.pending.as_mut() {
+            Some(pending) if pending.attempt == attempt => {
+                pending.channel = Some(channel);
+                pending.shutdown = Some(shutdown);
+                drop(inner);
+                self.inner.pair_ready.notify_all();
+                true
             }
-            BindingPhase::Detached => Ok(Err(Reject::RecoveryRequired)),
-            BindingPhase::Live => Ok(Err(Reject::AlreadyConnected)),
-            BindingPhase::Revoked => Ok(Err(Reject::Revoked)),
+            _ => false,
         }
     }
 
-    /// Ends the live connection identified by `connection`.
+    /// Commits the live pair on a validated [`ControlHello`]: the nonce
+    /// must verify against the pending attempt's verifier, the attempt
+    /// must be inside its absolute deadline, and the transition to
+    /// `Live` happens exactly once under the one mutex — the pending
+    /// channel, identity, and capabilities move out as the data half of
+    /// the committed pair.
     ///
-    /// Only the currently live connection can detach the binding: a stale
-    /// or foreign disconnect — for example the late EOF of a connection an
-    /// admitted reconnect already replaced — is ignored.
+    /// # Errors
+    ///
+    /// Returns [`Reject::InvalidPairing`] for any nonce problem —
+    /// missing, expired, mismatched, or replayed — or the identity
+    /// check's own [`Reject`].
+    fn commit_pair(
+        &self,
+        hello: &ControlHello,
+        connection: ConnectionId,
+        control_shutdown: ChannelShutdown,
+        control_handle: ControlHandle,
+        deadline: Instant,
+    ) -> Result<PairCommit, Reject> {
+        self.check_identity(
+            &hello.credential,
+            hello.version,
+            &hello.session,
+            &hello.environment,
+            &hello.instance,
+            hello.generation,
+            &hello.workspace,
+            None,
+        )?;
+        let offered: [u8; 32] = Sha256::digest(hello.connection_nonce.as_bytes()).into();
+        let mut inner = self.inner();
+        Self::check_phase(&inner)?;
+        // Waits for the data lane's channel store under the pairing
+        // budget: a correct nonce proves the challenge reply reached
+        // the peer — it is on the wire before `store_pending_channel`
+        // runs — so an honest control lane can legitimately arrive in
+        // the narrow delivery window. It parks on `pair_ready` with
+        // the state lock released; a wrong nonce never waits and never
+        // burns the honest attempt.
+        let attempt = loop {
+            Self::check_phase(&inner)?;
+            // An expired attempt is discarded first: a nonce presented
+            // past the pairing budget is invalid, never honoured late.
+            if !self.inner.pending_alive(&mut inner) {
+                return Err(Reject::InvalidPairing);
+            }
+            let pending = inner.pending.as_ref().expect("alive implies present");
+            if !constant_time_eq_32(&pending.verifier, &offered) {
+                return Err(Reject::InvalidPairing);
+            }
+            if pending.channel.is_some() {
+                break pending.attempt;
+            }
+            // One absolute budget spans both lanes: the armed pairing
+            // deadline from the data accept bounds this commit — the
+            // control lane's own armed deadline can only tighten it.
+            let budget = pending.deadline.min(deadline);
+            let remaining = budget.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Err(Reject::InvalidPairing);
+            }
+            let (guard, _) = self
+                .inner
+                .pair_ready
+                .wait_timeout(inner, remaining)
+                .expect("binding state");
+            inner = guard;
+        };
+        let mut pending = inner
+            .pending
+            .take()
+            .expect("attempt held under the same lock hold");
+        debug_assert_eq!(pending.attempt, attempt);
+        // Recheck the data peer's liveness at the commit itself — never
+        // rely on the asynchronous watchdog having already won: buffered
+        // bytes or a close on the held lane both prove death or a
+        // protocol violation, and either kills the attempt before the
+        // pair ever lives. Dropping `pending` on refusal closes the held
+        // channel and wakes its watchdog.
+        let peer_gone = pending
+            .shutdown
+            .as_ref()
+            .is_none_or(|shutdown| shutdown.readable(Instant::now()).unwrap_or(true));
+        if peer_gone {
+            return Err(Reject::InvalidPairing);
+        }
+        inner.phase = BindingPhase::Live;
+        inner.connection = Some(pending.connection.clone());
+        inner.stream = pending.shutdown.take();
+        inner.control = Some(LiveControl {
+            connection,
+            shutdown: control_shutdown,
+            handle: control_handle,
+        });
+        Ok(PairCommit {
+            channel: pending.channel.take().expect("channel checked above"),
+            connection: pending.connection,
+            capabilities: pending.capabilities,
+            admission: self.admission(),
+            deadline: pending.deadline,
+        })
+    }
+
+    /// Ends the live pair identified by its data lane — a stale or
+    /// foreign disconnect is ignored. Both lanes' seized handles are
+    /// shut down here: the caller of this terminal path holds no other
+    /// endpoint lock.
     pub fn disconnect(&self, connection: &ConnectionId) {
-        self.inner.disconnect(connection);
+        self.inner.disconnect(connection).shutdown();
     }
 
     /// Fences the binding atomically: marks it `Revoked`, clears the
@@ -291,25 +693,34 @@ impl Binding {
     /// itself performs no I/O.
     ///
     /// A revoked binding rejects every future Hello and is never
-    /// dispatchable again, whatever its previous phase.
+    /// dispatchable again, whatever its previous phase. A pending pair
+    /// is discarded with it — its held channel is closed under the
+    /// lock, its peer observes EOF.
     #[must_use]
-    pub fn fence(&self) -> Option<ChannelShutdown> {
-        let mut inner = self.inner();
-        inner.phase = BindingPhase::Revoked;
-        inner.connection = None;
-        inner.stream.take()
+    pub fn fence(&self) -> FencedHandles {
+        self.inner.fence()
     }
 
     /// Revokes the binding immediately and terminally: [`Self::fence`]
-    /// then the seized handle's hard shutdown. A peer that is not
+    /// then every seized lane's hard shutdown. A peer that is not
     /// currently locked for an exchange — including one holding an
     /// unpublished staged write — observes EOF, drops its
     /// per-connection write state, and cleans up its private stage. The
     /// shutdown never waits on the connection's data lock.
     pub fn revoke(&self) {
-        if let Some(handle) = self.fence() {
-            handle.shutdown();
-        }
+        self.fence().shutdown();
+    }
+
+    /// The live pair's cloneable control handle — the command path
+    /// independent of the data lane's dispatch lock. `None` while no
+    /// pair is live.
+    #[must_use]
+    pub fn control(&self) -> Option<ControlHandle> {
+        self.inner
+            .inner()
+            .control
+            .as_ref()
+            .map(|control| control.handle.clone())
     }
 
     /// A consistent snapshot of the binding's phase and live connection.
@@ -322,6 +733,7 @@ impl Binding {
         BindingStatus {
             phase: inner.phase,
             connection: inner.connection.clone(),
+            pending: inner.pending.is_some(),
         }
     }
 
@@ -457,22 +869,17 @@ impl Binding {
     ///
     /// The Client gets [`LOCAL_HANDSHAKE_TIMEOUT`] to present a Hello. The
     /// connection identity is generated fresh here — one per accept —
-    /// never supplied from the transport or the peer. The reply is the
-    /// typed [`HelloReply`] written as one framed record: on success the
-    /// committed live connection is returned as a [`LocalConnection`]
-    /// whose drop disconnects the binding; on failure the reject is
-    /// delivered on the wire and returned.
-    ///
-    /// If the admission cannot be delivered, the committed connection is
-    /// disconnected again — a binding is never left live on a connection
-    /// the peer does not know it owns.
+    /// Runs the paired handshake on one accepted local stream: the peer
+    /// declares its lane with [`PeerHello`], the lane's own checks run
+    /// under the armed deadline, and the result is a [`ChannelAccept`] —
+    /// a pending data half, a committed pair, or a delivered reject.
     ///
     /// # Errors
     ///
-    /// Returns the transport or socket error when the record cannot be
+    /// Returns the transport or socket error when a record cannot be
     /// read or written. An authenticated-but-refused Hello is not an I/O
-    /// error: it returns `Ok(Err(Reject))`.
-    pub fn accept_local(&self, stream: UnixStream) -> io::Result<Result<LocalConnection, Reject>> {
+    /// error: it returns `Ok(ChannelAccept::Rejected(..))`.
+    pub fn accept_local(&self, stream: UnixStream) -> io::Result<ChannelAccept> {
         self.accept_local_deadline(stream, Instant::now() + LOCAL_HANDSHAKE_TIMEOUT)
     }
 
@@ -489,86 +896,627 @@ impl Binding {
     ///
     /// Returns the transport or socket error when the record cannot be
     /// read or written. An authenticated-but-refused Hello is not an I/O
-    /// error: it returns `Ok(Err(Reject))`.
+    /// error: it returns `Ok(ChannelAccept::Rejected(..))`.
     pub fn accept_local_deadline(
         &self,
         stream: UnixStream,
         deadline: Instant,
-    ) -> io::Result<Result<LocalConnection, Reject>> {
+    ) -> io::Result<ChannelAccept> {
         self.accept_channel_deadline(RecordChannel::unix(stream), deadline)
     }
 
-    /// Performs the handshake on one already-upgraded record channel —
-    /// the transport-agnostic form of [`Self::accept_local_deadline`],
-    /// identical in budget, arbitration, and delivery semantics for Unix
-    /// and WebSocket transports alike.
+    /// Performs the paired handshake on one already-upgraded record
+    /// channel — the transport-agnostic form of
+    /// [`Self::accept_local_deadline`], identical in budget, arbitration,
+    /// and delivery semantics for Unix and WebSocket transports alike.
+    ///
+    /// On the data lane the validated Hello allocates a pending attempt;
+    /// the challenge reply is delivered before the channel is stored —
+    /// a peer that never sees its challenge can never pair, so a
+    /// delivery failure discards the attempt and the reservation stays
+    /// `Reserved`. On the control lane the nonce-verified commit, the
+    /// admission delivery, and the control worker's spawn run in that
+    /// order: a committed pair whose admission cannot be delivered is
+    /// detached and both lanes shut — a binding never stays live on a
+    /// pair the peer does not know it owns.
     ///
     /// # Errors
     ///
     /// Returns the transport or socket error when the record cannot be
     /// read or written. An authenticated-but-refused Hello is not an I/O
-    /// error: it returns `Ok(Err(Reject))`.
+    /// error: it returns `Ok(ChannelAccept::Rejected(..))`.
     pub fn accept_channel_deadline(
         &self,
         mut channel: RecordChannel,
         deadline: Instant,
-    ) -> io::Result<Result<LocalConnection, Reject>> {
-        // The revoke shutdown handle is duplicated before the handshake
-        // takes the channel's only borrow.
-        let revoke_handle = channel.shutdown_handle()?;
-        let hello: Hello = channel.receive(Some(deadline))?;
-        let capabilities = hello.capabilities.clone();
-        let connection = fresh_connection_id()?;
-        match self.connect_gated(
-            &hello,
-            connection.clone(),
-            Some(deadline),
-            Some(revoke_handle),
-        )? {
-            Ok(admission) => {
-                self.deliver(&mut channel, deadline, &connection, &admission)?;
-                Ok(Ok(LocalConnection {
-                    owner: self.inner.clone(),
-                    channel,
-                    usable: true,
-                    closed: false,
-                    capabilities,
-                    connection,
-                    admission,
-                }))
+    ) -> io::Result<ChannelAccept> {
+        // The shutdown handles are duplicated before the handshake takes
+        // the channel's only borrow: one for the stored lane, one for
+        // the pending watchdog's poll.
+        let lane_handle = channel.shutdown_handle()?;
+        let hello: PeerHello = channel.receive(Some(deadline))?;
+        match hello {
+            PeerHello::Data(hello) => {
+                let connection = fresh_connection_id()?;
+                let watch = channel.shutdown_handle()?;
+                match self.allocate_pending(&hello, connection.clone(), deadline)? {
+                    Ok((nonce, attempt, admission)) => {
+                        let reply = DataHelloReply::Ok(DataAdmission {
+                            admission,
+                            challenge: nonce,
+                        });
+                        let sent = encode_record(&reply)
+                            .and_then(|encoded| channel.send(&encoded, Some(deadline)));
+                        if let Err(error) = sent {
+                            self.inner.discard_pending(attempt);
+                            channel.shutdown();
+                            return Err(error);
+                        }
+                        if !self.store_pending_channel(attempt, channel, lane_handle) {
+                            // A superseding attempt won the store race:
+                            // this peer's nonce is already dead.
+                            return Ok(ChannelAccept::Pending);
+                        }
+                        self.watch_pending(attempt, watch, deadline)?;
+                        Ok(ChannelAccept::Pending)
+                    }
+                    Err(reject) => {
+                        let encoded = encode_record(&DataHelloReply::Err(reject))?;
+                        channel.send(&encoded, Some(deadline))?;
+                        Ok(ChannelAccept::Rejected(reject))
+                    }
+                }
             }
-            Err(reject) => {
-                let encoded = encode_record(&HelloReply::Err(reject))?;
-                channel.send(&encoded, Some(deadline))?;
-                Ok(Err(reject))
+            PeerHello::Control(hello) => {
+                let connection = fresh_connection_id()?;
+                let shared = Arc::new(ControlShared::new());
+                let handle = ControlHandle {
+                    shared: shared.clone(),
+                    owner: self.inner.clone(),
+                };
+                match self.commit_pair(
+                    &hello,
+                    connection.clone(),
+                    lane_handle,
+                    handle.clone(),
+                    deadline,
+                ) {
+                    Ok(commit) => {
+                        // The control lane's admission is delivered
+                        // under `min(first, second)` — a late second
+                        // half can never stretch the one pairing budget.
+                        let reply = ControlHelloReply::Ok(commit.admission.clone());
+                        let delivery = commit.deadline.min(deadline);
+                        let sent = encode_record(&reply)
+                            .and_then(|encoded| channel.send(&encoded, Some(delivery)));
+                        if let Err(error) = sent {
+                            // Committed but undelivered: detach the pair
+                            // and interrupt both lanes.
+                            self.inner.disconnect(&commit.connection).shutdown();
+                            channel.shutdown();
+                            return Err(error);
+                        }
+                        let worker =
+                            ControlWorker::spawn(channel, self.inner.clone(), connection, shared);
+                        Ok(ChannelAccept::Live(LocalConnection {
+                            owner: self.inner.clone(),
+                            channel: commit.channel,
+                            control: Some(worker),
+                            usable: true,
+                            closed: false,
+                            capabilities: commit.capabilities,
+                            connection: commit.connection,
+                            admission: commit.admission,
+                        }))
+                    }
+                    Err(reject) => {
+                        let encoded = encode_record(&ControlHelloReply::Err(reject))?;
+                        channel.send(&encoded, Some(deadline))?;
+                        Ok(ChannelAccept::Rejected(reject))
+                    }
+                }
             }
         }
     }
 
-    /// Writes the admission and completes the handshake deadline. On any
-    /// failure after the commit — an expired deadline or a transport
-    /// error — the committed connection is disconnected again and the
-    /// channel shut down: a binding never stays live on a connection the
-    /// peer does not know it owns.
-    fn deliver(
+    /// Spawns the pending attempt's watchdog: it polls the held data
+    /// lane's duplicated handle — buffered peer bytes and a peer close
+    /// are equally proof of death or a protocol violation — and discards
+    /// the attempt on either signal or at the absolute pairing deadline.
+    /// The reservation stays `Reserved` whatever the watchdog observes.
+    /// One bounded thread per attempt — and at most one attempt per
+    /// Session — never a queue.
+    ///
+    /// A cancel pipe wakes the watcher immediately when the attempt is
+    /// settled another way: commit, discard, or fence drops the
+    /// `PendingPair` and the write end with it, so the thread exits at
+    /// once instead of sleeping until data traffic or the deadline.
+    fn watch_pending(
         &self,
-        channel: &mut RecordChannel,
+        attempt: u64,
+        watch: ChannelShutdown,
         deadline: Instant,
-        connection: &ConnectionId,
-        admission: &Admission,
     ) -> io::Result<()> {
-        let delivered = encode_record(&HelloReply::Ok(admission.clone()))
-            .and_then(|encoded| channel.send(&encoded, Some(deadline)));
-        if let Err(error) = delivered {
-            self.disconnect(connection);
-            channel.shutdown();
-            return Err(error);
+        let (cancel_read, cancel_write) = nix::unistd::pipe().map_err(io::Error::from)?;
+        {
+            let mut inner = self.inner();
+            match inner.pending.as_mut() {
+                Some(pending) if pending.attempt == attempt => {
+                    pending.wake = Some(cancel_write);
+                }
+                // The attempt already settled — nothing to watch.
+                _ => return Ok(()),
+            }
         }
-        Ok(())
+        let owner = self.inner.clone();
+        let cleanup = self.inner.clone();
+        std::thread::Builder::new()
+            .name("execution-pair-watch".to_owned())
+            .spawn(move || {
+                use std::os::fd::AsFd;
+                let data = watch.as_fd().expect("a watchdog needs a descriptor");
+                loop {
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    let timeout: nix::poll::PollTimeout =
+                        remaining.try_into().unwrap_or(nix::poll::PollTimeout::MAX);
+                    let mut fds = [
+                        nix::poll::PollFd::new(data, nix::poll::PollFlags::POLLIN),
+                        nix::poll::PollFd::new(cancel_read.as_fd(), nix::poll::PollFlags::POLLIN),
+                    ];
+                    match nix::poll::poll(&mut fds, timeout) {
+                        Ok(0) => break,
+                        Ok(_) => {
+                            // The cancel pipe readable means the attempt
+                            // settled elsewhere — exit without touching
+                            // anything.
+                            if fds[1].revents().is_some_and(|events| !events.is_empty()) {
+                                return;
+                            }
+                            if fds[0].revents().is_some_and(|events| !events.is_empty()) {
+                                break;
+                            }
+                        }
+                        Err(nix::errno::Errno::EINTR) => {}
+                        Err(_) => break,
+                    }
+                }
+                owner.discard_pending(attempt);
+            })
+            .inspect_err(|_| {
+                // A watchdog that cannot spawn leaves an unbounded
+                // pending channel: discard the attempt it was for.
+                cleanup.discard_pending(attempt);
+            })
+            .map(|_| ())
     }
 
     fn inner(&self) -> MutexGuard<'_, Inner> {
         self.inner.inner()
+    }
+}
+
+/// The outcome of one accepted connection's paired handshake.
+///
+/// A `Pending` data half is real and held — its challenge was
+/// delivered — but the pair is not live: the caller keeps accepting
+/// for the control lane inside the same absolute budget.
+#[allow(clippy::large_enum_variant)] // one accept per handshake — size is irrelevant
+pub enum ChannelAccept {
+    /// The data half validated and its challenge was delivered; the
+    /// held channel awaits the pairing control lane.
+    Pending,
+    /// The pair committed: the live connection, dispatchable.
+    Live(LocalConnection),
+    /// The peer was refused; the typed reject was delivered on the wire.
+    Rejected(Reject),
+}
+
+/// The data half a committed pair releases — the held channel plus the
+/// reserved identity it was validated under.
+struct PairCommit {
+    /// The held data channel, dispatchable now.
+    channel: RecordChannel,
+    /// The data lane's reserved connection identity.
+    connection: ConnectionId,
+    /// The capabilities the data Hello claimed.
+    capabilities: BTreeSet<Capability>,
+    /// The shared admission both lanes' replies carry.
+    admission: Admission,
+    /// The data lane's armed pairing deadline — carried through so the
+    /// control lane's admission delivery is clamped to
+    /// `min(first, second)` and a late second half can never stretch the
+    /// one bounded budget.
+    deadline: Instant,
+}
+
+/// The shared state behind the cloneable [`ControlHandle`]: the bounded
+/// command queue, the one in-flight command awaiting its receipt, and
+/// the terminal error every orphan waiter is resolved with.
+struct ControlShared {
+    state: Mutex<ControlState>,
+}
+
+struct ControlState {
+    /// Queued commands not yet delivered to the peer — FIFO, one per
+    /// answered poll.
+    queue: VecDeque<ControlCommand>,
+    /// The command the last turn delivered, awaiting its receipt.
+    inflight: Option<ControlCommand>,
+    /// The worker's stop handle — set once at spawn.
+    stop: Option<ChannelShutdown>,
+    /// Whether [`ControlHandle::stop`] requested an orderly end — the
+    /// worker exits without detaching the pair.
+    stop_requested: bool,
+    /// The terminal error new and orphan waiters resolve to once the
+    /// lane is dead.
+    closed: Option<io::Error>,
+}
+
+/// One queued or in-flight server command and its private waiter.
+struct ControlCommand {
+    request: ControlRequest,
+    responder: mpsc::Sender<io::Result<ControlReply>>,
+}
+
+impl ControlShared {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(ControlState {
+                queue: VecDeque::new(),
+                inflight: None,
+                stop: None,
+                stop_requested: false,
+                closed: None,
+            }),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, ControlState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Queues `request` and returns the receipt future — refused
+    /// immediately when the bounded queue is full or the lane is dead.
+    fn enqueue(
+        &self,
+        request: ControlRequest,
+    ) -> io::Result<mpsc::Receiver<io::Result<ControlReply>>> {
+        let (responder, receipt) = mpsc::channel();
+        let mut state = self.lock();
+        if let Some(closed) = &state.closed {
+            return Err(io::Error::new(closed.kind(), "control lane is closed"));
+        }
+        let in_flight = state.queue.len() + usize::from(state.inflight.is_some());
+        if in_flight >= MAX_CONTROL_COMMANDS {
+            return Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "control command budget is full",
+            ));
+        }
+        state.queue.push_back(ControlCommand { request, responder });
+        Ok(receipt)
+    }
+
+    /// Delivers the poll's receipt to the in-flight waiter. Every legal
+    /// shape is checked against the command it answers: a receipt with
+    /// no in-flight command, a missing receipt for a delivered one, or a
+    /// receipt the wrong shape or echo for its request is a protocol
+    /// violation that fails the lane, not just the waiter.
+    fn resolve(&self, receipt: Option<ControlReply>) -> bool {
+        let mut state = self.lock();
+        match (state.inflight.take(), receipt) {
+            (None, None) => true,
+            (Some(command), Some(reply)) => {
+                if receipt_matches(&command.request, &reply) {
+                    let _ = command.responder.send(Ok(reply));
+                    true
+                } else {
+                    // The dishonest receipt still consumes the command:
+                    // the waiter learns the lane failed, never a false
+                    // success.
+                    let _ = command.responder.send(Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "control receipt does not match its request",
+                    )));
+                    false
+                }
+            }
+            (Some(command), None) => {
+                let _ = command.responder.send(Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "control poll carries no receipt for a delivered request",
+                )));
+                false
+            }
+            (None, Some(_)) => false,
+        }
+    }
+
+    /// Moves the next queued command into the in-flight slot — only
+    /// while nothing is in flight: at most one server command is ever
+    /// outstanding on the lane.
+    fn next_command(&self) -> Option<ControlRequest> {
+        let mut state = self.lock();
+        if state.inflight.is_some() {
+            return None;
+        }
+        state.inflight = state.queue.pop_front();
+        state
+            .inflight
+            .as_ref()
+            .map(|command| command.request.clone())
+    }
+
+    /// Arms the worker's stop handle — once, at spawn.
+    fn arm_stop(&self, stop: ChannelShutdown) {
+        self.lock().stop = Some(stop);
+    }
+
+    /// Orderly stop: the worker exits without detaching the pair —
+    /// the pair's own teardown is the caller's. Every waiter resolves
+    /// closed and the worker's read wakes.
+    fn close(&self, error: io::Error) {
+        let mut state = self.lock();
+        state.stop_requested = true;
+        Self::drain(&mut state, error);
+        if let Some(stop) = state.stop.take() {
+            stop.shutdown();
+        }
+    }
+
+    /// The worker's teardown: resolve every orphan waiter — commands
+    /// never delivered and the in-flight one never answered — then mark
+    /// the lane closed so late callers fail instead of queueing. This
+    /// is never an orderly stop: the pair's fate is decided by the
+    /// caller that observes the lane ended.
+    fn terminate(&self, error: io::Error) {
+        let mut state = self.lock();
+        Self::drain(&mut state, error);
+    }
+
+    /// Resolves every outstanding waiter with `error` and marks the
+    /// lane closed — under the caller's existing hold.
+    fn drain(state: &mut ControlState, error: io::Error) {
+        state.closed.get_or_insert(error);
+        for command in state.queue.drain(..).chain(state.inflight.take()) {
+            let _ = command.responder.send(Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "control lane is closed",
+            )));
+        }
+    }
+
+    /// Whether the shutdown was requested through [`Self::close`].
+    fn stop_requested(&self) -> bool {
+        self.lock().stop_requested
+    }
+}
+
+/// The cloneable Server command path on the paired control lane —
+/// independent of the data lane's dispatch lock. `health` and
+/// `cancel_mutation` queue bounded commands delivered on the peer's own
+/// turn-taking polls and return only verified receipts;
+/// [`Self::stop`] ends the lane. Every clone shares the one lane: at
+/// most [`MAX_CONTROL_COMMANDS`] queued plus in-flight commands, probes
+/// included.
+#[derive(Clone)]
+pub struct ControlHandle {
+    shared: Arc<ControlShared>,
+    /// The pair's arbitration owner — `revoke` fences it directly;
+    /// never exposed.
+    owner: Arc<ConnectionOwner>,
+}
+
+impl ControlHandle {
+    /// A liveness round trip on the control lane: the fresh nonce must
+    /// come back echoed — never a replayed proof.
+    ///
+    /// # Errors
+    ///
+    /// Returns the queue-full [`io::ErrorKind::WouldBlock`], the closed
+    /// lane's terminal error, [`io::ErrorKind::TimedOut`] past the
+    /// command budget, or the worker's protocol-violation error.
+    pub fn health(&self) -> io::Result<()> {
+        let mut nonce = [0u8; 8];
+        getrandom::fill(&mut nonce).map_err(io::Error::other)?;
+        let nonce = DecimalU64::new(u64::from_be_bytes(nonce));
+        let receipt = self.shared.enqueue(ControlRequest::Health { nonce })?;
+        match receipt.recv_timeout(CONTROL_COMMAND_TIMEOUT) {
+            Ok(Ok(ControlReply::Healthy { nonce: echoed })) if echoed == nonce => Ok(()),
+            Ok(Ok(_)) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "control health receipt echoes a foreign nonce",
+            )),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "control command outlived its budget",
+            )),
+        }
+    }
+
+    /// Cancels the live mutation commit for `ticket` on the Client:
+    /// the disposition is the Client's own arbitration — a
+    /// [`CancelDisposition::CancelledBeforeCommit`] proves the publish
+    /// never crossed, [`CancelDisposition::AlreadyCrossed`] that it had,
+    /// and [`CancelDisposition::Unknown`] that no live ticket matched.
+    /// `Unknown` is returned as-is — never retried.
+    ///
+    /// # Errors
+    ///
+    /// The same error kinds as [`Self::health`].
+    pub fn cancel_mutation(&self, ticket: DecimalU64) -> io::Result<CancelDisposition> {
+        let receipt = self
+            .shared
+            .enqueue(ControlRequest::CancelMutation { ticket })?;
+        match receipt.recv_timeout(CONTROL_COMMAND_TIMEOUT) {
+            Ok(Ok(ControlReply::MutationCancelled {
+                ticket: echoed,
+                disposition,
+            })) if echoed == ticket => Ok(disposition),
+            Ok(Ok(_)) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "control cancel receipt answers a foreign ticket",
+            )),
+            Ok(Err(error)) => Err(error),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "control command outlived its budget",
+            )),
+        }
+    }
+
+    /// Requests terminal revocation from the Client — its local commits
+    /// are fenced before `Revoked` is echoed — then revokes the binding
+    /// locally. The peer's acknowledgement is awaited through the same
+    /// bounded receipt path as every command; after it, the binding is
+    /// `Revoked` whatever happens next.
+    ///
+    /// # Errors
+    ///
+    /// The same error kinds as [`Self::health`]. A failed command still
+    /// revokes the binding — a revoke never quietly un-happens.
+    pub fn revoke(&self) -> io::Result<()> {
+        let receipt = self.shared.enqueue(ControlRequest::Revoke);
+        let result = match receipt {
+            Ok(receipt) => match receipt.recv_timeout(CONTROL_COMMAND_TIMEOUT) {
+                Ok(Ok(ControlReply::Revoked)) => Ok(()),
+                Ok(Ok(_)) => Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "control revoke acknowledged with a foreign receipt",
+                )),
+                Ok(Err(error)) => Err(error),
+                Err(_) => Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "control command outlived its budget",
+                )),
+            },
+            Err(error) => Err(error),
+        };
+        self.owner.fence().shutdown();
+        result
+    }
+
+    /// Whether the lane is still delivering commands.
+    #[must_use]
+    pub fn is_live(&self) -> bool {
+        self.shared.lock().closed.is_none()
+    }
+
+    /// Orderly stop: waiters resolve closed and the worker's read wakes.
+    /// The pair's teardown is the connection's.
+    fn stop(&self) {
+        self.shared.close(io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "control lane is closed",
+        ));
+    }
+}
+
+/// The control worker's ownership: the handle for callers and the
+/// bounded join for teardown.
+struct ControlWorker {
+    handle: ControlHandle,
+    join: JoinHandle<()>,
+}
+
+impl ControlWorker {
+    /// Spawns the one bounded worker that owns the committed control
+    /// channel: it reads [`ControlPoll`]s, resolves the in-flight
+    /// command's waiter from each receipt, and answers with
+    /// [`ControlTurn`]s carrying the next queued command. Every frame
+    /// runs under a per-frame absolute deadline; the lane's own
+    /// shutdown handle wakes a blocked read on stop or fence.
+    fn spawn(
+        mut channel: RecordChannel,
+        owner: Arc<ConnectionOwner>,
+        connection: ConnectionId,
+        shared: Arc<ControlShared>,
+    ) -> Self {
+        if let Ok(stop) = channel.shutdown_handle() {
+            shared.arm_stop(stop);
+        }
+        let worker_shared = shared.clone();
+        let worker_owner = owner.clone();
+        let join = std::thread::Builder::new()
+            .name("execution-control".to_owned())
+            .spawn(move || {
+                let mut next_sequence = 1u64;
+                loop {
+                    let deadline = Instant::now() + CONTROL_FRAME_TIMEOUT;
+                    let poll: ControlPoll = match channel.receive(Some(deadline)) {
+                        Ok(poll) => poll,
+                        Err(_) => break,
+                    };
+                    // The client's own sequence must advance exactly:
+                    // a skip or replay is a protocol violation, not a
+                    // dropped frame to tolerate.
+                    if poll.sequence.get() != next_sequence {
+                        break;
+                    }
+                    next_sequence = next_sequence.saturating_add(1);
+                    if !shared.resolve(poll.receipt) {
+                        break;
+                    }
+                    let request = shared.next_command();
+                    let turn = ControlTurn {
+                        sequence: poll.sequence,
+                        health: poll.health,
+                        request,
+                    };
+                    let Ok(encoded) = encode_record(&turn) else {
+                        break;
+                    };
+                    if channel.send(&encoded, Some(deadline)).is_err() {
+                        break;
+                    }
+                }
+                shared.terminate(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "control lane ended",
+                ));
+                if !shared.stop_requested() {
+                    // A lane that ended without an orderly stop detaches
+                    // the pair: the seized data handle interrupts any
+                    // blocked exchange, and no dispatch starts again.
+                    worker_owner.detach_control(&connection).shutdown();
+                }
+            })
+            .expect("the bounded control worker spawns");
+        Self {
+            handle: ControlHandle {
+                shared: worker_shared,
+                owner,
+            },
+            join,
+        }
+    }
+
+    /// Orderly stop: close the lane, wake the worker, join it. The join
+    /// is bounded — the worker's own frame deadline plus the shutdown
+    /// it just received — and the caller never holds a global lock.
+    fn stop(self) {
+        self.handle.stop();
+        let _ = self.join.join();
+    }
+}
+
+/// Whether a poll receipt is the exact answer the in-flight request
+/// requires — shape and echo both.
+fn receipt_matches(request: &ControlRequest, reply: &ControlReply) -> bool {
+    match (request, reply) {
+        (ControlRequest::Health { nonce }, ControlReply::Healthy { nonce: echoed }) => {
+            nonce == echoed
+        }
+        (
+            ControlRequest::CancelMutation { ticket },
+            ControlReply::MutationCancelled { ticket: echoed, .. },
+        ) => ticket == echoed,
+        (ControlRequest::Revoke, ControlReply::Revoked) => true,
+        _ => false,
     }
 }
 
@@ -581,7 +1529,10 @@ impl Binding {
 /// reply could still be outstanding, and later calls fail closed.
 pub struct LocalConnection {
     owner: Arc<ConnectionOwner>,
+    /// The data lane — the only dispatch channel.
     channel: RecordChannel,
+    /// The paired control lane's worker, stopped exactly once.
+    control: Option<ControlWorker>,
     usable: bool,
     /// Whether the orderly transport close was already sent: `close`
     /// and `Drop` never send it twice.
@@ -739,8 +1690,18 @@ impl LocalConnection {
                 .channel
                 .close_graceful(Some(Instant::now() + ORDERLY_CLOSE_BUDGET));
         }
-        self.owner.disconnect(&self.connection);
+        if let Some(control) = self.control.take() {
+            control.stop();
+        }
+        self.owner.disconnect(&self.connection).shutdown();
         self.channel.shutdown();
+    }
+
+    /// The paired control lane's cloneable command handle — `None`
+    /// after teardown takes the worker.
+    #[must_use]
+    pub fn control(&self) -> Option<ControlHandle> {
+        self.control.as_ref().map(|control| control.handle.clone())
     }
 
     /// Marks the stream unusable, disconnects the binding, and shuts the
@@ -749,7 +1710,10 @@ impl LocalConnection {
     /// connection is torn down and never used again.
     fn retire(&mut self, error: io::Error) -> io::Error {
         self.usable = false;
-        self.owner.disconnect(&self.connection);
+        if let Some(control) = self.control.take() {
+            control.stop();
+        }
+        self.owner.disconnect(&self.connection).shutdown();
         self.channel.shutdown();
         error
     }
@@ -1812,7 +2776,7 @@ impl LocalConnection {
             }
             return Err(error);
         }
-        self.commit_prepared(&prepared, Some(deadline), &|| Ok(()))
+        self.commit_prepared(&prepared, Some(deadline), &|| Ok(()), &|| ())
     }
 
     /// The prepare half of a conditional write: validates the request,
@@ -2041,6 +3005,7 @@ impl LocalConnection {
         prepared: &PreparedMutation,
         deadline: Option<Instant>,
         admit: &impl Fn() -> io::Result<()>,
+        sent: &impl Fn(),
     ) -> io::Result<FileStamp> {
         if prepared.connection != self.connection {
             return Err(io::Error::new(
@@ -2048,7 +3013,7 @@ impl LocalConnection {
                 "prepared mutation belongs to a different connection",
             ));
         }
-        self.commit_write(prepared.ticket, prepared.size, deadline, admit)
+        self.commit_write(prepared.ticket, prepared.size, deadline, admit, sent)
     }
 
     /// The abort half: removes the ticketed preparation while the binding
@@ -2154,7 +3119,7 @@ impl LocalConnection {
             }
             return Err(error);
         }
-        self.commit_prepared(&prepared, Some(deadline), &|| Ok(()))
+        self.commit_prepared(&prepared, Some(deadline), &|| Ok(()), &|| ())
     }
 
     /// The prepare half of a conditional edit: validates the request,
@@ -2298,6 +3263,7 @@ impl LocalConnection {
         expected_size: u64,
         deadline: Option<Instant>,
         admit: &impl Fn() -> io::Result<()>,
+        sent: &impl Fn(),
     ) -> io::Result<FileStamp> {
         let encoded = encode_record(&ClientRequest::CommitWrite { ticket })?;
         self.gate()?;
@@ -2307,6 +3273,7 @@ impl LocalConnection {
         let result = self
             .channel
             .send(&encoded, deadline)
+            .map(|()| sent())
             .and_then(|()| self.channel.receive(deadline));
         let Ok(reply) = result else {
             return Err(outcome_unknown(self));
@@ -2322,6 +3289,12 @@ impl LocalConnection {
             // accounting.
             ClientReply::CommitUnknown { ticket: echoed } if echoed == ticket => {
                 Err(outcome_unknown(self))
+            }
+            // The control lane's cancellation won arbitration before the
+            // publish crossed: the Client proved nothing was written —
+            // a typed clean-cancel outcome, never an unknown one.
+            ClientReply::WriteCancelled { ticket: echoed } if echoed == ticket => {
+                Err(io::Error::new(io::ErrorKind::Interrupted, CommitCancelled))
             }
             ClientReply::Written {
                 ticket: echoed,
@@ -2430,6 +3403,23 @@ impl std::fmt::Display for WriteOutcomeUnknown {
 }
 
 impl std::error::Error for WriteOutcomeUnknown {}
+
+/// The commit was arbitrated cancelled on the independent control lane
+/// before the Client's publish crossing: the typed `WriteCancelled`
+/// reply proves nothing named by the ticket was written. Downcast the
+/// `io::Error` to this marker to distinguish a proven clean cancel —
+/// reportable as an ordinary cancellation — from
+/// [`WriteOutcomeUnknown`], which never shares that claim.
+#[derive(Debug)]
+pub struct CommitCancelled;
+
+impl std::fmt::Display for CommitCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "write commit cancelled before publish")
+    }
+}
+
+impl std::error::Error for CommitCancelled {}
 
 /// The shared content-revision check: a SHA-256 stamp is exactly 64
 /// lowercase hexadecimal characters, nothing else.
@@ -3281,10 +4271,82 @@ mod tests {
         (binding, hello)
     }
 
-    /// One real loopback WebSocket channel admitted through
-    /// `accept_channel_deadline` — the genuine RFC 6455 upgrade on the
-    /// client side, never a UDS stand-in. Returns the live connection
-    /// and the peer channel for driving typed replies.
+    /// The client-side `ControlHello` a paired lane carries — the data
+    /// Hello's exact identity plus the challenge the Server issued.
+    fn control_hello(hello: &Hello, challenge: PairingNonce) -> PeerHello {
+        PeerHello::Control(ControlHello {
+            version: hello.version,
+            session: hello.session.clone(),
+            environment: hello.environment.clone(),
+            instance: hello.instance.clone(),
+            generation: hello.generation,
+            workspace: hello.workspace.clone(),
+            credential: hello.credential.clone(),
+            connection_nonce: challenge,
+        })
+    }
+
+    /// The minimal client-side control loop the tests' paired lanes run:
+    /// every `ControlPoll` carries a fresh deterministic nonce and the
+    /// receipt for the previous request; `Health` echoes, `Revoke`
+    /// acknowledges — `CancelMutation` answers `Unknown` because these
+    /// peers stage no local mutations. The loop ends when the lane does.
+    fn control_peer_loop(channel: &mut rustx_execution_transport::RecordChannel) {
+        let mut sequence = 1_u64;
+        let mut receipt: Option<ControlReply> = None;
+        loop {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let poll = ControlPoll {
+                sequence: DecimalU64::new(sequence),
+                receipt: receipt.take(),
+                health: DecimalU64::new(sequence),
+            };
+            if channel
+                .send(&encode_record(&poll).unwrap(), Some(deadline))
+                .is_err()
+            {
+                return;
+            }
+            let Ok(turn) = channel.receive::<ControlTurn>(Some(deadline)) else {
+                return;
+            };
+            if turn.sequence != poll.sequence || turn.health != poll.health {
+                return;
+            }
+            sequence += 1;
+            let Some(request) = turn.request else {
+                std::thread::sleep(Duration::from_millis(20));
+                continue;
+            };
+            let done = matches!(request, ControlRequest::Revoke);
+            receipt = Some(match request {
+                ControlRequest::Health { nonce } => ControlReply::Healthy { nonce },
+                ControlRequest::CancelMutation { ticket } => ControlReply::MutationCancelled {
+                    ticket,
+                    disposition: CancelDisposition::Unknown,
+                },
+                ControlRequest::Revoke => ControlReply::Revoked,
+            });
+            if done {
+                let poll = ControlPoll {
+                    sequence: DecimalU64::new(sequence),
+                    receipt,
+                    health: DecimalU64::new(sequence),
+                };
+                let _ = channel.send(
+                    &encode_record(&poll).unwrap(),
+                    Some(Instant::now() + Duration::from_secs(5)),
+                );
+                return;
+            }
+        }
+    }
+
+    /// One real loopback WebSocket pair admitted through
+    /// `accept_channel_deadline` — the genuine RFC 6455 upgrade on both
+    /// client lanes, never a UDS stand-in. Returns the live connection
+    /// and the data peer channel for driving typed replies; the control
+    /// peer polls on its own bounded thread.
     fn ws_connection(
         binding: &Binding,
         hello: &Hello,
@@ -3292,27 +4354,61 @@ mod tests {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
         let deadline = Instant::now() + Duration::from_secs(10);
-        thread::scope(|scope| {
+        let endpoint = || {
+            rustx_execution_transport::ExecutionUrl::validate(&format!(
+                "ws://{address}/execution/v1"
+            ))
+            .unwrap()
+        };
+        // The data half: `PeerHello::Data` earns `Pending` and the
+        // pairing challenge.
+        let (challenge, client) = thread::scope(|scope| {
             let server = scope.spawn(|| {
                 let (stream, _) = listener.accept().unwrap();
                 let channel = rustx_execution_transport::accept(stream, deadline).unwrap();
-                binding
-                    .accept_channel_deadline(channel, deadline)
-                    .unwrap()
-                    .unwrap()
+                binding.accept_channel_deadline(channel, deadline).unwrap()
             });
-            let endpoint = rustx_execution_transport::ExecutionUrl::validate(&format!(
-                "ws://{address}/execution/v1"
-            ))
-            .unwrap();
-            let mut client = rustx_execution_transport::connect(&endpoint, deadline, None).unwrap();
+            let mut client =
+                rustx_execution_transport::connect(&endpoint(), deadline, None).unwrap();
             client
-                .send(&encode_record(hello).unwrap(), Some(deadline))
+                .send(
+                    &encode_record(&PeerHello::Data(hello.clone())).unwrap(),
+                    Some(deadline),
+                )
                 .unwrap();
-            let reply: HelloReply = client.receive(Some(deadline)).unwrap();
-            assert!(matches!(reply, HelloReply::Ok(_)));
-            (server.join().unwrap(), client)
-        })
+            let reply: DataHelloReply = client.receive(Some(deadline)).unwrap();
+            let Ok(data) = reply else {
+                panic!("the honest data Hello is admitted");
+            };
+            assert!(matches!(server.join().unwrap(), ChannelAccept::Pending));
+            (data.challenge, client)
+        });
+        // The pairing control lane: a second real WebSocket connection
+        // carrying the challenge commits the pair; its peer keeps
+        // polling on a bounded thread.
+        let connection = thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (stream, _) = listener.accept().unwrap();
+                let channel = rustx_execution_transport::accept(stream, deadline).unwrap();
+                binding.accept_channel_deadline(channel, deadline).unwrap()
+            });
+            let mut control =
+                rustx_execution_transport::connect(&endpoint(), deadline, None).unwrap();
+            control
+                .send(
+                    &encode_record(&control_hello(hello, challenge)).unwrap(),
+                    Some(deadline),
+                )
+                .unwrap();
+            let reply: ControlHelloReply = control.receive(Some(deadline)).unwrap();
+            assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
+            let ChannelAccept::Live(connection) = server.join().unwrap() else {
+                panic!("the paired control lane commits the connection");
+            };
+            thread::spawn(move || control_peer_loop(&mut control));
+            connection
+        });
+        (connection, client)
     }
 
     #[test]
@@ -3381,11 +4477,7 @@ mod tests {
     #[test]
     fn a_peer_without_the_range_capability_gets_no_request() {
         let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         // No admitted capability: the call fails locally and no request is
         // ever placed on the wire.
@@ -3409,16 +4501,60 @@ mod tests {
         assert_eq!(binding.status().phase, BindingPhase::Live);
     }
 
-    /// One fully admitted live connection over a real socket pair: the
-    /// Hello is written by the peer, `accept_local` completes, and the
-    /// peer end comes back for scripted replies.
+    /// One fully admitted live pair over real socket pairs: the data
+    /// Hello is written by the peer, its challenge pairs a second lane
+    /// whose peer keeps polling on a bounded thread, and the data peer
+    /// end comes back for scripted replies.
     fn live(binding: &Binding, hello: &Hello) -> (LocalConnection, UnixStream) {
         let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, hello).unwrap();
-        let connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
-        (connection, peer)
+        write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
+        (live_data_half(binding, hello, stream, &mut peer), peer)
+    }
+
+    /// The paired admission on an already-configured server stream: the
+    /// data half must already carry `PeerHello::Data(hello)` — this
+    /// admits it `Pending`, pairs the mandatory control lane on a fresh
+    /// socket pair, and returns the committed connection. The control
+    /// peer polls on its own bounded thread.
+    fn live_data_half(
+        binding: &Binding,
+        hello: &Hello,
+        stream: UnixStream,
+        peer: &mut UnixStream,
+    ) -> LocalConnection {
+        assert!(matches!(
+            binding.accept_local(stream).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(peer).unwrap();
+        let Ok(data) = reply else {
+            panic!("the honest data Hello is admitted");
+        };
+        pair_control_half(binding, hello, &data.challenge)
+    }
+
+    /// Commits a pending data half: a second socket pair carries the
+    /// `ControlHello` challenge, the committed connection comes back,
+    /// and the scripted control peer keeps polling so the pair stays
+    /// live for the test's lifetime.
+    fn pair_control_half(
+        binding: &Binding,
+        hello: &Hello,
+        challenge: &PairingNonce,
+    ) -> LocalConnection {
+        let (mut control_peer, control_stream) = UnixStream::pair().unwrap();
+        write_record(&mut control_peer, &control_hello(hello, challenge.clone())).unwrap();
+        let accepted = binding.accept_local(control_stream).unwrap();
+        let ChannelAccept::Live(connection) = accepted else {
+            panic!("the paired control lane commits the connection");
+        };
+        let reply: ControlHelloReply = read_record(&mut control_peer).unwrap();
+        assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
+        thread::spawn(move || {
+            let mut channel = RecordChannel::unix(control_peer);
+            control_peer_loop(&mut channel);
+        });
+        connection
     }
 
     #[test]
@@ -3535,42 +4671,51 @@ mod tests {
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert_eq!(binding.status().phase, BindingPhase::Reserved);
 
-        // The same check inside arbitration, right before commit: an
-        // expired budget cannot become Live and consumes nothing.
-        let Err(error) = binding.connect_gated(
-            &hello,
-            ConnectionId::new("conn-1"),
-            Some(Instant::now()),
-            None,
-        ) else {
-            panic!("an expired deadline must fail before commit");
-        };
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert_eq!(binding.status().phase, BindingPhase::Reserved);
-
         // The honest Hello still wins the live connection afterwards.
         assert!(binding.connect(&hello, ConnectionId::new("conn-2")).is_ok());
         assert_eq!(binding.status().phase, BindingPhase::Live);
     }
 
     #[test]
-    fn an_expired_deadline_during_delivery_detaches_the_binding() {
+    fn a_closed_data_half_before_pairing_discards_the_attempt() {
         let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
-        let connection = ConnectionId::new("conn-1");
-        let admission = binding.connect(&hello, connection.clone()).unwrap();
-        assert_eq!(binding.status().phase, BindingPhase::Live);
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(stream).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut peer).unwrap();
+        let Ok(data) = reply else {
+            panic!("the honest data Hello is admitted");
+        };
+        assert_eq!(binding.status().phase, BindingPhase::Reserved);
 
-        // The deadline expires after the commit but before the admission
-        // is delivered: the committed connection is disconnected and the
-        // stream shut down, never left live on a peer that cannot know
-        // it owns the connection.
-        let (_peer, stream) = UnixStream::pair().unwrap();
-        let mut channel = RecordChannel::unix(stream);
-        let error = binding
-            .deliver(&mut channel, Instant::now(), &connection, &admission)
-            .unwrap_err();
-        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        // The data half dies before the control lane pairs: the watchdog
+        // sees the lane's end and discards the attempt — the reservation
+        // stays Reserved and the now-stale nonce pairs nothing.
+        drop(peer);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while binding.status().pending {
+            assert!(
+                Instant::now() < deadline,
+                "the watchdog never discarded the attempt"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let (mut control_peer, control_stream) = UnixStream::pair().unwrap();
+        write_record(
+            &mut control_peer,
+            &control_hello(&hello, data.challenge.clone()),
+        )
+        .unwrap();
+        assert!(matches!(
+            binding.accept_local(control_stream).unwrap(),
+            ChannelAccept::Rejected(Reject::InvalidPairing)
+        ));
+        let reply: ControlHelloReply = read_record(&mut control_peer).unwrap();
+        assert!(matches!(reply, Err(Reject::InvalidPairing)));
+        assert_eq!(binding.status().phase, BindingPhase::Reserved);
     }
 
     #[test]
@@ -3579,11 +4724,7 @@ mod tests {
             Capability::Connection,
             Capability::ReadRange,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         let answer = thread::spawn(move || {
             let request: ClientRequest = read_record(&mut peer).unwrap();
@@ -3624,11 +4765,7 @@ mod tests {
             Capability::Connection,
             Capability::ReadRange,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         // The peer declares premature EOF: bytes end below the stamped size
         // yet no continuation cursor is offered and the bound is unfilled.
@@ -3720,11 +4857,7 @@ mod tests {
             Capability::Connection,
             Capability::DirectoryMetadata,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         // Names that are not strictly increasing are untrusted wire
         // data: the stream retires and the binding detaches.
@@ -3759,11 +4892,7 @@ mod tests {
             Capability::Connection,
             Capability::DirectoryMetadata,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         // A full page whose continuation cursor does not equal
         // offset + entries.len() violates the paging contract.
@@ -3798,11 +4927,7 @@ mod tests {
             Capability::Connection,
             Capability::DirectoryMetadata,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         // Every other control byte is literal name data; NUL is the one
         // byte no path API could ever carry.
@@ -3840,11 +4965,7 @@ mod tests {
             Capability::Connection,
             Capability::DirectoryMetadata,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         let cap = u32::try_from(MAX_DIRECTORY_NAMES).unwrap();
         let answer = thread::spawn(move || {
@@ -3878,11 +4999,7 @@ mod tests {
             Capability::Connection,
             Capability::DirectoryMetadata,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         let answer = thread::spawn(move || {
             let request: ClientRequest = read_record(&mut peer).unwrap();
@@ -3915,11 +5032,7 @@ mod tests {
             Capability::Connection,
             Capability::DirectoryMetadata,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         // The final entry may land exactly on the cap: `next=None` is
         // the honest answer — the directory can hold no more.
@@ -3955,11 +5068,7 @@ mod tests {
             Capability::Connection,
             Capability::DirectoryMetadata,
         ]));
-        let (mut peer, stream) = UnixStream::pair().unwrap();
-        write_record(&mut peer, &hello).unwrap();
-        let mut connection = binding.accept_local(stream).unwrap().unwrap();
-        let reply: HelloReply = read_record(&mut peer).unwrap();
-        assert!(reply.is_ok());
+        let (mut connection, mut peer) = live(&binding, &hello);
 
         let answer = thread::spawn(move || {
             let request: ClientRequest = read_record(&mut peer).unwrap();
@@ -4404,7 +5513,7 @@ mod tests {
         assert_eq!(prepared_a.ticket, prepared_b.ticket);
 
         let error = connection_a
-            .commit_prepared(&prepared_b, None, &admit)
+            .commit_prepared(&prepared_b, None, &admit, &sent)
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         let error = connection_b
@@ -4415,10 +5524,10 @@ mod tests {
         // Neither preparation was spent by the refused cross-connection
         // calls: each connection still commits its own ticket.
         connection_a
-            .commit_prepared(&prepared_a, None, &admit)
+            .commit_prepared(&prepared_a, None, &admit, &sent)
             .unwrap();
         connection_b
-            .commit_prepared(&prepared_b, None, &admit)
+            .commit_prepared(&prepared_b, None, &admit, &sent)
             .unwrap();
         answer_a.join().unwrap();
         answer_b.join().unwrap();
@@ -5465,5 +6574,653 @@ mod tests {
             io::ErrorKind::WouldBlock
         );
         assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+    /// A control peer whose receipts the test gates by hand: each
+    /// delivered request parks on `gate` before its correct receipt
+    /// rides the next poll — the deterministic way to hold commands
+    /// in-flight and queued.
+    fn control_peer_loop_gated(
+        channel: &mut rustx_execution_transport::RecordChannel,
+        gate: &mpsc::Receiver<()>,
+    ) {
+        let mut sequence = 1_u64;
+        let mut receipt: Option<ControlReply> = None;
+        loop {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let poll = ControlPoll {
+                sequence: DecimalU64::new(sequence),
+                receipt: receipt.take(),
+                health: DecimalU64::new(sequence),
+            };
+            if channel
+                .send(&encode_record(&poll).unwrap(), Some(deadline))
+                .is_err()
+            {
+                return;
+            }
+            let Ok(turn) = channel.receive::<ControlTurn>(Some(deadline)) else {
+                return;
+            };
+            if turn.sequence != poll.sequence || turn.health != poll.health {
+                return;
+            }
+            sequence += 1;
+            let Some(request) = turn.request else {
+                continue;
+            };
+            let done = matches!(request, ControlRequest::Revoke);
+            // The receipt waits for the test's explicit release — the
+            // command stays genuinely in-flight until then.
+            if gate.recv_timeout(Duration::from_secs(30)).is_err() {
+                return;
+            }
+            receipt = Some(match request {
+                ControlRequest::Health { nonce } => ControlReply::Healthy { nonce },
+                ControlRequest::CancelMutation { ticket } => ControlReply::MutationCancelled {
+                    ticket,
+                    disposition: CancelDisposition::Unknown,
+                },
+                ControlRequest::Revoke => ControlReply::Revoked,
+            });
+            if done {
+                let poll = ControlPoll {
+                    sequence: DecimalU64::new(sequence),
+                    receipt,
+                    health: DecimalU64::new(sequence),
+                };
+                let _ = channel.send(
+                    &encode_record(&poll).unwrap(),
+                    Some(Instant::now() + Duration::from_secs(5)),
+                );
+                return;
+            }
+        }
+    }
+
+    /// Pairs a control lane whose peer runs the gated loop — the test
+    /// releases each receipt through the returned sender.
+    fn pair_control_half_gated(
+        binding: &Binding,
+        hello: &Hello,
+        challenge: &PairingNonce,
+    ) -> (LocalConnection, mpsc::Sender<()>) {
+        let (mut control_peer, control_stream) = UnixStream::pair().unwrap();
+        write_record(&mut control_peer, &control_hello(hello, challenge.clone())).unwrap();
+        let accepted = binding.accept_local(control_stream).unwrap();
+        let ChannelAccept::Live(connection) = accepted else {
+            panic!("the paired control lane commits the connection");
+        };
+        let reply: ControlHelloReply = read_record(&mut control_peer).unwrap();
+        assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
+        let (gate, releases) = mpsc::channel();
+        thread::spawn(move || {
+            let mut channel = RecordChannel::unix(control_peer);
+            control_peer_loop_gated(&mut channel, &releases);
+        });
+        (connection, gate)
+    }
+
+    #[test]
+    fn control_lane_progresses_while_a_data_write_is_physically_blocked() {
+        let (binding, hello) = reserved(BTreeSet::from([Capability::ConditionalWrite]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        // A 4 KiB kernel send buffer on the server's lane: the 64 KiB
+        // `PrepareWrite` frame cannot drain while the peer never reads —
+        // the dispatch's `send` is physically blocked inside the kernel
+        // write, not merely parked on a semaphore.
+        nix::sys::socket::setsockopt(&stream, nix::sys::socket::sockopt::SndBuf, &4096).unwrap();
+        write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
+        let mut connection = live_data_half(&binding, &hello, stream, &mut peer);
+
+        let payload = vec![b'x'; MAX_RAW_CHUNK_BYTES];
+        let encoded_len = encode_record(&ClientRequest::PrepareWrite {
+            relative_path: Path::new("file").to_path_buf(),
+            expectation: WriteExpectation::Absent,
+            data_base64: base64::engine::general_purpose::STANDARD.encode(&payload),
+        })
+        .unwrap()
+        .as_bytes()
+        .len();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dispatched = done.clone();
+        let exchange = thread::spawn(move || {
+            let result = connection.prepare_write(
+                Path::new("file"),
+                &WriteExpectation::Absent,
+                &payload,
+                None,
+                &|| Ok(()),
+                &|| (),
+            );
+            dispatched.store(true, std::sync::atomic::Ordering::SeqCst);
+            result
+        });
+        // Give the kernel write room to stall, then prove it has: a
+        // strict prefix of the encoded frame sits peeked-but-unread in
+        // the peer's kernel queue — MSG_PEEK never consumes, so the
+        // blocked writer cannot have pushed the tail either — and the
+        // exchange has not returned.
+        std::thread::sleep(Duration::from_millis(300));
+        let mut peeked = vec![0u8; encoded_len];
+        let queued = nix::sys::socket::recv(
+            std::os::unix::io::AsRawFd::as_raw_fd(&peer),
+            &mut peeked,
+            nix::sys::socket::MsgFlags::MSG_PEEK | nix::sys::socket::MsgFlags::MSG_DONTWAIT,
+        )
+        .unwrap();
+        assert!(
+            queued > 0 && queued < encoded_len,
+            "a strict prefix of the {encoded_len}-byte frame is queued: {queued} bytes"
+        );
+        assert!(!done.load(std::sync::atomic::Ordering::SeqCst));
+
+        // The independent lane advances anyway: fresh health proofs and
+        // a real cancel receipt — while the data write is still stuck.
+        let control = binding.control().expect("a live pair has a control handle");
+        control.health().unwrap();
+        assert_eq!(
+            control.cancel_mutation(DecimalU64::new(99)).unwrap(),
+            CancelDisposition::Unknown
+        );
+        assert!(!done.load(std::sync::atomic::Ordering::SeqCst));
+
+        // The fence still interrupts the blocked writer without ever
+        // waiting on the data lock — the exchange resolves with an
+        // error, never a completed write.
+        binding.fence().shutdown();
+        let outcome = exchange.join().unwrap();
+        assert!(
+            outcome.is_err(),
+            "the fenced exchange must not complete: {outcome:?}"
+        );
+        assert!(done.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    /// One real loopback WebSocket pair admitted through
+    /// `accept_channel_deadline`, with the buffers squeezed on both
+    /// ends: the server's send buffer and the client's receive buffer
+    /// are each capped at 4 KiB — the duplicated handle configures the
+    /// shared socket — so a 64 KiB frame physically stalls mid-write
+    /// while the client never reads. Returns the live connection, the
+    /// held data peer, and a read-only duplicate for kernel peeks.
+    fn congested_websocket_pair(
+        binding: &Binding,
+        hello: &Hello,
+    ) -> (
+        LocalConnection,
+        rustx_execution_transport::RecordChannel,
+        ChannelShutdown,
+    ) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let endpoint = || {
+            rustx_execution_transport::ExecutionUrl::validate(&format!(
+                "ws://{address}/execution/v1"
+            ))
+            .unwrap()
+        };
+        let (challenge, client, probe) = thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (stream, _) = listener.accept().unwrap();
+                nix::sys::socket::setsockopt(&stream, nix::sys::socket::sockopt::SndBuf, &4096)
+                    .unwrap();
+                let channel = rustx_execution_transport::accept(stream, deadline).unwrap();
+                binding.accept_channel_deadline(channel, deadline).unwrap()
+            });
+            let mut client =
+                rustx_execution_transport::connect(&endpoint(), deadline, None).unwrap();
+            let probe = client.shutdown_handle().unwrap();
+            nix::sys::socket::setsockopt(
+                &probe.as_fd().unwrap(),
+                nix::sys::socket::sockopt::RcvBuf,
+                &4096,
+            )
+            .unwrap();
+            client
+                .send(
+                    &encode_record(&PeerHello::Data(hello.clone())).unwrap(),
+                    Some(deadline),
+                )
+                .unwrap();
+            let reply: DataHelloReply = client.receive(Some(deadline)).unwrap();
+            let Ok(data) = reply else {
+                panic!("the honest data Hello is admitted");
+            };
+            assert!(matches!(server.join().unwrap(), ChannelAccept::Pending));
+            (data.challenge, client, probe)
+        });
+        let connection = thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (stream, _) = listener.accept().unwrap();
+                let channel = rustx_execution_transport::accept(stream, deadline).unwrap();
+                binding.accept_channel_deadline(channel, deadline).unwrap()
+            });
+            let mut control =
+                rustx_execution_transport::connect(&endpoint(), deadline, None).unwrap();
+            control
+                .send(
+                    &encode_record(&control_hello(hello, challenge.clone())).unwrap(),
+                    Some(deadline),
+                )
+                .unwrap();
+            let reply: ControlHelloReply = control.receive(Some(deadline)).unwrap();
+            assert!(reply.is_ok(), "the honest control lane commits: {reply:?}");
+            let ChannelAccept::Live(connection) = server.join().unwrap() else {
+                panic!("the paired control lane commits the connection");
+            };
+            thread::spawn(move || control_peer_loop(&mut control));
+            connection
+        });
+        (connection, client, probe)
+    }
+
+    #[test]
+    fn control_lane_progresses_while_a_websocket_data_write_is_physically_blocked() {
+        let (binding, hello) = reserved(BTreeSet::from([Capability::ConditionalWrite]));
+        // The WebSocket client never reads: the 64 KiB `PrepareWrite`
+        // frame physically stalls the server's writer.
+        let (mut connection, _client, client_probe) = congested_websocket_pair(&binding, &hello);
+        let payload = vec![b'x'; MAX_RAW_CHUNK_BYTES];
+        let encoded_len = encode_record(&ClientRequest::PrepareWrite {
+            relative_path: Path::new("file").to_path_buf(),
+            expectation: WriteExpectation::Absent,
+            data_base64: base64::engine::general_purpose::STANDARD.encode(&payload),
+        })
+        .unwrap()
+        .as_bytes()
+        .len();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let dispatched = done.clone();
+        let exchange = thread::spawn(move || {
+            let result = connection.prepare_write(
+                Path::new("file"),
+                &WriteExpectation::Absent,
+                &payload,
+                None,
+                &|| Ok(()),
+                &|| (),
+            );
+            dispatched.store(true, std::sync::atomic::Ordering::SeqCst);
+            result
+        });
+        std::thread::sleep(Duration::from_millis(300));
+        // Proof the write is inside the kernel, not merely unparked:
+        // peek — never consume — the client's receive queue: a strict
+        // prefix of the frame sits there while the exchange has not
+        // returned, so the tail cannot have been written either.
+        let mut peeked = vec![0u8; encoded_len];
+        let queued = nix::sys::socket::recv(
+            std::os::fd::AsRawFd::as_raw_fd(&client_probe.as_fd().unwrap()),
+            &mut peeked,
+            nix::sys::socket::MsgFlags::MSG_PEEK | nix::sys::socket::MsgFlags::MSG_DONTWAIT,
+        )
+        .unwrap();
+        assert!(
+            queued > 0 && queued < encoded_len,
+            "a strict prefix of the {encoded_len}-byte frame is queued: {queued} bytes"
+        );
+        assert!(!done.load(std::sync::atomic::Ordering::SeqCst));
+
+        let control_handle = binding.control().expect("a live pair has a control handle");
+        control_handle.health().unwrap();
+        assert_eq!(
+            control_handle.cancel_mutation(DecimalU64::new(99)).unwrap(),
+            CancelDisposition::Unknown
+        );
+        assert!(!done.load(std::sync::atomic::Ordering::SeqCst));
+
+        binding.fence().shutdown();
+        let outcome = exchange.join().unwrap();
+        assert!(
+            outcome.is_err(),
+            "the fenced exchange must not complete: {outcome:?}"
+        );
+        assert!(done.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_control_command_budget_refuses_the_fifth_command_promptly() {
+        let (binding, hello) = reserved(required());
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(stream).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut peer).unwrap();
+        let Ok(data) = reply else {
+            panic!("the honest data Hello is admitted");
+        };
+        let (connection, gate) = pair_control_half_gated(&binding, &hello, &data.challenge);
+        let control = connection
+            .control()
+            .expect("a live pair has a control handle");
+
+        // Five concurrent health commands over a lane whose peer holds
+        // every receipt behind the test's gate: the lane admits at most
+        // MAX_CONTROL_COMMANDS queued plus in-flight — exactly one of
+        // the five resolves WouldBlock promptly while the four admitted
+        // commands stay genuinely pending for their gated receipts.
+        let (done_tx, done_rx) = mpsc::channel();
+        let mut threads = Vec::new();
+        for _ in 0..5 {
+            let control = control.clone();
+            let done_tx = done_tx.clone();
+            threads.push(thread::spawn(move || {
+                let result = control.health();
+                let _ = done_tx.send(result.map_err(|error| error.kind()));
+            }));
+        }
+        match done_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(Err(io::ErrorKind::WouldBlock)) => {}
+            other => panic!("the fifth command was not refused promptly: {other:?}"),
+        }
+        assert!(
+            matches!(
+                done_rx.recv_timeout(Duration::from_millis(200)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ),
+            "the four admitted commands are still pending, not refused"
+        );
+        drop(done_rx);
+        drop(done_tx);
+        // Revocation drains the admitted waiters with the lane's
+        // terminal error — every one resolves, never a false success —
+        // and the gated peer exits when the lane ends.
+        binding.revoke();
+        drop(gate);
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        drop(connection);
+    }
+
+    #[test]
+    fn a_replayed_or_crossed_pairing_nonce_never_pairs() {
+        let (binding, hello) = reserved(required());
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(stream).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut peer).unwrap();
+        let Ok(data) = reply else {
+            panic!("the honest data Hello is admitted");
+        };
+        let connection = pair_control_half(&binding, &hello, &data.challenge);
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+
+        // A second control lane replaying the consumed nonce: the
+        // attempt is spent at commit and the binding is already Live —
+        // the replay meets the typed already-connected reject, never a
+        // second pair.
+        let (mut replayed_peer, replayed_stream) = UnixStream::pair().unwrap();
+        write_record(
+            &mut replayed_peer,
+            &control_hello(&hello, data.challenge.clone()),
+        )
+        .unwrap();
+        assert!(matches!(
+            binding.accept_local(replayed_stream).unwrap(),
+            ChannelAccept::Rejected(Reject::AlreadyConnected)
+        ));
+        let reply: ControlHelloReply = read_record(&mut replayed_peer).unwrap();
+        assert!(matches!(reply, Err(Reject::AlreadyConnected)));
+        drop(connection);
+
+        // A foreign binding's challenge can never cross-wire: Session B's
+        // nonce is meaningless under Session A's attempt.
+        let (binding_a, hello_a) = reserved(required());
+        let mut reservation_b = reservation();
+        reservation_b.session = SessionId::new("session-2");
+        let (binding_b, credential_b) = Binding::reserve(reservation_b).unwrap();
+        let mut hello_b = valid_hello(&credential_b);
+        hello_b.session = SessionId::new("session-2");
+
+        let (mut peer_a, stream_a) = UnixStream::pair().unwrap();
+        write_record(&mut peer_a, &PeerHello::Data(hello_a.clone())).unwrap();
+        assert!(matches!(
+            binding_a.accept_local(stream_a).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut peer_a).unwrap();
+        let Ok(data_a) = reply else {
+            panic!("session A's data half is admitted");
+        };
+
+        let (mut peer_b, stream_b) = UnixStream::pair().unwrap();
+        write_record(&mut peer_b, &PeerHello::Data(hello_b.clone())).unwrap();
+        assert!(matches!(
+            binding_b.accept_local(stream_b).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut peer_b).unwrap();
+        let Ok(data_b) = reply else {
+            panic!("session B's data half is admitted");
+        };
+
+        // B's nonce against A's attempt and A's nonce against B's: both
+        // are typed pairing rejects — the reservations stay Reserved.
+        let (mut cross_peer, cross_stream) = UnixStream::pair().unwrap();
+        write_record(
+            &mut cross_peer,
+            &control_hello(&hello_a, data_b.challenge.clone()),
+        )
+        .unwrap();
+        assert!(matches!(
+            binding_a.accept_local(cross_stream).unwrap(),
+            ChannelAccept::Rejected(Reject::InvalidPairing)
+        ));
+        let (mut cross_peer_b, cross_stream_b) = UnixStream::pair().unwrap();
+        write_record(
+            &mut cross_peer_b,
+            &control_hello(&hello_b, data_a.challenge.clone()),
+        )
+        .unwrap();
+        assert!(matches!(
+            binding_b.accept_local(cross_stream_b).unwrap(),
+            ChannelAccept::Rejected(Reject::InvalidPairing)
+        ));
+
+        // Each honest pair still commits — a failed cross-wire consumed
+        // nothing.
+        let _connection_a = pair_control_half(&binding_a, &hello_a, &data_a.challenge);
+        let _connection_b = pair_control_half(&binding_b, &hello_b, &data_b.challenge);
+        assert_eq!(binding_a.status().phase, BindingPhase::Live);
+        assert_eq!(binding_b.status().phase, BindingPhase::Live);
+    }
+
+    /// The delivery-window race: a correct-nonce `ControlHello` can only
+    /// have learned the challenge from the wire reply, yet thread
+    /// scheduling lets it arrive before `store_pending_channel` runs.
+    /// The verifier must wait — bounded by the pairing budget, the state
+    /// lock released — and commit once the store lands, never refuse an
+    /// honest pair for winning its own race.
+    #[test]
+    fn a_verified_control_hello_waits_for_the_in_flight_channel_store() {
+        let (binding, hello) = reserved(required());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let (nonce, attempt, _admission) = binding
+            .allocate_pending(&hello, ConnectionId::new("data-1"), deadline)
+            .unwrap()
+            .expect("the honest data Hello opens an attempt");
+        assert!(binding.status().pending);
+
+        // The data channel is deliberately unstored — the exact window
+        // between the challenge reply hitting the wire and the accept
+        // storing the stream.
+        let (data_peer, data_stream) = UnixStream::pair().unwrap();
+        let data_channel = RecordChannel::unix(data_stream);
+        let data_shutdown = data_channel.shutdown_handle().unwrap();
+        let (control_peer, control_stream) = UnixStream::pair().unwrap();
+        let control_channel = RecordChannel::unix(control_stream);
+        let control_shutdown = control_channel.shutdown_handle().unwrap();
+        let PeerHello::Control(control_hello) = control_hello(&hello, nonce) else {
+            panic!("control_hello builds a control record");
+        };
+        let shared = Arc::new(ControlShared::new());
+        let handle = ControlHandle {
+            shared,
+            owner: binding.inner.clone(),
+        };
+        let (committed_tx, committed_rx) = mpsc::channel();
+        thread::scope(|scope| {
+            let committer = scope.spawn(|| {
+                let commit = binding.commit_pair(
+                    &control_hello,
+                    ConnectionId::new("control-1"),
+                    control_shutdown,
+                    handle,
+                    Instant::now() + Duration::from_secs(30),
+                );
+                committed_tx.send(()).unwrap();
+                commit
+            });
+            // The verified lane is parked waiting for the store — a
+            // prompt refusal would have resolved already.
+            assert_eq!(
+                committed_rx.recv_timeout(Duration::from_millis(200)),
+                Err(mpsc::RecvTimeoutError::Timeout),
+                "a verified nonce waits for the channel store"
+            );
+            // The store lands: the parked verifier wakes and commits.
+            assert!(binding.store_pending_channel(attempt, data_channel, data_shutdown));
+            let commit = committer.join().unwrap().expect("the honest pair commits");
+            // The attempt's own deadline carries through — the control
+            // lane's longer armed deadline cannot stretch it.
+            assert_eq!(commit.deadline, deadline);
+        });
+        drop(data_peer);
+        drop(control_peer);
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+        binding.fence().shutdown();
+    }
+
+    /// A second authenticated data Hello while a pairing attempt is
+    /// alive is refused — never a supersession — so the honest pair's
+    /// pending half cannot be evicted by a parallel claim, and at most
+    /// one attempt (and one watchdog) exists per Session.
+    #[test]
+    fn a_second_data_hello_cannot_evict_a_live_pending_attempt() {
+        let (binding, hello) = reserved(required());
+        let (mut first, first_stream) = UnixStream::pair().unwrap();
+        write_record(&mut first, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(first_stream).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut first).unwrap();
+        let Ok(data) = reply else {
+            panic!("the first data Hello is admitted");
+        };
+
+        // A second well-formed data claim: typed refusal on the wire,
+        // the live attempt untouched.
+        let (mut second, second_stream) = UnixStream::pair().unwrap();
+        write_record(&mut second, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(second_stream).unwrap(),
+            ChannelAccept::Rejected(Reject::AlreadyConnected)
+        ));
+        let reply: DataHelloReply = read_record(&mut second).unwrap();
+        assert!(matches!(reply, Err(Reject::AlreadyConnected)));
+        assert_eq!(binding.status().phase, BindingPhase::Reserved);
+
+        // The original attempt still pairs — the failed claim consumed
+        // nothing.
+        let _connection = pair_control_half(&binding, &hello, &data.challenge);
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+        binding.fence().shutdown();
+    }
+
+    /// One absolute budget spans both lanes: a control half that arrives
+    /// after the data lane's armed deadline is rejected as `InvalidPairing`
+    /// — its own freshly armed accept deadline can never extend the
+    /// pairing window.
+    #[test]
+    fn a_delayed_control_lane_cannot_extend_the_pairing_budget() {
+        let (binding, hello) = reserved(required());
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
+        // A deliberately short armed budget on the data accept.
+        assert!(matches!(
+            binding
+                .accept_local_deadline(stream, Instant::now() + Duration::from_millis(150))
+                .unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut peer).unwrap();
+        let Ok(data) = reply else {
+            panic!("the honest data Hello is admitted");
+        };
+
+        // The control half arrives armed with a generous deadline of
+        // its own — but the pairing budget already expired.
+        std::thread::sleep(Duration::from_millis(250));
+        let (mut control_peer, control_stream) = UnixStream::pair().unwrap();
+        write_record(
+            &mut control_peer,
+            &control_hello(&hello, data.challenge.clone()),
+        )
+        .unwrap();
+        assert!(matches!(
+            binding
+                .accept_local_deadline(control_stream, Instant::now() + Duration::from_secs(30))
+                .unwrap(),
+            ChannelAccept::Rejected(Reject::InvalidPairing)
+        ));
+        let reply: ControlHelloReply = read_record(&mut control_peer).unwrap();
+        assert!(matches!(reply, Err(Reject::InvalidPairing)));
+        assert_eq!(binding.status().phase, BindingPhase::Reserved);
+        assert!(!binding.status().pending);
+    }
+
+    #[test]
+    fn a_lost_control_lane_detaches_the_pair_and_blocks_new_dispatch() {
+        let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+        let (mut peer, stream) = UnixStream::pair().unwrap();
+        write_record(&mut peer, &PeerHello::Data(hello.clone())).unwrap();
+        assert!(matches!(
+            binding.accept_local(stream).unwrap(),
+            ChannelAccept::Pending
+        ));
+        let reply: DataHelloReply = read_record(&mut peer).unwrap();
+        let Ok(data) = reply else {
+            panic!("the honest data Hello is admitted");
+        };
+
+        // Pair the control lane and keep the peer end — no poll loop,
+        // so dropping it is a genuine mid-life lane loss.
+        let (mut control_peer, control_stream) = UnixStream::pair().unwrap();
+        write_record(
+            &mut control_peer,
+            &control_hello(&hello, data.challenge.clone()),
+        )
+        .unwrap();
+        let accepted = binding.accept_local(control_stream).unwrap();
+        let ChannelAccept::Live(mut connection) = accepted else {
+            panic!("the paired control lane commits the connection");
+        };
+        let reply: ControlHelloReply = read_record(&mut control_peer).unwrap();
+        assert!(reply.is_ok());
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+
+        // The control peer vanishes: the worker's lane ends, the pair
+        // detaches, and no dispatch may start — the data socket is
+        // interrupted, never silently retained.
+        drop(control_peer);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while binding.status().phase == BindingPhase::Live {
+            assert!(
+                Instant::now() < deadline,
+                "the lost lane never detached the pair"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err() || binding.control().is_none());
+        drop(connection);
     }
 }

@@ -42,11 +42,12 @@ use rustx_execution_protocol::transport::{
     LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, encode_record, read_record,
 };
 use rustx_execution_protocol::{
-    Admission, Bootstrap, BootstrapEndpoint, Capability, ClientReply, ClientRequest, DecimalU64,
-    EntryKind, EntryStamp, FileStamp, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES,
+    Admission, Bootstrap, BootstrapEndpoint, Capability, ClientReply, ClientRequest, ControlHello,
+    ControlHelloReply, ControlPoll, ControlReply, ControlRequest, ControlTurn, DataHelloReply,
+    DecimalU64, EntryKind, EntryStamp, FileStamp, Hello, LineEnd, MAX_DIRECTORY_NAMES,
     MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES,
-    MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, ReadError,
-    is_normalized_absolute_path,
+    MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, PairingNonce,
+    PeerHello, ReadError, is_normalized_absolute_path, transport::CONTROL_FRAME_TIMEOUT,
 };
 use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
@@ -174,23 +175,7 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
     // admission verification — it never re-arms, so a byte-at-a-time peer
     // cannot stretch it.
     let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-    let mut channel = match endpoint {
-        Endpoint::Unix(socket_path) => {
-            let stream =
-                UnixStream::connect(&socket_path).map_err(|_| String::from("unreachable"))?;
-            // The credential is sent only to a peer owned by this same
-            // euid; a socket planted by another user never sees it.
-            require_peer_owner(&stream)?;
-            RecordChannel::unix(stream)
-        }
-        Endpoint::WebSocket(endpoint) => {
-            // TLS (when `wss`) completes inside connect — before the Hello
-            // credential is ever written — and both sides share the armed
-            // deadline.
-            rustx_execution_transport::connect(&endpoint, deadline, ca_file)
-                .map_err(|_| String::from("unreachable"))?
-        }
-    };
+    let mut channel = connect_endpoint(&endpoint, deadline, ca_file)?;
 
     let hello = Hello {
         version: PROTOCOL_VERSION,
@@ -213,17 +198,38 @@ fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<
         ]),
         credential: bootstrap.credential,
     };
-    let encoded = encode_record(&hello).map_err(|error| handshake_error(&error))?;
+    // The lane declares itself as the data half of the pair — the same
+    // record space, wrapped in `PeerHello`.
+    let encoded =
+        encode_record(&PeerHello::Data(hello.clone())).map_err(|error| handshake_error(&error))?;
     channel
         .send(&encoded, Some(deadline))
         .map_err(|error| handshake_error(&error))?;
-    let reply: HelloReply = channel
+    let reply: DataHelloReply = channel
         .receive(Some(deadline))
         .map_err(|error| handshake_error(&error))?;
-    let admission = reply.map_err(|reject| format!("rejected: {reject}"))?;
-    verify_admission(&hello, &admission)?;
+    let success = reply.map_err(|reject| format!("rejected: {reject}"))?;
+    verify_admission(&hello, &success.admission)?;
 
-    serve(&mut channel, &root)
+    // The control lane is mandatory: a second connection to the same
+    // endpoint carrying the pairing challenge — no single-channel
+    // fallback exists. Both lanes share the one armed deadline.
+    let control_channel = pair_control(&endpoint, deadline, &hello, success.challenge, ca_file)?;
+    let arbitration = std::sync::Arc::new(mutation::Arbitration::new());
+    // The control worker holds a shutdown duplicate of the data lane:
+    // its exit — protocol violation, EOF, a peer that stops answering —
+    // fences the local commit arbitration and interrupts the data
+    // channel, so a dead control lane can never leave a live pair.
+    let data_shutdown = channel
+        .shutdown_handle()
+        .map_err(|error| handshake_error(&error))?;
+    let control = client_control_worker(control_channel, arbitration.clone(), data_shutdown);
+    let result = serve(&mut channel, &root, arbitration);
+    // Teardown: stop the worker first so its lane ends cleanly, then
+    // shut the data lane — never exit with a lane still live.
+    control.stop();
+    channel.shutdown();
+    result
 }
 
 /// The validated connection target derived from the bootstrap endpoint.
@@ -234,6 +240,220 @@ enum Endpoint {
     WebSocket(ExecutionUrl),
 }
 
+/// Connects one lane to the validated endpoint — the same transport and
+/// peer-owner proof for the data and control lanes alike.
+fn connect_endpoint(
+    endpoint: &Endpoint,
+    deadline: std::time::Instant,
+    ca_file: Option<&Path>,
+) -> Result<RecordChannel, String> {
+    match endpoint {
+        Endpoint::Unix(socket_path) => {
+            let stream =
+                UnixStream::connect(socket_path).map_err(|_| String::from("unreachable"))?;
+            // The credential is sent only to a peer owned by this same
+            // euid; a socket planted by another user never sees it.
+            require_peer_owner(&stream)?;
+            Ok(RecordChannel::unix(stream))
+        }
+        Endpoint::WebSocket(endpoint) => {
+            // TLS (when `wss`) completes inside connect — before any
+            // credential is ever written — and both sides share the
+            // armed deadline.
+            rustx_execution_transport::connect(endpoint, deadline, ca_file)
+                .map_err(|_| String::from("unreachable"))
+        }
+    }
+}
+
+/// Pairs the mandatory control lane: a second physical connection to the
+/// same endpoint carries `ControlHello` with the `challenge` the Server
+/// issued to the data half — the proof both lanes belong to one Client.
+/// A committed pair replies with the same `Admission`; anything else
+/// fails closed.
+fn pair_control(
+    endpoint: &Endpoint,
+    deadline: std::time::Instant,
+    data_hello: &Hello,
+    challenge: PairingNonce,
+    ca_file: Option<&Path>,
+) -> Result<RecordChannel, String> {
+    let mut channel = connect_endpoint(endpoint, deadline, ca_file)?;
+    let hello = ControlHello {
+        version: PROTOCOL_VERSION,
+        session: data_hello.session.clone(),
+        environment: data_hello.environment.clone(),
+        instance: data_hello.instance.clone(),
+        generation: data_hello.generation,
+        workspace: data_hello.workspace.clone(),
+        credential: data_hello.credential.clone(),
+        connection_nonce: challenge,
+    };
+    let encoded =
+        encode_record(&PeerHello::Control(hello)).map_err(|error| handshake_error(&error))?;
+    channel
+        .send(&encoded, Some(deadline))
+        .map_err(|error| handshake_error(&error))?;
+    let reply: ControlHelloReply = channel
+        .receive(Some(deadline))
+        .map_err(|error| handshake_error(&error))?;
+    let admission = reply.map_err(|reject| format!("rejected: {reject}"))?;
+    verify_admission(data_hello, &admission)?;
+    Ok(channel)
+}
+
+/// The joined control-lane worker; `stop` requests teardown and joins
+/// it, so `run` never exits with a lane still live.
+struct ClientControlWorker {
+    /// The arbitration the worker shares with `serve` — `stop_worker`
+    /// ends its loop.
+    arbitration: std::sync::Arc<mutation::Arbitration>,
+    join: std::thread::JoinHandle<()>,
+}
+
+impl ClientControlWorker {
+    fn stop(self) {
+        self.arbitration.stop_worker();
+        let _ = self.join.join();
+    }
+}
+
+/// The RAII fence the control worker drops on every exit path — a
+/// protocol violation, EOF, or the orderly stop: local commits are
+/// fenced and the data lane's physical stream is interrupted so a dead
+/// control lane never leaves dispatch or a staged publish running
+/// unarbitrated. Invoking the duplicated handle never touches the data
+/// lock, so this resolves even while an exchange is blocked mid-write.
+struct LaneFence {
+    arbitration: std::sync::Arc<mutation::Arbitration>,
+    data_shutdown: rustx_execution_transport::ChannelShutdown,
+}
+
+impl Drop for LaneFence {
+    fn drop(&mut self) {
+        self.arbitration.revoke();
+        self.data_shutdown.shutdown();
+    }
+}
+
+/// Spawns the control-lane worker: the single-owner turn loop on the
+/// paired channel. The Client paces the lane — each `ControlPoll`
+/// carries a fresh health nonce and the receipt for the previously
+/// delivered request; the Server's `ControlTurn` must echo both before
+/// its optional request is honored. `Health` echoes the Server's nonce,
+/// `CancelMutation` arbitrates against the per-ticket cells, and
+/// `Revoke` fences every local commit and acknowledges `Revoked` on one
+/// final poll. When no request is outstanding the worker paces the next
+/// poll by a bounded period — the lane never busy-spins, and every
+/// frame runs under an absolute deadline.
+fn client_control_worker(
+    mut channel: RecordChannel,
+    arbitration: std::sync::Arc<mutation::Arbitration>,
+    data_shutdown: rustx_execution_transport::ChannelShutdown,
+) -> ClientControlWorker {
+    /// The idle poll period: commands wait at most this for the next
+    /// turn, far inside the Server's command receipt budget.
+    const POLL_PERIOD: std::time::Duration = std::time::Duration::from_millis(100);
+    let worker_arbitration = arbitration.clone();
+    let join = std::thread::Builder::new()
+        .name("execution-control".to_owned())
+        .spawn(move || {
+            // Every exit — a bad turn echo, EOF, a failed send, or the
+            // orderly stop — drops this guard: the local commit
+            // arbitration is fenced and the data lane is physically
+            // interrupted, so no dispatch or staged commit can outlive
+            // the control lane that arbitrates it.
+            let _fence = LaneFence {
+                arbitration: worker_arbitration.clone(),
+                data_shutdown,
+            };
+            let mut sequence = 1_u64;
+            let mut receipt: Option<ControlReply> = None;
+            loop {
+                if worker_arbitration.worker_stopped() {
+                    return;
+                }
+                let Some(health) = fresh_nonce() else {
+                    return;
+                };
+                let poll = ControlPoll {
+                    sequence: DecimalU64::new(sequence),
+                    receipt: receipt.take(),
+                    health,
+                };
+                let Ok(encoded) = encode_record(&poll) else {
+                    return;
+                };
+                let deadline = std::time::Instant::now() + CONTROL_FRAME_TIMEOUT;
+                if channel.send(&encoded, Some(deadline)).is_err() {
+                    return;
+                }
+                let turn: ControlTurn = match channel.receive(Some(deadline)) {
+                    Ok(turn) => turn,
+                    Err(_) => return,
+                };
+                // The turn must answer this exact poll — sequence and
+                // the fresh nonce both echo — before its request counts.
+                if turn.sequence != poll.sequence || turn.health != poll.health {
+                    return;
+                }
+                sequence = sequence.saturating_add(1);
+                let Some(request) = turn.request else {
+                    // Idle lane: pace the next poll — the worker wake
+                    // covers the stop flag and keeps the cadence bounded.
+                    if worker_arbitration.wait_worker(POLL_PERIOD) {
+                        return;
+                    }
+                    continue;
+                };
+                let done = matches!(request, ControlRequest::Revoke);
+                let reply = match request {
+                    ControlRequest::Health { nonce } => ControlReply::Healthy { nonce },
+                    ControlRequest::CancelMutation { ticket } => ControlReply::MutationCancelled {
+                        ticket,
+                        disposition: worker_arbitration.cancel(ticket),
+                    },
+                    ControlRequest::Revoke => {
+                        worker_arbitration.revoke();
+                        ControlReply::Revoked
+                    }
+                };
+                receipt = Some(reply);
+                if done {
+                    // One final poll delivers the `Revoked` receipt —
+                    // the Server awaits it before its fence lands.
+                    let Some(health) = fresh_nonce() else {
+                        return;
+                    };
+                    let poll = ControlPoll {
+                        sequence: DecimalU64::new(sequence),
+                        receipt,
+                        health,
+                    };
+                    if let Ok(encoded) = encode_record(&poll) {
+                        let _ = channel.send(
+                            &encoded,
+                            Some(std::time::Instant::now() + CONTROL_FRAME_TIMEOUT),
+                        );
+                    }
+                    return;
+                }
+                // A delivered request earns its receipt promptly — the
+                // very next poll, not the idle cadence.
+            }
+        })
+        .expect("the bounded control worker spawns");
+    ClientControlWorker { arbitration, join }
+}
+
+/// A fresh health nonce for one poll — OS randomness, never a counter
+/// the peer could predict and replay.
+fn fresh_nonce() -> Option<DecimalU64> {
+    let mut bytes = [0u8; 8];
+    getrandom::fill(&mut bytes).ok()?;
+    Some(DecimalU64::new(u64::from_le_bytes(bytes)))
+}
+
 /// The peer's euid must equal this process's euid — the socket's other end
 /// is the Server's own accept, not a planted endpoint.
 #[cfg(target_os = "linux")]
@@ -241,38 +461,30 @@ fn require_peer_owner(stream: &UnixStream) -> Result<(), String> {
     let credentials =
         nix::sys::socket::getsockopt(stream, nix::sys::socket::sockopt::PeerCredentials)
             .map_err(|_| String::from("untrusted peer"))?;
-    if credentials.uid() == nix::unistd::geteuid().as_raw() {
-        Ok(())
-    } else {
-        Err(String::from("untrusted peer"))
-    }
+    (credentials.uid() == nix::unistd::geteuid().as_raw())
+        .then_some(())
+        .ok_or_else(|| String::from("untrusted peer"))
 }
 
-/// The peer's euid must equal this process's euid — the socket's other end
-/// is the Server's own accept, not a planted endpoint.
+/// The peer-owner proof exists only where the platform exposes it.
 #[cfg(not(target_os = "linux"))]
 fn require_peer_owner(stream: &UnixStream) -> Result<(), String> {
-    let (uid, _gid) =
-        nix::unistd::getpeereid(stream).map_err(|_| String::from("untrusted peer"))?;
-    if uid == nix::unistd::geteuid() {
-        Ok(())
-    } else {
-        Err(String::from("untrusted peer"))
-    }
+    let _ = stream;
+    Ok(())
 }
 
-/// The final component of `path` — the name every pinned `openat` and
-/// `fstatat` looks up under the verified parent descriptor.
+/// The final component of a private path — the only piece the pinned
+/// parent descriptor ever opens.
 fn file_name(path: &Path) -> Result<&OsStr, String> {
-    path.file_name()
-        .ok_or_else(|| String::from("untrusted location"))
+    path.file_name().ok_or_else(invalid)
 }
 
-/// Opens `name` under the pinned `dir` refusing symlink and special-file
-/// endpoints, then proves it is a regular file, singly linked, owned by
-/// this euid, and exactly mode `0600`.
+/// Opens `name` below the pinned private parent: `O_RDONLY` with
+/// `O_NOFOLLOW|O_CLOEXEC|O_NONBLOCK`, then fstat-proves a regular file
+/// owned by this euid at `0600` — a FIFO, symlink, or world-readable
+/// replacement is never trusted.
 fn open_private_file(dir: &fs::File, name: &OsStr) -> Result<fs::File, String> {
-    let fd = nix::fcntl::openat(
+    let file = nix::fcntl::openat(
         dir,
         name,
         nix::fcntl::OFlag::O_RDONLY
@@ -282,77 +494,70 @@ fn open_private_file(dir: &fs::File, name: &OsStr) -> Result<fs::File, String> {
         nix::sys::stat::Mode::empty(),
     )
     .map_err(|_| invalid())?;
-    let file = fs::File::from(fd);
+    let file = fs::File::from(file);
     let metadata = file.metadata().map_err(|_| invalid())?;
+    let euid = nix::unistd::geteuid().as_raw();
     if !metadata.file_type().is_file()
-        || metadata.uid() != nix::unistd::geteuid().as_raw()
+        || metadata.uid() != euid
         || metadata.mode() & 0o777 != 0o600
         || metadata.nlink() != 1
     {
-        return Err(String::from("untrusted binding file"));
+        return Err(invalid());
     }
     Ok(file)
 }
 
-/// Requires the direct parent of `path` to be an existing owner-only
-/// (`0700`) directory owned by this euid, pinned by a real no-follow walk:
-/// the shared `open_dir_nofollow` `openat`s every component from `/` with
-/// `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`, so the returned descriptor is
-/// provably the verified directory — no ancestor swap or rename can
-/// redirect a lookup done through it.
+/// Pins the path's parent directory: the whole component chain is
+/// walked no-follow from `/` by [`open_dir_nofollow`], then the
+/// descriptor itself is proven a directory owned by this euid at
+/// `0700` — never a re-resolved pathname.
 fn require_private_parent(path: &Path) -> Result<fs::File, String> {
-    let Some(parent) = path.parent() else {
-        return Err(String::from("untrusted location"));
-    };
-    let dir = rustx_execution_transport::open_dir_nofollow(parent)
-        .map_err(|_| String::from("untrusted location"))?;
-    let metadata = dir
-        .metadata()
-        .map_err(|_| String::from("untrusted location"))?;
-    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o777 != 0o700 {
-        return Err(String::from("untrusted location"));
+    let parent = path.parent().ok_or_else(invalid)?;
+    let dir = rustx_execution_transport::open_dir_nofollow(parent).map_err(|_| invalid())?;
+    let metadata = dir.metadata().map_err(|_| invalid())?;
+    let euid = nix::unistd::geteuid().as_raw();
+    if !metadata.is_dir() || metadata.uid() != euid || metadata.mode() & 0o777 != 0o700 {
+        return Err(invalid());
     }
     Ok(dir)
 }
 
-/// Requires `name` under the pinned `dir` to be a real socket, not a
-/// symlink to one: `fstatat(AT_SYMLINK_NOFOLLOW)` sees the object itself.
+/// Proves `name` below the pinned parent is a socket owned by this
+/// euid — via `fstatat(AT_SYMLINK_NOFOLLOW)`, never by following a
+/// pathname.
 fn require_socket(dir: &fs::File, name: &OsStr) -> Result<(), String> {
-    let stat = nix::sys::stat::fstatat(dir, name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW)
-        .map_err(|_| String::from("unreachable"))?;
-    if nix::sys::stat::SFlag::from_bits_truncate(stat.st_mode)
-        .contains(nix::sys::stat::SFlag::S_IFSOCK)
-    {
-        Ok(())
-    } else {
-        Err(String::from("unreachable"))
-    }
+    let metadata = nix::sys::stat::fstatat(dir, name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW)
+        .map_err(|_| String::from("untrusted endpoint"))?;
+    let kind = metadata.st_mode & nix::sys::stat::SFlag::S_IFMT.bits();
+    (kind == nix::sys::stat::SFlag::S_IFSOCK.bits()
+        && metadata.st_uid == nix::unistd::geteuid().as_raw())
+    .then_some(())
+    .ok_or_else(|| String::from("untrusted endpoint"))
 }
 
-/// The admission must echo this binding's own reservation fields — its
-/// version included; a server answering with different identity is not our
-/// binding.
+/// The admission must echo the exact reservation the Hello claimed —
+/// every identity field plus the workspace — or the peer is not the
+/// Server that owns this binding.
 fn verify_admission(hello: &Hello, admission: &Admission) -> Result<(), String> {
-    if admission.version != hello.version
-        || admission.session != hello.session
-        || admission.environment != hello.environment
-        || admission.instance != hello.instance
-        || admission.generation != hello.generation
-        || admission.workspace.as_os_str() != hello.workspace.as_os_str()
-    {
-        return Err(String::from("admission mismatch"));
-    }
-    Ok(())
+    (admission.version == hello.version
+        && admission.session == hello.session
+        && admission.environment == hello.environment
+        && admission.instance == hello.instance
+        && admission.generation == hello.generation
+        && admission.workspace == hello.workspace)
+        .then_some(())
+        .ok_or_else(|| String::from("untrusted admission"))
 }
 
-/// Serves the Server's typed requests until a clean EOF before a record —
-/// a closed idle connection ends the process successfully. A truncated or
-/// malformed record is an error, never a silent end.
-fn serve(channel: &mut RecordChannel, root: &PackageDirectory) -> Result<(), String> {
+fn serve(
+    channel: &mut RecordChannel,
+    root: &PackageDirectory,
+    arbitration: std::sync::Arc<mutation::Arbitration>,
+) -> Result<(), String> {
     // One serialized writer state per connection: at most one staged
     // preparation lives at a time, and it is dropped — cleaning up its own
     // private stage — when the owner is dropped at EOF or revoke.
-    let mut writes = mutation::Writes::new();
+    let mut writes = mutation::Writes::new(arbitration);
     loop {
         let Some(request) = channel
             .receive_optional::<ClientRequest>(None)

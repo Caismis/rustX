@@ -145,17 +145,16 @@ check is purely lexical (`is_normalized_absolute_path`): absolute, root
 plus normal components only, no `.`/`..`, redundant, or trailing
 separators, and the filesystem is never touched.
 
-`Binding::connect(&hello, connection)` checks, under one mutex hold, in
+Every lane's Hello passes the same checks, under one mutex hold, in
 this order: the credential verifier first in constant time — no identity
 field may be probed without valid authentication — then `version` equals
 `PROTOCOL_VERSION` (incompatible versions are explicitly rejected; no
 implicit downgrade), then session, environment, instance, and generation
 each equal the reservation, then the workspace by literal `OsStr` bytes
-(so `/work//root` and `/work/./root` never alias `/work/root`), then the
-advertised capabilities cover the required set. On success exactly one
-connection is committed `Live` and an `Admission` is returned. A `Hello`
-is never trusted to select required capabilities or the expected
-instance — those come only from the reservation.
+(so `/work//root` and `/work/./root` never alias `/work/root`), then —
+the data lane only — the advertised capabilities cover the required set.
+A `Hello` is never trusted to select required capabilities or the
+expected instance — those come only from the reservation.
 
 `Reject` carries machine-stable codes only. No reject, error, log, or
 `Debug` output echoes a submitted credential or any secret-bearing field.
@@ -164,20 +163,103 @@ characters; it is non-`Debug` (redacted), has no `Display`, and malformed
 wire forms — wrong length, uppercase, non-hex — are rejected without
 echoing the submitted value.
 
+### Paired lanes (implemented)
+
+Admission is always a *pair* of independently authenticated physical
+channels to the same binding — never a dispatch owner and a side door.
+The first message on each channel is the tagged `PeerHello::{Data,
+Control}`.
+
+- **Data half first.** A validated `PeerHello::Data(Hello)` allocates a
+  pending attempt: a fresh 256-bit `PairingNonce` challenge (redacted
+  `Debug`, only its SHA-256 verifier retained), a unique attempt id, and
+  the absolute pairing deadline — the same ~5-second budget the accept
+  armed, covering every lane's wait. Issuing a challenge consumes
+  nothing: `phase` stays `Reserved` and the attempt is not dispatchable.
+- **One attempt per Session, never superseded.** A second authenticated
+  data `Hello` while an attempt is live is refused `AlreadyConnected` —
+  a parallel claim cannot evict the honest pair's half, and at most one
+  pending attempt (and one watchdog) exists per Session.
+- **Challenge then store.** The `DataAdmission{admission, challenge}`
+  reply goes on the wire before the channel is stored into the attempt.
+  A correct nonce can only be learned from that reply, yet scheduling
+  lets a `ControlHello` legitimately arrive in the store window — a
+  verified nonce with no channel yet *waits* on a per-attempt signal,
+  bounded by the attempt's own deadline, never a refusal of the honest
+  pair. A wrong nonce never waits and never burns the attempt.
+- **The control half commits exactly once.** `PeerHello::Control
+  (ControlHello{…identity…, connection_nonce})` re-runs the identical
+  identity gate (capabilities excluded), verifies the nonce against the
+  pending verifier, and rechecks the data peer's liveness at the commit
+  itself — never relying on the watchdog having already won. The
+  transition to `Live` happens exactly once under the mutex; the
+  control lane's admission delivery is clamped to
+  `min(data_deadline, control_deadline)` so a delayed second half can
+  never stretch the budget, and a committed pair whose admission cannot
+  be delivered is detached with both lanes shut — a binding never stays
+  live on a pair the peer does not know it owns.
+- **The pending half is disposable.** A watchdog (one bounded thread)
+  polls the held lane for peer bytes or a close — either kills the
+  attempt and the reservation stays `Reserved` — and exits immediately
+  when the attempt settles by commit, discard, or fence (a cancel pipe
+  wakes it; it never sleeps on past settlement).
+- **`Pending` and `Rejected` are honest outcomes.** The data half's
+  accept reports `ChannelAccept::Pending`; the control half commits to
+  `Live` or rejects `InvalidPairing`/`AlreadyConnected`. A synthetic
+  `Binding::connect` exists only behind `cfg(test)` for pure-arbitration
+  tests — the product path never calls it.
+
+### The control lane (implemented)
+
+The control lane is an independently authenticated physical channel —
+not tunneled over the data wire, and never a second dispatch owner. The
+Client paces a continuous turn loop: each `ControlPoll{sequence,
+receipt, health}` carries a fresh nonce and acknowledges the previously
+delivered request; the Server's `ControlTurn{sequence, health,
+request}` must echo both before its request counts. Idle polls pace by
+a bounded period under per-frame deadlines — no busy-spin, and a
+delivered command's receipt arrives on the very next poll.
+
+- `ControlRequest::{Health{nonce}, CancelMutation{ticket}, Revoke}` map
+  to exact `ControlReply` receipts — `Healthy{nonce}`,
+  `MutationCancelled{ticket, disposition}`, `Revoked` — each verified
+  for the exact echo by the `ControlHandle` caller.
+- `CancelDisposition::{CancelledBeforeCommit, AlreadyCrossed, Unknown}`
+  is the Client's own arbitration: `CancelledBeforeCommit` proves the
+  publish never crossed; `AlreadyCrossed` that it had; `Unknown` that
+  no live ticket matched — never claimed "cancelled with no effect",
+  never retried.
+- The command budget is four queued plus in-flight commands; a fifth
+  fails promptly `WouldBlock` — orphan waiters count until terminal
+  delivery or retirement.
+- The `ControlHandle` is cloneable and independent of the data
+  connection's dispatch lock: health and cancel progress while a data
+  write is physically blocked mid-send (proven on both transports with
+  capped socket buffers and a real non-draining peer) and while every
+  one of the 8 endpoint data permits is held by a live exchange.
+- A lost control lane terminates the pair: the binding detaches or
+  revokes, both lanes' physical shutdown handles are seized without
+  touching the data lock, and no dispatch may start — never an implied
+  release or replacement. The Client mirrors it: its control worker's
+  RAII fence revokes local commit arbitration and interrupts the data
+  channel on *any* exit — protocol violation, EOF, or orderly stop.
+
 ### Linearization and lifecycle (implemented)
 
-One mutex is the binding arbitration point: Hello validation, connection
-commit, disconnect, and revocation all linearize under it. Two barrier-
-synchronized Hellos produce exactly one `Live` winner. The phase machine
-is `Reserved → Live → Detached`, plus terminal `Revoked` from any phase.
+One mutex is the binding arbitration point: Hello validation, pairing
+commit, disconnect, and revocation all linearize under it. The phase
+machine is `Reserved → Live → Detached`, plus terminal `Revoked` from
+any phase, and `Live` always means a *committed pair* of lanes.
 
 - A failed Hello consumes nothing: `Reserved` stays `Reserved`, `Live`
   stays `Live`.
-- While `Live`, a second Hello gets `AlreadyConnected` — at most one
-  live connection per Session binding.
+- While `Live` — or while a pending attempt is negotiating — a second
+  data Hello gets `AlreadyConnected`: at most one data lane per
+  Session binding, ever.
 - `disconnect(connection)` moves `Live → Detached` only for the current
-  live connection. A stale disconnect — the late EOF of a replaced
-  connection — is ignored.
+  live pair, seizing both lanes' shutdown handles. Losing either lane
+  detaches the pair identically — a stale or foreign disconnect is
+  ignored.
 - `Detached` rejects every Hello with `RecoveryRequired`. EOF never
   reopens the reservation, so even the fully valid reserved identity
   cannot replay its own credential after EOF — the static bootstrap file
@@ -615,6 +697,23 @@ commit is dispatched gates the commit frame out entirely — the revoke
 shuts the retained duplicate stream down, the idle Client exits on
 EOF, and its dropped write state cleans the unpublished stage.
 
+Inside the Client, the crossing itself arbitrates against the control
+lane: `StagedWrite::publish_with_gate` runs every pre-crossing
+verification first, then hands the one `linkat`/`renameat` (or subtree
+`NOREPLACE` rename) closure to the caller's gate, which runs it under
+the per-ticket arbitration lock. `Crossed` is recorded iff the syscall
+physically succeeded — a `CancelMutation` that parks on that lock mid-
+crossing receives the true post-syscall answer, a cancel that reached
+the cell first means the crossing never runs, and a failed crossing is
+never `AlreadyCrossed`. Revocation is checked under the same lock, so
+a reported `Revoked` linearizes against every in-flight gate; a commit
+parked between grant and gate is fenced, not silently crossed. On the
+Server side, `LocalExecutionEndpoint::commit_prepared` arms the
+invocation's cancellation listener the moment the commit frame hits
+the wire and forwards `CancelMutation` on the paired control lane —
+an independent physical path the data exchange cannot jam — retaining
+the watcher until physical settlement.
+
 ### Conditional edits (implemented)
 
 `ClientRequest::PrepareEdit { relative_path, expectation,
@@ -925,8 +1024,12 @@ envelope.
   identical record/Session semantics as the Unix socket, bound to
   loopback plaintext `ws` or an operator-provisioned `wss` ingress —
   there is no Server-side TLS listener, no cross-host proxy, and no
-  health/recovery windows (recovery stays #577, independent
-  control/backpressure stays T11).
+  recovery windows (recovery stays #577). The paired control lane —
+  health, `CancelMutation`, `Revoke` on an independent channel — is
+  implemented and exercised at member and endpoint level including
+  real physical congestion proofs; what remains open under T11 is
+  end-to-end proof at the product Agent-flow level (a real mid-commit
+  cancel raced against a live composed Client), not the mechanism.
 - No spawn, MCP session, Python, managed output, or any file
   operation beyond the range read, the two query operations, the
   two-phase conditional write, the conditional edit, the two

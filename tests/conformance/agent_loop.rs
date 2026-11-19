@@ -345,14 +345,31 @@ impl Driver {
                 .spawn()
                 .expect("staged Execution Client spawns");
             tokio::time::timeout(std::time::Duration::from_secs(30), async {
-                let (stream, _) = listener.accept().await.expect("accept");
-                tokio::task::spawn_blocking(move || {
-                    endpoint.admit_local_stream(stream.into_std().expect("std stream"))
-                })
-                .await
-                .expect("admit task")
-                .expect("admit io")
-                .unwrap_or_else(|reject| panic!("execution client rejected: {reject:?}"));
+                let deadline = std::time::Instant::now()
+                    + rustx_execution_protocol::transport::LOCAL_HANDSHAKE_TIMEOUT;
+                loop {
+                    let (stream, _) = listener.accept().await.expect("accept");
+                    let endpoint = endpoint.clone();
+                    let admission = tokio::task::spawn_blocking(move || {
+                        endpoint.admit_local_stream_deadline(
+                            stream.into_std().expect("std stream"),
+                            deadline,
+                        )
+                    })
+                    .await
+                    .expect("admit task")
+                    .expect("admit io");
+                    match admission {
+                        rustx::local_runtime::session_runtime_manager::EndpointAdmission::Live => {
+                            break;
+                        }
+                        rustx::local_runtime::session_runtime_manager::EndpointAdmission::Pending => {
+                        }
+                        rustx::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
+                            reject,
+                        ) => panic!("execution client rejected: {reject:?}"),
+                    }
+                }
             })
             .await
             .expect("execution client admission timed out");

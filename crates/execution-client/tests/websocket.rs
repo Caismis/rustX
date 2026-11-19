@@ -104,10 +104,9 @@ fn spawn_client(rig: &Rig) -> Child {
         .unwrap()
 }
 
-/// Accepts one TCP peer and runs the real RFC 6455 upgrade plus the
-/// binding's authenticated Hello handshake, bounded by the shared
-/// handshake deadline; reports an early client exit instead of hanging.
-fn accept(rig: &Rig, child: &mut Child) -> Result<Result<(), Reject>, String> {
+/// Accepts one TCP peer, reporting an early client exit instead of
+/// hanging.
+fn accept_stream(rig: &Rig, child: &mut Child) -> Result<std::net::TcpStream, String> {
     rig.listener.set_nonblocking(true).unwrap();
     let deadline = Instant::now() + ACCEPT_DEADLINE;
     let stream = loop {
@@ -127,13 +126,41 @@ fn accept(rig: &Rig, child: &mut Child) -> Result<Result<(), Reject>, String> {
         }
     };
     rig.listener.set_nonblocking(false).unwrap();
+    Ok(stream)
+}
+
+/// Runs the binding's authenticated handshake on one accepted stream —
+/// the real RFC 6455 upgrade plus the paired `PeerHello` admission —
+/// bounded by the shared handshake deadline.
+fn admit_stream(
+    rig: &Rig,
+    stream: std::net::TcpStream,
+    deadline: Instant,
+) -> Result<rustx_execution_server::ChannelAccept, String> {
+    rig.binding
+        .accept_channel_deadline(
+            rustx_execution_transport::accept(stream, deadline).unwrap(),
+            deadline,
+        )
+        .map_err(|error| format!("handshake failed: {error}"))
+}
+
+/// Accepts one TCP peer and runs the real RFC 6455 upgrade plus the
+/// binding's authenticated Hello handshake, bounded by the shared
+/// handshake deadline; reports an early client exit instead of hanging.
+/// A `Pending` data half keeps accepting for the pairing control lane —
+/// the terminal verdict is the committed pair or the reject.
+fn accept(rig: &Rig, child: &mut Child) -> Result<Result<(), Reject>, String> {
     let deadline = Instant::now() + ACCEPT_DEADLINE;
-    match rig.binding.accept_channel_deadline(
-        rustx_execution_transport::accept(stream, deadline).unwrap(),
-        deadline,
-    ) {
-        Ok(admitted) => Ok(admitted.map(|_| ())),
-        Err(error) => Err(format!("handshake failed: {error}")),
+    loop {
+        let stream = accept_stream(rig, child)?;
+        match admit_stream(rig, stream, deadline)? {
+            rustx_execution_server::ChannelAccept::Pending => {}
+            rustx_execution_server::ChannelAccept::Live(_) => return Ok(Ok(())),
+            rustx_execution_server::ChannelAccept::Rejected(reject) => {
+                return Ok(Err(reject));
+            }
+        }
     }
 }
 
@@ -216,35 +243,20 @@ fn websocket_admits_the_real_client_and_serves_typed_records() {
 }
 
 /// Accepts and returns the live `LocalConnection` for tests that drive
-/// typed dispatch themselves.
+/// typed dispatch themselves — the data half then the pairing control
+/// lane, both inside one handshake budget.
 fn accept_connection(rig: &Rig, child: &mut Child) -> rustx_execution_server::LocalConnection {
-    rig.listener.set_nonblocking(true).unwrap();
     let deadline = Instant::now() + ACCEPT_DEADLINE;
-    let stream = loop {
-        match rig.listener.accept() {
-            Ok((stream, _)) => break stream,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                if let Some(status) = child.try_wait().unwrap() {
-                    panic!(
-                        "client exited {status} before connecting: {}",
-                        stderr_of(child)
-                    );
-                }
-                assert!(Instant::now() < deadline, "client never connected");
-                std::thread::sleep(Duration::from_millis(10));
+    loop {
+        let stream = accept_stream(rig, child).expect("client connects");
+        match admit_stream(rig, stream, deadline).expect("handshake succeeds") {
+            rustx_execution_server::ChannelAccept::Pending => {}
+            rustx_execution_server::ChannelAccept::Live(connection) => return connection,
+            rustx_execution_server::ChannelAccept::Rejected(reject) => {
+                panic!("admission rejected: {reject}")
             }
-            Err(error) => panic!("accept failed: {error}"),
         }
-    };
-    rig.listener.set_nonblocking(false).unwrap();
-    let deadline = Instant::now() + ACCEPT_DEADLINE;
-    rig.binding
-        .accept_channel_deadline(
-            rustx_execution_transport::accept(stream, deadline).unwrap(),
-            deadline,
-        )
-        .unwrap()
-        .unwrap()
+    }
 }
 
 #[test]

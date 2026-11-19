@@ -13,13 +13,241 @@
 
 use std::io::Write;
 use std::path::Path;
+use std::sync::Mutex;
 
 use rustx_confined_fs::{CommitUnknown, Expectation, PackageDirectory, WriteTarget};
 use rustx_execution_protocol::{
-    ClientReply, DecimalU64, EditRefusal, MAX_EDIT_FILE_BYTES, MAX_EDIT_REPLACEMENTS,
-    MAX_EDIT_REQUEST_BYTES, MAX_PREPARATIONS_PER_CONNECTION, MAX_RAW_CHUNK_BYTES, MAX_WRITE_BYTES,
-    ReadError, TextReplacement, WriteExpectation,
+    CancelDisposition, ClientReply, DecimalU64, EditRefusal, MAX_EDIT_FILE_BYTES,
+    MAX_EDIT_REPLACEMENTS, MAX_EDIT_REQUEST_BYTES, MAX_PREPARATIONS_PER_CONNECTION,
+    MAX_RAW_CHUNK_BYTES, MAX_WRITE_BYTES, ReadError, TextReplacement, WriteExpectation,
 };
+
+/// The per-ticket publish arbitration shared between the data lane's
+/// `CommitWrite` crossing and the control lane's `CancelMutation`.
+///
+/// One ticket moves `Prepared` — `commit` has not started — to
+/// `Committing` when the request is granted, and only the publish gate
+/// itself decides whether the staged bytes cross: a cancellation that
+/// landed while the commit was still staging wins (`Cancelled`), one
+/// that lands after the gate meets `Crossed` and is answered
+/// [`CancelDisposition::AlreadyCrossed`]. Cells live in the shared map
+/// only while the data lane can still reach them; the control lane
+/// never blocks unrelated tickets — each cell carries its own lock and
+/// no filesystem work runs under it.
+pub(crate) struct Arbitration {
+    /// Live ticket cells by ticket number.
+    cells: Mutex<std::collections::BTreeMap<u64, std::sync::Arc<TicketCell>>>,
+    /// The publish/revoke grant: the publish gate holds a read guard
+    /// exactly across the one crossing syscall, so a `Revoke` — which
+    /// takes the write guard — cannot complete until every admitted
+    /// crossing has physically finished. Once set, no later gate or
+    /// commit grant is admitted.
+    revoked: std::sync::RwLock<bool>,
+    /// Wakes the control worker when a crossing is queued or the worker
+    /// should stop.
+    wake: std::sync::Condvar,
+    /// The worker stop flag — set once on teardown, polled per turn.
+    stopped: Mutex<bool>,
+}
+
+/// The one lockable state a `CancelMutation` arbitrates against.
+struct TicketCell {
+    state: Mutex<TicketState>,
+}
+
+/// The arbitration lifecycle of one ticket — `Prepared` and
+/// `Committing` are still cancellable; `Cancelled` and `Crossed` are
+/// terminal answers.
+#[derive(Debug)]
+enum TicketState {
+    /// Prepared but `CommitWrite` not yet dispatched.
+    Prepared,
+    /// `CommitWrite` granted; private staging may still be running.
+    Committing,
+    /// A `CancelMutation` won before the publish gate.
+    Cancelled,
+    /// The publish gate passed — the crossing cannot un-happen.
+    Crossed,
+}
+
+/// The publish gate's verdict for one staged commit.
+pub(crate) enum PublishGate {
+    /// The crossing syscall ran inside the gate and succeeded — the
+    /// publish cannot un-happen; the ticket is `Crossed`.
+    Crossed,
+    /// A control-lane cancellation or revocation won before the
+    /// crossing ran: drop the stage, reply `WriteCancelled`.
+    Cancelled,
+    /// The crossing syscall ran and failed before publication — the
+    /// stage is still private, the ticket still answerable. Surfaced
+    /// so the caller reports the typed write error, never a phantom
+    /// `Crossed`.
+    Failed(std::io::Error),
+}
+
+impl Arbitration {
+    pub(crate) fn new() -> Self {
+        Self {
+            cells: Mutex::new(std::collections::BTreeMap::new()),
+            revoked: std::sync::RwLock::new(false),
+            wake: std::sync::Condvar::new(),
+            stopped: Mutex::new(false),
+        }
+    }
+
+    /// Registers a freshly issued ticket as `Prepared` — called from the
+    /// data lane the moment a preparation is admitted. A revocation
+    /// already granted makes the cell dead weight, so it is not
+    /// registered; one racing the check is harmless — the gate still
+    /// fences it.
+    fn prepared(&self, ticket: DecimalU64) {
+        if *self.revoked.read().expect("revoke grant") {
+            return;
+        }
+        self.cells.lock().expect("arbitration cells").insert(
+            ticket.get(),
+            std::sync::Arc::new(TicketCell {
+                state: Mutex::new(TicketState::Prepared),
+            }),
+        );
+    }
+
+    /// Marks a ticket `Committing` under its own lock and returns the
+    /// cell for the later publish gate. `None` means the ticket is
+    /// unknown or the control lane already fenced all commits.
+    fn begin_commit(&self, ticket: DecimalU64) -> Option<std::sync::Arc<TicketCell>> {
+        if *self.revoked.read().expect("revoke grant") {
+            return None;
+        }
+        let cell = self
+            .cells
+            .lock()
+            .expect("arbitration cells")
+            .get(&ticket.get())
+            .cloned()?;
+        let mut state = cell.state.lock().expect("ticket cell");
+        match *state {
+            TicketState::Prepared | TicketState::Committing | TicketState::Cancelled => {
+                // A cancellation already in `Cancelled` stays: the gate
+                // reads it and answers WriteCancelled — begin never
+                // revives a cancelled ticket.
+                if matches!(*state, TicketState::Prepared) {
+                    *state = TicketState::Committing;
+                }
+                drop(state);
+                Some(cell)
+            }
+            TicketState::Crossed => None,
+        }
+    }
+
+    /// The irreversible publish gate: `cross` — the one
+    /// `linkat`/`renameat` closure confined-fs hands over — runs under
+    /// the publish read grant and the ticket's own lock, so a
+    /// `CancelMutation` never observes `Crossed` before the crossing
+    /// physically succeeded and a `Revoke` cannot report completion
+    /// while the syscall is still in flight. A won cancellation or a
+    /// granted revocation refuses before `cross` runs; `Crossed` is
+    /// recorded iff the syscall returned success, and the `Committed`
+    /// wake reaches the control worker only then. A failed syscall
+    /// leaves the ticket answerable — never `AlreadyCrossed`. The
+    /// guards span exactly the arbitration decision and the one crossing
+    /// syscall — no other filesystem work.
+    fn publish_gate(
+        &self,
+        cell: &TicketCell,
+        cross: &mut dyn FnMut() -> std::io::Result<()>,
+    ) -> PublishGate {
+        let grant = self.revoked.read().expect("revoke grant");
+        let mut state = cell.state.lock().expect("ticket cell");
+        if matches!(*state, TicketState::Cancelled) || *grant {
+            return PublishGate::Cancelled;
+        }
+        match cross() {
+            Ok(()) => {
+                *state = TicketState::Crossed;
+                drop(state);
+                drop(grant);
+                self.wake.notify_one();
+                PublishGate::Crossed
+            }
+            Err(source) => PublishGate::Failed(source),
+        }
+    }
+
+    /// The control lane's `CancelMutation` arbitration — bounded to the
+    /// cell lookup and the cell lock, never any filesystem work.
+    pub(crate) fn cancel(&self, ticket: DecimalU64) -> CancelDisposition {
+        let cell = self
+            .cells
+            .lock()
+            .expect("arbitration cells")
+            .get(&ticket.get())
+            .cloned();
+        let Some(cell) = cell else {
+            return CancelDisposition::Unknown;
+        };
+        let mut state = cell.state.lock().expect("ticket cell");
+        match *state {
+            TicketState::Prepared | TicketState::Committing | TicketState::Cancelled => {
+                *state = TicketState::Cancelled;
+                CancelDisposition::CancelledBeforeCommit
+            }
+            TicketState::Crossed => CancelDisposition::AlreadyCrossed,
+        }
+    }
+
+    /// Fences all new commit grants — the control lane's `Revoke`.
+    ///
+    /// The write grant drains every in-flight publish gate first: the
+    /// call may wait for a crossing kernel call already admitted —
+    /// never for staging or verification, which run outside the grant —
+    /// so a returned `Revoked` acknowledgement means no publish crossing
+    /// can still complete and no later crossing can ever start.
+    pub(crate) fn revoke(&self) {
+        *self.revoked.write().expect("revoke grant") = true;
+    }
+
+    /// Whether the control lane's `Revoke` already fenced this
+    /// arbitration — the data lane uses it to answer a live ticket's
+    /// commit honestly: a fenced commit is cancelled, not malformed. A
+    /// `Revoke` queued behind an in-flight crossing makes this check
+    /// wait it out, so it never answers ahead of the acknowledgement.
+    fn is_revoked(&self) -> bool {
+        *self.revoked.read().expect("revoke grant")
+    }
+
+    /// Whether the control worker was asked to stop.
+    pub(crate) fn worker_stopped(&self) -> bool {
+        *self.stopped.lock().expect("worker stop")
+    }
+
+    /// Removes a terminal ticket cell — after `WriteAborted`,
+    /// `WriteCancelled`, or a finished commit.
+    fn remove(&self, ticket: DecimalU64) {
+        self.cells
+            .lock()
+            .expect("arbitration cells")
+            .remove(&ticket.get());
+    }
+
+    /// The worker's stop request: idempotent, wakes the wait.
+    pub(crate) fn stop_worker(&self) {
+        *self.stopped.lock().expect("worker stop") = true;
+        self.wake.notify_one();
+    }
+
+    /// Bounded wait for a worker wake — a queued `Committed`, the stop
+    /// flag, or the poll deadline.
+    pub(crate) fn wait_worker(&self, timeout: std::time::Duration) -> bool {
+        let stopped = self.stopped.lock().expect("worker stop");
+        let (stopped, _) = self
+            .wake
+            .wait_timeout(stopped, timeout)
+            .expect("worker stop");
+        *stopped
+    }
+}
 
 /// The staged-write state of one authenticated connection.
 ///
@@ -36,6 +264,8 @@ pub(super) struct Writes {
     prepared: std::collections::BTreeMap<u64, Preparation>,
     /// Planned bytes currently held across all live preparations.
     payload_bytes: usize,
+    /// The per-ticket publish arbitration shared with the control lane.
+    arbitration: std::sync::Arc<Arbitration>,
 }
 
 /// One live ticketed preparation: the retained target plus the planned
@@ -49,11 +279,12 @@ struct Preparation {
 }
 
 impl Writes {
-    pub(super) fn new() -> Self {
+    pub(super) fn new(arbitration: std::sync::Arc<Arbitration>) -> Self {
         Self {
             next: 1,
             prepared: std::collections::BTreeMap::new(),
             payload_bytes: 0,
+            arbitration,
         }
     }
 
@@ -118,6 +349,7 @@ impl Writes {
                 expected,
             },
         );
+        self.arbitration.prepared(ticket);
         reply(ticket, original)
     }
 
@@ -288,17 +520,35 @@ impl Writes {
     }
 
     /// Handles a `CommitWrite` for the exact live ticket: the retained
-    /// target stages the planned bytes — only now, under the grant — and
-    /// publishes them through the shared kernel. A wrong or incomplete
-    /// ticket is refused without disturbing any preparation; a
-    /// post-crossing failure is `CommitUnknown`.
+    /// target stages the planned bytes privately — only now, under the
+    /// grant — then the shared publish gate arbitrates the crossing
+    /// against any control-lane `CancelMutation` under the ticket's own
+    /// lock. A cancellation that won before the gate gets the typed
+    /// `WriteCancelled` and the private stage is dropped with nothing
+    /// named written; a post-crossing failure is `CommitUnknown`.
+    /// A wrong or incomplete ticket is refused without disturbing any
+    /// preparation.
     pub(super) fn commit(&mut self, ticket: DecimalU64) -> ClientReply {
+        // A foreign or still-incomplete ticket is refused without
+        // disturbing anything: the preparation, its payload
+        // accounting, and the arbitration cell all stay exactly as the
+        // peer left them — the ticket remains chunkable and
+        // cancellable.
         let Some(preparation) = self.prepared.get(&ticket.get()) else {
             return error(ReadError::Invalid);
         };
         if preparation.payload.len() != preparation.expected {
             return error(ReadError::Invalid);
         }
+        let Some(cell) = self.arbitration.begin_commit(ticket) else {
+            // The ticket is live but unfundable: a revocation already
+            // fenced the arbitration — the commit is cancelled, never
+            // malformed, and nothing ever crosses.
+            if self.arbitration.is_revoked() {
+                return ClientReply::WriteCancelled { ticket };
+            }
+            return error(ReadError::Invalid);
+        };
         let Preparation {
             target,
             payload,
@@ -308,10 +558,45 @@ impl Writes {
             .remove(&ticket.get())
             .expect("live ticket checked");
         self.payload_bytes = self.payload_bytes.saturating_sub(expected);
-        let result = target
-            .stage(|file| file.write_all(&payload))
-            .and_then(rustx_confined_fs::StagedWrite::publish)
-            .and_then(rustx_confined_fs::PublishedWrite::finish);
+        // Private staging first — nothing named is written, and no
+        // shared arbitration lock is held while the kernel works.
+        let staged = target.stage(|file| file.write_all(&payload));
+        let result = match staged {
+            Ok(staged) => {
+                // The gate runs inside `publish_with_gate`, wrapped
+                // around the actual `linkat`/`renameat` syscall under
+                // the ticket lock: `Crossed` can only be recorded
+                // after the crossing physically succeeded.
+                let arbitration = self.arbitration.clone();
+                let mut cancelled = false;
+                match staged.publish_with_gate(|cross| {
+                    match arbitration.publish_gate(&cell, cross) {
+                        PublishGate::Crossed => Ok(()),
+                        // The staged write's own drop cleans the
+                        // private stage — a proven zero-write cancel.
+                        PublishGate::Cancelled => {
+                            cancelled = true;
+                            Err(std::io::Error::new(
+                                std::io::ErrorKind::Interrupted,
+                                "cancelled before publish",
+                            ))
+                        }
+                        PublishGate::Failed(source) => Err(source),
+                    }
+                }) {
+                    Ok(published) => published.finish(),
+                    Err(source) => {
+                        if cancelled {
+                            self.arbitration.remove(ticket);
+                            return ClientReply::WriteCancelled { ticket };
+                        }
+                        Err(source)
+                    }
+                }
+            }
+            Err(source) => Err(source),
+        };
+        self.arbitration.remove(ticket);
         match result {
             Ok(metadata) => ClientReply::Written {
                 ticket,
@@ -325,6 +610,7 @@ impl Writes {
     /// target and its in-memory payload drop — nothing physical was ever
     /// staged, so nothing needs cleaning.
     pub(super) fn abort(&mut self, ticket: DecimalU64) -> ClientReply {
+        self.arbitration.remove(ticket);
         let Some(preparation) = self.prepared.remove(&ticket.get()) else {
             return error(ReadError::Invalid);
         };
@@ -386,7 +672,7 @@ mod tests {
     #[test]
     fn a_prepared_write_commits_and_the_same_ticket_never_commits_twice() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new();
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
         fs::write(dir.path().join("file"), b"before").unwrap();
         let original = root.entry_metadata(std::path::Path::new("file")).unwrap();
 
@@ -432,7 +718,7 @@ mod tests {
     #[test]
     fn a_foreign_or_stale_ticket_leaves_the_live_preparation_intact() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new();
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
         let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
             &root,
             std::path::Path::new("file"),
@@ -470,7 +756,7 @@ mod tests {
     #[test]
     fn concurrent_approvals_share_the_bounded_ticket_budget() {
         let (_dir, root) = fixture();
-        let mut writes = Writes::new();
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
         // Multiple preparations stay live independently — approvals are
         // no longer serialized through one outstanding slot.
         let mut tickets = Vec::new();
@@ -508,7 +794,7 @@ mod tests {
     #[test]
     fn a_leaf_replaced_between_prepare_and_commit_is_rejected_at_the_target() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new();
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
         fs::write(dir.path().join("file"), b"before").unwrap();
         let original = root.entry_metadata(std::path::Path::new("file")).unwrap();
         let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
@@ -539,7 +825,7 @@ mod tests {
     fn dropping_the_owner_never_publishes_and_leaves_no_stage() {
         let (dir, root) = fixture();
         {
-            let mut writes = Writes::new();
+            let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
             let ClientReply::WritePrepared { .. } = writes.prepare(
                 &root,
                 std::path::Path::new("file"),
@@ -562,7 +848,7 @@ mod tests {
         let (dir, root) = fixture();
         fs::create_dir(dir.path().join("dir")).unwrap();
         fs::write(dir.path().join("dir").join("file"), b"before").unwrap();
-        let mut writes = Writes::new();
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
         // `components()` would silently elide the interior `.` — the raw
         // spelling is what the gate must refuse.
         let reply = writes.prepare(
@@ -603,7 +889,7 @@ mod tests {
     #[test]
     fn oversized_or_malformed_payloads_are_refused_before_staging() {
         let (dir, root) = fixture();
-        let mut writes = Writes::new();
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
         for encoded in [
             // Valid base64 that decodes past the decoded cap.
             encode(&vec![b'x'; MAX_RAW_CHUNK_BYTES + 1]),
@@ -626,5 +912,298 @@ mod tests {
             );
         }
         assert_eq!(stage_names(dir.path()), Vec::<PathBuf>::new());
+    }
+
+    /// A cancellation acknowledged before the gate is honest
+    /// end-to-end: the commit reply is `WriteCancelled`, the named
+    /// target stays absent, no staging name or missing-parent directory
+    /// survives, and an unrelated competitor is byte-identical. The
+    /// ticket is terminal — a replayed commit can never publish later.
+    #[test]
+    fn a_cancelled_commit_publishes_nothing_and_leaves_no_stage() {
+        let (dir, root) = fixture();
+        let arbitration = std::sync::Arc::new(Arbitration::new());
+        let mut writes = Writes::new(arbitration.clone());
+        fs::write(dir.path().join("competitor"), b"untouched").unwrap();
+
+        let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
+            &root,
+            std::path::Path::new("missing/sub/file"),
+            &WriteExpectation::Absent,
+            &encode(b"data"),
+        ) else {
+            panic!("expected a prepared write")
+        };
+        // The control lane's arbitration: the cancel lands while the
+        // ticket is still `Prepared` — before any crossing exists.
+        assert_eq!(
+            arbitration.cancel(ticket),
+            CancelDisposition::CancelledBeforeCommit
+        );
+
+        // The data lane's commit can never succeed after the cancelled
+        // acknowledgement was delivered.
+        assert_eq!(
+            writes.commit(ticket),
+            ClientReply::WriteCancelled { ticket }
+        );
+        assert!(!dir.path().join("missing").exists());
+        assert_eq!(stage_names(dir.path()), Vec::<PathBuf>::new());
+        assert_eq!(
+            fs::read(dir.path().join("competitor")).unwrap(),
+            b"untouched"
+        );
+        // The ticket is dead: a replay is a typed refuse, never a write.
+        assert_eq!(
+            writes.commit(ticket),
+            ClientReply::Error {
+                kind: ReadError::Invalid
+            }
+        );
+        assert!(!dir.path().join("missing").exists());
+    }
+
+    /// Revocation fences the gate itself: a commit granted while the
+    /// arbitration was live still cannot cross once `revoke` landed —
+    /// the atomic flag is read under the ticket lock, so a commit
+    /// parked between grant and gate is refused, never published after
+    /// a reported revocation.
+    #[test]
+    fn a_revocation_fences_a_commit_at_the_gate_itself() {
+        let (dir, root) = fixture();
+        let arbitration = std::sync::Arc::new(Arbitration::new());
+        let mut writes = Writes::new(arbitration.clone());
+        let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
+            &root,
+            std::path::Path::new("file"),
+            &WriteExpectation::Absent,
+            &encode(b"data"),
+        ) else {
+            panic!("expected a prepared write")
+        };
+        arbitration.revoke();
+
+        assert_eq!(
+            writes.commit(ticket),
+            ClientReply::WriteCancelled { ticket }
+        );
+        assert!(!dir.path().join("file").exists());
+        assert_eq!(stage_names(dir.path()), Vec::<PathBuf>::new());
+    }
+
+    /// The write grant drains the gate: a `Revoke` issued while a
+    /// crossing syscall is physically in flight cannot report completion
+    /// until the syscall returns — and the acknowledgement then forbids
+    /// every later crossing.
+    #[test]
+    fn a_revocation_waits_for_an_in_flight_crossing_then_fences_forever() {
+        use std::sync::mpsc;
+
+        let arbitration = std::sync::Arc::new(Arbitration::new());
+        let ticket = DecimalU64::new(11);
+        arbitration.prepared(ticket);
+        let cell = arbitration
+            .cells
+            .lock()
+            .expect("arbitration cells")
+            .get(&ticket.get())
+            .cloned()
+            .expect("the ticket is registered");
+        *cell.state.lock().expect("ticket cell") = TicketState::Committing;
+
+        // The gate is parked inside the crossing syscall.
+        let (in_cross_tx, in_cross_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let gate_arbitration = arbitration.clone();
+        let gate_cell = cell.clone();
+        let gate = std::thread::spawn(move || {
+            gate_arbitration.publish_gate(&gate_cell, &mut || {
+                in_cross_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        in_cross_rx.recv().unwrap();
+
+        let (revoked_tx, revoked_rx) = mpsc::channel();
+        let revoke_arbitration = arbitration.clone();
+        let revoker = std::thread::spawn(move || {
+            revoke_arbitration.revoke();
+            revoked_tx.send(()).unwrap();
+        });
+        assert!(
+            revoked_rx
+                .recv_timeout(std::time::Duration::from_millis(200))
+                .is_err(),
+            "the acknowledgement must wait out an in-flight crossing"
+        );
+
+        release_tx.send(()).unwrap();
+        assert!(matches!(gate.join().unwrap(), PublishGate::Crossed));
+        revoked_rx.recv().unwrap();
+        revoker.join().unwrap();
+
+        // After the acknowledgement every later crossing is fenced: a
+        // new grant is never issued and the syscall never runs.
+        let cell = std::sync::Arc::new(TicketCell {
+            state: Mutex::new(TicketState::Committing),
+        });
+        let mut crossed = false;
+        let verdict = arbitration.publish_gate(&cell, &mut || {
+            crossed = true;
+            Ok(())
+        });
+        assert!(matches!(verdict, PublishGate::Cancelled));
+        assert!(!crossed, "no crossing runs after the acknowledgement");
+    }
+
+    /// The gate runs the crossing under the ticket lock: a `CancelMutation`
+    /// that arrives while the syscall is in flight parks on that lock and
+    /// then receives the *true* post-syscall answer — `AlreadyCrossed`
+    /// only because the crossing physically succeeded. A cancel that
+    /// reaches the cell first means the crossing never runs at all.
+    #[test]
+    fn a_cancel_during_the_crossing_gets_the_true_post_syscall_answer() {
+        use std::sync::mpsc;
+
+        let arbitration = std::sync::Arc::new(Arbitration::new());
+        let ticket = DecimalU64::new(7);
+        arbitration.prepared(ticket);
+        let cell = arbitration
+            .cells
+            .lock()
+            .expect("arbitration cells")
+            .get(&ticket.get())
+            .cloned()
+            .expect("the ticket is registered");
+        *cell.state.lock().expect("ticket cell") = TicketState::Committing;
+
+        // The gate holds the ticket lock across the crossing itself —
+        // proven by the cell lock being held while `cross` runs.
+        let (in_cross_tx, in_cross_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let gate_arbitration = arbitration.clone();
+        let gate_cell = cell.clone();
+        let gate = std::thread::spawn(move || {
+            gate_arbitration.publish_gate(&gate_cell, &mut || {
+                in_cross_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(())
+            })
+        });
+        in_cross_rx.recv().unwrap();
+        assert!(
+            cell.state.try_lock().is_err(),
+            "the ticket lock spans the crossing syscall"
+        );
+
+        // A cancel during the crossing parks on the same lock; only the
+        // syscall's real result decides its disposition.
+        let cancel_arbitration = arbitration.clone();
+        let canceller = std::thread::spawn(move || cancel_arbitration.cancel(ticket));
+        release_tx.send(()).unwrap();
+        assert!(matches!(gate.join().unwrap(), PublishGate::Crossed));
+        assert_eq!(canceller.join().unwrap(), CancelDisposition::AlreadyCrossed);
+
+        // Reverse ordering on a fresh ticket: a cancel that reached the
+        // cell first means the crossing never runs.
+        let ticket = DecimalU64::new(8);
+        arbitration.prepared(ticket);
+        let cell = arbitration
+            .cells
+            .lock()
+            .expect("arbitration cells")
+            .get(&ticket.get())
+            .cloned()
+            .expect("the ticket is registered");
+        *cell.state.lock().expect("ticket cell") = TicketState::Committing;
+        assert_eq!(
+            arbitration.cancel(ticket),
+            CancelDisposition::CancelledBeforeCommit
+        );
+        let mut crossed = false;
+        let verdict = arbitration.publish_gate(&cell, &mut || {
+            crossed = true;
+            Ok(())
+        });
+        assert!(matches!(verdict, PublishGate::Cancelled));
+        assert!(!crossed, "a won cancellation prevents the crossing");
+    }
+
+    /// A crossing that attempted but failed before publication is never
+    /// `AlreadyCrossed`: the syscall's error surfaces as
+    /// `PublishGate::Failed` and a later cancel still answers
+    /// `CancelledBeforeCommit` — the honest "no write happened".
+    #[test]
+    fn a_failed_crossing_is_never_reported_as_already_crossed() {
+        let arbitration = std::sync::Arc::new(Arbitration::new());
+        let ticket = DecimalU64::new(3);
+        arbitration.prepared(ticket);
+        let cell = arbitration
+            .cells
+            .lock()
+            .expect("arbitration cells")
+            .get(&ticket.get())
+            .cloned()
+            .expect("the ticket is registered");
+        *cell.state.lock().expect("ticket cell") = TicketState::Committing;
+
+        let verdict = arbitration.publish_gate(&cell, &mut || {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "rename failed",
+            ))
+        });
+        assert!(matches!(verdict, PublishGate::Failed(_)));
+        // Attempted but not published: the cell stayed `Committing`, so
+        // the cancel wins — never a phantom `AlreadyCrossed`.
+        assert_eq!(
+            arbitration.cancel(ticket),
+            CancelDisposition::CancelledBeforeCommit
+        );
+    }
+
+    /// A commit on a still-incomplete ticket is refused without
+    /// disturbing anything: the preparation, its payload accounting,
+    /// and the arbitration cell stay live — the ticket accepts the rest
+    /// of its payload and commits normally afterwards.
+    #[test]
+    fn an_incomplete_commit_refuses_without_disturbing_the_ticket() {
+        let (dir, root) = fixture();
+        let mut writes = Writes::new(std::sync::Arc::new(Arbitration::new()));
+        let ClientReply::WritePrepared { ticket, .. } = writes.begin(
+            &root,
+            std::path::Path::new("file"),
+            &WriteExpectation::Absent,
+            DecimalU64::new(4),
+        ) else {
+            panic!("expected a prepared write")
+        };
+        assert_eq!(
+            writes.chunk(ticket, DecimalU64::new(0), &encode(b"ab")),
+            ClientReply::WriteChunkReceived {
+                ticket,
+                offset: DecimalU64::new(0)
+            }
+        );
+        // Incomplete: refused — and the ticket stays alive, not orphaned.
+        assert_eq!(
+            writes.commit(ticket),
+            ClientReply::Error {
+                kind: ReadError::Invalid
+            }
+        );
+        assert_eq!(
+            writes.chunk(ticket, DecimalU64::new(2), &encode(b"cd")),
+            ClientReply::WriteChunkReceived {
+                ticket,
+                offset: DecimalU64::new(2)
+            }
+        );
+        assert!(matches!(
+            writes.commit(ticket),
+            ClientReply::Written { ticket: echoed, .. } if echoed == ticket
+        ));
+        assert_eq!(fs::read(dir.path().join("file")).unwrap(), b"abcd");
     }
 }

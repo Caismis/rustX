@@ -563,6 +563,87 @@ impl<'de> Deserialize<'de> for BindingCredential {
     }
 }
 
+/// The pairing challenge issued to an admitted data lane.
+///
+/// Exactly 32 bytes of OS randomness carried on the wire as 64 lowercase
+/// hex characters — the same shape and secrecy rules as
+/// [`BindingCredential`]: `Debug` redacts, there is no `Display`, and the
+/// Server retains only a SHA-256 verifier. It authenticates the control
+/// lane to the one pending pairing attempt; it is never reusable across
+/// attempts or bindings.
+#[derive(Clone)]
+pub struct PairingNonce([u8; Self::LENGTH]);
+
+impl PairingNonce {
+    /// The nonce length in bytes.
+    pub const LENGTH: usize = 32;
+    /// The nonce length on the wire in hex characters.
+    pub const HEX_LENGTH: usize = Self::LENGTH * 2;
+
+    /// Wraps raw nonce bytes issued by the Server.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; Self::LENGTH]) -> Self {
+        Self(bytes)
+    }
+
+    /// The raw nonce bytes, for verifier computation only.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; Self::LENGTH] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for PairingNonce {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("PairingNonce(REDACTED)")
+    }
+}
+
+impl Serialize for PairingNonce {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut hex = String::with_capacity(Self::HEX_LENGTH);
+        for byte in self.0 {
+            use fmt::Write;
+            write!(hex, "{byte:02x}").expect("string write");
+        }
+        serializer.serialize_str(&hex)
+    }
+}
+
+impl<'de> Deserialize<'de> for PairingNonce {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct NonceVisitor;
+
+        impl Visitor<'_> for NonceVisitor {
+            type Value = PairingNonce;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("64 lowercase hex characters")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                if value.len() != PairingNonce::HEX_LENGTH {
+                    return Err(E::custom(
+                        "pairing nonce must be exactly 64 lowercase hex characters",
+                    ));
+                }
+                let mut bytes = [0u8; PairingNonce::LENGTH];
+                let (pairs, _) = value.as_bytes().as_chunks::<2>();
+                for (slot, &[high, low]) in bytes.iter_mut().zip(pairs) {
+                    let high =
+                        hex_value(high).ok_or_else(|| E::custom("invalid pairing nonce hex"))?;
+                    let low =
+                        hex_value(low).ok_or_else(|| E::custom("invalid pairing nonce hex"))?;
+                    *slot = (high << 4) | low;
+                }
+                Ok(PairingNonce(bytes))
+            }
+        }
+
+        deserializer.deserialize_str(NonceVisitor)
+    }
+}
+
 /// The Client's authenticated negotiation request — the first and only
 /// message that may open an execution binding.
 #[derive(Clone, Serialize, Deserialize)]
@@ -665,10 +746,194 @@ pub enum Reject {
     /// The binding was revoked and can never be dispatched again.
     #[error("binding revoked")]
     Revoked,
+    /// The control lane's pairing nonce matched no pending attempt —
+    /// missing, expired, mismatched, or already consumed.
+    #[error("invalid pairing")]
+    InvalidPairing,
 }
 
-/// The Server's reply to a [`Hello`].
-pub type HelloReply = Result<Admission, Reject>;
+/// The role an accepted connection asserts with its first record.
+///
+/// Every admitted connection begins with exactly one of these: the data
+/// lane — the dispatch-capable half — presents the authenticated
+/// [`Hello`] it always did; the control lane presents a [`ControlHello`]
+/// carrying the same identity plus the [`PairingNonce`] challenge the
+/// data lane's admission issued. The two halves of a binding share one
+/// authenticated pair: either lane alone is never dispatchable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PeerHello {
+    /// The data-lane negotiation request.
+    Data(Hello),
+    /// The control-lane pairing request.
+    Control(ControlHello),
+}
+
+/// The control lane's authenticated pairing request — every identity
+/// field of the data lane's [`Hello`] (capabilities excluded: the
+/// control lane never dispatches) plus the [`PairingNonce`] the data
+/// lane's admission delivered. A nonce matching no pending pairing, a
+/// stale one, or a replayed one is refused.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlHello {
+    /// Wire protocol revision; must equal [`PROTOCOL_VERSION`].
+    pub version: u16,
+    /// The Session this binding belongs to.
+    pub session: SessionId,
+    /// The logical execution environment.
+    pub environment: EnvironmentId,
+    /// The physical Client instance asserting the binding.
+    pub instance: ClientInstanceId,
+    /// The binding generation asserted for this instance.
+    pub generation: Generation,
+    /// The exact normalized absolute workspace the Client claims.
+    pub workspace: PathBuf,
+    /// The binding credential issued to this reservation.
+    pub credential: BindingCredential,
+    /// The pairing challenge the data lane's [`DataAdmission`] issued.
+    pub connection_nonce: PairingNonce,
+}
+
+impl fmt::Debug for ControlHello {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ControlHello")
+            .field("version", &self.version)
+            .field("session", &self.session)
+            .field("environment", &self.environment)
+            .field("instance", &self.instance)
+            .field("generation", &self.generation)
+            .field("workspace", &self.workspace)
+            .field("credential", &self.credential)
+            .field("connection_nonce", &self.connection_nonce)
+            .finish()
+    }
+}
+
+/// The Server's acceptance of a data-lane [`Hello`]: the half-admission
+/// plus the [`PairingNonce`] challenge the Client must echo on the
+/// control lane it connects next. The binding is not live — nothing may
+/// dispatch — until the pairing commits.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DataAdmission {
+    /// The reserved identity this pair binds.
+    pub admission: Admission,
+    /// The fresh single-attempt pairing challenge.
+    pub challenge: PairingNonce,
+}
+
+impl fmt::Debug for DataAdmission {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DataAdmission")
+            .field("admission", &self.admission)
+            .field("challenge", &self.challenge)
+            .finish()
+    }
+}
+
+/// The Server's reply to a data-lane [`Hello`]: the challenge-carrying
+/// half-admission or a typed refusal.
+pub type DataHelloReply = Result<DataAdmission, Reject>;
+
+/// The Server's reply to a [`ControlHello`]: the committed pair's
+/// admission or a typed refusal.
+pub type ControlHelloReply = Result<Admission, Reject>;
+
+/// One command the Server delivers to the Client on the control lane.
+///
+/// The control lane is independently authenticated and never a dispatch
+/// channel: it carries only health probes, live-mutation commit
+/// cancellation, and terminal revocation. Exactly one request is
+/// outstanding per pair at a time — the next [`ControlPoll`] carries
+/// its [`ControlReply`] as `receipt`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ControlRequest {
+    /// A liveness probe: the Client echoes `nonce` in `Healthy`.
+    Health {
+        /// The fresh nonce the reply must echo.
+        nonce: DecimalU64,
+    },
+    /// Cancels the live mutation commit for `ticket`: the publish
+    /// crossing is prevented when it has not happened yet, and the
+    /// honest disposition is reported either way.
+    CancelMutation {
+        /// The ticket whose commit must not cross.
+        ticket: DecimalU64,
+    },
+    /// Terminally revokes the binding: the Client fences every local
+    /// commit — a commit that has not crossed never publishes — and
+    /// acknowledges with `Revoked`.
+    Revoke,
+}
+
+/// What the Client reports for a [`ControlRequest::CancelMutation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum CancelDisposition {
+    /// The ticket existed and the publish provably never crossed: the
+    /// private stage was dropped unpublished.
+    CancelledBeforeCommit,
+    /// The ticket existed but the publish had already crossed when the
+    /// cancellation was arbitrated.
+    AlreadyCrossed,
+    /// No live or just-crossed ticket matches — the cancellation had no
+    /// target. Never means "no effect" on a real ticket.
+    Unknown,
+}
+
+/// The Client's receipt for one delivered [`ControlRequest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ControlReply {
+    /// The `Health` nonce echoed — fresh proof, never a replayed one.
+    Healthy {
+        /// The echoed nonce.
+        nonce: DecimalU64,
+    },
+    /// The `CancelMutation` outcome for the exact ticket.
+    MutationCancelled {
+        /// The ticket the disposition reports.
+        ticket: DecimalU64,
+        /// What arbitration proved.
+        disposition: CancelDisposition,
+    },
+    /// The `Revoke` was arbitrated: local commits are fenced.
+    Revoked,
+}
+
+/// The Client's turn on the control lane: one continuous poll that
+/// acknowledges the previously delivered request and offers a fresh
+/// health nonce the Server must echo in its [`ControlTurn`].
+///
+/// The lane is client-paced turn-taking: the Server answers each poll
+/// with at most one request, so an idle lane exchanges one bounded pair
+/// per poll period and a delivered command's receipt arrives on the
+/// poll right after it — control never waits behind data traffic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPoll {
+    /// The poll's own sequence, strictly increasing from 1.
+    pub sequence: DecimalU64,
+    /// The receipt for the request the previous `ControlTurn`
+    /// delivered, `None` when that turn carried none.
+    pub receipt: Option<ControlReply>,
+    /// The fresh client nonce the `ControlTurn` must echo.
+    pub health: DecimalU64,
+}
+
+/// The Server's answer to one [`ControlPoll`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ControlTurn {
+    /// Echo of the answered poll's sequence.
+    pub sequence: DecimalU64,
+    /// Echo of the poll's `health` — the Server's fresh liveness proof.
+    pub health: DecimalU64,
+    /// The queued command this turn delivers, if any.
+    pub request: Option<ControlRequest>,
+}
 
 /// The Server's one typed request on a live execution connection.
 ///
@@ -1003,6 +1268,10 @@ pub enum ClientReply {
     /// stage failed: the named outcome is unknowable and must be reported
     /// as such — never as a pre-commit denial.
     CommitUnknown { ticket: DecimalU64 },
+    /// The `CommitWrite` was arbitrated cancelled before its publish
+    /// crossed: the private stage was dropped unpublished. The ticket is
+    /// consumed; nothing named by it was written.
+    WriteCancelled { ticket: DecimalU64 },
     /// A `PrepareEdit` staged privately and verified: `ticket` is a
     /// Client-assigned nonzero scalar unique to this connection,
     /// `original` is the retained source's verified stamp (an edit always

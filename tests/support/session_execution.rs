@@ -175,27 +175,40 @@ impl ExecutionFixture {
             listener
                 .set_nonblocking(true)
                 .expect("nonblocking listener");
+            // The paired handshake: the data lane's `Pending` keeps
+            // accepting for the mandatory control lane until the pair
+            // commits `Live` — one shared deadline over both halves.
             let deadline = Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-            let stream = loop {
-                match listener.accept() {
-                    Ok((stream, _)) => break stream,
-                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
-                        if let Some(status) = child.0.try_wait().expect("client status") {
-                            panic!("execution client exited before admit: {status}");
+            loop {
+                let stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            if let Some(status) = child.0.try_wait().expect("client status") {
+                                panic!("execution client exited before admit: {status}");
+                            }
+                            assert!(
+                                Instant::now() < deadline,
+                                "execution client did not connect within {LOCAL_HANDSHAKE_TIMEOUT:?}"
+                            );
+                            std::thread::sleep(Duration::from_millis(10));
                         }
-                        assert!(
-                            Instant::now() < deadline,
-                            "execution client did not connect within {LOCAL_HANDSHAKE_TIMEOUT:?}"
-                        );
-                        std::thread::sleep(Duration::from_millis(10));
+                        Err(error) => panic!("execution listener accept failed: {error}"),
                     }
-                    Err(error) => panic!("execution listener accept failed: {error}"),
+                };
+                match endpoint
+                    .admit_local_stream_deadline(stream, deadline)
+                    .expect("admit exchange")
+                {
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Live => {
+                        break;
+                    }
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Pending => {}
+                    rustx::local_runtime::session_runtime_manager::EndpointAdmission::Rejected(
+                        reject,
+                    ) => panic!("execution client rejected: {reject:?}"),
                 }
-            };
-            endpoint
-                .admit_local_stream_deadline(stream, deadline)
-                .expect("admit exchange")
-                .unwrap_or_else(|reject| panic!("execution client rejected: {reject:?}"));
+            }
 
             let scope = manager.execution_scope(&session.id);
             Self {

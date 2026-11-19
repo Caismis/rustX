@@ -33,7 +33,9 @@ mod schedule;
 mod schedule_catalog;
 mod schedule_driver;
 pub(crate) mod status;
-pub use execution::{ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope};
+pub use execution::{
+    EndpointAdmission, ExecutionListener, LocalExecutionEndpoint, SessionExecutionScope,
+};
 pub use schedule_catalog::{ScheduleCatalogCursor, ScheduleCatalogEntry, ScheduleCatalogPage};
 mod sessions;
 mod source_watch;
