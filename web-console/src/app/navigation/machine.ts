@@ -295,7 +295,7 @@ export const shellNavigationMachine = setup({
     };
     const subscription = input.parent.subscribe(follow); follow();
     return () => subscription.unsubscribe();
-  }), authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession' | 'pending'> } } }>(({ input, sendBack }) => {
+  }), authority: fromCallback<ShellNavigationEvent, { client: AppServerClient; parent: { getSnapshot(): { context: Pick<ShellNavigationContext, 'generation' | 'authority' | 'retry' | 'route' | 'draftSession' | 'pending'> }; subscribe(listener: () => void): { unsubscribe(): void } } }>(({ input, sendBack }) => {
     const observe = () => {
       const native = input.client.getSnapshot(), owner = input.parent.getSnapshot().context;
       if (native.generation !== owner.generation || native.authorityRevision !== owner.authority) sendBack({ type: 'AUTHORITY', generation: native.generation, authority: native.authorityRevision });
@@ -306,7 +306,18 @@ export const shellNavigationMachine = setup({
         sendBack({ type: 'SESSION.RESUME', intent: owner.draftSession.intent, generation: native.generation, authority: native.authorityRevision });
       else if (owner.retry && responseRetryReady(owner.retry, native.views[owner.retry.view.id])) sendBack({ type: 'RETRY.OBSERVED', retry: owner.retry });
     };
-    const release = input.client.subscribe(observe); observe(); return release;
+    const release = input.client.subscribe(observe);
+    let route = input.parent.getSnapshot().context.route;
+    const navigation = input.parent.subscribe(() => {
+      const next = input.parent.getSnapshot().context.route;
+      if (next === route) return;
+      route = next;
+      // Reconnect can reach the native attach while Settings owns the view.
+      // Returning Home must sample that proof even without a new native event.
+      if (route.kind === 'session-draft') observe();
+    });
+    observe();
+    return () => { release(); navigation.unsubscribe(); };
   }), prepare: fromPromise<Prepared, { client: AppServerClient; host: ProductHostWorkspaces; workspaces: WorkspaceAuthority; pending: Pending; parent: { send(event: ShellNavigationEvent): void } }>(({ input, signal }) => prepare(input, signal)) },
   guards: {
     workflowLeave: ({ context, event }) => context.route.kind === 'workflows' && context.approvedLeave?.event !== event,

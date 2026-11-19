@@ -502,7 +502,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "0d4d325039aa5605fa146a5a087c904fe6a6f6c62114426b9addb03ed8d39382"
+      "local_sha256": "7f40178b3afe43c2f3120d0000f429caaf523e6edc136c262f209af4044826ac"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -519,6 +519,7 @@
         "../../locale/translation",
         "../../presentation/primitives/FileTypeIcon",
         "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/clipboard",
         "../../presentation/primitives/file-size",
         "../../presentation/primitives/icons",
         "../components/Artifact",
@@ -533,7 +534,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e9041bc35ad838b18d21fe4f5fdbe635175007affe7876d85bc8f443b0ec1e22"
+      "local_sha256": "abb33c54394450b88a889547406fe13fe88510e02d99c6787917214ff146dab3"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -4061,7 +4062,7 @@
           "treatment": "Add the English/Chinese pending-message label for the Harness-style sending progress, driven by rustX native admission state."
         }
       ],
-      "local_sha256": "1da2f5f785aefc4c731100d58479913f852e795b61b1f2c1ee93719617c68658"
+      "local_sha256": "ae9ba24a07330fd685784586f22e24b9e5de19112f6002e1768004d3284e5845"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",

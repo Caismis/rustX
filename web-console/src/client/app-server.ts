@@ -532,7 +532,10 @@ export class AppServerClient {
     this.statusNotifications.clear();
     this.publish({ sessions:this.state.sessions.map(row=>({...row,thread_status:undefined})), threadStatusSynchronized:false, connection, generation: this.state.generation + 1, uncertain, interactionOperations: operations,
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
-        ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,turnOutline: undefined, turnNavigation: undefined, submissions: undefined, sendingSubmissions: undefined, inboundRequests: undefined,
+        ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,
+        preview: view.preview?.history.loading ? { ...view.preview, history: { ...view.preview.history, loading: false, initialLoading: false } } : view.preview,
+        tracePreview: view.tracePreview ? { ...view.tracePreview, cache: { ...view.tracePreview.cache, loading: false, details: Object.fromEntries(Object.entries(view.tracePreview.cache.details).filter(([, detail]) => !detail.loading)) } } : undefined,
+        turnOutline: undefined, turnNavigation: undefined, submissions: undefined, sendingSubmissions: undefined, inboundRequests: undefined,
       }])),
     });
     if (oldSocket && !this.closedSockets.has(oldSocket)) {

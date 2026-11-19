@@ -14,6 +14,14 @@ export interface ColdReadPort {
   setSession(id: string, patch: Partial<Pick<SessionView, 'preview' | 'statisticsPreview' | 'settings'>>): void;
 }
 
+/** Shared durable cold-read condition: a wanted, non-deleting Session with no
+ * live attachment claim that is either opening (`attaching`) or holding
+ * capacity-fallback `passiveHistory`. */
+export function isDurableColdRead(view?: SessionView): boolean {
+  return !!view && view.attachmentIntent === 'wanted' && !view.deleting && !view.target
+    && (view.attachment === 'attaching' || !!view.passiveHistory && view.attachment === 'detached');
+}
+
 /** Read-only durable history of a Session that is still opening, or whose
  * activation was refused for capacity. One observation scope is fixed to the
  * exact native Node and Conversation, so a late read can never replace a live
@@ -29,9 +37,8 @@ export class ColdReads {
     const generation = this.port.state().generation, epoch = this.port.epoch(id), revision = view.attachmentIntentRevision ?? 0;
     const current = () => {
       const latest = this.port.state().views[id];
-      const passive = !!latest?.passiveHistory && !latest.target && latest.attachment !== 'attached' && latest.attachment !== 'attaching';
       return admitted() && this.port.current(generation) && this.port.epoch(id) === epoch
-        && latest?.attachmentIntent === 'wanted' && (latest.attachment === 'attaching' || passive)
+        && isDurableColdRead(latest)
         && (latest.attachmentIntentRevision ?? 0) === revision
         && latest.nodeId === node && latest.nodeConversationId === conversation;
     };
@@ -101,7 +108,7 @@ export class ColdReads {
   }
   async loadEarlierPreview(id: string): Promise<void> {
     const view = this.port.state().views[id], preview = view?.preview, before = preview?.history.page.next_cursor;
-    if (!preview || preview.history.loading || before == null || view.attachment !== 'attaching' && !view.passiveHistory) return;
+    if (!preview || preview.history.loading || before == null || !isDurableColdRead(view)) return;
     const scope = this.scope(id); if (!scope || preview.conversationId !== scope.conversation) return;
     const epoch = preview.history.epoch, node = scope.node;
     const current = () => scope.current() && this.port.state().views[id]?.preview?.conversationId === scope.conversation

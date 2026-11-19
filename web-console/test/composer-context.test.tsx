@@ -809,30 +809,157 @@ describe('exact pending QueueDock mutations', () => {
     expect(screen.getByRole('region', { name: 'Queue' }).getAttribute('aria-busy')).toBe('true');
     expect(screen.queryByText('Updating queue…')).toBeNull();
     expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
-    await act(async () => finish({ status: 'known', outcome: { status: 'applied' ,read_cut:readCut()}, observed: false }));
+    const receipt = { ...readCut(), mutation_revision: '1' };
+    await act(async () => finish({ status: 'known', outcome: { status: 'applied', read_cut: receipt }, observed: false }));
     expect(screen.getByRole('textbox').closest('[data-inbound-sequence]')?.getAttribute('data-inbound-sequence')).toBe('7');
     expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
-    ui.rerender(<QueueDock rows={[{ ...row(), revision: '1', message: { ...row().message, content: [{ type: 'text', text: 'after' }] } }]} observation={snapshot()} submissions={[]} running edit={edit} remove={vi.fn()} />);
+    ui.rerender(<QueueDock rows={[row()]} observation={snapshot()} readCut={readCut()} submissions={[]} running edit={edit} remove={vi.fn()} />);
+    expect(screen.getByRole('textbox')).toHaveProperty('value', 'after');
+    ui.rerender(<QueueDock rows={[{ ...row(), revision: '1', message: { ...row().message, content: [{ type: 'text', text: 'after' }] } }]} observation={snapshot()} readCut={receipt} submissions={[]} running edit={edit} remove={vi.fn()} />);
+    expect(screen.queryByRole('textbox')).toBeNull();
     expect(screen.getByText('after')).toBeTruthy();
     expect(edit).toHaveBeenCalledTimes(1);
   });
-  it('preserves edits across revision conflicts and closes the editor when the row leaves the queue', async () => {
-    const edit = vi.fn(async () => ({ status: 'known' as const, outcome: { status: 'conflict' as const }, observed: true }));
-    const ui = render(<QueueDock rows={[row()]} submissions={[]} running edit={edit} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
-    fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'my draft' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await screen.findByText(/This item changed/);
-    ui.rerender(<QueueDock rows={[{ ...row(), revision: '1' }]} submissions={[]} running edit={edit} />);
-    expect(screen.getByRole('textbox')).toHaveProperty('value', 'my draft');
-    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
-    fireEvent.click(screen.getByRole('button', { name: 'Use latest version' }));
-    expect(edit).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', false);
-    ui.rerender(<QueueDock rows={[]} submissions={[]} running edit={edit} />);
-    expect(screen.queryByRole('textbox')).toBeNull();
-    expect(ui.container.querySelector('[data-queue-dock]')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Remove' })).toBeNull();
+  it('preserves edits across revision conflicts and keeps unsaved text when adoption removes the last row', async () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    let refuseClipboard = false;
+    const writeText = vi.fn(async (_text: string) => {
+      if (refuseClipboard) throw new Error('denied');
+    });
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      const edit = vi.fn(async () => ({ status: 'known' as const, outcome: { status: 'conflict' as const }, observed: true }));
+      const ui = render(<QueueDock rows={[row()]} submissions={[]} running edit={edit} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'my draft' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      await screen.findByText(/This item changed/);
+      ui.rerender(<QueueDock rows={[{ ...row(), revision: '1' }]} submissions={[]} running edit={edit} />);
+      expect(screen.getByRole('textbox')).toHaveProperty('value', 'my draft');
+      expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+      fireEvent.click(screen.getByRole('button', { name: 'Use latest version' }));
+      expect(edit).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', false);
+      // Native adoption removes the exact row as the last row: preserve the unsaved draft without auto-sending.
+      ui.rerender(<QueueDock rows={[]} submissions={[]} running edit={edit} />);
+      expect(ui.container.querySelector('[data-queue-dock]')).toBeTruthy();
+      expect(ui.container.querySelector('[data-queue-draft="detached"]')).toBeTruthy();
+      const editor = screen.getByRole('textbox', { name: 'Edit queued message' }) as HTMLTextAreaElement;
+      expect(editor.value).toBe('my draft');
+      expect(editor.disabled).toBe(false);
+      expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+      expect(screen.queryByRole('button', { name: 'Use latest version' })).toBeNull();
+      expect(screen.getByText('This message is no longer queued. Your draft is preserved.')).toBeTruthy();
+      // Neither Enter nor Escape submits or clears the preserved detached draft.
+      fireEvent.keyDown(editor, { key: 'Enter' });
+      fireEvent.keyDown(editor, { key: 'Escape' });
+      expect(edit).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('textbox', { name: 'Edit queued message' })).toHaveProperty('value', 'my draft');
+      // Copy works without clearing the draft.
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy draft' })); });
+      expect(writeText).toHaveBeenCalledExactlyOnceWith('my draft');
+      expect(screen.getByText('Draft copied.')).toBeTruthy();
+      expect(screen.getByRole('textbox', { name: 'Edit queued message' })).toHaveProperty('value', 'my draft');
+      // A refused clipboard write reports copy failure and keeps the draft intact.
+      refuseClipboard = true;
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy draft' })); });
+      expect(screen.getByText('Could not copy draft. Select the text and copy it manually.')).toBeTruthy();
+      expect(screen.getByRole('textbox', { name: 'Edit queued message' })).toHaveProperty('value', 'my draft');
+      // Only explicit discard clears the detached draft and hides the empty dock.
+      fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(ui.container.querySelector('[data-queue-dock]')).toBeNull();
+      expect(edit).toHaveBeenCalledTimes(1);
+    } finally {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+  it('preserves unsaved text when native adoption removes the edited row while other rows remain queued', async () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      const first = inbound('7', 'first queued');
+      const second = inbound('8', 'second queued');
+      const edit = vi.fn<() => Promise<InboundControlOutcome>>();
+      const remove = vi.fn<() => Promise<InboundControlOutcome>>(async () => ({ status: 'known', outcome: { status: 'applied', read_cut: readCut() }, observed: true }));
+      const ui = render(<QueueDock rows={[first, second]} submissions={[]} running edit={edit} remove={remove} />);
+      fireEvent.click(screen.getByRole('button', { expanded: false }));
+      const firstRow = ui.container.querySelector('[data-inbound-sequence="7"]') as HTMLElement;
+      fireEvent.click(within(firstRow).getByRole('button', { name: 'Edit' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'edited first' } });
+      // Native adoption removes row 7 while row 8 remains pending.
+      ui.rerender(<QueueDock rows={[second]} submissions={[]} running edit={edit} remove={remove} />);
+      expect(ui.container.querySelector('[data-inbound-sequence="7"]')).toBeNull();
+      const remainingRow = ui.container.querySelector('[data-inbound-sequence="8"]') as HTMLElement;
+      expect(within(remainingRow).getByText('second queued')).toBeTruthy();
+      expect(within(remainingRow).getByRole('button', { name: 'Edit' })).toHaveProperty('disabled', true);
+      expect(screen.getByRole('textbox', { name: 'Edit queued message' })).toHaveProperty('value', 'edited first');
+      expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+      expect(screen.getByText('This message is no longer queued. Your draft is preserved.')).toBeTruthy();
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy draft' })); });
+      expect(writeText).toHaveBeenCalledExactlyOnceWith('edited first');
+      // Mutating another remaining row never clears the preserved detached draft.
+      await act(async () => { fireEvent.click(within(remainingRow).getByRole('button', { name: 'Remove' })); });
+      expect(remove).toHaveBeenCalledExactlyOnceWith({ sequence: '8', revision: '0' });
+      expect(screen.getByRole('textbox', { name: 'Edit queued message' })).toHaveProperty('value', 'edited first');
+      // Explicit discard clears only the draft and re-enables editing remaining rows.
+      fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(within(remainingRow).getByRole('button', { name: 'Edit' })).toHaveProperty('disabled', false);
+      expect(edit).not.toHaveBeenCalled();
+    } finally {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
+  });
+  it('preserves unsaved text when a pending edit returns not_pending, including across readback, until explicit discard', async () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    try {
+      let finish!: (value: InboundControlOutcome) => void;
+      const edit = vi.fn(() => new Promise<InboundControlOutcome>(resolve => { finish = resolve; }));
+      const ui = render(<QueueDock rows={[row()]} observation={snapshot()} submissions={[]} running edit={edit} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'pending edit draft' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+      expect(edit).toHaveBeenCalledExactlyOnceWith({ sequence: '7', revision: '0' }, 'pending edit draft');
+      // Even when not_pending settles with observed: false, Save stays disabled and the draft stays preserved.
+      await act(async () => finish({ status: 'known', outcome: { status: 'not_pending' }, observed: false }));
+      expect(screen.getByRole('textbox', { name: 'Edit queued message' })).toHaveProperty('value', 'pending edit draft');
+      expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+      expect(screen.getAllByText('This message is no longer queued. Your draft is preserved.')).toHaveLength(1);
+      // Authoritative readback removing the row still preserves the unsaved draft without auto-sending.
+      ui.rerender(<QueueDock rows={[]} observation={snapshot()} submissions={[]} running edit={edit} />);
+      expect(screen.getByRole('textbox', { name: 'Edit queued message' })).toHaveProperty('value', 'pending edit draft');
+      expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+      expect(screen.getByText('This message is no longer queued. Your draft is preserved.')).toBeTruthy();
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Copy draft' })); });
+      expect(writeText).toHaveBeenCalledExactlyOnceWith('pending edit draft');
+      fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
+      expect(screen.queryByRole('textbox')).toBeNull();
+      expect(ui.container.querySelector('[data-queue-dock]')).toBeNull();
+      expect(edit).toHaveBeenCalledTimes(1);
+
+      // Also verify not_pending with observed: true keeps the draft preserved when the row leaves immediately.
+      const editObserved = vi.fn<() => Promise<InboundControlOutcome>>(async () => ({ status: 'known', outcome: { status: 'not_pending' }, observed: true }));
+      ui.rerender(<QueueDock rows={[row()]} observation={snapshot()} submissions={[]} running edit={editObserved} />);
+      fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+      fireEvent.change(screen.getByRole('textbox', { name: 'Edit queued message' }), { target: { value: 'observed not_pending draft' } });
+      await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Save' })); });
+      ui.rerender(<QueueDock rows={[]} observation={snapshot()} submissions={[]} running edit={editObserved} />);
+      expect(screen.getByRole('textbox', { name: 'Edit queued message' })).toHaveProperty('value', 'observed not_pending draft');
+      expect(screen.getByRole('button', { name: 'Save' })).toHaveProperty('disabled', true);
+      expect(screen.getByText('This message is no longer queued. Your draft is preserved.')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Discard draft' }));
+      expect(ui.container.querySelector('[data-queue-dock]')).toBeNull();
+      expect(editObserved).toHaveBeenCalledTimes(1);
+    } finally {
+      if (originalClipboard) Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      else Reflect.deleteProperty(navigator, 'clipboard');
+    }
   });
   it('keeps an uncertain remove locked without inventing or replaying a snapshot', async () => {
     const remove = vi.fn(async () => ({ status: 'uncertain' as const }));

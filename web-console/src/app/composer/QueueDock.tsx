@@ -1,5 +1,5 @@
 import { isPlainMessageKind } from '../../../../protocol/app-server/message-kind';
-import type { PendingInboundRef, UserContentBlock, UserInputBlock } from '../../../../protocol/app-server/v80';
+import type { ConversationReadCut1, PendingInboundRef, UserContentBlock, UserInputBlock } from '../../../../protocol/app-server/v80';
 import { contentPreview, inboundOrigin, type InboundRow } from '../../bindings/composer-context';
 import type { InboundControlOutcome, Submission } from '../../client/contracts';
 import type { UploadAttachmentKey, UploadedAttachmentMetadata } from '../../client/session-uploads';
@@ -12,6 +12,7 @@ import { useTranslation, useNotice } from '../../locale/react';
 // and human rows expose CAS-bound Edit / Remove / Steer controls.
 import { useContext, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { FileTypeIcon } from '../../presentation/primitives/FileTypeIcon';
+import { writeClipboard } from '../../presentation/primitives/clipboard';
 import { fileSizeText } from '../../presentation/primitives/file-size';
 import {
   IconCheckOutline14, IconChevronDownOutline14, IconChevronUpOutline14, IconCloseOutline16, IconEditOutline16, IconQueueOutline14, IconSendOutline14, IconTrashOutline16,
@@ -121,13 +122,14 @@ function QueueThumb({ artifactId, file, label }: {
     : <img className={css.thumb} src={url} alt={label} />;
 }
 
-export function QueueDock({ rows, submissions, running, disabled = false, edit, remove, steer, attachmentMetadata, observation }: {
+export function QueueDock({ rows, submissions, running, disabled = false, edit, remove, steer, attachmentMetadata, observation, readCut }: {
   rows: readonly InboundRow[];
   /** Sending or accepted submissions; settled by exact MessageId or sendingInputId. */
   submissions: readonly Submission[];
   running: boolean;
   disabled?: boolean;
   observation?: object;
+  readCut?: ConversationReadCut1;
   edit?: (expected: PendingInboundRef, text: string) => Promise<InboundControlOutcome>;
   remove?: (expected: PendingInboundRef) => Promise<InboundControlOutcome>;
   steer?: (expected: PendingInboundRef) => Promise<InboundControlOutcome>;
@@ -140,18 +142,34 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   const latestObservation = useRef(observation);
   latestObservation.current = observation;
   useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  const [draft, setDraft] = useState<{ expected: PendingInboundRef; messageId: string; text: string }>();
-  const [operation, setOperation] = useState<{ status: 'pending' | 'uncertain' | 'readback'; observation?: object; clearDraft?: boolean }>();
+  const [draft, setDraft] = useState<{ expected: PendingInboundRef; messageId: string; text: string; notPending?: boolean }>();
+  const [operation, setOperation] = useState<{ status: 'pending' | 'uncertain' | 'readback'; observation?: object; editReceipt?: ConversationReadCut1; returnSequence?: string }>();
+  const [copyStatus, setCopyStatus] = useState<'copied' | 'failed'>();
   const [notice, setNotice] = useNotice();
   const editButtons = useRef(new Map<string, HTMLButtonElement>());
   const editorNode = useRef<HTMLTextAreaElement>(null);
   const returnFocus = useRef<string | undefined>(undefined);
+  const copySequence = useRef(0);
+  const clearCopyState = () => {
+    copySequence.current += 1;
+    setCopyStatus(undefined);
+  };
   useEffect(() => {
-    if (operation && operation.status !== 'pending' && observation !== operation.observation) {
-      if (operation.clearDraft) setDraft(undefined);
-      setOperation(undefined); setNotice('');
+    if (!operation || operation.status === 'pending') return;
+    const receipt = operation.editReceipt;
+    if (receipt) {
+      if (!readCut || receipt.conversation_id !== readCut.conversation_id
+        || BigInt(readCut.mutation_revision) < BigInt(receipt.mutation_revision)) return;
+      if (operation.returnSequence) returnFocus.current = operation.returnSequence;
+      copySequence.current += 1;
+      setCopyStatus(undefined);
+      setDraft(undefined);
+    } else if (observation === operation.observation) {
+      return;
     }
-  }, [observation, operation, setNotice]);
+    setOperation(undefined);
+    setNotice('');
+  }, [observation, operation, readCut, setNotice]);
   useEffect(() => {
     if (draft || !returnFocus.current) return;
     const sequence = returnFocus.current;
@@ -159,7 +177,9 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
     editButtons.current.get(sequence)?.focus({ preventScroll: true });
   }, [draft]);
   const currentDraft = draft && rows.find(row => row.sequence === draft.expected.sequence && row.message.id === draft.messageId);
-  const staleDraft = !!draft && (!currentDraft || currentDraft.deferred || currentDraft.revision !== draft.expected.revision);
+  const detachedDraft = !!draft && (!currentDraft || !!draft.notPending);
+  const staleDraft = !!draft && (detachedDraft || !currentDraft || !!currentDraft.deferred || currentDraft.revision !== draft.expected.revision);
+  const pendingOperation = operation?.status === 'pending';
   const locked = disabled || !!operation;
   const expected = (row: InboundRow): PendingInboundRef => ({ sequence: row.sequence, revision: row.revision });
   const failureNotice: Record<OperationKind, string> = {
@@ -170,6 +190,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   const apply = async (work: () => Promise<InboundControlOutcome>, kind: OperationKind) => {
     if (locked) return;
     const editing = kind === 'edit';
+    const sequence = draft?.expected.sequence;
     setOperation({ status: 'pending', observation }); setNotice('');
     let result: InboundControlOutcome;
     try {
@@ -180,23 +201,38 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
       setNotice(failureNotice[kind]);
       return;
     }
-    if (!alive.current || result.status === 'obsolete') return;
+    if (!alive.current) return;
+    if (result.status === 'obsolete') {
+      setOperation(undefined);
+      return;
+    }
     if (result.status === 'uncertain') {
       setOperation({ status: 'uncertain', observation: latestObservation.current });
       setNotice(message('agent:copy.outcome-uncertain-do-not-resend-reconnect-to-read-the-authoritative-queue'));
       return;
     }
-    setOperation(result.observed ? undefined : { status: 'readback', observation: latestObservation.current, clearDraft: editing && result.status === 'known' && result.outcome.status === 'applied' });
+    const editReceipt = editing && result.status === 'known' && result.outcome.status === 'applied' ? result.outcome.read_cut : undefined;
+    setOperation(result.observed ? undefined : {
+      status: 'readback',
+      observation: latestObservation.current,
+      editReceipt,
+      returnSequence: editReceipt ? sequence : undefined,
+    });
     if (result.status === 'rejected') { setNotice(result.reason); return; }
     if (result.outcome.status === 'applied') {
       if (editing && result.observed) {
-        if (draft) returnFocus.current = draft.expected.sequence;
+        if (sequence) returnFocus.current = sequence;
+        clearCopyState();
         setDraft(undefined);
       }
       setNotice(result.observed ? '' : message('agent:copy.committed-awaiting-authoritative-readback'));
     } else {
+      if (editing && result.outcome.status === 'not_pending') {
+        setDraft(current => current ? { ...current, notPending: true } : current);
+        return;
+      }
       setNotice(result.outcome.status === 'conflict' ? message('agent:copy.this-item-changed-your-draft-is-preserved-compare-it-with-the-current-row')
-        : result.outcome.status === 'not_pending' ? (editing ? message('agent:copy.this-occurrence-is-no-longer-pending-your-draft-is-preserved') : failureNotice[kind])
+        : result.outcome.status === 'not_pending' ? failureNotice[kind]
         : message('agent:copy.this-item-cannot-be-edited-with-the-text-editor'));
     }
   };
@@ -213,8 +249,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
   const count = rows.length + echoes.length;
   useEffect(() => {
     if (count === 0) setCollapsed(true);
-    if (draft && !currentDraft) { setDraft(undefined); setNotice(''); }
-  }, [count, draft, currentDraft, setNotice]);
+  }, [count]);
   useLayoutEffect(() => {
     const node = editorNode.current;
     if (!node) return;
@@ -227,49 +262,82 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
     const observer = new ResizeObserver(fit);
     observer.observe(node);
     return () => observer.disconnect();
-  }, [draft?.text]);
-  if (count === 0) return null;
+  }, [draft?.text, detachedDraft, staleDraft]);
+  if (count === 0 && !draft) return null;
   const listed = count === 1 || !collapsed || !!draft || !!operation;
   const cancelEdit = () => {
     if (draft) returnFocus.current = draft.expected.sequence;
+    clearCopyState();
     setDraft(undefined);
     setNotice('');
   };
-  const editor = draft && <div className={css.editPanel}>
+  const discardDraft = () => {
+    if (pendingOperation) return;
+    clearCopyState();
+    setDraft(undefined);
+    if (!operation) setNotice('');
+  };
+  const copyDraft = () => {
+    if (!draft?.text) return;
+    const token = ++copySequence.current;
+    setCopyStatus(undefined);
+    void writeClipboard(draft.text).then(ok => {
+      if (alive.current && copySequence.current === token) setCopyStatus(ok ? 'copied' : 'failed');
+    });
+  };
+  const saveDisabled = !draft || locked || staleDraft || !draft.text.trim() || !edit;
+  const discardDisabled = pendingOperation;
+  const editor = draft ? <div className={css.editPanel}>
     <div className={css.editorField}>
-      <textarea ref={editorNode} className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={locked}
-        onChange={event => setDraft({ ...draft, text: event.currentTarget.value })}
+      <textarea ref={editorNode} className={css.editor} autoFocus rows={1} aria-label={tx('agent:queue-dock.edit-queued-message')} value={draft.text} disabled={pendingOperation || (!detachedDraft && locked)} readOnly={!!operation?.editReceipt}
+        onChange={event => {
+          const text = event.currentTarget.value;
+          clearCopyState();
+          setDraft(current => current ? { ...current, text } : current);
+        }}
         onKeyDown={event => {
-          if (event.key === 'Escape' && !locked) {
+          if (event.key === 'Escape' && !detachedDraft && !locked) {
             event.preventDefault();
             cancelEdit();
           }
-          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && !locked && !staleDraft && draft.text.trim() && edit) {
+          if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && !saveDisabled && edit) {
             event.preventDefault();
             void apply(() => edit(draft.expected, draft.text), 'edit');
           }
         }} />
     </div>
     <div className={css.actions}>
-      <Tooltip label={tx('agent:queue-dock.save')} side="bottom" delayMs={500} disabled={locked || staleDraft || !draft.text.trim() || !edit}>
-        <button aria-label={tx('agent:queue-dock.save')} type="button" className={css.action} disabled={locked || staleDraft || !draft.text.trim() || !edit} onClick={() => { if (edit) void apply(() => edit(draft.expected, draft.text), 'edit'); }}><IconCheckOutline14 size={14} /></button>
+      <Tooltip label={tx('agent:queue-dock.save')} side="bottom" delayMs={500} disabled={saveDisabled}>
+        <button aria-label={tx('agent:queue-dock.save')} type="button" className={css.action} disabled={saveDisabled} onClick={() => { if (edit && !saveDisabled) void apply(() => edit(draft.expected, draft.text), 'edit'); }}><IconCheckOutline14 size={14} /></button>
       </Tooltip>
-      <Tooltip label={tx('agent:queue-dock.cancel-edit')} side="bottom" delayMs={500} disabled={locked}>
-        <button aria-label={tx('agent:queue-dock.cancel-edit')} type="button" className={css.action} disabled={locked} onClick={cancelEdit}><IconCloseOutline16 size={14} /></button>
-      </Tooltip>
-      {staleDraft && currentDraft && <button type="button" className={css.action} disabled={locked} onClick={() => setDraft({ ...draft, expected: expected(currentDraft), messageId: currentDraft.message.id })}>{tx('agent:queue-dock.use-latest-version')}</button>}
+      {staleDraft ? <button type="button" className={css.action} disabled={!draft.text} onClick={copyDraft}>{tx('agent:queue-dock.copy-draft')}</button> : null}
+      {detachedDraft ? (
+        <button type="button" className={css.action} disabled={discardDisabled} onClick={discardDraft}>{tx('agent:queue-dock.discard-draft')}</button>
+      ) : (
+        <Tooltip label={tx('agent:queue-dock.cancel-edit')} side="bottom" delayMs={500} disabled={locked}>
+          <button aria-label={tx('agent:queue-dock.cancel-edit')} type="button" className={css.action} disabled={locked} onClick={cancelEdit}><IconCloseOutline16 size={14} /></button>
+        </Tooltip>
+      )}
+      {!detachedDraft && staleDraft && currentDraft && !currentDraft.deferred ? (
+        <button type="button" className={css.action} disabled={locked} onClick={() => setDraft(current => current ? { ...current, expected: expected(currentDraft), messageId: currentDraft.message.id, notPending: false } : current)}>{tx('agent:queue-dock.use-latest-version')}</button>
+      ) : null}
     </div>
-    {staleDraft && <p role="status">{currentDraft ? tx('agent:queue-dock.this-queued-message-changed-review-the-latest-version-before-sav') : tx('agent:queue-dock.this-message-is-no-longer-queued')}</p>}
-  </div>;
-  return <section className={css.dock} aria-label={tx('agent:queue-dock.queue')} aria-busy={operation?.status === 'pending'} data-queue-dock="">
+    {staleDraft ? (
+      <p className={css.draftStatus} role="status">{detachedDraft ? tx('agent:queue-dock.this-message-is-no-longer-queued') : tx('agent:queue-dock.this-queued-message-changed-review-the-latest-version-before-sav')}</p>
+    ) : null}
+    {copyStatus ? (
+      <p className={css.draftStatus} role="status">{tx(copyStatus === 'copied' ? 'agent:queue-dock.draft-copied' : 'agent:queue-dock.copy-draft-failed')}</p>
+    ) : null}
+  </div> : null;
+  return <section className={css.dock} aria-label={tx('agent:queue-dock.queue')} aria-busy={pendingOperation} data-queue-dock="">
     <div className={css.panel}>
-      {count > 1 && <button type="button" className={css.header} aria-expanded={listed} disabled={!!draft || !!operation} aria-controls={listId} onClick={() => setCollapsed(value => !value)}>
+      {count > 1 ? <button type="button" className={css.header} aria-expanded={listed} disabled={!!draft || !!operation} aria-controls={listId} onClick={() => setCollapsed(value => !value)}>
         <QueueGlyph /><span className={css.count}>{count} {tx('agent:queue-dock.queued')}</span>
         {/* A collapsed header keeps sending/accepted provisional submissions visible. */}
-        {!listed && echoes.length > 0 && <span className={css.status} role="status">{tx('agent:submission.sending')}</span>}
+        {!listed && echoes.length > 0 ? <span className={css.status} role="status">{tx('agent:submission.sending')}</span> : null}
         <span className={css.chevron} aria-hidden>{listed ? <IconChevronDownOutline14 /> : <IconChevronUpOutline14 />}</span>
-      </button>}
-      <ul id={listId} className={css.list} hidden={!listed}>
+      </button> : null}
+      {count > 0 ? <ul id={listId} className={css.list} hidden={!listed}>
         {listed && rows.map(row => {
           const origin = inboundOrigin(tx, row.message);
           const attachments = queueAttachments(row.message.content, attachmentMetadata);
@@ -280,23 +348,25 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
             ? tx('common:activity.loading')
             : editableText === undefined
               ? tx('agent:queue-dock.text-only-editing')
-              : undefined;
+              : draft
+                ? tx('agent:queue-dock.finish-or-discard-draft')
+                : undefined;
           const editDisabled = locked || !edit || !!editBlockedReason;
           const removeDisabled = locked || !remove;
           const steerDisabled = locked || !steer || !running;
           return <li key={`inbound:${row.sequence}`} className={css.row} data-inbound-sequence={row.sequence} data-message-id={row.message.id}>
-            {count === 1 && <QueueGlyph />}
+            {count === 1 ? <QueueGlyph /> : null}
             {currentDraft === row && !staleDraft ? editor : <>
-              {attachments.length > 0 && (
+              {attachments.length > 0 ? (
                 <span className={css.attachments}>
                   {attachments.map((item, index) => item.type === 'image'
                     ? <QueueThumb key={`${item.artifactId ?? item.file?.name ?? ''}:${index}`} artifactId={item.artifactId} file={item.file} label={item.alt || tx('agent:queue-dock.image')} />
                     : <QueueFile key={`${item.name}:${index}`} name={item.name} bytes={item.bytes} label={tx('agent:queue-dock.file', { name: item.name })} />)}
                 </span>
-              )}
+              ) : null}
               <span className={css.preview}>{previewText}</span>
-              {origin && <span className={css.status}>{origin}</span>}
-              {row.message.source === 'human' && isPlainMessageKind(row.message.kind) && <div className={css.actions}>
+              {origin ? <span className={css.status}>{origin}</span> : null}
+              {row.message.source === 'human' && isPlainMessageKind(row.message.kind) ? <div className={css.actions}>
                 <Tooltip label={tx('agent:queue-dock.edit')} side="bottom" delayMs={500} disabled={editDisabled}>
                   <button
                     ref={element => {
@@ -309,6 +379,7 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
                     disabled={editDisabled}
                     title={editBlockedReason}
                     onClick={() => {
+                      clearCopyState();
                       setDraft({ expected: expected(row), messageId: row.message.id, text: editableText ?? '' });
                       setNotice('');
                     }}
@@ -320,9 +391,9 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
                 <Tooltip label={tx('agent:queue-dock.steer')} side="bottom" delayMs={500} disabled={steerDisabled}>
                   <button aria-label={tx('agent:queue-dock.steer')} type="button" className={css.action} disabled={steerDisabled} title={running ? undefined : tx('agent:queue-dock.steer-unavailable')} onClick={() => { if (steer) void apply(() => steer(expected(row)), 'steer'); }}><IconSendOutline14 size={14} /></button>
                 </Tooltip>
-              </div>}
+              </div> : null}
             </>}
-            {currentDraft === row && staleDraft && editor}
+            {currentDraft === row && staleDraft && !detachedDraft ? editor : null}
           </li>;
         })}
         {listed && echoes.map(submission => {
@@ -336,14 +407,14 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
             data-sending-input-id={submission.sendingInputId}
             data-accepted-message-id={isSending ? undefined : submission.messageId}
           >
-            {count === 1 && <QueueGlyph />}
-            {attachments.length > 0 && (
+            {count === 1 ? <QueueGlyph /> : null}
+            {attachments.length > 0 ? (
               <span className={css.attachments}>
                 {attachments.map((item, index) => item.type === 'image'
                   ? <QueueThumb key={`${item.artifactId ?? item.file?.name ?? ''}:${index}`} artifactId={item.artifactId} file={item.file} label={item.alt || tx('agent:queue-dock.image')} />
                   : <QueueFile key={`${item.name}:${index}`} name={item.name} bytes={item.bytes} label={tx('agent:queue-dock.file', { name: item.name })} />)}
               </span>
-            )}
+            ) : null}
             <span className={css.preview}>{previewText}</span>
             <span className={css.status} role="status">{tx('agent:submission.sending')}</span>
             <div className={css.actions}>
@@ -353,8 +424,12 @@ export function QueueDock({ rows, submissions, running, disabled = false, edit, 
             </div>
           </li>;
         })}
-      </ul>
-      {notice && <p className={css.notice} role="status">{notice}</p>}
+      </ul> : null}
+      {detachedDraft ? <div className={count > 0 ? `${css.detachedDraft} ${css.detachedDraftSeparated}` : css.detachedDraft} data-queue-draft="detached">
+        {count === 0 ? <QueueGlyph /> : null}
+        {editor}
+      </div> : null}
+      {notice && (!detachedDraft || operation) ? <p className={css.notice} role="status">{notice}</p> : null}
     </div>
   </section>;
 }

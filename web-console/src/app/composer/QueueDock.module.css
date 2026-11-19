@@ -178,7 +178,11 @@
 .action:disabled { opacity: .45; cursor: default; }
 .action:focus-visible { outline: var(--dsw-focus-ring-width) solid var(--dsw-focus-ring-color, var(--dsw-alias-state-business-primary)); outline-offset: -2px; }
 .editPanel, .notice { padding: 8px 12px; font-size: 13px; }
-.row .editPanel { display: flex; align-items: center; flex: 1; gap: 8px; flex-wrap: wrap; padding: 0; }
+.row .editPanel, .detachedDraft .editPanel { display: flex; align-items: center; flex: 1; gap: 8px; flex-wrap: wrap; min-width: 0; padding: 0; }
+.detachedDraft { box-sizing: border-box; display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 5px 6px 12px; }
+.detachedDraftSeparated { box-shadow: inset 0 1px 0 var(--dsw-alias-border-l1); }
+.detachedDraft .editPanel .actions { flex-wrap: wrap; }
+.draftStatus { flex: 1 0 100%; margin: 0; color: var(--dsw-alias-label-tertiary); font: var(--dsw-font-xs-13); }
 .editorField { flex: 1; min-width: 0; }
 /* InlineEditor metrics: grow with the draft up to six lines, then scroll. */
 .editor { box-sizing: border-box; display: block; width: 100%; min-width: 0; min-height: 28px; max-height: 127px; margin: 0; padding: 3px 8px; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-sm); outline: none; background: var(--dsw-alias-bg-base); color: var(--dsw-alias-label-primary); font: var(--dsw-font-xs-13); font-family: Inter, var(--dsw-font-family); overflow-y: auto; resize: none; }

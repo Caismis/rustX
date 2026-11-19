@@ -4,6 +4,7 @@ import { contentBindings } from '../../../../protocol/app-server/projection';
 import { useSubagents } from './subagent-context';
 import { ToolInspectionContext, useToolTraceNavigation } from './tool-inspection';
 import type { AppServerClient } from '../../client/app-server';
+import { isDurableColdRead } from '../../client/cold-reads';
 import type { SessionView } from '../../client/contracts';
 import { shallowEqual, useClientSelector } from '../../client/selectors';
 import { useModelRetryFeedback } from './ModelRetry';
@@ -51,12 +52,15 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const submission = useSyncExternalStore(firstSubmissions(client).subscribe, () => sessionId ? firstSubmissions(client).session(sessionId) : undefined);
   const tracePreview = useClientSelector(client, state => {
     const view = sessionId ? state.views[sessionId] : undefined;
-    return mode === 'trajectory' && view?.attachment === 'attaching' ? view.tracePreview : undefined;
+    return mode === 'trajectory' && isDurableColdRead(view) ? view?.tracePreview : undefined;
   });
   const readingOwner = useClientSelector(client, state => {
     const native = sessionId ? state.views[sessionId] : undefined;
+    const coldReadable = isDurableColdRead(native);
     return { endpoint: state.endpoint, authority: state.authorityId, authorityRevision: state.authorityRevision, node: native?.nodeId, conversation: native?.target?.conversation_id ?? native?.nodeConversationId,
-      loading: state.connection === 'connected' && !!native && !native.error && !native.deleting && (native.attachment === 'attaching' || native.attachment === 'resynchronizing' || native.observationState === 'checkpointLoading' || !!native.passiveHistory && !native.target && !native.preview),
+      connected: state.connection === 'connected',
+      coldReadable,
+      loading: state.connection === 'connected' && !!native && !native.error && !native.deleting && (native.attachment === 'attaching' || native.attachment === 'resynchronizing' || native.observationState === 'checkpointLoading' || !!native.passiveHistory && !native.target && (mode === 'trajectory' ? !native.tracePreview : !native.preview)),
       wanted: !!native && native.attachmentIntent === 'wanted' && !native.deletionCommitted,
       checkpointPending: !!native && !native.snapshot && native.attachmentIntent === 'wanted' && !native.deletionCommitted };
   }, shallowEqual);
@@ -67,8 +71,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     if (!view) return undefined;
     // A loading preview of the same Conversation cannot replace rows the
     // reader already has. A genuinely different Conversation still changes scope.
-    const passiveHistory = !!view.passiveHistory && !view.target;
-    const preview = (view.attachment === 'attaching' || passiveHistory) && view.preview && (passiveHistory || !view.snapshot || view.preview.conversationId !== view.snapshot.conversation_id) ? view.preview : undefined;
+    const cold = isDurableColdRead(view);
+    const passiveHistory = cold && !!view.passiveHistory;
+    const preview = cold && view.preview && (passiveHistory || !view.snapshot || view.preview.conversationId !== view.snapshot.conversation_id) ? view.preview : undefined;
     const snapshot = preview ? { messages: [], attempt: null, statuses: [], conversation_id: preview.conversationId, transcript: preview.history.page } : view.snapshot;
     if (!snapshot) return undefined;
     return { retrying, hasBranches: !!view.summary?.has_branches, publicationHeads: preview || view.history?.window ? undefined : view.publicationHeads, nodeId:view.nodeId,generation:state.generation,content: preview ? preview.history.page.content ?? [] : transcriptContent(view.history,contentBindings(view.snapshot!)), hasCheckpoint: !!view.checkpoint, configurationObservation:state.configurationObservation?.[view.id], id: view.id, target: view.target, observation: view.attachmentObservation, readable: !disabled && client.isAttachmentObservationCurrent(view.id, view.attachmentObservation), inbound: 'inbound' in snapshot ? snapshot.inbound : undefined, messages: snapshot.messages, message_descriptors: 'message_descriptors' in snapshot ? snapshot.message_descriptors : [], publication_settlements: 'publication_settlements' in snapshot ? snapshot.publication_settlements : undefined, attempt: snapshot.attempt, submissions: view.submissions, sendingSubmissions: view.sendingSubmissions,
@@ -122,7 +127,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
   const ownsHistory=()=>{
     if(!view?.readingPreview||!view.history?.page.source_cut||currentContentView.current!==contentView||mode!=='chat'||scope?.selected)return false;
     const state=client.getSnapshot(),current=state.views[view.id];
-    return state.generation===view.generation&&current?.nodeId===view.nodeId&&(current.attachment==='attaching'||!!current.passiveHistory&&!current.target)
+    return state.generation===view.generation&&current?.nodeId===view.nodeId&&isDurableColdRead(current)
       &&current.preview?.history.page.source_cut===view.history.page.source_cut;
   };
   const inspect = useToolTraceNavigation(locator => view ? client.locateToolTrace(view.id, locator) : Promise.resolve(false), onMode, !!view && !readingPending && !view.readingPreview && !scope?.selected, `root:${sessionId}:${view?.target?.attachment_id}`);
@@ -138,6 +143,13 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     void (mode === 'chat' ? client.loadInitialHistory(view.id) : client.loadInitialTrace(view.id)).catch(() => {});
   }, [client, mode, view?.id, view?.target?.attachment_id, view?.readable, view?.retrying, view?.readingPreview, scope?.selected,
     initialTrace?.epoch, initialTrace?.page.next_cursor, initialTrace?.loading, initialTrace?.error]);
+  useEffect(() => {
+    if (mode !== 'trajectory' || !sessionId || disabled || scope?.selected || view?.retrying
+      || !readingOwner.coldReadable || !readingOwner.connected) return;
+    void client.loadInitialTrace(sessionId).catch(() => {});
+  }, [client, sessionId, mode, disabled, scope?.selected, view?.retrying,
+    readingOwner.coldReadable, readingOwner.connected, readingOwner.node, readingOwner.conversation,
+    tracePreview?.conversationId, tracePreview?.cache.epoch, tracePreview?.cache.page.next_cursor, tracePreview?.cache.loading, tracePreview?.cache.error]);
   const liveReadable = view ? (view.readingPreview || !view.target ? true : view.readable) : !!tracePreview;
   const wrapCanvas = (contentNode: ReactNode) => (
     <ConversationRunCanvasHost
@@ -160,6 +172,9 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     </ConversationRunCanvasHost>
   );
   if (sessionId && tracePreview) return wrapCanvas(<Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>);
+  if (sessionId && mode === 'trajectory' && readingOwner.coldReadable && !view?.trace) return <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}>
+    {readingOwner.loading && !waiting && <div className={pendingCss.root}><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
+  </ChatViewport>;
   if (!view) return sessionId ? <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}>
     {readingOwner.loading && !waiting && <div className={pendingCss.root}><ConversationSkeleton label={tx('common:activity.loading')}/></div>}
     <PendingMessage client={client} sessionId={sessionId}/>
@@ -201,7 +216,8 @@ export function ConversationDocks({ client, sessionId, disabled }: { client: App
   };
   const view = useClientSelector(client, state => state.views[sessionId], (a, b) => a === b || !!a && !!b &&
     a.target === b.target && a.attachmentObservation === b.attachmentObservation && a.submissions === b.submissions && a.sendingSubmissions === b.sendingSubmissions && a.snapshot?.goal === b.snapshot?.goal && a.snapshot?.todos === b.snapshot?.todos &&
-    a.snapshot?.inbound === b.snapshot?.inbound && activeAttempt(a.snapshot) === activeAttempt(b.snapshot) && todoEvidence(a) === todoEvidence(b));
+    a.snapshot?.inbound === b.snapshot?.inbound && a.checkpoint?.read_cut.source_cut?.read.mutation_revision === b.checkpoint?.read_cut.source_cut?.read.mutation_revision &&
+    activeAttempt(a.snapshot) === activeAttempt(b.snapshot) && todoEvidence(a) === todoEvidence(b));
   const content = useComposerContent(client, view);
   if (!view) return null;
   const queuedSubmissions = [
@@ -212,7 +228,7 @@ export function ConversationDocks({ client, sessionId, disabled }: { client: App
     {content.error && <p role="alert">{content.error}</p>}
     <TodoDock state={todoDock(content.snapshot, content.todoLoaded ? undefined : view.checkpoint?.collections.find(value => value.domain === 'todos.tasks'))}/>
     <GoalDock state={goalDock(content.snapshot)} observation={view.snapshot?.goal ?? undefined} disabled={disabled} mutate={(expected, mutation) => client.controlGoal(view.id, expected, mutation)} loadObjective={expected => client.goalObjective(view.id, expected)}/>
-    <QueueDock disabled={disabled} observation={view.snapshot?.inbound} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} steer={expected => client.steerInbound(view.id, expected)} attachmentMetadata={key => client.uploadAttachmentMetadata(view.id, key)} rows={queueRows(view.snapshot)} submissions={queuedSubmissions} running={activeAttempt(view.snapshot)}/>
+    <QueueDock disabled={disabled} observation={view.snapshot?.inbound} readCut={view.checkpoint?.read_cut.source_cut?.read} edit={(expected, text) => client.editInbound(view.id, expected, text)} remove={expected => client.removeInbound(view.id, expected)} steer={expected => client.steerInbound(view.id, expected)} attachmentMetadata={key => client.uploadAttachmentMetadata(view.id, key)} rows={queueRows(view.snapshot)} submissions={queuedSubmissions} running={activeAttempt(view.snapshot)}/>
   </>;
 }
 
