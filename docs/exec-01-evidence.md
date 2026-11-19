@@ -6,7 +6,9 @@ Initial audit: original implementation base `f0cd4f59d7dbdd2730cf262d0afa964af79
 
 ## Phase-one gates
 
-`bootstrap` = `rustx-execution-client --test bootstrap`, selected by rust-fast, rust-boundaries, rust-platform-core and rust-platform-boundaries. `member unit` = package-qualified libtest, selected by the Linux FAST unit step and FULL contracts. Listed lane ownership does not certify a green run on a new revision.
+`bootstrap` = `rustx-execution-client --test bootstrap`, selected by rust-fast and rust-boundaries. `member unit` = package-qualified libtest, selected by the Linux FAST unit step and FULL contracts. Listed lane ownership does not certify a green run on a new revision.
+
+The merge of `origin/main` (50d0e5728) removed the macOS CI lanes (`rust-platform-core`, `rust-platform-boundaries`) wholesale: upstream retired its macOS runners, so this branch's Execution-Client coverage there went with them rather than being ported. CI proof is therefore Linux-only today; native macOS execution of the `bootstrap`/`bins` suites is pending an independent native run and is not claimed here.
 
 | ID | Required PR1 proof | Current implementer / test | Lane and evidence at initial audit |
 | --- | --- | --- | --- |

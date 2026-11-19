@@ -51,6 +51,7 @@ pub(super) fn client_error(error: RuntimeClientError) -> RpcError {
         RuntimeClientError::ContentSourceUnavailable => ErrorData::ContentSourceUnavailable,
         RuntimeClientError::InvalidRange => ErrorData::InvalidRange,
         RuntimeClientError::ReadCutExpired => ErrorData::ReadCutExpired,
+        RuntimeClientError::SteerUnavailable => ErrorData::SteerUnavailable,
         RuntimeClientError::InvalidRequest { .. }
         | RuntimeClientError::InteractionInvalidResponse { .. } => ErrorData::InvalidParams,
         _ => ErrorData::InvalidState,
@@ -179,6 +180,7 @@ pub(super) fn domain(data: ErrorData) -> RpcError {
         ErrorData::ModelUnavailable { .. } => {
             "The Session's configured Model is not in its published catalog; select one it provides"
         }
+        ErrorData::SteerUnavailable => "The expected Turn is no longer active or steerable",
         _ => "Operation rejected",
     };
     rpc_error(-32000, message, Some(data))
@@ -295,5 +297,12 @@ mod tests {
         );
         assert!(error.message.contains("explicit repair"));
         assert!(!error.message.contains("retry"));
+    }
+
+    #[test]
+    fn steer_unavailable_maps_to_typed_wire_refusal() {
+        let error =
+            super::client_error(crate::runtime_client::types::RuntimeClientError::SteerUnavailable);
+        assert_eq!(error.data, Some(super::ErrorData::SteerUnavailable));
     }
 }

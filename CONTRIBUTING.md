@@ -165,8 +165,8 @@ high risk (anything outside the low-risk allowlist of documentation, Web
 presentation, translations, stylesheets and added or edited leaf tests —
 removing or renaming a test is high risk; see "Verification profiles" in
 tests/README.md) and the candidate is final, add the
-`full-verification` label: CI then runs FULL — every lane, macOS full and the
-complete browser suite in two shards — on that exact head, and on every
+`full-verification` label: CI then runs FULL — every lane and the
+complete browser suite — on that exact head, and on every
 later push while the label stays. Remove the label to go back to FAST while
 you keep developing. `Merge verification` is required on `main` by a
 repository ruleset and stays red for a high-risk change until FULL passes on

@@ -80,7 +80,7 @@ impl ClientInner {
             .as_ref()
             .expect("writable runtime")
             .start_or_steer(content, expected, input_id)
-            .map_err(input_admission_error)
+            .map_err(|error| admit_turn_error(error, expected.is_some()))
     }
 
     pub(crate) fn lookup_input(
@@ -342,6 +342,26 @@ impl ClientInner {
             .mailbox()
             .remove_pending(expected)
             .unwrap_or(crate::durable::PendingMutationOutcome::DurabilityUncertain))
+    }
+
+    pub(crate) fn steer_queued(
+        &self,
+        expected: &crate::runtime::identity::AttemptId,
+        scope: &crate::durable::PendingSteerScope,
+    ) -> Result<crate::durable::PendingMutationOutcome, RuntimeClientError> {
+        self.ensure_writable_runtime()?;
+        match self
+            .runtime
+            .as_ref()
+            .expect("writable runtime")
+            .steer_queued(expected, scope)
+        {
+            Ok(outcome) => Ok(outcome),
+            Err(InboundAdmissionError::Mailbox(_)) => {
+                Ok(crate::durable::PendingMutationOutcome::DurabilityUncertain)
+            }
+            Err(error) => Err(input_admission_error(error)),
+        }
     }
 
     pub(crate) fn submit_session_inbound(
@@ -714,6 +734,27 @@ impl ClientInner {
         Ok(background_view(&snapshot))
     }
 
+    pub(crate) fn job_output(
+        &self,
+        id: &ToolExecutionId,
+    ) -> Result<(String, bool), RuntimeClientError> {
+        let registry = self
+            .runtime
+            .as_ref()
+            .map(crate::runtime::conversation_runtime::ConversationRuntime::background_registry)
+            .filter(|registry| registry.contains_execution(id))
+            .ok_or_else(|| RuntimeClientError::UnknownBackgroundExecution {
+                execution_id: id.clone(),
+            })?;
+        registry
+            .resources()
+            .tool_output
+            .live_tail(id)
+            .map_err(|error| RuntimeClientError::ObservationUnavailable {
+                message: error.to_string(),
+            })
+    }
+
     pub(crate) fn job_status_page(
         &self,
         id: &ToolExecutionId,
@@ -834,6 +875,18 @@ impl ClientInner {
     pub(crate) fn model_catalog(&self) -> Result<RuntimeClientResult, RuntimeClientError> {
         self.domain_page("model_catalog.models", 0, 32)
     }
+}
+
+fn admit_turn_error(error: InboundAdmissionError, steering: bool) -> RuntimeClientError {
+    if steering
+        && matches!(
+            error,
+            InboundAdmissionError::StaleAttempt | InboundAdmissionError::NotSteerable
+        )
+    {
+        return RuntimeClientError::SteerUnavailable;
+    }
+    input_admission_error(error)
 }
 
 fn input_admission_error(error: InboundAdmissionError) -> RuntimeClientError {

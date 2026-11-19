@@ -556,6 +556,16 @@ managed artifact service, never browser access to a local path.
 
 ## Conversation reading
 
+The selected conversation stays open. The Web console also keeps ten recently
+visited idle conversations, favoring pinned conversations. Running conversations,
+pending questions and unread completions have separate retention. Opening another
+conversation can release an older view. Its saved history stays available in the
+sidebar. Reloading the page reconnects the selected conversation.
+
+An operator can set a native runtime limit. When runtime or attachment slots are
+full, the selected conversation opens with read-only history. **Resume chat**
+requests live controls again after capacity becomes available.
+
 Chat has a bounded native Turn rail. Initial reading and older-history actions
 assemble a Harness-style window of at least 50 conversational messages and two
 Turns, or at most 500 messages, from native pages. Loaded pages accumulate without

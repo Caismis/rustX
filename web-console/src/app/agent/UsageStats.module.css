@@ -19,6 +19,11 @@
   font-size: 12px;
   line-height: 20px;
 }
+
+.dock:empty {
+  display: none;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

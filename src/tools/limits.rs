@@ -87,6 +87,29 @@ pub const BASH_TERM_GRACE: Duration = Duration::from_secs(2);
 /// same duration separately bounds capture only after process terminality.
 pub const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
 
+/// Default foreground wait before a native Bash command moves to a background
+/// job instead of being killed. Matches the reference executor default
+/// (`timeoutMs` of `120_000`).
+pub const DEFAULT_BASH_FOREGROUND_BUDGET: Duration = Duration::from_secs(120);
+
+/// Upper bound of an explicit native Bash foreground budget. Matches the
+/// reference executor’s `maxTimeoutMs` default (`600_000`).
+pub const MAX_BASH_FOREGROUND_BUDGET: Duration = Duration::from_secs(600);
+
+/// The foreground wait for one native Bash call.
+///
+/// An omitted timeout uses [`DEFAULT_BASH_FOREGROUND_BUDGET`]. An explicit
+/// timeout overrides that budget and is capped at
+/// [`MAX_BASH_FOREGROUND_BUDGET`]. The wait is not a kill: when it expires
+/// the command continues as a conversation-owned background job.
+#[must_use]
+pub fn bash_foreground_budget(explicit_seconds: Option<u64>) -> Duration {
+    match explicit_seconds {
+        Some(seconds) => Duration::from_secs(seconds).min(MAX_BASH_FOREGROUND_BUDGET),
+        None => DEFAULT_BASH_FOREGROUND_BUDGET,
+    }
+}
+
 /// Produces a deterministic bounded preview of `data`.
 ///
 /// When the data exceeds `limit` bytes, a head/tail scheme is used: the
@@ -294,6 +317,21 @@ mod tests {
         });
         assert_eq!(bounded.completed, None);
         assert_eq!(bounded.total, Some(2.5));
+    }
+
+    #[test]
+    fn bash_foreground_budget_defaults_to_120_seconds_and_caps_an_explicit_override() {
+        assert_eq!(
+            super::bash_foreground_budget(None),
+            super::DEFAULT_BASH_FOREGROUND_BUDGET
+        );
+        assert_eq!(super::bash_foreground_budget(None).as_secs(), 120);
+        assert_eq!(super::bash_foreground_budget(Some(30)).as_secs(), 30);
+        assert_eq!(
+            super::bash_foreground_budget(Some(10_000)),
+            super::MAX_BASH_FOREGROUND_BUDGET
+        );
+        assert_eq!(super::MAX_BASH_FOREGROUND_BUDGET.as_secs(), 600);
     }
 
     /// Fractional finite progress survives the canonical boundary.

@@ -4,7 +4,8 @@ use std::path::Path;
 
 use super::bash::{BashReadonlyClass, analyze_bash_readonly};
 use super::matrix::BuiltinToolKind;
-use crate::tools::types::ToolOrigin;
+use crate::runtime::identity::ToolId;
+use crate::tools::types::{ToolDefinition, ToolOrigin};
 
 /// Extra facts needed to classify Write/Edit and Bash invocations.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,12 +21,20 @@ pub struct ClassificationHints<'a> {
 /// Classifies one tool into the built-in permission matrix family.
 #[must_use]
 pub fn classify_tool_kind(
+    tool_id: &ToolId,
     tool_name: &str,
     origin: &ToolOrigin,
     hints: &ClassificationHints<'_>,
 ) -> (BuiltinToolKind, Option<BashReadonlyClass>) {
     match origin {
         ToolOrigin::Mcp { .. } | ToolOrigin::ManagedPython { .. } | ToolOrigin::Host { .. } => {
+            return (BuiltinToolKind::ExternalOrDelegated, None);
+        }
+        ToolOrigin::Builtin
+            if tool_id
+                .as_str()
+                .starts_with(crate::runtime::workflow::WORKFLOW_TOOL_ID_PREFIX) =>
+        {
             return (BuiltinToolKind::ExternalOrDelegated, None);
         }
         ToolOrigin::Builtin => {}
@@ -66,6 +75,29 @@ pub fn classify_tool_kind(
         "list_agents" | "wait_agent" => (BuiltinToolKind::AgentObserve, None),
         _ => (BuiltinToolKind::ExternalOrDelegated, None),
     }
+}
+
+/// Whether any built-in mode can escalate a call to this tool. Without call
+/// arguments, Bash and file mutations use their non-fast-path classification.
+pub(crate) fn supports_elevation(tool: &ToolDefinition) -> bool {
+    use super::{BuiltinPermissionAction, ExecutionPermissionMode, builtin_action_for};
+    let (kind, _) = classify_tool_kind(
+        &tool.id,
+        &tool.name,
+        &tool.origin,
+        &ClassificationHints {
+            workspace_root: None,
+            mutation_target: None,
+            bash_command: None,
+        },
+    );
+    [
+        ExecutionPermissionMode::Plan,
+        ExecutionPermissionMode::Automatic,
+        ExecutionPermissionMode::FullAccess,
+    ]
+    .into_iter()
+    .any(|mode| builtin_action_for(kind, mode) != BuiltinPermissionAction::Allow)
 }
 
 /// True only when the mutation target is exactly `<workspace>/PLAN.md`.
@@ -136,10 +168,20 @@ mod tests {
             mutation_target: None,
             bash_command: Some("ls -la"),
         };
-        let (kind, bash) = classify_tool_kind("bash", &ToolOrigin::Builtin, &hints);
+        let (kind, bash) = classify_tool_kind(
+            &ToolId::new("tool-bash"),
+            "bash",
+            &ToolOrigin::Builtin,
+            &hints,
+        );
         assert_eq!(kind, BuiltinToolKind::BashReadonly);
         assert!(matches!(bash, Some(BashReadonlyClass::Readonly)));
-        let (kind, _) = classify_tool_kind("read", &ToolOrigin::Builtin, &hints);
+        let (kind, _) = classify_tool_kind(
+            &ToolId::new("tool-read"),
+            "read",
+            &ToolOrigin::Builtin,
+            &hints,
+        );
         assert_eq!(kind, BuiltinToolKind::NativeRead);
     }
     #[test]
@@ -155,6 +197,7 @@ mod tests {
             "git log --no-ext-diff --no-textconv --format=pretty_alias",
         ] {
             let (kind, bash) = classify_tool_kind(
+                &ToolId::new("tool-bash"),
                 "bash",
                 &ToolOrigin::Builtin,
                 &ClassificationHints {

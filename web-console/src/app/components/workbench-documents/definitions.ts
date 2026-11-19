@@ -24,6 +24,7 @@ export function viewersForArtifact(artifact: { source: { kind: string }; name: s
   const mime = managed ? artifact.mimeType?.split(';')[0].trim().toLowerCase() : undefined;
   if (managed && (artifact.image || mime?.startsWith('image/'))) return ['image'];
   if (mime === 'text/markdown') return ['markdown', 'code', 'text'];
+  if (mime === 'text/html') return ['html', 'code', 'text'];
   return viewersForPath(artifact.name);
 }
 export const loadsBytes = (viewer: Viewer) => viewer === 'geometry' || viewer === 'html' || viewer === 'image' || viewer === 'pdf' || viewer === 'excel';

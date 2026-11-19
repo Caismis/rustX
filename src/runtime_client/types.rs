@@ -1160,6 +1160,8 @@ pub enum RuntimeClientError {
     ReadCutExpired,
     /// The runtime is shutting down and no longer admits inbound work.
     RuntimeShutdown,
+    /// Direct `turn/steer` was not admitted because the expected Turn is stale or not steerable.
+    SteerUnavailable,
     /// The operation is impossible in the current authoritative runtime
     /// state.
     InvalidState {

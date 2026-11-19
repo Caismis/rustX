@@ -4,7 +4,7 @@ import { IconWarningOutline16 } from '../../presentation/primitives/icons';
 import { actionError } from '../../bindings/action-error';
 import { SessionTasks } from '../scheduler/SessionTasks';
 import { SubagentHeader } from './Subagents';
-import { BackgroundJobs } from './BackgroundJobs';
+import { SessionPanelToggle } from './SessionPanelToggle';
 import { useSubagents } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { OpenWorkspace } from './OpenWorkspace';
@@ -13,7 +13,7 @@ import type { WorkspaceAuthority } from '../../workspaces/authority';
 import { useTranslation } from '../../locale/react';
 import { useState, type ReactNode } from 'react';
 import type { AppServerClient } from '../../client/app-server';
-import type { SessionView } from '../../client/contracts';
+import type { SessionSummary, SessionView } from '../../client/contracts';
 import type { SourceTarget } from '../../../../protocol/app-server/v80';
 import { useClientSelector } from '../../client/selectors';
 import { Menu } from '../../presentation/primitives/Menu';
@@ -24,35 +24,35 @@ import { lineageSwitchSafe } from '../../bindings/projection';
 import { sessionDisplayTitle } from '../../bindings/session-title';
 import { SessionConfiguration } from '../SessionConfiguration';
 import agentCss from '../../presentation/agent/Conversation.module.css';
-export function ConversationHeader({ host, authority, client, view, authorityRevision, connected, attached, commandOpen, invokeCommand, openOwningSettings, conversationMode, setConversationMode, settingsFeedback, previewToggle }: {
-  host: ProductHostWorkspaces; authority: WorkspaceAuthority; settingsFeedback?: ReactNode; previewToggle?: ReactNode; client: AppServerClient; view?: SessionView; authorityRevision?: number; connected: boolean; attached: boolean; commandOpen: boolean;
+export function ConversationHeader({ host, authority, client, sessionId, summary, view, authorityRevision, connected, attached, commandOpen, invokeCommand, openOwningSettings, conversationMode, setConversationMode, settingsFeedback, previewToggle }: {
+  host: ProductHostWorkspaces; authority: WorkspaceAuthority; settingsFeedback?: ReactNode; previewToggle?: ReactNode; client: AppServerClient; sessionId?: string; summary?: SessionSummary; view?: SessionView; authorityRevision?: number; connected: boolean; attached: boolean; commandOpen: boolean;
   invokeCommand: (request: { id: 'tree' }) => void;
   openOwningSettings: (owner: SourceTarget) => void; conversationMode: 'chat' | 'trajectory'; setConversationMode: (mode: 'chat' | 'trajectory') => void;
 }) {
   const tx = useTranslation();
   const [displayPreferences] = useConversationPreferences();
   const subagents = useSubagents();
-  const owner = JSON.stringify([client.getSnapshot().generation, view?.id]);
+  const owner = JSON.stringify([client.getSnapshot().generation, sessionId]);
   const [failure, setFailure] = useToastNotice(owner);
   const error = failure?.text;
-  const exportSession = () => { if (!view) return; setFailure(''); void client.exportSession(view.id).catch(cause => setFailure(actionError(cause))); };
-  return <header className={`${agentCss.header} ${!view ? agentCss.headerBlank : ""}`}>
+  const exportSession = () => { if (!sessionId) return; setFailure(''); void client.exportSession(sessionId).catch(cause => setFailure(actionError(cause))); };
+  return <header className={`${agentCss.header} ${!sessionId ? agentCss.headerBlank : ""}`}>
       <div className={agentCss.titleRow}>
-        {view && <div className={agentCss.titleCluster}>
-          <SubagentHeader title={sessionDisplayTitle(tx, view.summary)}/>
-          {!subagents?.selected && <BackgroundJobs client={client} sessionId={view.id}/>}
+        {sessionId && <div className={agentCss.titleCluster}>
+          <SubagentHeader title={sessionDisplayTitle(tx, summary ?? { id: sessionId })}/>
         </div>}
         <div className={agentCss.headerUtilities}>
-          {view?.summary && !subagents?.selected && <SessionTasks key={`${authorityRevision}:${view.id}`} client={client} sessionId={view.id} nodeId={view.nodeId ?? view.summary.active_node} disabled={!connected || !!view.deleting}/>}
+          {sessionId && !subagents?.selected && <SessionPanelToggle client={client} sessionId={sessionId}/>}
+          {sessionId && summary && !subagents?.selected && <SessionTasks key={`${authorityRevision}:${sessionId}`} client={client} sessionId={sessionId} nodeId={view?.nodeId ?? summary.active_node} disabled={!connected || !!view?.deleting}/>}
           {subagents?.selected && <div id="subagent-header-actions"/>}
-          {view?.summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: view.id, active_node: view.summary.active_node }} disabled={!connected || !!view.deleting}/>}
-          {view && !subagents?.selected && <SessionActions client={client} sessionId={view.id} connected={connected} attached={attached} commandOpen={commandOpen} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
+          {sessionId && summary && <OpenWorkspace client={client} host={host} authority={authority} target={{ session_id: sessionId, active_node: summary.active_node }} disabled={!connected || !!view?.deleting}/>}
+          {sessionId && !subagents?.selected && <SessionActions client={client} sessionId={sessionId} connected={connected} attached={attached} commandOpen={commandOpen} tree={() => invokeCommand({ id: 'tree' })} exportSession={exportSession}/>}
         </div>
         <div className={agentCss.headerCorner}>{previewToggle}</div>
       </div>
       {view && !subagents?.selected && <SessionConfiguration key={`${authorityRevision}:${view.id}`} client={client} view={view} openOwningSettings={openOwningSettings} />}
       {settingsFeedback}
-      {view && displayPreferences.codingView && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
+      {sessionId && displayPreferences.codingView && <div className={agentCss.tabs} role="tablist" aria-label={tx('agent:conversation-header.conversation-view')} onKeyDown={navigateTabs}>{(['chat', 'trajectory'] as const).map(mode => <button type="button" className={`${agentCss.tab} ${conversationMode === mode ? agentCss.tabActive : ""}`} key={mode} role="tab" id={`view-tab-${mode}`} aria-controls="conversation-view" tabIndex={conversationMode === mode ? 0 : -1} aria-selected={conversationMode === mode} onClick={() => setConversationMode(mode)}>{mode === 'chat' ? tx('agent:conversation-header.chat') : tx('agent:conversation-header.trajectory')}</button>)}</div>}
       {error && <Toast key={failure?.sequence} text={error} holdMs={6000} icon={<IconWarningOutline16/>} onDone={() => setFailure('')}/>}
       </header>;
 }

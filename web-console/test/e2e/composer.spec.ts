@@ -178,12 +178,12 @@ test('native Todo, Goal and Queue docks follow the real App Server through contr
     await queue.getByRole('textbox', { name: 'Edit queued message' }).fill('Draft that must not change admitted work');
     await fixture.release('goal-round');
     await expect(page.getByText('Queued input handled.', { exact: true })).toBeVisible();
-    // Claim won while the editor was open. Preserve the draft, disable Save,
-    // and never send it into canonical or already-admitted work.
+    // Native adoption displays the committed message while preserving the unsaved QueueDock draft until explicit discard.
+    await expect(page.getByLabel('Canonical conversation').getByText('Draft that must not change admitted work', { exact: true })).toHaveCount(0);
     await expect(queue.getByRole('textbox', { name: 'Edit queued message' })).toHaveValue('Draft that must not change admitted work');
     await expect(queue.getByRole('button', { name: 'Save', exact: true })).toBeDisabled();
-    await expect(queue.getByRole('button', { name: 'Remove', exact: true })).toHaveCount(0);
-    await queue.getByRole('button', { name: 'Cancel edit', exact: true }).click();
+    await expect(queue.getByRole('button', { name: 'Copy draft', exact: true })).toBeEnabled();
+    await queue.getByRole('button', { name: 'Discard draft', exact: true }).click();
     await expect(queue).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'Send', exact: true })).toBeVisible();
 

@@ -115,11 +115,6 @@
 
 .observation { display: block; font-size: 10px; line-height: 14px; color: var(--dsw-alias-label-secondary); }
 
-.flatSessionRowWithoutStatus .title {
-  margin-left: 0;
-}
-
-
 .slot {
   flex: none;
   width: 16px;

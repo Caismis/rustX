@@ -494,7 +494,8 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
                 mutation_target: view.mutation_target,
                 bash_command,
             };
-            let (kind, bash) = classify_tool_kind(view.tool_name, view.origin, &hints);
+            let (kind, bash) =
+                classify_tool_kind(view.tool_id, view.tool_name, view.origin, &hints);
             let facts = PermissionFacts {
                 mode: self.mode,
                 kind,
@@ -512,6 +513,11 @@ impl PreToolPolicy for ConfiguredApprovalPolicy {
                     reason: decision.reason,
                 },
                 PermissionDecisionKind::Review => {
+                    if let Some(reason) =
+                        crate::runtime::permission::review::oversized_write_approval(view)
+                    {
+                        return Ok(PreToolDecision::Ask { reason });
+                    }
                     let verdict = match &self.reviewer {
                         Some(reviewer) => {
                             reviewer
@@ -1031,6 +1037,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // Compare all policy outcomes against the same prepared invocation.
     async fn permission_mode_changes_only_the_execution_decision() {
         let conversation_id = ConversationId::new("conv_6ae353db-f482-746d-8f8d-b42ad2fef7a7");
         let attempt_id = AttemptId::new("approval-policy-attempt");
@@ -1109,5 +1116,36 @@ mod tests {
             PreToolDecision::Allow
         ));
         assert_eq!(write.arguments, &write_arguments);
+        let oversized = serde_json::json!({"path": "same.txt", "content": "x".repeat(65536)});
+        let mut large_write = PreToolView {
+            arguments: &oversized,
+            audit_arguments: &oversized,
+            ..write
+        };
+        let automatic = ConfiguredApprovalPolicy::new(ApprovalMode::Automatic);
+        assert!(matches!(
+            automatic
+                .evaluate(&large_write, &cancellation)
+                .await
+                .unwrap(),
+            PreToolDecision::Ask { .. }
+        ));
+        large_write.resource_permission = ResourcePermissionValue::Deny;
+        assert!(matches!(
+            automatic
+                .evaluate(&large_write, &cancellation)
+                .await
+                .unwrap(),
+            PreToolDecision::Deny { .. }
+        ));
+        large_write.resource_permission = ResourcePermissionValue::Default;
+        large_write.tool_name = "edit";
+        assert!(matches!(
+            automatic
+                .evaluate(&large_write, &cancellation)
+                .await
+                .unwrap(),
+            PreToolDecision::Deny { .. }
+        ));
     }
 }

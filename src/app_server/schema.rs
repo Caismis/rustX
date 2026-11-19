@@ -206,6 +206,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                     generated_title: None,
                     preview: Some("Native first user message".into()),
                     updated_at: chrono::DateTime::from_timestamp(0, 0).expect("fixture date"),
+                    has_branches: false,
                     active_node: crate::local_runtime::session::SessionNodeId::new(
                         "node_00000000-0000-7000-8000-000000000001",
                     ),
@@ -472,6 +473,23 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
             boundary: None,
             side: crate::local_runtime::session::LineageSide::Before,
         },
+        Method::SessionMessageBoundary {
+            session_id: target.session_id.clone(),
+            node_id: crate::runtime::identity::SessionNodeId::new(
+                "node_01942a9d-1800-7000-8000-000000000002",
+            ),
+            boundary: crate::observation::content::CanonicalContentLocator::ByLedgerPosition {
+                position: 128,
+            },
+        },
+        Method::SessionMessageVersions {
+            session_id: target.session_id.clone(),
+            node_id: crate::runtime::identity::SessionNodeId::new(
+                "node_01942a9d-1800-7000-8000-000000000002",
+            ),
+            offset: 0,
+            limit: 32,
+        },
         Method::InboundEdit {
             target: target.clone(),
             expected: crate::durable::PendingInboundRef {
@@ -486,6 +504,29 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
                 revision: EXACT,
             },
+        },
+        Method::InboundSteer {
+            target: target.clone(),
+            expected_turn_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+            scope: crate::durable::PendingSteerScope::Row {
+                expected: crate::durable::PendingInboundRef {
+                    sequence: crate::runtime::inbound::InboundSequence::new(EXACT),
+                    revision: EXACT,
+                },
+            },
+        },
+        Method::InboundSteer {
+            target: target.clone(),
+            expected_turn_id: crate::runtime::identity::AttemptId::new("attempt-fixture"),
+            scope: crate::durable::PendingSteerScope::All {
+                through: crate::runtime::inbound::InboundSequence::new(EXACT),
+            },
+        },
+        Method::JobOutput {
+            target: target.clone(),
+            job_id: crate::runtime::identity::ToolExecutionId::new(
+                "exec_215a03ee-2332-70b6-8e2d-634da8066f98",
+            ),
         },
         Method::AgentStatistics {
             target: target.clone(),
@@ -570,6 +611,10 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
                 mime_type: "text/markdown".into(),
             },
             data: "IyBSZXBvcnQK".into(),
+        },
+        MethodResult::JobOutput {
+            text: "live output".into(),
+            truncated: false,
         },
         MethodResult::DomainPage {
             page: crate::runtime_client::checkpoint::CheckpointPage {
@@ -737,6 +782,7 @@ pub fn fixtures() -> Vec<ProtocolMessage> {
         super::protocol::ErrorData::AttachmentCapacity,
         super::protocol::ErrorData::RequestCapacity,
         super::protocol::ErrorData::ServerDraining,
+        super::protocol::ErrorData::SteerUnavailable,
     ] {
         fixtures.push(ProtocolMessage::Response(Response::Failure(Failure {
             jsonrpc: JsonRpcVersion::V2,

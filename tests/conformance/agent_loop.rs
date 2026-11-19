@@ -302,7 +302,7 @@ impl Driver {
             )]),
             dependencies,
             RuntimeResidencyPolicy {
-                max_resident_runtimes: 8,
+                max_resident_runtimes: None,
                 idle_grace_ms: 300_000,
             },
         )

@@ -1986,7 +1986,7 @@ mod tests {
             CredentialSnapshot::default(),
             LocalRuntimeDependencies::default(),
             super::super::RuntimeResidencyPolicy {
-                max_resident_runtimes: 8,
+                max_resident_runtimes: Some(8),
                 idle_grace_ms: 300_000,
             },
         )

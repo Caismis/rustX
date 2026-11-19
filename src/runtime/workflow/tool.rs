@@ -350,6 +350,7 @@ impl WorkflowRuntime {
                     clock: &*services.clock,
                     policy: services.leaf_policy,
                     registration: registration.foreground(),
+                    handoff: None,
                     #[cfg(test)]
                     deadline_armed: None,
                     #[cfg(test)]
@@ -367,7 +368,7 @@ impl WorkflowRuntime {
                     )
                     .await;
                 if outcome.physical_settlement
-                    == crate::tools::deadline::ToolSettlementCertainty::Unconfirmed
+                    == Some(crate::tools::deadline::ToolSettlementCertainty::Unconfirmed)
                 {
                     settled = false;
                     if let Some(effects) = &run.effects {

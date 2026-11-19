@@ -515,6 +515,13 @@ export type Request1 =
       };
     }
   | {
+      method: 'job/output';
+      params: {
+        target: AttachmentTarget;
+        job_id: ToolExecutionId;
+      };
+    }
+  | {
       method: 'job/status';
       params: {
         target: AttachmentTarget;
@@ -923,6 +930,23 @@ export type Request1 =
       };
     }
   | {
+      method: 'session/messageBoundary';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        boundary: CanonicalContentLocator;
+      };
+    }
+  | {
+      method: 'session/messageVersions';
+      params: {
+        session_id: SessionId;
+        node_id: SessionNodeId;
+        offset: number;
+        limit: number;
+      };
+    }
+  | {
       method: 'session/forkProjection';
       params: {
         session_id: SessionId;
@@ -1182,6 +1206,14 @@ export type Request1 =
       params: {
         target: AttachmentTarget;
         expected: PendingInboundRef;
+      };
+    }
+  | {
+      method: 'inbound/steer';
+      params: {
+        target: AttachmentTarget;
+        expectedTurnId: AttemptId;
+        scope: PendingSteerScope;
       };
     }
   | {
@@ -2019,6 +2051,38 @@ export type UserInputBlock =
       token: string;
       type: 'upload';
     };
+/**
+ * One running-turn promotion of queued rows into steering.
+ *
+ * `Row` is compare-and-set on one occurrence. `All` reclassifies every
+ * eligible queued row through the observed sequence. Neither mints an identity.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "PendingSteerScope".
+ */
+export type PendingSteerScope =
+  | {
+      expected: PendingInboundRef;
+      kind: 'row';
+    }
+  | {
+      through: InboundSequence;
+      kind: 'all';
+    };
+/**
+ * A conversation-scoped inbound sequence number.
+ *
+ * The sequence identifies one item of the conversation's inbound ordering
+ * domain. It is **not**
+ * [`RuntimeEventEnvelope`]`::sequence`
+ * and is never allocated from the Event Journal sequence; the durable
+ * Pending Inbound Inbox owns allocation, and the first successful
+ * acceptance of a conversation receives `1`.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "InboundSequence".
+ */
+export type InboundSequence = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "EffectiveFieldName".
@@ -2876,6 +2940,11 @@ export type MethodResult =
       type: 'goal_mutation';
     }
   | {
+      text: string;
+      truncated: boolean;
+      type: 'job_output';
+    }
+  | {
       job_id: ToolExecutionId;
       type: 'job_cancellation_accepted';
     }
@@ -2981,6 +3050,14 @@ export type MethodResult =
       boundaries: SessionUserMessageBoundaryObservation[];
       next_offset?: number | null;
       type: 'boundaries';
+    }
+  | {
+      boundary?: SessionMessageVersion | null;
+      type: 'session_message_boundary';
+    }
+  | {
+      page: SessionMessageVersionsPage;
+      type: 'session_message_versions';
     }
   | {
       result: RuntimeClientSessionDeletionResult;
@@ -3310,20 +3387,6 @@ export type ThreadStatus =
  * via the `definition` "ThreadActiveFlag".
  */
 export type ThreadActiveFlag = 'waitingOnApproval' | 'waitingOnUserInput';
-/**
- * A conversation-scoped inbound sequence number.
- *
- * The sequence identifies one item of the conversation's inbound ordering
- * domain. It is **not**
- * [`RuntimeEventEnvelope`]`::sequence`
- * and is never allocated from the Event Journal sequence; the durable
- * Pending Inbound Inbox owns allocation, and the first successful
- * acceptance of a conversation receives `1`.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "InboundSequence".
- */
-export type InboundSequence = string;
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "TurnInputDisposition".
@@ -6077,8 +6140,7 @@ export type RuntimeClientEvent =
       sequence: string;
       message: UserMessageBlock2;
       /**
-       * The durable transcript position allocated at acceptance, absent
-       * for hidden Context-kind inbound.
+       * Pending messages have no transcript position.
        */
       transcript_cursor?: RuntimeClientTranscriptCursor | null;
       type: 'inbound_enqueued';
@@ -6881,6 +6943,9 @@ export type ErrorData =
     }
   | {
       kind: 'stale_runtime';
+    }
+  | {
+      kind: 'steer_unavailable';
     }
   | {
       kind: 'invalid_state';
@@ -10456,7 +10521,12 @@ export interface AppServerPolicy {
    * @maxItems 32
    */
   environment_roots?: string[];
-  max_resident_runtimes?: number;
+  /**
+   * Optional explicit cap on concurrently resident runtimes (`Loading`,
+   * `Loaded`, `Unloading`, and reserved creations). `None` leaves residency
+   * uncapped while idle reaping and host/transport limits continue to apply.
+   */
+  max_resident_runtimes?: number | null;
   max_connections?: number;
   max_external_attachments?: number;
   idle_grace_ms?: number;
@@ -11018,6 +11088,10 @@ export interface SessionSummary {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
 }
 /**
  * Saved automatic display metadata, independent of a user's chosen name.
@@ -14985,6 +15059,11 @@ export interface InboundItemView {
    * The bounded native header defers part of its authoritative message.
    */
   deferred?: boolean;
+  /**
+   * Original public app-server input id, projected only from durable
+   * correlation `app-server:<id>`. Absent for every other producer.
+   */
+  input_id?: string | null;
   message: UserMessageBlock1;
 }
 /**
@@ -17197,8 +17276,7 @@ export interface RuntimeClientProtocolEvent {
         sequence: string;
         message: UserMessageBlock2;
         /**
-         * The durable transcript position allocated at acceptance, absent
-         * for hidden Context-kind inbound.
+         * Pending messages have no transcript position.
          */
         transcript_cursor?: RuntimeClientTranscriptCursor | null;
         type: 'inbound_enqueued';
@@ -19465,6 +19543,10 @@ export interface SessionSummary2 {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
   thread_id: ConversationId;
   thread_status?: ThreadStatusEntry | null;
 }
@@ -19503,6 +19585,43 @@ export interface SessionUserMessageBoundaryObservation {
   block_count: string;
   content: ContentBinding[];
   collections: CollectionFrontier[];
+}
+/**
+ * Exact coordinates of a human message in a particular Session node.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersion".
+ */
+export interface SessionMessageVersion {
+  node_id: SessionNodeId;
+  conversation_id: ConversationId;
+  /**
+   * Inline identity when it fits the native 256-byte locator budget.
+   */
+  message_id?: MessageId | null;
+  surface_revision: SurfaceRevision;
+  boundary: CanonicalContentLocator;
+}
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersionsPage".
+ */
+export interface SessionMessageVersionsPage {
+  versions: SessionMessageVersionFamily[];
+  next_offset?: number | null;
+}
+/**
+ * A version pager for a prompt present in the requested lineage.
+ *
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "SessionMessageVersionFamily".
+ */
+export interface SessionMessageVersionFamily {
+  current: SessionMessageVersion;
+  current_index: number;
+  total: number;
+  previous?: SessionMessageVersion | null;
+  next?: SessionMessageVersion | null;
 }
 /**
  * Confirmation metadata; counts include the complete native ownership graph.
@@ -21921,6 +22040,10 @@ export interface SessionSummary1 {
    * Active node in the session.
    */
   active_node: string;
+  /**
+   * A Session with multiple nodes can expose message versions.
+   */
+  has_branches?: boolean;
 }
 /**
  * The original native filesystem root, independent of the viewing lineage.

@@ -226,8 +226,6 @@ class Planning(unittest.TestCase):
                 self.assertEqual(planned["profile"], "full")
                 self.assertTrue(all(planned["run"][job] for job in v.FULL_JOBS))
                 self.assertFalse(planned["run"]["rust-fast"])
-                self.assertFalse(planned["run"]["rust-platform-core"])
-                self.assertTrue(planned["run"]["rust-platform-boundaries"])
 
     def test_a_pull_request_runs_fast_until_promoted(self):
         self.assertEqual(v.plan("pull_request", [], modified("src/lib.rs"))["profile"], "fast")
@@ -236,19 +234,18 @@ class Planning(unittest.TestCase):
     def test_fast_selects_the_affected_surfaces_only(self):
         run = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))["run"]
         self.assertEqual({job for job, selected in run.items() if selected},
-                         {"desktop-macos", "browser-prepare", "web-client", "browser-shard", "browser-report"})
+                         {"browser-prepare", "web-client", "browser-shard", "browser-report"})
         self.assertEqual(v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))["risk"], "low")
         run = v.plan("pull_request", [], modified("src/lib.rs"))["run"]
-        self.assertTrue(run["rust-fast"] and run["rust-platform-core"] and run["web-client"])
-        self.assertFalse(run["rust-contracts"] or run["rust-platform-boundaries"])
-        self.assertFalse(run["desktop-macos"])
+        self.assertTrue(run["rust-fast"] and run["web-client"])
+        self.assertFalse(run["rust-contracts"] or run["rust-boundaries"])
         # Execution-boundary member crates are rust surface too.
         self.assertEqual(v.classify(modified("crates/confined-fs/src/lib.rs"))["surfaces"], ["rust"])
         run = v.plan("pull_request", [], modified("crates/execution-client/src/main.rs"))["run"]
-        self.assertTrue(run["rust-fast"] and run["rust-platform-core"])
+        self.assertTrue(run["rust-fast"])
         for path in ("src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"):
             with self.subTest(path=path):
-                self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["desktop-macos"])
+                self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["web-client"])
         run = v.plan("pull_request", [], modified("README.md"))["run"]
         self.assertEqual({job for job, selected in run.items() if selected}, {"documentation-contracts"})
         run = v.plan("pull_request", [], modified("tests/README.md"))["run"]
@@ -381,9 +378,9 @@ class Gate(unittest.TestCase):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
         self.assertIn("superseded", v.gate(planned, passing(planned), "old", "new")[0])
 
-    def test_full_without_macos_full_fails(self):
+    def test_full_without_a_selected_lane_fails(self):
         planned = v.plan("push", [], [])
-        for job in ("rust-platform-boundaries",):
+        for job in ("rust-contracts", "rust-boundaries"):
             for result in ("skipped", "cancelled", "failure", None):
                 with self.subTest(job=job, result=result):
                     results = passing(planned)
@@ -394,12 +391,12 @@ class Gate(unittest.TestCase):
                     self.assertEqual(v.gate(planned, results, None, None),
                                      [f"{job}: selected for FULL but {result or 'missing'}"])
 
-    def test_a_promoted_pull_request_cannot_pass_on_macos_core_alone(self):
+    def test_a_promoted_pull_request_cannot_pass_on_the_fast_lane_alone(self):
         planned = v.plan("pull_request", [v.PROMOTION_LABEL], modified("src/runtime/process_runner.rs"))
-        results = {**passing(planned), "rust-platform-core": "success", "rust-platform-boundaries": "skipped"}
+        results = {**passing(planned), "rust-fast": "success", "rust-contracts": "skipped"}
         self.assertEqual(v.gate(planned, results, "abc", "abc"),
-                         ["rust-platform-core: not selected for FULL but success",
-                          "rust-platform-boundaries: selected for FULL but skipped"])
+                         ["rust-fast: not selected for FULL but success",
+                          "rust-contracts: selected for FULL but skipped"])
 
     def test_a_job_that_ran_without_being_selected_fails(self):
         planned = v.plan("pull_request", [], modified("web-console/src/presentation/a.tsx"))
@@ -442,10 +439,8 @@ class Workflow(unittest.TestCase):
     def test_rust_profiles_match_the_lane_check_declarations(self):
         jobs = self.jobs()
         self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-fast"])
-        self.assertIn("VERIFICATION_PROFILE: fast\n", jobs["rust-platform-core"])
-        for job in ("rust-contracts", "rust-boundaries", "rust-platform-boundaries"):
+        for job in ("rust-contracts", "rust-boundaries"):
             self.assertIn("VERIFICATION_PROFILE: full", jobs[job])
-        for job in ("rust-contracts", "rust-boundaries", "rust-platform-core", "rust-platform-boundaries"):
             self.assertIn('CARGO_BUILD_JOBS: "1"', jobs[job])
 
 

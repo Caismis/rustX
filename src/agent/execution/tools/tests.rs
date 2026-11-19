@@ -9,7 +9,9 @@ use crate::model::event::ModelEvent;
 use crate::model::finish::ModelFinishReason;
 use crate::runtime::identity::{ConversationId, ToolCallId, ToolId};
 use crate::runtime::types::CancellationReason;
-use crate::scripted_suites::common::{capability_lease, tool_runtime_with_store};
+use crate::scripted_suites::common::{
+    capability_lease, tool_runtime_with_store, tool_runtime_with_store_and_execution,
+};
 use crate::tools::executor::{ProgressReporter, ToolExecutor, ToolRegistry};
 use crate::tools::limits::{MAX_PROGRESS_EVENTS_PER_FOREGROUND_CALL, MAX_PROGRESS_MESSAGE_BYTES};
 use crate::tools::types::{
@@ -19,6 +21,129 @@ use crate::tools::types::{
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::watch;
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bash_does_not_spawn_when_attempt_is_cancelled_after_tool_start_fact() {
+    assert_bash_shutdown_reason(false).await;
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn running_bash_retains_the_attempt_shutdown_reason() {
+    assert_bash_shutdown_reason(true).await;
+}
+
+#[cfg(unix)]
+#[allow(clippy::too_many_lines)] // Both cancellation cuts use the same physical and journal evidence.
+async fn assert_bash_shutdown_reason(start_before_cancel: bool) {
+    use crate::agent::execution::test_sync::ToolStartPause;
+    use crate::message::types::MessageBlock;
+
+    let fixture = crate::scripted_suites::common::native_fixture_with_extensions(
+        Vec::new(),
+        crate::tools::NativeToolPolicies::default(),
+        &crate::extensions::NativeAgentExtensions::none(),
+    );
+    let call = ToolCall {
+        id: ToolCallId::new("call-bash-before-physical-start"),
+        tool_id: ToolId::new("tool-bash"),
+        name: "bash".to_owned(),
+        arguments: crate::scripted_suites::common::tool_call_envelope(serde_json::json!({
+            "command": "printf started > bash-physical-start-marker; sleep 30",
+            "execution_mode": "foreground"
+        })),
+    };
+    let adapter = Arc::new(ScriptedAdapter::new(vec![tool_call_script(&call)]));
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let lease = capability_lease(fixture.registry, &fixture.runtime)
+        .await
+        .into_lease();
+    let (pause, mut reached, release) = ToolStartPause::install();
+    let mut request = request(&adapter);
+    request.conversation_id = fixture.runtime.conversation_id().clone();
+    let mut execution = AgentExecution::new(
+        request,
+        lease,
+        &cancellation,
+        crate::scripted_suites::support::default_execution_policy(),
+        runtime(&adapter),
+        &fixture.runtime,
+        crate::agent::AttemptLifecycle::inert(),
+    )
+    .expect("execution construction");
+    execution.install_tool_start_pause(pause);
+    let marker = fixture
+        .runtime
+        .workspace()
+        .root()
+        .join("bash-physical-start-marker");
+    let controller = tokio::spawn({
+        let cancellation = cancellation.clone();
+        let marker = marker.clone();
+        async move {
+            reached
+                .wait_for(|started| *started)
+                .await
+                .expect("tool start fact committed");
+            if start_before_cancel {
+                release
+                    .send(())
+                    .expect("start the shell before cancellation");
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    while !marker.exists() {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("the shell crossed its physical effect frontier");
+            }
+            assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+            assert!(!cancellation.request_cancel(CancellationReason::UserRequested));
+            if !start_before_cancel {
+                release
+                    .send(())
+                    .expect("release execution after cancellation");
+            }
+        }
+    });
+    let result = tokio::time::timeout(std::time::Duration::from_secs(15), execution.run())
+        .await
+        .expect("cancellation settles the call");
+    controller.await.unwrap();
+    let audit =
+        crate::scripted_suites::common::durable_agent_result(result, fixture.store.as_ref());
+    let statuses: Vec<_> = audit
+        .result
+        .messages()
+        .iter()
+        .filter_map(|message| match message {
+            MessageBlock::Tool(tool) => Some(tool.result.status.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(matches!(
+        statuses.as_slice(),
+        [ToolExecutionStatus::Cancelled {
+            reason: CancellationReason::RuntimeShutdown,
+            ..
+        }]
+    ));
+    assert!(matches!(
+        audit.result.outcome,
+        AttemptOutcome::Cancelled {
+            reason: CancellationReason::RuntimeShutdown
+        }
+    ));
+    assert!(
+        audit
+            .event_history
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::ToolExecutionSettlementObserved { .. }))
+    );
+    assert_eq!(marker.exists(), start_before_cancel);
+    assert_eq!(fixture.runtime.background().all_snapshots(), []);
+}
 
 /// An empty bounded foreground progress buffer for one scripted call.
 fn foreground_buffer() -> ForegroundProgressBuffer {
@@ -453,7 +578,7 @@ async fn plan_write_refuses_when_authorized_plan_target_is_replaced_before_execu
         ))
         .expect("in-memory store"),
     );
-    let tool_runtime = tool_runtime_with_store(
+    let tool_runtime = tool_runtime_with_store_and_execution(
         "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
         Some(store.clone()),
     );
@@ -537,8 +662,8 @@ async fn plan_write_refuses_when_authorized_plan_target_is_replaced_before_execu
     match status {
         ToolExecutionStatus::Failed { error } => {
             assert!(
-                error.contains("mutation target changed since authorization"),
-                "expected bind-contract failure, got {error}"
+                error.contains("physical revision conflict"),
+                "expected the retained-target commit refusal, got {error}"
             );
         }
         other => panic!("expected Failed status, got {other:?}"),

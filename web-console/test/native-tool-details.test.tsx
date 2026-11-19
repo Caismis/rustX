@@ -77,7 +77,24 @@ it('Todo renders the recorded post-call status and dependency edges, including t
     { id: 1, subject: 'Retired task', status: 'deleted' }, { id: 2, subject: 'Follow up', status: 'pending', blocked_by: [1], owner: 'explore' },
   ] } }], tx)!;
   expect(details.items[0]).toMatchObject({ title: 'Retired task', status: { value: 'deleted', label: 'Deleted' } });
+  expect(details.summary).toBe('0/1 completed');
+  expect(details.summarySuffix).toBeUndefined();
   expect(details.items[1]).toMatchObject({ status: { value: 'pending', label: 'Pending' }, fields: [{ label: 'Owner', value: 'explore' }, { label: 'Depends on', value: '#1' }] });
+});
+it('Todo separates parallel activity from the truncatable summary and keeps the native receipt on disclosure', () => {
+  const tool = nativeTool('tool-todo', 'todo', { action: 'update', id: 3 }, [
+    { type: 'text', text: 'Updated #3' }, { type: 'json', value: { tasks: [
+      { id: 1, subject: 'First', status: 'completed' }, { id: 2, subject: 'Review', active_form: 'Reviewing', status: 'in_progress' },
+      { id: 3, subject: 'Verify', status: 'in_progress' },
+    ] } },
+  ]);
+  const ui = render(<Tool tool={tool}/>);
+  expect(ui.getByText('Update to-do list')).toBeTruthy();
+  expect(ui.getByText('1/3 completed · Reviewing')).toBeTruthy();
+  expect(ui.getByText('+1')).toBeTruthy();
+  fireEvent.click(ui.getByRole('button', { expanded: false }));
+  expect(ui.getByText('Updated #3')).toBeTruthy();
+  expect(ui.getByText('Verify')).toBeTruthy();
 });
 it('Trace overview shows the same Job output; Result retains the original JSON without a second disclosure', () => {
   const record = traceTool(1); record.tool = { ...record.tool!, name: 'job_wait', tool_id: 'tool-job_wait' };

@@ -110,8 +110,9 @@ let advanceHistory: (() => Promise<void>) | undefined;
 if (new URL(location.href).searchParams.has('opening-history')) {
   const saved = server.snapshots.get('A')!;
   const entries = saved.transcript.entries!;
+  saved.transcript.statistics = agentMetrics.statistics;
   // Match the native eight-row checkpoint after a larger durable preview.
-  server.handlers.set('session/checkpoint', () => ({ type: 'checkpoint', checkpoint: checkpoint({ ...saved, transcript: { entries: entries.slice(-8), next_cursor: entries.at(-8)!.cursor } }) }));
+  server.handlers.set('session/checkpoint', () => ({ type: 'checkpoint', checkpoint: checkpoint({ ...saved, transcript: { ...saved.transcript, entries: entries.slice(-8), next_cursor: entries.at(-8)!.cursor } }) }));
   server.handlers.set('session/transcript', request => {
     if (request.method !== 'session/transcript' || request.params.at.type !== 'older') throw Error('Expected older history');
     const before = BigInt(request.params.at.before);

@@ -105,21 +105,22 @@ fn warmed_turn_write_work_is_fixed() {
     // Include the bounded occurrence seeks that distinguish a requested tool
     // from actual execution, alongside adoption and Workflow indexing. Keep
     // the integrated baseline exact rather than using a tolerance.
+    // Adoption also moves the temporary pending header onto its canonical row.
     let expected = [
         TurnWork {
-            calls: 622,
+            calls: 617,
             prepares: 18,
-            steps: 20_491,
+            steps: 20_512,
             commits: 7,
-            wal_frames: 260,
+            wal_frames: 263,
             event_index_entries: 58,
         },
         TurnWork {
-            calls: 1397,
+            calls: 1392,
             prepares: 38,
-            steps: 45_612,
+            steps: 45_633,
             commits: 13,
-            wal_frames: 555,
+            wal_frames: 559,
             event_index_entries: 112,
         },
     ];

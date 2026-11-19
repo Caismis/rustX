@@ -1,4 +1,4 @@
-import type { AttachmentTarget, CompletedResponseView, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v80';
+import type { AttachmentTarget, CanonicalContentLocator, CompletedResponseView, RuntimeClientMessageDescriptor, RuntimeClientTranscriptPage } from '../../../../protocol/app-server/v80';
 import { attemptOwnerKey } from '../../../../protocol/app-server/attempt-identity';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { sameTarget } from '../../../../protocol/app-server/attachment-identity';
@@ -10,27 +10,36 @@ import { transcriptPresentation } from '../../client/transcript';
 export interface ResponseRetry {
   view: SessionView;
   replay?: { target: AttachmentTarget; messageId: string };
+  edited?: { locator: CanonicalContentLocator; messageId?: string | null; text: string };
 }
 
 export function responseRetry(view: SessionView | undefined, response: CompletedResponseView): ResponseRetry | undefined {
+  return retryPresentation(view, response.retry_locator ?? undefined, response);
+}
+
+export function userMessageRetry(view: SessionView | undefined, locator: CanonicalContentLocator, text?: string): ResponseRetry | undefined {
+  return retryPresentation(view, locator, undefined, text);
+}
+
+function retryPresentation(view: SessionView | undefined, locator: CanonicalContentLocator | undefined, response?: CompletedResponseView, replacementText?: string): ResponseRetry | undefined {
   if (!view?.snapshot) return;
   const entries = transcriptPresentation(view.history, view.snapshot.transcript);
   const pages = [view.snapshot.transcript, ...(view.history ? [view.history.page] : [])];
   const deferred = pages.flatMap(page => page.deferred_entries ?? []);
-  const locator = response.retry_locator;
-  const userId = response.retry_message_id ?? (locator?.type === 'by_message_id' ? locator.message_id
+  const userId = response?.retry_message_id ?? (locator?.type === 'by_message_id' ? locator.message_id
     : locator && [...view.snapshot.message_descriptors ?? [], ...deferred.flatMap(entry => { const descriptor = messageDescriptor(entry.value); return descriptor ? [descriptor] : []; })].find(descriptor => canonicalLocatorKey(descriptor.locator) === canonicalLocatorKey(locator))?.identity);
   const user = entries.find(entry => entry.item.type === 'message' && entry.item.message.id === userId);
   const isInput = (descriptor: RuntimeClientMessageDescriptor | undefined) => !!descriptor && (userId != null && descriptor.identity === userId
     || !!locator && canonicalLocatorKey(descriptor.locator) === canonicalLocatorKey(locator));
   const deferredUser = deferred.find(entry => isInput(messageDescriptor(entry.value)));
-  const owner = attemptOwnerKey(response.origin);
+  const owner = response && attemptOwnerKey(response.origin);
   const facts = [...entries, ...deferred.map(entry => ({ cursor: entry.offset, ...messageDescriptor(entry.value) }))];
   const process = facts.find(entry => entry.turn_process && attemptOwnerKey(entry.turn_process) === owner)?.turn_process;
   const closing = facts.find(entry => entry.completed_response && attemptOwnerKey(entry.completed_response.origin) === owner);
   // A paged-out input does not authorize borrowing a neighbouring User row.
   const through = user?.cursor ?? deferredUser?.offset;
   const before = process?.control_cursor ?? closing?.cursor;
+  if (!response && through == null) return;
   const retained = (cursor: string) => through != null ? BigInt(cursor) <= BigInt(through) : before != null && BigInt(cursor) < BigInt(before);
   const prefix = entries.filter(entry => retained(entry.cursor)).map(entry => entry === user
       ? { ...entry, turn_process: undefined, completed_response: undefined } : entry);
@@ -58,7 +67,8 @@ export function responseRetry(view: SessionView | undefined, response: Completed
   const locators = new Set([...transcript.deferred_entries ?? [], ...history.deferred_entries ?? []].flatMap(entry => {
     const descriptor = messageDescriptor(entry.value); return descriptor ? [canonicalLocatorKey(descriptor.locator)] : [];
   }));
-  return { view: { ...view, snapshot: { ...view.snapshot, messages: view.snapshot.messages.filter((message, index) => index <= inputIndex || ids.has(message.id)),
+  const edited = locator && replacementText !== undefined ? { locator, messageId: userId, text: replacementText } : undefined;
+  return { edited, view: { ...view, snapshot: { ...view.snapshot, messages: view.snapshot.messages.filter((message, index) => index <= inputIndex || ids.has(message.id)),
     attempt: null, transcript, message_descriptors: view.snapshot.message_descriptors?.filter(descriptor => locators.has(canonicalLocatorKey(descriptor.locator)) || isInput(descriptor)
       || descriptor.identity != null && ids.has(descriptor.identity)).map(descriptor => isInput(descriptor)
         ? { ...descriptor, turn_process: undefined, completed_response: undefined } : descriptor), publication_settlements: [], pending_interactions: [] },

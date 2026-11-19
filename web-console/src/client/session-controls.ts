@@ -98,6 +98,18 @@ export class SessionControls {
   async removeInbound(id: string, expected: PendingInboundRef): Promise<InboundControlOutcome> {
     return this.controlInbound(id, target => ({ method: 'inbound/remove', params: { target, expected } }));
   }
+  async steerInbound(id: string, expected?: PendingInboundRef): Promise<InboundControlOutcome> {
+    const view = this.port.state().views[id];
+    const snapshot = view?.snapshot;
+    const expectedTurnId = snapshot?.attempt?.attempt_id;
+    if (!expectedTurnId) return { status: 'obsolete' };
+    const lastRow = snapshot?.inbound.pending?.at(-1)?.sequence ?? '0';
+    const checkpointEnd = view.checkpoint?.read_cut.source_cut?.read.pending_through ?? '0';
+    // The checkpoint can cover more queued rows than its bounded inline page.
+    const through = BigInt(checkpointEnd) > BigInt(lastRow) ? checkpointEnd : lastRow;
+    const scope = expected ? { kind: 'row' as const, expected } : { kind: 'all' as const, through };
+    return this.controlInbound(id, target => ({ method: 'inbound/steer', params: { target, expectedTurnId, scope } }));
+  }
   private async controlInbound(id: string, operation: (target: AttachmentTarget) => Request1): Promise<InboundControlOutcome> {
     const generation = this.port.state().generation;
     let target: AttachmentTarget;

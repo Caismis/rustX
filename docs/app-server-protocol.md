@@ -910,7 +910,7 @@ clears it. Superseded source completions cannot publish stale tools or failures.
 | `configuration/sourcesRead`, `configuration/sourceWrite` | Native structured User/Workspace documents and exact revisions; bounded semantic-unit CAS writes |
 | `session/effectiveConfiguration`, `configuration/reconcile` | Authoritative application state and native rescan/retry |
 | `context/compact`, `goal/control` | Existing maintenance and Goal owners |
-| `job/list`, `job/status`, `job/wait`, `job/cancel` | ConversationBackgroundRegistry: bounded finite Jobs, immediate status and cancellation-intent receipt; the separate exact terminal wait reaches physical settlement or typed publication abandonment |
+| `job/list`, `job/status`, `job/output`, `job/wait`, `job/cancel` | ConversationBackgroundRegistry: bounded finite Jobs, immediate status and cancellation-intent receipt; the separate exact terminal wait reaches physical settlement or typed publication abandonment |
 | `agent/statistics` | Parent `AttachmentTarget` → exact parent registry Agent ownership → existing child store → incremental native usage, timing and occupancy; read-only, no child activation |
 | `agent/transcript`, `agent/turns` | Parent `AttachmentTarget` → current parent Runtime Client authority → exact parent `SubagentRegistry` ownership resolution of caller-supplied `AgentId` (never arbitrary child `ConversationId`) → exact owned child Conversation, which remains history authority → bounded read-only durable transcript projection; grants no execution, control, or HITL authority |
 | `agent/list`, `agent/status`, `agent/sendMessage`, `agent/wait`, `agent/interrupt` | Durable Agent owner: atomic message/resume arbitration, captured activation wait and finite intent receipt for interruption of that exact reserved/current activation |
@@ -919,7 +919,9 @@ clears it. Superseded source completions cannot publish stale tools or failures.
 `turn/steer` requires `expectedTurnId` and refuses a different or closed Attempt.
 Both carry `inputId`; receipts retain the exact native Turn, disposition, message
 identity and inbound sequence. `inbound/queue` explicitly waits for a future
-Attempt rather than steering current work. These use one native coordinator and
+Attempt rather than steering current work. `inbound/steer` promotes one expected
+queued row, or every eligible queued row through the observed sequence, into that running Attempt without a
+new identity. These use one native coordinator and
 mailbox, with no separate execution state machine.
 
 `turn/interrupt` requires exact `turnId`; the native coordinator checks and cancels
@@ -1253,39 +1255,44 @@ TOML cannot override it, and it is never persisted in a Session:
 
 ```toml
 [app_server]
-max_resident_runtimes = 8
+# max_resident_runtimes = 8  # optional explicit cap (1..=256); unset = uncapped
 max_connections = 32
 max_external_attachments = 64
 idle_grace_ms = 300000
 shutdown_deadline_ms = 30000
 ```
 
-These conservative defaults allow several concurrently focused Sessions while
-bounding expensive live compositions. The five-minute grace avoids recomposing
-on ordinary focus changes; the thirty-second host deadline bounds operational
-shutdown independently of native settlement. They are product defaults, not
-throughput or user-per-host claims. One process still represents one user
-environment. Zero values are invalid. Upper authoring bounds are respectively
-256 runtimes, 1024 connections, 4096 attachments, one day of idle grace, and one
-hour of shutdown grace. Invalid policy fails before traffic admission. Settings
-changes take effect on the next process start.
+By default `max_resident_runtimes` is unset (`None` / uncapped), matching DSH's
+model of no fixed server resident runtime quota (`recentViewLimit = 10` remains
+only a soft client cache). The five-minute idle grace (`idle_grace_ms`) avoids
+recomposing on ordinary focus changes while letting the idle reaper reclaim
+unattached idle runtimes; the thirty-second host deadline bounds operational
+shutdown independently of native settlement; and hard transport/host limits
+(`max_connections`, `max_external_attachments`, and per-connection 32 routes)
+remain enforced. These are product defaults, not throughput or user-per-host
+claims. One process still represents one user environment. Zero values are
+invalid (including `max_resident_runtimes = 0`). Upper authoring bounds are
+respectively 256 runtimes (when configured), 1024 connections, 4096 attachments,
+one day of idle grace, and one hour of shutdown grace. Invalid policy fails
+before traffic admission.
 
 Configuration resolves the policy once during App Server composition. The host
-owns the full process policy and passes only runtime count and idle grace to
-SessionRuntimeManager. The dependency graph is AppServerHost → connection /
-transport / SessionRuntimeManager → ConversationRuntime; the manager never imports
-App Server types.
+owns the full process policy and passes only the optional runtime cap and idle
+grace to SessionRuntimeManager. The dependency graph is AppServerHost →
+connection / transport / SessionRuntimeManager → ConversationRuntime; the
+manager never imports App Server types.
 
-`Loading`, `Loaded`, and `Unloading` all consume the same writer quota. The
+When an operator configures `max_resident_runtimes`, `Loading`, `Loaded`, and
+`Unloading` (plus reserved creations) all consume that writer quota: the
 registry lock checks quota and installs `Loading` atomically; same-Conversation
 callers join that flight without consuming another slot. Composition runs
 outside that lock. Failure releases a loading reservation; unproven unload
 retains its counted `Unloading` slot. Capacity refusal does not queue for a slot.
-One native coordinator owns at most one current root attempt, so the resident
-slot limit also bounds aggregate root attempts. Pending inbound remains durable
-native work; a `turn/start` response does not release an execution permit. No
-second root-attempt registry or limiter is introduced. Subagent/Workflow limits
-remain with their native domains.
+One native coordinator owns at most one current root attempt, so an explicit
+resident slot limit also bounds aggregate root attempts. Pending inbound remains
+durable native work; a `turn/start` response does not release an execution permit.
+No second root-attempt registry or limiter is introduced. Subagent/Workflow
+limits remain with their native domains.
 
 AppServerHost owns process-wide attachment capacity reservations. Each admitted
 attachment separately obtains an incarnation-bound RuntimeResidencyPin from the
@@ -1520,12 +1527,11 @@ and `invalid_item`. Storage acknowledgement/readback failures report
 `durability_uncertain`. Routing errors retain the existing typed attachment and
 runtime errors. Clients never substitute a newer revision or replay after loss.
 
-Edit currently supports one ordinary Human text block without producer
-correlation. Unsupported typed or multipart content is rejected atomically;
-QueueDock disables Edit for those shapes. In particular it never flattens or
-drops Session-owned upload references. Remove supports ordinary uncorrelated
-Human pending messages, including uploads. Runtime-authored work is not a user
-queue control target.
+Edit accepts human messages composed entirely of text blocks. The editor joins
+their text in order and saves the replacement as one block. Messages with
+attachments support removal and steering. App-server input IDs continue to
+identify the original submission across these operations. Other producers
+retain ownership of their pending work.
 
 Selection is a non-destructive finite watermark, not a payload reservation.
 Canonical adoption reads the current rows inside its own transaction and builds
@@ -1539,8 +1545,10 @@ An empty claim creates no answer obligation and admits no fresh turn.
 Editing updates the pending message body read through its original transcript
 cursor. Removal deletes only its pending transcript index entry, in the same
 transaction. Neither operation edits canonical history or cancels attempts,
-background executions, Subagents or Workflows. Queue/Steer submission converges
-on this same native domain; there is no per-row Steer/reclassification flag.
+background executions, Subagents or Workflows. `inbound/steer` reclassifies
+queued rows in this same domain: one expected row or the observed queue through an inclusive
+inbound sequence. Later arrivals remain queued. Promoted rows keep their message
+identities and follow earlier steering input in the running Attempt. It does not mint a second message.
 
 The mailbox publishes a complete `pending_inbound_changed` projection only after
 the durable mutation check and readback. Its publication ordering is coordination,
@@ -2244,6 +2252,8 @@ mutations.
 
 
 ## Exact Job and Agent synchronization (v52)
+
+`job/output` reads the last 16 KiB of live output for a committed job on the attached conversation. The response carries UTF-8 text and a truncation flag. Terminal output comes from the job result.
 
 Job status is non-blocking and `job/wait` waits on the registry's exact finite
 Job ID through physical settlement. No client poll loop discovers completion;

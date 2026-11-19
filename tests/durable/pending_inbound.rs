@@ -1250,7 +1250,7 @@ fn mutation_failed_sql_transaction_changes_neither_payload_nor_revision() {
 }
 
 #[test]
-fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
+fn mutation_exact_identity_isolates_conversations_and_edits_text_blocks() {
     use rustx::durable::PendingMutationOutcome as Outcome;
     let (store, _) = file_store();
     let other = SqliteConversationStore::in_memory(ConversationId::new(
@@ -1277,17 +1277,21 @@ fn mutation_exact_identity_isolates_conversations_and_protects_typed_content() {
         other_accepted.message
     );
     assert_eq!(store.load_pending().unwrap()[0].message, accepted.message);
-    let mixed = store
+    let blocks = store
         .accept_inbound(InboundDraft {
             content: [text_blocks("first"), text_blocks("second")].concat(),
             ..human("unused")
         })
         .unwrap();
-    assert_eq!(
-        store.edit_pending(&pending_ref(&mixed), "flattened"),
-        Ok(Outcome::InvalidItem)
-    );
-    assert_eq!(store.load_pending().unwrap()[1].message, mixed.message);
+    assert!(matches!(
+        store.edit_pending(&pending_ref(&blocks), "replacement"),
+        Ok(Outcome::Applied { .. })
+    ));
+    let pending = store.load_pending().unwrap();
+    assert_eq!(pending[1].sequence, blocks.sequence);
+    assert_eq!(pending[1].message_id, blocks.message_id);
+    assert_eq!(pending[1].revision, 1);
+    assert_eq!(pending[1].message.content, text_blocks("replacement"));
     let notification = store
         .accept_inbound(runtime("background finished"))
         .unwrap();

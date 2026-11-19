@@ -20,7 +20,8 @@ use crate::runtime::types::{CancellationReason, RuntimeError};
 use crate::tools::background::BackgroundDispatchOutcome;
 use crate::tools::environment::ToolEnvironment;
 use crate::tools::executor::{
-    PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext, ToolRegistry,
+    PreflightOutcome, PreparedInvocation, ProgressReporter, ToolExecutionContext,
+    ToolExecutionHandle, ToolExecutor, ToolRegistry, start_tool_execution,
 };
 use crate::tools::types::{
     ToolCall, ToolCancellationPhase, ToolExecutionResult, ToolExecutionStatus, ToolInvocation,
@@ -124,6 +125,89 @@ fn concurrent_group_end(slots: &[CallSlot], index: usize) -> usize {
         end += 1;
     }
     end
+}
+
+fn promotes_native_bash(registry: &ToolRegistry, prepared: &PreparedInvocation) -> bool {
+    prepared.invocation.tool_name == crate::tools::native::BASH_TOOL_NAME
+        && matches!(prepared.origin, ToolOrigin::Builtin)
+        && registry
+            .definition_ordinal(&prepared.invocation.tool_id)
+            .and_then(|ordinal| registry.definition_at(ordinal))
+            .is_some_and(|definition| {
+                definition.execution_policy
+                    == crate::tools::types::ToolExecutionPolicy::ModelSelectable
+            })
+}
+
+fn explicit_bash_timeout(arguments: &serde_json::Value) -> Option<u64> {
+    arguments.get("timeout").and_then(serde_json::Value::as_u64)
+}
+
+/// One foreground operation that can hand its process to the Job registry.
+/// The normal foreground driver still owns its cancellation and settlement.
+struct BashHandoff<'a> {
+    executor: &'a Arc<dyn ToolExecutor>,
+    registry: &'a crate::tools::background::ConversationBackgroundRegistry,
+    capability: &'a crate::capabilities::AttemptCapabilityLease,
+    handoff: crate::tools::invocation::ForegroundHandoff,
+}
+
+impl ToolExecutor for BashHandoff<'_> {
+    fn progress_capability(&self) -> crate::tools::deadline::ToolProgressCapability {
+        self.executor.progress_capability()
+    }
+
+    fn start<'a>(
+        &'a self,
+        mut invocation: ToolInvocation,
+        context: ToolExecutionContext<'a>,
+    ) -> ToolExecutionHandle<'a> {
+        let cancellation = context.cancellation.clone();
+        let operation = async move {
+            let Some(leases) = self.capability.mcp_leases() else {
+                return failed_result("the admitted MCP generation is already physically retired");
+            };
+            let mut job = invocation.clone();
+            job.mode = ToolInvocationMode::Background;
+            match self.registry.stage_private(
+                &job,
+                self.executor,
+                context.environment.clone(),
+                leases,
+                context.cancellation.clone(),
+            ) {
+                Ok(stage) => {
+                    crate::tools::native::drive_private_bash(
+                        stage,
+                        &self.handoff,
+                        &context.cancellation,
+                        context.progress,
+                    )
+                    .await
+                }
+                Err(crate::tools::background::BackgroundDispatchError::GoalAdmissionInProgress) => {
+                    if let Some(object) = invocation.arguments.as_object_mut() {
+                        object.insert(
+                            "timeout".to_owned(),
+                            serde_json::json!(self.handoff.budget.as_secs().max(1)),
+                        );
+                    }
+                    start_tool_execution(&**self.executor, invocation, context)
+                        .completion
+                        .await
+                }
+                Err(crate::tools::background::BackgroundDispatchError::ConversationInactive {
+                    ..
+                }) => cancelled_result(if context.cancellation.is_cancelled() {
+                    context.cancellation.reason()
+                } else {
+                    CancellationReason::RuntimeShutdown
+                }),
+                Err(error) => failed_result(&error.to_string()),
+            }
+        };
+        ToolExecutionHandle::settled_by_operation(Box::pin(operation), cancellation)
+    }
 }
 
 /// A failed tool result.
@@ -1253,10 +1337,32 @@ impl AgentExecution<'_> {
         let cancellation_won = || self.park_after_tool_cancellation_settlement();
         #[cfg(test)]
         let completion_won = || self.park_after_tool_physical_settlement();
+        let registration = self.tool_registry().foreground_policy(&invocation.tool_id);
+        let mut invocation_to_execute = invocation.clone();
+        let handoff = if promotes_native_bash(self.tool_registry(), prepared) {
+            let budget = crate::tools::limits::bash_foreground_budget(explicit_bash_timeout(
+                &invocation_to_execute.arguments,
+            ));
+            if let Some(object) = invocation_to_execute.arguments.as_object_mut() {
+                object.remove("timeout");
+            }
+            let hard_deadline = registration
+                .resolve(self.tool_deadline_policy)
+                .hard_deadline;
+            (budget <= hard_deadline).then_some(BashHandoff {
+                executor: &executor,
+                registry: self.tool_runtime.background(),
+                capability: &self.capability,
+                handoff: crate::tools::invocation::ForegroundHandoff::new(budget),
+            })
+        } else {
+            None
+        };
         let driver = crate::tools::invocation::ForegroundInvocation {
             clock: &*self.monotonic_clock,
             policy: self.tool_deadline_policy,
-            registration: self.tool_registry().foreground_policy(&invocation.tool_id),
+            registration,
+            handoff: handoff.as_ref().map(|executor| &executor.handoff),
             #[cfg(test)]
             deadline_armed: Some(&armed),
             #[cfg(test)]
@@ -1264,8 +1370,14 @@ impl AgentExecution<'_> {
             #[cfg(test)]
             completion_won: Some(&completion_won),
         };
+        let execution: &dyn ToolExecutor = handoff.as_ref().map_or(&*executor, |executor| executor);
         let outcome = driver
-            .execute(&*executor, invocation.clone(), progress_capability, context)
+            .execute(
+                execution,
+                invocation_to_execute,
+                progress_capability,
+                context,
+            )
             .await;
         let result = outcome.result;
         let facts = outcome.facts;
@@ -1333,7 +1445,10 @@ impl AgentExecution<'_> {
                     .commit_dispatch_owned(prepared, &self.cancellation.signal())
                     .await
                 {
-                    Ok(BackgroundDispatchOutcome::Accepted { result, .. }) => result,
+                    Ok(
+                        BackgroundDispatchOutcome::Accepted { result, .. }
+                        | BackgroundDispatchOutcome::ForegroundFinished(result),
+                    ) => result,
                     // A rolled-back dispatch (attempt cancellation won at
                     // the ownership boundary) or a refused commit (the
                     // owning conversation runtime is not activated) both

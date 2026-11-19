@@ -89,7 +89,7 @@ pub use inbox::{
     AcceptedInbound, AdoptedBatch, ConversationInboundCapability, ConversationInteractionAudit,
     ConversationStoreBinding, GoalObservationReceipt, InboundDraft, InboxStore, PendingBatch,
     PendingInboundItem, PendingInboundRef, PendingMutationOutcome, PendingObservationReceipt,
-    canonical_block, interaction_audit_capability,
+    PendingSteerScope, canonical_block, interaction_audit_capability,
 };
 #[cfg(test)]
 pub(crate) use sqlite::conversation_store_opens_on_this_thread;

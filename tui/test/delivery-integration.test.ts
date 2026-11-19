@@ -226,9 +226,8 @@ async function inspectPresentDefinition(host:AppServerHost,session:AppServerSess
   const schema=original.input_schema;
   assert.ok(schema&&typeof schema==='object'&&'truncated' in schema&&'value' in schema);assert.equal(schema.truncated,false);
   const value=schema.value;
-  // Inspect the entire frozen contract: business constraints stay inside
-  // arguments, permission metadata remains outside, and single-use schemas
-  // need no provider-specific resource references.
+  // Present never requests escalation. Inspect the exact frozen business
+  // schema and compare it with the schema sent to the provider.
   assert.deepEqual(value, {
     $id: 'urn:rustx:invocation',
     $schema: 'https://json-schema.org/draft/2020-12/schema',
@@ -266,11 +265,6 @@ async function inspectPresentDefinition(host:AppServerHost,session:AppServerSess
             },
           },
         },
-      },
-      elevation_reason: {
-        type: ['string', 'null'],
-        maxLength: 512,
-        description: 'Optional reason requesting human escalation for this exact tool call under Plan or Automatic permission modes. Omit or leave null when no escalation is requested. At most 512 UTF-8 bytes when present. This is a reason only — never approval evidence — and it never reaches the tool\'s business executor.',
       },
     },
   });

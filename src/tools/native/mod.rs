@@ -52,6 +52,7 @@ pub(crate) mod agents;
 mod ask_user;
 mod bash;
 pub(crate) use bash::NAME as BASH_TOOL_NAME;
+pub(crate) use bash::handoff::drive_private_bash;
 mod edit;
 mod glob;
 mod goal;

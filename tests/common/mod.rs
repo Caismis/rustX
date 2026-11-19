@@ -995,12 +995,24 @@ pub fn tool_runtime(conversation_id: &str) -> ToolRuntimeFixture {
 /// is killed and reaped when the fixture drops.
 #[must_use]
 pub fn tool_runtime_with_execution(conversation_id: &str) -> ToolRuntimeFixture {
-    let mut fixture = tool_runtime(conversation_id);
+    tool_runtime_with_store_and_execution(conversation_id, None)
+}
+
+/// [`tool_runtime_with_execution`] with an explicitly configured durable
+/// authority, for suites that need both the admitted Client route and a
+/// durable store binding.
+#[must_use]
+pub fn tool_runtime_with_store_and_execution(
+    conversation_id: &str,
+    store: Option<Arc<dyn ConversationStore>>,
+) -> ToolRuntimeFixture {
+    let mut fixture = tool_runtime_with_store(conversation_id, store.clone());
     let execution =
         session_execution::ExecutionFixture::new(&fixture.storage_root().join("workspace"));
     let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
         fixture.runtime.conversation_id().clone(),
         rustx::tools::runtime::ConversationRuntimeConfig {
+            durable_binding: store.map(rustx::durable::ConversationStoreBinding::new),
             execution_scope: Some(execution.scope.clone()),
             ..rustx::tools::runtime::ConversationRuntimeConfig::new(
                 fixture.storage_root().join("workspace"),

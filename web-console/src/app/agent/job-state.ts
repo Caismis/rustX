@@ -6,8 +6,8 @@ export function jobActive(job: RuntimeClientJob): boolean {
   return job.state === 'starting' || job.state === 'running' || job.state === 'cancelling' || job.state === 'publishing_terminal';
 }
 
-export function jobDot(state: RuntimeClientJob['state']): StateDotState {
-  if (state === 'succeeded') return 'done';
+export function jobDot(state: RuntimeClientJob['state'], exitCode?: number | null): StateDotState {
+  if (state === 'succeeded') return exitCode == null || exitCode === 0 ? 'done' : 'warning';
   if (state === 'cancelled' || state === 'outcome_unknown' || state === 'cancelling' || state === 'denied') return 'warning';
   if (state === 'failed' || state === 'timed_out') return 'error';
   return 'ongoing';

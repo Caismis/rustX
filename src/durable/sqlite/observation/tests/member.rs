@@ -67,7 +67,7 @@ fn t09_t12_t19_pending_layout_cleanup_failure_cannot_refuse_native_adoption() {
         );
         assert_eq!(adopted.read_cut.pending_total, 0);
         assert_eq!(adopted.read_cut.ledger_through, 1);
-        assert_eq!(adopted.read_cut.transcript, before.transcript);
+        assert_eq!(adopted.read_cut.transcript, before.transcript + 1);
         let event = adopted.adoption.as_ref().unwrap();
         assert!(
             matches!(&event.event, RuntimeEvent::InboundTurnAdopted { message_ids } if message_ids == std::slice::from_ref(&accepted.message_id))

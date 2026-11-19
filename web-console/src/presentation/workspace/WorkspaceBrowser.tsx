@@ -32,14 +32,14 @@ export function WorkspaceBrowser({ unclassified = [], groups, sessions, selected
   useEffect(() => {
     if (draftGroup) setCollapsed(value => value.filter(key => key !== draftGroup));
   }, [draftGroup, draft?.binding]);
-  const draftRow = draft && <DraftConversationRow focus={draft.focus} flat={flat}/>;
+  const draftRow = draft && <DraftConversationRow focus={draft.focus}/>;
   const searchInput = useRef<HTMLInputElement>(null);
   // The Session tree is where keyboard navigation continues when a row's
   // actions menu loses its anchor: the row scrolled out of the tree, which
   // stays rendered and visible around it. Programmatically focusable, never a
   // Tab stop of its own; Tab from it enters its rows.
   const tree = useRef<HTMLDivElement>(null);
-  const row = (node: SessionNode) => renderSession(node, node => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onPin={pin} onCopyId={copyId} flat={flat || !!query} menuFocusOwner={tree} t={tx} />);
+  const row = (node: SessionNode) => renderSession(node, node => <SessionNodeItem key={node.id} node={node} currentId={selected} now={Date.now()} onOpen={open} onRename={rename} onFork={fork} onDelete={remove} onPin={pin} onCopyId={copyId} menuFocusOwner={tree} t={tx} />);
   return <section className={css.root} aria-label={tx('workspace:workspace-browser.workspaces-and-sessions')}>
     <div className={css.sectionHeader}>
       {<span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>{flat ? tx('workspace:workspace-browser.sessions') : tx('workspace:workspace-browser.workspaces')}</span>}

@@ -1353,8 +1353,8 @@ async fn fresh_terminal_inbound_status_shows_remaining_active_tasks() {
     assert_terminal_inbound_status(false).await;
 }
 
-/// Serial background admission in reversed call order makes allocation order
-/// deterministically differ from which task completes first.
+/// Separate model generations establish an allocation order that differs
+/// from the completion order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn terminal_inbound_status_survives_reversed_background_allocation() {
     assert_terminal_inbound_status(true).await;
@@ -1383,28 +1383,31 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
         "b2",
         serde_json::json!({"execution_mode": "background"}),
     );
-    let (first_call, second_call) = if reverse_order {
-        (&call_b2, &call_b1)
+    let call_batches: &[&[&ScriptedCall]] = if reverse_order {
+        &[&[&call_b2], &[&call_b1]]
     } else {
-        (&call_b1, &call_b2)
+        &[&[&call_b1, &call_b2]]
     };
+    let mut script = Vec::new();
+    for calls in call_batches {
+        let mut generation = vec![FakeStep::Emit(started())];
+        for (index, call) in (0_u32..).zip(calls.iter()) {
+            generation.extend(
+                tool_call_events(index, call)
+                    .into_iter()
+                    .map(FakeStep::Emit),
+            );
+        }
+        generation.push(FakeStep::Emit(done(ModelFinishReason::ToolCalls)));
+        script.push(generation);
+    }
+    let terminal_inbound_index = script.len() + 1;
     let (model_release_tx, model_release_rx) = support::fake::model_release();
-    let model = fake_model(vec![
+    script.extend([
         vec![
             FakeStep::Emit(started()),
-            FakeStep::Emit(tool_call_events(0, first_call)[0].clone()),
-            FakeStep::Emit(tool_call_events(0, first_call)[1].clone()),
-            FakeStep::Emit(tool_call_events(0, first_call)[2].clone()),
-            FakeStep::Emit(tool_call_events(1, second_call)[0].clone()),
-            FakeStep::Emit(tool_call_events(1, second_call)[1].clone()),
-            FakeStep::Emit(tool_call_events(1, second_call)[2].clone()),
-            FakeStep::Emit(done(ModelFinishReason::ToolCalls)),
-        ],
-        vec![
-            FakeStep::Emit(started()),
-            // The second model generation parks while the detached B1
-            // completes, so the terminal inbound provably enqueues after
-            // the first safe-boundary snapshot.
+            // Park after both jobs were admitted so B1 enqueues its terminal
+            // inbound after the preceding safe-boundary snapshot.
             FakeStep::ParkUntilReleased(model_release_rx),
             FakeStep::Emit(ModelEvent::TextDelta {
                 block_index: rustx::message::types::ContentBlockIndex::new(0),
@@ -1421,6 +1424,7 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
             FakeStep::Emit(done(ModelFinishReason::Stop)),
         ],
     ]);
+    let model = fake_model(script);
     let (tool_b1, release_b1) = FakeTool::parking(
         common::tool_policies("b1", "tool-b1", ToolExecutionPolicy::ModelSelectable),
         success_result("b1"),
@@ -1439,10 +1443,8 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
 
     let controller_registry = tool_runtime.background().clone();
     let controller = tokio::spawn(async move {
-        // Wait for the second model generation to park: that happens only
-        // after the first turn's safe-boundary selection already committed,
-        // so the terminal inbound below provably enqueues after that
-        // snapshot (and can never join the first batch).
+        // The tool-result continuation parks after both admits and the
+        // preceding safe-boundary selection committed.
         model_parked
             .wait_for(|is_parked| *is_parked)
             .await
@@ -1457,7 +1459,7 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
                     .map(|task| task.tool_name.as_ref())
                     .collect::<Vec<_>>(),
                 ["b2", "b1"],
-                "serial admission fixes the reversed allocation order"
+                "separate tool-call batches fix the reversed allocation order"
             );
         }
         let jobs = controller_registry.all_snapshots();
@@ -1478,8 +1480,8 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
         // terminal registry transition and its inbound enqueue share one
         // registry critical section, so observing the terminal registry
         // state deterministically means the enqueue already committed
-        // before the model is released — after the first safe-boundary
-        // snapshot, which B1 could not have reached while parked.
+        // before the model is released and after the preceding safe-boundary
+        // snapshot.
         release_b1.send_replace(true);
         wait_for_state(
             &controller_registry,
@@ -1499,24 +1501,23 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
     let (completed_job, active_job) = controller.await.expect("controller task");
 
     let requests = model.requests();
-    assert_eq!(requests.len(), 3);
-    // Request 2 is a foreground tool-result continuation: no Agent Status.
-    assert!(!requests[1].messages.iter().any(|message| {
-        matches!(
-            message.as_canonical(),
-            Some(MessageBlock::User(user))
-                if matches!(
-                    &user.kind,
-                    rustx::message::types::InboundKind::Context(
-                        rustx::message::types::ContextKind::AgentStatus(_)
+    assert_eq!(requests.len(), terminal_inbound_index + 1);
+    for continuation in &requests[1..terminal_inbound_index] {
+        assert!(!continuation.messages.iter().any(|message| {
+            matches!(
+                message.as_canonical(),
+                Some(MessageBlock::User(user))
+                    if matches!(
+                        &user.kind,
+                        rustx::message::types::InboundKind::Context(
+                            rustx::message::types::ContextKind::AgentStatus(_)
+                        )
                     )
-                )
-        )
-    }));
-    // Request 3 is the fresh terminal inbound turn: its canonical Agent
-    // Status fact shows
-    // only the remaining active task.
-    let status = requests[2]
+            )
+        }));
+    }
+    let terminal_inbound = &requests[terminal_inbound_index];
+    let status = terminal_inbound
         .messages
         .iter()
         .find_map(|message| match message.as_canonical() {
@@ -1550,7 +1551,7 @@ async fn assert_terminal_inbound_status(reverse_order: bool) {
         "semantic module order is Time then Background"
     );
     assert!(
-        requests[2]
+        terminal_inbound
             .messages
             .iter()
             .any(|message| matches!(message.as_canonical(), Some(MessageBlock::User(user)) if user.id.as_str() == format!("background-{completed_job}-terminal"))),

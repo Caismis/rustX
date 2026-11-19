@@ -14,6 +14,10 @@
 .action[aria-busy=true] { opacity: 1; color: var(--dsw-alias-button-info-fill); }
 
 @media (hover: hover) and (pointer: fine) {
+  :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering']):has(~ :is([data-chat-flow-kind='user'], [data-chat-flow-kind='steering'])):not(:hover):not(:focus-within) .actions {
+    opacity: 0;
+    transition: opacity 80ms ease;
+  }
   [data-response-reveal='hover'] .actions, .actions[data-response-reveal='hover'] { opacity: 0; transition: opacity 80ms ease; }
   [data-response-reveal='hover']:hover .actions, [data-response-reveal='hover']:focus-within .actions, .actions[data-response-reveal='hover']:hover, .actions[data-response-reveal='hover']:focus-within { opacity: 1; }
 }
