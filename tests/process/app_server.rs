@@ -336,6 +336,20 @@ fn local_exec_command(
     command
 }
 
+/// Grants exactly these environment roots in the fixture's authored
+/// config — the immutable allowlist the App Server's file queries are
+/// authorized against.
+fn grant_environment_roots(f: &Fixture, roots: &[PathBuf]) {
+    let authored = f.root.path().join("home/rustx/rustx.toml");
+    let mut source: toml::Value =
+        toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
+    source.as_table_mut().unwrap().insert(
+        "app_server".into(),
+        toml::Value::try_from(serde_json::json!({ "environment_roots": roots })).unwrap(),
+    );
+    std::fs::write(&authored, toml::to_string_pretty(&source).unwrap()).unwrap();
+}
+
 #[tokio::test]
 async fn local_execution_rejects_a_workspace_that_is_not_the_reserved_one() {
     bounded(async {
@@ -431,20 +445,13 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
         use rustx::app_server::protocol::*;
         let f = Fixture::new().await;
         // Both catalog workspaces are configured roots for this composition.
-        let authored = f.root.path().join("home/rustx/rustx.toml");
-        let mut source: toml::Value =
-            toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
-        source.as_table_mut().unwrap().insert(
-            "app_server".into(),
-            toml::Value::try_from(serde_json::json!({
-                "environment_roots": [
-                    std::fs::canonicalize(f.root.path().join("a")).unwrap(),
-                    std::fs::canonicalize(f.root.path().join("b")).unwrap(),
-                ]
-            }))
-            .unwrap(),
+        grant_environment_roots(
+            &f,
+            &[
+                std::fs::canonicalize(f.root.path().join("a")).unwrap(),
+                std::fs::canonicalize(f.root.path().join("b")).unwrap(),
+            ],
         );
-        std::fs::write(&authored, toml::to_string_pretty(&source).unwrap()).unwrap();
 
         // Same filename in both workspaces: only Session A may be served.
         let marker = b"only through the admitted client";
@@ -602,6 +609,198 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
             };
             assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
         }
+
+        client.close().await;
+        terminate(&child);
+        let output = child.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    })
+    .await;
+}
+
+/// Product-entrance proof of the Client's private mount view: the real
+/// two-process composition serves Session A's workspace from the
+/// Client's `bwrap` bind mount, never the Server's view of the same
+/// absolute path. Linux-only and opt-in — `bwrap` is a hard requirement
+/// of the proof, and the wrapping launcher exists only inside this
+/// fixture's private bin directory; no production override exists.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+#[ignore = "requires Linux mount namespace; run test-support/prove_execution_mount_view.sh"]
+async fn explicit_composition_reads_from_client_mount_namespace() {
+    bounded(async {
+        use base64::Engine as _;
+        use rustx::app_server::protocol::*;
+        use std::os::unix::fs::PermissionsExt;
+        assert!(
+            std::env::var_os("RUSTX_MOUNT_VIEW_PROOF").is_some(),
+            "opt-in proof only: run test-support/prove_execution_mount_view.sh"
+        );
+        assert!(
+            std::fs::metadata("/usr/bin/bwrap")
+                .is_ok_and(|meta| meta.permissions().mode() & 0o111 != 0),
+            "the mount-view proof requires an executable /usr/bin/bwrap"
+        );
+
+        let f = Fixture::new().await;
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        grant_environment_roots(&f, std::slice::from_ref(&workspace));
+
+        // The Server's own view of the workspace holds only a decoy the
+        // Client's mount never sees; the marker exists only in the
+        // physical directory the launcher bind-mounts over the workspace
+        // path inside the Client's mount namespace.
+        let decoy = workspace.join("server-only");
+        std::fs::write(&decoy, b"server-side only").unwrap();
+        let rustx = isolated_server_bin(f.root.path());
+        let bin = f.root.path().join("bin-only");
+        // The staged sibling is the only trusted source for the real
+        // Client — never a runtime build, PATH lookup, or fallback.
+        let staged = std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client");
+        assert!(
+            staged.is_file(),
+            "staged Execution Client is absent: {staged:?}"
+        );
+        std::fs::hard_link(&staged, bin.join("client-real"))
+            .or_else(|_| std::fs::copy(&staged, bin.join("client-real")).map(|_| ()))
+            .unwrap();
+        let physical = bin.join("physical");
+        std::fs::create_dir(&physical).unwrap();
+        let marker = b"mount-view proof marker";
+        std::fs::write(physical.join("marker"), marker).unwrap();
+        // The test-only launcher: `$4` is the Server's explicit trusted
+        // `--workspace` value; the real Client still rechecks it byte for
+        // byte against the bootstrap record.
+        let launcher = bin.join("rustx-execution-client");
+        std::fs::write(
+            &launcher,
+            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --ro-bind \"$bin/physical\" \"$4\" -- \"$bin/client-real\" \"$@\"\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Before the exchange the Server's own view has no marker.
+        assert_eq!(
+            std::fs::metadata(workspace.join("marker"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+
+        let mut child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+
+        // fs/readFile serves the marker through the admitted Client's
+        // mount view — bytes the Server's filesystem cannot see.
+        let MethodResult::FileChunk { chunk } = result(
+            &client,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readFile through the Client's mount view")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap(),
+            marker
+        );
+        // The stamp is the physical source's own — ro-bind preserves the
+        // same dev:ino identity the Server would stamp.
+        let expected = rustx_confined_fs::FileMetadata::of(
+            &std::fs::File::open(physical.join("marker")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(chunk.metadata.revision, expected.revision);
+        assert_eq!(chunk.metadata.identity, expected.identity);
+        assert_eq!(chunk.metadata.size, expected.size);
+
+        let MethodResult::FileMetadata { metadata } = result(
+            &client,
+            Method::FsGetMetadata {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+            },
+        )
+        .await
+        else {
+            panic!("fs/getMetadata through the Client's mount view")
+        };
+        assert!(metadata.is_file);
+        assert_eq!(metadata.revision, expected.revision);
+        assert_eq!(metadata.identity, expected.identity);
+
+        // The listing is the Client's view: the marker, never the
+        // Server-side decoy.
+        let MethodResult::DirectoryPage { page } = result(
+            &client,
+            Method::FsReadDirectory {
+                session_id: f.sessions[0].clone(),
+                path: workspace.display().to_string(),
+                offset: 0,
+                limit: 16,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readDirectory through the Client's mount view")
+        };
+        assert_eq!(
+            page.entries
+                .iter()
+                .map(|entry| entry.file_name.as_str())
+                .collect::<Vec<_>>(),
+            ["marker"]
+        );
+
+        // The decoy is absent in the Client's view: NotFound, and no
+        // Server-local fallback can serve it either.
+        let Response::Failure(failure) = rpc(
+            &client,
+            11,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: decoy.display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("the Server-side decoy must stay unreachable")
+        };
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::EnvironmentResourceNotFound)
+        );
+
+        // After the exchange the Server's view is untouched: still no
+        // marker, the decoy intact.
+        assert_eq!(
+            std::fs::metadata(workspace.join("marker"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        assert_eq!(std::fs::read(&decoy).unwrap(), b"server-side only");
 
         client.close().await;
         terminate(&child);

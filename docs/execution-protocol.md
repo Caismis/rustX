@@ -676,7 +676,8 @@ cargo run --profile test --all-features --locked --example check_test_lanes -- -
 ```
 
 Distinct mount-view evidence (Linux, opt-in, requires bubblewrap — a
-read-only T02 fragment, not a CI gate):
+read-only T02 fragment, not a CI gate). One script runs both proofs:
+the boundary-layer RPC and the product-entrance composition:
 
 ```sh
 test-support/prove_execution_mount_view.sh
@@ -712,7 +713,18 @@ violations, and clean-EOF versus truncated-record exit status. On Linux
 the opt-in `range_read_from_private_mount_view` proof reads the marker
 through a `bwrap` private bind mount of the same absolute workspace path
 while the server side proves the marker stays `NotFound` before and
-after the RPC — a read-only T02 fragment.
+after the RPC — a read-only T02 fragment. Its product-entrance
+counterpart, `explicit_composition_reads_from_client_mount_namespace`
+in the `process` target, composes the real App Server pair with a
+test-only sibling launcher that wraps the staged Client in the same
+`bwrap` layout (a fixture artifact only — production resolves the
+sibling executable directly and has no override): the product
+`fs/readFile`, `fs/getMetadata`, and `fs/readDirectory` calls then
+serve the marker bytes and the source stamp from the Client's mount
+view, the listing shows the marker and never the Server-side decoy,
+the decoy read is `EnvironmentResourceNotFound` with no Server-local
+fallback, and the Server's own view keeps the marker `NotFound` and
+the decoy intact before and after.
 T03/T24/T28's connection-singularity,
 dependency-boundary, and cross-instance rejection portions and T42's
 bounded-read portion have their first coverage here; the remainder of
