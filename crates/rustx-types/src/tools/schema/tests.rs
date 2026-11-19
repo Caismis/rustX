@@ -29,10 +29,10 @@ fn static_tool_references_use_root_defs_for_provider_requests() {
         "$defs": {"value": {"type": "integer"}},
         "additionalProperties": false,
     });
-    let model = compile_model_definition(&definition(
-        ToolExecutionPolicy::ModelSelectable,
-        canonical.clone(),
-    ))
+    let model = compile_model_definition(
+        &definition(ToolExecutionPolicy::ModelSelectable, canonical.clone()),
+        true,
+    )
     .unwrap();
     let reference = model.input_schema["properties"]["arguments"]["$ref"]
         .as_str()
@@ -60,10 +60,10 @@ fn single_use_open_objects_stay_inline_and_preserve_arbitrary_json() {
             "metadata":{"type":"object", "additionalProperties":true},
         }, "required":["action"],
     });
-    let compiled = compile_model_definition(&definition(
-        ToolExecutionPolicy::ForegroundOnly,
-        canonical.clone(),
-    ))
+    let compiled = compile_model_definition(
+        &definition(ToolExecutionPolicy::ForegroundOnly, canonical.clone()),
+        true,
+    )
     .unwrap();
     assert_eq!(compiled.input_schema["properties"]["arguments"], canonical);
     assert!(compiled.input_schema.get("$defs").is_none());
@@ -89,9 +89,11 @@ fn shared_schemas_remain_shared_instead_of_expanding_a_dag() {
         },
         "$defs":{"shared":{"type":"object", "properties":{"value":{"type":"string"}}}},
     });
-    let compiled =
-        compile_model_definition(&definition(ToolExecutionPolicy::ForegroundOnly, canonical))
-            .unwrap();
+    let compiled = compile_model_definition(
+        &definition(ToolExecutionPolicy::ForegroundOnly, canonical),
+        true,
+    )
+    .unwrap();
     let root = &compiled.input_schema["properties"]["arguments"];
     assert_eq!(root["type"], "object");
     let reference = root["properties"]["left"]["$ref"].as_str().unwrap();
@@ -136,7 +138,7 @@ fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
             ToolExecutionPolicy::ModelSelectable,
         ] {
             let original = definition(policy, schema.clone());
-            let compiled = compile_model_definition(&original).unwrap();
+            let compiled = compile_model_definition(&original, true).unwrap();
             assert_eq!(original.input_schema.as_ref(), &schema);
             let model = build_validator(&compiled.input_schema).unwrap();
             for business in &values {
@@ -154,7 +156,9 @@ fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
                         "schema={schema}, call={envelope}"
                     );
                     assert_eq!(
-                        resolve_invocation_metadata(policy, &envelope).unwrap().2,
+                        resolve_invocation_metadata(&original, &envelope, true)
+                            .unwrap()
+                            .2,
                         *business
                     );
                 }
@@ -165,6 +169,14 @@ fn wrapped_projection_preserves_business_semantics_and_metadata_names() {
 
 #[test]
 fn decoder_rejects_flat_calls_unknown_metadata_and_missing_business() {
+    let selectable = definition(
+        ToolExecutionPolicy::ModelSelectable,
+        json!({"type":"object"}),
+    );
+    let foreground = definition(
+        ToolExecutionPolicy::ForegroundOnly,
+        json!({"type":"object"}),
+    );
     for call in [
         json!({}),
         json!({"command":"status"}),
@@ -174,21 +186,19 @@ fn decoder_rejects_flat_calls_unknown_metadata_and_missing_business() {
         json!({"arguments":{},"execution_mode":"foreground"}),
     ] {
         assert!(
-            resolve_invocation_metadata(ToolExecutionPolicy::ForegroundOnly, &call).is_err(),
+            resolve_invocation_metadata(&foreground, &call, true).is_err(),
             "{call}"
         );
     }
     assert!(matches!(
-        resolve_invocation_metadata(
-            ToolExecutionPolicy::ModelSelectable,
-            &json!({"arguments":{}})
-        ),
+        resolve_invocation_metadata(&selectable, &json!({"arguments":{}}), true),
         Err(SchemaError::MissingExecutionMode)
     ));
     assert!(matches!(
         resolve_invocation_metadata(
-            ToolExecutionPolicy::ModelSelectable,
-            &json!({"arguments":{},"execution_mode":"later"})
+            &selectable,
+            &json!({"arguments":{},"execution_mode":"later"}),
+            true,
         ),
         Err(SchemaError::InvalidExecutionMode(_))
     ));
@@ -196,18 +206,23 @@ fn decoder_rejects_flat_calls_unknown_metadata_and_missing_business() {
 
 #[test]
 fn decoder_enforces_elevation_utf8_budget_and_preserves_business_names() {
+    let foreground = definition(
+        ToolExecutionPolicy::ForegroundOnly,
+        json!({"type":"object"}),
+    );
     for reason in [json!(null), json!("  "), json!("\n")] {
         assert_eq!(
             resolve_invocation_metadata(
-                ToolExecutionPolicy::ForegroundOnly,
-                &json!({"arguments":{},"elevation_reason":reason})
+                &foreground,
+                &json!({"arguments":{},"elevation_reason":reason}),
+                true,
             )
             .unwrap()
             .1,
             None
         );
     }
-    assert_eq!(resolve_invocation_metadata(ToolExecutionPolicy::ForegroundOnly,&json!({"arguments":{"elevation_reason":7,"execution_mode":false},"elevation_reason":"  permit  "})).unwrap(),(ToolInvocationMode::Foreground,Some("permit".into()),json!({"elevation_reason":7,"execution_mode":false})));
+    assert_eq!(resolve_invocation_metadata(&foreground,&json!({"arguments":{"elevation_reason":7,"execution_mode":false},"elevation_reason":"  permit  "}),true).unwrap(),(ToolInvocationMode::Foreground,Some("permit".into()),json!({"elevation_reason":7,"execution_mode":false})));
     for reason in [
         json!("界".repeat(171)),
         json!("x".repeat(513)),
@@ -217,16 +232,18 @@ fn decoder_enforces_elevation_utf8_budget_and_preserves_business_names() {
     ] {
         assert!(matches!(
             resolve_invocation_metadata(
-                ToolExecutionPolicy::ForegroundOnly,
-                &json!({"arguments":{},"elevation_reason":reason})
+                &foreground,
+                &json!({"arguments":{},"elevation_reason":reason}),
+                true,
             ),
             Err(SchemaError::InvalidElevationReason(_))
         ));
     }
     assert!(
         resolve_invocation_metadata(
-            ToolExecutionPolicy::ForegroundOnly,
-            &json!({"arguments":{},"elevation_reason":"界".repeat(170)})
+            &foreground,
+            &json!({"arguments":{},"elevation_reason":"界".repeat(170)}),
+            true,
         )
         .is_ok()
     );
@@ -249,7 +266,7 @@ fn only_selectable_policy_has_outer_execution_selector() {
         ),
     ] {
         let model =
-            compile_model_definition(&definition(policy, json!({"type":"object"}))).unwrap();
+            compile_model_definition(&definition(policy, json!({"type":"object"})), true).unwrap();
         let selectable = policy == ToolExecutionPolicy::ModelSelectable;
         assert_eq!(
             model.input_schema["properties"]
@@ -267,7 +284,13 @@ fn only_selectable_policy_has_outer_execution_selector() {
             );
         }
         assert_eq!(
-            resolve_invocation_metadata(policy, &envelope).unwrap().0,
+            resolve_invocation_metadata(
+                &definition(policy, json!({"type":"object"})),
+                &envelope,
+                true
+            )
+            .unwrap()
+            .0,
             mode
         );
     }
@@ -281,8 +304,11 @@ fn invalid_schema_is_rejected_before_it_can_be_hidden_by_reference_rewriting() {
         json!({"type":"object","$ref":"#/missing"}),
     ] {
         assert!(
-            compile_model_definition(&definition(ToolExecutionPolicy::ForegroundOnly, schema))
-                .is_err()
+            compile_model_definition(
+                &definition(ToolExecutionPolicy::ForegroundOnly, schema),
+                true,
+            )
+            .is_err()
         );
     }
 }
@@ -299,7 +325,11 @@ fn business_validation_never_reads_a_schema_reference_from_the_host() {
     assert!(error.to_string().contains("does not fetch resources"));
     assert!(!error.to_string().contains(marker));
     assert!(
-        compile_model_definition(&definition(ToolExecutionPolicy::ForegroundOnly, schema)).is_err()
+        compile_model_definition(
+            &definition(ToolExecutionPolicy::ForegroundOnly, schema),
+            true
+        )
+        .is_err()
     );
 }
 
@@ -312,4 +342,65 @@ fn dependency_defaults_cannot_reintroduce_schema_host_access() {
     // This intentionally bypasses our explicit builder. The dependency feature
     // boundary also protects owner paths that construct their own validator.
     assert!(Validator::new(&schema).is_err());
+}
+
+#[test]
+fn elevation_metadata_follows_tool_identity_and_the_permission_matrix() {
+    let reason = json!({"arguments": {}, "elevation_reason": "request approval"});
+    let mut tool = definition(
+        ToolExecutionPolicy::ForegroundOnly,
+        json!({"type": "object"}),
+    );
+    for (name, expected) in [
+        ("read", false),
+        ("read_image", false),
+        ("glob", false),
+        ("grep", false),
+        ("todo", false),
+        ("get_goal", false),
+        ("update_goal", false),
+        ("ask_user", false),
+        ("present", false),
+        ("job_status", false),
+        ("write", true),
+        ("edit", true),
+        ("bash", true),
+        ("create_goal", true),
+    ] {
+        tool.name = name.into();
+        let model = compile_model_definition(&tool, expected).unwrap();
+        assert_eq!(
+            model.input_schema["properties"]
+                .get(ELEVATION_REASON_FIELD)
+                .is_some(),
+            expected,
+            "{name}"
+        );
+        assert_eq!(
+            resolve_invocation_metadata(&tool, &reason, expected).is_ok(),
+            expected,
+            "{name}"
+        );
+        assert!(resolve_invocation_metadata(&tool, &json!({"arguments":{}}), expected).is_ok());
+    }
+    tool.name = "get_goal".into();
+    tool.id = crate::runtime::identity::ToolId::new("tool-workflow-get_goal");
+    assert!(
+        compile_model_definition(&tool, true).unwrap().input_schema["properties"]
+            .get(ELEVATION_REASON_FIELD)
+            .is_some()
+    );
+    assert!(resolve_invocation_metadata(&tool, &reason, true).is_ok());
+    tool.id = crate::runtime::identity::ToolId::new("tool-host-read");
+    tool.name = "read".into();
+    tool.origin = ToolOrigin::Host {
+        namespace: None,
+        name: "read".into(),
+    };
+    assert!(
+        compile_model_definition(&tool, true).unwrap().input_schema["properties"]
+            .get(ELEVATION_REASON_FIELD)
+            .is_some()
+    );
+    assert!(resolve_invocation_metadata(&tool, &reason, true).is_ok());
 }

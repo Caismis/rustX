@@ -261,7 +261,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "d66b2def7067e62230cdb4658790550840ba79dcc9c8d01805ca113db5b1fc25",
+      "local_sha256": "4f1806f54960054b985ee19eafc05243aad93aa528144a145421c3570f39e7e0",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.tsx",
@@ -310,7 +310,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "760bd15d9da1ba97578830585d80f049fc131f551b18bd226339457e22b00eaa",
+      "local_sha256": "b1a658cb26a1d89e165e536d6b62df17a91a40876e719a2f7eaf6ec2d5ec5ecf",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.tsx",
@@ -502,7 +502,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "1541db1949246a7ada35837acad65258a985f4eaccf0b116759cf2698dee785e"
+      "local_sha256": "7f40178b3afe43c2f3120d0000f429caaf523e6edc136c262f209af4044826ac"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/queue/QueueDock.tsx",
@@ -514,9 +514,15 @@
         "../../../../protocol/app-server/v80",
         "../../bindings/composer-context",
         "../../client/contracts",
+        "../../client/session-uploads",
         "../../locale/react",
         "../../locale/translation",
+        "../../presentation/primitives/FileTypeIcon",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/clipboard",
+        "../../presentation/primitives/file-size",
         "../../presentation/primitives/icons",
+        "../components/Artifact",
         "./QueueDock.module.css",
         "react"
       ],
@@ -528,7 +534,7 @@
         "Harness per-row steer/reclassification and queue storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "9c696da68703b40dc72db4aefdaa65c993f619bcac76ab34ffbfbbe3e3af29eb"
+      "local_sha256": "abb33c54394450b88a889547406fe13fe88510e02d99c6787917214ff146dab3"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.module.css",
@@ -542,7 +548,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "excluded_dependencies": [],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "e1218e6c8ccf76d6507adfb6e5604416ce1b439ef33a6cc55507f3ec3290a382"
+      "local_sha256": "09af7ca9c33b002dbfb9d88ce3c6fecbef1f80fb0b90ebc1c273d2cdaa305919"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/skeleton/TodoPanel.tsx",
@@ -554,6 +560,7 @@
         "../../bindings/composer-context",
         "../../locale/react",
         "../../locale/translation",
+        "../../presentation/primitives/StateDot",
         "../../presentation/primitives/icons",
         "./TodoDock.module.css",
         "react"
@@ -566,7 +573,7 @@
         "Harness locale runtime"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "568a2403353969212627cc14e532d58aac23d42d5e59a48df5ff57aabbaf5686"
+      "local_sha256": "e64665808d56947ba58fce44d32e58f1d975271456eff28e18300e043527f3c8"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/input/submission-policy.ts",
@@ -795,7 +802,7 @@
         "provider configuration authority"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "e349d05bec75b9495771501d4fadf88a65f45b8423682e67e5abe355ef8d5c22",
+      "local_sha256": "242d32f80c17f888899bab1c4a9eb2130311c92c462341ec2c9211c32f3c9428",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTurnHeader.module.css",
@@ -910,7 +917,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "3cadbbcb00dfdfcf0a153bedf099bcc389cd9a3637e84e2338a3bdf460f13b49"
+      "local_sha256": "3440e4ee4b84ce87304abe5e493a7c4ab61aadad910804f9f73f7f80c5780c8b"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -918,6 +925,7 @@
       "treatment": "Issue #394: Harness presentation grammar adapted to native TraceProjection facts and local semantic display items; exact owner/facet selection, Calls scope, bounded keyed virtualization, native timing, React Aria Inspector and library-owned resize. No Harness runtime authority; see PROVENANCE.md parity table. Issue #406: current App Server v24 type imports / TurnTail owner imports; upstream presentation otherwise retained. Issue #407: one native-identity Turn projection shared by ledger and timeline, semantic System Prompt cells, and ordinal-independent interaction state. Issue #407 review: Timeline focus owned by the Trace read epoch; exact native Attempt/Step records inspectable as bounded structural evidence without detail reads. Issue #410: browser-owned subscribed locale presentation, stable semantic IDs and untranslated native facts. Issue #410 review: layout-only Questionnaire mirror kept out of the locale; one typed context-kind/facet label owner with locale-independent search. Issue #419: client-owned startup handoff/pending presentation and mandatory App Server v24 imports; upstream reference unchanged. Issue #420: mandatory protocol import and/or incremental Chat ownership adaptation; upstream pin unchanged. Issue #421: mandatory v26 import and/or semantic ledger convergence. PR #424: mandatory App Server v28 imports. PR #425: mandatory App Server v29 imports. Issue #430: native conversation reading/width ownership; existing upstream baseline unchanged. Issue #434: mandatory App Server v35 imports and native attachment intake/recovery integration; upstream source baseline unchanged. Session configuration observation (App Server v35 / Runtime Client v58): generated protocol import only; upstream reference unchanged. Header/Trajectory chrome alignment: Harness title crumb, compact header controls, toolbar, role tags, turn label and detail header. Harness ledger: Steps have no chrome, seats or navigation targets; the Turn label is the only selectable structure. Trace input ownership repair: current App Server v39 imports and protocol display; upstream source unchanged. Trajectory Harness parity (UI repair): details panel tabs, overview sections, DSH resize handle and narrow overlay; overview lane-label safe area, clipped zoom/pan domain and delayed block tooltip; ledger rows without rustX-only fold carets, call toggles, state words or Turn-structure inspector. Native Tool Trace location: App Server v44 imports and exact occurrence navigation; existing upstream baseline unchanged. Main integration #456: general Model Profiles and JSON-object request parameter authoring; existing upstream baseline unchanged. Issue #467: exact native decimal u64 usage and context quantities use BigInt for accounting and formatting; opaque source bytes and upstream reference unchanged. #464: App Server v47 generated-protocol import path. #467: App Server v48 current generated-protocol import path. #467: retain positive bounded Trace descriptors and explicit selected field windows at their original native cuts; upstream presentation reference unchanged. PR #477 final contract repair: mandatory App Server v49 import for nullable native-covered Tool wire correlation; upstream reference unchanged. PR #478: reconciled bounded observation with immutable model-context projections under App Server v50. PR #478 compaction integration: display the original Completed-J bounded summary in the existing Inspector; truncated Summary and Raw Output retain explicit deferred wording. ProjectionHistory remains the independent original checkpoint inspector. Background task alignment: native dispatch acceptance, task settlement and historical observations retain independent ownership; header grouping, native timing and output formatting are presentation only. Native Tool detail alignment: shared compact result presentation and one Inspect path; duplicate execution JSON disclosures removed; native lifecycle and original Trace Result remain authoritative. App Server v51: mandatory current generated-protocol import; upstream presentation and native ownership remain unchanged. Preserve explicit truncation disclosure when selected compaction content is only a bounded preview. Main #494 integration: current App Server v54 imports and native auxiliary delivery integration; retained branch presentation and upstream source baseline. Issue #499: mandatory App Server v57 imports and native submission-intent/readiness integration; upstream baseline and licenses unchanged. Issue #504: mandatory App Server v58 imports and selected-Workspace MCP preparation integration; upstream baseline and licenses unchanged. Combined App Server v62 integration: preserve optimized presentation with native preview identities, selected-Workspace readiness and structured model capability. Issue #510: mandatory App Server v62 type imports; upstream source pin unchanged. Scheduler UI alignment: mandatory App Server v62 imports and native task navigation; original upstream baseline retained. Workflow data nodes: mandatory App Server v69 generated-protocol imports; retained presentation and upstream baseline unchanged. PR #521 revision: mandatory App Server v69 imports and reviewed presentation corrections; upstream baseline unchanged.am baseline retained. Issue #518: mandatory App Server v72 imports and automatic Session configuration commit; upstream source pin unchanged. Issue #518 review: a configuration record shows its retained effective instructions through the record detail cut. Trace history review: expose native gap continuations independently of visible rows and require a contiguous native prefix through the selected owner for cumulative usage. Combined App Server v80 imports; upstream pin and licenses retained.",
       "upstream_sha256": "465ce52a8988b3d841438eff50de0ba128ca6dae3dc34289bd9ae75791bd1fa5",
       "retained_dependencies": [
+        "../../../../protocol/app-server/content-identity",
         "../../../../protocol/app-server/model-tool-call",
         "../../../../protocol/app-server/trace-identity",
         "../../../../protocol/app-server/v80",
@@ -938,10 +946,12 @@
         "../../presentation/primitives/clipboard",
         "../../presentation/primitives/icons",
         "../../presentation/primitives/json",
+        "../agent/UserMessageVersions",
         "../agent/workflow-state",
         "../components/Artifact",
         "./Trajectory.module.css",
         "./TrajectoryCell",
+        "./TrajectoryRow",
         "./layout",
         "./timeline",
         "./useTraceContent",
@@ -995,7 +1005,7 @@
           "treatment": "Render recorded image results in the shared inline gallery."
         }
       ],
-      "local_sha256": "5a73db327cd023557b4c23a78ebcd62dd16662744c04986f41cef83dd58c0abd"
+      "local_sha256": "9c800db6c3f9f36dffdb43abf3d7a11edc163460f8c7738ac857a3c653f00148"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTimeline.module.css",
@@ -1269,7 +1279,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "0694f0912d2f88e30e36ece65721cf6fa053458db4d657d2fde8fdd320083f55",
+      "local_sha256": "c78c6210d4dc14ab9ac473aa084141a3e129490cd7c196e62c387bb433ba46f9",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.module.css",
@@ -1541,7 +1551,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "692ce461cd4bcf7d970e67195e1d2c41622fcce417452b633d68c77daf9382af",
+      "local_sha256": "67b9821f071cf290a590d90e33ba0b9dc9671c6f654a9c8de10a5d35d4490fb6",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-user-questions/src/client/QuestionComposer.module.css",
@@ -1672,7 +1682,7 @@
         "Host/Remote runtime and permission presets",
         "browser Tool lifecycle and interaction settlement"
       ],
-      "local_sha256": "eed5f1961645e45a02d349da7769ad29c23a8dd7b045fcac6bdf54fa1e6215e0",
+      "local_sha256": "aaf8b4df7daacca9670ceb0cde9a5de8f89dd30dc8ed39549e3ebfafa0b9b133",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-tool/src/client/tool/components/ToolRow.tsx",
@@ -2300,7 +2310,7 @@
         "react",
         "react-dom"
       ],
-      "local_sha256": "610da056ebf0022acf7796129b75aac306328d0cecab4ead0304e827dcdde12c",
+      "local_sha256": "83585f101c96f43e2a19f4158f052f92b47f27f502e59a4c1e7d078f0bbf1d41",
       "classification": "A",
       "additional_sources": [
         {
@@ -2696,7 +2706,7 @@
         "provisional Session identity, archive, durable browser membership"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "9474f2337b29c3584fad079ca9c82ea2129f13f9402d9ea93aa554d28a62e3de",
+      "local_sha256": "bd02987abf1d100ec41d9a80c4ee51c7e68965537851efdc92ce0be02395202e",
       "classification": "A",
       "additional_sources": [
         {
@@ -2766,7 +2776,7 @@
       "treatment": "Adapted header, bounded scrolling text and wrap styling; excludes Host filesystem, slots, registry and automatic reload. Issue #441: bounded Session preview workspace presentation and externally retained view metadata; existing upstream source baseline unchanged. Preview sidebar alignment: two 38px rows, shared dockkit file chips and icon chrome; header visibility is independent of docked layout.",
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
       "upstream_sha256": "792d87ed962b3fcbe39a50fca6f29faf4ca92dec4b63b6b260b14b74378e1e82",
-      "local_sha256": "6a46037edf5d7d0c489a372df4bfc3e84b5a09a4640e3331cd80a564884f3250",
+      "local_sha256": "de2478bdf849f8218c643df3530fbb98c9bbde8bbc75acc82320d79cc8b3e6c9",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [
@@ -2912,7 +2922,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "d957e84356fbaf90f29e6fb190c7b7bd6ec920dd05330f95a4e55a1ceba9076c",
+      "local_sha256": "866542e9aeedbf4f4ed00e2c6157d526295530913daa691f3c01baf30ba2ea0b",
       "retained_dependencies": [],
       "classification": "B"
     },
@@ -2937,7 +2947,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "c4e9f4c01fd1236d962beaee5b507e1bddf03a8a43e6455f6dba6fccdb3ed633",
+      "local_sha256": "b8246f03efdc1d9ddc0603791e7440a27db65962f126805fb14ae0392cae16bc",
       "classification": "B",
       "additional_sources": [
         {
@@ -3091,7 +3101,7 @@
         "desktop/titlebar/update authority",
         "provisional Session identity, archive, durable browser membership"
       ],
-      "local_sha256": "21548f2d70312ca09cb56742393159019460511f30a1474c62ed165903fd934f",
+      "local_sha256": "7fb72665e6077ac9f0df33aa2d8fccaa7fd114f90bf6b6894b1e0260174d0ecb",
       "retained_dependencies": [],
       "classification": "B",
       "additional_sources": [
@@ -3136,7 +3146,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "03d0d6d9fc590c2adeffb11380b73c793fbd7137f6dee738244162b3a281e083",
+      "local_sha256": "a191c30c1fc0a1aaf694ec19a6cfdfdf5ae498db8a1e8582bc0f23de595df8e2",
       "classification": "B",
       "additional_sources": [
         {
@@ -3214,7 +3224,7 @@
         "clsx",
         "react"
       ],
-      "local_sha256": "785dd59f0717fc4ea994ed09729649b0962ec166aeafda2368d8a4b806ae177e",
+      "local_sha256": "3b8b1d80f4c940ef5e70ed5381ec672548ac5cd2027829654579f7ba73073151",
       "classification": "B",
       "additional_sources": [
         {
@@ -3297,7 +3307,7 @@
         }
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "13bf686c7c2b575c8401df6601e99ba942cf14e4de62ed80f996bd209c5f393b"
+      "local_sha256": "6482b355a216e797496677c0c3595d61ce164c7fe3842e76cc1ad0089892f900"
     },
     {
       "upstream": "packages/client/ui-primitives/tests/markdown-incremental.client.spec.tsx",
@@ -3463,7 +3473,7 @@
         "Cordis/plugin slots"
       ],
       "commit": "ddefc45fbc7f8e46dd73185e68295696d1297887",
-      "local_sha256": "ea61476de3fb7af9391a19c87fa5662a0bb4e9282213ab132a871fd8c0d59854"
+      "local_sha256": "f59d80a6deaefda610490c88df41150c2e34c3394934c86179375c958c075bbf"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -3556,7 +3566,7 @@
         "Harness provider/permission semantics",
         "ANSI interpreter (native bounded text remains verbatim)"
       ],
-      "local_sha256": "e96665d112971663a4c63ccea7567ae60682b3ca2f655c071c6346b172a80ef8",
+      "local_sha256": "9803094f3388a9eeb168fedfc97c171719a7b3fae9cf4e6dd1bb3a4022b8b251",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-workspace/src/client/WorkspacePicker.tsx",
@@ -4022,7 +4032,7 @@
           "treatment": "Task count, stop confirmation, duration and output disclosure wording follows the Harness job menu."
         }
       ],
-      "local_sha256": "b47bd69fd19ae2d6a229d4108aea49b25e830e1ec4424bd3ecdef8083728ae3a"
+      "local_sha256": "b9adeda7a274a9a8f808c48ed0c221ba4f021dba557031c8fce16c214f68dba6"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4052,7 +4062,7 @@
           "treatment": "Add the English/Chinese pending-message label for the Harness-style sending progress, driven by rustX native admission state."
         }
       ],
-      "local_sha256": "c193227f9daf529c54f8d9cea255e6a8cd5e0d603b7c014dc4f67fa95df1d83a"
+      "local_sha256": "ae9ba24a07330fd685784586f22e24b9e5de19112f6002e1768004d3284e5845"
     },
     {
       "destination": "web-console/src/locale/dictionaries/workspace.ts",
@@ -4100,7 +4110,7 @@
         "dynamic language registration"
       ],
       "additional_sources": [],
-      "local_sha256": "91a17583365a40622c88976e1e09da92ebd47d461db5ea5b41338acd7de3aa74"
+      "local_sha256": "bdb06ae4c5c24813ab34850d88ad83f65990cc2a6759fc1e4fd5d01d1390b98a"
     },
     {
       "upstream": "packages/client/ui-conversation/src/client/locales.ts",
@@ -4130,7 +4140,7 @@
           "treatment": "Right-sidebar parity: source chrome, fading tab titles, localized affordances, shortcut keycaps, focus continuity and selected-body retention; native workspace authority remains rustX-owned."
         }
       ],
-      "local_sha256": "b2d1eb92527a5c759a6e3da41cf573fab06160532756245e5373908f74c56a8e"
+      "local_sha256": "f1104d0cef17716a28eee101d2204300911e2f11d789f8023ffab218782f0991"
     },
     {
       "upstream": "packages/client/ui-settings-general/src/client/locales.ts",
@@ -4220,7 +4230,7 @@
           "treatment": "Use the localized read-family image title."
         }
       ],
-      "local_sha256": "60cd0c5fb6218b3a4e993f8a50908f33588a6759b244b40a02fe2e5dbb2e708f"
+      "local_sha256": "4355700518253b57200a77dffbe2a3733e9546aae019786dbc905b8b3c4fd647"
     },
     {
       "upstream": "packages/client/ui-sidebar/src/client/locales.ts",
@@ -4248,9 +4258,11 @@
       "classification": "B",
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [
+        "../../../../protocol/app-server/content-identity",
         "../../../../protocol/app-server/v80",
         "../../locale/react",
         "../../presentation/primitives/icons",
+        "../agent/UserMessageVersions",
         "./Trajectory.module.css",
         "./TrajectoryCell",
         "./layout",
@@ -4274,7 +4286,7 @@
           "treatment": "Event-cell turn label (full/compact) and active-turn rail adapted onto native Turn/Step/Request controls."
         }
       ],
-      "local_sha256": "0b9a1bce26cdaff13aafcb2cee74b59b0941382e7e185ebccd2343f0e04493b5"
+      "local_sha256": "0def6eebb15866794a7913b8ee150d32582765855358de716090e94a5a070e22"
     },
     {
       "commit": "477b4f420553e8a52c2fbccc464d7561b239c443",
@@ -4556,7 +4568,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "a826d9ca822e9351fa8e2967902cb6b9427adde8bbd491dcfe7726c09008ca26",
+      "local_sha256": "6dd1e5d5246899c81b9734ed4582a56d6ff211e836e9eadad2ea7cd703af2f3f",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",
@@ -4988,6 +5000,7 @@
         "./documents/GeometryLoading",
         "./documents/errors",
         "./workbench-documents/DocumentBody",
+        "./workbench-documents/ViewerMenu",
         "./workbench-documents/definitions",
         "react"
       ],
@@ -5011,7 +5024,7 @@
           "treatment": "Files tree, document toolbar and source viewer presentation adapted to the existing native Host and React tab lifetime."
         }
       ],
-      "local_sha256": "f9bcee3e71fe10e241dbc13347eb3e51b70d578b69926cca6cbbd5e0093513c9"
+      "local_sha256": "d1a98b481a5db30b91eb6f7a488eef30d2a69a8fd63b2413c78bccc46338a00c"
     },
     {
       "upstream": "packages/client/ui-sidebar-files/src/client/FilesBody.module.css",
@@ -5907,7 +5920,7 @@
         "./bytes.ts",
         "dompurify"
       ],
-      "local_sha256": "d26fa97343159acf7f75c8d87019059438e566c0f0b5e8cba44e9bb312be2162"
+      "local_sha256": "ac0a016d8679c3b37d5e73ce4c394c024b59f90108b30cc09a22bcc97d95b117"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/bytes.ts",
@@ -5966,24 +5979,21 @@
         "../../../locale/dictionaries/workbench-excel",
         "../../../locale/react",
         "../../../presentation/markdown/DocumentResources",
-        "../../../presentation/markdown/MarkdownText",
         "../../../presentation/primitives/LoadingIndicator",
         "../WorkbenchFiles",
         "../documents/GeometryDocument",
         "../documents/ImagePreview",
         "../documents/PdfPreview",
-        "./MarkdownBody.module.css",
+        "./MarkdownBody",
         "./definitions",
         "./dependencies",
         "./excel/excel",
         "./excel/format",
-        "./frontmatter",
-        "./frontmatter-fields",
         "./html/HtmlBody",
         "./resources",
         "react"
       ],
-      "local_sha256": "65d2d3f72851d4d6e4f3b51e8c7e5144ce65f442947576b0850e9dff31cc2c85"
+      "local_sha256": "fb297e7bd868ff4d2d2e5991a3b373950a7e497adeae4766b35a791b5f7b0ab4"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/excel/locales.ts",
@@ -6222,7 +6232,7 @@
         "./preferences",
         "react"
       ],
-      "local_sha256": "e05a134458efc40193f9456611dfa2f2b02ba17da8e778586752cfb3ac593674"
+      "local_sha256": "cec74f9891aa7bd26519c1d29ff935971d54e42edf5def18fb6ef2e5db25bc6f"
     },
     {
       "upstream": "packages/client/ui-sidebar-documentpreview/src/client/html/HtmlBody.module.css",
@@ -6858,18 +6868,17 @@
         "../../client/app-server",
         "../../client/selectors",
         "../../locale/react",
-        "../../presentation/primitives/MenuSurface",
+        "../../presentation/primitives/HoverCard",
         "../../presentation/primitives/icons",
         "./BackgroundJobItem",
         "./BackgroundJobs.module.css",
-        "./JobStateDot",
         "./job-state",
-        "@floating-ui/react-dom",
-        "react",
-        "react-dom"
+        "./jobs-store",
+        "./session-panel-state",
+        "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "cc9c354a745bfd4a32a8aeae96e27aed0aed12e41fe941ab0239ed21cbd8162a"
+      "local_sha256": "54cca1fc5a6e93fe53a672092ad09516a766b720482c514172bd5471b7888e46"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6881,7 +6890,7 @@
       "license": "MIT; Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "0429e81ee16a8fa1287a5b770fc2040045a25adc248c26efe2100098e4c73fb9",
+      "local_sha256": "85224099946f54ea682b2ad93f07207e1cafaf5ecf53c6e4aef5f9811a36b613",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-primitives/src/StateDot.module.css",
@@ -6919,17 +6928,21 @@
         "../../client/app-server",
         "../../locale/react",
         "../../locale/translation",
+        "../../presentation/primitives/HoverCard",
+        "../../presentation/primitives/Marquee",
         "../../presentation/primitives/TerminalBlock",
+        "../../presentation/primitives/Tooltip",
         "../../presentation/primitives/icons",
         "../components/Artifact",
         "../components/useActivityRequest",
         "./BackgroundJobs.module.css",
         "./JobStateDot",
         "./job-state",
+        "./useLiveJobOutput",
         "react"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "813748e419e69a3fc61df66c744f741733f46334c6832b20f2564b334f06f8ba"
+      "local_sha256": "c9719ad023a81f30526ae5c4432adaf5db89ab69a2ff89196c36905ebca095c4"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -6965,7 +6978,7 @@
         "Harness tool execution models",
         "File navigation and recursive detail grouping"
       ],
-      "local_sha256": "a47d3505ff142ff2a2c1eccb1ac65e7b51af2a412dbaaa754f5b9d485befb948"
+      "local_sha256": "e4b2bbccf574ba6f4ae6a4d6bf347ef7cf5dfcdd47626c33649f57de07e58aec"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -7096,7 +7109,7 @@
       "excluded_dependencies": [
         "DSH Cordis runtime, Remote upload/receipt authority and provider image-message submission"
       ],
-      "local_sha256": "8b0fa076ee621312671b699c5db0d7b6b95f6b3c2ab6cc33ef99fd55505e3af4"
+      "local_sha256": "72b70c00176d87a49aae2d43457f2a5d3f17142eb8c21c75fd07afbb7f0c6c59"
     },
     {
       "commit": "687f282e8625c6b8d11ff58211a90524be2e4317",
@@ -8138,7 +8151,7 @@
         "Cordis slots and stores",
         "Harness schedule mutation and delivery authority"
       ],
-      "local_sha256": "c6ca4e5449b6249e72d44612e14acfac22e21cb911ff0a78ce082f9961e73707"
+      "local_sha256": "ecc8d68d0c257da37c6e78e957bd5333b4981d1995d96a7ddca1c469425dcc92"
     },
     {
       "commit": "22ddee3792402c3e70ec5f86a63c3e3e895a2f60",
@@ -8519,6 +8532,101 @@
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
       "local_sha256": "513c289fa9ebeac504b596c64d50a0b23ee58b68309719fecb6cf24f43a0848d"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/visibility.ts",
+      "destination": "web-console/src/app/agent/session-panel-state.ts",
+      "classification": "B",
+      "treatment": "Session panel pinned preference, dock probe ResizeObserver state, overlay visibility, and element id helpers adapted from ui-session-panel visibility.ts and element-ids.ts.",
+      "upstream_sha256": "86793862b54db81eb9ddfa40adf1c0b21a788ee15141a985dda02348abd10281",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "e32b3c615862490269497b6b44750dc33fe0a69f7eee2a87c84faf6bb2838178"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/SessionPanelToggle.tsx",
+      "destination": "web-console/src/app/agent/SessionPanelToggle.tsx",
+      "classification": "B",
+      "treatment": "Header utility toggle button for Session panel with running indicator slot and chat-view availability tooltip, adapted from ui-session-panel SessionPanelToggle.tsx.",
+      "upstream_sha256": "e543e5dd4f04bd8de23eb7c57a1b1cc89285c2460682f0cc7e1ad21ea34fd8c9",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../client/app-server",
+        "../../locale/react",
+        "../../presentation/primitives/Button",
+        "../../presentation/primitives/Tooltip",
+        "../../presentation/primitives/icons",
+        "./BackgroundJobs",
+        "./SessionPanelToggle.module.css",
+        "./session-panel-state",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "234dcce0f075d249f42e00e366921a3103a5ba0bf468a7bdbf03621bb94b58e5"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/SessionPanelToggle.module.css",
+      "destination": "web-console/src/app/agent/SessionPanelToggle.module.css",
+      "classification": "B",
+      "treatment": "Session panel toggle button active/disabled states and top-right indicator dot geometry, adapted from ui-session-panel SessionPanelToggle.module.css.",
+      "upstream_sha256": "c273fe32090dd28895ec7f45d2a37dac89a8db40e36731a88a2789a55d756ee3",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "fe588f897e38b8f46fb3bed8fc00a2376222bd6681452d86dc1c79c403350d33"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/SessionPanel.tsx",
+      "destination": "web-console/src/app/agent/SessionPanel.tsx",
+      "classification": "B",
+      "treatment": "Chat-view floating/docked Session panel aside with dock probe, overlay dismissal, focus return, and Background jobs section, adapted from ui-session-panel SessionPanel.tsx.",
+      "upstream_sha256": "c07b734ed701784c0144e764c191da9a2584a57498c28bbdb9c3e8d14a191ef0",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../client/app-server",
+        "../../locale/react",
+        "../../presentation/primitives/keyboard-composition",
+        "./BackgroundJobs",
+        "./SessionPanel.module.css",
+        "./session-panel-state",
+        "react"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "c93add7946ed1b14c839686221582046386a80726314d4b2161a05c03fc7ca47"
+    },
+    {
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream": "packages/client/ui-session-panel/src/client/SessionPanel.module.css",
+      "destination": "web-console/src/app/agent/SessionPanel.module.css",
+      "classification": "B",
+      "treatment": "Session panel docked/overlay layout, dock probe geometry, empty section hiding, and fold row styling adapted from ui-session-panel SessionPanel.module.css.",
+      "upstream_sha256": "3f76a1b7bf1a793c1f24ef1e1467a38f5c9069d34577de1b729513b6463b624f",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [],
+      "excluded_dependencies": [],
+      "local_sha256": "37976c2a358b05d204cd98c589250e714a75c814566400203dca80e76f696e42"
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/client/recent-views.ts",
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream_sha256": "fbe0f2764ff6cb25bd0a93cb72e5ddfe9929daa5ce5e3d786872cf2e7ff4abf6",
+      "treatment": "Recent-view ordering, attention exemptions, and pin-aware eviction.",
+      "destination": "web-console/src/app/navigation/recent-views.ts",
+      "classification": "B",
+      "license": "MIT; Copyright (c) 2026 DeepSeek",
+      "retained_dependencies": [
+        "../../../../protocol/app-server/v80",
+        "../../client/contracts"
+      ],
+      "excluded_dependencies": [],
+      "local_sha256": "526df85e3a221b4261b2c954e4b330e0da68f416e6d79b529aad34010b29f17f"
     }
   ],
   "inspected_only": [
@@ -9673,6 +9781,18 @@
       "commit": "ce7073d51254c26cd63b22a60835b8f948deb447",
       "upstream_sha256": "5fe1d13f1072d5393d765ccfd8e61734ee5e75cf57949a45e14f392cc874d844",
       "treatment": "Read-only inspection: exact call-owned panel reveal/review with pending form preservation and native command detail selection. rustX owns the original local presentation controller and native response authority; Harness card registry, waterfall, timed-question projection, Remote and Cordis APIs are excluded."
+    },
+    {
+      "upstream": "packages/client/ui-workspace/src/index.ts",
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream_sha256": "ed4e16ee8cf7d8ae9d5353914d37bd90e769c5fb9b44f4cf3704708b475ba4dd",
+      "treatment": "Default recent view count of ten."
+    },
+    {
+      "upstream": "packages/api/session-controller/src/history/controller.ts",
+      "commit": "ca33fd6843b205e279c7ccb6cb73a472c78f5760",
+      "upstream_sha256": "9a982bfa8c9a9ad36c8ae0ffe17c579cabf7956675b5ef7d4fca4883aaa29aec",
+      "treatment": "Durable history reads independent of an active session."
     }
   ]
 }

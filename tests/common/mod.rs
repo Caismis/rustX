@@ -1283,7 +1283,7 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
     use rustx::runtime::identity::ToolId;
     use rustx::tools::compile_model_definition;
     use rustx::tools::types::{ToolDefinition, ToolExecutionPolicy, ToolOrigin, ToolReplayPolicy};
-    compile_model_definition(&ToolDefinition {
+    let definition = ToolDefinition {
         id: ToolId::new(id),
         name: name.to_owned(),
         description: format!("Tool {name}"),
@@ -1296,7 +1296,11 @@ pub fn model_selectable_tool(name: &str, id: &str) -> rustx::tools::types::Model
         execution_policy: ToolExecutionPolicy::ModelSelectable,
         replay_policy: ToolReplayPolicy::Never,
         origin: ToolOrigin::Builtin,
-    })
+    };
+    compile_model_definition(
+        &definition,
+        rustx::runtime::permission::supports_elevation(&definition),
+    )
     .expect("the model-selectable definition compiles")
 }
 

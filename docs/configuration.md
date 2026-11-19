@@ -535,6 +535,10 @@ Root-only Goal pursuit. No dynamic plugin loading, hook API or marketplace exist
 `{ mode = "window", milliseconds = N }`. Meaningful progress can satisfy an
 idle window but cannot extend a hard deadline.
 
+For native Bash, a foreground call can move to the background if its handoff
+budget is at or below `hard_deadline_ms`. If the hard deadline comes first,
+the runtime terminates the call through the normal deadline settlement path.
+
 Initial MCP readiness uses a separate native policy in `rustx.toml`:
 
 ```toml
@@ -597,10 +601,11 @@ native source policy; it has no separate authored policy engine. Runtime
 control and Plugin Tools keep their domain-owned policies. `read_image` has
 fixed foreground-only policy; its selection still uses `agent.tools.builtin`.
 
-`app_server` accepts positive bounded `max_resident_runtimes` (8),
-`max_connections` (32), `max_external_attachments` (64), `idle_grace_ms` (300000),
-and `shutdown_deadline_ms` (30000). It is User-authored process policy. Workspace
-authoring is rejected and application cannot rebind the process.
+`app_server` accepts optional positive bounded `max_resident_runtimes` (unset /
+`None` by default so server residency is uncapped; when configured, `1..=256`),
+plus `max_connections` (32), `max_external_attachments` (64), `idle_grace_ms`
+(300000), and `shutdown_deadline_ms` (30000). It is User-authored process policy.
+Workspace authoring is rejected and application cannot rebind the process.
 
 ## Exact overlay matrix
 

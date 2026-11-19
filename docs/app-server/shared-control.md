@@ -35,7 +35,7 @@ journal.
 | `turn/start` | `turn/start { target, inputId, content }` -> `turn_input_accepted { turnId, disposition, message_id, inbound_sequence }` | Conversation coordinator and existing mailbox: start idle work or steer an open active Attempt; one Agent Loop | Real provider `shared_start_steer_sparse_queue...` |
 | `turn/steer` | Required `expectedTurnId`, plus `target`, `inputId`, `content` | Same native coordinator/steering boundary; stale or closed Attempts refuse before durable acceptance | Shared-control conformance; native cancellation tests |
 | `turn/interrupt` | Required exact `turnId` and `target` | Native cancel/start arbitration; an old Turn never selects its successor | Shared-control conformance; product cancellation tests |
-| Explicit queued input | `inbound/queue`, `inbound/edit`, `inbound/remove`, `inbound/submissionLookup` | One existing durable mailbox. Queue entries wait for the next Attempt, remain distinct from steering and retain native CAS revisions | Sparse-adoption SQLite regression; real provider and lost-receipt client tests |
+| Explicit queued input | `inbound/queue`, `inbound/edit`, `inbound/remove`, `inbound/steer`, `inbound/submissionLookup` | One existing durable mailbox. Queue entries wait for the next Attempt and retain native CAS revisions. `inbound/steer` promotes one expected queued row, or all eligible rows through the observed inbound sequence, into the running Attempt without a new identity | Sparse-adoption SQLite regression; durable steer race tests; real provider and lost-receipt client tests |
 | Approval and user input | `item/interaction/request`, a JSON-RPC client result/error, `serverRequest/resolved` | Native Interaction coordinator, including child routing and Workflow Review. rustX preserves typed finite headers, chunked bodies, exact questionnaire numbers and Review subject identity | Native shared-interaction and product prompt tests |
 | Dynamic tools | `dynamicTools` on Thread creation; `item/tool/call`; client result/error | Native ToolOrigin::Host and common Tool Runtime, described below | Real provider broadcast/error/domain-invalid conformance; actual-process recovery |
 | Event subscription | `session/checkpoint`, `session/subscribe`, native `session/event` and invalidations | Independent native replay/registration fences. No controller acquisition or handoff event | Physical receipt/registration tests; product reconnect suites |
@@ -124,8 +124,9 @@ retransmits an uncertain mutation.
 
 Explicit queue entries may lie between steering entries. Adoption removes only
 selected native rows, and projection updates remove exact message IDs rather than
-an entire sequence prefix. Native transcript positions and acceptance correlations
-survive adoption. Queue edits/removals use existing pending-item CAS.
+an entire sequence prefix. Acceptance fixes durable message identity, inbound
+sequence, and correlation. Adoption assigns canonical transcript positions in
+actual adoption order. Queue edits/removals use existing pending-item CAS.
 
 The App Server callback broker owns only ephemeral transport correlation. Its
 server incarnation and monotonic counter identify pending requests. Capacity is

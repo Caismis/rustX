@@ -620,6 +620,16 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.adoptedVersions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.adoptedVersions li {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+}
 .toolCallOnly {
   color: var(--dsw-alias-label-tertiary);
 }

@@ -596,6 +596,7 @@ async fn drive_executor(
         clock: &*services.clock,
         policy: services.leaf_policy,
         registration: policy,
+        handoff: None,
         deadline_armed: None,
         cancellation_won: None,
         completion_won: completion_won.as_deref(),

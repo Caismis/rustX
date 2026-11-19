@@ -1733,12 +1733,20 @@ ordered `ToolExecutionStarted`, the retained progress facts,
 `ToolExecutionCompleted` last; the journal is observational evidence and the
 canonical ToolResult remains the only outcome authority.
 
-The Bash tool's explicit model-requested `timeout` is tool-owned business
-input below this lifecycle: the executor settles it physically (process-group
-kill, wait, reap) and reports the proven `TimedOut` itself. There is no
-implicit executor-local default timeout — a foreground Bash invocation
-without an explicit timeout is bounded by the generic hard deadline, which
-drives the same proven physical settlement through cancellation.
+When Bash permits both execution modes, a foreground call starts one process
+privately and waits for the foreground budget. The budget is 120 seconds when
+`timeout` is omitted, matching the DeepSeek Harness executor default. An
+explicit `timeout` overrides it, capped at 600 seconds. A strictly shorter
+runtime hard deadline takes priority and terminates the foreground execution.
+A command that finishes within the budget returns a normal foreground result
+without a job listing or a terminal inbound. A command still running at the
+budget can be adopted into the conversation-owned registry, at which point
+the call returns the handoff. Until that ownership commit, the foreground
+invocation owns cancellation and collects the real terminal output if the
+handoff is refused. After commit, the job owns the same process. Progress
+reported before transfer stays on the foreground path. If Goal admission
+temporarily excludes a new job, Bash runs in the foreground with that budget
+as its execution timeout.
 
 The real `ConversationRuntime::shutdown()` path is covered by a deterministic
 regression: it observes the Runtime Client pending event, linearizes
@@ -1769,8 +1777,9 @@ the same opaque string without colliding. The store appends that reference in
 the same transaction as the owning durable fact. Reading a page resolves the body from its
 canonical owner on demand, so the transcript cannot become a second body
 store or an unbounded in-memory vector. Accepted inbound User content is not
-displayable until its acceptance transaction commits; adoption into the
-Ledger preserves the same durable identity and ordering reference.
+displayable until its acceptance transaction commits. Acceptance fixes the
+durable message identity, inbound sequence, and correlation. Adoption into the
+Ledger assigns the canonical transcript position in actual adoption order.
 
 Surface and transcript intentionally diverge. Surface owns the finite active
 identity/order sent to the model and is replaced by compaction. Transcript
@@ -2728,8 +2737,8 @@ model Tool call uses one strict invocation envelope:
 
 `arguments` contains only business input. `execution_mode` is declared and
 required only for `ModelSelectable`; fixed policies resolve ownership without
-that outer field. `elevation_reason` is optional permission metadata, never
-approval evidence. Preflight rejects flat calls and unknown envelope fields,
+that outer field. Tools that can require approval expose optional
+`elevation_reason` metadata. Only the human approval grants authority. Preflight rejects flat calls and unknown envelope fields,
 resolves ownership once, normalizes business input, and validates it against
 the captured canonical validator before dispatch. Executors receive only the
 business object. Its properties may be named `execution_mode`,
@@ -3133,7 +3142,7 @@ projection presents exactly once; the result's `artifacts` stay empty — text
 overflow is not an artifact),
 `TERM -> BASH_TERM_GRACE -> KILL` cancellation driven by the supervisor,
 typed result semantics (zero exit success, non-zero exit failed with the
-code preserved, timeout as `TimedOut`, cancellation as `Cancelled`),
+code preserved, an explicit executor kill timeout as `TimedOut`, cancellation as `Cancelled`),
 explicit spill-capture failures (a spill that cannot be allocated or
 written fails the invocation explicitly rather than silently losing full
 output), and explicit process-control failures (supervisor setup, shell

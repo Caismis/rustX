@@ -9155,6 +9155,27 @@
         {
           "type": "object",
           "properties": {
+            "text": {
+              "type": "string"
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "job_output"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "text",
+            "truncated"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
             "job_id": {
               "$ref": "#/$defs/ToolExecutionId"
             },
@@ -9588,6 +9609,46 @@
             "type",
             "surface_revision",
             "boundaries"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "boundary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SessionMessageVersion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "session_message_boundary"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "page": {
+              "$ref": "#/$defs/SessionMessageVersionsPage"
+            },
+            "type": {
+              "type": "string",
+              "const": "session_message_versions"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "page"
           ]
         },
         {
@@ -12211,6 +12272,10 @@
         "active_node": {
           "description": "Active node in the session.",
           "$ref": "#/$defs/SessionNodeId"
+        },
+        "has_branches": {
+          "description": "A Session with multiple nodes can expose message versions.",
+          "type": "boolean"
         }
       },
       "required": [
@@ -13578,11 +13643,14 @@
           "default": []
         },
         "max_resident_runtimes": {
-          "type": "integer",
+          "description": "Optional explicit cap on concurrently resident runtimes (`Loading`,\n`Loaded`, `Unloading`, and reserved creations). `None` leaves residency\nuncapped while idle reaping and host/transport limits continue to apply.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint",
           "minimum": 1,
-          "maximum": 256,
-          "default": 8
+          "maximum": 256
         },
         "max_connections": {
           "type": "integer",
@@ -19542,6 +19610,13 @@
           "type": "boolean",
           "default": false
         },
+        "input_id": {
+          "description": "Original public app-server input id, projected only from durable\ncorrelation `app-server:<id>`. Absent for every other producer.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "message": {
           "description": "The canonical inbound message.",
           "$ref": "#/$defs/UserMessageBlock"
@@ -23674,7 +23749,7 @@
           ]
         },
         {
-          "description": "An inbound message was enqueued into the conversation mailbox.\n\nHuman and runtime-originated producers share the one inbound\nordering domain; the event carries the authoritative mailbox\nsequence and the canonical message.\nPending authority changed; reread the snapshot and transcript.",
+          "description": "The mailbox pending head changed.",
           "type": "object",
           "properties": {
             "pending": {
@@ -23696,6 +23771,7 @@
           ]
         },
         {
+          "description": "An inbound message was enqueued into the conversation mailbox.",
           "type": "object",
           "properties": {
             "sequence": {
@@ -23707,7 +23783,7 @@
               "$ref": "#/$defs/UserMessageBlock"
             },
             "transcript_cursor": {
-              "description": "The durable transcript position allocated at acceptance, absent\nfor hidden Context-kind inbound.",
+              "description": "Pending messages have no transcript position.",
               "anyOf": [
                 {
                   "$ref": "#/$defs/RuntimeClientTranscriptCursor"
@@ -26823,6 +26899,10 @@
           "description": "Active node in the session.",
           "$ref": "#/$defs/SessionNodeId"
         },
+        "has_branches": {
+          "description": "A Session with multiple nodes can expose message versions.",
+          "type": "boolean"
+        },
         "thread_id": {
           "$ref": "#/$defs/ConversationId"
         },
@@ -27103,6 +27183,110 @@
         "block_count",
         "content",
         "collections"
+      ]
+    },
+    "SessionMessageVersion": {
+      "description": "Exact coordinates of a human message in a particular Session node.",
+      "type": "object",
+      "properties": {
+        "node_id": {
+          "$ref": "#/$defs/SessionNodeId"
+        },
+        "conversation_id": {
+          "$ref": "#/$defs/ConversationId"
+        },
+        "message_id": {
+          "description": "Inline identity when it fits the native 256-byte locator budget.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MessageId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "surface_revision": {
+          "$ref": "#/$defs/SurfaceRevision"
+        },
+        "boundary": {
+          "$ref": "#/$defs/CanonicalContentLocator"
+        }
+      },
+      "required": [
+        "node_id",
+        "conversation_id",
+        "surface_revision",
+        "boundary"
+      ]
+    },
+    "SessionMessageVersionsPage": {
+      "type": "object",
+      "properties": {
+        "versions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SessionMessageVersionFamily"
+          }
+        },
+        "next_offset": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "versions"
+      ]
+    },
+    "SessionMessageVersionFamily": {
+      "description": "A version pager for a prompt present in the requested lineage.",
+      "type": "object",
+      "properties": {
+        "current": {
+          "$ref": "#/$defs/SessionMessageVersion"
+        },
+        "current_index": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "total": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "previous": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionMessageVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "next": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SessionMessageVersion"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "current",
+        "current_index",
+        "total"
       ]
     },
     "RuntimeClientSessionDeletionResult": {
@@ -33359,6 +33543,20 @@
           "additionalProperties": false
         },
         {
+          "description": "Direct `turn/steer` was not admitted because the expected Turn is stale or not steerable.",
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "steer_unavailable"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        {
           "type": "object",
           "properties": {
             "kind": {
@@ -36240,6 +36438,35 @@
           "properties": {
             "method": {
               "type": "string",
+              "const": "job/output"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "job_id": {
+                  "$ref": "#/$defs/ToolExecutionId"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "job_id"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
               "const": "job/status"
             },
             "params": {
@@ -38002,6 +38229,84 @@
           ]
         },
         {
+          "description": "Resolve an ordinary human message at its original Surface append.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/messageBoundary"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "boundary": {
+                  "$ref": "#/$defs/CanonicalContentLocator"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "boundary"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Page the retry families visible in the selected native node.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "session/messageVersions"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                },
+                "node_id": {
+                  "$ref": "#/$defs/SessionNodeId"
+                },
+                "offset": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                },
+                "limit": {
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 1,
+                  "maximum": 32
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "session_id",
+                "node_id",
+                "offset",
+                "limit"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
           "type": "object",
           "properties": {
             "method": {
@@ -39072,6 +39377,40 @@
               "required": [
                 "target",
                 "expected"
+              ]
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ]
+        },
+        {
+          "description": "Promote one expected queued row, or every currently queued row, into the running attempt.",
+          "type": "object",
+          "properties": {
+            "method": {
+              "type": "string",
+              "const": "inbound/steer"
+            },
+            "params": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "$ref": "#/$defs/AttachmentTarget"
+                },
+                "expectedTurnId": {
+                  "$ref": "#/$defs/AttemptId"
+                },
+                "scope": {
+                  "$ref": "#/$defs/PendingSteerScope"
+                }
+              },
+              "additionalProperties": false,
+              "required": [
+                "target",
+                "expectedTurnId",
+                "scope"
               ]
             }
           },
@@ -41195,6 +41534,47 @@
       "required": [
         "sequence",
         "revision"
+      ]
+    },
+    "PendingSteerScope": {
+      "description": "One running-turn promotion of queued rows into steering.\n\n`Row` is compare-and-set on one occurrence. `All` reclassifies every\neligible queued row through the observed sequence. Neither mints an identity.",
+      "oneOf": [
+        {
+          "description": "Reclassify one exact queued occurrence.",
+          "type": "object",
+          "properties": {
+            "expected": {
+              "$ref": "#/$defs/PendingInboundRef"
+            },
+            "kind": {
+              "type": "string",
+              "const": "row"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "expected"
+          ]
+        },
+        {
+          "description": "Reclassify eligible occurrences through the queue observed by the caller.",
+          "type": "object",
+          "properties": {
+            "through": {
+              "$ref": "#/$defs/InboundSequence"
+            },
+            "kind": {
+              "type": "string",
+              "const": "all"
+            }
+          },
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "through"
+          ]
+        }
       ]
     },
     "ModelProbeSource": {

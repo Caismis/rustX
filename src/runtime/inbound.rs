@@ -44,6 +44,16 @@ pub use rustx_durable::inbound::{
     AdoptedInbound, FreshInboundError, FreshInboundTurn, InboundBatch, InboundItem,
     InboundObserver, InboundSequence, InitialTurnTrigger, MailboxError,
 };
+fn inbound_from_pending(item: crate::durable::PendingInboundItem) -> InboundItem {
+    InboundItem {
+        revision: item.revision,
+        sequence: item.sequence,
+        message: item.message,
+        transcript_cursor: item.transcript_cursor,
+        input_id: crate::durable::observation::app_server_input_id(item.correlation.as_deref()),
+    }
+}
+
 #[derive(Clone)]
 pub struct ConversationInboundMailbox {
     pub(crate) steering: Arc<Mutex<SteeringState>>,
@@ -224,12 +234,7 @@ impl ConversationInboundMailbox {
             .inbound
             .load_pending()?
             .into_iter()
-            .map(|item| InboundItem {
-                revision: item.revision,
-                sequence: item.sequence,
-                message: item.message,
-                transcript_cursor: item.transcript_cursor,
-            })
+            .map(inbound_from_pending)
             .collect();
         {
             let mut state = self.state.lock().expect("inbound mailbox lock poisoned");
@@ -733,16 +738,7 @@ impl ConversationInboundMailbox {
         Ok(Some(InboundBatch {
             conversation_id: self.conversation_id.clone(),
             watermark: batch.watermark,
-            items: batch
-                .items
-                .into_iter()
-                .map(|item| InboundItem {
-                    revision: item.revision,
-                    sequence: item.sequence,
-                    message: item.message,
-                    transcript_cursor: item.transcript_cursor,
-                })
-                .collect(),
+            items: batch.items.into_iter().map(inbound_from_pending).collect(),
         }))
     }
 
@@ -753,10 +749,10 @@ impl ConversationInboundMailbox {
         batch
             .items
             .retain(|item| item.message.kind != InboundKind::QueuedMessage);
-        let Some(last) = batch.items.last() else {
+        let Some(watermark) = batch.items.iter().map(InboundItem::sequence).max() else {
             return Ok(None);
         };
-        batch.watermark = last.sequence;
+        batch.watermark = watermark;
         Ok(Some(batch))
     }
 
@@ -833,12 +829,7 @@ impl ConversationInboundMailbox {
             .inbound
             .load_pending()?
             .into_iter()
-            .map(|item| InboundItem {
-                revision: item.revision,
-                sequence: item.sequence,
-                message: item.message,
-                transcript_cursor: item.transcript_cursor,
-            })
+            .map(inbound_from_pending)
             .collect();
         Ok(Some(read(items)))
     }
@@ -858,6 +849,13 @@ impl ConversationInboundMailbox {
         expected: &crate::durable::PendingInboundRef,
     ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
         self.pending_mutation(|| self.inbound.remove_pending(expected))
+    }
+    /// Promotes queued input while retaining message IDs and acceptance sequences.
+    pub(crate) fn steer_pending(
+        &self,
+        scope: &crate::durable::PendingSteerScope,
+    ) -> Result<crate::durable::PendingMutationOutcome, MailboxError> {
+        self.pending_mutation(|| self.inbound.steer_pending(scope))
     }
     fn pending_mutation(
         &self,
@@ -932,12 +930,7 @@ impl PendingPublication<'_> {
         let items: Vec<_> = adopted
             .items
             .into_iter()
-            .map(|item| InboundItem {
-                revision: item.revision,
-                sequence: item.sequence,
-                message: item.message,
-                transcript_cursor: item.transcript_cursor,
-            })
+            .map(inbound_from_pending)
             .collect();
         if !items.is_empty() {
             let state = self

@@ -164,7 +164,7 @@ async fn pending_creation_reserves_runtime_capacity_independently_of_cold_storag
             .lock()
             .unwrap()
             .policy
-            .max_resident_runtimes = 1;
+            .max_resident_runtimes = Some(1);
         let probe = f.manager.probe(&f.id(0).await);
         probe.storage_before_close.arm();
         let command = start(&f, 0, "storage-during-creation");
@@ -316,7 +316,7 @@ async fn another_nodes_residency_does_not_refuse_cold_admission_or_change_select
                 .lock()
                 .unwrap()
                 .policy
-                .max_resident_runtimes = 1;
+                .max_resident_runtimes = Some(1);
         }
         let b = f
             .manager
@@ -1128,13 +1128,7 @@ mod workflow;
 async fn scheduler85_review_stalled_activations_cannot_starve_a_healthy_due_source() {
     bounded(async {
         let mut f = Fixture::with_session_count(None, 17).await;
-        f.manager
-            .registry
-            .0
-            .lock()
-            .unwrap()
-            .policy
-            .max_resident_runtimes = 32;
+        assert_eq!(f.manager.policy().max_resident_runtimes, None);
         let (utc, monotonic, _waiting) = manual_driver(&mut f);
         let mut created = Vec::new();
         for i in 0..17 {

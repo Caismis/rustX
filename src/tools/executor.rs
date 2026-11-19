@@ -881,7 +881,10 @@ impl ToolRegistration {
         {
             return;
         }
-        let Ok((model, validator)) = compile_tool_contract(&self.definition) else {
+        let Ok((model, validator)) = compile_tool_contract(
+            &self.definition,
+            crate::runtime::permission::supports_elevation(&self.definition),
+        ) else {
             self.contract = None;
             return;
         };
@@ -1124,11 +1127,13 @@ impl ToolRegistry {
             if let Some(contract) = cached.filter(|contract| contract.definition == definition) {
                 contract
             } else {
-                let (model, validator) = compile_tool_contract(&definition).map_err(|reason| {
-                    ToolRegistryError::ModelSchema {
-                        name: definition.name.clone(),
-                        reason,
-                    }
+                let (model, validator) = compile_tool_contract(
+                    &definition,
+                    crate::runtime::permission::supports_elevation(&definition),
+                )
+                .map_err(|reason| ToolRegistryError::ModelSchema {
+                    name: definition.name.clone(),
+                    reason,
                 })?;
                 Arc::new(CompiledToolContract {
                     definition: definition.clone(),
@@ -1333,17 +1338,20 @@ impl ToolRegistry {
     /// executor.
     pub fn preflight(&self, call: &ToolCall) -> Result<PreflightOutcome, ToolPreflightError> {
         let entry = self.resolve_entry(call)?;
-        let (mode, elevation_reason, stripped) =
-            match resolve_invocation_metadata(entry.definition.execution_policy, &call.arguments) {
-                Ok(value) => value,
-                Err(error) => {
-                    return Ok(PreflightOutcome::Rejected {
-                        tool_id: entry.definition.id.clone(),
-                        origin: entry.definition.origin.clone(),
-                        error: error.to_string(),
-                    });
-                }
-            };
+        let (mode, elevation_reason, stripped) = match resolve_invocation_metadata(
+            &entry.definition,
+            &call.arguments,
+            crate::runtime::permission::supports_elevation(&entry.definition),
+        ) {
+            Ok(value) => value,
+            Err(error) => {
+                return Ok(PreflightOutcome::Rejected {
+                    tool_id: entry.definition.id.clone(),
+                    origin: entry.definition.origin.clone(),
+                    error: error.to_string(),
+                });
+            }
+        };
         Ok(Self::prepare_arguments(
             entry,
             crate::tools::types::ToolInvocationId::Agent {

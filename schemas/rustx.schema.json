@@ -157,11 +157,13 @@
           "type": "integer"
         },
         "max_resident_runtimes": {
-          "default": 8,
+          "description": "Optional explicit cap on concurrently resident runtimes (`Loading`,\n`Loaded`, `Unloading`, and reserved creations). `None` leaves residency\nuncapped while idle reaping and host/transport limits continue to apply.",
           "format": "uint",
           "maximum": 256,
           "minimum": 1,
-          "type": "integer"
+          "type": [
+            "integer"
+          ]
         },
         "shutdown_deadline_ms": {
           "default": 30000,

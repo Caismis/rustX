@@ -11,7 +11,7 @@ afterEach(() => { cleanup(); server.client.disconnect(); });
 it('boots the source-derived shell with no Host backend and exposes only supported controls', () => {
   render(<App client={server.client} workspaceHost={server.workspaceHost} />);
   expect(document.querySelector('[data-harness-frame]')).toBeTruthy();
-  expect(screen.getAllByText('rustX').length).toBeGreaterThan(0);
+  expect(screen.getByRole('img', { name: 'rustX' }).getAttribute('src')).toBe('/rustx-logo.png');
   expect(screen.getByRole('button', { name: 'Reconnect now' })).toBeTruthy();
   expect(screen.queryByLabelText('WebSocket endpoint')).toBeNull();
   expect(screen.queryByLabelText('Access token')).toBeNull();

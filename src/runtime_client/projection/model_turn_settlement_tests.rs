@@ -92,11 +92,7 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
                     projection.apply_pending_receipt(accepted.pending_observation.as_deref());
                 });
             }
-            if let Some(cursor) = accepted.transcript_cursor {
-                store
-                    .mark_observation_transcript_ready(cursor.get())
-                    .unwrap();
-            }
+            assert!(accepted.transcript_cursor.is_none());
         }
         let start = crate::publication::PublicationStreamStart {
             stream_id: crate::runtime::identity::PublicationStreamId::for_request(
@@ -237,6 +233,11 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
         );
         actual.validate_source_prefix().unwrap();
         store.mark_native_observation_ready(family).unwrap();
+        assert_eq!(
+            store.transcript_source_ready().unwrap().prefix,
+            family.read_cut.read.transcript,
+            "family release includes the assistant and every visible adopted user"
+        );
         assert_eq!(
             store
                 .observation_ready_frontier(0, family.read_cut.read.journal)

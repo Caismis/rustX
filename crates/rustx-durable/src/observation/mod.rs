@@ -368,6 +368,20 @@ pub struct PendingHeader {
     pub sequence: u64,
     pub revision: u64,
     pub message: MessageHeader,
+    /// Original public app-server input id. Present only when this row's
+    /// durable correlation is `app-server:<id>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
+}
+
+/// Invert durable correlation `app-server:<id>` into the original public input id.
+///
+/// Any other correlation, including a longer prefix or a suffix outside the
+/// public id grammar, projects nothing. This is not inferred from message
+/// identity, request identity, or preview text.
+pub fn app_server_input_id(correlation: Option<&str>) -> Option<String> {
+    let id = correlation?.strip_prefix("app-server:")?;
+    crate::inbox::valid_public_input_id(id).then(|| id.to_owned())
 }
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingHeaderPage {
@@ -718,5 +732,33 @@ impl EnvelopeNativeObservation for Option<rustx_types::events::types::EphemeralO
 
     fn native_arc(&self) -> Option<std::sync::Arc<NativeObservationBatch>> {
         self.as_ref()?.as_arc::<NativeObservationBatch>()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::app_server_input_id;
+
+    #[test]
+    fn public_input_id_is_only_the_app_server_correlation_suffix() {
+        assert_eq!(app_server_input_id(None), None);
+        assert_eq!(
+            app_server_input_id(Some("app-server:send-1")).as_deref(),
+            Some("send-1")
+        );
+        assert_eq!(
+            app_server_input_id(Some("app-server:Ab_9-Z")).as_deref(),
+            Some("Ab_9-Z")
+        );
+        assert_eq!(app_server_input_id(Some("app-server:")), None);
+        assert_eq!(app_server_input_id(Some("app-server:bad/id")), None);
+        assert_eq!(app_server_input_id(Some("app-server:has:colon")), None);
+        assert_eq!(
+            app_server_input_id(Some(&format!("app-server:{}", "a".repeat(65)))),
+            None
+        );
+        assert_eq!(app_server_input_id(Some("scheduler:send-1")), None);
+        assert_eq!(app_server_input_id(Some("subagent-terminal:send-1")), None);
+        assert_eq!(app_server_input_id(Some("not-app-server:send-1")), None);
     }
 }

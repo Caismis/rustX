@@ -446,6 +446,7 @@ fn human_activity_max(
     Ok(previous.unwrap_or(current).max(current))
 }
 
+#[allow(clippy::too_many_lines)] // Identity, canonical append, and observation capture share one transaction.
 fn append_message_ledger_with_capture(
     transaction: &Transaction<'_>,
     message: &MessageBlock,
@@ -505,6 +506,14 @@ fn append_message_ledger_with_capture(
         .transpose()?;
     let retain_publication = publication_header.is_some();
     let captured = optional_display_layout(transaction, || {
+        if allowed_pending_message_id.is_some() && transcript_cursor.is_some() {
+            // The canonical header takes over the unique message reference
+            // from the mailbox's temporary display row.
+            transaction.execute_cached(
+                "DELETE FROM transcript_entries WHERE position<0 AND reference_kind='message' AND reference_id=?1",
+                [id.as_str()],
+            ).map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+        }
         content::index_message(transaction, message)?;
         let position = nonnegative(position, "header ledger position")?;
         observation::index::index_message_capture(

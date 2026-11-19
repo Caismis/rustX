@@ -98,8 +98,7 @@ jobs:
       #    of the cache identity. The key the action builds already covers the
       #    runner OS and architecture, the rustc version and host triple,
       #    `rust-toolchain.toml`, the Cargo manifests and lockfile, and the
-      #    build-relevant CARGO/CC/CFLAGS/CXX/CMAKE/RUST* environment. Linux
-      #    and macOS artifacts therefore can never share a lineage.
+      #    build-relevant CARGO/CC/CFLAGS/CXX/CMAKE/RUST* environment.
       #
       # 2. `shared-key` names one stable lineage per semantic lane, replacing
       #    the action's automatic job-id component with a readable name. Lanes
@@ -1301,11 +1300,8 @@ jobs:
       - documentation-contracts
       - rust-contracts
       - rust-boundaries
-      - rust-platform-core
-      - rust-platform-boundaries
       - tui
       - app-server-protocol
-      - desktop-macos
       - browser-prepare
       - web-client
       - browser-shard

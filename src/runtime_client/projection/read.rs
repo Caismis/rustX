@@ -13,7 +13,7 @@ use super::prepared_attempt;
 use super::prepared_capture;
 use super::{
     Arc, CheckpointSeed, InboundDrainView, InboundItemView, MessageBlock, RuntimeClientCursor,
-    RuntimeClientError, RuntimeClientEvent, RuntimeClientProjection, RuntimeClientTranscriptCursor,
+    RuntimeClientError, RuntimeClientEvent, RuntimeClientProjection,
 };
 
 impl RuntimeClientProjection {
@@ -264,6 +264,7 @@ impl RuntimeClientProjection {
         }
         self.transcript_prefix = cut.read.transcript;
         self.pending_mutation_revision = cut.read.mutation_revision;
+        self.pending_observed_through = cut.read.pending_through;
         self.canonical_observed_through = cut.ledger_through;
         self.native_canonical_highwater = cut.ledger_through;
         self.source_cut = Some(cut);
@@ -342,19 +343,12 @@ impl RuntimeClientProjection {
                     revision: header.revision,
                     sequence: crate::runtime::inbound::InboundSequence::new(header.sequence),
                     deferred: header.message.deferred,
+                    input_id: header.input_id.clone(),
                     message: message.clone(),
                 });
             }
         }
         self.snapshot.inbound.pending = pending;
-        if let Some(header) = &receipt.selected
-            && let Some(cursor) = header.message.transcript_cursor
-        {
-            self.observe_transcript_position(cursor);
-        }
-        if let Some(cursor) = receipt.removed_transcript {
-            self.observe_transcript_position(cursor);
-        }
     }
 
     pub(crate) fn apply_pending_receipt(
@@ -366,7 +360,9 @@ impl RuntimeClientProjection {
             return;
         };
         self.observe_released_journal_prefix(receipt.ready_through);
-        if receipt.read_cut.mutation_revision < self.pending_mutation_revision {
+        if receipt.read_cut.mutation_revision < self.pending_mutation_revision
+            || receipt.read_cut.pending_through < self.pending_observed_through
+        {
             return;
         }
         self.pending_mutation_revision = receipt.read_cut.mutation_revision;
@@ -376,6 +372,7 @@ impl RuntimeClientProjection {
             }
             self.pending_epoch_wait = None;
         }
+        self.pending_observed_through = receipt.read_cut.pending_through;
         self.install_pending_receipt_head(receipt);
         self.native_journal_highwater = self.native_journal_highwater.max(receipt.read_cut.journal);
         if let Some(mut cut) = self.source_cut.clone() {
@@ -393,11 +390,9 @@ impl RuntimeClientProjection {
         if !self.advance_read_revision() {
             return;
         }
-        for owner in ["inbound", "transcript"] {
-            let Some(_) = self.domain_revisions.advance_revision(owner) else {
-                self.publication_failed(&RuntimeClientError::ProjectionExhausted);
-                return;
-            };
+        if self.domain_revisions.advance_revision("inbound").is_none() {
+            self.publication_failed(&RuntimeClientError::ProjectionExhausted);
+            return;
         }
         let loaded = self.snapshot.inbound.pending.len() as u64;
         self.source_frontiers.insert(
@@ -429,10 +424,7 @@ impl RuntimeClientProjection {
             events.push(RuntimeClientEvent::InboundEnqueued {
                 sequence: crate::runtime::inbound::InboundSequence::new(header.sequence),
                 message: message.clone(),
-                transcript_cursor: header
-                    .message
-                    .transcript_cursor
-                    .map(RuntimeClientTranscriptCursor::from),
+                transcript_cursor: None,
             });
         }
         if let (Some(watermark), Some(count)) = (receipt.adopted_through, receipt.adopted_count) {
@@ -571,6 +563,7 @@ impl RuntimeClientProjection {
                 && cut.ledger_through >= previous.ledger_through
                 && cut.surface_revision >= previous.surface_revision
                 && cut.read.mutation_revision >= previous.read.mutation_revision
+                && cut.read.pending_through >= previous.read.pending_through
                 && cut.read.transcript >= previous.read.transcript
         });
         if advances {
@@ -583,7 +576,8 @@ impl RuntimeClientProjection {
             || self.canonical_observed_through < self.native_canonical_highwater
             || self.pending_epoch_wait.is_some()
             || self.source_cut.as_ref().is_some_and(|cut| {
-                cut.ledger_through > self.canonical_observed_through
+                cut.read.pending_through > self.pending_observed_through
+                    || cut.ledger_through > self.canonical_observed_through
                     || cut.read.transcript != self.transcript_prefix
             })
     }

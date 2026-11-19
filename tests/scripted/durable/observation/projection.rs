@@ -30,7 +30,7 @@ fn compaction_marker_keeps_its_original_transcript_boundary_as_history_grows() {
     store
         .initialize(&[user_message("anchor-original", "original C")])
         .unwrap();
-    // Accepted user input has a T position before it enters the canonical Ledger.
+    // Pending input on either side of compaction leaves the transcript anchor unchanged.
     store
         .accept_inbound(draft("accepted before compaction"))
         .unwrap();
@@ -41,7 +41,7 @@ fn compaction_marker_keeps_its_original_transcript_boundary_as_history_grows() {
     let before = store
         .observation_projection_activation(receipt.checkpoint.activation.activation)
         .unwrap();
-    assert_eq!(before.transcript_anchor.get(), 2);
+    assert_eq!(before.transcript_anchor.get(), 1);
     assert_eq!(before.activation_ledger.0, 1);
     store
         .accept_inbound(draft("accepted after compaction"))
@@ -63,7 +63,7 @@ fn compaction_marker_keeps_its_original_transcript_boundary_as_history_grows() {
             .unwrap()
             .transcript_anchor
             .get(),
-        4
+        2
     );
     let page = crate::runtime_client::projection_history::page(
         &store,
@@ -77,7 +77,7 @@ fn compaction_marker_keeps_its_original_transcript_boundary_as_history_grows() {
             .iter()
             .map(|head| head.transcript_anchor.get())
             .collect::<Vec<_>>(),
-        [2, 4]
+        [1, 2]
     );
 }
 #[test]
@@ -114,13 +114,33 @@ fn inherited_compaction_marker_uses_the_destination_transcript_boundary() {
     let source = store();
     let original = user_message("inherited-anchor", "original C");
     source.initialize(std::slice::from_ref(&original)).unwrap();
-    source
-        .accept_inbound(draft("source-only pending T"))
-        .unwrap();
-    let mut checkpoint = source
-        .commit_projection(observation_projection_input(&source, "inherited-head"))
-        .unwrap()
-        .checkpoint;
+    let mut input = observation_projection_input(&source, "inherited-head");
+    let attempt = AttemptId::new("source-only");
+    for (id, event) in [
+        (
+            "start",
+            RuntimeEvent::AttemptStarted {
+                attempt_id: attempt.clone(),
+            },
+        ),
+        (
+            "timeout",
+            RuntimeEvent::AttemptTimedOut {
+                attempt_id: attempt.clone(),
+            },
+        ),
+    ] {
+        source
+            .append_event(envelope(
+                source.conversation_id(),
+                id,
+                Some(attempt.clone()),
+                event,
+            ))
+            .unwrap();
+    }
+    input.owner = source.projection_owner(None).unwrap();
+    let mut checkpoint = source.commit_projection(input).unwrap().checkpoint;
     assert_eq!(
         source
             .observation_projection_activation(checkpoint.activation.activation)

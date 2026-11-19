@@ -51,6 +51,7 @@ use rustx_types::events::types::RuntimeEventEnvelope;
 #[cfg(any(test, feature = "test-hooks"))]
 use rustx_types::message::types::AssistantContentBlock;
 use rustx_types::message::types::{ContentBlockIndex, MessageBlock};
+use rustx_types::observation::content::CanonicalContentLocator;
 use rustx_types::runtime::identity::{ConversationId, EventId, MessageId, ToolCallId};
 use sha2::Sha256;
 use std::collections::BTreeSet;
@@ -59,6 +60,13 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 pub mod first_human;
+
+/// Position of a committed human prompt, including prompts retired by compaction.
+pub struct OrdinaryHumanBoundary {
+    pub message_id: MessageId,
+    pub position: u64,
+    pub surface_revision: SurfaceRevision,
+}
 
 /// Resolves the exact canonical result's committing Assistant/Attempt from
 /// primary canonical and Journal evidence, validating the native result.
@@ -1604,6 +1612,68 @@ pub fn initial_history_digest(messages: &[MessageBlock]) -> Result<String, Conve
 }
 
 impl SqliteConversationStore {
+    /// A point lookup in the native Ledger, without loading the message or Surface.
+    pub fn ordinary_human_boundary(
+        &self,
+        locator: &CanonicalContentLocator,
+    ) -> Result<Option<OrdinaryHumanBoundary>, ConversationStoreError> {
+        let connection = self.lock()?;
+        match locator {
+            CanonicalContentLocator::ByMessageId { message_id } => select_ordinary_human_boundary(
+                &connection,
+                "SELECT message_id,position,first_append_revision FROM message_ledger
+                 WHERE message_id=?1 AND ordinary_human=1 AND first_append_revision IS NOT NULL",
+                [message_id.as_str()],
+            ),
+            CanonicalContentLocator::ByLedgerPosition { position } => {
+                select_ordinary_human_boundary(
+                    &connection,
+                    "SELECT message_id,position,first_append_revision FROM message_ledger
+                 WHERE position=?1 AND ordinary_human=1 AND first_append_revision IS NOT NULL",
+                    [position],
+                )
+            }
+        }
+    }
+
+    /// A before-cut branch inherits a fixed bootstrap prefix. Its replacement is
+    /// the first ordinary human prompt committed to the Surface past that prefix.
+    pub fn first_local_human_boundary(
+        &self,
+    ) -> Result<Option<OrdinaryHumanBoundary>, ConversationStoreError> {
+        let connection = self.lock()?;
+        select_ordinary_human_boundary(
+            &connection,
+            "SELECT message_id,position,first_append_revision
+             FROM message_ledger INDEXED BY message_ledger_first_human_idx
+             WHERE ordinary_human=1 AND position>(SELECT message_count FROM bootstrap_identity WHERE id=1)
+                 AND first_append_revision IS NOT NULL
+             ORDER BY position LIMIT 1",
+        [],
+        )
+    }
+
+    pub fn verify_bootstrap_prefix(
+        &self,
+        retained_through: u64,
+    ) -> Result<(), ConversationStoreError> {
+        let connection = self.lock()?;
+        let count: Option<u64> = connection
+            .query_row_cached(
+                "SELECT message_count FROM bootstrap_identity WHERE id=1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| super::sqlite_error(&error, format!("native branch seed: {error}")))?;
+        if count != Some(retained_through) {
+            return Err(storage(
+                "native branch seed disagrees with the retained prefix",
+            ));
+        }
+        Ok(())
+    }
+
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn canonical_scalar_sources_match(
         &self,
@@ -1618,4 +1688,21 @@ impl SqliteConversationStore {
             && actual.opening_preview == expected.opening_preview
             && actual.todos == expected.todos)
     }
+}
+
+fn select_ordinary_human_boundary(
+    connection: &Connection,
+    sql: &'static str,
+    args: impl rusqlite::Params,
+) -> Result<Option<OrdinaryHumanBoundary>, ConversationStoreError> {
+    connection
+        .query_row_cached(sql, args, |row| {
+            Ok(OrdinaryHumanBoundary {
+                message_id: MessageId::new(row.get::<_, String>(0)?),
+                position: row.get(1)?,
+                surface_revision: SurfaceRevision::new(row.get(2)?),
+            })
+        })
+        .optional()
+        .map_err(|error| super::sqlite_error(&error, format!("ordinary human boundary: {error}")))
 }

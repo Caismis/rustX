@@ -28,6 +28,15 @@ it('folds only native completed membership across steering and interleaved Attem
   fireEvent.click(folded);
   expect(JSON.stringify(entries)).toBe(before);
 });
+it('keeps each side of an admitted steering batch visible in the same completed turn', () => {
+  const second = { ...user, cursor: 'u2', item: { type: 'message' as const, message: { role: 'user' as const, id: 'u2', source: 'human' as const, content: [{ type: 'text' as const, text: 'another steer' }] } } };
+  const entries = [row('first', process(), true), user, second, row('final', process())];
+  const ui = render(<AgentTranscript snapshot={{ ...snapshot(), transcript: { entries } }}/>);
+  expect(screen.getByRole('button', { name: 'Worked' })).toHaveProperty('disabled', true);
+  expect(screen.getByText('Answer first').closest('[hidden]')).toBeNull();
+  expect(ui.container.querySelector('[data-chat-steering-batch="start"]')?.textContent).toContain('steering');
+  expect(ui.container.querySelector('[data-chat-steering-batch="member"]')?.textContent).toContain('another steer');
+});
 it('pagination and retry origins preserve disclosure identity without merging turns', () => {
   const a = process(), b = process('retry', 'retry-final');
   const page = [row('late', a), row('final', a)];

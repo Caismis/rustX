@@ -19,6 +19,7 @@ pub use task::PermissionTaskEvidence;
 pub(crate) mod review;
 
 pub use bash::{BashReadonlyAnalysis, BashReadonlyClass, analyze_bash_readonly};
+pub use classify::supports_elevation;
 pub use classify::{ClassificationHints, classify_tool_kind, is_workspace_plan_file};
 pub use decision::{
     ElevationReason, PermissionDecision, PermissionDecisionKind, PermissionFacts,

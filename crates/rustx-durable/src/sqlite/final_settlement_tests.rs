@@ -567,8 +567,20 @@ fn final_model_faults_roll_back_provider_frames_canonical_and_terminal_together(
     }
 }
 
+fn assert_adopted_items(
+    store: &SqliteConversationStore,
+    mut selected: Vec<crate::PendingInboundItem>,
+    adopted: &[crate::PendingInboundItem],
+) {
+    for item in &mut selected {
+        assert!(item.transcript_cursor.is_none());
+        item.transcript_cursor = Some(store.message_transcript_cursor(&item.message_id).unwrap().unwrap());
+    }
+    assert_eq!(adopted, selected);
+}
+
 #[test]
-fn final_model_adopts_finite_pending_order_without_terminal_and_preserves_cursors() {
+fn final_model_adopts_finite_pending_order_without_terminal_and_assigns_cursors() {
     let fixture = FinalFixture::new();
     let first = fixture.store.accept_inbound(draft("first")).unwrap();
     let second = fixture.store.accept_inbound(draft("second")).unwrap();
@@ -592,9 +604,8 @@ fn final_model_adopts_finite_pending_order_without_terminal_and_preserves_cursor
     let boundary = result.boundary.unwrap();
     assert!(boundary.attempt_completed.is_none());
     let adopted = boundary.adopted.unwrap();
-    assert_eq!(adopted.items, batch.items);
-    assert_eq!(adopted.items[0].transcript_cursor, first.transcript_cursor);
-    assert_eq!(adopted.items[1].transcript_cursor, second.transcript_cursor);
+    assert!(first.transcript_cursor.is_none() && second.transcript_cursor.is_none());
+    assert_adopted_items(&fixture.store, batch.items, &adopted.items);
     let remaining = fixture.store.load_pending().unwrap();
     assert_eq!(remaining.len(), 1);
     assert_eq!(remaining[0].message_id, third.message_id);
@@ -621,7 +632,8 @@ fn final_model_leaves_explicit_queue_to_the_next_attempt() {
             let items = boundary.adopted.unwrap().items;
             assert_eq!(items.len(), 1);
             assert_eq!(items[0].message_id, steering.message_id);
-            assert_eq!(items[0].transcript_cursor, steering.transcript_cursor);
+            assert!(steering.transcript_cursor.is_none());
+            assert_eq!(items[0].transcript_cursor.unwrap(), fixture.store.message_transcript_cursor(&steering.message_id).unwrap().unwrap());
         }
         let remaining = fixture.store.load_pending().unwrap();
         assert_eq!(remaining.len(), 1);
@@ -870,7 +882,7 @@ fn final_model_adoption_family_keeps_assistant_when_more_than_eight_users_replac
     );
     assert_eq!(canonical.count, 12);
     let committed = result.boundary.as_ref().unwrap().adopted.as_ref().unwrap();
-    assert_eq!(committed.items, selected.items);
+    assert_adopted_items(&fixture.store, selected.items, &committed.items);
     assert!(
         result
             .boundary
@@ -918,22 +930,8 @@ fn final_model_adoption_family_keeps_assistant_when_more_than_eight_users_replac
             .filter(|(sequence, _, _)| *sequence >= result.provider.sequence && *sequence <= last)
             .all(|(_, ready, direct)| *ready && *direct)
     );
-    let unselected_cursor = remaining.transcript_cursor.unwrap().get();
-    assert!(
-        !state
-            .1
-            .iter()
-            .find(|(position, _)| *position == unselected_cursor)
-            .unwrap()
-            .1
-    );
-    assert!(
-        state
-            .1
-            .iter()
-            .filter(|(position, _)| *position != unselected_cursor)
-            .all(|(_, ready)| *ready)
-    );
+    assert!(fixture.store.message_transcript_cursor(&remaining.message_id).unwrap().is_none());
+    assert!(state.1.iter().all(|(_, ready)| *ready));
 }
 
 #[test]

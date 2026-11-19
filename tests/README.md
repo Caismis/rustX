@@ -95,8 +95,9 @@ The compiled namespace, not the directory, is what a selector sees:
 `src/local_runtime/session_runtime_manager.rs` as that owner's private test
 module, so its App Server host, connection, loopback transport and residency
 contracts can reach the manager's `cfg(test)` probes and gates without
-making them `pub(crate)`. It is therefore **not** under `scripted_suites::`,
-and macOS skips it by its own prefix. Do not move it or widen the owner's
+making them `pub(crate)`. It is therefore **not** under `scripted_suites::`.
+The FAST core step skips it by its own prefix, and the App Server affected
+step selects it. Do not move it or widen the owner's
 visibility to make the directory match a selector.
 
 ## Why anything compiles into the crate's test build
@@ -270,8 +271,10 @@ re-proven there.
   build serving a real `FastMCP` stdio child.
 
 Every one of these is platform-sensitive (process groups, signals, unix
-sockets, shell supervision), so the `boundary_suites::` prefix also runs in
-the macOS CI job.
+sockets, shell supervision), so the `boundary_suites::` prefix runs in the
+`rust-boundaries` lane. CI is Linux-only. When a change touches a primitive
+that differs across operating systems, run the suite locally on each
+affected platform.
 
 ## External integration targets
 
@@ -404,11 +407,8 @@ also runs in FAST when the change touches its owner:
 | `local_runtime::session_runtime_manager::tests::`, `local_runtime::session::` | `src/app_server/`, `src/local_runtime/`, `tests/scripted/app_server/`, `tests/support/` |
 | `runtime_client::response::` | `src/runtime_client/` |
 
-On Linux the in-crate boundary suites, the other external boundary targets
-and the `contracts`/`provider` targets run in FULL only. macOS core (the
-seven external boundary targets) runs on every push that touches Rust;
-macOS full (those targets plus unit tests and in-crate boundary suites)
-runs in FULL instead. This is a
+The in-crate boundary suites, the other external boundary targets
+and the `contracts`/`provider` targets run in FULL only. This is a
 deliberate scheduling tradeoff: before #479 every pull request push ran
 everything; now a high-risk change gets that complete verification once, on
 its promoted head, and its intermediate pushes get FAST feedback. A
@@ -514,10 +514,6 @@ summarizes them and the lane check below verifies them against Cargo:
   TypeScript through `cargo run --example generate_app_server_protocol` and
   fails on drift; `pnpm typecheck` checks the fixtures and reference
   intersections.
-- **desktop-macos** — the native macOS Workspace Host, PTY and Office
-  boundaries, plus Desktop adapter and TUI Save coverage. FAST selects it
-  for Web, TUI and the native supervisor changes. Linux Host tests run
-  in `web-client`.
 - **Browser and Web client** — preparation, Web client, selected shard jobs
   and reporting. `browser-prepare` builds once from the checked-out source: `cargo build --bins --example
   document_artifact_fixture` and the only production Web build (`pnpm
@@ -642,15 +638,15 @@ for:
   target (affected steps never satisfy this; the capacity suite is
   excluded), FULL on Linux the whole `::scale::` suite, key Stage 3/4 modularized
   suites, pure `contracts`/`provider`/`runtime_benchmark` targets, and explicit
-  `doc` plus all 6 documented owner symbol suites, FULL on macOS
-  `boundary_suites::` and the seven external boundary targets;
+  `doc` plus all 6 documented owner symbol suites;
 - a test job without a declared profile or the canonical plan gate, and a
   step, Cargo artifact receipt, libtest output, or rustdoc block output it
   cannot interpret exactly.
 
-Discovery is always native: the macOS job checks macOS, and `--job` refuses
-a job of another platform. Run it without `--job` to check every target of
-the host platform (it compiles what is missing).
+Discovery is native and the CI lanes run it on Linux. `--job` restricts
+discovery to the targets one job already built. Without `--job` it checks
+every target of the host platform and compiles what is missing. macOS
+product tests run locally with `cargo test`.
 
 Discovery owns the output it parses: each internal `cargo test ... --list`
 passes Cargo's own `--color never` (before `--`), so an inherited
@@ -680,9 +676,7 @@ cancelled run is diagnostic evidence, not a timing baseline.
 - **Compilation vs execution**: Cargo's `Finished … in` line is the build
   span of one command; libtest's `finished in` is execution of one harness.
   A `cargo test` step's duration is their sum plus process startup, never
-  pure test time. The macOS lane separates them with `--no-run` steps,
-  `/usr/bin/time -l` (wall time, peak RSS) and the `macos-cargo-timings`
-  artifact (per-unit `--timings` reports).
+  pure test time. The boundary lane separates them with `--no-run` steps.
 - **Library units**: two commands share compiled work only when they build
   the same unit. Compare artifact hashes rather than command lines:
 
@@ -738,8 +732,9 @@ skip:
   system `hdiutil` to create and mount an isolated case-insensitive APFS
   image. It verifies that the literal lowercase metadata path resolves to
   each physically authored alias before testing rejection; unavailable
-  fixtures fail rather than skip. Both macOS external-boundary lanes execute
-  this test, including the no-runtime-storage and unchanged-document checks.
+  fixtures fail rather than skip. Running the `process` target on macOS
+  exercises this test, including the no-runtime-storage and
+  unchanged-document checks.
 - **uv and Python 3.12** (the provider emulator and managed `FastMCP`
   children). Every uv-dependent Rust test resolves uv through
   `common::provider_emulator::required_uv`: a local checkout without uv
@@ -898,8 +893,8 @@ python3 test-support/prepare_native_tests.py -- \
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --all-features --locked $BOUNDARY_TARGETS
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --all-features --locked -- boundary_suites::
 
-# macOS core (CI: rust-platform-core): the seven external boundary targets
-# prepared above. macOS full (CI: rust-platform-boundaries) adds:
+# On macOS, run the seven external boundary targets prepared above, plus
+# the unit tests and in-crate boundary suites natively:
 python3 test-support/prepare_native_tests.py -- \
   cargo test --lib --bins --test durable --all-features --locked --no-run
 RUSTX_REQUIRE_PROVIDER_EMULATOR=1 cargo test --lib --bins --all-features --locked -- \

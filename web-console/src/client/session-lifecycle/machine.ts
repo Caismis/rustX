@@ -195,7 +195,7 @@ export const sessionLifecycleMachine = setup({
     admit: assign(({ context: c, event }) => {
       if (!('command' in event)) return {};
       const cmd = event.type === 'RECONNECT' && c.facts.deleting ? { ...event.command, kind: 'inspect' as const } : event.command; let f = c.facts;
-      if (cmd.kind === 'release') f = { ...revoke(f), attachmentIntent: 'released' };
+      if (cmd.kind === 'release') f = { ...revoke(f), attachmentIntent: 'released', passiveHistory: undefined };
       if (cmd.kind === 'switch' || cmd.kind === 'delete') f = revoke(f);
       if (cmd.kind === 'delete') f = { ...f, attachmentIntent: 'released', deleting: true, error: undefined };
       if (cmd.kind === 'recover') f = { ...f, recoveringDeletion: true, error: undefined };
@@ -210,7 +210,7 @@ export const sessionLifecycleMachine = setup({
       const op = c.queue[0]; if (!op) return {};
       const opening = op.command.kind === 'open' && !c.facts.target && c.facts.attachmentIntent === 'wanted' && c.facts.attachmentIntentRevision === op.revision;
       return { active: { ...op, target: c.facts.target }, queue: c.queue.slice(1),
-        ...(opening ? { epoch: c.budget.identity(), facts: { ...c.facts, attachment: 'attaching' as const, error: undefined } } : {}) };
+        ...(opening ? { epoch: c.budget.identity(), facts: { ...c.facts, attachment: 'attaching' as const, error: undefined, passiveHistory: undefined } } : {}) };
     }),
     execute: ({ context, self }) => { const op = context.active!; queueMicrotask(() => { void execute(self, op); }); },
     sent: assign(({ context, event }) => (event.type === 'SENT' || event.type === 'SUBMIT') && context.active ? { active: { ...context.active, stage: event.type === 'SENT' ? 'sent' as const : 'request' as const },
@@ -226,7 +226,7 @@ export const sessionLifecycleMachine = setup({
       const observation = valid && intentCurrent(c, op) && c.facts.nodeId === op.node ? Object.freeze({ generation: c.generation, target, nodeId: op.node!, intentRevision: op.revision }) : undefined;
       // A fresh native claim establishes current ownership; historical transport
       // uncertainty remains in the client diagnostic owner.
-      return { active: valid ? { ...op, stage: 'acknowledged' as const } : op, unresolved: valid ? undefined : c.unresolved, attachmentResult: observation ? result : undefined, facts: { ...c.facts, target, attachmentNodeId: op.node, attachmentObservation: observation, attachment: 'attached' as const }, residency: { conversation: result.target.conversation_id, generation: c.generation } };
+      return { active: valid ? { ...op, stage: 'acknowledged' as const } : op, unresolved: valid ? undefined : c.unresolved, attachmentResult: observation ? result : undefined, facts: { ...c.facts, target, attachmentNodeId: op.node, attachmentObservation: observation, attachment: 'attached' as const, passiveHistory: undefined }, residency: { conversation: result.target.conversation_id, generation: c.generation } };
     }),
     settle: assign(({ context: c, event }) => {
       if (event.type !== 'SETTLED' || !c.active) return {};
@@ -247,6 +247,10 @@ export const sessionLifecycleMachine = setup({
         if (kind === 'delete' && classification === 'unsent') return { facts: { ...f, deleting: false, error: String(error) } };
         if (kind === 'recover') return { unresolved, facts: { ...f, recoveringDeletion: false, error: String(error), ...(classification === 'uncertain' ? { deletionRecovery: undefined } : {}) } };
         if (kind === 'open') {
+          if (classification === 'capacity' && !event.outcome.obsolete && intentCurrent(c, op)
+            && !f.target && f.nodeId === op.node && f.nodeConversationId === op.conversation) {
+            return { facts: { ...f, passiveHistory: true, attachment: 'detached', error: undefined } };
+          }
           const absent = !f.target && (classification === 'unsent' || classification === 'refused' || op.stage === 'preparing');
           if (absent && (event.outcome.obsolete || !intentCurrent(c, op))) return { facts: { ...f, attachment: c.unresolved ? 'stale' : 'detached', error: undefined } };
           return { unresolved, facts: { ...f, attachment: 'error', error: String(error) } };
@@ -291,7 +295,7 @@ export const sessionLifecycleMachine = setup({
     }),
     observation: assign(({ context: c, event }) => event.type === 'OBSERVATION' && observationCurrent(c, event.proof)
       ? { facts: { ...c.facts, attachment: event.status, error: event.error } } : {}),
-    releaseWithoutCapacity: assign(({ context }) => context.deleted ? {} : { facts: { ...revoke(context.facts), attachmentIntent: 'released' as const, attachment: context.facts.target ? 'stale' as const : context.facts.attachment } }),
+    releaseWithoutCapacity: assign(({ context }) => context.deleted ? {} : { facts: { ...revoke(context.facts), attachmentIntent: 'released' as const, passiveHistory: undefined, attachment: context.facts.target ? 'stale' as const : context.facts.attachment } }),
     restore: assign(({ context }) => ({ facts: { ...context.facts, attachmentIntent: 'wanted' as const } })),
     retire: assign(({ context: c }) => {
       for (const op of c.queue) { c.budget.release(); op.command.resolve(); }
@@ -312,7 +316,7 @@ export const sessionLifecycleMachine = setup({
     RECOVER: [{ guard: 'admitted', actions: ['admit', raise({ type: 'ADVANCE' })] }, { actions: 'reject' }],
     RECONNECT: [
       { guard: ({ context }) => !!context.facts.deleting && context.budget.available(), actions: ['admit', raise({ type: 'ADVANCE' })] },
-      { guard: ({ context, event }) => context.facts.attachmentIntent === 'wanted' && !context.unresolved && context.facts.attachment !== 'error' && 'command' in event && !rejection(context, event.command), actions: ['admit', raise({ type: 'ADVANCE' })] },
+      { guard: ({ context, event }) => context.facts.attachmentIntent === 'wanted' && !context.unresolved && !context.facts.passiveHistory && context.facts.attachment !== 'error' && 'command' in event && !rejection(context, event.command), actions: ['admit', raise({ type: 'ADVANCE' })] },
       { actions: 'noWork' },
     ],
     INSPECT_DELETION: [{ guard: 'admitted', actions: ['admit', raise({ type: 'ADVANCE' })] }, { actions: 'reject' }],

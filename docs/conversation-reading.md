@@ -133,8 +133,9 @@ Each turn carries two native previews, matching DeepSeek Harness's turn outline.
 with Human or delegated-Agent source and ordinary Message kind adopted with this Attempt, or adopted while idle
 after the previous Attempt started and before this one did. Steering of the
 previous turn carries that turn's identity and never opens this one; automatic
-continuation has no prompt. Queued inbound reserves its transcript position at
-acceptance, so transcript adjacency is never used to find a prompt. `response`
+continuation has no prompt. The chat places queued and steering inputs at
+the boundary where the runtime adopts them for model input. The Turn outline
+uses native Attempt membership to identify its prompt. `response`
 is the newest text/refusal-bearing Assistant member, present only once the turn
 has a terminal at the cut. Both join text blocks with single spaces, collapse
 whitespace and end with an ellipsis when clipped: at most 50 and 120 Unicode
@@ -262,9 +263,9 @@ read-model ownership.
 
 A read cut C is `(ConversationId, journal, transcript, mutation_revision)`, the
 inclusive upper bounds one read was captured at. `mutation_revision` is the
-native monotonic epoch of successful pending-body edits/removals. Pending
-adoption preserves its accepted body and position; new admissions and ordinary
-execution append facts. Projection activation preserves immutable Ledger/Journal
+native monotonic epoch for mutations to the captured transcript. Pending input
+retains its message identity through adoption; chat order follows the adopted
+input batch and the surrounding execution facts. Projection activation preserves immutable Ledger/Journal
 meaning. Latest reads capture a fresh C. Anchor and continuation reads name C and reject
 foreign, future or mutated cuts; append-only growth remains reconstructible.
 

@@ -167,7 +167,7 @@ it('cold B still requires fresh Host authorization for its explicit submission i
   expect(f.editor().value).toBe('Must remain an unsent B draft');
 });
 
-it.each(['immediate reconnect', 'settled disconnect and reopened Settings'] as const)('same-authority reconnect renews cold B publication after held metadata without sending input (%s)', async recovery => {
+it.each(['immediate reconnect', 'settled disconnect and reopened Settings', 'reconnect before returning Home'] as const)('same-authority reconnect renews cold B publication after held metadata without sending input (%s)', async recovery => {
   const f = await fixture();
   fireEvent.change(f.editor(), { target: { value: 'A keeps its own unsent draft' } });
   await act(async () => fireEvent.change(f.ui.getByLabelText('Attach files'), { target: { files: [new File(['A'], 'A-owned.txt')] } }));
@@ -192,9 +192,21 @@ it.each(['immediate reconnect', 'settled disconnect and reopened Settings'] as c
   else {
     await act(async () => oldSocket.close());
     await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Settings' })));
-    await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Home' })));
     server.held.delete('session/read');
-    await act(async () => server.connect());
+    if (recovery === 'reconnect before returning Home') {
+      server.held.add('thread/resume');
+      await act(async () => server.connect());
+      await server.waitFor('thread/resume', 3);
+      const resumes = server.requests.filter(row => row.request.method === 'thread/resume').slice(1);
+      await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Home' })));
+      await waitFor(() => expect(f.editor().disabled).toBe(false));
+      expect(f.ui.container.querySelector('[data-shell-route]')?.getAttribute('data-shell-route')).toBe('session-draft');
+      server.held.delete('thread/resume');
+      await act(async () => { for (const { request } of resumes) server.reply(request); });
+    } else {
+      await act(async () => fireEvent.click(f.ui.getByRole('button', { name: 'Home' })));
+      await act(async () => server.connect());
+    }
   }
   await waitFor(() => {
     for (const id of ['A', 'B']) expect(server.client.isAttachmentControlCurrent(id, server.client.getSnapshot().views[id]?.attachmentObservation)).toBe(true);

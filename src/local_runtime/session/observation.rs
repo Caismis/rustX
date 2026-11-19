@@ -6,10 +6,12 @@ use super::{
 };
 use crate::{
     conversation::SurfaceRevision,
+    observation::content::CanonicalContentLocator,
     runtime::identity::{ConversationId, MessageId},
 };
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SessionNodeObservation {
     pub ordinal: u64,
@@ -72,7 +74,88 @@ pub struct SessionUserMessageBoundaryObservation {
     pub content: Vec<crate::observation::cut::ContentBinding>,
     pub collections: Vec<crate::observation::cut::CollectionFrontier>,
 }
+
+/// Exact coordinates of a human message in a particular Session node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SessionMessageVersion {
+    pub node_id: SessionNodeId,
+    pub conversation_id: ConversationId,
+    /// Inline identity when it fits the native 256-byte locator budget.
+    pub message_id: Option<MessageId>,
+    pub surface_revision: SurfaceRevision,
+    pub boundary: CanonicalContentLocator,
+}
+
+/// A version pager for a prompt present in the requested lineage.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SessionMessageVersionFamily {
+    pub current: SessionMessageVersion,
+    pub current_index: usize,
+    pub total: usize,
+    pub previous: Option<SessionMessageVersion>,
+    pub next: Option<SessionMessageVersion>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct SessionMessageVersionsPage {
+    pub versions: Vec<SessionMessageVersionFamily>,
+    pub next_offset: Option<usize>,
+}
+
+pub(crate) struct MessageVersionCut {
+    pub(crate) source_node: SessionNodeId,
+    pub(crate) source_position: u64,
+    pub(crate) source_message: MessageId,
+    pub(crate) side: LineageSide,
+    pub(crate) ordinal: u64,
+}
+
+impl MessageVersionCut {
+    pub(crate) fn retained_through(&self) -> u64 {
+        self.source_position - u64::from(self.side == LineageSide::Before)
+    }
+}
+
 impl SessionCatalog {
+    /// Snapshot only the graph fields needed to follow same-Session prefix copies.
+    pub(crate) fn message_version_cuts(
+        &self,
+        session_id: &SessionId,
+    ) -> BTreeMap<SessionNodeId, MessageVersionCut> {
+        self.document.sessions[session_id]
+            .nodes
+            .values()
+            .filter_map(|node| {
+                let SessionNodeOrigin::Fork {
+                    source_session,
+                    source_node,
+                    source_message,
+                    source_locator: CanonicalContentLocator::ByLedgerPosition { position },
+                    side,
+                    ..
+                } = &node.origin
+                else {
+                    return None;
+                };
+                (*position > 0
+                    && source_session == session_id
+                    && node.parent.as_ref() == Some(source_node))
+                .then(|| {
+                    (
+                        node.id.clone(),
+                        MessageVersionCut {
+                            source_node: source_node.clone(),
+                            source_position: *position,
+                            source_message: source_message.clone(),
+                            side: *side,
+                            ordinal: node.ordinal,
+                        },
+                    )
+                })
+            })
+            .collect()
+    }
+
     fn observation_node(
         &self,
         session_id: &SessionId,

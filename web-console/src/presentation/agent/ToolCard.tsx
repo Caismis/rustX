@@ -41,7 +41,7 @@ export function ToolCard({ tool, children, inspect, onOpenAgent, onOpenPath, onE
    {onOpenPath ? <button type="button" className={`${css.summary} ${css.pathLink}`} title={tool.path}
      onClick={event => { event.stopPropagation(); onOpenPath(); }} onKeyDown={event => event.stopPropagation()}>{summary}</button>
      : <span className={css.summary} data-error={state === 'error' || undefined} data-stopped={state === 'stopped' || undefined}><TextShimmer>{summary}</TextShimmer></span>}
- </>}{tool.background && <span className={css.summary}><TextShimmer>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</TextShimmer></span>}</>}>
+ </>}{tool.details?.summarySuffix && <span className={css.summarySuffix}>{tool.details.summarySuffix}</span>}{tool.background && <span className={css.summary}><TextShimmer>{tx(tool.jobId ? 'common:activity.background-started' : 'common:activity.background-starting')}</TextShimmer></span>}</>}>
  <div className={css.bodyWrap}>
  {body ?? (tool.details ? <ToolDetails model={tool.details} onOpenAgent={onOpenAgent}/>
  : tool.variant === 'bash' ? <TerminalBlock command={tool.input ?? ''} output={tool.output} exitCode={tool.exitCode} background={tool.background}

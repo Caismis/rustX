@@ -32,12 +32,15 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
   const uncertain = state.uncertain.some(item => sessionId !== undefined && item.sessionId === sessionId)
     || view?.cancellation?.status === 'uncertain' || view?.modelMutation?.status === 'uncertain'
     || view?.snapshot?.jobs?.some(tool => tool.state === 'outcome_unknown')
-    || view?.snapshot?.attempt?.foreground?.some(tool => tool.state.type === 'settled' && tool.state.result.status.type === 'outcome_unknown')
     || view?.snapshot?.workflows?.runs.some(run => run.state.type === 'settled' && run.state.outcome === 'outcome_unknown');
   if (uncertain) return { status: 'uncertain', label: tx('common:session-product.needs-verification'), severity: 'warning', recovery,
     detail: tx('common:copy.an-operation-may-have-taken-effect-check-the-conversation-and-affected-work-before-trying-', { p0: view?.snapshot?.durability_failure ? tx('common:copy.storage-also-reported-a-failure-changes-may-not-be-saved') : '' }) };
   if (view?.snapshot?.durability_failure) return { status: 'failure', label: tx('common:session-product.changes-may-not-be-saved'), severity: 'error', recovery,
     detail: tx('common:copy.storage-reported-a-failure-resolve-the-storage-problem-before-continuing-inspect-the-recor') };
+  if (view?.passiveHistory && !view.target && !view.error && state.connection === 'connected') {
+    return { status: 'idle', severity: 'quiet', label: tx('common:session-product.history-only'),
+      recovery: { action: 'open', label: tx('common:session-product.resume-chat') } };
+  }
   if (state.connection === 'incompatible') return { status: 'failure', label: tx('common:session-product.connection-version-mismatch'), severity: 'error', recovery,
     detail: tx('common:copy.use-matching-web-and-server-versions-review-connection-settings-before-connecting-again') };
   if (recovery?.action === 'refresh') return { status: 'unavailable', label: tx('common:session-product.observation-unavailable'), severity: 'warning', recovery,
@@ -47,6 +50,12 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
   if (transition && state.connection === 'connected' && !view?.error) return {
     status: 'connecting', severity: 'quiet', label: tx(transition === 'fork' ? 'common:session-product.forking' : 'common:session-product.regenerating'),
   };
+  if (state.connection === 'connected' && (view?.error || view?.attachment === 'error')) return {
+    status: 'unavailable', severity: 'warning', label: tx('common:session-product.observation-unavailable'), recovery,
+  };
+  if (state.connection === 'connected' && view && view.attachmentIntent === 'wanted' && view.attachment === 'detached' && !view.target) {
+    return { status: 'connecting', severity: 'quiet' };
+  }
   if (recovery) return { status: 'reconnect', label: tx('common:session-product.connection-interrupted'), severity: 'warning', recovery,
     detail: recovery.action === 'open' ? tx('common:copy.open-this-session-to-continue-your-previous-requests-will-not-be-sent-again') : tx('common:copy.reconnect-to-see-current-work-your-previous-requests-will-not-be-sent-again') };
   if (connecting || view?.attachment === 'attaching' || view?.attachment === 'resynchronizing') return { status: 'connecting', severity: 'quiet' };
@@ -61,6 +70,8 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
       case 'active':return {status:entry.status.activeFlags.length?'waiting':'working',severity:'quiet',label:entry.status.activeFlags.length?entry.status.activeFlags.map(flag=>tx(flag==='waitingOnApproval'?'workspace:status.waitingApproval':'workspace:status.waitingAnswer')).join(' · '):undefined};
     }
   }
-  return {status:'unavailable',severity:'warning',label:tx('common:session-product.observation-unavailable')};
+  if (view && !view.error && (view.observationState === 'attached' || view.observationState === 'checkpointLoading' || view.observationState === 'subscribePending')) return { status: 'connecting', severity: 'quiet' };
+  if (view?.error || view?.observationState === 'unavailable' || view?.observationState === 'resyncRequired') return { status: 'unavailable', severity: 'warning', label: tx('common:session-product.observation-unavailable') };
+  return { status: 'unavailable', severity: 'quiet' };
 
 }

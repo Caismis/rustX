@@ -33,7 +33,10 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     await page.locator(`button[data-session-id="${source.id}"]`).click();
     await expect(page.locator('[data-harness-frame]')).not.toHaveAttribute('data-sidebar-overlay');
     const sourceTarget = await wire.attachedTarget(source.id);
-    const sourceAttempt = (await wire.read('session/checkpoint', sourceTarget)).checkpoint.snapshot.attempt;
+    const readSourceHistory = async () => (await native!.client.call('session/history', {
+      session_id: source.id, node_id: source.active_node, at: { type: 'latest' }, limit: 8,
+    }, 'session_history')).window.page.entries;
+    const sourceHistory = await readSourceHistory();
     const editor = page.getByRole('textbox', { name: 'Message', exact: true });
     await expect(editor).toBeEnabled();
     await editor.fill('This unsent draft belongs to A');
@@ -59,8 +62,9 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     expect(wire.requests.filter(row => row.method === 'session/submissionIntent')).toHaveLength(0);
     expect(wire.requests.filter(row => row.method === 'inbound/queue')).toHaveLength(0);
     expect((await fixture.control('requests')).requests).toHaveLength(0);
-    expect((await wire.read('session/checkpoint', sourceTarget)).checkpoint.snapshot.attempt).toEqual(sourceAttempt);
-    expect(wire.requests.filter(row => ['session/detach', 'turn/interrupt', 'session/switchNode'].includes(row.method))).toEqual([]);
+    expect(await readSourceHistory()).toEqual(sourceHistory);
+    expect(wire.requests.filter(row => ['turn/interrupt', 'session/switchNode'].includes(row.method))).toEqual([]);
+    expect(wire.requests.filter(row => row.method === 'session/detach' && !sameTarget(row.params.target, sourceTarget))).toEqual([]);
 
     await editor.fill('mcp startup input belongs only to B');
     await page.getByLabel('Attach files').setInputFiles({ name: 'B-owned.txt', mimeType: 'text/plain', buffer: Buffer.from('B ownership') });
@@ -85,7 +89,7 @@ for (const width of [1440, 390]) for (const origin of ['session', 'workflows'] a
     const uploads = wire.requests.filter(row => row.method === 'session/uploadPrepare');
     expect(uploads).toHaveLength(2);
     expect(uploads[1].params).toMatchObject({ target: { session_id: target.id }, files: [{ name: 'B-owned.txt' }] });
-    expect((await wire.read('session/checkpoint', sourceTarget)).checkpoint.snapshot.attempt).toEqual(sourceAttempt);
+    expect(await readSourceHistory()).toEqual(sourceHistory);
     expect(gate.calls).toBe(1);
     await fixture.release('startup-request');
     await expect(page.getByText('Ready tools received.', { exact: true })).toBeVisible();
@@ -136,7 +140,7 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
     await expect(editor).toBeEnabled();
     await expect.poll(() => wire.requests.filter(row => row.method === 'session/read').length
       - wire.responses.filter(row => row.method === 'session/read').length).toBe(0);
-    const firstSourceTarget = await wire.attachedTarget(source.id);
+    await wire.attachedTarget(source.id);
     wire.holdNext('session/read');
     await page.locator(`button[data-session-id="${target.id}"]`).click();
     await expect.poll(() => wire.held()).toBe(1);
@@ -148,6 +152,7 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
     await editor.fill(text);
     await page.getByLabel('Attach files').setInputFiles({ name: 'B-local.txt', mimeType: 'text/plain', buffer: Buffer.from('B ownership') });
     await connectionAction(page, 'Disconnect');
+    const reconnectRequests = wire.requests.length;
     await connectionAction(page, 'Reconnect');
     await startupWait(() => gate!.reached, cancellation.signal);
     expect(wire.responses.filter(row => row.method === 'initialize').map(row => row.result.authority_id)).toEqual([
@@ -168,11 +173,10 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
       expect((await fixture.control('requests')).requests).toEqual([]);
     }
     gate.release();
-    const targetClaim = await wire.attachedTarget(target.id), sourceClaim = await wire.attachedTarget(source.id);
-    for (const claim of [targetClaim, sourceClaim]) await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe'
-      && row.result?.type === 'subscribed' && sameTarget(row.result.target, claim))).toBe(true);
+    const targetClaim = await wire.attachedTarget(target.id);
+    await expect.poll(() => wire.responses.some(row => row.method === 'session/subscribe'
+      && row.result?.type === 'subscribed' && sameTarget(row.result.target, targetClaim))).toBe(true);
     expect(targetClaim.conversation_id).toBe(target.active_conversation_id);
-    expect(sourceClaim.conversation_id).toBe(firstSourceTarget.conversation_id);
     if (sendDuringRecovery) {
       await fixture.gate('startup-request');
       const provider = (await fixture.control('requests')).requests;
@@ -195,7 +199,8 @@ for (const sendDuringRecovery of [false, true]) test(sendDuringRecovery
     expect(wire.held()).toBe(0);
     await expect(editor).toBeEditable();
     await expect(editor).toHaveValue(sendDuringRecovery ? '' : text);
-    expect(wire.requests.filter(row => ['turn/steer', 'turn/interrupt', 'session/detach'].includes(row.method))).toEqual([]);
+    expect(wire.requests.slice(reconnectRequests).filter(row => row.method === 'thread/resume').map(row => row.params.threadId)).toEqual([target.active_conversation_id]);
+    expect(wire.requests.filter(row => ['turn/steer', 'turn/interrupt'].includes(row.method))).toEqual([]);
     for (const method of ['session/submissionIntent', 'inbound/queue']) expect(wire.requests.filter(row => row.method === method)).toHaveLength(sendDuringRecovery ? 1 : 0);
     expect((await fixture.control('requests')).requests).toHaveLength(sendDuringRecovery ? 1 : 0);
     expect(gate.calls).toBe(1);

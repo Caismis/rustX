@@ -125,8 +125,14 @@ an external effect, not a still-running rustX worker.
 The foreground settlement guard remains a typed control-plane failure, separate
 from executor-returned unconfirmed evidence. It never proves physical
 termination. Executors must retain all local cleanup within their ownership
-contract. No automatic retry, ambiguous replay, or foreground-to-background
-switch is introduced.
+contract. The settlement guard does not retry, replay, or switch a call from
+foreground to background. Native Bash keeps its foreground execution owner
+while the process runs privately. That owner guards physical start, observes
+live cancellation, and consumes the executor's settlement. At the foreground
+budget, a still-running process can transfer to the conversation-owned jobs
+registry. If the transfer is refused, the foreground call awaits and returns
+the original operation's settlement. After transfer, the job owns cancellation
+and publishes the eventual terminal result.
 
 The cooperative handle consumes its operation on completion, so a repeated poll
 cannot execute it or produce another terminal winner. Invocation panics are

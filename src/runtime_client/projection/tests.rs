@@ -1337,8 +1337,8 @@ fn replaying_a_composition_evicts_nothing_from_a_full_window() {
 //
 // Inbound acceptance is an independent durable boundary and may commit
 // anywhere in that window. The test below parks the loop at
-// `observe_status`, durably accepts an unrelated inbound message while it
-// is parked, folds that acceptance into the Runtime Client projection, and
+// `observe_status`, durably adopts an unrelated inbound message while it
+// is parked, folds that commit into the Runtime Client projection, and
 // only then releases the status. Anything that derived placement at the
 // fold would produce the inbound's cursor; the frozen fact does not.
 // -----------------------------------------------------------------------
@@ -1501,7 +1501,7 @@ impl AgentExecutionObserver for StatusParkObserver {
 /// blocked in `observe_status`, between the composition and its
 /// publication, for the whole body of this function. Returns the tool
 /// batch's own durable position and the later position the unrelated
-/// inbound was accepted at.
+/// inbound was adopted at.
 async fn drive_anchor_race(
     observer: Arc<StatusParkObserver>,
     projection: Arc<Mutex<RuntimeClientProjection>>,
@@ -1518,7 +1518,7 @@ async fn drive_anchor_race(
         .expect("the status park stays open");
     let batch_cursor = observer.tool_batch_cursor();
 
-    // An independent durable boundary: a new inbound message is accepted,
+    // An independent durable boundary: a new inbound message is adopted,
     // and the durable transcript advances past the batch.
     mailbox
         .enqueue(UserMessageBlock {
@@ -1535,25 +1535,22 @@ async fn drive_anchor_race(
         .select_pending_batch()
         .expect("select pending")
         .expect("the accepted inbound is pending");
-    let item = batch
-        .items()
-        .iter()
-        .find(|item| item.message().id == MessageId::new("unrelated-inbound"))
-        .expect("the accepted inbound is in the pending batch")
-        .clone();
-    let inbound_cursor = item
-        .transcript_cursor()
-        .expect("a visible inbound message is a durable transcript item");
-    assert!(
-        inbound_cursor > batch_cursor,
-        "the unrelated inbound is durably later than the tool batch"
+    let adopted = mailbox
+        .adopt_pending_batch(&batch, None)
+        .expect("canonical adoption");
+    let [receipt] = adopted.canonical_receipts.as_slice() else {
+        panic!("expected one adopted user");
+    };
+    let inbound_cursor = receipt
+        .transcript_cursor
+        .expect("canonical user transcript cursor");
+    assert!(inbound_cursor > batch_cursor);
+    projection.lock().expect("projection lock").apply(
+        ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt: receipt.clone(),
+        },
     );
-
-    // Fold the acceptance into the Runtime Client *before* the status.
-    projection
-        .lock()
-        .expect("projection lock")
-        .apply(ConversationObservation::InboundEnqueued(item));
     let (mid_flight, _) = projection
         .lock()
         .expect("projection lock")
@@ -1563,16 +1560,11 @@ async fn drive_anchor_race(
         mid_flight.statuses.is_empty(),
         "the parked composition has not been published yet"
     );
-    assert_eq!(
+    assert!(
         mid_flight
-            .inbound
-            .pending
-            .last()
-            .expect("the unrelated inbound is folded")
-            .message
-            .id,
-        MessageId::new("unrelated-inbound"),
-        "the projection has already folded the later durable position"
+            .messages
+            .iter()
+            .any(|message| message.id() == &MessageId::new("unrelated-inbound"))
     );
 
     release.send(()).expect("release the parked status");
@@ -1591,8 +1583,8 @@ async fn drive_anchor_race(
 /// 1. canonical ToolResult batch commits at cursor N
 /// 2. the PostToolBatch opportunity freezes N
 /// 3. the loop PARKS in observe_status, before the projection sees it
-/// 4. an unrelated inbound is durably accepted at cursor N+1
-/// 5. its InboundEnqueued observation is folded
+/// 4. an unrelated inbound is durably adopted at cursor N+1
+/// 5. its CanonicalCommitted observation is folded
 /// 6. the park is RELEASED and the status is folded
 /// 7. the published anchor is still N
 /// ```
@@ -1771,7 +1763,7 @@ async fn a_later_inbound_cannot_relocate_a_prepared_post_tool_batch_status() {
     assert_ne!(
         published_anchor(status),
         Some(RuntimeClientTranscriptCursor::from(inbound_cursor)),
-        "an unrelated inbound accepted before the fold cannot relocate the status"
+        "an unrelated inbound adopted before the fold cannot relocate the status"
     );
 }
 
@@ -5827,6 +5819,45 @@ fn assert_released_goal_prefix(projection: &RuntimeClientProjection, goal: &crat
 }
 
 #[test]
+fn canonical_cut_waits_for_its_pending_head_even_when_enqueue_has_no_transcript_cursor() {
+    let (mut projection, store) = initialized_source_projection();
+    let pending = store
+        .accept_inbound(crate::durable::InboundDraft {
+            message_id: None,
+            source: UserSource::Human,
+            kind: InboundKind::Message,
+            content: vec![UserContentBlock::Text(TextBlock {
+                text: "pending".into(),
+            })],
+            timestamp: chrono::DateTime::UNIX_EPOCH,
+            correlation: None,
+        })
+        .unwrap();
+    let canonical = store
+        .append_canonical(&MessageBlock::Assistant(AssistantMessageBlock {
+            id: MessageId::new("later-canonical"),
+            content: Vec::new(),
+        }))
+        .unwrap();
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply(ConversationObservation::CanonicalCommitted {
+            attempt_id: None,
+            receipt: canonical,
+        });
+    });
+    assert!(projection.native_source_pending());
+    publish_source_fact(&mut projection, |projection| {
+        projection.apply_pending_receipt(pending.pending_observation.as_deref());
+    });
+    projection.validate_source_prefix().unwrap();
+    assert_eq!(
+        projection.checkpoint_read_cut().source_cut.unwrap(),
+        store.observation_read_cut().unwrap()
+    );
+    assert_eq!(projection.snapshot_ref().inbound.pending.len(), 1);
+}
+
+#[test]
 fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner() {
     let (mut projection, store) = initialized_source_projection();
     let published = projection.checkpoint_read_cut();
@@ -5886,9 +5917,7 @@ fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner
         .mark_observation_direct(earlier.sequence, earlier.sequence)
         .unwrap();
     store.mark_canonical_transcript_ready(1, 1).unwrap();
-    store
-        .mark_observation_transcript_ready(pending.read_cut.transcript)
-        .unwrap();
+
     publish_source_fact(&mut projection, |projection| {
         projection.apply(ConversationObservation::TranscriptSourceReady(
             store.transcript_source_ready().unwrap(),
@@ -5902,7 +5931,7 @@ fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner
         pending.read_cut.mutation_revision
     );
     assert_eq!(source.ledger_through, 1);
-    assert_eq!(source.read.transcript, 2);
+    assert_eq!(source.read.transcript, 1);
     assert_eq!(projection.snapshot_ref().inbound.pending.len(), 1);
     assert_eq!(projection.snapshot_ref().message_descriptors.len(), 1);
     assert_eq!(
@@ -6965,4 +6994,56 @@ fn replay_direct_index_handles_last_cursor_without_wrapping() {
         projection.poll_subscriber(subscriber),
         SubscriberPoll::Exhausted
     ));
+}
+
+#[test]
+fn app_server_input_id_projects_onto_pending_rows_from_durable_correlation_only() {
+    use crate::durable::SqliteConversationStore;
+    let mut projection = projection();
+    let store =
+        SqliteConversationStore::in_memory(projection.snapshot.conversation_id.clone()).unwrap();
+    projection
+        .initialize_descriptor_heads(&store, store.observation_read_cut().unwrap())
+        .unwrap();
+    let accept = |correlation: Option<&str>, text: &str, kind: InboundKind| {
+        store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: text.to_owned(),
+                })],
+                timestamp: chrono::DateTime::UNIX_EPOCH,
+                correlation: correlation.map(str::to_owned),
+            })
+            .unwrap()
+    };
+    accept(
+        Some("app-server:send-1"),
+        "queued",
+        InboundKind::QueuedMessage,
+    );
+    accept(Some("background:send-1"), "foreign", InboundKind::Message);
+    accept(Some("app-server:bad/id"), "malformed", InboundKind::Message);
+    let last = accept(None, "plain", InboundKind::Message);
+    projection.apply_pending_receipt(last.pending_observation.as_deref());
+    assert_eq!(
+        projection
+            .snapshot_ref()
+            .inbound
+            .pending
+            .iter()
+            .map(|item| item.input_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("send-1"), None, None, None]
+    );
+    let page = store.pending_header_page(&last.read_cut, None, 32).unwrap();
+    assert_eq!(
+        page.headers
+            .iter()
+            .map(|header| header.input_id.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("send-1"), None, None, None]
+    );
 }

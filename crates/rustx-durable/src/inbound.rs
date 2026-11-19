@@ -80,6 +80,8 @@ pub struct InboundItem {
     pub sequence: InboundSequence,
     pub message: UserMessageBlock,
     pub transcript_cursor: Option<TranscriptCursor>,
+    /// Public app-server input id, already projected from durable correlation.
+    pub input_id: Option<String>,
 }
 
 impl InboundItem {
@@ -92,13 +94,21 @@ impl InboundItem {
         revision: u64,
         sequence: u64,
         message: UserMessageBlock,
+        input_id: Option<String>,
     ) -> Self {
         Self {
             revision,
             sequence: InboundSequence::new(sequence),
             message,
             transcript_cursor: None,
+            input_id,
         }
+    }
+
+    /// Original public app-server input id, when this row carried one.
+    #[must_use]
+    pub fn input_id(&self) -> Option<&str> {
+        self.input_id.as_deref()
     }
 
     /// The durable inbound sequence of the item.

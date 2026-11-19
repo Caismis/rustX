@@ -394,7 +394,8 @@ it('S1-10 preparing and adopted states fabricate no candidate and no owner actio
   const s = cfg3Client();
   s.source.application = { ...cfg3Application(), scope: cfg3Session, units: { capabilities: { status: 'preparing' } } };
   render(<SessionConfiguration client={s.client} view={s.state.views[cfg3Session]} openOwningSettings={open} />);
-  await screen.findByText(/Preparing configuration/);
+  await waitFor(() => expect(s.request.mock.calls.some(([op]) => op.method === 'session/configuration')).toBe(true));
+  expect(screen.queryByLabelText('Session configuration')).toBeNull();
   expect(screen.queryByRole('button', { name: /^Open / })).toBeNull();
   expect(open).not.toHaveBeenCalled();
 });

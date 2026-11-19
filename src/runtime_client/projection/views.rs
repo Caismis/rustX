@@ -115,6 +115,7 @@ pub(super) fn inbound_item_view(item: &InboundItem) -> InboundItemView {
         revision: item.revision(),
         sequence: item.sequence(),
         deferred,
+        input_id: item.input_id().map(str::to_owned),
         message,
     }
 }

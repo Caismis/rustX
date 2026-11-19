@@ -238,35 +238,36 @@ impl ScheduledWorkflowStore for SqliteConversationStore {
         &self,
         id: &ScheduledWorkflowStartId,
     ) -> Result<Option<ScheduledWorkflowStart>, ConversationStoreError> {
-        let c = self.lock()?;
-        let Some(h) = head(&c, id)? else {
-            return Ok(None);
-        };
-        if h.binding.conversation_id != self.conversation_id {
-            return Err(storage("foreign scheduled start"));
-        }
-        let (contract,args,result):(Option<String>,Option<String>,Option<String>)=c.query_row("SELECT CASE WHEN length(CAST(contract_json AS BLOB))<=65536 THEN contract_json END,CASE WHEN length(CAST(args_json AS BLOB))<=16384 THEN args_json END,CASE WHEN length(CAST(result_json AS BLOB))<=65536 THEN result_json END FROM scheduled_workflow_starts WHERE start_id=?1",[id.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(sql)?;
-        let contract = contract
-            .map(|json| decode(&json, "pinned scheduled Workflow"))
-            .transpose()?;
-        let arguments = args
-            .map(|json| decode(&json, "scheduled arguments"))
-            .transpose()?;
-        if !matches!(h.state, ScheduledWorkflowState::Settled { .. })
-            && (contract.is_none() || arguments.is_none())
-        {
-            return Err(storage(
-                "nonterminal scheduled start lost its bounded contract",
-            ));
-        }
-        Ok(Some(ScheduledWorkflowStart {
-            head: h,
-            contract,
-            arguments,
-            result: result
-                .map(|json| decode(&json, "scheduled result"))
-                .transpose()?,
-        }))
+        self.read_transaction(|tx| {
+            let Some(h) = head(tx, id)? else {
+                return Ok(None);
+            };
+            if h.binding.conversation_id != self.conversation_id {
+                return Err(storage("foreign scheduled start"));
+            }
+            let (contract,args,result):(Option<String>,Option<String>,Option<String>)=tx.query_row("SELECT CASE WHEN length(CAST(contract_json AS BLOB))<=65536 THEN contract_json END,CASE WHEN length(CAST(args_json AS BLOB))<=16384 THEN args_json END,CASE WHEN length(CAST(result_json AS BLOB))<=65536 THEN result_json END FROM scheduled_workflow_starts WHERE start_id=?1",[id.as_str()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?))).map_err(sql)?;
+            let contract = contract
+                .map(|json| decode(&json, "pinned scheduled Workflow"))
+                .transpose()?;
+            let arguments = args
+                .map(|json| decode(&json, "scheduled arguments"))
+                .transpose()?;
+            if !matches!(h.state, ScheduledWorkflowState::Settled { .. })
+                && (contract.is_none() || arguments.is_none())
+            {
+                return Err(storage(
+                    "nonterminal scheduled start lost its bounded contract",
+                ));
+            }
+            Ok(Some(ScheduledWorkflowStart {
+                head: h,
+                contract,
+                arguments,
+                result: result
+                    .map(|json| decode(&json, "scheduled result"))
+                    .transpose()?,
+            }))
+        })
     }
     fn scheduled_workflow_pending(
         &self,
@@ -493,11 +494,17 @@ impl ScheduledWorkflowStore for SqliteConversationStore {
                 "scheduled recovery page".into(),
             ));
         }
-        let c = self.lock()?;
-        let Some(h) = head(&c, id)? else {
-            return Ok(None);
-        };
-        let effects = c.prepare("SELECT ordinal,node_key,CASE WHEN length(CAST(effect_json AS BLOB))<=4096 THEN effect_json END FROM scheduled_workflow_effects WHERE start_id=?1 AND ordinal>?2 ORDER BY ordinal LIMIT ?3").map_err(sql)?
+        // The writer publishes the Return and its digest together. Separate
+        // statements must also read them (and the effects page) at one cut.
+        self.read_transaction(|tx| {
+            let Some(h) = head(tx, id)? else {
+                return Ok(None);
+            };
+            #[cfg(test)]
+            if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
+                probe();
+            }
+            let effects = tx.prepare("SELECT ordinal,node_key,CASE WHEN length(CAST(effect_json AS BLOB))<=4096 THEN effect_json END FROM scheduled_workflow_effects WHERE start_id=?1 AND ordinal>?2 ORDER BY ordinal LIMIT ?3").map_err(sql)?
             .query_map(params![id.as_str(),after,limit],|r|Ok((r.get::<_,u64>(0)?,r.get::<_,String>(1)?,r.get::<_,Option<String>>(2)?))).map_err(sql)?
             .map(|row| {
                 let (ordinal,key,json)=row.map_err(sql)?;
@@ -507,33 +514,34 @@ impl ScheduledWorkflowStore for SqliteConversationStore {
                 }
                 Ok(effect)
             }).collect::<Result<Vec<_>,ConversationStoreError>>()?;
-        let next_effect_ordinal = effects
-            .last()
-            .filter(|_| effects.len() == limit as usize)
-            .map(|e| e.ordinal);
-        let blocked = !matches!(h.state, ScheduledWorkflowState::Settled { .. });
-        let (has_result,result):(bool,Option<String>)=c.query_row("SELECT result_json IS NOT NULL,CASE WHEN length(CAST(result_json AS BLOB))<=65536 THEN result_json END FROM scheduled_workflow_starts WHERE start_id=?1",[id.as_str()],|r|Ok((r.get(0)?,r.get(1)?))).map_err(sql)?;
-        if has_result && result.is_none() {
-            return Err(storage("scheduled Return exceeds native bound"));
-        }
-        let result = result
-            .map(|json| {
-                if h.result_digest.as_deref()
-                    != Some(format!("{:x}", Sha256::digest(json.as_bytes())).as_str())
-                {
-                    return Err(storage("scheduled Return digest differs"));
-                }
-                decode(&json, "scheduled Return")
-            })
-            .transpose()?;
-        Ok(Some(ScheduledWorkflowRecovery {
-            start: h,
-            effects,
-            result,
-            next_effect_ordinal,
-            capacity_blocked: blocked,
-            deletion_blocked: blocked,
-        }))
+            let next_effect_ordinal = effects
+                .last()
+                .filter(|_| effects.len() == limit as usize)
+                .map(|e| e.ordinal);
+            let blocked = !matches!(h.state, ScheduledWorkflowState::Settled { .. });
+            let (has_result,result):(bool,Option<String>)=tx.query_row("SELECT result_json IS NOT NULL,CASE WHEN length(CAST(result_json AS BLOB))<=65536 THEN result_json END FROM scheduled_workflow_starts WHERE start_id=?1",[id.as_str()],|r|Ok((r.get(0)?,r.get(1)?))).map_err(sql)?;
+            if has_result && result.is_none() {
+                return Err(storage("scheduled Return exceeds native bound"));
+            }
+            let result = result
+                .map(|json| {
+                    if h.result_digest.as_deref()
+                        != Some(format!("{:x}", Sha256::digest(json.as_bytes())).as_str())
+                    {
+                        return Err(storage("scheduled Return digest differs"));
+                    }
+                    decode(&json, "scheduled Return")
+                })
+                .transpose()?;
+            Ok(Some(ScheduledWorkflowRecovery {
+                start: h,
+                effects,
+                result,
+                next_effect_ordinal,
+                capacity_blocked: blocked,
+                deletion_blocked: blocked,
+            }))
+        })
     }
     #[allow(clippy::too_many_lines)] // One exhaustive native proof interpretation.
     fn scheduled_workflow_recover_effects(

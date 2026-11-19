@@ -23,14 +23,15 @@
 //! - a workflow step, Cargo artifact receipt, libtest output or rustdoc block
 //!   output cannot be interpreted exactly.
 //!
-//! Discovery is native: each platform is checked by its own CI job on its own
-//! runner. `--job <id>` restricts discovery to the targets that job already
-//! built; every step on the same platform that selects one of those targets
-//! is evaluated, so a target's Linux coverage is complete across lanes.
+//! Discovery is native and CI runs it on Linux. `--job <id>` restricts
+//! discovery to the targets that job already built. Every step that selects
+//! one of those targets is evaluated, so a target's coverage is complete
+//! across lanes. A host whose workflow has no native executing lane fails
+//! clearly.
 //!
 //! ```text
 //! cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-contracts
-//! cargo run --profile test --all-features --locked --example check_test_lanes # all targets on this host
+//! cargo run --profile test --all-features --locked --example check_test_lanes # all targets on this Linux host
 //! ```
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -43,11 +44,7 @@ use std::process::Command;
 ///
 /// FULL on Linux is complete: every runnable test there must execute. FAST
 /// entries name what every FAST run must execute (the capacity suite
-/// excluded), whatever the change touches. macOS deliberately runs only the platform-sensitive
-/// classes; these entries name the ones whose loss would silently remove
-/// native process, signal, socket and filesystem proof. The deterministic
-/// contract suites and the pure `contracts`/`provider` targets are Linux-only
-/// by design and are intentionally absent.
+/// excluded), whatever the change touches.
 const REQUIREMENTS: &[Requirement] = &[
     // FAST, on every push touching Rust: the deterministic Agent Loop and
     // runtime contracts and the real-process App Server and CLI workflows.
@@ -125,33 +122,6 @@ const REQUIREMENTS: &[Requirement] = &[
         "doc",
         "tools::todo::ConversationTodoList",
     ),
-    // macOS full: the lib test binary's in-crate boundary suites.
-    Requirement::new(Profile::Full, Platform::Macos, "lib", "boundary_suites::"),
-    // macOS core, in both profiles: every external boundary target.
-    Requirement::new(Profile::Fast, Platform::Macos, "test durable", ""),
-    Requirement::new(Profile::Fast, Platform::Macos, "test process", ""),
-    Requirement::new(Profile::Fast, Platform::Macos, "test subagent", ""),
-    Requirement::new(Profile::Fast, Platform::Macos, "test tools", ""),
-    Requirement::new(Profile::Fast, Platform::Macos, "test conformance", ""),
-    Requirement::new(Profile::Fast, Platform::Macos, "test cfg3_catalog", ""),
-    Requirement::new(
-        Profile::Fast,
-        Platform::Macos,
-        "test cfg3_managed_output",
-        "",
-    ),
-    Requirement::new(Profile::Full, Platform::Macos, "test durable", ""),
-    Requirement::new(Profile::Full, Platform::Macos, "test process", ""),
-    Requirement::new(Profile::Full, Platform::Macos, "test subagent", ""),
-    Requirement::new(Profile::Full, Platform::Macos, "test tools", ""),
-    Requirement::new(Profile::Full, Platform::Macos, "test conformance", ""),
-    Requirement::new(Profile::Full, Platform::Macos, "test cfg3_catalog", ""),
-    Requirement::new(
-        Profile::Full,
-        Platform::Macos,
-        "test cfg3_managed_output",
-        "",
-    ),
 ];
 
 /// The module name that marks a capacity test: its value comes from its scale
@@ -186,6 +156,14 @@ fn main() {
     let workflow = std::fs::read_to_string(root.join(".github/workflows/ci.yml"))
         .unwrap_or_else(|error| fail(&[format!("cannot read the CI workflow: {error}")]));
     let steps = parse_workflow(&workflow, &metadata.targets).unwrap_or_else(|errors| fail(&errors));
+    if !steps
+        .iter()
+        .any(|step| step.platform == host && step.executes)
+    {
+        fail(&[format!(
+            "the workflow has no executing cargo test lane on {host}"
+        )]);
+    }
     let discovery = CargoDiscovery::from_metadata(cargo, root, metadata.clone());
     let report = check(
         &steps,

@@ -554,6 +554,8 @@ export function describeRpcError(error: RpcError): string {
       return "this attachment has been replaced";
     case "stale_runtime":
       return "this runtime incarnation has been replaced";
+    case "steer_unavailable":
+      return "the expected Turn is no longer active or steerable";
     case "invalid_state":
       return `the server rejected the request: ${error.message}`;
     case "invalid_params":

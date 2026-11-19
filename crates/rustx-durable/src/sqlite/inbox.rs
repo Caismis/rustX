@@ -7,10 +7,7 @@ mod tests;
 
 #[cfg(any(test, feature = "test-hooks"))]
 use super::AdmissionFaultOperation;
-use super::canonical::ledger::{
-    append_transcript_reference, load_message_tx, load_transcript_reference, message_exists,
-    patch_message_transcript,
-};
+use super::canonical::ledger::{load_message_tx, load_transcript_reference, message_exists};
 use super::journal::reference::validate_subagent_terminal_publication;
 use super::journal::{find_event_by_id, persist_event_tx};
 use super::{
@@ -19,10 +16,11 @@ use super::{
     reading, seq_to_i64, sequence_from_i64, storage,
 };
 use crate::inbound::InboundSequence;
+use crate::observation::NativeObservationBatch;
 use crate::process_death;
 use crate::{
     AcceptedInbound, ConversationStoreError, InboundDraft, InboxStore, PendingBatch,
-    PendingInboundItem, TranscriptCursor, observation::NativeObservationBatch,
+    PendingInboundItem,
 };
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
@@ -423,8 +421,9 @@ impl InboxStore for SqliteConversationStore {
             }
         }
         let connection = self.lock()?;
-        let items = load_pending_rows(&connection)?;
-        let Some(watermark) = items.last().map(|item| item.sequence) else {
+        // Selection includes every pending row representable by SQLite.
+        let items = load_pending_ordered(&connection, Some(InboundSequence::new(i64::MAX as u64)))?;
+        let Some(watermark) = items.iter().map(|item| item.sequence).max() else {
             return Ok(None);
         };
         Ok(Some(PendingBatch {
@@ -482,6 +481,12 @@ impl InboxStore for SqliteConversationStore {
     ) -> Result<crate::PendingMutationOutcome, ConversationStoreError> {
         self.mutate_pending(expected, None)
     }
+    fn steer_pending(
+        &self,
+        scope: &crate::PendingSteerScope,
+    ) -> Result<crate::PendingMutationOutcome, ConversationStoreError> {
+        self.steer_pending_rows(scope)
+    }
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
         let connection = self.lock()?;
         load_pending_rows(&connection)
@@ -514,7 +519,7 @@ pub fn rewrite_pending_body(
     item: &mut PendingInboundItem,
     expected: &crate::PendingInboundRef,
     text: &str,
-) -> Result<(), ConversationStoreError> {
+) -> Result<bool, ConversationStoreError> {
     item.message.content = vec![UserContentBlock::Text(
         rustx_types::message::content::TextBlock {
             text: text.to_owned(),
@@ -527,34 +532,23 @@ pub fn rewrite_pending_body(
         .ok_or(ConversationStoreError::SequenceExhausted)?;
     transaction
         .execute(
-            "UPDATE pending_inbound SET message_json=?1, revision=?2 WHERE sequence=?3",
+            "UPDATE pending_inbound SET message_json=json_set(message_json, '$.content', json(?1)),
+                                        revision=?2 WHERE sequence=?3",
             params![
-                encode(&item.message, "pending edit")?,
+                encode(&item.message.content, "pending edit")?,
                 revision,
                 seq_to_i64(expected.sequence.get())?
             ],
         )
         .map_err(|error| crate::sqlite::sqlite_error(&error, format!("pending edit: {error}")))?;
-    let _ = optional_display_layout(transaction, || {
-        content::index_pending(
-            transaction,
-            &item.message,
-            expected.sequence.get(),
-            revision,
-        )?;
-        observation::index::index_message(
-            transaction,
-            &MessageBlock::User(item.message.clone()),
-            None,
-        )
-    })?;
-    let _ = observation::index::index_pending_header(
+    item.revision = revision;
+    refresh_pending_display_layout(
         transaction,
+        &item.message,
         expected.sequence.get(),
-        &item.message_id,
-        None,
-    );
-    Ok(())
+        revision,
+        true,
+    )
 }
 
 pub fn reject_unaccounted_goal(draft: &InboundDraft) -> Result<(), ConversationStoreError> {
@@ -601,13 +595,15 @@ pub fn refresh_pending_receipt(
     accepted: &mut AcceptedInbound,
 ) -> Result<(), ConversationStoreError> {
     accepted.read_cut = reading::cut(connection, conversation)?;
-    accepted.pending_observation = observation_receipt::pending(
-        connection,
-        conversation,
-        Some(accepted.sequence.get()),
-        None,
-        None,
-    );
+    if accepted.pending_observation.is_some() {
+        accepted.pending_observation = observation_receipt::pending(
+            connection,
+            conversation,
+            Some(accepted.sequence.get()),
+            None,
+            None,
+        );
+    }
     Ok(())
 }
 
@@ -672,15 +668,7 @@ pub fn accept_scheduled_inbound_tx(
             let transcript_cursor = if matches!(message.kind, InboundKind::Context(_)) {
                 None
             } else {
-                Some(
-                    load_transcript_reference(transaction, "message", &message_id)?.ok_or_else(
-                        || {
-                            ConversationStoreError::InvalidReference(format!(
-                                "accepted inbound {message_id} is missing its transcript reference"
-                            ))
-                        },
-                    )?,
-                )
+                load_transcript_reference(transaction, "message", &message_id)?
             };
             return Ok(AcceptedInbound {
                 goal_observation: None,
@@ -750,59 +738,29 @@ pub fn accept_scheduled_inbound_tx(
                 crate::sqlite::sqlite_error(&error, format!("insert correlation: {error}"))
             })?;
     }
-    // Acceptance is the durable-before-display frontier for an ordinary
-    // inbound user message. Context facts are durable model input but are not
-    // ordinary transcript content, so they never receive an ordering row.
-    // Adoption later reuses this same reference when a visible body moves
-    // into the Message Ledger.
-    let prior_cursor = match load_transcript_reference(transaction, "message", message_id.as_str())
-    {
-        Err(error @ ConversationStoreError::OperationCancelled) => return Err(error),
-        result => result,
-    };
-    let transcript_cursor = if matches!(message.kind, InboundKind::Context(_)) {
-        None
-    } else {
-        Some(append_transcript_reference(
-            transaction,
-            "message",
-            message_id.as_str(),
-        )?)
-    };
-    let _ = optional_display_layout(transaction, || {
-        content::index_pending(transaction, &message, sequence, 0)?;
-        observation::index::index_message_capture(
-            transaction,
-            &MessageBlock::User(message.clone()),
-            None,
-            false,
-            prior_cursor?,
-        )
-        .map(|_| ())
-    })?;
-    if let Some(cursor) = transcript_cursor {
-        patch_message_transcript(transaction, &message_id, cursor)?;
-    }
-    let _ = observation::index::index_pending_header(
-        transaction,
-        sequence,
-        &message_id,
-        transcript_cursor.map(TranscriptCursor::get),
-    );
+    // Pending inputs never allocate a positive transcript seat until adopted
+    // into the Message Ledger; their display header uses a temporary negative
+    // carrier row (like Context facts) until adoption or removal.
+    let display_available =
+        refresh_pending_display_layout(transaction, &message, sequence, 0, false)?;
     Ok(AcceptedInbound {
         goal_observation: None,
-        pending_observation: observation_receipt::pending(
-            transaction,
-            &store.conversation_id,
-            Some(sequence),
-            None,
-            None,
-        ),
+        pending_observation: display_available
+            .then(|| {
+                observation_receipt::pending(
+                    transaction,
+                    &store.conversation_id,
+                    Some(sequence),
+                    None,
+                    None,
+                )
+            })
+            .flatten(),
         read_cut: reading::cut(transaction, &store.conversation_id)?,
         sequence: InboundSequence::new(sequence),
         message_id,
         message,
-        transcript_cursor,
+        transcript_cursor: None,
         retried: false,
     })
 }
@@ -862,49 +820,55 @@ pub fn load_correlated_user_message(
 pub fn load_pending_rows(
     connection: &Connection,
 ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
-    let mut statement = connection
-        .prepare_cached(
-            "SELECT p.sequence,p.message_id,p.message_json,p.correlation,t.position,p.revision
+    load_pending_ordered(connection, None)
+}
+
+fn load_pending_ordered(
+    connection: &Connection,
+    through: Option<InboundSequence>,
+) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
+    let sql = match through {
+        None => {
+            "SELECT p.sequence,p.message_id,p.message_json,p.correlation,p.revision
              FROM pending_inbound p
-             LEFT JOIN transcript_entries t
-               ON t.native_reference_kind='message' AND t.native_reference_id=p.message_id
-             ORDER BY p.sequence",
-        )
+             ORDER BY p.sequence"
+        }
+        Some(_) => {
+            "SELECT p.sequence,p.message_id,p.message_json,p.correlation,p.revision
+             FROM pending_inbound p
+             WHERE p.sequence <= ?1
+             ORDER BY json_extract(p.message_json, '$.kind') IS 'queued_message',
+                      COALESCE(json_extract(p.message_json, '$.promoted_after'), p.sequence),
+                      json_extract(p.message_json, '$.promotion_revision'), p.sequence"
+        }
+    };
+    let mut statement = connection
+        .prepare_cached(sql)
         .map_err(|error| crate::sqlite::sqlite_error(&error, format!("load pending: {error}")))?;
     let rows = statement
-        .query_map([], |row| {
-            let sequence: i64 = row.get(0)?;
-            let message_id = MessageId::new(row.get::<_, String>(1)?);
-            let json: String = row.get(2)?;
-            let message: UserMessageBlock = serde_json::from_str(&json).map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    2,
-                    rusqlite::types::Type::Text,
-                    Box::new(error),
-                )
-            })?;
-            Ok(PendingInboundItem {
-                revision: row.get::<_, u64>(5)?,
-                sequence: InboundSequence::new(read_sequence(sequence)?),
-                message_id,
-                message,
-                transcript_cursor: row
-                    .get::<_, Option<i64>>(4)?
-                    .map(|position| {
-                        u64::try_from(position)
-                            .map(TranscriptCursor::new)
-                            .map_err(|error| {
-                                rusqlite::Error::FromSqlConversionFailure(
-                                    4,
-                                    rusqlite::types::Type::Integer,
-                                    Box::new(error),
-                                )
-                            })
-                    })
-                    .transpose()?,
-                correlation: row.get(3)?,
-            })
-        })
+        .query_map(
+            rusqlite::params_from_iter(through.map(InboundSequence::get)),
+            |row| {
+                let sequence: i64 = row.get(0)?;
+                let message_id = MessageId::new(row.get::<_, String>(1)?);
+                let json: String = row.get(2)?;
+                let message: UserMessageBlock = serde_json::from_str(&json).map_err(|error| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        2,
+                        rusqlite::types::Type::Text,
+                        Box::new(error),
+                    )
+                })?;
+                Ok(PendingInboundItem {
+                    revision: row.get::<_, u64>(4)?,
+                    sequence: InboundSequence::new(read_sequence(sequence)?),
+                    message_id,
+                    message,
+                    transcript_cursor: None,
+                    correlation: row.get(3)?,
+                })
+            },
+        )
         .map_err(|error| crate::sqlite::sqlite_error(&error, format!("pending query: {error}")))?;
     let items: Vec<PendingInboundItem> = rows
         .map(|row| row.map_err(|error| storage(format!("pending row: {error}"))))
@@ -916,13 +880,6 @@ pub fn load_pending_rows(
                 item.message_id
             )));
         }
-        let visible = !matches!(item.message.kind, InboundKind::Context(_));
-        if visible != item.transcript_cursor.is_some() {
-            return Err(ConversationStoreError::InvalidReference(format!(
-                "pending inbound {} has an invalid transcript reference",
-                item.message_id
-            )));
-        }
     }
     Ok(items)
 }
@@ -931,16 +888,18 @@ pub fn load_pending_exact(
     connection: &Connection,
     sequence: InboundSequence,
 ) -> Result<Option<PendingInboundItem>, ConversationStoreError> {
-    type PendingIdentityRow = (String, String, Option<String>, Option<u64>, u64);
-    let row:Option<PendingIdentityRow>=connection.query_row("SELECT p.message_id,p.message_json,p.correlation,t.position,p.revision FROM pending_inbound p LEFT JOIN transcript_entries t ON t.native_reference_kind='message' AND t.native_reference_id=p.message_id WHERE p.sequence=?1",[sequence.get()],|row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?,row.get(4)?))).optional().map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
-    row.map(|(id, json, correlation, cursor, revision)| {
+    type PendingIdentityRow = (String, String, Option<String>, u64);
+    let row: Option<PendingIdentityRow> = connection.query_row_cached(
+        "SELECT message_id,message_json,correlation,revision FROM pending_inbound WHERE sequence=?1",
+        [sequence.get()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional().map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+    row.map(|(id, json, correlation, revision)| {
         let message: UserMessageBlock =
             serde_json::from_str(&json).map_err(|error| storage(error.to_string()))?;
-        if message.id.as_str() != id
-            || matches!(message.kind, InboundKind::Context(_)) == cursor.is_some()
-        {
+        if message.id.as_str() != id {
             return Err(ConversationStoreError::InvalidReference(
-                "pending source identity or transcript mismatch".into(),
+                "pending source identity mismatch".into(),
             ));
         }
         Ok(PendingInboundItem {
@@ -948,7 +907,7 @@ pub fn load_pending_exact(
             sequence,
             message_id: MessageId::new(id),
             message,
-            transcript_cursor: cursor.map(TranscriptCursor::new),
+            transcript_cursor: None,
             correlation,
         })
     })
@@ -959,14 +918,12 @@ pub fn load_pending_until(
     transaction: &Transaction<'_>,
     watermark: InboundSequence,
 ) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
-    Ok(load_pending_rows(transaction)?
-        .into_iter()
-        .filter(|item| item.sequence <= watermark)
-        .collect())
+    load_pending_ordered(transaction, Some(watermark))
 }
 
 impl SqliteConversationStore {
-    pub fn mutate_pending(
+    #[allow(clippy::too_many_lines)] // CAS, body mutation and observation receipt share one transaction.
+    pub(super) fn mutate_pending(
         &self,
         expected: &crate::PendingInboundRef,
         text: Option<&str>,
@@ -1017,13 +974,19 @@ impl SqliteConversationStore {
         {
             return Ok(Outcome::InvalidItem);
         }
+        let mut display_available = true;
         if let Some(text) = text {
             if text.trim().is_empty()
-                || !matches!(item.message.content.as_slice(), [UserContentBlock::Text(_)])
+                || item.message.content.is_empty()
+                || !item
+                    .message
+                    .content
+                    .iter()
+                    .all(|block| matches!(block, UserContentBlock::Text(_)))
             {
                 return Ok(Outcome::InvalidItem);
             }
-            rewrite_pending_body(&transaction, &mut item, expected, text)?;
+            display_available = rewrite_pending_body(&transaction, &mut item, expected, text)?;
         } else {
             let _ = optional_display_layout(&transaction, || {
                 content::clear_pending(&transaction, &item.sequence.get().to_string())
@@ -1036,21 +999,38 @@ impl SqliteConversationStore {
                 .map_err(|error| {
                     crate::sqlite::sqlite_error(&error, format!("pending remove: {error}"))
                 })?;
-            transaction.execute("DELETE FROM transcript_entries WHERE native_reference_kind='message' AND native_reference_id=?1", [item.message_id.as_str()])
-                .map_err(|error| crate::sqlite::sqlite_error(&error,format!("pending transcript remove: {error}")))?;
-            transaction.execute("UPDATE rustx_store SET retained_transcript_count=retained_transcript_count-1,pending_observation_count=pending_observation_count-1 WHERE id=1", []).map_err(|error|crate::sqlite::sqlite_error(&error,error.to_string()))?;
+            transaction
+                .execute(
+                    "DELETE FROM transcript_entries WHERE position<0 AND native_reference_kind IS NULL AND reference_kind='message' AND reference_id=?1",
+                    [item.message_id.as_str()],
+                )
+                .map_err(|error| {
+                    crate::sqlite::sqlite_error(
+                        &error,
+                        format!("pending transcript remove: {error}"),
+                    )
+                })?;
+            transaction
+                .execute(
+                    "UPDATE rustx_store SET pending_observation_count=pending_observation_count-1 WHERE id=1",
+                    [],
+                )
+                .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
         }
         transaction.execute("UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1", [])
             .map_err(|error| crate::sqlite::sqlite_error(&error,format!("reading mutation: {error}")))?;
         let read_cut = reading::cut(&transaction, &self.conversation_id)?;
-        let pending_observation = observation_receipt::pending(
-            &transaction,
-            &self.conversation_id,
-            text.map(|_| expected.sequence.get()),
-            text.is_none()
-                .then_some((expected.sequence.get(), item.transcript_cursor)),
-            None,
-        );
+        let pending_observation = display_available
+            .then(|| {
+                observation_receipt::pending(
+                    &transaction,
+                    &self.conversation_id,
+                    text.map(|_| expected.sequence.get()),
+                    text.is_none().then_some(expected.sequence.get()),
+                    None,
+                )
+            })
+            .flatten();
         transaction.commit().map_err(|error| {
             crate::sqlite::sqlite_error(&error, format!("pending mutation commit: {error}"))
         })?;
@@ -1059,4 +1039,173 @@ impl SqliteConversationStore {
             pending_observation,
         })
     }
+
+    pub(super) fn steer_pending_rows(
+        &self,
+        scope: &crate::PendingSteerScope,
+    ) -> Result<crate::PendingMutationOutcome, ConversationStoreError> {
+        use crate::PendingMutationOutcome as Outcome;
+        use crate::PendingSteerScope;
+        let mut connection = self.lock()?;
+        let transaction = connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|error| {
+                crate::sqlite::sqlite_error(&error, format!("pending steer: {error}"))
+            })?;
+        let mut rows = match scope {
+            PendingSteerScope::Row { expected } => {
+                let revision: Option<u64> = transaction
+                    .query_row(
+                        "SELECT revision FROM pending_inbound WHERE sequence=?1",
+                        [expected.sequence.get()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))?;
+                let Some(revision) = revision else {
+                    return Ok(Outcome::NotPending);
+                };
+                if revision != expected.revision {
+                    return Ok(Outcome::Conflict);
+                }
+                let Some(item) = load_pending_exact(&transaction, expected.sequence)? else {
+                    return Ok(Outcome::NotPending);
+                };
+                if !queue_row_steerable(&item) {
+                    return Ok(Outcome::InvalidItem);
+                }
+                vec![item]
+            }
+            PendingSteerScope::All { through } => load_pending_rows(&transaction)?
+                .into_iter()
+                .filter(|item| item.sequence <= *through && queue_row_steerable(item))
+                .collect(),
+        };
+        let mut display_available = true;
+        if !rows.is_empty() {
+            for item in &mut rows {
+                display_available &= reclassify_queued_row(&transaction, item)?;
+            }
+            transaction
+                .execute(
+                    "UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1",
+                    [],
+                )
+                .map_err(|error| {
+                    crate::sqlite::sqlite_error(
+                        &error,
+                        format!("reading mutation: {error}"),
+                    )
+                })?;
+        }
+        let read_cut = reading::cut(&transaction, &self.conversation_id)?;
+        let pending_observation = display_available
+            .then(|| {
+                observation_receipt::pending(&transaction, &self.conversation_id, None, None, None)
+            })
+            .flatten();
+        if !rows.is_empty() {
+            transaction.commit().map_err(|error| {
+                crate::sqlite::sqlite_error(&error, format!("pending steer commit: {error}"))
+            })?;
+        }
+        Ok(Outcome::Applied {
+            read_cut,
+            pending_observation,
+        })
+    }
+}
+
+fn queue_row_steerable(item: &PendingInboundItem) -> bool {
+    item.message.source == UserSource::Human
+        && item.message.kind == InboundKind::QueuedMessage
+        && item
+            .correlation
+            .as_deref()
+            .is_none_or(|id| id.starts_with("app-server:"))
+}
+
+fn reclassify_queued_row(
+    transaction: &Transaction<'_>,
+    item: &mut PendingInboundItem,
+) -> Result<bool, ConversationStoreError> {
+    item.message.kind = InboundKind::Message;
+    let revision = item
+        .revision
+        .checked_add(1)
+        .filter(|value| i64::try_from(*value).is_ok())
+        .ok_or(ConversationStoreError::SequenceExhausted)?;
+    // A promotion follows all inputs accepted so far. The store revision
+    // orders separate promotion gestures at the same acceptance watermark.
+    // These inbox-only fields disappear when the typed message is adopted.
+    let updated = transaction
+        .execute(
+            "UPDATE pending_inbound SET message_json=(
+                 SELECT json_set(?1, '$.promoted_after', next_inbound_sequence,
+                                      '$.promotion_revision', reading_mutation_revision)
+                 FROM rustx_store WHERE id=1), revision=?2
+             WHERE sequence=?3 AND revision=?4
+               AND json_extract(message_json, '$.kind') = 'queued_message'",
+            params![
+                encode(&item.message, "pending steer")?,
+                revision,
+                seq_to_i64(item.sequence.get())?,
+                item.revision,
+            ],
+        )
+        .map_err(|error| crate::sqlite::sqlite_error(&error, format!("pending steer: {error}")))?;
+    if updated != 1 {
+        return Err(ConversationStoreError::InvalidReference(
+            "pending steer changed a different row".into(),
+        ));
+    }
+    item.revision = revision;
+    refresh_pending_display_layout(
+        transaction,
+        &item.message,
+        item.sequence.get(),
+        revision,
+        true,
+    )
+}
+
+/// Optional pending display indexing isolated from the authoritative inbox row.
+/// Cancellation and loss of transaction integrity propagate immediately; a
+/// contained derived-header failure rolls back its savepoint, attempts to
+/// invalidate any prior `observation_header`, and returns `Ok(false)` while
+/// revision tagging ensures any un-clearable prior header stays unavailable.
+fn refresh_pending_display_layout(
+    transaction: &Transaction<'_>,
+    message: &UserMessageBlock,
+    sequence: u64,
+    revision: u64,
+    invalidate_on_failure: bool,
+) -> Result<bool, ConversationStoreError> {
+    let indexed = optional_display_layout(transaction, || {
+        content::index_pending(transaction, message, sequence, revision)?;
+        observation::index::index_message_capture(
+            transaction,
+            &MessageBlock::User(message.clone()),
+            None,
+            false,
+            None,
+        )
+        .map(|_| ())?;
+        observation::index::index_pending_header(transaction, sequence, revision, &message.id, None)
+    })?;
+    if indexed.is_some() {
+        return Ok(true);
+    }
+    if invalidate_on_failure {
+        let _ = optional_display_layout(transaction, || {
+            transaction
+                .execute_cached(
+                    "UPDATE pending_inbound SET observation_header=NULL WHERE sequence=?1",
+                    [seq_to_i64(sequence)?],
+                )
+                .map_err(|error| crate::sqlite::sqlite_error(&error, error.to_string()))
+                .map(|_| ())
+        })?;
+    }
+    Ok(false)
 }
