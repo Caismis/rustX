@@ -555,6 +555,7 @@ mod tests {
                     preview: Some(row.preview.clone()),
                     updated_at: chrono::DateTime::UNIX_EPOCH,
                     active_node: SessionNodeId::new("node_00000000-0000-7000-8000-000000000000"),
+                    has_branches: false,
                 })
                 .collect(),
             next_offset,
