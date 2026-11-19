@@ -27,8 +27,10 @@
 //! files and directories.
 
 mod mutation;
+mod text;
 
 pub use mutation::{CommitUnknown, PublishedWrite, StagedWrite, WriteTarget};
+pub use text::{PageEnd, PageLimits, TextPage};
 
 use std::ffi::OsStr;
 use std::fs::File;

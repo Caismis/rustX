@@ -41,6 +41,15 @@ pub const MAX_DIRECTORY_NAMES: usize = 4096;
 /// Maximum entries one `Directory` page reply may carry.
 pub const MAX_DIRECTORY_PAGE_ENTRIES: usize = 128;
 
+/// Maximum joined bytes of one `Lines` page — the wire policy equal to the
+/// physical scanner's 50KB complete-line budget.
+pub const MAX_TEXT_BYTES: usize = 50 * 1024;
+
+/// Maximum counted complete lines of one `Lines` page — the wire policy
+/// equal to the physical scanner's 2000-line budget. A page that ends
+/// exactly on a source trailing newline may show one extra empty element.
+pub const MAX_TEXT_LINES: usize = 2_000;
+
 /// Maximum data records queued or in flight on one connection.
 pub const MAX_DATA_RECORDS_PER_CONNECTION: usize = 8;
 
@@ -287,6 +296,9 @@ pub enum Capability {
     /// ticketed `CommitWrite`/`AbortWrite` per request, carried out by the
     /// private commit kernel under the binding workspace.
     ConditionalWrite,
+    /// The implemented logical-text page: a bounded streaming line page
+    /// under the binding workspace with whole-source UTF-8 validation.
+    ReadLines,
     /// Data-side bounded glob/grep, conditional edit, document decoding.
     Search,
     /// Managed processes under Server-assigned `OperationId`s.
@@ -575,6 +587,20 @@ pub enum ClientRequest {
         /// The exact ticket returned by the live `WritePrepared` reply.
         ticket: DecimalU64,
     },
+    /// One bounded logical-text page of a file under the binding
+    /// workspace: the complete-line page contract the native Read tool
+    /// projects, carried out by the streaming scanner. The whole source is
+    /// validated and counted even past the returned window.
+    ReadLines {
+        /// The workspace-relative file path: normal components only.
+        relative_path: PathBuf,
+        /// The 1-based line the page starts at; must be nonzero.
+        offset: DecimalU64,
+        /// The requested line bound, when given; never zero.
+        limit: Option<DecimalU64>,
+        /// The revision the file must still hold, when checked.
+        expected_revision: Option<String>,
+    },
 }
 
 /// The Client's one typed reply to a [`ClientRequest`].
@@ -607,6 +633,19 @@ pub enum ClientReply {
         entries: Vec<PageEntry>,
         /// The index the next page starts at, absent at the end.
         next_offset: Option<u32>,
+    },
+    /// The verified logical-text page the Client physically scanned.
+    Lines {
+        /// The source-descriptor stamp of the file the page came from.
+        metadata: FileStamp,
+        /// The shown text: at most [`MAX_TEXT_BYTES`] joined bytes.
+        text: String,
+        /// The addressable line count of the whole source.
+        total_lines: DecimalU64,
+        /// The shown element count of this page.
+        shown_lines: u32,
+        /// Why the page ended.
+        end: LineEnd,
     },
     /// A `PrepareWrite` staged privately and verified: the ticket is a
     /// Client-assigned nonzero scalar unique to this connection, `original`
@@ -680,6 +719,28 @@ pub struct EntryStamp {
     pub stamp: FileStamp,
 }
 
+/// Why one `Lines` page ended — the wire mirror of the physical scanner's
+/// page-end reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum LineEnd {
+    /// The selected window ran to the end of the source.
+    Complete,
+    /// The caller's `limit` ended the selection while lines remained.
+    RequestedLimit,
+    /// The complete-line count reached [`MAX_TEXT_LINES`].
+    LineLimit,
+    /// The joined bytes reached [`MAX_TEXT_BYTES`].
+    ByteLimit,
+    /// The first selected line alone exceeds [`MAX_TEXT_BYTES`].
+    FirstLineTooLarge {
+        /// Its full byte length, even unstaged.
+        bytes: DecimalU64,
+    },
+    /// The requested offset addresses a line beyond the source.
+    OffsetPastEnd,
+}
+
 /// One entry of a directory page.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -709,6 +770,9 @@ pub enum ReadError {
     /// The file changed across the read or no longer holds the expected
     /// revision.
     Conflict,
+    /// The source is not UTF-8 — binary content is never fabricated as
+    /// text.
+    InvalidUtf8,
     /// The read could not be completed for another reason.
     Unavailable,
 }

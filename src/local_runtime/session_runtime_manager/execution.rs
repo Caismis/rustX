@@ -27,7 +27,9 @@ use rustx_execution_protocol::{
     Capability, ClientInstanceId, EntryKind, EntryStamp, EnvironmentId, FileStamp, Generation,
     Reject, is_normalized_absolute_path, transport::LOCAL_HANDSHAKE_TIMEOUT,
 };
-use rustx_execution_server::{Binding, DirectoryListing, LocalConnection, RangeRead, Reservation};
+use rustx_execution_server::{
+    Binding, DirectoryListing, LinesPage, LocalConnection, RangeRead, Reservation,
+};
 
 use super::super::session::SessionId;
 use super::{RuntimeManagerError, SessionRuntimeManager, error};
@@ -257,6 +259,39 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    /// One bounded logical-text page through the admitted Client — the
+    /// complete-line projection the Read tool owns — plus the verified
+    /// source stamp. `path` resolves once against the reserved workspace
+    /// at dispatch and names a file leaf, never the workspace root.
+    ///
+    /// Serializes with every other dispatch on the connection: `path`
+    /// gates lexically on the reserved workspace, and the binding's
+    /// live-connection check authorizes the send at dispatch time. The
+    /// reply is trusted only after the connection's page validation; a
+    /// semantic refusal — a non-UTF-8 source included — never retires a
+    /// healthy connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same gating kinds as [`read_range`](Self::read_range)
+    /// plus [`io::ErrorKind::InvalidInput`] for a zero offset or limit,
+    /// [`io::ErrorKind::InvalidData`] for a non-UTF-8 source or an
+    /// untruthful page, and the typed exchange's own errors.
+    pub fn read_lines(
+        &self,
+        path: &Path,
+        offset: u64,
+        limit: Option<u64>,
+        expected_revision: Option<&str>,
+    ) -> io::Result<(rustx_confined_fs::FileMetadata, rustx_confined_fs::TextPage)> {
+        self.with_connection(|connection| {
+            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            connection
+                .read_lines(&relative, offset, limit, expected_revision)
+                .map(project_lines)
+        })
+    }
+
     /// The conditional write through the admitted Client: `path` resolves
     /// once against the reserved workspace at dispatch, then the whole
     /// prepare–authorize–commit sequence runs on that same connection.
@@ -410,6 +445,36 @@ fn project_metadata(entry: EntryStamp) -> rustx_confined_fs::FileMetadata {
         identity: entry.stamp.identity,
         modified_at_ms: entry.stamp.modified_at_ms,
     }
+}
+
+/// Projects a validated wire text page onto the shared product shape —
+/// the wire `LineEnd` mirrors the scanner's [`rustx_confined_fs::PageEnd`]
+/// one to one, and the stamped source size is the page's original bytes.
+fn project_lines(
+    page: LinesPage,
+) -> (rustx_confined_fs::FileMetadata, rustx_confined_fs::TextPage) {
+    let metadata = project_stamp(page.metadata);
+    let page = rustx_confined_fs::TextPage {
+        text: page.text,
+        total_lines: page.total_lines,
+        original_bytes: metadata.size,
+        shown_lines: page.shown_lines,
+        end: match page.end {
+            rustx_execution_protocol::LineEnd::Complete => rustx_confined_fs::PageEnd::Complete,
+            rustx_execution_protocol::LineEnd::RequestedLimit => {
+                rustx_confined_fs::PageEnd::RequestedLimit
+            }
+            rustx_execution_protocol::LineEnd::LineLimit => rustx_confined_fs::PageEnd::LineLimit,
+            rustx_execution_protocol::LineEnd::ByteLimit => rustx_confined_fs::PageEnd::ByteLimit,
+            rustx_execution_protocol::LineEnd::FirstLineTooLarge { bytes } => {
+                rustx_confined_fs::PageEnd::FirstLineTooLarge { bytes: bytes.get() }
+            }
+            rustx_execution_protocol::LineEnd::OffsetPastEnd => {
+                rustx_confined_fs::PageEnd::OffsetPastEnd
+            }
+        },
+    };
+    (metadata, page)
 }
 
 /// Projects a validated wire page onto the shared product shape.

@@ -7773,7 +7773,8 @@ current layer status.
 - `rustx-execution-server` is a library owned by the Agent. It owns binding
   reservation, credential authentication, arbitration, connection lifecycle,
   and typed request dispatch (`Ping`, `ReadRange`, `GetMetadata`,
-  `ReadDirectory`, and the `PrepareWrite`/`CommitWrite`/`AbortWrite`
+  `ReadDirectory`, `ReadLines`, and the
+  `PrepareWrite`/`CommitWrite`/`AbortWrite`
   conditional-write sequence). Binding uniqueness is per
   `Binding`, not per `Session`: each binding admits at most one live
   connection, and a `Detached` binding is closed to every new Hello until the
@@ -7786,7 +7787,8 @@ current layer status.
   together, prepared exactly once on a blocking task, and fenced on
   Session delete and process drain. The endpoint's typed surface —
   `admit_local_stream` and serialized `read_range`, `entry_metadata`,
-  and `directory_page` exchanges (busy refusal, lexical workspace
+  `directory_page`, `read_lines`, and `write_file` exchanges (busy
+  refusal, lexical workspace
   gate, binding live-check at send time) — is the Session's live
   dispatch owner. The claim is not reachable through
   the App Server protocol. The paired `--local-execution-session` /
@@ -7813,9 +7815,14 @@ current layer status.
   revision-checked `read_range`, and the `entry_metadata` /
   `directory_page` queries. Root `rustx`
   and the client both depend on it; the server does not.
-- The boundary currently serves three physical operations: bounded,
-  revision-checked range reads, entry metadata, and bounded directory
-  pages over the isolated Unix socket. The product's write, copy,
-  remove, create-directory, and watch paths still use the local path
+- The boundary currently serves five physical operations: bounded,
+  revision-checked range reads, entry metadata, bounded directory
+  pages, the two-phase conditional write, and the bounded
+  logical-text page over the isolated Unix socket — `fs/readFile`,
+  `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` are served
+  by the admitted Client, and the streaming `scan_text` scanner the
+  page runs on is shared verbatim with the native Read tool. The
+  product's copy, remove, create-directory, and watch paths still use
+  the local path
   through `rustx`'s delegating `PackageDirectory` wrapper, and no
   second Agent, in-process fallback, or speculative launcher exists.

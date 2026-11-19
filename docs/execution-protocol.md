@@ -64,15 +64,16 @@ and directory-page readers —
   over `rustx-confined-fs`, preserving every existing semantic.
 
 These layers perform authenticated negotiation, binding arbitration,
-local bootstrap, and four physical operations — the bounded
+local bootstrap, and five physical operations — the bounded
 revision-checked range read, entry metadata, bounded directory
-pages, and the two-phase conditional write. There is no production
+pages, the two-phase conditional write, and the bounded
+logical-text page. There is no production
 dispatch beyond them,
 no process spawn of business work, and no remote
 transport; none may exist until the gates below exist. Nothing claims
 unimplemented I/O: a runtime Hello advertises `Capability::Connection`,
-`Capability::ReadRange`, `Capability::DirectoryMetadata`, and
-`Capability::ConditionalWrite`, exactly
+`Capability::ReadRange`, `Capability::DirectoryMetadata`,
+`Capability::ConditionalWrite`, and `Capability::ReadLines`, exactly
 what the Client implements, never
 `Files`.
 
@@ -251,12 +252,13 @@ publishes the trusted-channel bundle:
 - `LocalConnection` exposes only typed, Server-initiated exchanges —
   `ping()` (`Ping`/`Pong`), `read_range(...)` (`ReadRange`/`Range`),
   `entry_metadata(...)` (`GetMetadata`/`Metadata`),
-  `directory_page(...)` (`ReadDirectory`/`Directory`), and
+  `directory_page(...)` (`ReadDirectory`/`Directory`),
+  `read_lines(...)` (`ReadLines`/`Lines`), and
   `write_file(...)` (the `PrepareWrite`/`CommitWrite`/`AbortWrite`
   sequence) — never a raw
   message path. Each first consults the capabilities the peer actually
   advertised in its Hello: a connection that never claimed `ReadRange`,
-  `DirectoryMetadata`, or `ConditionalWrite` gets
+  `DirectoryMetadata`, `ConditionalWrite`, or `ReadLines` gets
   `io::ErrorKind::Unsupported` and
   no request is written. Every exchange serializes the request with
   `encode_record` *before* the gate, so an unencodable request fails
@@ -313,7 +315,8 @@ offset: DecimalU64, max_bytes: u32, expected_revision: Option<String>
 }` answered by `ClientReply::Range { data_base64, offset, next_offset,
 metadata }` or `ClientReply::Error { kind }` with the stable
 `ReadError` codes `invalid`, `denied`, `not-found`, `conflict`,
-`unavailable` — no raw paths or payload details cross back. `metadata`
+`invalid-utf8`, `unavailable` — no raw paths or payload details cross
+back. `metadata`
 is a `FileStamp { size: DecimalU64, revision, identity,
 modified_at_ms }`: the source descriptor of the file the bytes were
 read from, projected from the same `FileChunk.metadata` the confined
@@ -350,6 +353,50 @@ the wire shape cannot honestly carry — a non-UTF-8 member — is
 reported `invalid` by the Client rather than emitted. Malformed replies — wrong cursor,
 unordered or illegal names, bad stamps — retire the stream and detach
 the binding exactly like a malformed `Range`.
+
+### Logical text pages (implemented)
+
+`ClientRequest::ReadLines { relative_path, offset: DecimalU64,
+limit: Option<DecimalU64>, expected_revision: Option<String> }` is
+answered by `ClientReply::Lines { metadata: FileStamp, text,
+total_lines: DecimalU64, shown_lines: u32, end: LineEnd }` or a typed
+`Error` — the bounded logical-text page the native Read tool projects,
+scanned physically by the Client under its workspace view. The file
+must be a leaf — never the root — and the offset is 1-based with any
+`limit` nonzero; both are refused `invalid` before touching the
+filesystem.
+
+One scanner owns the contract on both sides: `rustx_confined_fs`
+`scan_text` streams the source in fixed blocks — the file never lands
+in memory — with at most the three tail bytes of an incomplete UTF-8
+sequence carried between blocks. It validates UTF-8 across the
+*whole* source, including bytes after the requested page (a rejected
+page never hides an invalid tail; the wire code is `invalid-utf8`,
+a semantic refusal that never retires a healthy connection), counts
+every byte and `'\n'`-element — the trailing empty line included — and
+stages only the bounded output prefix and the current bounded line: a
+giant line is counted, never allocated. `text` is the shown elements
+joined by `'\n'` — at most `MAX_TEXT_BYTES` (50 KiB) — `total_lines`
+is the whole source's `split('\n')` count, `shown_lines` the shown
+element count (up to `MAX_TEXT_LINES`, 2000, counted elements plus
+one when a complete page keeps the trailing empty), and `end` is the
+`LineEnd` mirror of the scanner's stop reason: `complete`,
+`requested-limit`, `line-limit`, `byte-limit`,
+`first-line-too-large` (the first selected line's full byte length),
+or `offset-past-end`. The wire `MAX_TEXT_BYTES`/`MAX_TEXT_LINES`
+constants are the wire policy the Client hands the scanner — one
+policy, no duplicate bound.
+
+Like every physical read, the file is stamped before the scan and
+proven unchanged after it — the retained descriptor plus a freshly
+opened path — or the answer is `conflict`, never unverified text; a
+supplied `expected_revision` conflicts instead of serving a changed
+file. On the Server side the reply is verified before trust: the
+stamp, the nonzero `total_lines`, `text` within the byte bound whose
+`'\n'`-split reproduces exactly `shown_lines`, `end` consistent with
+the request and the page's own accounting, and every count bounded
+by the stamped source size. A malformed or untruthful `Lines` reply
+retires the stream exactly like a malformed `Range`.
 
 ### Conditional writes (implemented)
 
@@ -433,7 +480,7 @@ physical Client:
   enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
   capability set `{Connection, ReadRange, DirectoryMetadata,
-  ConditionalWrite}` — the
+  ConditionalWrite, ReadLines}` — the
   operations this build physically implements — constructed by the
   client, never read from the mutable bundle.
 - After sending the Hello it reads one `HelloReply`; a reject is
@@ -444,7 +491,8 @@ physical Client:
   record ends it: `Ping` → `Pong`, `ReadRange` answered through the
   retained `PackageDirectory` via `rustx_confined_fs::read_range`,
   `GetMetadata`/`ReadDirectory` answered through its
-  `entry_metadata`/`directory_page`, and
+  `entry_metadata`/`directory_page`, `ReadLines` answered through the
+  retained `PackageDirectory` and the shared `scan_text` scanner, and
   `PrepareWrite`/`CommitWrite`/`AbortWrite` answered through the
   `WriteTarget`/`StagedWrite` kernel by the per-connection `Writes`
   owner. EOF

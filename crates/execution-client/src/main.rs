@@ -35,8 +35,9 @@ use rustx_execution_protocol::transport::{
 };
 use rustx_execution_protocol::{
     Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, EntryKind,
-    EntryStamp, FileStamp, Hello, HelloReply, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
-    MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, PageEntry, ReadError, is_normalized_absolute_path,
+    EntryStamp, FileStamp, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES,
+    MAX_DIRECTORY_PAGE_ENTRIES, MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES,
+    PROTOCOL_VERSION, PageEntry, ReadError, is_normalized_absolute_path,
 };
 
 mod mutation;
@@ -139,6 +140,7 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
             Capability::ReadRange,
             Capability::DirectoryMetadata,
             Capability::ConditionalWrite,
+            Capability::ReadLines,
         ]),
         credential: bootstrap.credential,
     };
@@ -296,6 +298,18 @@ fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String>
             ),
             ClientRequest::CommitWrite { ticket } => writes.commit(ticket),
             ClientRequest::AbortWrite { ticket } => writes.abort(ticket),
+            ClientRequest::ReadLines {
+                relative_path,
+                offset,
+                limit,
+                expected_revision,
+            } => read_lines(
+                root,
+                &relative_path,
+                offset,
+                limit,
+                expected_revision.as_deref(),
+            ),
         };
         write_record(stream, &reply).map_err(|_| String::from("reply"))?;
     }
@@ -352,6 +366,113 @@ fn read_range(
         }
         Err(error) => ClientReply::Error {
             kind: read_error(&error),
+        },
+    }
+}
+
+/// `ReadLines`: one bounded logical-text page of `relative_path` under the
+/// workspace — the same streaming scanner the native Read tool projects,
+/// under the same complete-line byte/line budgets. The file is opened
+/// once, stamped before the scan, and proven unchanged after it (the
+/// retained descriptor plus a freshly opened path) — a mid-scan change is
+/// a conflict, never unverified text. Errors cross as stable [`ReadError`]
+/// codes only; non-UTF-8 bytes anywhere in the source — the whole source
+/// is validated even past the page — are [`ReadError::InvalidUtf8`].
+fn read_lines(
+    root: &PackageDirectory,
+    relative_path: &Path,
+    offset: DecimalU64,
+    limit: Option<DecimalU64>,
+    expected_revision: Option<&str>,
+) -> ClientReply {
+    // A text page names one file leaf — never the empty root — and the
+    // scanner's contract rejects a zero offset or a zero requested limit.
+    let Ok(relative) = relative_entry(relative_path) else {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    };
+    if relative.as_os_str().is_empty()
+        || offset.get() == 0
+        || limit.is_some_and(|limit| limit.get() == 0)
+    {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    }
+    let file = match root.file(relative) {
+        Ok(file) => file,
+        Err(error) => {
+            return ClientReply::Error {
+                kind: read_error(&error),
+            };
+        }
+    };
+    let Ok(before) = rustx_confined_fs::FileMetadata::of(&file) else {
+        return ClientReply::Error {
+            kind: ReadError::Unavailable,
+        };
+    };
+    if expected_revision.is_some_and(|expected| expected != before.revision) {
+        return ClientReply::Error {
+            kind: ReadError::Conflict,
+        };
+    }
+    // The wire policy constants are the scanner's own bound — one policy,
+    // no duplicate source. The scan is bounded to the stamped size: a
+    // file that keeps growing can never stream without end, and the
+    // scanned byte count must equal the stamp exactly.
+    let limits = rustx_confined_fs::PageLimits {
+        max_bytes: MAX_TEXT_BYTES,
+        max_lines: MAX_TEXT_LINES,
+    };
+    let page = match limits.scan_text(
+        (&file).take(before.size),
+        offset.get(),
+        limit.map(DecimalU64::get),
+    ) {
+        Ok(page) => page,
+        Err(error) => {
+            return ClientReply::Error {
+                kind: if error.kind() == std::io::ErrorKind::InvalidData {
+                    ReadError::InvalidUtf8
+                } else {
+                    read_error(&error)
+                },
+            };
+        }
+    };
+    if page.original_bytes != before.size {
+        return ClientReply::Error {
+            kind: ReadError::Conflict,
+        };
+    }
+    // The retained descriptor and a freshly opened path must still name
+    // the file that was scanned.
+    let unchanged = rustx_confined_fs::FileMetadata::of(&file).is_ok_and(|after| after == before)
+        && root
+            .file(relative)
+            .and_then(|reopened| rustx_confined_fs::FileMetadata::of(&reopened))
+            .is_ok_and(|reopened| reopened == before);
+    if !unchanged {
+        return ClientReply::Error {
+            kind: ReadError::Conflict,
+        };
+    }
+    ClientReply::Lines {
+        metadata: stamp(&before).stamp,
+        text: page.text,
+        total_lines: DecimalU64::new(page.total_lines),
+        shown_lines: page.shown_lines,
+        end: match page.end {
+            rustx_confined_fs::PageEnd::Complete => LineEnd::Complete,
+            rustx_confined_fs::PageEnd::RequestedLimit => LineEnd::RequestedLimit,
+            rustx_confined_fs::PageEnd::LineLimit => LineEnd::LineLimit,
+            rustx_confined_fs::PageEnd::ByteLimit => LineEnd::ByteLimit,
+            rustx_confined_fs::PageEnd::FirstLineTooLarge { bytes } => LineEnd::FirstLineTooLarge {
+                bytes: DecimalU64::new(bytes),
+            },
+            rustx_confined_fs::PageEnd::OffsetPastEnd => LineEnd::OffsetPastEnd,
         },
     }
 }

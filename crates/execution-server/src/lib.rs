@@ -19,8 +19,9 @@ use constant_time_eq::constant_time_eq_32;
 use rustx_execution_protocol::{
     Admission, BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply,
     ClientRequest, ConnectionId, DecimalU64, EntryStamp, EnvironmentId, FileStamp, Generation,
-    Hello, HelloReply, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES, MAX_RAW_CHUNK_BYTES,
-    PROTOCOL_VERSION, PageEntry, ReadError, Reject, SessionId, is_normalized_absolute_path,
+    Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
+    MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, ReadError,
+    Reject, SessionId, is_normalized_absolute_path,
     transport::{Handshake, encode_record, read_record, write_record},
 };
 use sha2::{Digest, Sha256};
@@ -491,6 +492,26 @@ pub struct DirectoryListing {
     pub next_offset: Option<u32>,
 }
 
+/// A verified logical-text page reply from the Client.
+///
+/// The page's shown text, line and byte accounting, end reason, and
+/// source stamp were checked against the request and the scanner's
+/// complete-line contract before this value exists — the reply's own
+/// claims are never trusted raw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinesPage {
+    /// The shown text: the page's joined lines, bounded.
+    pub text: String,
+    /// The addressable line count of the whole source.
+    pub total_lines: u64,
+    /// The shown element count of this page.
+    pub shown_lines: u32,
+    /// Why the page ended.
+    pub end: LineEnd,
+    /// The source-descriptor stamp of the file the page came from.
+    pub metadata: FileStamp,
+}
+
 impl LocalConnection {
     /// The admission the peer was sent.
     #[must_use]
@@ -870,6 +891,178 @@ impl LocalConnection {
         })
     }
 
+    /// One bounded logical-text page of `relative_path` under the binding
+    /// workspace — the complete-line page contract the Read tool
+    /// projects, scanned physically by the Client.
+    ///
+    /// The peer must have advertised [`Capability::ReadLines`] at
+    /// admission or the call is [`io::ErrorKind::Unsupported`] and no
+    /// request is sent. `offset` is 1-based and `limit`, when given, must
+    /// be nonzero — both are enforced before anything crosses the wire.
+    /// The reply is trusted only after validation: the stamp must pass
+    /// `stamp_violation` and a supplied `expected_revision` must match,
+    /// `total_lines` must be nonzero, `text` must stay within
+    /// [`MAX_TEXT_BYTES`] and its `'\n'`-split must reproduce exactly
+    /// `shown_lines` elements (never more than [`MAX_TEXT_LINES`]` + 1`),
+    /// and `end` must agree with the request and the page's own numbers —
+    /// `Complete` reaches the source end exactly, `RequestedLimit` shows
+    /// precisely the requested bound with lines remaining, `LineLimit`
+    /// and `ByteLimit` leave at least one more element, `FirstLineTooLarge`
+    /// reports a first line beyond [`MAX_TEXT_BYTES`], and `OffsetPastEnd`
+    /// addresses beyond the source. The page's accounting must also fit
+    /// the stamped source size. Any deviation retires the stream — it is
+    /// never reused with reply accounting that cannot be trusted.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
+    /// capability, [`io::ErrorKind::InvalidInput`] for a zero offset or
+    /// limit, the [`ReadError`] the Client reported mapped onto an I/O
+    /// error kind — [`ReadError::InvalidUtf8`] included, a semantic
+    /// refusal that never retires a healthy connection — or
+    /// [`io::ErrorKind::InvalidData`] for a malformed or untruthful
+    /// reply.
+    pub fn read_lines(
+        &mut self,
+        relative_path: &Path,
+        offset: u64,
+        limit: Option<u64>,
+        expected_revision: Option<&str>,
+    ) -> io::Result<LinesPage> {
+        if !self.capabilities.contains(&Capability::ReadLines) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no lines capability",
+            ));
+        }
+        if offset == 0 || limit == Some(0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid text page request",
+            ));
+        }
+        let reply = self.exchange(&ClientRequest::ReadLines {
+            relative_path: relative_path.to_path_buf(),
+            offset: DecimalU64::new(offset),
+            limit: limit.map(DecimalU64::new),
+            expected_revision: expected_revision.map(str::to_owned),
+        })?;
+        if let ClientReply::Error { kind } = reply {
+            return Err(read_error(kind));
+        }
+        self.validate_lines(offset, limit, expected_revision, &reply)
+    }
+
+    /// Verifies a `Lines` reply against the request and the scanner's
+    /// complete-line contract before trusting it. Any deviation means
+    /// the peer cannot account for its answers honestly, so the
+    /// connection is retired.
+    fn validate_lines(
+        &mut self,
+        offset: u64,
+        limit: Option<u64>,
+        expected_revision: Option<&str>,
+        reply: &ClientReply,
+    ) -> io::Result<LinesPage> {
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        let ClientReply::Lines {
+            metadata,
+            text,
+            total_lines,
+            shown_lines,
+            end,
+        } = reply
+        else {
+            return Err(self.retire(violation("unexpected reply to lines read")));
+        };
+        if let Some(reason) = stamp_violation(metadata) {
+            return Err(self.retire(violation(reason)));
+        }
+        if let Some(expected) = expected_revision
+            && metadata.revision != expected
+        {
+            return Err(self.retire(violation("lines reply revision ignores expectation")));
+        }
+        let total = total_lines.get();
+        let shown = u64::from(*shown_lines);
+        let shown_limit = u64::try_from(MAX_TEXT_LINES + 1).unwrap_or(u64::MAX);
+        let line_limit = u64::try_from(MAX_TEXT_LINES).unwrap_or(u64::MAX);
+        let byte_limit = u64::try_from(MAX_TEXT_BYTES).unwrap_or(u64::MAX);
+        let size = metadata.size.get();
+        let text_bytes = u64::try_from(text.len()).unwrap_or(u64::MAX);
+        if total == 0
+            || shown > shown_limit
+            || shown > total
+            || text.len() > MAX_TEXT_BYTES
+            || total - 1 > size
+            || text_bytes > size
+        {
+            return Err(self.retire(violation("lines reply accounting is impossible")));
+        }
+        // The shown text is the shown elements joined by `\n`: `shown`
+        // zero is a diagnostic-only page that must carry no bytes, and a
+        // nonempty page must reproduce exactly `shown` split elements —
+        // every one of the `total - shown` unshown source delimiters must
+        // then fit inside the stamped size too.
+        if shown == 0 {
+            if !text.is_empty() {
+                return Err(self.retire(violation("lines reply shown count is inconsistent")));
+            }
+        } else {
+            if text.split('\n').count() as u64 != shown {
+                return Err(self.retire(violation("lines reply shown count is inconsistent")));
+            }
+            let minimal = text_bytes.saturating_add(total - shown);
+            if minimal > size {
+                return Err(self.retire(violation("lines reply contradicts the stamped size")));
+            }
+            // The `line_limit + 1` shape exists only for a page that
+            // retained the trailing empty element — text then ends in a
+            // newline and the page completed or hit its requested bound,
+            // never a budget stop.
+            if shown == shown_limit
+                && !(text.ends_with('\n')
+                    && matches!(end, LineEnd::Complete | LineEnd::RequestedLimit))
+            {
+                return Err(self.retire(violation("lines reply shown count is inconsistent")));
+            }
+        }
+        // `end` must agree with the request and the page's own numbers:
+        // `remaining` is the elements the offset can still address,
+        // `selected` what the window asked for — both derived without
+        // overflow. A budget stop must leave the window unconsumed.
+        let remaining = total.saturating_sub(offset.saturating_sub(1));
+        let selected = limit.unwrap_or(u64::MAX).min(remaining);
+        let valid_end = match end {
+            LineEnd::Complete => shown > 0 && shown == remaining && shown == selected,
+            LineEnd::RequestedLimit => shown > 0 && shown == selected && selected < remaining,
+            LineEnd::LineLimit => shown == line_limit && shown < selected,
+            LineEnd::ByteLimit => shown > 0 && shown <= line_limit && shown < selected,
+            LineEnd::FirstLineTooLarge { bytes } => {
+                shown == 0
+                    && remaining > 0
+                    && bytes.get() > byte_limit
+                    && bytes.get() <= size - (total - 1)
+            }
+            LineEnd::OffsetPastEnd => shown == 0 && remaining == 0,
+        };
+        if !valid_end {
+            return Err(self.retire(violation("lines reply end reason is inconsistent")));
+        }
+        // A complete page from the first line is the whole source: its
+        // joined text must reproduce the stamped size exactly.
+        if *end == LineEnd::Complete && offset == 1 && text_bytes != size {
+            return Err(self.retire(violation("lines reply contradicts the stamped size")));
+        }
+        Ok(LinesPage {
+            text: text.clone(),
+            total_lines: total,
+            shown_lines: *shown_lines,
+            end: *end,
+            metadata: metadata.clone(),
+        })
+    }
+
     /// The conditional write: `relative_path` under the binding workspace
     /// becomes exactly `bytes` when `expected_revision` still names the
     /// current file — or the target did not exist for `None`.
@@ -1092,6 +1285,7 @@ fn read_error(kind: ReadError) -> io::Error {
         ReadError::Denied => (io::ErrorKind::PermissionDenied, "physical access denied"),
         ReadError::NotFound => (io::ErrorKind::NotFound, "physical path not found"),
         ReadError::Conflict => (io::ErrorKind::AlreadyExists, "physical revision conflict"),
+        ReadError::InvalidUtf8 => (io::ErrorKind::InvalidData, "physical source is not UTF-8"),
         ReadError::Unavailable => (io::ErrorKind::Other, "physical operation unavailable"),
     };
     io::Error::new(error_kind, message)
@@ -2513,5 +2707,387 @@ mod tests {
         let mut buffer = [0u8; 16];
         assert_eq!(peer.read(&mut buffer).unwrap(), 0);
         assert_eq!(binding.status().phase, BindingPhase::Revoked);
+    }
+
+    fn lines_rig() -> (Binding, Hello) {
+        reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::ReadLines,
+        ]))
+    }
+
+    fn lines_stamp(size: u64, revision: &str) -> FileStamp {
+        FileStamp {
+            size: DecimalU64::new(size),
+            revision: revision.to_owned(),
+            identity: String::from("1:1"),
+            modified_at_ms: None,
+        }
+    }
+
+    /// A `Lines` reply shape the validator must accept: six source bytes
+    /// as `"a\nb\nc"`, three addressable lines, one shown element.
+    fn lines_reply(shown: &str, shown_lines: u32, total: u64, end: LineEnd) -> ClientReply {
+        ClientReply::Lines {
+            metadata: lines_stamp(6, &"a".repeat(64)),
+            text: shown.to_owned(),
+            total_lines: DecimalU64::new(total),
+            shown_lines,
+            end,
+        }
+    }
+
+    #[test]
+    fn a_peer_without_the_lines_capability_gets_no_request() {
+        let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let error = connection
+            .read_lines(Path::new("file"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        peer.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        assert!(read_record::<ClientRequest>(&mut peer).is_err());
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_zero_lines_request_never_reaches_the_wire() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        for (offset, limit) in [(0, None), (1, Some(0))] {
+            let error = connection
+                .read_lines(Path::new("file"), offset, limit, None)
+                .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        }
+        peer.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        assert!(read_record::<ClientRequest>(&mut peer).is_err());
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_lines_page_is_verified_against_the_request() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let expected = "a".repeat(64);
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadLines {
+                relative_path,
+                offset,
+                limit,
+                expected_revision,
+            } = request
+            else {
+                panic!("expected a lines request");
+            };
+            assert_eq!(relative_path, PathBuf::from("file"));
+            assert_eq!(offset.get(), 2);
+            assert_eq!(limit, Some(DecimalU64::new(1)));
+            assert_eq!(expected_revision.as_deref(), Some(expected.as_str()));
+            write_record(&mut peer, &lines_reply("b", 1, 3, LineEnd::RequestedLimit)).unwrap();
+        });
+        let page = connection
+            .read_lines(Path::new("file"), 2, Some(1), Some(&"a".repeat(64)))
+            .unwrap();
+        answer.join().unwrap();
+        assert_eq!(page.text, "b");
+        assert_eq!(page.total_lines, 3);
+        assert_eq!(page.shown_lines, 1);
+        assert_eq!(page.end, LineEnd::RequestedLimit);
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_complete_lines_page_may_show_the_trailing_empty_line() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // A source ending in a newline keeps its trailing empty
+            // element on a complete page: `"a\n"` shows 2 elements.
+            write_record(
+                &mut peer,
+                &ClientReply::Lines {
+                    metadata: lines_stamp(2, &"a".repeat(64)),
+                    text: String::from("a\n"),
+                    total_lines: DecimalU64::new(2),
+                    shown_lines: 2,
+                    end: LineEnd::Complete,
+                },
+            )
+            .unwrap();
+        });
+        let page = connection
+            .read_lines(Path::new("file"), 1, None, None)
+            .unwrap();
+        answer.join().unwrap();
+        assert_eq!(page.text, "a\n");
+        assert_eq!(page.shown_lines, 2);
+        assert_eq!(page.end, LineEnd::Complete);
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn an_untruthful_lines_end_retires_the_stream() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // "Complete" while lines remain: the end reason cannot
+            // account for the page.
+            write_record(&mut peer, &lines_reply("a", 1, 3, LineEnd::Complete)).unwrap();
+        });
+        let error = connection
+            .read_lines(Path::new("file"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_lines_reply_whose_text_contradicts_shown_retires_the_stream() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // `shown` claims two elements; the text holds one.
+            write_record(&mut peer, &lines_reply("a", 2, 3, LineEnd::LineLimit)).unwrap();
+        });
+        let error = connection
+            .read_lines(Path::new("file"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_lines_reply_with_zero_total_retires_the_stream() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // Even an empty source addresses one line: zero is impossible.
+            write_record(&mut peer, &lines_reply("", 0, 0, LineEnd::OffsetPastEnd)).unwrap();
+        });
+        let error = connection
+            .read_lines(Path::new("file"), 5, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_lines_reply_with_a_stale_revision_retires_the_stream() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            write_record(
+                &mut peer,
+                &ClientReply::Lines {
+                    metadata: lines_stamp(6, &"b".repeat(64)),
+                    text: String::from("a"),
+                    total_lines: DecimalU64::new(1),
+                    shown_lines: 1,
+                    end: LineEnd::Complete,
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .read_lines(Path::new("file"), 1, None, Some(&"a".repeat(64)))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_lines_reply_at_the_offset_space_edge_does_not_panic() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadLines { offset, .. } = request else {
+                panic!("expected a lines request");
+            };
+            assert_eq!(offset.get(), u64::MAX);
+            // `u64::MAX` is a legitimate out-of-range offset: the honest
+            // `OffsetPastEnd` reply must survive validation — arithmetic
+            // that overflowed here would panic, not retire.
+            write_record(&mut peer, &lines_reply("", 0, 2, LineEnd::OffsetPastEnd)).unwrap();
+        });
+        let page = connection
+            .read_lines(Path::new("file"), u64::MAX, None, None)
+            .unwrap();
+        answer.join().unwrap();
+        assert_eq!(page.end, LineEnd::OffsetPastEnd);
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_complete_lines_reply_that_violates_the_limit_retires() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // `Complete` claims the window reached the source end, but
+            // the request asked for one line and two arrived — the
+            // accounting cannot be trusted.
+            write_record(&mut peer, &lines_reply("a\nb", 2, 3, LineEnd::Complete)).unwrap();
+        });
+        let error = connection
+            .read_lines(Path::new("file"), 1, Some(1), None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_budget_stop_that_consumed_the_window_retires() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // `ByteLimit` claims a budget stop, yet the shown count
+            // consumed the whole requested window — nothing was left
+            // for a budget to stop on.
+            write_record(
+                &mut peer,
+                &lines_reply("a\nb\nc\nd\ne", 5, 10, LineEnd::ByteLimit),
+            )
+            .unwrap();
+        });
+        let error = connection
+            .read_lines(Path::new("file"), 1, Some(5), None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_2001_element_page_without_the_trailing_newline_retires() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // `shown_lines` may exceed `MAX_TEXT_LINES` only for the
+            // trailing-empty page: 2001 nonempty elements is a lie.
+            let text = "x\n".repeat(MAX_TEXT_LINES) + "x";
+            write_record(
+                &mut peer,
+                &ClientReply::Lines {
+                    metadata: lines_stamp(5_000_000, &"a".repeat(64)),
+                    text,
+                    total_lines: DecimalU64::new(2_001),
+                    shown_lines: u32::try_from(MAX_TEXT_LINES + 1).unwrap(),
+                    end: LineEnd::Complete,
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .read_lines(Path::new("file"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_requested_limit_may_keep_the_trailing_empty_element() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // The file `("x\n" * 2000) + "\nrest"`: the caller's limit
+            // selects the empty element after the 2000th line — exempt
+            // from the budgets exactly like the source's own trailing
+            // empty, so 2001 shown elements ending in a newline is a
+            // legitimate `RequestedLimit` page.
+            write_record(
+                &mut peer,
+                &ClientReply::Lines {
+                    metadata: lines_stamp(4_005, &"a".repeat(64)),
+                    text: "x\n".repeat(MAX_TEXT_LINES),
+                    total_lines: DecimalU64::new(u64::try_from(MAX_TEXT_LINES + 2).unwrap()),
+                    shown_lines: u32::try_from(MAX_TEXT_LINES + 1).unwrap(),
+                    end: LineEnd::RequestedLimit,
+                },
+            )
+            .unwrap();
+        });
+        let page = connection
+            .read_lines(
+                Path::new("file"),
+                1,
+                Some(u64::try_from(MAX_TEXT_LINES + 1).unwrap()),
+                None,
+            )
+            .unwrap();
+        answer.join().unwrap();
+        assert_eq!(page.shown_lines, u32::try_from(MAX_TEXT_LINES + 1).unwrap());
+        assert!(page.text.ends_with('\n'));
+        assert_eq!(page.end, LineEnd::RequestedLimit);
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn an_invalid_utf8_error_keeps_the_connection_live() {
+        let (binding, hello) = lines_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            write_record(
+                &mut peer,
+                &ClientReply::Error {
+                    kind: ReadError::InvalidUtf8,
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        // The semantic refusal maps to InvalidData but never retires:
+        // the same connection still answers Ping afterward.
+        let error = connection
+            .read_lines(Path::new("file"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
     }
 }

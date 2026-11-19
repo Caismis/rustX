@@ -134,187 +134,132 @@ async fn run_read(
             // The logical text of a document source is its projected
             // Markdown: `original_bytes` reports the size of the complete
             // untruncated output, not the size of the compressed binary
-            // source.
-            let original_bytes = text.len() as u64;
-            project_read_text(&text, original_bytes, &input)
-        }
-        document::SourceKind::Text => {
-            let bytes = match std::fs::read(&target) {
-                Ok(bytes) => bytes,
+            // source. The same streaming scanner owns the projection, so
+            // a document and a plain file share one paging contract.
+            let page = match page_limits().scan_text(text.as_bytes(), input.offset(), input.limit) {
+                Ok(page) => page,
                 Err(error) => {
-                    return failed_result(format!("cannot read {}: {error}", target.display()));
+                    return failed_result(format!("cannot project {}: {error}", target.display()));
                 }
             };
-            let original_bytes = bytes.len() as u64;
-            let Ok(text) = String::from_utf8(bytes) else {
-                return failed_result(format!(
-                    "{} is not a UTF-8 text file; binary content is never fabricated as text",
-                    target.display()
-                ));
+            project_page(&page, &input)
+        }
+        document::SourceKind::Text => {
+            // Plain text never lands in memory: the file streams through
+            // the same scanner on the blocking pool, validating UTF-8
+            // across the whole source — an invalid tail behind the
+            // requested page is still the binary refusal, never served.
+            let offset = input.offset();
+            let limit = input.limit;
+            let scan_target = target.clone();
+            let page = match tokio::task::spawn_blocking(move || {
+                std::fs::File::open(&scan_target)
+                    .and_then(|file| page_limits().scan_text(file, offset, limit))
+            })
+            .await
+            {
+                Ok(Ok(page)) => page,
+                Ok(Err(error)) if error.kind() == std::io::ErrorKind::InvalidData => {
+                    return failed_result(format!(
+                        "{} is not a UTF-8 text file; binary content is never fabricated as text",
+                        target.display()
+                    ));
+                }
+                Ok(Err(error)) => {
+                    return failed_result(format!("cannot read {}: {error}", target.display()));
+                }
+                Err(error) => {
+                    return failed_result(format!(
+                        "cannot read {}: read task failed: {error}",
+                        target.display()
+                    ));
+                }
             };
-            project_read_text(&text, original_bytes, &input)
+            project_page(&page, &input)
         }
     }
 }
 
-/// The one shared Read projection: line addressing, slicing, the
-/// complete-line 2000-line/50KB bounds, continuation diagnostics, and the
-/// result semantics for every source that produced logical text.
-fn project_read_text(text: &str, original_bytes: u64, input: &ReadInput) -> ToolExecutionResult {
-    // `split('\n')` intentionally preserves the trailing empty addressable
-    // line, matching the model-facing line accounting used by pi. Thus an
-    // empty file has one addressable empty line and a final newline creates
-    // one trailing empty line for offset validation.
-    let all_lines: Vec<&str> = text.split('\n').collect();
-    let total_lines = all_lines.len();
+/// The page bounds the shared scanner runs under — the execution
+/// protocol's single policy, reached through the tool limits.
+fn page_limits() -> rustx_confined_fs::PageLimits {
+    rustx_confined_fs::PageLimits {
+        max_bytes: NATIVE_FILE_TOOL_MAX_BYTES,
+        max_lines: MAX_READ_LINES,
+    }
+}
+
+/// The one shared Read projection over a scanned
+/// [`rustx_confined_fs::TextPage`]: continuation diagnostics and result
+/// semantics for every source that produced logical text, reproduced
+/// exactly from the historical projection.
+fn project_page(page: &rustx_confined_fs::TextPage, input: &ReadInput) -> ToolExecutionResult {
     let offset = input.offset();
-    let start = usize::try_from(offset.saturating_sub(1)).unwrap_or(usize::MAX);
-    if start >= total_lines {
-        return failed_result(format!(
-            "Offset {offset} is beyond end of file ({total_lines} lines total)"
-        ));
+    let total_lines = page.total_lines;
+    let shown = u64::from(page.shown_lines);
+    match page.end {
+        rustx_confined_fs::PageEnd::OffsetPastEnd => {
+            return failed_result(format!(
+                "Offset {offset} is beyond end of file ({total_lines} lines total)"
+            ));
+        }
+        rustx_confined_fs::PageEnd::FirstLineTooLarge { bytes } => {
+            return success_text(
+                format!(
+                    "[Line {offset} is {}, exceeds 50.0KB limit. Use bash: sed -n '{offset}p' {} | head -c {}]",
+                    format_size(bytes),
+                    input.path,
+                    NATIVE_FILE_TOOL_MAX_BYTES
+                ),
+                Some(TruncationState {
+                    truncated: true,
+                    original_bytes: Some(page.original_bytes),
+                }),
+            );
+        }
+        _ => {}
     }
 
-    let requested_end = input
-        .limit
-        .and_then(|limit| usize::try_from(limit).ok())
-        .map_or(total_lines, |limit| {
-            start.saturating_add(limit).min(total_lines)
-        });
-    let selected = &all_lines[start..requested_end];
-    let projection = truncate_head(selected);
-    if let Some(size) = projection.first_line_too_large {
-        let line = offset;
-        let text = format!(
-            "[Line {line} is {}, exceeds 50.0KB limit. Use bash: sed -n '{line}p' {} | head -c {}]",
-            format_size(size),
-            input.path,
-            NATIVE_FILE_TOOL_MAX_BYTES
-        );
-        return success_text(
-            text,
-            Some(TruncationState {
-                truncated: true,
-                original_bytes: Some(original_bytes),
-            }),
-        );
+    let mut output = page.text.clone();
+    let continuation_offset = offset.saturating_add(shown);
+    match page.end {
+        rustx_confined_fs::PageEnd::LineLimit => {
+            let _ = write!(
+                output,
+                "\n\n[Showing lines {offset}-{} of {total_lines}. Use offset={continuation_offset} to continue.]",
+                continuation_offset.saturating_sub(1)
+            );
+        }
+        rustx_confined_fs::PageEnd::ByteLimit => {
+            let _ = write!(
+                output,
+                "\n\n[Showing lines {offset}-{} of {total_lines} (50KB limit). Use offset={continuation_offset} to continue.]",
+                continuation_offset.saturating_sub(1)
+            );
+        }
+        rustx_confined_fs::PageEnd::RequestedLimit => {
+            let _ = write!(
+                output,
+                "\n\n[{} more lines in file. Use offset={continuation_offset} to continue.]",
+                total_lines.saturating_sub(offset.saturating_sub(1).saturating_add(shown))
+            );
+        }
+        rustx_confined_fs::PageEnd::Complete
+        | rustx_confined_fs::PageEnd::FirstLineTooLarge { .. }
+        | rustx_confined_fs::PageEnd::OffsetPastEnd => {}
     }
 
-    let shown = projection.shown_lines;
-    let mut output = projection.lines.join("\n");
-    let continuation_offset = offset.saturating_add(shown as u64);
-    if projection.stopped_by_line {
-        let _ = write!(
-            output,
-            "\n\n[Showing lines {offset}-{} of {total_lines}. Use offset={continuation_offset} to continue.]",
-            offset.saturating_add(shown as u64).saturating_sub(1)
-        );
-    } else if projection.stopped_by_bytes {
-        let _ = write!(
-            output,
-            "\n\n[Showing lines {offset}-{} of {total_lines} (50KB limit). Use offset={continuation_offset} to continue.]",
-            offset.saturating_add(shown as u64).saturating_sub(1)
-        );
-    } else if requested_end < total_lines {
-        let _ = write!(
-            output,
-            "\n\n[{} more lines in file. Use offset={continuation_offset} to continue.]",
-            total_lines.saturating_sub(requested_end)
-        );
-    }
-
-    let truncated =
-        projection.stopped_by_line || projection.stopped_by_bytes || requested_end < total_lines;
+    let truncated = page.end != rustx_confined_fs::PageEnd::Complete;
     success_text(
         output,
         truncated.then_some(TruncationState {
             truncated: true,
-            original_bytes: Some(original_bytes),
+            original_bytes: Some(page.original_bytes),
         }),
     )
 }
 
-struct ReadProjection<'a> {
-    lines: Vec<&'a str>,
-    shown_lines: usize,
-    stopped_by_line: bool,
-    stopped_by_bytes: bool,
-    first_line_too_large: Option<usize>,
-}
-
-/// Returns a complete-line prefix of `lines`, never splitting UTF-8 or
-/// removing a middle section. Newline bytes between returned lines count
-/// toward the 50KB payload budget.
-fn truncate_head<'a>(lines: &[&'a str]) -> ReadProjection<'a> {
-    // A final newline is a separator, not an additional content line for
-    // the truncation budget. Keep it in an untruncated result, however, so
-    // the file's representation remains faithful. Offset validation still
-    // uses the full split result above, matching pi's addressable-line
-    // behavior for a trailing empty line.
-    let counted = if lines.last().is_some_and(|line| line.is_empty()) {
-        &lines[..lines.len().saturating_sub(1)]
-    } else {
-        lines
-    };
-    let content_bytes = lines
-        .iter()
-        .map(|line| line.len())
-        .sum::<usize>()
-        .saturating_add(lines.len().saturating_sub(1));
-    if counted.len() <= MAX_READ_LINES && content_bytes <= NATIVE_FILE_TOOL_MAX_BYTES {
-        return ReadProjection {
-            lines: lines.to_vec(),
-            shown_lines: lines.len(),
-            stopped_by_line: false,
-            stopped_by_bytes: false,
-            first_line_too_large: None,
-        };
-    }
-    if let Some(first) = counted.first()
-        && first.len() > NATIVE_FILE_TOOL_MAX_BYTES
-    {
-        return ReadProjection {
-            lines: Vec::new(),
-            shown_lines: 0,
-            stopped_by_line: false,
-            stopped_by_bytes: true,
-            first_line_too_large: Some(first.len()),
-        };
-    }
-    let mut result = Vec::new();
-    let mut bytes = 0usize;
-    let mut stopped_by_line = false;
-    let mut stopped_by_bytes = false;
-    for line in counted {
-        if result.len() >= MAX_READ_LINES {
-            stopped_by_line = true;
-            break;
-        }
-        let separator = usize::from(!result.is_empty());
-        let cost = line.len().saturating_add(separator);
-        if bytes.saturating_add(cost) > NATIVE_FILE_TOOL_MAX_BYTES {
-            stopped_by_bytes = true;
-            break;
-        }
-        result.push(*line);
-        bytes = bytes.saturating_add(cost);
-    }
-    if !stopped_by_line && !stopped_by_bytes && content_bytes > NATIVE_FILE_TOOL_MAX_BYTES {
-        // The only remaining byte can be the terminal newline that was
-        // excluded from `counted`; omit that separator in the bounded
-        // projection rather than returning a payload over the byte budget.
-        stopped_by_bytes = true;
-    }
-    ReadProjection {
-        shown_lines: result.len(),
-        lines: result,
-        stopped_by_line,
-        stopped_by_bytes,
-        first_line_too_large: None,
-    }
-}
-
-fn format_size(bytes: usize) -> String {
+fn format_size(bytes: u64) -> String {
     format!("{}.{:01}KB", bytes / 1024, bytes % 1024 * 10 / 1024)
 }
 

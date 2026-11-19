@@ -25,12 +25,16 @@ pub const MAX_MODEL_TOOL_RESULT_BYTES: usize = 64 * 1024;
 /// make the canonical terminal record unbounded.
 pub const MAX_OUTPUT_CONTINUATION_DIAGNOSTIC_BYTES: usize = 1024;
 
-/// The tool-owned content budget of the native sequential/search projections.
-pub const NATIVE_FILE_TOOL_MAX_BYTES: usize = 50 * 1024;
+/// The tool-owned content budget of the native sequential/search
+/// projections. The value is the execution protocol's text-page byte
+/// budget — one bound for the native Read page and the Execution
+/// Client's logical-text page.
+pub const NATIVE_FILE_TOOL_MAX_BYTES: usize = rustx_execution_protocol::MAX_TEXT_BYTES;
 
 /// The maximum number of complete lines returned by Read when its own byte
-/// budget is not reached first.
-pub const MAX_READ_LINES: usize = 2_000;
+/// budget is not reached first. The value is the execution protocol's
+/// text-page line budget — one bound for both projections.
+pub const MAX_READ_LINES: usize = rustx_execution_protocol::MAX_TEXT_LINES;
 
 /// The canonical bounded default number of Grep matches, used when the model
 /// omits `limit`.

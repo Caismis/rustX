@@ -12,11 +12,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use rustx_execution_protocol::EntryKind;
 use rustx_execution_protocol::transport::{read_record, write_record};
 use rustx_execution_protocol::{
-    BindingCredential, Bootstrap, Capability, ClientInstanceId, EnvironmentId, Generation, Hello,
-    HelloReply, Reject, SessionId,
+    BindingCredential, Bootstrap, Capability, ClientInstanceId, EntryKind, EnvironmentId,
+    Generation, Hello, HelloReply, LineEnd, Reject, SessionId,
 };
 use rustx_execution_server::{Binding, BindingPhase, Reservation};
 
@@ -371,6 +370,167 @@ fn stale_expected_revision_is_a_conflict_not_a_read() {
 
     // The connection survives an ordinary typed error reply.
     connection.ping().unwrap();
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn read_lines_pages_a_large_file_in_single_bounded_exchanges() {
+    let rig = rig();
+    // ~1 MiB of short lines: an early small page and a late page each
+    // complete as one typed exchange — the client never ships the file.
+    let path = rig.workspace_path.join("large.log");
+    let mut file = fs::File::create(&path).unwrap();
+    for index in 0..60_000u64 {
+        writeln!(file, "line{index}").unwrap();
+    }
+    drop(file);
+    let expected =
+        rustx_confined_fs::FileMetadata::of(&std::fs::File::open(&path).unwrap()).unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // The early page returns only the requested window and a counted
+    // total over the whole — still-validated — source.
+    let page = connection
+        .read_lines(Path::new("large.log"), 1, Some(3), None)
+        .unwrap();
+    assert_eq!(page.text, "line0\nline1\nline2");
+    assert_eq!(page.shown_lines, 3);
+    assert_eq!(page.total_lines, 60_001);
+    assert_eq!(page.end, LineEnd::RequestedLimit);
+    assert_eq!(page.metadata.revision, expected.revision);
+    assert_eq!(page.metadata.size.get(), expected.size);
+    assert_eq!(page.metadata.identity, expected.identity);
+
+    // A late page near EOF is one bounded exchange: the six addressed
+    // lines plus the source's trailing empty element.
+    let page = connection
+        .read_lines(
+            Path::new("large.log"),
+            59_995,
+            None,
+            Some(&expected.revision),
+        )
+        .unwrap();
+    assert_eq!(
+        page.text,
+        "line59994\nline59995\nline59996\nline59997\nline59998\nline59999\n"
+    );
+    assert_eq!(page.shown_lines, 7);
+    assert_eq!(page.total_lines, 60_001);
+    assert_eq!(page.end, LineEnd::Complete);
+    assert_eq!(page.metadata.revision, expected.revision);
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn read_lines_reports_end_reasons_and_keeps_stable_semantics() {
+    let rig = rig();
+    let path = rig.workspace_path.join("big-line");
+    // A first line over the 50KB budget: a diagnostic page, not an error.
+    let mut bytes = vec![b'x'; 60 * 1024];
+    bytes.extend_from_slice(b"\nrest");
+    fs::write(&path, &bytes).unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    let page = connection
+        .read_lines(Path::new("big-line"), 1, None, None)
+        .unwrap();
+    assert_eq!(page.shown_lines, 0);
+    assert_eq!(page.text, "");
+    assert_eq!(page.total_lines, 2);
+    assert_eq!(
+        page.end,
+        LineEnd::FirstLineTooLarge {
+            bytes: rustx_execution_protocol::DecimalU64::new((60 * 1024) as u64)
+        }
+    );
+
+    // An offset beyond the source is a typed page state, not an error.
+    let page = connection
+        .read_lines(Path::new("big-line"), 9, None, None)
+        .unwrap();
+    assert_eq!(page.end, LineEnd::OffsetPastEnd);
+    assert_eq!(page.shown_lines, 0);
+
+    // Skipping the oversized line pages the remainder normally.
+    let page = connection
+        .read_lines(Path::new("big-line"), 2, None, None)
+        .unwrap();
+    assert_eq!(page.text, "rest");
+    assert_eq!(page.end, LineEnd::Complete);
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn read_lines_stale_revision_is_a_conflict_not_a_read() {
+    let rig = rig();
+    let path = rig.workspace_path.join("asset");
+    fs::write(&path, b"first\n").unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    let page = connection
+        .read_lines(Path::new("asset"), 1, None, None)
+        .unwrap();
+    fs::write(&path, b"second\n").unwrap();
+    let error = connection
+        .read_lines(Path::new("asset"), 1, None, Some(&page.metadata.revision))
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+
+    // The connection survives an ordinary typed error reply.
+    connection.ping().unwrap();
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn read_lines_refuses_non_utf8_and_keeps_the_connection_live() {
+    let rig = rig();
+    let path = rig.workspace_path.join("binary");
+    fs::write(&path, b"text\xFFtail").unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // A non-UTF-8 source is a semantic refusal — InvalidData, never a
+    // fabrication — and it never retires the connection.
+    let error = connection
+        .read_lines(Path::new("binary"), 1, None, None)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    connection.ping().unwrap();
+
+    // Invalid bytes after the requested page are still the refusal: the
+    // scanner validates the whole source, not only the shown window.
+    fs::write(&path, b"ok\n\xFF").unwrap();
+    let error = connection
+        .read_lines(Path::new("binary"), 1, Some(1), None)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+
+    // The same connection still serves a clean page afterward.
+    fs::write(&path, b"clean\n").unwrap();
+    let page = connection
+        .read_lines(Path::new("binary"), 1, None, None)
+        .unwrap();
+    assert_eq!(page.text, "clean\n");
+    assert_eq!(page.end, LineEnd::Complete);
+
     drop(connection);
     expect_success(&mut child);
 }
