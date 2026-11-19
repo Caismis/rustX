@@ -1,0 +1,38 @@
+[package]
+name = "rustx-document-reader"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.100"
+license = "MIT"
+description = "The physical structured-document decoder shared by the rustX Agent Server and the physical Execution Client: the rustX-owned format whitelist, bounded source acquisition, and the parser-only xberg decode into deterministic Markdown."
+publish = false
+
+[dependencies]
+# The parser-only document decode backend. rustX owns the supported-format
+# whitelist (`.pdf`, `.docx`, `.xlsx`, `.pptx`), the path contract, and all
+# extraction policy; xberg only decodes. Defaults are disabled and only the
+# three format features plus the async runtime are enabled: no
+# `ocr`/`ocr-pipeline` (Tesseract/ONNX/ML), no `tree-sitter`, no
+# embeddings/NER/summarization/chunking, no `archives`, no `url-ingestion`,
+# no server/API/MCP surface ever compiles in.
+# `disable_ocr: true` is also set at runtime; a scanned PDF therefore can
+# never fall back to OCR.
+xberg = { version = "1.0.14", default-features = false, features = [
+    "pdf",
+    "excel",
+    "office",
+    "tokio-runtime",
+] }
+# The xberg extraction API is async-only; decode drives it on a dedicated
+# current-thread runtime built inside the synchronous call.
+tokio = { version = "1", features = ["rt", "time"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = "warn"
+pedantic = "warn"

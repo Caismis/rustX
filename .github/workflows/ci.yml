@@ -244,6 +244,12 @@ jobs:
       - name: Run the Execution Client boundary
         run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
 
+      # The binary's own unit tests (e.g. `mutation::`) live outside the
+      # `bootstrap` integration target; FULL's contracts lane already runs
+      # workspace `--bins`, but FAST must not skip them.
+      - name: Run the Execution Client binary units
+        run: cargo test -p rustx-execution-client --bins --all-features --locked
+
       - name: Check test lane coverage
         run: cargo run --profile test --all-features --locked --example check_test_lanes -- --job rust-fast
 
@@ -619,6 +625,11 @@ jobs:
       - name: Run the Execution Client boundary
         run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
 
+      # The binary's own unit tests (e.g. `mutation::`) live outside the
+      # `bootstrap` integration target; native macOS must run them too.
+      - name: Run the Execution Client binary units
+        run: cargo test -p rustx-execution-client --bins --all-features --locked
+
       # Native macOS discovery: every required external target (see
       # REQUIREMENTS in the checker) must execute here.
       - name: Check test lane coverage
@@ -754,6 +765,11 @@ jobs:
 
       - name: Run the Execution Client boundary
         run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
+
+      # The binary's own unit tests (e.g. `mutation::`) live outside the
+      # `bootstrap` integration target; native macOS must run them too.
+      - name: Run the Execution Client binary units
+        run: cargo test -p rustx-execution-client --bins --all-features --locked
 
       # Native macOS discovery: both --skip selectors must still exclude
       # tests, and `boundary_suites::` and every external target (see

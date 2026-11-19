@@ -7773,7 +7773,7 @@ current layer status.
 - `rustx-execution-server` is a library owned by the Agent. It owns binding
   reservation, credential authentication, arbitration, connection lifecycle,
   and typed request dispatch (`Ping`, `ReadRange`, `GetMetadata`,
-  `ReadDirectory`, `ReadLines`, and the
+  `ReadDirectory`, `ReadLines`, `ReadDocument`, and the
   `PrepareWrite`/`CommitWrite`/`AbortWrite`
   conditional-write sequence). Binding uniqueness is per
   `Binding`, not per `Session`: each binding admits at most one live
@@ -7787,7 +7787,8 @@ current layer status.
   together, prepared exactly once on a blocking task, and fenced on
   Session delete and process drain. The endpoint's typed surface —
   `admit_local_stream` and serialized `read_range`, `entry_metadata`,
-  `directory_page`, `read_lines`, and `write_file` exchanges (busy
+  `directory_page`, `read_lines`, `read_document`, and `write_file`
+  exchanges (busy
   refusal, lexical workspace
   gate, binding live-check at send time) — is the Session's live
   dispatch owner. The claim is not reachable through
@@ -7804,24 +7805,33 @@ current layer status.
   their prior paths until their own migrations land.
 - `rustx-execution-client` is a standalone binary performing physical
   workspace/environment I/O inside the workspace view it was launched under.
-  Its production workspace dependencies are the protocol and
-  `rustx-confined-fs` — never on the root
+  Its production workspace dependencies are the protocol,
+  `rustx-confined-fs`, and `rustx-document-reader` — never on the root
   crate, canonical store, or model types (the server appears only as a test
   dev-dependency). Its `--workspace` is local launch policy checked byte for
   byte against the bootstrap record; the server cannot redirect it.
 - `rustx-confined-fs` holds the proven descriptor-relative primitives factored
   out of the root package I/O — `PackageDirectory`, `FileMetadata`,
   `FileChunk`, `DirectoryEntry`, `DirectoryPage`, the bounded
-  revision-checked `read_range`, and the `entry_metadata` /
-  `directory_page` queries. Root `rustx`
+  revision-checked `read_range`, the `entry_metadata` /
+  `directory_page` queries, the streaming `scan_text` logical-page
+  scanner, and the `WriteTarget`/`StagedWrite` commit kernel. Root
+  `rustx`
   and the client both depend on it; the server does not.
-- The boundary currently serves five physical operations: bounded,
+- `rustx-document-reader` is the physical structured-document decoder —
+  the rustX-owned format whitelist, classification, bounded source
+  acquisition, and parser-only xberg decode factored out of the native
+  Read tool. The root tool and the client both depend on it for exactly
+  one parser policy; it depends on neither side.
+- The boundary currently serves six physical operations: bounded,
   revision-checked range reads, entry metadata, bounded directory
-  pages, the two-phase conditional write, and the bounded
-  logical-text page over the isolated Unix socket — `fs/readFile`,
+  pages, the two-phase conditional write, the bounded
+  logical-text page, and the whitelisted structured-document page
+  over the isolated Unix socket — `fs/readFile`,
   `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` are served
-  by the admitted Client, and the streaming `scan_text` scanner the
-  page runs on is shared verbatim with the native Read tool. The
+  by the admitted Client; the streaming `scan_text` scanner and the
+  `rustx-document-reader` decoder the pages run on are shared verbatim
+  with the native Read tool. The
   product's copy, remove, create-directory, and watch paths still use
   the local path
   through `rustx`'s delegating `PackageDirectory` wrapper, and no

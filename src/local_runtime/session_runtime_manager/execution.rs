@@ -28,7 +28,7 @@ use rustx_execution_protocol::{
     Reject, is_normalized_absolute_path, transport::LOCAL_HANDSHAKE_TIMEOUT,
 };
 use rustx_execution_server::{
-    Binding, DirectoryListing, LinesPage, LocalConnection, RangeRead, Reservation,
+    Binding, DirectoryListing, DocumentPage, LinesPage, LocalConnection, RangeRead, Reservation,
 };
 
 use super::super::session::SessionId;
@@ -327,6 +327,40 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    /// One bounded logical-text page of a whitelisted document through
+    /// the admitted Client — the same complete-line projection the Read
+    /// tool owns, decoded by the shared parser policy — plus the verified
+    /// source stamp. `path` resolves once against the reserved workspace
+    /// at dispatch and names a file leaf, never the workspace root.
+    ///
+    /// The returned [`rustx_confined_fs::TextPage`]'s `original_bytes` is
+    /// the decoded Markdown length — the logical source the line
+    /// accounting answers to — not the compressed document's stamped
+    /// size, which stays available on the returned stamp.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same gating kinds as [`read_lines`](Self::read_lines):
+    /// [`io::ErrorKind::Unsupported`] without the Client's document
+    /// capability or for a non-whitelisted extension,
+    /// [`io::ErrorKind::FileTooLarge`] for an over-cap source, and the
+    /// typed decode refusals — a corrupt document or a missing text
+    /// layer — as [`io::ErrorKind::InvalidData`].
+    pub fn read_document(
+        &self,
+        path: &Path,
+        offset: u64,
+        limit: Option<u64>,
+        expected_revision: Option<&str>,
+    ) -> io::Result<(rustx_confined_fs::FileMetadata, rustx_confined_fs::TextPage)> {
+        self.with_connection(|connection| {
+            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            connection
+                .read_document(&relative, offset, limit, expected_revision)
+                .map(project_document)
+        })
+    }
+
     /// Serializes one synchronous exchange on the admitted connection:
     /// `WouldBlock` while another dispatch holds it — a bounded busy
     /// signal, never a queue — and `NotConnected` before admission.
@@ -458,6 +492,36 @@ fn project_lines(
         text: page.text,
         total_lines: page.total_lines,
         original_bytes: metadata.size,
+        shown_lines: page.shown_lines,
+        end: match page.end {
+            rustx_execution_protocol::LineEnd::Complete => rustx_confined_fs::PageEnd::Complete,
+            rustx_execution_protocol::LineEnd::RequestedLimit => {
+                rustx_confined_fs::PageEnd::RequestedLimit
+            }
+            rustx_execution_protocol::LineEnd::LineLimit => rustx_confined_fs::PageEnd::LineLimit,
+            rustx_execution_protocol::LineEnd::ByteLimit => rustx_confined_fs::PageEnd::ByteLimit,
+            rustx_execution_protocol::LineEnd::FirstLineTooLarge { bytes } => {
+                rustx_confined_fs::PageEnd::FirstLineTooLarge { bytes: bytes.get() }
+            }
+            rustx_execution_protocol::LineEnd::OffsetPastEnd => {
+                rustx_confined_fs::PageEnd::OffsetPastEnd
+            }
+        },
+    };
+    (metadata, page)
+}
+
+/// Projects a validated wire document page onto the shared product
+/// shape — `source` becomes the entry stamp while `logical_bytes`, the
+/// decoded Markdown length, is the page's original bytes.
+fn project_document(
+    page: DocumentPage,
+) -> (rustx_confined_fs::FileMetadata, rustx_confined_fs::TextPage) {
+    let metadata = project_stamp(page.source);
+    let page = rustx_confined_fs::TextPage {
+        text: page.text,
+        total_lines: page.total_lines,
+        original_bytes: page.logical_bytes,
         shown_lines: page.shown_lines,
         end: match page.end {
             rustx_execution_protocol::LineEnd::Complete => rustx_confined_fs::PageEnd::Complete,

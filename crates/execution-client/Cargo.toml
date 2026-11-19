@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.100"
 license = "MIT"
-description = "The physical rustX Execution Client. This layer implements exactly one authenticated local binding and typed liveness and bounded revision-checked range reads of its workspace — no process, MCP, or Python I/O."
+description = "The physical rustX Execution Client. This layer implements exactly one authenticated local binding and typed liveness, bounded revision-checked range reads, logical-text pages, and whitelisted document pages of its workspace — no process, MCP, or Python I/O."
 publish = false
 
 [[bin]]
@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 rustx-execution-protocol = { path = "../execution-protocol" }
 rustx-confined-fs = { path = "../confined-fs" }
+rustx-document-reader = { path = "../document-reader" }
 base64 = "0.22"
 nix = { version = "0.31.3", default-features = false, features = ["user", "socket"] }
 

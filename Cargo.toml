@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/confined-fs",
+    "crates/document-reader",
     "crates/execution-client",
     "crates/execution-protocol",
     "crates/execution-server",
@@ -11,6 +12,7 @@ members = [
 default-members = [
     ".",
     "crates/confined-fs",
+    "crates/document-reader",
     "crates/execution-client",
     "crates/execution-protocol",
     "crates/execution-server",
@@ -146,24 +148,13 @@ tempfile = "3.27.0"
 # SQLite 3.53.2 includes the WAL-reset race fix required by concurrent checkpoints.
 # Keep checked u64/usize SQL conversions explicit with rusqlite's fallible_uint.
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "functions", "preupdate_hook", "fallible_uint"] }
-# The parser-only document decode backend behind native Read (Issue #48).
-# rustX owns the supported-format whitelist (`.pdf`, `.docx`, `.xlsx`,
-# `.pptx`), the path contract, and all extraction policy; xberg only decodes.
-# Defaults are disabled and only the three format features plus the async
-# runtime are enabled: no `ocr`/`ocr-pipeline` (Tesseract/ONNX/ML), no
-# `tree-sitter`, no embeddings/NER/summarization/chunking, no `archives`,
-# no `url-ingestion`, no server/API/MCP surface ever compiles into rustX.
-# `disable_ocr: true` is also set at runtime; a scanned PDF therefore can
-# never fall back to OCR.
-xberg = { version = "1.0.14", default-features = false, features = [
-    "pdf",
-    "excel",
-    "office",
-    "tokio-runtime",
-] }
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }
 
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
+# The physical structured-document decoder behind native Read (Issue #48)
+# — the rustX-owned format whitelist, bounded source acquisition, and the
+# parser-only xberg decode the physical Execution Client also serves.
+rustx-document-reader = { path = "crates/document-reader" }
 # The proven descriptor-relative filesystem primitives the physical
 # Execution Client shares; there is no parallel implementation.
 rustx-confined-fs = { path = "crates/confined-fs" }

@@ -4712,6 +4712,7 @@ dependencies = [
  "rusqlite",
  "rustix",
  "rustx-confined-fs",
+ "rustx-document-reader",
  "rustx-execution-protocol",
  "rustx-execution-server",
  "schemars",
@@ -4736,7 +4737,6 @@ dependencies = [
  "url",
  "uuid",
  "uv-normalize",
- "xberg",
  "zip",
 ]
 
@@ -4756,12 +4756,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustx-document-reader"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "tokio",
+ "xberg",
+]
+
+[[package]]
 name = "rustx-execution-client"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "nix",
  "rustx-confined-fs",
+ "rustx-document-reader",
  "rustx-execution-protocol",
  "rustx-execution-server",
  "serde_json",

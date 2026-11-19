@@ -64,16 +64,18 @@ and directory-page readers —
   over `rustx-confined-fs`, preserving every existing semantic.
 
 These layers perform authenticated negotiation, binding arbitration,
-local bootstrap, and five physical operations — the bounded
+local bootstrap, and six physical operations — the bounded
 revision-checked range read, entry metadata, bounded directory
-pages, the two-phase conditional write, and the bounded
-logical-text page. There is no production
+pages, the two-phase conditional write, the bounded
+logical-text page, and the whitelisted structured-document
+page. There is no production
 dispatch beyond them,
 no process spawn of business work, and no remote
 transport; none may exist until the gates below exist. Nothing claims
 unimplemented I/O: a runtime Hello advertises `Capability::Connection`,
 `Capability::ReadRange`, `Capability::DirectoryMetadata`,
-`Capability::ConditionalWrite`, and `Capability::ReadLines`, exactly
+`Capability::ConditionalWrite`, `Capability::ReadLines`, and
+`Capability::DocumentPages`, exactly
 what the Client implements, never
 `Files`.
 
@@ -253,12 +255,14 @@ publishes the trusted-channel bundle:
   `ping()` (`Ping`/`Pong`), `read_range(...)` (`ReadRange`/`Range`),
   `entry_metadata(...)` (`GetMetadata`/`Metadata`),
   `directory_page(...)` (`ReadDirectory`/`Directory`),
-  `read_lines(...)` (`ReadLines`/`Lines`), and
+  `read_lines(...)` (`ReadLines`/`Lines`),
+  `read_document(...)` (`ReadDocument`/`DocumentPage`), and
   `write_file(...)` (the `PrepareWrite`/`CommitWrite`/`AbortWrite`
   sequence) — never a raw
   message path. Each first consults the capabilities the peer actually
   advertised in its Hello: a connection that never claimed `ReadRange`,
-  `DirectoryMetadata`, `ConditionalWrite`, or `ReadLines` gets
+  `DirectoryMetadata`, `ConditionalWrite`, `ReadLines`, or
+  `DocumentPages` gets
   `io::ErrorKind::Unsupported` and
   no request is written. Every exchange serializes the request with
   `encode_record` *before* the gate, so an unencodable request fails
@@ -315,7 +319,9 @@ offset: DecimalU64, max_bytes: u32, expected_revision: Option<String>
 }` answered by `ClientReply::Range { data_base64, offset, next_offset,
 metadata }` or `ClientReply::Error { kind }` with the stable
 `ReadError` codes `invalid`, `denied`, `not-found`, `conflict`,
-`invalid-utf8`, `unavailable` — no raw paths or payload details cross
+`invalid-utf8`, `unsupported-document`, `document-too-large`,
+`document-decode-failed`, `no-text-layer`, `unavailable` — no raw
+paths, parser messages, or payload details cross
 back. `metadata`
 is a `FileStamp { size: DecimalU64, revision, identity,
 modified_at_ms }`: the source descriptor of the file the bytes were
@@ -397,6 +403,50 @@ stamp, the nonzero `total_lines`, `text` within the byte bound whose
 the request and the page's own accounting, and every count bounded
 by the stamped source size. A malformed or untruthful `Lines` reply
 retires the stream exactly like a malformed `Range`.
+
+### Structured document pages (implemented)
+
+`ClientRequest::ReadDocument { relative_path, offset: DecimalU64,
+limit: Option<DecimalU64>, expected_revision: Option<String> }` is
+answered by `ClientReply::DocumentPage { source: FileStamp,
+logical_bytes: DecimalU64, text, total_lines: DecimalU64,
+shown_lines: u32, end: LineEnd }` or a typed `Error` — the same
+complete-line page contract as `Lines`, projected over the decoded
+Markdown of a whitelisted structured document (`.pdf`, `.docx`,
+`.xlsx`, `.pptx`). There is no caller-supplied MIME type or URI on the
+wire: the Client chooses the decoder by extension against the one
+rustX whitelist — the same `rustx-document-reader` classification,
+`MAX_DOCUMENT_SOURCE_BYTES` acquisition bound, and parser policy the
+native Read tool runs — and every other extension is the distinct
+`unsupported-document` refusal, never conflated with a missing
+capability or a parser failure.
+
+The document is opened no-follow, stamped before acquisition, and
+refused `document-too-large` when the stamped size exceeds the
+32 MiB source bound — before a single byte is read or a parser step
+runs. The bounded acquisition is capped at the stamped size (a file
+that keeps appending can never stretch the decode) and must observe
+exactly the stamped byte count; a shrink mid-read is `conflict`. The
+decoded Markdown then pages under the same `PageLimits` the plain
+text scan uses, and the retained descriptor plus a freshly opened
+path must still name the decoded source or the answer is `conflict`
+— an unstable or corrupt source never leaks a page. `source` stamps
+the physical document; `logical_bytes` reports the decoded Markdown
+length, independent of the compressed source's size. A parser
+rejection is `document-decode-failed`; a document with no
+extractable text layer is `no-text-layer` — OCR and image inference
+never substitute, and parser messages never cross the wire.
+
+The decoder's own policy constants live in `rustx-document-reader`
+(which cannot depend on the protocol crate); the wire policy —
+`MAX_DOCUMENT_SOURCE_BYTES` and `MAX_DOCUMENT_LOGICAL_BYTES` (64
+MiB) — lives in this crate, and the Client proves the identity at
+build time. On the Server side the reply is verified before trust:
+the `source` stamp, the source and logical bounds, and the shared
+complete-line accounting every `Lines` reply answers to — with
+`logical_bytes` playing the source-size role. A malformed or
+untruthful `DocumentPage` retires the stream exactly like a
+malformed `Range`; a typed semantic refusal never does.
 
 ### Conditional writes (implemented)
 
@@ -480,7 +530,7 @@ physical Client:
   enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
   capability set `{Connection, ReadRange, DirectoryMetadata,
-  ConditionalWrite, ReadLines}` — the
+  ConditionalWrite, ReadLines, DocumentPages}` — the
   operations this build physically implements — constructed by the
   client, never read from the mutable bundle.
 - After sending the Hello it reads one `HelloReply`; a reject is
@@ -492,7 +542,10 @@ physical Client:
   retained `PackageDirectory` via `rustx_confined_fs::read_range`,
   `GetMetadata`/`ReadDirectory` answered through its
   `entry_metadata`/`directory_page`, `ReadLines` answered through the
-  retained `PackageDirectory` and the shared `scan_text` scanner, and
+  retained `PackageDirectory` and the shared `scan_text` scanner,
+  `ReadDocument` answered through `rustx-document-reader` — the same
+  whitelist, bounded acquisition, and parser policy as the native
+  Read tool — and
   `PrepareWrite`/`CommitWrite`/`AbortWrite` answered through the
   `WriteTarget`/`StagedWrite` kernel by the per-connection `Writes`
   owner. EOF
@@ -635,8 +688,9 @@ envelope.
   record framing and the local Unix-socket bootstrap are implemented.
   WSS/TLS, health budgets, and recovery windows are pending.
 - No spawn, MCP session, Python, managed output, or any file
-  operation beyond the range read, the two query operations, and the
-  two-phase conditional write exists
+  operation beyond the range read, the two query operations, the
+  two-phase conditional write, and the two logical-text page
+  operations exists
   behind `Admission`;
   `Binding::status()` is observation only, and a `Live` phase is a
   connection fact, not an integration claim. `Capability::Files` and

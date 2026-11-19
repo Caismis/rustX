@@ -50,6 +50,18 @@ pub const MAX_TEXT_BYTES: usize = 50 * 1024;
 /// exactly on a source trailing newline may show one extra empty element.
 pub const MAX_TEXT_LINES: usize = 2_000;
 
+/// Maximum source bytes of one `ReadDocument` target — the wire policy
+/// equal to the shared document decoder's extraction-resource bound. A
+/// source larger than this is refused before any decode work starts, and
+/// a `DocumentPage` claiming a larger `source` is untruthful.
+pub const MAX_DOCUMENT_SOURCE_BYTES: usize = 32 * 1024 * 1024;
+
+/// Maximum logical bytes of the decoded Markdown text one `DocumentPage`
+/// may describe — the wire policy equal to the shared document decoder's
+/// projection bound. `logical_bytes` counts the decoded text, independent
+/// of the compressed source's byte length.
+pub const MAX_DOCUMENT_LOGICAL_BYTES: u64 = 64 * 1024 * 1024;
+
 /// Maximum data records queued or in flight on one connection.
 pub const MAX_DATA_RECORDS_PER_CONNECTION: usize = 8;
 
@@ -299,6 +311,10 @@ pub enum Capability {
     /// The implemented logical-text page: a bounded streaming line page
     /// under the binding workspace with whole-source UTF-8 validation.
     ReadLines,
+    /// The implemented structured-document page: a whitelisted document
+    /// under the binding workspace decoded by the shared parser policy
+    /// into bounded logical-text pages.
+    DocumentPages,
     /// Data-side bounded glob/grep, conditional edit, document decoding.
     Search,
     /// Managed processes under Server-assigned `OperationId`s.
@@ -601,6 +617,23 @@ pub enum ClientRequest {
         /// The revision the file must still hold, when checked.
         expected_revision: Option<String>,
     },
+    /// One bounded logical-text page of a whitelisted structured document
+    /// under the binding workspace: the Client decodes the source with
+    /// the shared rustX parser policy — never a caller-supplied MIME type
+    /// or URI — and serves the complete-line projection of the decoded
+    /// Markdown. The document format is chosen by the Client from the
+    /// path's extension against the rustX whitelist; every other source
+    /// is [`ReadError::UnsupportedDocument`].
+    ReadDocument {
+        /// The workspace-relative document path: normal components only.
+        relative_path: PathBuf,
+        /// The 1-based line the page starts at; must be nonzero.
+        offset: DecimalU64,
+        /// The requested line bound, when given; never zero.
+        limit: Option<DecimalU64>,
+        /// The revision the file must still hold, when checked.
+        expected_revision: Option<String>,
+    },
 }
 
 /// The Client's one typed reply to a [`ClientRequest`].
@@ -667,6 +700,27 @@ pub enum ClientReply {
     /// stage failed: the named outcome is unknowable and must be reported
     /// as such — never as a pre-commit denial.
     CommitUnknown { ticket: DecimalU64 },
+    /// The verified logical-text page the Client decoded from a
+    /// whitelisted document: `source` stamps the physical document the
+    /// page came from, `logical_bytes` is the full decoded Markdown
+    /// length — independent of the compressed source's size — and the
+    /// remaining fields carry the same complete-line contract as
+    /// `Lines`.
+    DocumentPage {
+        /// The source-descriptor stamp of the document the page came
+        /// from.
+        source: FileStamp,
+        /// The byte length of the complete decoded Markdown text.
+        logical_bytes: DecimalU64,
+        /// The shown text: at most [`MAX_TEXT_BYTES`] joined bytes.
+        text: String,
+        /// The addressable line count of the whole decoded text.
+        total_lines: DecimalU64,
+        /// The shown element count of this page.
+        shown_lines: u32,
+        /// Why the page ended.
+        end: LineEnd,
+    },
     /// The request failed; `kind` carries only the stable reason.
     Error {
         /// Why the operation failed — never a raw path or payload.
@@ -773,6 +827,19 @@ pub enum ReadError {
     /// The source is not UTF-8 — binary content is never fabricated as
     /// text.
     InvalidUtf8,
+    /// The path's extension is not in the rustX document whitelist, so no
+    /// structured decode exists for it — a distinct unavailability, never
+    /// conflated with a missing capability or a parser failure.
+    UnsupportedDocument,
+    /// The document source exceeds [`MAX_DOCUMENT_SOURCE_BYTES`]; it is
+    /// refused before any decode work starts.
+    DocumentTooLarge,
+    /// The document's parser rejected the source; the reason is never
+    /// carried on the wire.
+    DocumentDecodeFailed,
+    /// The document decoded but has no extractable text layer — OCR and
+    /// image inference never substitute for one.
+    NoTextLayer,
     /// The read could not be completed for another reason.
     Unavailable,
 }

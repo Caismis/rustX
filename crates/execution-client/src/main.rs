@@ -7,10 +7,12 @@
 //! the bound Unix socket, then serves the Server's typed requests until
 //! EOF: `Ping` liveness and the implemented physical operations — bounded
 //! revision-checked `ReadRange`, `GetMetadata` stat'ed without following
-//! the leaf, bounded `ReadDirectory` paging, and the ticketed
-//! `PrepareWrite`/`CommitWrite`/`AbortWrite` conditional write — all
-//! executed through `rustx-confined-fs`, the same primitives the Agent
-//! Server itself uses. No process, MCP, or Python I/O exists here.
+//! the leaf, bounded `ReadDirectory` paging, the ticketed
+//! `PrepareWrite`/`CommitWrite`/`AbortWrite` conditional write, the
+//! `ReadLines` logical-text page, and the `ReadDocument` whitelisted
+//! document page — all executed through `rustx-confined-fs` and
+//! `rustx-document-reader`, the same primitives the Agent Server itself
+//! uses. No process, MCP, or Python I/O exists here.
 //!
 //! The workspace is local policy, never a server request: `--workspace`
 //! must match the bootstrap workspace byte for byte or the client refuses
@@ -36,8 +38,9 @@ use rustx_execution_protocol::transport::{
 use rustx_execution_protocol::{
     Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, EntryKind,
     EntryStamp, FileStamp, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES,
-    MAX_DIRECTORY_PAGE_ENTRIES, MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES,
-    PROTOCOL_VERSION, PageEntry, ReadError, is_normalized_absolute_path,
+    MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES,
+    MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, ReadError,
+    is_normalized_absolute_path,
 };
 
 mod mutation;
@@ -45,6 +48,20 @@ mod mutation;
 /// `O_NOFOLLOW` refuses a symlinked final component; `O_NONBLOCK` makes a
 /// misidentified special file (FIFO, device) fail instead of blocking.
 const SECURE_OPEN_FLAGS: i32 = nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK;
+
+// The document decoder's policy constants and the wire's must be the
+// same values — the decoder crate cannot depend on the protocol crate,
+// so the build proves the identity here where both are visible.
+const _: () = {
+    assert!(
+        rustx_document_reader::MAX_DOCUMENT_SOURCE_BYTES == MAX_DOCUMENT_SOURCE_BYTES,
+        "document source bound must equal the wire policy"
+    );
+    assert!(
+        rustx_document_reader::MAX_PROJECTED_DOCUMENT_BYTES as u64 == MAX_DOCUMENT_LOGICAL_BYTES,
+        "document projection bound must equal the wire policy"
+    );
+};
 
 fn main() -> ExitCode {
     let mut args = env::args_os();
@@ -141,6 +158,7 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
             Capability::DirectoryMetadata,
             Capability::ConditionalWrite,
             Capability::ReadLines,
+            Capability::DocumentPages,
         ]),
         credential: bootstrap.credential,
     };
@@ -310,6 +328,18 @@ fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String>
                 limit,
                 expected_revision.as_deref(),
             ),
+            ClientRequest::ReadDocument {
+                relative_path,
+                offset,
+                limit,
+                expected_revision,
+            } => read_document(
+                root,
+                &relative_path,
+                offset,
+                limit,
+                expected_revision.as_deref(),
+            ),
         };
         write_record(stream, &reply).map_err(|_| String::from("reply"))?;
     }
@@ -464,17 +494,154 @@ fn read_lines(
         text: page.text,
         total_lines: DecimalU64::new(page.total_lines),
         shown_lines: page.shown_lines,
-        end: match page.end {
-            rustx_confined_fs::PageEnd::Complete => LineEnd::Complete,
-            rustx_confined_fs::PageEnd::RequestedLimit => LineEnd::RequestedLimit,
-            rustx_confined_fs::PageEnd::LineLimit => LineEnd::LineLimit,
-            rustx_confined_fs::PageEnd::ByteLimit => LineEnd::ByteLimit,
-            rustx_confined_fs::PageEnd::FirstLineTooLarge { bytes } => LineEnd::FirstLineTooLarge {
-                bytes: DecimalU64::new(bytes),
-            },
-            rustx_confined_fs::PageEnd::OffsetPastEnd => LineEnd::OffsetPastEnd,
-        },
+        end: line_end(page.end),
     }
+}
+
+/// The wire mirror of the scanner's page-end reason — one projection for
+/// every logical-text reply.
+fn line_end(end: rustx_confined_fs::PageEnd) -> LineEnd {
+    match end {
+        rustx_confined_fs::PageEnd::Complete => LineEnd::Complete,
+        rustx_confined_fs::PageEnd::RequestedLimit => LineEnd::RequestedLimit,
+        rustx_confined_fs::PageEnd::LineLimit => LineEnd::LineLimit,
+        rustx_confined_fs::PageEnd::ByteLimit => LineEnd::ByteLimit,
+        rustx_confined_fs::PageEnd::FirstLineTooLarge { bytes } => LineEnd::FirstLineTooLarge {
+            bytes: DecimalU64::new(bytes),
+        },
+        rustx_confined_fs::PageEnd::OffsetPastEnd => LineEnd::OffsetPastEnd,
+    }
+}
+
+/// `ReadDocument`: one bounded logical-text page of a whitelisted
+/// structured document under the workspace — the same classification,
+/// acquisition bound, and parser policy the native Read tool runs, served
+/// through `rustx-document-reader`. The document is opened no-follow,
+/// stamped before acquisition, read through the shared bounded read under
+/// the stamped-size cap, decoded, and proven unchanged after (the
+/// retained descriptor plus a freshly opened path) — a mid-decode change
+/// is a conflict, never unverified text. `logical_bytes` counts the
+/// decoded Markdown, independent of the compressed source's byte length.
+/// Errors cross as stable [`ReadError`] codes only — never raw paths,
+/// parser messages, or payload.
+fn read_document(
+    root: &PackageDirectory,
+    relative_path: &Path,
+    offset: DecimalU64,
+    limit: Option<DecimalU64>,
+    expected_revision: Option<&str>,
+) -> ClientReply {
+    // A document page names one file leaf — never the empty root — and
+    // the scanner's contract rejects a zero offset or a zero requested
+    // limit, all before any filesystem access.
+    let Ok(relative) = relative_entry(relative_path) else {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    };
+    if relative.as_os_str().is_empty()
+        || offset.get() == 0
+        || limit.is_some_and(|limit| limit.get() == 0)
+    {
+        return ClientReply::Error {
+            kind: ReadError::Invalid,
+        };
+    }
+    // The rustX whitelist picks the decoder by extension — a text source
+    // has no document decode, and there is no content sniffing.
+    let rustx_document_reader::SourceKind::Document(format) =
+        rustx_document_reader::classify_source(relative)
+    else {
+        return ClientReply::Error {
+            kind: ReadError::UnsupportedDocument,
+        };
+    };
+    let (file, before, text) = match document_source(root, relative, format, expected_revision) {
+        Ok(source) => source,
+        Err(kind) => {
+            return ClientReply::Error { kind };
+        }
+    };
+    // The decoded Markdown pages under the same complete-line budgets as
+    // a text source; the projection itself is a `String`, so the scan
+    // cannot fail on UTF-8.
+    let limits = rustx_confined_fs::PageLimits {
+        max_bytes: MAX_TEXT_BYTES,
+        max_lines: MAX_TEXT_LINES,
+    };
+    let page = match limits.scan_text(text.as_bytes(), offset.get(), limit.map(DecimalU64::get)) {
+        Ok(page) => page,
+        Err(error) => {
+            return ClientReply::Error {
+                kind: read_error(&error),
+            };
+        }
+    };
+    // The retained descriptor and a freshly opened path must still name
+    // the document that was decoded: an unstable or corrupt source never
+    // leaks a page.
+    let unchanged = rustx_confined_fs::FileMetadata::of(&file).is_ok_and(|after| after == before)
+        && root
+            .file(relative)
+            .and_then(|reopened| rustx_confined_fs::FileMetadata::of(&reopened))
+            .is_ok_and(|reopened| reopened == before);
+    if !unchanged {
+        return ClientReply::Error {
+            kind: ReadError::Conflict,
+        };
+    }
+    ClientReply::DocumentPage {
+        source: stamp(&before).stamp,
+        logical_bytes: DecimalU64::new(page.original_bytes),
+        text: page.text,
+        total_lines: DecimalU64::new(page.total_lines),
+        shown_lines: page.shown_lines,
+        end: line_end(page.end),
+    }
+}
+
+/// Opens the document under the retained no-follow descriptor, enforces
+/// the caller's expected revision and the stamped-size source cap before
+/// a single parser step runs, and returns the decoded Markdown with the
+/// descriptor and the stamp the source must still match after decoding.
+/// The acquisition is bounded twice: the stamped-size `take` keeps an
+/// appended tail out of the decode, and the shared read keeps its own
+/// limit+1 ceiling; the observed byte count must equal the stamp — a
+/// shrink mid-read is a conflict, never a partial document.
+fn document_source(
+    root: &PackageDirectory,
+    relative: &Path,
+    format: rustx_document_reader::DocumentFormat,
+    expected_revision: Option<&str>,
+) -> Result<(fs::File, rustx_confined_fs::FileMetadata, String), ReadError> {
+    let file = root.file(relative).map_err(|error| read_error(&error))?;
+    let before = rustx_confined_fs::FileMetadata::of(&file).map_err(|_| ReadError::Unavailable)?;
+    if expected_revision.is_some_and(|expected| expected != before.revision) {
+        return Err(ReadError::Conflict);
+    }
+    // The source bound is a hard pre-decode cap on the stamped size: an
+    // oversized document is refused before a single byte is read or a
+    // single parser step runs.
+    if before.size > MAX_DOCUMENT_SOURCE_BYTES as u64 {
+        return Err(ReadError::DocumentTooLarge);
+    }
+    let bytes =
+        rustx_document_reader::read_source((&file).take(before.size)).map_err(
+            |error| match error {
+                rustx_document_reader::SourceError::Io(error) => read_error(&error),
+                rustx_document_reader::SourceError::OverLimit => ReadError::DocumentTooLarge,
+            },
+        )?;
+    if bytes.len() as u64 != before.size {
+        return Err(ReadError::Conflict);
+    }
+    let text = rustx_document_reader::decode(bytes, format).map_err(|error| match error {
+        rustx_document_reader::DecodeError::SourceTooLarge => ReadError::DocumentTooLarge,
+        rustx_document_reader::DecodeError::Runtime(_) => ReadError::Unavailable,
+        rustx_document_reader::DecodeError::Failed(_) => ReadError::DocumentDecodeFailed,
+        rustx_document_reader::DecodeError::NoTextLayer => ReadError::NoTextLayer,
+    })?;
+    Ok((file, before, text))
 }
 
 /// The shared physical-error projection: stable wire codes only, never a

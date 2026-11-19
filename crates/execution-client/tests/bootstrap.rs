@@ -535,6 +535,177 @@ fn read_lines_refuses_non_utf8_and_keeps_the_connection_live() {
     expect_success(&mut child);
 }
 
+/// One committed document-fixture corpus file copied into the test
+/// workspace under the same leaf name.
+fn copy_document_fixture(rig: &Rig, fixture: &str) -> PathBuf {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/read/documents")
+        .join(fixture);
+    let target = rig
+        .workspace_path
+        .join(Path::new(fixture).file_name().unwrap());
+    fs::copy(&root, &target).unwrap();
+    target
+}
+
+#[test]
+fn read_document_decodes_every_whitelisted_format() {
+    let rig = rig();
+    // Every whitelisted format decodes through the real client into the
+    // same deterministic Markdown the native Read tool projects.
+    let fixtures: &[(&str, &[&str])] = &[
+        (
+            "pdf/small-text.pdf",
+            &[
+                "The rustX document projection.",
+                "Hello from a text-layer PDF.",
+            ],
+        ),
+        (
+            "docx/small.docx",
+            &["## Quarterly Report", "Revenue grew", "| North | 120 |"],
+        ),
+        (
+            "xlsx/small.xlsx",
+            &["## Summary", "| Total revenue | 215 |"],
+        ),
+        (
+            "pptx/small.pptx",
+            &["## Project Kickoff", "## Budget Review"],
+        ),
+    ];
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    for (fixture, fragments) in fixtures {
+        let target = copy_document_fixture(&rig, fixture);
+        let name = target.file_name().unwrap().to_owned();
+        let expected =
+            rustx_confined_fs::FileMetadata::of(&std::fs::File::open(&target).unwrap()).unwrap();
+        let page = connection
+            .read_document(Path::new(&name), 1, None, Some(&expected.revision))
+            .unwrap();
+        assert!(!page.text.is_empty(), "{fixture} produced no page");
+        assert!(page.shown_lines >= 1);
+        assert!(page.total_lines >= 1);
+        assert_eq!(page.end, LineEnd::Complete, "{fixture}");
+        // The logical source is the decoded Markdown, independent of the
+        // compressed bytes the stamp describes.
+        assert!(page.logical_bytes > 0);
+        assert_eq!(page.source.revision, expected.revision);
+        assert_eq!(page.source.identity, expected.identity);
+        assert_eq!(page.source.size.get(), expected.size);
+        for fragment in *fragments {
+            assert!(
+                page.text.contains(fragment),
+                "{fixture} page missing {fragment:?}: {}",
+                page.text
+            );
+        }
+    }
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn read_document_serves_deterministic_pages_and_stale_revisions_conflict() {
+    let rig = rig();
+    let target = copy_document_fixture(&rig, "docx/larger.docx");
+    let name = target.file_name().unwrap().to_owned();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // One bounded exchange pages the decoded text: a limited window is a
+    // typed page, never the whole projection or the binary source.
+    let page = connection
+        .read_document(Path::new(&name), 1, Some(2), None)
+        .unwrap();
+    assert_eq!(page.shown_lines, 2);
+    assert_eq!(page.end, LineEnd::RequestedLimit);
+    assert!(page.total_lines > 2);
+    let logical = page.logical_bytes;
+    assert!(logical > page.text.len() as u64);
+
+    // The projection is deterministic: the identical request returns
+    // byte-for-byte the same page and the same stamp.
+    let again = connection
+        .read_document(Path::new(&name), 1, Some(2), None)
+        .unwrap();
+    assert_eq!(page, again);
+
+    // A stale expected revision is a conflict, never a served page —
+    // and the connection stays live.
+    fs::write(&target, b"changed").unwrap();
+    let error = connection
+        .read_document(Path::new(&name), 1, None, Some(&page.source.revision))
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+    connection.ping().unwrap();
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn read_document_refuses_unsupported_corrupt_oversized_and_textless() {
+    let rig = rig();
+    // A non-whitelisted source, a corrupt document, a sparse over-cap
+    // source, and a valid document with no text layer — each is a
+    // distinct typed refusal, never a page and never a disconnect.
+    fs::write(rig.workspace_path.join("notes.md"), b"# notes\n").unwrap();
+    fs::write(rig.workspace_path.join("legacy.doc"), b"old\n").unwrap();
+    fs::write(rig.workspace_path.join("broken.docx"), vec![b'x'; 4096]).unwrap();
+    let huge = rig.workspace_path.join("huge.xlsx");
+    let file = fs::File::create(&huge).unwrap();
+    file.set_len(rustx_execution_protocol::MAX_DOCUMENT_SOURCE_BYTES as u64 + 1)
+        .unwrap();
+    drop(file);
+    copy_document_fixture(&rig, "pdf/scanned-no-text.pdf");
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    for path in [Path::new("notes.md"), Path::new("legacy.doc")] {
+        let error = connection.read_document(path, 1, None, None).unwrap_err();
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::Unsupported,
+            "{}",
+            path.display()
+        );
+    }
+    let error = connection
+        .read_document(Path::new("broken.docx"), 1, None, None)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    // The over-cap source is refused by the stamped-size bound: the
+    // parser never ran, proven by the deterministic FileTooLarge kind.
+    let error = connection
+        .read_document(Path::new("huge.xlsx"), 1, None, None)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+    let error = connection
+        .read_document(Path::new("scanned-no-text.pdf"), 1, None, None)
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("text layer"), "{error}");
+
+    // Every refusal left the connection live and still serving.
+    let page = connection
+        .read_document(Path::new("notes.md"), 1, None, None)
+        .unwrap_err();
+    assert_eq!(page.kind(), io::ErrorKind::Unsupported);
+    connection.ping().unwrap();
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
 #[test]
 fn symlink_parent_and_outside_paths_are_denied() {
     let rig = rig();

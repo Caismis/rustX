@@ -20,8 +20,9 @@ use rustx_execution_protocol::{
     Admission, BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply,
     ClientRequest, ConnectionId, DecimalU64, EntryStamp, EnvironmentId, FileStamp, Generation,
     Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
-    MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, ReadError,
-    Reject, SessionId, is_normalized_absolute_path,
+    MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES, MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES,
+    MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, ReadError, Reject, SessionId,
+    is_normalized_absolute_path,
     transport::{Handshake, encode_record, read_record, write_record},
 };
 use sha2::{Digest, Sha256};
@@ -512,6 +513,30 @@ pub struct LinesPage {
     pub metadata: FileStamp,
 }
 
+/// A verified document page reply from the Client.
+///
+/// `source` stamps the physical document the page came from and
+/// `logical_bytes` is the full decoded Markdown length — independent of
+/// the compressed source's size. The page's shown text, line and byte
+/// accounting, and end reason passed the same complete-line contract a
+/// `Lines` reply answers to, so the reply's own claims are never trusted
+/// raw.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentPage {
+    /// The source-descriptor stamp of the document the page came from.
+    pub source: FileStamp,
+    /// The byte length of the complete decoded Markdown text.
+    pub logical_bytes: u64,
+    /// The shown text: the page's joined lines, bounded.
+    pub text: String,
+    /// The addressable line count of the whole decoded text.
+    pub total_lines: u64,
+    /// The shown element count of this page.
+    pub shown_lines: u32,
+    /// Why the page ended.
+    pub end: LineEnd,
+}
+
 impl LocalConnection {
     /// The admission the peer was sent.
     #[must_use]
@@ -983,83 +1008,144 @@ impl LocalConnection {
         {
             return Err(self.retire(violation("lines reply revision ignores expectation")));
         }
-        let total = total_lines.get();
-        let shown = u64::from(*shown_lines);
-        let shown_limit = u64::try_from(MAX_TEXT_LINES + 1).unwrap_or(u64::MAX);
-        let line_limit = u64::try_from(MAX_TEXT_LINES).unwrap_or(u64::MAX);
-        let byte_limit = u64::try_from(MAX_TEXT_BYTES).unwrap_or(u64::MAX);
         let size = metadata.size.get();
-        let text_bytes = u64::try_from(text.len()).unwrap_or(u64::MAX);
-        if total == 0
-            || shown > shown_limit
-            || shown > total
-            || text.len() > MAX_TEXT_BYTES
-            || total - 1 > size
-            || text_bytes > size
-        {
-            return Err(self.retire(violation("lines reply accounting is impossible")));
-        }
-        // The shown text is the shown elements joined by `\n`: `shown`
-        // zero is a diagnostic-only page that must carry no bytes, and a
-        // nonempty page must reproduce exactly `shown` split elements —
-        // every one of the `total - shown` unshown source delimiters must
-        // then fit inside the stamped size too.
-        if shown == 0 {
-            if !text.is_empty() {
-                return Err(self.retire(violation("lines reply shown count is inconsistent")));
-            }
-        } else {
-            if text.split('\n').count() as u64 != shown {
-                return Err(self.retire(violation("lines reply shown count is inconsistent")));
-            }
-            let minimal = text_bytes.saturating_add(total - shown);
-            if minimal > size {
-                return Err(self.retire(violation("lines reply contradicts the stamped size")));
-            }
-            // The `line_limit + 1` shape exists only for a page that
-            // retained the trailing empty element — text then ends in a
-            // newline and the page completed or hit its requested bound,
-            // never a budget stop.
-            if shown == shown_limit
-                && !(text.ends_with('\n')
-                    && matches!(end, LineEnd::Complete | LineEnd::RequestedLimit))
-            {
-                return Err(self.retire(violation("lines reply shown count is inconsistent")));
-            }
-        }
-        // `end` must agree with the request and the page's own numbers:
-        // `remaining` is the elements the offset can still address,
-        // `selected` what the window asked for — both derived without
-        // overflow. A budget stop must leave the window unconsumed.
-        let remaining = total.saturating_sub(offset.saturating_sub(1));
-        let selected = limit.unwrap_or(u64::MAX).min(remaining);
-        let valid_end = match end {
-            LineEnd::Complete => shown > 0 && shown == remaining && shown == selected,
-            LineEnd::RequestedLimit => shown > 0 && shown == selected && selected < remaining,
-            LineEnd::LineLimit => shown == line_limit && shown < selected,
-            LineEnd::ByteLimit => shown > 0 && shown <= line_limit && shown < selected,
-            LineEnd::FirstLineTooLarge { bytes } => {
-                shown == 0
-                    && remaining > 0
-                    && bytes.get() > byte_limit
-                    && bytes.get() <= size - (total - 1)
-            }
-            LineEnd::OffsetPastEnd => shown == 0 && remaining == 0,
-        };
-        if !valid_end {
-            return Err(self.retire(violation("lines reply end reason is inconsistent")));
-        }
-        // A complete page from the first line is the whole source: its
-        // joined text must reproduce the stamped size exactly.
-        if *end == LineEnd::Complete && offset == 1 && text_bytes != size {
-            return Err(self.retire(violation("lines reply contradicts the stamped size")));
+        if let Some(reason) = page_accounting_violation(
+            size,
+            text,
+            total_lines.get(),
+            *shown_lines,
+            end,
+            offset,
+            limit,
+        ) {
+            return Err(self.retire(violation(reason)));
         }
         Ok(LinesPage {
             text: text.clone(),
-            total_lines: total,
+            total_lines: total_lines.get(),
             shown_lines: *shown_lines,
             end: *end,
             metadata: metadata.clone(),
+        })
+    }
+
+    /// One bounded logical-text page of a whitelisted structured document
+    /// under the binding workspace — the Client decodes the source with
+    /// the shared rustX parser policy and serves the complete-line
+    /// projection of the decoded Markdown.
+    ///
+    /// The peer must have advertised [`Capability::DocumentPages`] at
+    /// admission or the call is [`io::ErrorKind::Unsupported`] and no
+    /// request is sent. `offset` is 1-based and `limit`, when given, must
+    /// be nonzero — both are enforced before anything crosses the wire.
+    /// The reply is trusted only after validation: `source` must pass
+    /// `stamp_violation`, stay within [`MAX_DOCUMENT_SOURCE_BYTES`], and a
+    /// supplied `expected_revision` must match; `logical_bytes` — the
+    /// decoded Markdown length, independent of the compressed source's
+    /// size — must stay within [`MAX_DOCUMENT_LOGICAL_BYTES`]; and the
+    /// page must pass the shared complete-line accounting every `Lines`
+    /// reply answers to. A violation retires the stream — it is never
+    /// reused with reply accounting that cannot be trusted. A typed
+    /// semantic refusal — an unsupported extension, an oversized source,
+    /// a parser rejection, or a missing text layer — is a distinct
+    /// [`ReadError`] that never retires a healthy connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
+    /// document capability, [`io::ErrorKind::InvalidInput`] for a zero
+    /// offset or limit, the [`ReadError`] the Client reported mapped onto
+    /// an I/O error kind, or [`io::ErrorKind::InvalidData`] for a
+    /// malformed or untruthful reply.
+    pub fn read_document(
+        &mut self,
+        relative_path: &Path,
+        offset: u64,
+        limit: Option<u64>,
+        expected_revision: Option<&str>,
+    ) -> io::Result<DocumentPage> {
+        if !self.capabilities.contains(&Capability::DocumentPages) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no document capability",
+            ));
+        }
+        if offset == 0 || limit == Some(0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "invalid document page request",
+            ));
+        }
+        let reply = self.exchange(&ClientRequest::ReadDocument {
+            relative_path: relative_path.to_path_buf(),
+            offset: DecimalU64::new(offset),
+            limit: limit.map(DecimalU64::new),
+            expected_revision: expected_revision.map(str::to_owned),
+        })?;
+        if let ClientReply::Error { kind } = reply {
+            return Err(read_error(kind));
+        }
+        self.validate_document(offset, limit, expected_revision, &reply)
+    }
+
+    /// Verifies a `DocumentPage` reply against the request, the source
+    /// and logical bounds, and the shared complete-line contract before
+    /// trusting it. Any deviation means the peer cannot account for its
+    /// answers honestly, so the connection is retired.
+    fn validate_document(
+        &mut self,
+        offset: u64,
+        limit: Option<u64>,
+        expected_revision: Option<&str>,
+        reply: &ClientReply,
+    ) -> io::Result<DocumentPage> {
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        let ClientReply::DocumentPage {
+            source,
+            logical_bytes,
+            text,
+            total_lines,
+            shown_lines,
+            end,
+        } = reply
+        else {
+            return Err(self.retire(violation("unexpected reply to document read")));
+        };
+        if let Some(reason) = stamp_violation(source) {
+            return Err(self.retire(violation(reason)));
+        }
+        if let Some(expected) = expected_revision
+            && source.revision != expected
+        {
+            return Err(self.retire(violation("document reply revision ignores expectation")));
+        }
+        // The reply's own bounds are wire policy: a source the Client
+        // could never have decoded and a projection larger than the
+        // decoder's own cap are both untruthful on their face.
+        let logical = logical_bytes.get();
+        if source.size.get() > MAX_DOCUMENT_SOURCE_BYTES as u64
+            || logical > MAX_DOCUMENT_LOGICAL_BYTES
+        {
+            return Err(self.retire(violation("document reply exceeds the document bounds")));
+        }
+        if let Some(reason) = page_accounting_violation(
+            logical,
+            text,
+            total_lines.get(),
+            *shown_lines,
+            end,
+            offset,
+            limit,
+        ) {
+            return Err(self.retire(violation(reason)));
+        }
+        Ok(DocumentPage {
+            source: source.clone(),
+            logical_bytes: logical,
+            text: text.clone(),
+            total_lines: total_lines.get(),
+            shown_lines: *shown_lines,
+            end: *end,
         })
     }
 
@@ -1277,6 +1363,93 @@ fn stamp_violation(stamp: &FileStamp) -> Option<&'static str> {
     None
 }
 
+/// The shared complete-line page accounting a `Lines` or `DocumentPage`
+/// reply answers to: the page's own numbers must be internally consistent
+/// and must agree with the request's `offset`/`limit` and the source's
+/// `logical_bytes` (the stamped source size for a `Lines` page, the
+/// decoded Markdown length for a `DocumentPage`). Returns the violation
+/// message — never `Ok` data — because an inconsistent reply means the
+/// peer cannot account for its answers honestly.
+fn page_accounting_violation(
+    logical_bytes: u64,
+    text: &str,
+    total: u64,
+    shown_lines: u32,
+    end: &LineEnd,
+    offset: u64,
+    limit: Option<u64>,
+) -> Option<&'static str> {
+    let shown = u64::from(shown_lines);
+    let shown_limit = u64::try_from(MAX_TEXT_LINES + 1).unwrap_or(u64::MAX);
+    let line_limit = u64::try_from(MAX_TEXT_LINES).unwrap_or(u64::MAX);
+    let byte_limit = u64::try_from(MAX_TEXT_BYTES).unwrap_or(u64::MAX);
+    let text_bytes = u64::try_from(text.len()).unwrap_or(u64::MAX);
+    if total == 0
+        || shown > shown_limit
+        || shown > total
+        || text.len() > MAX_TEXT_BYTES
+        || total - 1 > logical_bytes
+        || text_bytes > logical_bytes
+    {
+        return Some("lines reply accounting is impossible");
+    }
+    // The shown text is the shown elements joined by `\n`: `shown` zero
+    // is a diagnostic-only page that must carry no bytes, and a nonempty
+    // page must reproduce exactly `shown` split elements — every one of
+    // the `total - shown` unshown source delimiters must then fit inside
+    // the logical length too.
+    if shown == 0 {
+        if !text.is_empty() {
+            return Some("lines reply shown count is inconsistent");
+        }
+    } else {
+        if text.split('\n').count() as u64 != shown {
+            return Some("lines reply shown count is inconsistent");
+        }
+        let minimal = text_bytes.saturating_add(total - shown);
+        if minimal > logical_bytes {
+            return Some("lines reply contradicts the stamped size");
+        }
+        // The `line_limit + 1` shape exists only for a page that retained
+        // the trailing empty element — text then ends in a newline and
+        // the page completed or hit its requested bound, never a budget
+        // stop.
+        if shown == shown_limit
+            && !(text.ends_with('\n') && matches!(end, LineEnd::Complete | LineEnd::RequestedLimit))
+        {
+            return Some("lines reply shown count is inconsistent");
+        }
+    }
+    // `end` must agree with the request and the page's own numbers:
+    // `remaining` is the elements the offset can still address, `selected`
+    // what the window asked for — both derived without overflow. A budget
+    // stop must leave the window unconsumed.
+    let remaining = total.saturating_sub(offset.saturating_sub(1));
+    let selected = limit.unwrap_or(u64::MAX).min(remaining);
+    let valid_end = match end {
+        LineEnd::Complete => shown > 0 && shown == remaining && shown == selected,
+        LineEnd::RequestedLimit => shown > 0 && shown == selected && selected < remaining,
+        LineEnd::LineLimit => shown == line_limit && shown < selected,
+        LineEnd::ByteLimit => shown > 0 && shown <= line_limit && shown < selected,
+        LineEnd::FirstLineTooLarge { bytes } => {
+            shown == 0
+                && remaining > 0
+                && bytes.get() > byte_limit
+                && bytes.get() <= logical_bytes - (total - 1)
+        }
+        LineEnd::OffsetPastEnd => shown == 0 && remaining == 0,
+    };
+    if !valid_end {
+        return Some("lines reply end reason is inconsistent");
+    }
+    // A complete page from the first line is the whole logical source:
+    // its joined text must reproduce the logical length exactly.
+    if *end == LineEnd::Complete && offset == 1 && text_bytes != logical_bytes {
+        return Some("lines reply contradicts the stamped size");
+    }
+    None
+}
+
 /// Maps a stable [`ReadError`] wire code onto an I/O error kind. No raw
 /// path or payload crosses here — only the kind.
 fn read_error(kind: ReadError) -> io::Error {
@@ -1286,6 +1459,19 @@ fn read_error(kind: ReadError) -> io::Error {
         ReadError::NotFound => (io::ErrorKind::NotFound, "physical path not found"),
         ReadError::Conflict => (io::ErrorKind::AlreadyExists, "physical revision conflict"),
         ReadError::InvalidUtf8 => (io::ErrorKind::InvalidData, "physical source is not UTF-8"),
+        ReadError::UnsupportedDocument => (
+            io::ErrorKind::Unsupported,
+            "not a supported document source",
+        ),
+        ReadError::DocumentTooLarge => (
+            io::ErrorKind::FileTooLarge,
+            "document exceeds the source bound",
+        ),
+        ReadError::DocumentDecodeFailed => (io::ErrorKind::InvalidData, "document decode failed"),
+        ReadError::NoTextLayer => (
+            io::ErrorKind::InvalidData,
+            "document has no extractable text layer",
+        ),
         ReadError::Unavailable => (io::ErrorKind::Other, "physical operation unavailable"),
     };
     io::Error::new(error_kind, message)
@@ -3086,6 +3272,276 @@ mod tests {
             .read_lines(Path::new("file"), 1, None, None)
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    fn document_rig() -> (Binding, Hello) {
+        reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::DocumentPages,
+        ]))
+    }
+
+    /// A `DocumentPage` reply shape the validator must accept: a 512-byte
+    /// compressed source decoding to a six-byte `"a\nb\nc"` Markdown
+    /// whose logical length — not the source size — carries the page
+    /// accounting.
+    fn document_reply(
+        logical_bytes: u64,
+        text: &str,
+        shown_lines: u32,
+        total: u64,
+        end: LineEnd,
+    ) -> ClientReply {
+        ClientReply::DocumentPage {
+            source: lines_stamp(512, &"a".repeat(64)),
+            logical_bytes: DecimalU64::new(logical_bytes),
+            text: text.to_owned(),
+            total_lines: DecimalU64::new(total),
+            shown_lines,
+            end,
+        }
+    }
+
+    #[test]
+    fn a_peer_without_the_document_capability_gets_no_request() {
+        let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let error = connection
+            .read_document(Path::new("report.pdf"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        peer.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        assert!(read_record::<ClientRequest>(&mut peer).is_err());
+        peer.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_document_page_is_verified_against_the_request() {
+        let (binding, hello) = document_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let expected = "a".repeat(64);
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::ReadDocument {
+                relative_path,
+                offset,
+                limit,
+                expected_revision,
+            } = request
+            else {
+                panic!("expected a document request");
+            };
+            assert_eq!(relative_path, PathBuf::from("report.pdf"));
+            assert_eq!(offset.get(), 2);
+            assert_eq!(limit, Some(DecimalU64::new(1)));
+            assert_eq!(expected_revision.as_deref(), Some(expected.as_str()));
+            // The decoded text is longer than the page and independent
+            // of the compressed source's stamped size.
+            write_record(
+                &mut peer,
+                &document_reply(900, "b", 1, 3, LineEnd::RequestedLimit),
+            )
+            .unwrap();
+        });
+        let page = connection
+            .read_document(Path::new("report.pdf"), 2, Some(1), Some(&"a".repeat(64)))
+            .unwrap();
+        answer.join().unwrap();
+        assert_eq!(page.text, "b");
+        assert_eq!(page.total_lines, 3);
+        assert_eq!(page.shown_lines, 1);
+        assert_eq!(page.end, LineEnd::RequestedLimit);
+        assert_eq!(page.logical_bytes, 900);
+        assert_eq!(page.source.size.get(), 512);
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_wrong_document_reply_kind_retires_the_stream() {
+        let (binding, hello) = document_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // A `Lines` reply to a `ReadDocument` request is a protocol
+            // violation: the reply accounting cannot be trusted.
+            write_record(&mut peer, &lines_reply("a", 1, 1, LineEnd::Complete)).unwrap();
+        });
+        let error = connection
+            .read_document(Path::new("report.pdf"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_document_reply_with_a_conflicting_source_retires_the_stream() {
+        let (binding, hello) = document_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            write_record(
+                &mut peer,
+                &ClientReply::DocumentPage {
+                    source: lines_stamp(512, &"b".repeat(64)),
+                    logical_bytes: DecimalU64::new(1),
+                    text: String::from("a"),
+                    total_lines: DecimalU64::new(1),
+                    shown_lines: 1,
+                    end: LineEnd::Complete,
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .read_document(Path::new("report.pdf"), 1, None, Some(&"a".repeat(64)))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_document_reply_past_the_bounds_retires_the_stream() {
+        let (binding, hello) = document_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            // A source the Client could never have decoded and a
+            // projection beyond the decoder's own cap are both
+            // untruthful — one exchange each, then the peer drains.
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            write_record(
+                &mut peer,
+                &ClientReply::DocumentPage {
+                    source: lines_stamp(
+                        u64::try_from(MAX_DOCUMENT_SOURCE_BYTES + 1).unwrap(),
+                        &"a".repeat(64),
+                    ),
+                    logical_bytes: DecimalU64::new(1),
+                    text: String::from("a"),
+                    total_lines: DecimalU64::new(1),
+                    shown_lines: 1,
+                    end: LineEnd::Complete,
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .read_document(Path::new("report.pdf"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_document_reply_past_the_logical_bound_retires_the_stream() {
+        let (binding, hello) = document_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            write_record(
+                &mut peer,
+                &document_reply(MAX_DOCUMENT_LOGICAL_BYTES + 1, "a", 1, 1, LineEnd::Complete),
+            )
+            .unwrap();
+        });
+        let error = connection
+            .read_document(Path::new("report.pdf"), 1, None, None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_document_reply_shares_the_lines_accounting() {
+        let (binding, hello) = document_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            let _: ClientRequest = read_record(&mut peer).unwrap();
+            // `Complete` claims the window reached the end of the
+            // decoded text, but the request asked for one line and two
+            // arrived — the shared accounting catches it.
+            write_record(
+                &mut peer,
+                &document_reply(900, "a\nb", 2, 3, LineEnd::Complete),
+            )
+            .unwrap();
+        });
+        let error = connection
+            .read_document(Path::new("report.pdf"), 1, Some(1), None)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_document_semantic_error_keeps_the_connection_live() {
+        let (binding, hello) = document_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let answer = thread::spawn(move || {
+            for kind in [
+                ReadError::NoTextLayer,
+                ReadError::DocumentDecodeFailed,
+                ReadError::UnsupportedDocument,
+                ReadError::DocumentTooLarge,
+            ] {
+                let _: ClientRequest = read_record(&mut peer).unwrap();
+                write_record(&mut peer, &ClientReply::Error { kind }).unwrap();
+            }
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        // Every document refusal is a distinct stable kind — never
+        // conflated — and none retires a healthy connection.
+        assert_eq!(
+            connection
+                .read_document(Path::new("scanned.pdf"), 1, None, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            connection
+                .read_document(Path::new("broken.docx"), 1, None, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidData
+        );
+        assert_eq!(
+            connection
+                .read_document(Path::new("notes.md"), 1, None, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::Unsupported
+        );
+        assert_eq!(
+            connection
+                .read_document(Path::new("huge.xlsx"), 1, None, None)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::FileTooLarge
+        );
         connection.ping().unwrap();
         answer.join().unwrap();
         assert_eq!(binding.status().phase, BindingPhase::Live);
