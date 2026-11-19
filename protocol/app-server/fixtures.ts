@@ -1637,14 +1637,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -1669,14 +1669,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -1983,14 +1983,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -2015,14 +2015,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -2329,14 +2329,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -2361,14 +2361,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -2675,14 +2675,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -2707,14 +2707,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -3021,14 +3021,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -3053,14 +3053,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -3367,14 +3367,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -3399,14 +3399,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },
@@ -3713,14 +3713,14 @@ export const fixtures = [
           "builtin_tools": [
             {
               "name": "read",
-              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+              "description": "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath inside the Session's admitted Client workspace."
                   },
                   "offset": {
                     "type": "integer",
@@ -3745,14 +3745,14 @@ export const fixtures = [
             },
             {
               "name": "read_image",
-              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths use the host filesystem.",
+              "description": "Read a static PNG image and return the image itself. Maximum encoded size 256 KiB, dimension 4096 pixels, total pixels 4,194,304. Animated PNG and other formats are unsupported. Relative paths resolve from the execution cwd; absolute paths must stay within the Session's admitted Client workspace.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "PNG file path. Relative paths resolve from the execution cwd.",
+                    "description": "PNG file path. Relative paths resolve from the execution cwd; absolute\npaths must stay within the Session's admitted Client workspace.",
                     "minLength": 1
                   }
                 },

@@ -4774,11 +4774,15 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
 
 ## Native tools and Bash (M5)
 
-- Native Read/Write/Edit/Grep/Glob resolve relative model paths against the
+- Native Write/Edit/Grep/Glob resolve relative model paths against the
   authoritative execution cwd (`Workspace::root()`) and use absolute paths
   as ordinary host filesystem paths. Both forms are lexically normalized for
   `.` and `..` before filesystem behavior, without requiring intermediate
-  components to exist. They no longer impose workspace containment. Workspace remains the runtime/Bash cwd authority, while
+  components to exist. They no longer impose workspace containment. Native
+  Read and `read_image` share the lexical normalization but require the
+  result to stay inside the Session's admitted Client workspace — their
+  physical bytes cross the Execution Client boundary, and an unbound
+  Session answers `Session execution unavailable`. Workspace remains the runtime/Bash cwd authority, while
   `locator.rs` remains the runtime read resolver for advertised managed-output
   paths and unrelated runtime invariants; `ManagedToolOutput` owns the narrow
   model-mutation rejection for that namespace. Final-component symlinks are

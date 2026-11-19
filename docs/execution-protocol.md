@@ -754,8 +754,17 @@ envelope.
   `PAGE_REQUEST_TIMEOUT` deadline with biased cancellation before its
   synchronous exchange runs to settlement on a blocking worker; a
   `TimedOut` or malformed reply retires the connection, never a
-  partial accounting. A Session without an
-  admitted Client is an honest `Session execution unavailable` — the
+  partial accounting. The native `read_image` tool routes through the
+  same scope and the same bounded admission: its physical bytes are
+  assembled from at most four `ReadRange` exchanges on the one admitted
+  connection — the first chunk's stamp is pinned whole, every later
+  request names its revision, a stamped size over the 256 KiB artifact
+  transfer bound is an honest `FileTooLarge` refusal after one request,
+  and a typed `conflict` mid-fetch or a contradictory stamp can never
+  publish assembled bytes. PNG validity, the artifact commit, and the
+  model-facing image reference stay on the Agent side — the wire
+  carries only bytes, never a whole-image operation. A Session without
+  an admitted Client is an honest `Session execution unavailable` — the
   scope is never proof of admission and there is no Server-local
   filesystem branch behind it; standalone composition and launch-test
   composition bind no scope at all. The model-facing projection —

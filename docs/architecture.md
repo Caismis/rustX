@@ -2930,11 +2930,14 @@ read_image { path }                          static PNG, effective Image input r
 
 For Read, Write, Edit, Grep, and Glob, a relative model path is interpreted
 against and lexically normalized from the authoritative execution cwd
-(`Workspace::root()` in the current runtime); an absolute path is likewise
-lexically normalized as an ordinary host filesystem path. `.` and `..` are
+(`Workspace::root()` in the current runtime). `.` and `..` are
 resolved before filesystem existence or symlink behavior, so missing
-intermediate components cannot change path meaning. These five tools do not
-impose the locator workspace-containment policy. `Workspace` remains the
+intermediate components cannot change path meaning. Read — like `read_image` —
+then requires the interpreted path to stay inside the Session's admitted
+Client workspace, since its physical read crosses the Execution Client
+boundary; Write, Edit, Grep, and Glob use absolute paths as ordinary host
+filesystem paths and do not impose the locator workspace-containment
+policy. `Workspace` remains the
 runtime/Bash cwd authority. `tools/locator.rs` resolves runtime-advertised
 managed-output paths for reads, while `ManagedToolOutput` owns the narrow
 model-mutation rejection; neither is a hidden second policy for ordinary
@@ -7843,7 +7846,12 @@ current layer status.
   admission — one shared `MAX_DATA_RECORDS_PER_CONNECTION` budget with
   management queries, a single writer permit awaited on the async side
   under `PAGE_REQUEST_TIMEOUT` with biased cancellation, and the
-  synchronous exchange run to settlement on a blocking worker; a
+  synchronous exchange run to settlement on a blocking worker. The
+  native `read_image` tool routes through the same scope and admission:
+  its bytes are assembled from at most four pinned-stamp `ReadRange`
+  exchanges under the 256 KiB artifact transfer bound, with the PNG
+  constraint and the `with_active`-gated artifact commit kept on the
+  Agent side — there is no whole-image wire operation. A
   Session without an admitted Client —
   standalone or launch-test composition binds none — is an honest
   `Session execution unavailable`, never a Server-local filesystem

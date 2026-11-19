@@ -50,7 +50,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<ReadInput>(
         TOOL_ID,
         NAME,
-        "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
+        "Read a UTF-8 text file, or a supported PDF, DOCX, XLSX, or PPTX document, which is projected to deterministic Markdown text. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Start at the 1-based offset (default 1). An optional positive limit bounds the returned lines; otherwise Read returns a contiguous prefix of at most 2000 complete lines and 50KB. Use the continuation offset shown in the result to read more.",
         policy,
     )
 }
@@ -287,11 +287,15 @@ mod tests {
     }
 
     #[test]
-    fn description_states_the_ordinary_host_path_contract() {
+    fn description_states_the_admitted_workspace_contract() {
         let description = super::registration(ToolInvocationPolicy::default())
             .definition
             .description;
-        assert!(description.contains("absolute paths are used as host filesystem paths"));
+        assert!(
+            description.contains(
+                "absolute paths must stay within the Session's admitted Client workspace"
+            )
+        );
     }
 
     #[test]

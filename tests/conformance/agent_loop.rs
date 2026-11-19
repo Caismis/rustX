@@ -2438,6 +2438,7 @@ async fn image_tool_round_trip_and_text_model_switch() {
     };
     let mut setup = Setup::new(&format!("emulator-anthropic/{ANTHROPIC_MODEL}"));
     setup.images = true;
+    setup.execution = true;
     setup.keep_recent_tokens = 0;
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("read the image");
@@ -2763,6 +2764,7 @@ async fn image_coverage_driver(scenario: &str, model: &str) -> Option<(Driver, P
     let emulator = ProviderEmulator::start_with_workspace(scenario, Some(&workspace)).await?;
     let mut setup = Setup::new(model);
     setup.images = true;
+    setup.execution = true;
     if scenario == "image_coverage_overflow_retry" {
         setup.keep_recent_tokens = setup.context_window;
         setup.auxiliary = Some("emulator/summary-model".into());
@@ -2988,6 +2990,7 @@ async fn image_budget_continuation(scenario: &str, image_model: &str, text_model
     };
     let mut setup = Setup::new(image_model);
     setup.images = true;
+    setup.execution = true;
     let driver = Driver::start_in(root, &emulator, &setup).await;
     driver.submit("Read the same PNG seventeen times in parallel.");
     emulator.await_gate("image-budget-admitted").await;

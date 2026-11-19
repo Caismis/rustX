@@ -404,7 +404,7 @@ impl LocalExecutionEndpoint {
     /// [`io::ErrorKind::TimedOut`] when the deadline lapses, which
     /// retires the connection.
     #[allow(clippy::too_many_arguments)] // one admitted exchange's full context
-    pub fn read_page_admitted(
+    fn read_page_admitted(
         &self,
         path: &Path,
         offset: u64,
@@ -429,6 +429,34 @@ impl LocalExecutionEndpoint {
                     .map(project_lines)
                     .map(|(_metadata, page)| page)
             }
+        })
+    }
+
+    /// The bounded whole-file backing of [`SessionExecutionScope::image_bytes`]:
+    /// resolves the already-interpreted absolute `path` once through the
+    /// lexical workspace gate, then assembles the file from bounded
+    /// `ReadRange` exchanges under the same deadline, permits, and
+    /// per-request `with_active` cancellation grant as a page dispatch.
+    fn image_bytes_admitted(
+        &self,
+        path: &Path,
+        deadline: Instant,
+        data: OwnedSemaphorePermit,
+        _writer: OwnedSemaphorePermit,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<Vec<u8>> {
+        self.with_connection(Some(data), true, |connection| {
+            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            connection.read_image(
+                &relative,
+                crate::tools::artifacts::ARTIFACT_TRANSFER_MAX as u64,
+                deadline,
+                || {
+                    cancellation
+                        .with_active(|| ())
+                        .ok_or_else(cancelled_before_dispatch)
+                },
+            )
         })
     }
 
@@ -728,10 +756,122 @@ impl SessionExecutionScope {
         document: bool,
         cancellation: &ExecutionCancellation,
     ) -> io::Result<rustx_confined_fs::TextPage> {
-        let interrupted =
-            || io::Error::new(io::ErrorKind::Interrupted, "read cancelled before dispatch");
-        if cancellation.is_cancelled() {
-            return Err(interrupted());
+        let worker_path = path.to_path_buf();
+        self.dispatch_data(
+            cancellation,
+            move |endpoint, data, writer, deadline, worker_cancellation| {
+                #[cfg(test)]
+                let admit_path = worker_path.clone();
+                #[cfg(test)]
+                let sent_path = worker_path.clone();
+                #[cfg(test)]
+                let reply_path = worker_path.clone();
+                let admit_cancellation = worker_cancellation.clone();
+                let admit = move || {
+                    #[cfg(test)]
+                    crate::tools::native::read_hooks::record_admit(&admit_path);
+                    admit_cancellation
+                        .with_active(|| ())
+                        .ok_or_else(cancelled_before_dispatch)
+                };
+                let sent = move || {
+                    #[cfg(test)]
+                    crate::tools::native::read_hooks::record_sent(&sent_path);
+                };
+                let result = endpoint.read_page_admitted(
+                    &worker_path,
+                    offset,
+                    limit,
+                    document,
+                    deadline,
+                    data,
+                    writer,
+                    admit,
+                    sent,
+                );
+                #[cfg(test)]
+                if result.is_ok() {
+                    crate::tools::native::read_hooks::record_reply(&reply_path);
+                }
+                result
+            },
+        )
+        .await
+    }
+
+    /// The Session's bounded whole-file bytes for `path` — the physical
+    /// backing of native `read_image`, assembled from at most four
+    /// [`ReadRange`](rustx_execution_protocol::ClientRequest::ReadRange)
+    /// exchanges on the one admitted connection under the shared
+    /// [`ARTIFACT_TRANSFER_MAX`](crate::tools::artifacts::ARTIFACT_TRANSFER_MAX)
+    /// budget. The stamp, size, and contradiction policy are the
+    /// connection's [`LocalConnection::read_image`] contract; PNG
+    /// validity itself stays an Agent-side concern — the wire carries
+    /// only bytes.
+    ///
+    /// # Errors
+    ///
+    /// The [`dispatch_data`](Self::dispatch_data) kinds plus the
+    /// connection's own: `FileTooLarge` for a source over the bound,
+    /// typed `Stale`/`denied`/`not-found` refusals, and a retired
+    /// `InvalidData` for a contradictory peer.
+    pub(crate) async fn image_bytes(
+        &self,
+        path: &Path,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<Vec<u8>> {
+        let worker_path = path.to_path_buf();
+        self.dispatch_data(
+            cancellation,
+            move |endpoint, data, writer, deadline, worker_cancellation| {
+                endpoint.image_bytes_admitted(
+                    &worker_path,
+                    deadline,
+                    data,
+                    writer,
+                    &worker_cancellation,
+                )
+            },
+        )
+        .await
+    }
+
+    /// One admitted data dispatch's shared admission: the endpoint's
+    /// non-owning resolution, the bounded data budget, and the single
+    /// writer permit awaited on the async side under one absolute
+    /// [`PAGE_REQUEST_TIMEOUT`] deadline with biased cancellation — the
+    /// wait holds no blocking-pool thread. The synchronous `work` runs
+    /// on the blocking pool with both permits retained through
+    /// settlement; cancellation is linearized by `with_active` inside
+    /// `work`'s per-request admit gates — after the request is encoded
+    /// and the binding's live check passes, before the first request
+    /// byte — and by the biased race afterwards: a cancelled
+    /// post-dispatch exchange is still awaited to wire settlement (or
+    /// the deadline) so the reply accounting is never abandoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotConnected` when the Session has no live endpoint,
+    /// `WouldBlock` while the shared data budget is full,
+    /// `io::ErrorKind::Interrupted` when cancellation wins any cut,
+    /// `io::ErrorKind::TimedOut` when the absolute deadline lapses, and
+    /// whatever `work` returns — including the endpoint's gating and
+    /// typed-exchange errors.
+    async fn dispatch_data<T: Send + 'static>(
+        &self,
+        cancel: &ExecutionCancellation,
+        work: impl FnOnce(
+            Arc<LocalExecutionEndpoint>,
+            OwnedSemaphorePermit,
+            OwnedSemaphorePermit,
+            Instant,
+            ExecutionCancellation,
+        ) -> io::Result<T>
+        + Send
+        + 'static,
+    ) -> io::Result<T> {
+        if cancel.is_cancelled() {
+            return Err(cancelled_before_dispatch());
         }
         let endpoint = self.endpoint()?;
         let data = endpoint
@@ -747,7 +887,7 @@ impl SessionExecutionScope {
         // honest timeout, not a release.
         let writer = tokio::select! {
             biased;
-            () = cancellation.cancelled() => return Err(interrupted()),
+            () = cancel.cancelled() => return Err(cancelled_before_dispatch()),
             permit = tokio::time::timeout_at(
                 tokio::time::Instant::from_std(deadline),
                 endpoint.agent_writer.clone().acquire_owned(),
@@ -762,18 +902,11 @@ impl SessionExecutionScope {
                     .map_err(|_| io::Error::other("execution writer queue is closed"))?
             }
         };
-        let worker_path = path.to_path_buf();
-        #[cfg(test)]
-        let admit_path = worker_path.clone();
-        #[cfg(test)]
-        let sent_path = worker_path.clone();
-        #[cfg(test)]
-        let reply_path = worker_path.clone();
-        let worker_cancellation = cancellation.clone();
+        let worker_cancellation = cancel.clone();
         let mut exchange = tokio::task::spawn_blocking(move || {
             if Instant::now() >= deadline || worker_cancellation.is_cancelled() {
                 return Err(if worker_cancellation.is_cancelled() {
-                    interrupted()
+                    cancelled_before_dispatch()
                 } else {
                     io::Error::new(
                         io::ErrorKind::TimedOut,
@@ -781,40 +914,13 @@ impl SessionExecutionScope {
                     )
                 });
             }
-            let admit_cancellation = worker_cancellation.clone();
-            let admit = move || {
-                #[cfg(test)]
-                crate::tools::native::read_hooks::record_admit(&admit_path);
-                admit_cancellation
-                    .with_active(|| ())
-                    .ok_or_else(interrupted)
-            };
-            let sent = move || {
-                #[cfg(test)]
-                crate::tools::native::read_hooks::record_sent(&sent_path);
-            };
-            let result = endpoint.read_page_admitted(
-                &worker_path,
-                offset,
-                limit,
-                document,
-                deadline,
-                data,
-                writer,
-                admit,
-                sent,
-            );
-            #[cfg(test)]
-            if result.is_ok() {
-                crate::tools::native::read_hooks::record_reply(&reply_path);
-            }
-            result
+            work(endpoint, data, writer, deadline, worker_cancellation)
         });
         let settled = tokio::select! {
             biased;
             // The cancellation authority wins the race, including ties
             // with an exchange that completed in the same wakeup.
-            () = cancellation.cancelled() => None,
+            () = cancel.cancelled() => None,
             joined = &mut exchange => Some(joined),
         };
         let Some(joined) = settled else {
@@ -822,7 +928,7 @@ impl SessionExecutionScope {
             // blocking task — its reply and its deadline — is awaited to
             // physical settlement before the cancelled result returns.
             let _ = exchange.await;
-            return Err(interrupted());
+            return Err(cancelled_before_dispatch());
         };
         match joined {
             Ok(result) => result,
@@ -831,6 +937,12 @@ impl SessionExecutionScope {
             ))),
         }
     }
+}
+
+/// The admission-time cancellation error every Agent data dispatch maps
+/// to the tool's cancelled result.
+fn cancelled_before_dispatch() -> io::Error {
+    io::Error::new(io::ErrorKind::Interrupted, "read cancelled before dispatch")
 }
 
 impl std::fmt::Debug for SessionExecutionScope {
@@ -1164,7 +1276,7 @@ mod tests {
     use rustx_execution_protocol::transport::{read_record, write_record};
     use rustx_execution_protocol::{
         Bootstrap, ClientReply, ClientRequest, DecimalU64, FileStamp, Hello, HelloReply,
-        PROTOCOL_VERSION,
+        MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError,
     };
     use rustx_execution_server::BindingPhase;
 
@@ -1781,14 +1893,17 @@ mod tests {
     }
 
     /// One registry-claimed, published endpoint with a scripted peer
-    /// admitted under the `ReadLines` capability: the claim registry,
-    /// the Session it names, the endpoint, the peer socket, and the
+    /// admitted under `capabilities`: the claim registry, the Session it
+    /// names, the endpoint, the peer socket, the workspace root, and the
     /// workspace directory kept alive.
-    fn admitted_lines_endpoint() -> (
+    fn admitted_endpoint(
+        capabilities: BTreeSet<Capability>,
+    ) -> (
         Arc<SessionExecutionRegistry>,
         SessionId,
         Arc<LocalExecutionEndpoint>,
         UnixStream,
+        PathBuf,
         tempfile::TempDir,
     ) {
         let registry = Arc::new(SessionExecutionRegistry::default());
@@ -1805,7 +1920,7 @@ mod tests {
             instance: published.instance.clone(),
             generation: published.generation,
             workspace: published.workspace.clone(),
-            capabilities: BTreeSet::from([Capability::Connection, Capability::ReadLines]),
+            capabilities,
             credential: published.credential.clone(),
         };
         let (accepted, _) = endpoint.listener().accept().unwrap();
@@ -1818,7 +1933,35 @@ mod tests {
             read_record::<HelloReply>(&mut client).unwrap(),
             HelloReply::Ok(_)
         ));
-        (registry, session, endpoint, client, dir)
+        (registry, session, endpoint, client, workspace, dir)
+    }
+
+    fn admitted_lines_endpoint() -> (
+        Arc<SessionExecutionRegistry>,
+        SessionId,
+        Arc<LocalExecutionEndpoint>,
+        UnixStream,
+        PathBuf,
+        tempfile::TempDir,
+    ) {
+        admitted_endpoint(BTreeSet::from([
+            Capability::Connection,
+            Capability::ReadLines,
+        ]))
+    }
+
+    fn admitted_ranges_endpoint() -> (
+        Arc<SessionExecutionRegistry>,
+        SessionId,
+        Arc<LocalExecutionEndpoint>,
+        UnixStream,
+        PathBuf,
+        tempfile::TempDir,
+    ) {
+        admitted_endpoint(BTreeSet::from([
+            Capability::Connection,
+            Capability::ReadRange,
+        ]))
     }
 
     /// An independently-created scope over `registry` for `session` —
@@ -1886,7 +2029,7 @@ mod tests {
     /// cross-accounting between queued dispatches.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn agent_page_dispatches_share_one_bounded_writer_budget() {
-        let (registry, session, endpoint, mut client, _dir) = admitted_lines_endpoint();
+        let (registry, session, endpoint, mut client, _workspace, _dir) = admitted_lines_endpoint();
         // The parked peer: each request's path is reported, the reply is
         // held until the test releases it — so exactly one dispatch is
         // on the wire while the rest wait.
@@ -2003,7 +2146,8 @@ mod tests {
     /// next dispatch normally — a refused admission never retires.
     #[test]
     fn a_refused_page_admission_writes_no_frame_and_keeps_the_connection() {
-        let (_registry, _session, endpoint, mut client, _dir) = admitted_lines_endpoint();
+        let (_registry, _session, endpoint, mut client, _workspace, _dir) =
+            admitted_lines_endpoint();
         let data = endpoint.data_slots.clone().try_acquire_owned().unwrap();
         let writer = endpoint.agent_writer.clone().try_acquire_owned().unwrap();
         let refused = io::Error::new(io::ErrorKind::Interrupted, "read cancelled before dispatch");
@@ -2041,7 +2185,8 @@ mod tests {
     /// accounting can never be trusted.
     #[test]
     fn an_expired_page_deadline_times_out_and_retires_the_connection() {
-        let (_registry, _session, endpoint, mut client, _dir) = admitted_lines_endpoint();
+        let (_registry, _session, endpoint, mut client, _workspace, _dir) =
+            admitted_lines_endpoint();
         let data = endpoint.data_slots.clone().try_acquire_owned().unwrap();
         let writer = endpoint.agent_writer.clone().try_acquire_owned().unwrap();
         let error = endpoint
@@ -2064,6 +2209,224 @@ mod tests {
             endpoint.binding().status().phase,
             BindingPhase::Detached
         ));
+        wire_is_closed(&mut client);
+    }
+
+    /// A detached caller token for Agent data dispatches.
+    fn detached_cancellation() -> ExecutionCancellation {
+        ExecutionCancellation::detached(
+            crate::runtime::CancellationSignal::new(),
+            crate::runtime::types::CancellationReason::UserRequested,
+        )
+    }
+
+    /// A checked `Range` reply: `bytes` at `offset`, `next_offset`
+    /// continuing the file, stamped `size`/`revision`/`identity`.
+    fn range_reply(
+        offset: u64,
+        bytes: &[u8],
+        next_offset: Option<u64>,
+        size: u64,
+        revision: &str,
+        identity: &str,
+    ) -> ClientReply {
+        use base64::Engine;
+        ClientReply::Range {
+            data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            offset: DecimalU64::new(offset),
+            next_offset: next_offset.map(DecimalU64::new),
+            metadata: FileStamp {
+                size: DecimalU64::new(size),
+                revision: revision.to_owned(),
+                identity: identity.to_owned(),
+                modified_at_ms: None,
+            },
+        }
+    }
+
+    /// A scripted peer for one `ReadRange` request answered by `reply`,
+    /// returned for assertion.
+    fn answer_range_reply(
+        mut client: UnixStream,
+        reply: &ClientReply,
+    ) -> (UnixStream, ClientRequest) {
+        let request: ClientRequest = read_record(&mut client).unwrap();
+        let ClientRequest::ReadRange { .. } = request else {
+            panic!("expected a range request");
+        };
+        write_record(&mut client, reply).unwrap();
+        (client, request)
+    }
+
+    /// A source whose stamped size exceeds the artifact transfer bound
+    /// is refused after exactly one `ReadRange` — `FileTooLarge`, no
+    /// follow-up request, and the honest refusal never retires the
+    /// connection: the next dispatch is served normally.
+    #[tokio::test]
+    async fn an_oversized_image_source_reads_one_range_and_stays_live() {
+        let (registry, session, endpoint, mut client, workspace, _dir) = admitted_ranges_endpoint();
+        let oversized = crate::tools::artifacts::ARTIFACT_TRANSFER_MAX as u64 + 1;
+        let peer = std::thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut client).unwrap();
+            let ClientRequest::ReadRange {
+                relative_path,
+                offset,
+                max_bytes,
+                expected_revision,
+            } = request
+            else {
+                panic!("expected a range request");
+            };
+            assert_eq!(relative_path, Path::new("image.png"));
+            assert_eq!(offset, DecimalU64::new(0));
+            assert_eq!(usize::try_from(max_bytes), Ok(MAX_RAW_CHUNK_BYTES));
+            assert!(expected_revision.is_none());
+            write_record(
+                &mut client,
+                &range_reply(
+                    0,
+                    &vec![0xAB; MAX_RAW_CHUNK_BYTES],
+                    Some(MAX_RAW_CHUNK_BYTES as u64),
+                    oversized,
+                    "a".repeat(64).as_str(),
+                    "1:1",
+                ),
+            )
+            .unwrap();
+            client
+        });
+        let error = scope_for(&registry, &session)
+            .image_bytes(&workspace.join("image.png"), &detached_cancellation())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::FileTooLarge, "{error}");
+        let mut client = peer.join().unwrap();
+        wire_is_quiet(&mut client);
+
+        // The honest oversize refusal kept the connection live.
+        let answer = std::thread::spawn(move || {
+            answer_range_reply(
+                client,
+                &range_reply(0, b"x", None, 1, "a".repeat(64).as_str(), "1:1"),
+            )
+        });
+        let range = endpoint
+            .read_range(&workspace.join("image.png"), 0, 64, None)
+            .unwrap();
+        assert_eq!(range.bytes, b"x");
+        let (mut client, _) = answer.join().unwrap();
+        wire_is_quiet(&mut client);
+    }
+
+    /// A file replaced between chunks surfaces as the peer's typed
+    /// `conflict` — an honest refusal that never publishes assembled
+    /// bytes and never retires the connection.
+    #[tokio::test]
+    async fn a_replacement_between_image_chunks_is_an_honest_conflict() {
+        let (registry, session, endpoint, client, workspace, _dir) = admitted_ranges_endpoint();
+        let revision = "a".repeat(64);
+        let peer = std::thread::spawn(move || {
+            let (client, _) = answer_range_reply(
+                client,
+                &range_reply(
+                    0,
+                    &vec![0xAB; MAX_RAW_CHUNK_BYTES],
+                    Some(MAX_RAW_CHUNK_BYTES as u64),
+                    (MAX_RAW_CHUNK_BYTES * 2) as u64,
+                    &revision,
+                    "1:1",
+                ),
+            );
+            let mut client = client;
+            let request: ClientRequest = read_record(&mut client).unwrap();
+            let ClientRequest::ReadRange {
+                offset,
+                expected_revision,
+                ..
+            } = request
+            else {
+                panic!("expected the follow-up range request");
+            };
+            assert_eq!(offset, DecimalU64::new(MAX_RAW_CHUNK_BYTES as u64));
+            assert_eq!(expected_revision.as_deref(), Some(revision.as_str()));
+            write_record(
+                &mut client,
+                &ClientReply::Error {
+                    kind: ReadError::Conflict,
+                },
+            )
+            .unwrap();
+            client
+        });
+        let error = scope_for(&registry, &session)
+            .image_bytes(&workspace.join("image.png"), &detached_cancellation())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists, "{error}");
+        let mut client = peer.join().unwrap();
+        wire_is_quiet(&mut client);
+
+        // A typed refusal stays live: the next dispatch is served.
+        let answer = std::thread::spawn(move || {
+            answer_range_reply(
+                client,
+                &range_reply(0, b"y", None, 1, "b".repeat(64).as_str(), "2:2"),
+            )
+        });
+        assert_eq!(
+            endpoint
+                .read_range(&workspace.join("image.png"), 0, 64, None)
+                .unwrap()
+                .bytes,
+            b"y"
+        );
+        let (mut client, _) = answer.join().unwrap();
+        wire_is_quiet(&mut client);
+    }
+
+    /// A reply stamped differently than the pinned first chunk — same
+    /// revision, another identity — is a peer that cannot account for
+    /// its bytes: the assembled image is never returned and the
+    /// connection retires.
+    #[tokio::test]
+    async fn a_stamped_mismatch_between_image_chunks_retires_the_connection() {
+        let (registry, session, endpoint, client, workspace, _dir) = admitted_ranges_endpoint();
+        let revision = "a".repeat(64);
+        let peer = std::thread::spawn(move || {
+            let (client, _) = answer_range_reply(
+                client,
+                &range_reply(
+                    0,
+                    &vec![0xAB; MAX_RAW_CHUNK_BYTES],
+                    Some(MAX_RAW_CHUNK_BYTES as u64),
+                    (MAX_RAW_CHUNK_BYTES * 2) as u64,
+                    &revision,
+                    "1:1",
+                ),
+            );
+            let (client, _) = answer_range_reply(
+                client,
+                &range_reply(
+                    MAX_RAW_CHUNK_BYTES as u64,
+                    &vec![0xCD; MAX_RAW_CHUNK_BYTES],
+                    None,
+                    (MAX_RAW_CHUNK_BYTES * 2) as u64,
+                    &revision,
+                    "2:2",
+                ),
+            );
+            client
+        });
+        let error = scope_for(&registry, &session)
+            .image_bytes(&workspace.join("image.png"), &detached_cancellation())
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData, "{error}");
+        assert!(matches!(
+            endpoint.binding().status().phase,
+            BindingPhase::Detached
+        ));
+        let mut client = peer.join().unwrap();
         wire_is_closed(&mut client);
     }
 }

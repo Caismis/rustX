@@ -679,6 +679,40 @@ impl LocalConnection {
         max_bytes: u32,
         expected_revision: Option<&str>,
     ) -> io::Result<RangeRead> {
+        self.read_range_admitted(
+            relative_path,
+            offset,
+            max_bytes,
+            expected_revision,
+            Instant::now() + PAGE_REQUEST_TIMEOUT,
+            || Ok(()),
+            || (),
+        )
+    }
+
+    /// `read_range` against a caller-armed absolute deadline and
+    /// acceptance gate, under the same contract as
+    /// [`read_lines_admitted`](Self::read_lines_admitted): one wire
+    /// budget, an admission refusal that returns before any request byte
+    /// without retiring, and a `sent` observation between the written
+    /// frame and the reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same kinds as [`read_range`](Self::read_range), plus
+    /// the `admit` error verbatim and [`io::ErrorKind::TimedOut`] when
+    /// the deadline lapses mid-exchange — which retires the connection.
+    #[allow(clippy::too_many_arguments)] // one admitted exchange's full context
+    pub fn read_range_admitted(
+        &mut self,
+        relative_path: &Path,
+        offset: u64,
+        max_bytes: u32,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+        sent: impl FnOnce(),
+    ) -> io::Result<RangeRead> {
         if !self.capabilities.contains(&Capability::ReadRange) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -692,16 +726,92 @@ impl LocalConnection {
                 "range read exceeds chunk limit",
             ));
         }
-        let reply = self.exchange(&ClientRequest::ReadRange {
-            relative_path: relative_path.to_path_buf(),
-            offset: DecimalU64::new(offset),
-            max_bytes,
-            expected_revision: expected_revision.map(str::to_owned),
-        })?;
+        let reply = self.exchange_admitted(
+            &ClientRequest::ReadRange {
+                relative_path: relative_path.to_path_buf(),
+                offset: DecimalU64::new(offset),
+                max_bytes,
+                expected_revision: expected_revision.map(str::to_owned),
+            },
+            Some(deadline),
+            admit,
+            sent,
+        )?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
         self.validate_range(offset, bound, expected_revision, &reply)
+    }
+
+    /// One bounded whole-file fetch assembled from `ReadRange` chunks on
+    /// this connection — the physical backing of the Agent's image
+    /// transfer. `admit` is the caller's acceptance gate run after each
+    /// request is encoded and the binding's live check passes, before
+    /// that request's first byte; every chunk shares the one absolute
+    /// `deadline`.
+    ///
+    /// The first chunk's stamp is pinned whole — `size`, `identity`,
+    /// `revision`, `mtime` — and its `size` must not exceed `bound`
+    /// before a single follow-up request is issued: an oversized source
+    /// is an honest [`io::ErrorKind::FileTooLarge`] refusal that never
+    /// retires the connection, exactly like a typed `Stale` or
+    /// `conflict` from the peer. Every later request names the pinned
+    /// revision; a reply stamped differently — or assembled bytes whose
+    /// total contradicts the pinned size — means the peer cannot
+    /// account for its answers, which retires the stream. At most
+    /// `ceil(bound / MAX_RAW_CHUNK_BYTES)` requests are ever made for
+    /// one call; there are no retries.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same kinds as [`read_range`], plus
+    /// [`io::ErrorKind::FileTooLarge`] for a source larger than `bound`
+    /// and the `admit` error verbatim.
+    pub fn read_image(
+        &mut self,
+        relative_path: &Path,
+        bound: u64,
+        deadline: Instant,
+        admit: impl Fn() -> io::Result<()>,
+    ) -> io::Result<Vec<u8>> {
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        let limit = usize::try_from(bound).unwrap_or(usize::MAX);
+        let chunk_bound = u32::try_from(MAX_RAW_CHUNK_BYTES).unwrap_or(u32::MAX);
+        let first =
+            self.read_range_admitted(relative_path, 0, chunk_bound, None, deadline, &admit, || ())?;
+        let stamp = first.metadata;
+        let size = stamp.size.get();
+        if size > bound {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                "image source exceeds the transfer bound",
+            ));
+        }
+        let mut bytes = first.bytes;
+        let mut next = first.next_offset;
+        while let Some(offset) = next {
+            let chunk = self.read_range_admitted(
+                relative_path,
+                offset,
+                chunk_bound,
+                Some(&stamp.revision),
+                deadline,
+                &admit,
+                || (),
+            )?;
+            if chunk.metadata != stamp {
+                return Err(self.retire(violation("image source stamp changed between chunks")));
+            }
+            if bytes.len() + chunk.bytes.len() > limit {
+                return Err(self.retire(violation("image chunks exceed the stamped bound")));
+            }
+            bytes.extend_from_slice(&chunk.bytes);
+            next = chunk.next_offset;
+        }
+        if bytes.len() as u64 != size {
+            return Err(self.retire(violation("image chunks contradict the stamped size")));
+        }
+        Ok(bytes)
     }
 
     /// Verifies a `Range` reply against the request before trusting it. Any
