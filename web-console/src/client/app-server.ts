@@ -534,7 +534,8 @@ export class AppServerClient {
       views: Object.fromEntries(Object.entries(this.state.views).map(([id, view]) => [id, {
         ...view,threadStatus:undefined,summary:view.summary&&{...view.summary,thread_status:undefined},modelIntent:undefined,history:view.history,
         preview: view.preview?.history.loading ? { ...view.preview, history: { ...view.preview.history, loading: false, initialLoading: false } } : view.preview,
-        tracePreview: view.tracePreview ? { ...view.tracePreview, cache: { ...view.tracePreview.cache, loading: false, details: Object.fromEntries(Object.entries(view.tracePreview.cache.details).filter(([, detail]) => !detail.loading)) } } : undefined,
+        // Cold detail readers and field reads close over the retired scope; page, epoch and selection survive for explicit reacquisition.
+        tracePreview: view.tracePreview ? { ...view.tracePreview, cache: { ...view.tracePreview.cache, loading: false, fields: undefined, details: {} } } : undefined,
         turnOutline: undefined, turnNavigation: undefined, submissions: undefined, sendingSubmissions: undefined, inboundRequests: undefined,
       }])),
     });

@@ -124,8 +124,9 @@ retransmits an uncertain mutation.
 
 Explicit queue entries may lie between steering entries. Adoption removes only
 selected native rows, and projection updates remove exact message IDs rather than
-an entire sequence prefix. Native transcript positions and acceptance correlations
-survive adoption. Queue edits/removals use existing pending-item CAS.
+an entire sequence prefix. Acceptance fixes durable message identity, inbound
+sequence, and correlation. Adoption assigns canonical transcript positions in
+actual adoption order. Queue edits/removals use existing pending-item CAS.
 
 The App Server callback broker owns only ephemeral transport correlation. Its
 server incarnation and monotonic counter identify pending requests. Capacity is

@@ -964,6 +964,10 @@ struct BackgroundRegistryState {
     publication_hook: Option<Arc<test_sync::CommitBoundaryHook>>,
     #[cfg(test)]
     ownership_wait: Option<Arc<Notify>>,
+    /// Test-only asynchronous gate at the runner's first executor-poll
+    /// authority arbitration; never present outside `#[cfg(test)]`.
+    #[cfg(test)]
+    first_poll_hook: Option<Arc<test_sync::FirstPollGate>>,
 }
 
 /// The conversation-owned authoritative background registry.
@@ -1033,6 +1037,8 @@ impl ConversationBackgroundRegistry {
                 publication_hook: None,
                 #[cfg(test)]
                 ownership_wait: None,
+                #[cfg(test)]
+                first_poll_hook: None,
             })),
             resources,
             state_version,
@@ -1061,6 +1067,14 @@ impl ConversationBackgroundRegistry {
     #[cfg(test)]
     pub(crate) fn install_publication_hook(&self, hook: Arc<test_sync::CommitBoundaryHook>) {
         self.state().publication_hook = Some(hook);
+    }
+
+    /// Installs the test-only asynchronous gate at the runner's first
+    /// executor-poll authority arbitration. Only available under
+    /// `#[cfg(test)]`; never used by production code.
+    #[cfg(test)]
+    pub(crate) fn install_first_poll_hook(&self, hook: Arc<test_sync::FirstPollGate>) {
+        self.state().first_poll_hook = Some(hook);
     }
 
     /// Installs the durability-failure sink of the owning conversation
@@ -2787,6 +2801,17 @@ impl ConversationBackgroundRegistry {
                 .prepared
                 .get(&execution_id)
                 .and_then(|prepared| prepared.private_owner.clone());
+            #[cfg(test)]
+            let first_poll_hook = registry.state().first_poll_hook.clone();
+            // TEST-ONLY first-poll boundary: the cached owner is already
+            // acquired and the first executor poll is the next executor
+            // contact — exactly where a stale authority used to retire an
+            // already-adopted operation. The gate is awaited, so no OS
+            // worker ever parks here.
+            #[cfg(test)]
+            if let Some(gate) = &first_poll_hook {
+                gate.enter().await;
+            }
             registry.mark_running(&execution_id);
             let reporter = BackgroundProgressReporter {
                 registry: registry.clone(),
@@ -2845,9 +2870,45 @@ impl ConversationBackgroundRegistry {
                         owner
                             .with_active(|| completion.as_mut().poll(cx))
                             .unwrap_or_else(|| {
-                                std::task::Poll::Ready(
-                                    crate::tools::native::support::cancelled_result(owner.reason()),
-                                )
+                                // A refused grant is absorbing — the attempt
+                                // stays cancelled — so the second cut reads
+                                // the durable-ownership authority under the
+                                // same registry mutex the ownership commit
+                                // holds across its own deciding
+                                // attempt-cancellation check and the
+                                // prepared -> owned transfer:
+                                // - A commit that observes the
+                                //   already-cancelled attempt rolls back and
+                                //   never inserts `index`; the refused grant
+                                //   proves cancellation is already
+                                //   observable, so no commit that decides
+                                //   after this read can transfer either.
+                                // - A commit that passed that check before
+                                //   the cancellation keeps the registry lock
+                                //   through `index` insertion and finishes
+                                //   deciding before this read can start.
+                                // `index` membership is therefore the exact
+                                // transfer evidence: present means the
+                                // conversation-owned Job's own cancellation
+                                // authority governs this as-yet-unstarted
+                                // operation — the retired attempt's
+                                // cancellation is the expected
+                                // post-promotion teardown, not Job evidence —
+                                // while absent means the stage is still
+                                // private or already rolled back and the
+                                // refused attempt grant retires it. The
+                                // executor poll itself runs after the guard
+                                // drops, outside the registry mutex.
+                                let committed = registry.state().index.contains_key(&execution_id);
+                                if committed {
+                                    completion.as_mut().poll(cx)
+                                } else {
+                                    std::task::Poll::Ready(
+                                        crate::tools::native::support::cancelled_result(
+                                            owner.reason(),
+                                        ),
+                                    )
+                                }
                             })
                     } else {
                         completion.as_mut().poll(cx)
@@ -3318,11 +3379,16 @@ impl ProgressReporter for BackgroundProgressReporter {
 ///
 /// All synchronization is `std` (mutex + condvar) because the commit
 /// boundary is a `std` mutex critical section; the parking blocks the OS
-/// thread, so the race tests run on a multi-threaded runtime. This module
-/// exists only under `#[cfg(test)]`.
+/// thread, so the race tests run on a multi-threaded runtime. The runner's
+/// first-poll boundary is the exception: it lives inside an async task,
+/// so [`FirstPollGate`] parks purely through `await` and never blocks an
+/// OS worker — a failed assertion cannot hang the test runtime. This
+/// module exists only under `#[cfg(test)]`.
 #[cfg(test)]
 pub(crate) mod test_sync {
     use std::sync::{Condvar, Mutex};
+
+    use tokio::sync::watch;
 
     /// The two-phase gate of the commit boundary.
     #[derive(Debug, Default)]
@@ -3365,6 +3431,58 @@ pub(crate) mod test_sync {
             self.condvar.notify_all();
         }
     }
+
+    /// A one-use async (entered, resume) gate of the runner's first-poll
+    /// boundary.
+    ///
+    /// [`FirstPollGate::enter`] is called by the spawned runner after it
+    /// acquired the cached foreground owner and before its first executor
+    /// poll; it publishes `entered` and then asynchronously parks until the
+    /// test calls [`FirstPollGate::resume`]. Both directions are awaited, so
+    /// no synchronous `Condvar` and no `spawn_blocking` waiter ever holds an
+    /// OS thread: a regression or a failed assertion unwinds instead of
+    /// hanging the test runtime.
+    #[derive(Debug)]
+    pub(crate) struct FirstPollGate {
+        entered: watch::Sender<bool>,
+        resume: watch::Sender<bool>,
+    }
+
+    impl Default for FirstPollGate {
+        fn default() -> Self {
+            Self {
+                entered: watch::channel(false).0,
+                resume: watch::channel(false).0,
+            }
+        }
+    }
+
+    impl FirstPollGate {
+        /// Publishes `entered`, then asynchronously parks until
+        /// [`FirstPollGate::resume`].
+        pub(crate) async fn enter(&self) {
+            self.entered.send_replace(true);
+            self.resume
+                .subscribe()
+                .wait_for(|resume| *resume)
+                .await
+                .expect("the first-poll gate outlives its parked runner");
+        }
+
+        /// Asynchronously waits until the runner reached the boundary.
+        pub(crate) async fn wait_entered(&self) {
+            self.entered
+                .subscribe()
+                .wait_for(|entered| *entered)
+                .await
+                .expect("the first-poll gate outlives its parked runner");
+        }
+
+        /// Releases the parked runner.
+        pub(crate) fn resume(&self) {
+            self.resume.send_replace(true);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3374,7 +3492,7 @@ mod tests {
 
     use tokio::sync::{Notify, watch};
 
-    use super::test_sync::CommitBoundaryHook;
+    use super::test_sync::{CommitBoundaryHook, FirstPollGate};
     use super::{
         BACKGROUND_CANCEL_REASON, BackgroundDispatchOutcome, BackgroundExecutionListing,
         BackgroundLifecycle, BackgroundRecord, BackgroundResources, ConversationBackgroundRegistry,
@@ -3679,6 +3797,149 @@ mod tests {
             assert_eq!(fixture.registry.listing(false, 16).matched, 0);
             assert!(fixture.mailbox.select_pending_batch().unwrap().is_none());
         }
+    }
+
+    /// The shared stale-owner prologue of the first-poll regression tests.
+    ///
+    /// A staged private Bash runner wakes at the released stage gate,
+    /// snapshots the live attempt owner, and parks at the async first-poll
+    /// boundary before its first executor poll. The adoption then commits
+    /// durably while the runner is parked, and the retired attempt is
+    /// cancelled — the exact post-promotion teardown order. The runner
+    /// stays parked until the caller resumes the gate after its own
+    /// parked-state assertions.
+    struct ParkedAdoption {
+        first_poll: Arc<FirstPollGate>,
+        execution_id: ToolExecutionId,
+    }
+
+    async fn adopt_while_runner_is_parked(
+        fixture: &TestRegistry,
+        executor: &Arc<dyn ToolExecutor>,
+    ) -> ParkedAdoption {
+        let first_poll = Arc::new(FirstPollGate::default());
+        fixture.registry.install_first_poll_hook(first_poll.clone());
+        let cancellation =
+            crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
+        let mut stage = stage_bash(fixture, executor, &cancellation);
+        tokio::time::timeout(TEST_LIVENESS_GUARD, first_poll.wait_entered())
+            .await
+            .expect("the runner reached the first-poll boundary");
+
+        // The foreground budget expires while the runner is parked: the
+        // ownership transfer commits durably and publishes the Job.
+        let attempt_signal = cancellation.signal();
+        let outcome = stage
+            .adopt(&attempt_signal)
+            .await
+            .expect("the adoption resolves");
+        let BackgroundDispatchOutcome::Accepted { execution_id, .. } = outcome else {
+            panic!("the parked runner must not block the ownership transfer")
+        };
+        // The retiring attempt is cancelled after the transfer — the exact
+        // stale-owner trigger — while the runner is still parked.
+        assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        ParkedAdoption {
+            first_poll,
+            execution_id,
+        }
+    }
+
+    /// The stale-owner regression: the ownership transfer commits and the
+    /// retired attempt is cancelled while the runner is parked between its
+    /// cached-owner snapshot and its first executor poll. Once released,
+    /// the already-adopted operation must still physically start and settle
+    /// under Job authority instead of retiring the accepted Job as
+    /// `Cancelled` without ever running.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn adopted_stage_still_starts_after_the_retired_attempt_is_cancelled() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e616");
+        let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let parked = adopt_while_runner_is_parked(&fixture, &executor).await;
+        assert!(
+            !*started.borrow(),
+            "no executor poll exists at the parked first-poll boundary"
+        );
+        assert_eq!(fixture.registry.listing(false, 16).matched, 1);
+        assert_eq!(
+            fixture
+                .registry
+                .snapshot(&parked.execution_id)
+                .unwrap()
+                .state,
+            BackgroundLifecycle::Running,
+            "the adopted Job is unaffected by the retired attempt's cancellation"
+        );
+        parked.first_poll.resume();
+
+        await_test_started(&mut started, "the adopted runner still physically starts").await;
+        release.send_replace(true);
+        let terminal = wait_for_terminal(&fixture, &parked.execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Succeeded);
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("a terminal inbound is published");
+        assert_eq!(
+            batch.items().len(),
+            1,
+            "exactly one terminal pending inbound exists"
+        );
+    }
+
+    /// Post-promotion cancellation independence before the first poll: the
+    /// adopted Job records its own cancellation while the runner is still
+    /// parked, so the operation never physically starts and settles
+    /// `Cancelled` under the Job's recorded cause and start frontier —
+    /// never the stale attempt's reason.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn adopted_stage_settles_under_job_owned_cancellation() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e617");
+        let (started_tx, started) = watch::channel(false);
+        let executor: Arc<dyn ToolExecutor> = Arc::new(PrintingExecutor {
+            started: started_tx,
+        });
+        let parked = adopt_while_runner_is_parked(&fixture, &executor).await;
+
+        // The Job authority — not the retired attempt — owns cancellation
+        // of the transferred execution, already before the first executor
+        // poll.
+        let cancelling = fixture
+            .registry
+            .cancel_with_reason(&parked.execution_id, CancellationReason::UserRequested)
+            .expect("the adopted Job remains cancellable");
+        assert_eq!(cancelling.state, BackgroundLifecycle::Cancelling);
+        parked.first_poll.resume();
+
+        let terminal = wait_for_terminal(&fixture, &parked.execution_id).await;
+        assert_eq!(terminal.state, BackgroundLifecycle::Cancelled);
+        assert!(
+            !*started.borrow(),
+            "a Job cancelled before the first poll never physically starts"
+        );
+        let Some(result) = terminal.result else {
+            panic!("a cancelled Job retains its terminal result")
+        };
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::UserRequested,
+                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+            },
+            "the Job's recorded cause and start frontier win, not the retired attempt's RuntimeShutdown"
+        );
+        let batch = fixture
+            .mailbox
+            .select_pending_batch()
+            .expect("select")
+            .expect("a terminal inbound is published");
+        assert_eq!(
+            batch.items().len(),
+            1,
+            "exactly one terminal pending inbound exists"
+        );
     }
 
     // --- The background domain's own bounded discovery read model (#180) ---

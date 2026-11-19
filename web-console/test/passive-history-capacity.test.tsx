@@ -10,6 +10,7 @@ import { ConversationLive } from '../src/app/agent/ConversationLive';
 import { TRACE_PAGE_SIZE } from '../src/client/trace';
 import { HISTORY_PAGE_SIZE } from '../src/client/transcript';
 import { checkpoint, Server, snapshot, traceReceipt } from './fixture';
+import { nativeTraceFixture } from './native-trace-fixture';
 import { routeFixture } from './shell-navigation-fixture';
 import { requestDetail, traceRecord } from './trace-fixture';
 
@@ -148,6 +149,10 @@ it.each(['residency_capacity', 'attachment_capacity'] as const)('%s supports pas
     traceRecord(102, { location: { attempt_id: 'attempt-late', step_id: '1' } }),
   ];
   const earlier = traceRecord(51, { location: { attempt_id: 'attempt-early', step_id: '1' } });
+  const cut = traceCut('A'), native = nativeTraceFixture(earlier, requestDetail(51), cut);
+  const payload = 'reconnected payload';
+  const ref = { conversation_id: 'conversation-A', source: { type: 'canonical_message_block' as const, component: 'payload' as const, locator: { type: 'by_ledger_position' as const, position: 1 }, block_index: 0 }, representation: 'utf8_text' as const, version: 1, content_revision: 1, readable_end: payload.length };
+  native.contents.set(JSON.stringify(ref), payload);
   server.held.add('session/traceHistory');
   server.handlers.set('thread/resume', () => { throw refusal(kind); });
   server.handlers.set('session/traceHistory', request => {
@@ -159,7 +164,16 @@ it.each(['residency_capacity', 'attachment_capacity'] as const)('%s supports pas
   });
   server.handlers.set('session/traceHistoryDetail', request => {
     if (request.method !== 'session/traceHistoryDetail') throw Error('trace detail');
-    return { type: 'session_trace_history_detail', conversation_id: 'conversation-A', page: traceReceipt(requestDetail(Number(request.params.record_id.slice(6)))).page };
+    return { type: 'session_trace_history_detail', conversation_id: 'conversation-A',
+      page: request.params.record_id === 'trace:51' ? native.page : traceReceipt(requestDetail(Number(request.params.record_id.slice(6)))).page };
+  });
+  server.handlers.set('session/traceValueRead', request => {
+    if (request.method !== 'session/traceValueRead') throw Error('trace value');
+    return { type: 'checkpoint_value_chunk', chunk: native.original.value(request.params.cut, request.params, request.params.offset, () => true) };
+  });
+  server.handlers.set('session/traceContentRead', request => {
+    if (request.method !== 'session/traceContentRead') throw Error('trace content');
+    return { type: 'content_chunk', chunk: native.original.content(request.params.cut, request.params.content_ref, request.params.offset, () => true) };
   });
 
   const opening = server.client.attach('A');
@@ -184,15 +198,51 @@ it.each(['residency_capacity', 'attachment_capacity'] as const)('%s supports pas
   expect(server.client.getSnapshot().views.A.tracePreview?.cache.selection?.id).toBe('trace:51');
 
   await server.client.loadTraceDetail('A', 'trace:51');
-  expect(server.client.getSnapshot().views.A.tracePreview?.cache.details['trace:51']?.detail).toEqual(requestDetail(51));
+  const cached = server.client.getSnapshot().views.A!.tracePreview!.cache.details['trace:51']!;
+  expect(cached.page).toEqual(native.page);
+  expect(cached.detail).toBeUndefined();
+  expect(cached.reader).toBeTruthy();
   expect(server.requests.filter(row => row.request.method === 'session/traceHistory' || row.request.method === 'session/traceHistoryDetail')
     .every(row => 'node_id' in row.request.params && row.request.params.node_id === 'node-A')).toBe(true);
   expect(mutations(server)).toEqual(['thread/resume']);
 
-  // Reconnecting preserves passive history and allows further detail reads without thread/resume.
+  // An in-flight detail read retired by the connection loss cannot land.
+  server.held.add('session/traceHistoryDetail');
+  const stale = server.client.loadTraceDetail('A', 'trace:52');
+  const staleRequest = await server.waitFor('session/traceHistoryDetail');
+  const retired = server.socket;
   server.socket.close();
+  server.reply(staleRequest, retired);
+  await stale;
+  server.held.delete('session/traceHistoryDetail');
+  expect(server.client.getSnapshot().views.A.tracePreview?.cache.details['trace:52']).toBeUndefined();
+
+  // Reconnecting preserves passive record pages and selection while
+  // invalidating detail readers bound to the retired cold scope.
   await server.connect();
   await server.client.loadInitialTrace('A');
+  const preserved = server.client.getSnapshot().views.A!.tracePreview!.cache;
+  expect(preserved.page.records).toHaveLength(52);
+  expect(preserved.selection?.id).toBe('trace:51');
+  expect(preserved.details['trace:51']).toBeUndefined();
+  expect(preserved.details['trace:52']).toBeUndefined();
+
+  // Reopening the same record refetches its deferred detail in the new cold
+  // scope; its unexpanded field and content resolve on the new connection.
+  await server.client.loadTraceDetail('A', 'trace:51');
+  const rebound = server.client.getSnapshot().views.A!.tracePreview!.cache.details['trace:51']!;
+  expect(rebound).not.toBe(cached);
+  expect(rebound.page).toEqual(native.page);
+  expect(rebound.reader).toBeTruthy();
+  expect(rebound.readContent).toBeTruthy();
+  const field = { domain: 'trace.records.51.detail.request.model', item_offset: 0, path: [] };
+  await expect(cached.reader!.value(cut, field, 0, () => true)).rejects.toThrow('replaced');
+  await expect(rebound.reader!.value(cut, field, 0, () => true)).resolves.toMatchObject({ domain: field.domain, offset: 0 });
+  await expect(rebound.readContent!(ref, 0, () => true)).resolves.toMatchObject({ content_ref: ref, complete: true });
+  expect(server.requests.filter(row => ['session/traceValueRead', 'session/traceContentRead'].includes(row.request.method)).every(row => row.socket === server.socket)).toBe(true);
+  expect(server.requests.filter(row => row.request.method === 'session/traceHistoryDetail' && row.socket === server.socket)).toHaveLength(1);
+
+  // Further detail reads still work without retrying thread/resume.
   await server.client.loadTraceDetail('A', 'trace:102');
   expect(server.client.getSnapshot().views.A.tracePreview?.cache.details['trace:102']?.detail).toEqual(requestDetail(102));
   expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
@@ -200,7 +250,7 @@ it.each(['residency_capacity', 'attachment_capacity'] as const)('%s supports pas
   // Releasing retires an in-flight passive detail read so it cannot land.
   server.held.add('session/traceHistoryDetail');
   const pending = server.client.loadTraceDetail('A', 'trace:52');
-  const inFlight = await server.waitFor('session/traceHistoryDetail', server.requests.filter(row => row.request.method === 'session/traceHistoryDetail').length);
+  const inFlight = await server.waitFor('session/traceHistoryDetail');
   await server.client.release('A');
   server.reply(inFlight);
   await pending;
@@ -235,9 +285,19 @@ it('passive Trajectory UI loads initial trace, paginates, selects and opens deta
     if (request.method !== 'session/traceHistory') throw Error('trace history');
     return request.params.before == null ? traceHistoryOf(ready, 'trace:20', 'B') : traceHistoryOf([earlier], null, 'B');
   });
+  const native = nativeTraceFixture(ready.at(-1)!, requestDetail(70), traceCut('B'));
   server.handlers.set('session/traceHistoryDetail', request => {
     if (request.method !== 'session/traceHistoryDetail') throw Error('trace detail');
-    return { type: 'session_trace_history_detail', conversation_id: 'conversation-B', page: traceReceipt(requestDetail(Number(request.params.record_id.slice(6)))).page };
+    return { type: 'session_trace_history_detail', conversation_id: 'conversation-B',
+      page: request.params.record_id === 'trace:70' ? native.page : traceReceipt(requestDetail(Number(request.params.record_id.slice(6)))).page };
+  });
+  server.handlers.set('session/tracePage', request => {
+    if (request.method !== 'session/tracePage') throw Error('trace page');
+    return { type: 'checkpoint_page', page: native.original.page(request.params.cut, request.params.domain, request.params.offset, () => true) };
+  });
+  server.handlers.set('session/traceValueRead', request => {
+    if (request.method !== 'session/traceValueRead') throw Error('trace value');
+    return { type: 'checkpoint_value_chunk', chunk: native.original.value(request.params.cut, request.params, request.params.offset, () => true) };
   });
 
   const navigation = routeFixture(server.client, server.workspaceHost);
@@ -268,7 +328,17 @@ it('passive Trajectory UI loads initial trace, paginates, selects and opens deta
   await act(async () => { fireEvent.click(ui.container.querySelector('[data-request-owner="trace:70"]')!); });
   await waitFor(() => expect(ui.getByRole('complementary', { name: 'Event details' }).textContent).toContain('openai_chat_completions'));
   expect(server.client.getSnapshot().views.B.tracePreview?.cache.selection?.id).toBe('trace:70');
-  expect(server.client.getSnapshot().views.B.tracePreview?.cache.details['trace:70']?.detail).toEqual(requestDetail(70));
+  expect(server.client.getSnapshot().views.B.tracePreview?.cache.details['trace:70']?.page).toEqual(native.page);
+  expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
+
+  // A reconnect invalidates the selected record's retained detail readers; the
+  // surviving inspector reopens the same record on the new connection.
+  await act(async () => { server.socket.close(); });
+  expect(server.client.getSnapshot().views.B.tracePreview?.cache.details['trace:70']).toBeUndefined();
+  await act(async () => { await server.connect(); });
+  await waitFor(() => expect(server.requests.filter(row => row.request.method === 'session/traceHistoryDetail' && row.socket === server.socket)).toHaveLength(1));
+  await waitFor(() => expect(ui.getByRole('complementary', { name: 'Event details' }).textContent).toContain('openai_chat_completions'));
+  expect(server.client.getSnapshot().views.B.tracePreview?.cache.selection?.id).toBe('trace:70');
   expect(server.requests.filter(row => row.request.method === 'thread/resume')).toHaveLength(1);
   server.client.disconnect();
 });

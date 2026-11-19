@@ -1727,8 +1727,9 @@ the same opaque string without colliding. The store appends that reference in
 the same transaction as the owning durable fact. Reading a page resolves the body from its
 canonical owner on demand, so the transcript cannot become a second body
 store or an unbounded in-memory vector. Accepted inbound User content is not
-displayable until its acceptance transaction commits; adoption into the
-Ledger preserves the same durable identity and ordering reference.
+displayable until its acceptance transaction commits. Acceptance fixes the
+durable message identity, inbound sequence, and correlation. Adoption into the
+Ledger assigns the canonical transcript position in actual adoption order.
 
 Surface and transcript intentionally diverge. Surface owns the finite active
 identity/order sent to the model and is replaced by compaction. Transcript
