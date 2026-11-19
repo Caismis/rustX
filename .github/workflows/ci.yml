@@ -223,7 +223,7 @@ jobs:
 
       - name: Run the SQLite store contracts (durable changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:durable']
-        run: 'cargo test -p rustx-durable --lib --all-features --locked -- --skip ::scale::'
+        run: 'cargo test -p rustx-durable --lib --all-features --locked'
 
       - name: Run the App Server and Session contracts (App Server or local runtime changes)
         if: fromJSON(needs.plan.outputs.steps)['rust-fast:app-server']

@@ -13156,7 +13156,7 @@ export interface GoalSnapshot {
  * order.
  *
  * ```compile_fail
- * use crate::message::types::AgentStatusGenerationMetadata;
+ * use rustx_types::message::types::AgentStatusGenerationMetadata;
  *
  * fn mutate(metadata: &mut AgentStatusGenerationMetadata) {
  *     metadata.modules = Vec::new();
@@ -13165,7 +13165,7 @@ export interface GoalSnapshot {
  *
  * ```rust
  * use chrono::Utc;
- * use crate::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
+ * use rustx_types::message::types::{AgentStatusGenerationMetadata, AgentStatusModuleId};
  *
  * let metadata = AgentStatusGenerationMetadata::new(
  *     Utc::now(),
