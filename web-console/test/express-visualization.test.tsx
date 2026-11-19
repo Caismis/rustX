@@ -147,12 +147,12 @@ describe('ExpressVisualization empty states', () => {
     expect(getByText('No data')).toBeTruthy();
   });
 
-  it('still renders the table frame when rows are empty', () => {
-    const { getByRole, queryAllByRole } = render(
+  it('keeps the table headers and labels the empty state', () => {
+    const { getByRole } = render(
       <ExpressVisualization kind="Table" title="空表" rows={[]} columns={['a', 'b']} />,
     );
     expect(getByRole('table')).toBeTruthy();
     expect(getByRole('columnheader', { name: 'a' })).toBeTruthy();
-    expect(queryAllByRole('cell')).toHaveLength(0);
+    expect(getByRole('cell', { name: 'No data' }).getAttribute('colspan')).toBe('2');
   });
 });

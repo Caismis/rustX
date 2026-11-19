@@ -1,15 +1,16 @@
-/* Express Table/LineChart/BarChart nodes: semantic table plus SVG charts.
-   All colors resolve through the dsw theme aliases so light/dark both work. */
-
 .tableScroll {
   max-width: 100%;
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  border: 1px solid var(--a2-border);
+  border-radius: var(--a2-radius);
+  background: var(--a2-card);
+  box-shadow: var(--a2-shadow);
 }
 
 .tableScroll:focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--a2-ring) 50%, transparent);
 }
 
 .tableScroll table {
@@ -18,38 +19,23 @@
 }
 
 .caption {
-  padding: 0 0 0.5rem;
-  color: var(--dsw-alias-label-primary);
+  padding: .75rem 1rem;
+  border-bottom: 1px solid var(--a2-border);
   font-weight: 600;
   text-align: start;
 }
 
-.tableScroll th {
-  padding: 8px 14px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
-  color: var(--dsw-alias-label-secondary);
-  font: var(--dsw-font-markdown-table-head);
+.tableScroll th, .tableScroll td {
+  padding: .5rem 1rem;
+  border-bottom: 1px solid var(--a2-border);
+  font: inherit;
   text-align: start;
-  white-space: nowrap;
 }
 
-.tableScroll td {
-  padding: 8px 14px;
-  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
-  color: var(--dsw-alias-label-primary);
-  font: var(--dsw-font-markdown-table);
-  overflow-wrap: anywhere;
-}
-
-.tableScroll th:first-child,
-.tableScroll td:first-child {
-  padding-left: 0;
-}
-
-.tableScroll th:last-child,
-.tableScroll td:last-child {
-  padding-right: 0;
-}
+.tableScroll th { color: var(--a2-muted-foreground); font-weight: 500; white-space: nowrap; }
+.tableScroll td { overflow-wrap: anywhere; }
+.tableScroll tbody tr:hover { background: color-mix(in oklch, var(--a2-muted) 50%, transparent); }
+.tableScroll tbody tr:last-child td { border-bottom: 0; }
 
 .tableScroll .numeric {
   text-align: end;
@@ -57,18 +43,30 @@
 }
 
 .tableScroll .missing {
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--a2-muted-foreground);
+}
+
+.tableScroll td.emptyTable {
+  height: 5rem;
+  color: var(--a2-muted-foreground);
+  font-size: .875em;
+  text-align: center;
 }
 
 .figure {
+  container-type: inline-size;
   min-width: 0;
-  margin: 0.75rem 0;
+  margin: 0;
+  padding: 1rem;
+  border: 1px solid var(--a2-border);
+  border-radius: var(--a2-radius);
+  background: var(--a2-card);
+  box-shadow: var(--a2-shadow);
 }
 
 .title {
   display: block;
   margin: 0 0 0.4rem;
-  color: var(--dsw-alias-label-primary);
   font-weight: 600;
 }
 
@@ -79,31 +77,36 @@
 }
 
 .grid {
-  stroke: var(--dsw-alias-border-l1);
+  stroke: var(--a2-border);
   stroke-width: 1;
 }
 
 .zero,
 .axis {
-  stroke: var(--dsw-alias-border-l3);
+  stroke: var(--a2-border);
   stroke-width: 1;
 }
 
 .tick {
-  fill: var(--dsw-alias-label-tertiary);
-  font-family: var(--ds-font-family-code);
+  fill: var(--a2-muted-foreground);
+  font-variant-numeric: tabular-nums;
   font-size: 10px;
 }
 
 .line {
   fill: none;
   stroke-width: 2;
+  vector-effect: non-scaling-stroke;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
+@container (max-width: 26rem) {
+  .tick { font-size: 18px; }
+}
+
 .point {
-  stroke: var(--dsw-alias-bg-layer-1);
+  stroke: var(--a2-card);
   stroke-width: 1;
 }
 
@@ -113,7 +116,7 @@
   gap: 0.3rem 1rem;
   margin: 0.45rem 0 0;
   padding: 0;
-  color: var(--dsw-alias-label-secondary);
+  color: var(--a2-muted-foreground);
   font-size: 0.8rem;
   list-style: none;
 }
@@ -133,6 +136,6 @@
 
 .empty {
   margin: 0.5rem 0;
-  color: var(--dsw-alias-label-tertiary);
+  color: var(--a2-muted-foreground);
   font-size: 0.875em;
 }

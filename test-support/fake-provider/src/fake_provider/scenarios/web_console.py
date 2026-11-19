@@ -815,7 +815,7 @@ root = Card(Column([
   CheckBox("显示详情", $/enabled), Text($/enabled),
   TextField("名称", $/name), Text($/name),
   DateTimeInput($/date, true, false, _, _, "日期"), Text($/date),
-  ChoicePicker("分组", "multipleSelection", [{label:"乙组",value:"B"}], $/selection, "chips"),
+  ChoicePicker("分组", "multipleSelection", [{label:"乙组",value:"B"}], $/selection, "chips", true),
   Button(Text("提交到会话"), "primary", Event("submit"))
 ]))
 </a2ui>"""
@@ -835,7 +835,8 @@ root = Card(Column([
   Slider("二月销量", 0, 10, $/sales/1/units),
   Table($/sales, ["month", "units"], "销量明细"),
   LineChart($/sales, "month", "units", "销量趋势"),
-  BarChart($/sales, "month", "units", "月度销量")
+  BarChart($/sales, "month", "units", "月度销量"),
+  LineChart([], "month", "units")
 ]))
 </a2ui>"""
     return Scenario("web_a2ui_charts", Step(

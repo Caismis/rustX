@@ -17,6 +17,27 @@ no old protocol path is retained. The picker uses existing Base UI modal and
 React Aria grid/search controls. Browser plugin is unavailable in this session;
 validation uses the repository's pinned Playwright/Chromium runner.
 
+## MCP tool approvals and the A2UI Playground theme
+
+MCP detail follows the distinction in VS Code's tool and approval settings and
+Cursor's MCP management between exposing a tool and approving its invocation.
+The Web Console writes the native exact-tool permission object on the selected
+server. An omitted object inherits that server's rules. A `default` entry in an
+explicit object delegates to the corresponding built-in mode. No VS Code or
+Cursor source is included.
+
+The Express message renderer adapts CopilotKit A2UI Playground's shadcn/ui
+design system from `CopilotKit/CopilotKit` at
+`535978c0ff44d7ee4132f69cca4e96f2ad16e968`, under
+`examples/showcases/a2ui-playground/src/`. The sources are
+`design-systems/design-systems.css` (neutral light/dark and chart tokens),
+`design-systems/shadcn.tsx` (component styling and Button variant mapping), and
+`components/ui/` (shadcn/ui control and table treatments). RustX scopes these
+styles to supported Express surfaces and retains its own parser and local
+bindings. CopilotKit runtime, provider, and unrelated catalog components are not
+included. The MIT notice is in `licenses/copilotkit-a2ui-playground.txt` and in
+the shipped third-party notices.
+
 ## Settings information density (2026-11-08)
 
 Compared ZCode `29628c9acdb81b703bbd4080c207a0e7ce5e276e` SettingsPage,

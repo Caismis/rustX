@@ -27,7 +27,8 @@ export function ExpressCard({ surface }: { surface: ExpressSurface }) {
           {node.bindings?.text ? String(props.text ?? '') : node.text}
         </Tag>;
       }
-      case 'Divider': return <hr key={index} className={css.divider}/>;
+      case 'Divider': return <hr key={index} data-slot="separator" className={css.divider}/>;
+      case 'Card': return <div key={index} data-slot="card" className={css.Card}>{node.children.map(renderNode)}</div>;
       case 'List': return <ul key={index} className={css.list}>{node.children.map((child, i) => <li key={i}>{renderNode(child, i)}</li>)}</ul>;
       case 'Table':
       case 'LineChart':
@@ -48,5 +49,5 @@ export function ExpressCard({ surface }: { surface: ExpressSurface }) {
     }
   }
 
-  return <div className={css.surface} data-a2ui-express="">{renderNode(surface.root, 0)}</div>;
+  return <div className={css.surface} data-a2ui-express="" data-ds="shadcn">{renderNode(surface.root, 0)}</div>;
 }

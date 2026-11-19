@@ -8,6 +8,7 @@
 import { useId, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import clsx from 'clsx';
+import { useTranslation } from '../../locale/react';
 import css from './ExpressVisualization.module.css';
 
 export interface ExpressVisualizationProps {
@@ -19,14 +20,13 @@ export interface ExpressVisualizationProps {
   columns?: string[];
 }
 
-/** Series palette: theme-adaptive aliases first, then fixed accents. */
 const SERIES_COLORS = [
-  'var(--dsw-alias-state-business-primary)',
-  'var(--dsw-alias-state-success-primary)',
-  'var(--dsw-alias-state-warn-primary)',
-  'var(--dsw-alias-state-error-primary)',
-  'var(--dsw-static-deepseek-400)',
-  'var(--dsw-static-blue-400)',
+  'var(--a2-chart-1)',
+  'var(--a2-chart-2)',
+  'var(--a2-chart-3)',
+  'var(--a2-chart-4)',
+  'var(--a2-chart-5)',
+  'var(--a2-chart-6)',
 ] as const;
 
 const CHART_W = 640;
@@ -95,19 +95,21 @@ function isNumericColumn(rows: readonly Record<string, unknown>[], column: strin
 }
 
 function DataTable({ title, columns, rows }: { title?: string; columns: string[]; rows: readonly Record<string, unknown>[] }) {
+  const tx = useTranslation();
   const numeric = useMemo(() => new Set(columns.filter(column => isNumericColumn(rows, column))), [columns, rows]);
   return (
     <div className={css.tableScroll} tabIndex={columns.length >= 4 ? 0 : undefined}>
-      <table>
+      <table data-slot="table" aria-label={title ? undefined : tx('interactions:express.table')}>
         {title !== undefined && title !== '' && <caption className={css.caption}>{title}</caption>}
         {columns.length > 0 && (
           <thead>
             <tr>{columns.map(column => <th key={column} scope="col">{column}</th>)}</tr>
           </thead>
         )}
-        {rows.length > 0 && (
-          <tbody>
-            {rows.map((row, rowIndex) => (
+        <tbody>
+          {rows.length === 0 || columns.length === 0
+            ? <tr><td colSpan={Math.max(1, columns.length)} className={css.emptyTable}>{tx('interactions:express.no-data')}</td></tr>
+            : rows.map((row, rowIndex) => (
               <tr key={rowIndex}>
                 {columns.map(column => {
                   const text = formatScalar(row[column]);
@@ -123,8 +125,7 @@ function DataTable({ title, columns, rows }: { title?: string; columns: string[]
                 })}
               </tr>
             ))}
-          </tbody>
-        )}
+        </tbody>
       </table>
     </div>
   );
@@ -267,10 +268,11 @@ function lineSegments(model: ChartModel, yScale: (v: number) => number, xAt: (in
 
 function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarChart'; title?: string; rows: readonly Record<string, unknown>[]; x?: string; y?: string | string[] }) {
   const id = useId();
+  const tx = useTranslation();
   const model = useMemo(() => buildChartModel(kind, rows, x, y), [kind, rows, x, y]);
-  const kindLabel = kind === 'LineChart' ? 'Line chart' : 'Bar chart';
+  const kindLabel = tx(kind === 'LineChart' ? 'interactions:express.line-chart' : 'interactions:express.bar-chart');
 
-  let body: ReactNode = <p className={css.empty}>No data</p>;
+  let body: ReactNode = <p className={css.empty}>{tx('interactions:express.no-data')}</p>;
   if (model !== null) {
     const count = model.entries.length;
     const [yLo, yHi] = model.yDomain;
@@ -295,16 +297,17 @@ function ExpressChart({ kind, title, rows, x, y }: { kind: 'LineChart' | 'BarCha
     const barW = Math.max(0.5, (groupW - barGap * (model.series.length - 1)) / model.series.length);
 
     const seriesNames = model.series.map(item => item.name).join(', ');
-    const description = `${kindLabel}${title ? `: ${title}` : ''} with ${model.series.length} series (${seriesNames}) across ${count} ${count === 1 ? 'point' : 'points'}.`;
+    const description = tx('interactions:express.chart-summary', { series: seriesNames, count });
 
     body = (
       <svg
         className={css.chart}
         viewBox={`0 0 ${CHART_W} ${CHART_H}`}
         role="img"
-        aria-labelledby={`${id}-title ${id}-desc`}
+        aria-labelledby={`${id}-title`}
+        aria-describedby={`${id}-desc`}
       >
-        <title id={`${id}-title`}>{title ?? kindLabel}</title>
+        <title id={`${id}-title`}>{title || kindLabel}</title>
         <desc id={`${id}-desc`}>{description}</desc>
         {yTicks.map(tick => (
           <g key={tick}>

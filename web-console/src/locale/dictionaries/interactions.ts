@@ -1,5 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Selected wording adapted; see PROVENANCE.md. */
 export const en = {
+  "express.filter-options": "Filter options",
+  "express.no-data": "No data",
+  "express.table": "Data table",
+  "express.line-chart": "Line chart",
+  "express.bar-chart": "Bar chart",
+  "express.chart-summary": "Series: {series}. Data points: {count}.",
   "audit.interaction": "Interaction",
   "review.title": "Human Input",
   "audit.requested": "Requested",
@@ -59,6 +65,12 @@ export const en = {
 } as const;
 export type InteractionsKey = keyof typeof en;
 export const zh = {
+  "express.filter-options": "筛选选项",
+  "express.no-data": "暂无数据",
+  "express.table": "数据表格",
+  "express.line-chart": "折线图",
+  "express.bar-chart": "柱状图",
+  "express.chart-summary": "数据系列：{series}。数据点数：{count}。",
   "audit.interaction": "交互",
   "review.title": "人工介入",
   "audit.requested": "已请求",

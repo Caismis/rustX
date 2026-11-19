@@ -1,11 +1,11 @@
 /* Copyright (c) 2026 DeepSeek. MIT. Adapted resource controls; see PROVENANCE.md. */
-import type { McpWrite, ResourcePermissionSet, SourceScope, SourceSettings, WorkflowToolChoice } from '../../../../../protocol/app-server/v80';
+import type { ResourcePermissionSet, SourceScope, SourceSettings, WorkflowToolChoice } from '../../../../../protocol/app-server/v80';
 import { useTranslation } from '../../../locale/react';
 import { UnitForm } from '../../settings/forms/bridge';
 import { documentAuthoring } from '../../settings/projection';
 import { ConfigUnavailable } from '../../settings/forms/ConfigUnavailable';
-import { ResourcePermissionFields, blankResourcePermissions } from '../../settings/forms/ResourcePermissionFields';
-import settingsCss from '../../../presentation/settings/SettingsContent.module.css';
+import { ResourcePermissionFields } from '../../settings/forms/ResourcePermissionFields';
+import css from '../mcp/McpPage.module.css';
 import { AvailabilityDetail } from './AvailabilityDetail';
 
 function permissionsCleared(permissions: ResourcePermissionSet | null | undefined): boolean {
@@ -36,48 +36,39 @@ export function McpPermissionDetail({
 }) {
   const tx = useTranslation();
   const mcp = documentAuthoring(scope === 'user' ? source.user_mcp : source.workspace_mcp);
-  if (mcp.state !== 'structured') return <ConfigUnavailable />;
-  const authored = Object.hasOwn(mcp.document, name) ? mcp.document[name] : undefined;
-  const blank: McpWrite = {
-    definition: { type: 'stdio', command: '', args: [], permissions: blankResourcePermissions },
-    retained_env: [],
-    retained_headers: [],
-  };
+  const authored = mcp.state === 'structured' && Object.hasOwn(mcp.document, name) ? mcp.document[name] : undefined;
   return (
-    <section aria-label={tx('resources:mcp.permissions')}>
-      {revision !== undefined && (
-        <AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={name}
-          tools={tools} heading={tx('resources:mcp.availability')} saveLabel={tx('resources:mcp.save-availability')} />
-      )}
-      <section aria-label={tx('resources:mcp.approval-rules')}>
+    <section className={css.permissionGroups} aria-label={tx('resources:mcp.permissions')}>
+      <section className={css.serverRules} aria-label={tx('resources:mcp.approval-rules')}>
         <h4>{tx('resources:mcp.approval-rules')}</h4>
-        <p className={settingsCss.hint}>{tx('resources:mcp.approval-rules-help')}</p>
-        <UnitForm<McpWrite>
+        <p className={css.hint}>{tx('resources:mcp.approval-rules-help')}</p>
+        {mcp.state === 'structured' && authored ? <UnitForm<{ rules: ResourcePermissionSet | null }>
           title={tx('resources:mcp.permissions')}
-          authored={authored}
-          blank={blank}
+          authored={{ rules: authored.definition.permissions ?? null }}
+          blank={{ rules: null }}
           revision={mcp.revision}
           draftKey={JSON.stringify(['mcp-permissions', name])}
           removable={false}
           saveLabel={tx('resources:mcp.save-rules')}
-          mutation={value => ({ kind: 'mcp', id: name, authored: value })}
+          mutation={value => ({ kind: 'mcp', id: name, authored: value === null ? null : {
+            ...authored, definition: { ...authored.definition, permissions: value.rules ?? undefined },
+          } })}
         >
           {(value, change) => (
-            <ResourcePermissionFields
-              value={value.definition.permissions}
-              change={(permissions: ResourcePermissionSet | null) =>
-                change({
-                  ...value,
-                  definition: {
-                    ...value.definition,
-                    permissions: permissionsCleared(permissions) ? undefined : permissions ?? undefined,
-                  },
-                })
-              }
-            />
+            <div className={css.modeFields}><ResourcePermissionFields
+              value={value.rules}
+              change={permissions => change({ rules: permissionsCleared(permissions) ? null : permissions })}
+            /></div>
           )}
-        </UnitForm>
+        </UnitForm> : mcp.state === 'structured' && scope === 'workspace'
+          ? <p className={css.hint}>{tx('resources:mcp.approval-rules-inherited')}</p>
+          : <ConfigUnavailable />}
       </section>
+      {revision !== undefined && (
+        <AvailabilityDetail source={source} scope={scope} revision={revision} family="mcp" name={name}
+          tools={tools} heading={tx('resources:mcp.availability')} saveLabel={tx('resources:mcp.save-availability')}
+          help={tx('resources:mcp.availability-help')} />
+      )}
     </section>
   );
 }

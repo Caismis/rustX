@@ -12,9 +12,9 @@ import { ResourceChoices } from '../subagents/ScopedChoices';
 import subagentsCss from '../subagents/Subagents.module.css';
 
 /** Root Agent tool availability. Server-level approvals live in McpPermissionDetail. */
-export function AvailabilityDetail({ source, scope, revision, family, name, tools, heading, saveLabel }: {
+export function AvailabilityDetail({ source, scope, revision, family, name, tools, heading, saveLabel, help }: {
   source: SourceSettings; scope: SourceScope; revision?: string; family: 'mcp' | 'managed_python'; name: string;
-  tools?: readonly WorkflowToolChoice[]; heading?: string; saveLabel?: string;
+  tools?: readonly WorkflowToolChoice[]; heading?: string; saveLabel?: string; help?: string;
 }) {
   const tx = useTranslation();
   if (revision === undefined) return <ConfigUnavailable />;
@@ -23,6 +23,7 @@ export function AvailabilityDetail({ source, scope, revision, family, name, tool
   const title = heading ?? tx('settings:extension-detail.availability-to-the-root-agent');
   return <section aria-label={title}>
     <h4>{title}</h4>
+    {help && <p className={settingsCss.hint}>{help}</p>}
     <UnitForm<SourceToolSelection> title={tx('settings:extension-detail.source-value', { p0: id })}
       authored={document?.agent?.tools?.sources?.[id] ?? undefined} blank={[]} revision={revision} saveLabel={saveLabel}
       mutation={authored => ({ kind: 'config', mutation: { unit: 'source_tools', id, authored } })}>

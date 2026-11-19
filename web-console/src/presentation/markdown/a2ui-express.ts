@@ -5,7 +5,7 @@ const signatures = {
   TextField: ['label', 'value', 'placeholder', 'variant', 'weight'],
   ChoicePicker: ['label', 'variant', 'options', 'value', 'displayStyle', 'filterable', 'weight'],
   DateTimeInput: ['value', 'enableDate', 'enableTime', 'min', 'max', 'label', 'weight'],
-  Button: ['child', 'variant', 'action', 'weight'],
+  Button: ['child', 'variant', 'action', 'weight', 'color', 'size', 'block'],
   Table: ['rows', 'columns', 'title'],
   LineChart: ['rows', 'x', 'y', 'title'],
   BarChart: ['rows', 'x', 'y', 'title'],

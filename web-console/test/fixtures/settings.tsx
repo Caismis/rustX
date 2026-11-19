@@ -128,6 +128,12 @@ if (variant.get('scenario') === 'mcp-details') {
     empty: { definition: { command: 'empty-fixture' }, retained_env: [], retained_headers: [] },
     retry: { definition: { command: 'retry-fixture' }, retained_env: [], retained_headers: [] },
   };
+  if (variant.has('tool-rules')) {
+    const notes = source.user_mcp.authored.notes!;
+    notes.definition.permissions = { plan: 'deny', automatic: 'ask', full_access: 'allow' };
+    notes.definition.tools = { previous_tool: { permissions: { plan: 'deny', automatic: 'deny', full_access: 'deny' } } };
+    notes.retained_env = ['NOTES_TOKEN'];
+  }
   source.user.authored!.agent = { tools: { sources: { notes: ['previous_tool'] } } };
   const tools = [
     { name: 'read_note', description: 'Read the selected note.' },
@@ -159,6 +165,9 @@ if (variant.get('scenario') === 'mcp-details') {
       else selections[id] = authored;
       source.user.revision += '+';
     } else if (mutation.kind === 'mcp' && mutation.authored) {
+      if (variant.has('tool-rules') && request.params.expected_revision !== source.user_mcp.revision) {
+        throw new Error('Expected the current MCP document revision');
+      }
       const { definition, retained_env = [], retained_headers = [] } = mutation.authored;
       source.user_mcp.authored![mutation.id] = { definition, retained_env, retained_headers };
       source.user_mcp.revision += '+';
