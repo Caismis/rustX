@@ -7,7 +7,8 @@ use crate::conversation::SurfaceRevision;
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::*;
 use crate::durable::{
-    CanonicalStore, InboxStore, PendingInboundRef, PendingMutationOutcome, PendingSteerScope,
+    CanonicalStore, ConversationStoreError, InboxStore, ObservationStore, PendingInboundRef,
+    PendingMutationOutcome, PendingSteerScope,
 };
 use crate::message::types::{InboundKind, MessageBlock, UserSource};
 use crate::runtime::identity::{AttemptId, ConversationId};
@@ -637,4 +638,320 @@ fn steer_races_adoption_and_retries_without_double_delivery() {
             .count(),
         1
     );
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Observe the same row from acceptance through fault and adoption.
+fn steer_derived_header_fail_preserves_native_cas_and_once_only_adoption() {
+    let cases = [
+        (
+            "transcript_header_fail",
+            "CREATE TEMP TRIGGER fail_steer_derived_header \
+             BEFORE UPDATE OF header_json ON transcript_entries \
+             BEGIN SELECT RAISE(FAIL, 'optional transcript header'); END;",
+            true,
+        ),
+        (
+            "pending_header_non_null_fail",
+            "CREATE TEMP TRIGGER fail_steer_derived_header \
+             BEFORE UPDATE OF observation_header ON pending_inbound \
+             WHEN NEW.observation_header IS NOT NULL \
+             BEGIN SELECT RAISE(FAIL, 'optional pending header'); END;",
+            true,
+        ),
+        (
+            "pending_header_unconditional_fail",
+            "CREATE TEMP TRIGGER fail_steer_derived_header \
+             BEFORE UPDATE OF observation_header ON pending_inbound \
+             BEGIN SELECT RAISE(FAIL, 'optional pending header'); END;",
+            false,
+        ),
+    ];
+
+    for (label, trigger_sql, expect_null_header) in cases {
+        for steer_all in [false, true] {
+            let store = store();
+            let accepted = store.accept_inbound(queued("promote-under-fault")).unwrap();
+            let before_cut = accepted.read_cut.clone();
+            let initial_page = store.pending_header_page(&before_cut, None, 32).unwrap();
+            assert_eq!(initial_page.headers.len(), 1, "{label}");
+            let MessageBlock::User(initial_display) =
+                initial_page.headers[0].message.display.as_ref().unwrap()
+            else {
+                panic!("{label}: expected user pending header");
+            };
+            assert_eq!(initial_display.kind, InboundKind::QueuedMessage, "{label}");
+            assert!(
+                store
+                    .pending_value_read(&before_cut, accepted.sequence.get(), 0, 65_536)
+                    .is_ok(),
+                "{label}"
+            );
+
+            store.lock().unwrap().execute_batch(trigger_sql).unwrap();
+
+            let scope = if steer_all {
+                PendingSteerScope::All {
+                    through: accepted.sequence,
+                }
+            } else {
+                PendingSteerScope::Row {
+                    expected: expected(accepted.sequence, 0),
+                }
+            };
+            let outcome = store.steer_pending(&scope).unwrap();
+            let PendingMutationOutcome::Applied {
+                read_cut,
+                pending_observation,
+            } = outcome
+            else {
+                panic!("{label}: expected applied steer despite derived header RAISE(FAIL)");
+            };
+            assert!(
+                pending_observation.is_none(),
+                "{label}: receipt must mark unavailable when derived header fails"
+            );
+            assert_eq!(
+                read_cut.mutation_revision,
+                before_cut.mutation_revision + 1,
+                "{label}"
+            );
+
+            let pending = store.load_pending().unwrap();
+            assert_eq!(pending.len(), 1, "{label}");
+            assert_eq!(pending[0].sequence, accepted.sequence, "{label}");
+            assert_eq!(pending[0].message_id, accepted.message_id, "{label}");
+            assert_eq!(pending[0].revision, 1, "{label}");
+            assert_eq!(pending[0].message.kind, InboundKind::Message, "{label}");
+
+            let header_is_null: bool = store
+                .lock()
+                .unwrap()
+                .query_row(
+                    "SELECT observation_header IS NULL FROM pending_inbound WHERE sequence=?1",
+                    [accepted.sequence.get()],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(header_is_null, expect_null_header, "{label}");
+
+            // Stale QueuedMessage header must never be served at the steered cut.
+            assert!(
+                matches!(
+                    store.pending_header_page(&read_cut, None, 32),
+                    Err(ConversationStoreError::Storage(_))
+                ),
+                "{label}: pending header page must fail unavailable instead of returning stale header"
+            );
+            assert!(
+                matches!(
+                    store.pending_value_read(&read_cut, accepted.sequence.get(), 0, 65_536),
+                    Err(ConversationStoreError::InvalidReference(_))
+                ),
+                "{label}: stale revision-0 content frontier must be fenced"
+            );
+
+            // Dropping the trigger cannot make a stale revision-0 header readable.
+            store
+                .lock()
+                .unwrap()
+                .execute_batch("DROP TRIGGER fail_steer_derived_header")
+                .unwrap();
+            assert!(
+                matches!(
+                    store.pending_header_page(&read_cut, None, 32),
+                    Err(ConversationStoreError::Storage(_))
+                ),
+                "{label}: stale header must stay unavailable after trigger removal"
+            );
+
+            // Authoritative CAS/revision remains intact after faulted steer.
+            assert_eq!(
+                steer_row(&store, accepted.sequence, 0),
+                PendingMutationOutcome::Conflict,
+                "{label}"
+            );
+            assert_eq!(
+                steer_row(&store, accepted.sequence, 1),
+                PendingMutationOutcome::InvalidItem,
+                "{label}"
+            );
+
+            // Active-attempt adoption claims the steered row exactly once.
+            let adopted = store
+                .adopt_pending_batch(accepted.sequence, Some(AttemptId::new("active")))
+                .unwrap();
+            assert_eq!(adopted.items.len(), 1, "{label}");
+            assert_eq!(adopted.items[0].message_id, accepted.message_id, "{label}");
+            assert_eq!(adopted.items[0].revision, 1, "{label}");
+            assert_eq!(
+                adopted.items[0].message.kind,
+                InboundKind::Message,
+                "{label}"
+            );
+            assert_eq!(
+                store.load_pending().unwrap(),
+                [] as [crate::durable::inbox::PendingInboundItem; 0],
+                "{label}"
+            );
+            assert_eq!(
+                message_ids(&store),
+                vec![accepted.message_id.as_str().to_owned()],
+                "{label}"
+            );
+            let second = store
+                .adopt_pending_batch(accepted.sequence, Some(AttemptId::new("active")))
+                .unwrap();
+            assert_eq!(
+                second.items,
+                [] as [crate::durable::inbox::PendingInboundItem; 0],
+                "{label}"
+            );
+            assert_eq!(message_ids(&store).len(), 1, "{label}");
+        }
+    }
+}
+
+#[test]
+#[allow(clippy::too_many_lines)] // Compare all transaction failure modes at both display writes.
+fn steer_propagates_cancellation_and_transaction_invalidity_from_derived_headers() {
+    use rusqlite::functions::FunctionFlags;
+    use rusqlite::hooks::{AuthAction, AuthContext, Authorization, TransactionOperation};
+
+    let targets = [
+        ("transcript_header", "header_json ON transcript_entries"),
+        ("pending_header", "observation_header ON pending_inbound"),
+    ];
+
+    for (label, target) in targets {
+        // 1. Cancellation inside either derived header path propagates OperationCancelled.
+        {
+            let store = store();
+            let accepted = store.accept_inbound(queued("cancel-me")).unwrap();
+            let before_cut = accepted.read_cut.clone();
+            {
+                let connection = store.lock().unwrap();
+                let interrupt = connection.get_interrupt_handle();
+                connection
+                    .create_scalar_function(
+                        "test_cancel_steer",
+                        0,
+                        FunctionFlags::SQLITE_UTF8,
+                        move |_| {
+                            interrupt.interrupt();
+                            Ok(1_i64)
+                        },
+                    )
+                    .unwrap();
+                connection
+                    .execute_batch(&format!(
+                        "CREATE TEMP TRIGGER cancel_steer_header \
+                         BEFORE UPDATE OF {target} \
+                         BEGIN \
+                             SELECT test_cancel_steer(); \
+                             SELECT count(*) FROM (WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM r WHERE n<16) SELECT n FROM r); \
+                         END;"
+                    ))
+                    .unwrap();
+            }
+            let result = store.steer_pending(&PendingSteerScope::Row {
+                expected: expected(accepted.sequence, 0),
+            });
+            assert_eq!(
+                result,
+                Err(ConversationStoreError::OperationCancelled),
+                "{label}: cancellation must propagate"
+            );
+            let pending = store.load_pending().unwrap();
+            assert_eq!(pending.len(), 1, "{label}");
+            assert_eq!(pending[0].revision, 0, "{label}");
+            assert_eq!(
+                pending[0].message.kind,
+                InboundKind::QueuedMessage,
+                "{label}"
+            );
+            let page = store.pending_header_page(&before_cut, None, 32).unwrap();
+            assert_eq!(page.headers[0].revision, 0, "{label}");
+        }
+
+        // 2. Outer transaction abort (RAISE(ROLLBACK)) propagates without degrading.
+        {
+            let store = store();
+            let accepted = store.accept_inbound(queued("rollback-me")).unwrap();
+            store
+                .lock()
+                .unwrap()
+                .execute_batch(&format!(
+                    "CREATE TEMP TRIGGER rollback_steer_header \
+                     BEFORE UPDATE OF {target} \
+                     BEGIN SELECT RAISE(ROLLBACK, 'outer tx aborted'); END;"
+                ))
+                .unwrap();
+            let result = store.steer_pending(&PendingSteerScope::Row {
+                expected: expected(accepted.sequence, 0),
+            });
+            assert!(
+                matches!(result, Err(ConversationStoreError::Storage(_))),
+                "{label}: outer transaction abort must propagate, got {result:?}"
+            );
+            let pending = store.load_pending().unwrap();
+            assert_eq!(pending.len(), 1, "{label}");
+            assert_eq!(pending[0].revision, 0, "{label}");
+            assert_eq!(
+                pending[0].message.kind,
+                InboundKind::QueuedMessage,
+                "{label}"
+            );
+        }
+
+        // 3. Savepoint cleanup failure propagates TransactionInvalid.
+        {
+            let store = store();
+            let accepted = store.accept_inbound(queued("invalid-tx")).unwrap();
+            {
+                let connection = store.lock().unwrap();
+                connection
+                    .execute_batch(&format!(
+                        "CREATE TEMP TRIGGER fail_steer_header \
+                         BEFORE UPDATE OF {target} \
+                         BEGIN SELECT RAISE(FAIL, 'optional header'); END;"
+                    ))
+                    .unwrap();
+                connection
+                    .authorizer(Some(|context: AuthContext<'_>| {
+                        if matches!(
+                            context.action,
+                            AuthAction::Savepoint {
+                                operation: TransactionOperation::Rollback,
+                                ..
+                            }
+                        ) {
+                            return Authorization::Deny;
+                        }
+                        Authorization::Allow
+                    }))
+                    .unwrap();
+            }
+            let result = store.steer_pending(&PendingSteerScope::Row {
+                expected: expected(accepted.sequence, 0),
+            });
+            store
+                .lock()
+                .unwrap()
+                .authorizer(None::<fn(AuthContext<'_>) -> Authorization>)
+                .unwrap();
+            assert!(
+                matches!(result, Err(ConversationStoreError::TransactionInvalid(_))),
+                "{label}: savepoint cleanup failure must propagate TransactionInvalid, got {result:?}"
+            );
+            let pending = store.load_pending().unwrap();
+            assert_eq!(pending.len(), 1, "{label}");
+            assert_eq!(pending[0].revision, 0, "{label}");
+            assert_eq!(
+                pending[0].message.kind,
+                InboundKind::QueuedMessage,
+                "{label}"
+            );
+        }
+    }
 }

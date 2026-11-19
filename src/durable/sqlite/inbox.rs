@@ -520,7 +520,7 @@ pub(super) fn rewrite_pending_body(
     item: &mut PendingInboundItem,
     expected: &crate::durable::PendingInboundRef,
     text: &str,
-) -> Result<(), ConversationStoreError> {
+) -> Result<bool, ConversationStoreError> {
     item.message.content = vec![UserContentBlock::Text(crate::message::content::TextBlock {
         text: text.to_owned(),
     })];
@@ -542,26 +542,14 @@ pub(super) fn rewrite_pending_body(
         .map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("pending edit: {error}"))
         })?;
-    let _ = optional_display_layout(transaction, || {
-        content::index_pending(
-            transaction,
-            &item.message,
-            expected.sequence.get(),
-            revision,
-        )?;
-        observation::index::index_message(
-            transaction,
-            &MessageBlock::User(item.message.clone()),
-            None,
-        )
-    })?;
-    let _ = observation::index::index_pending_header(
+    item.revision = revision;
+    refresh_pending_display_layout(
         transaction,
+        &item.message,
         expected.sequence.get(),
-        &item.message_id,
-        None,
-    );
-    Ok(())
+        revision,
+        true,
+    )
 }
 
 pub(super) fn reject_unaccounted_goal(draft: &InboundDraft) -> Result<(), ConversationStoreError> {
@@ -610,13 +598,15 @@ pub(super) fn refresh_pending_receipt(
     accepted: &mut AcceptedInbound,
 ) -> Result<(), ConversationStoreError> {
     accepted.read_cut = reading::cut(connection, conversation)?;
-    accepted.pending_observation = observation_receipt::pending(
-        connection,
-        conversation,
-        Some(accepted.sequence.get()),
-        None,
-        None,
-    );
+    if accepted.pending_observation.is_some() {
+        accepted.pending_observation = observation_receipt::pending(
+            connection,
+            conversation,
+            Some(accepted.sequence.get()),
+            None,
+            None,
+        );
+    }
     Ok(())
 }
 
@@ -754,27 +744,21 @@ pub(super) fn accept_scheduled_inbound_tx(
     // Pending inputs never allocate a positive transcript seat until adopted
     // into the Message Ledger; their display header uses a temporary negative
     // carrier row (like Context facts) until adoption or removal.
-    let _ = optional_display_layout(transaction, || {
-        content::index_pending(transaction, &message, sequence, 0)?;
-        observation::index::index_message_capture(
-            transaction,
-            &MessageBlock::User(message.clone()),
-            None,
-            false,
-            None,
-        )
-        .map(|_| ())
-    })?;
-    let _ = observation::index::index_pending_header(transaction, sequence, &message_id, None);
+    let display_available =
+        refresh_pending_display_layout(transaction, &message, sequence, 0, false)?;
     Ok(AcceptedInbound {
         goal_observation: None,
-        pending_observation: observation_receipt::pending(
-            transaction,
-            &store.conversation_id,
-            Some(sequence),
-            None,
-            None,
-        ),
+        pending_observation: display_available
+            .then(|| {
+                observation_receipt::pending(
+                    transaction,
+                    &store.conversation_id,
+                    Some(sequence),
+                    None,
+                    None,
+                )
+            })
+            .flatten(),
         read_cut: reading::cut(transaction, &store.conversation_id)?,
         sequence: InboundSequence::new(sequence),
         message_id,
@@ -1001,6 +985,7 @@ impl SqliteConversationStore {
         {
             return Ok(Outcome::InvalidItem);
         }
+        let mut display_available = true;
         if let Some(text) = text {
             if text.trim().is_empty()
                 || item.message.content.is_empty()
@@ -1012,7 +997,7 @@ impl SqliteConversationStore {
             {
                 return Ok(Outcome::InvalidItem);
             }
-            rewrite_pending_body(&transaction, &mut item, expected, text)?;
+            display_available = rewrite_pending_body(&transaction, &mut item, expected, text)?;
         } else {
             let _ = optional_display_layout(&transaction, || {
                 content::clear_pending(&transaction, &item.sequence.get().to_string())
@@ -1046,13 +1031,17 @@ impl SqliteConversationStore {
         transaction.execute("UPDATE rustx_store SET reading_mutation_revision=reading_mutation_revision+1 WHERE id=1", [])
             .map_err(|error| crate::durable::sqlite::sqlite_error(&error,format!("reading mutation: {error}")))?;
         let read_cut = reading::cut(&transaction, &self.conversation_id)?;
-        let pending_observation = observation_receipt::pending(
-            &transaction,
-            &self.conversation_id,
-            text.map(|_| expected.sequence.get()),
-            text.is_none().then_some(expected.sequence.get()),
-            None,
-        );
+        let pending_observation = display_available
+            .then(|| {
+                observation_receipt::pending(
+                    &transaction,
+                    &self.conversation_id,
+                    text.map(|_| expected.sequence.get()),
+                    text.is_none().then_some(expected.sequence.get()),
+                    None,
+                )
+            })
+            .flatten();
         transaction.commit().map_err(|error| {
             crate::durable::sqlite::sqlite_error(
                 &error,
@@ -1108,9 +1097,10 @@ impl SqliteConversationStore {
                 .filter(|item| item.sequence <= *through && queue_row_steerable(item))
                 .collect(),
         };
+        let mut display_available = true;
         if !rows.is_empty() {
             for item in &mut rows {
-                reclassify_queued_row(&transaction, item)?;
+                display_available &= reclassify_queued_row(&transaction, item)?;
             }
             transaction
                 .execute(
@@ -1125,8 +1115,11 @@ impl SqliteConversationStore {
                 })?;
         }
         let read_cut = reading::cut(&transaction, &self.conversation_id)?;
-        let pending_observation =
-            observation_receipt::pending(&transaction, &self.conversation_id, None, None, None);
+        let pending_observation = display_available
+            .then(|| {
+                observation_receipt::pending(&transaction, &self.conversation_id, None, None, None)
+            })
+            .flatten();
         if !rows.is_empty() {
             transaction.commit().map_err(|error| {
                 crate::durable::sqlite::sqlite_error(
@@ -1154,7 +1147,7 @@ fn queue_row_steerable(item: &PendingInboundItem) -> bool {
 fn reclassify_queued_row(
     transaction: &Transaction<'_>,
     item: &mut PendingInboundItem,
-) -> Result<(), ConversationStoreError> {
+) -> Result<bool, ConversationStoreError> {
     item.message.kind = InboundKind::Message;
     let revision = item
         .revision
@@ -1188,22 +1181,52 @@ fn reclassify_queued_row(
         ));
     }
     item.revision = revision;
+    refresh_pending_display_layout(
+        transaction,
+        &item.message,
+        item.sequence.get(),
+        revision,
+        true,
+    )
+}
+
+/// Optional pending display indexing isolated from the authoritative inbox row.
+/// Cancellation and loss of transaction integrity propagate immediately; a
+/// contained derived-header failure rolls back its savepoint, attempts to
+/// invalidate any prior `observation_header`, and returns `Ok(false)` while
+/// revision tagging ensures any un-clearable prior header stays unavailable.
+fn refresh_pending_display_layout(
+    transaction: &Transaction<'_>,
+    message: &UserMessageBlock,
+    sequence: u64,
+    revision: u64,
+    invalidate_on_failure: bool,
+) -> Result<bool, ConversationStoreError> {
     let indexed = optional_display_layout(transaction, || {
-        content::index_pending(transaction, &item.message, item.sequence.get(), revision)?;
-        observation::index::index_message(
+        content::index_pending(transaction, message, sequence, revision)?;
+        observation::index::index_message_capture(
             transaction,
-            &MessageBlock::User(item.message.clone()),
+            &MessageBlock::User(message.clone()),
+            None,
+            false,
             None,
         )
+        .map(|_| ())?;
+        observation::index::index_pending_header(transaction, sequence, revision, &message.id, None)
     })?;
-    if indexed.is_none() {
-        return Err(storage("pending steer display index failed"));
+    if indexed.is_some() {
+        return Ok(true);
     }
-    observation::index::index_pending_header(
-        transaction,
-        item.sequence.get(),
-        &item.message_id,
-        None,
-    )?;
-    Ok(())
+    if invalidate_on_failure {
+        let _ = optional_display_layout(transaction, || {
+            transaction
+                .execute_cached(
+                    "UPDATE pending_inbound SET observation_header=NULL WHERE sequence=?1",
+                    [seq_to_i64(sequence)?],
+                )
+                .map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))
+                .map(|_| ())
+        })?;
+    }
+    Ok(false)
 }

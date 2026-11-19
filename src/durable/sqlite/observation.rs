@@ -1296,12 +1296,16 @@ pub(super) fn pending_page(
     let mut headers = Vec::with_capacity(page_limit);
     for row in rows {
         let (sequence, revision, bytes, transcript_cursor, correlation) =
-            row.map_err(|error| storage(error.to_string()))?;
+            row.map_err(|error| crate::durable::sqlite::sqlite_error(&error, error.to_string()))?;
         if bytes.len() > HEADER_ENCODED_MAX {
             return Err(storage("pending header exceeds bound"));
         }
-        let mut message: MessageHeader =
+        let stored: index::StoredPendingHeader =
             serde_json::from_slice(&bytes).map_err(|error| storage(error.to_string()))?;
+        if stored.revision != revision {
+            return Err(storage("pending header revision mismatch"));
+        }
+        let mut message = stored.message;
         message.transcript_cursor = transcript_cursor.map(crate::durable::TranscriptCursor::new);
         headers.push(crate::durable::observation::PendingHeader {
             sequence,
