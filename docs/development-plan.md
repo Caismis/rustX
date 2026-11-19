@@ -310,7 +310,7 @@ Bash requirements:
 - Runtime child-subreaper capability: on Linux, rustX's process-wide
   `PR_SET_CHILD_SUBREAPER` activation is a runtime-level kernel coordination
   primitive (lazy one-time, idempotent, sticky activation; owned by
-  `src/runtime/process_supervision.rs`), established before `START` and
+  `crates/process-supervisor/src/process_supervision.rs`), established before `START` and
   never toggled per invocation. It is the catastrophic fallback authority
   for Bash supervisor units only — in M5, Bash is the only production
   subprocess hierarchy relying on orphan adoption, no generic unknown-child

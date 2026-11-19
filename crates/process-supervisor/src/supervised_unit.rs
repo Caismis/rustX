@@ -8,7 +8,7 @@
 //!
 //! - one kernel-mediated terminal proof: the group-scoped wait
 //!   (`waitid(Id::PGid)` returning `ECHILD`), with the platform-specific
-//!   wait adapter in [`crate::runtime::process_wait`];
+//!   wait adapter in [`crate::process_wait`];
 //! - on Linux, an inherited seccomp filter rejects `setsid(2)`/`setpgid(2)`
 //!   with `EPERM`, so no owned descendant can escape the unit's
 //!   process-group/session; macOS has the process-group lifecycle but no
@@ -17,7 +17,7 @@
 //!   leaves that group is outside the ownership domain (not tracked,
 //!   contained, reaped, or waited for);
 //! - on Linux, the runtime child-subreaper prerequisite is installed before
-//!   the unit spawns (`crate::runtime::process_supervision`) and re-established
+//!   the unit spawns (`crate::process_supervision`) and re-established
 //!   inside each supervisor process so orphaned descendants reparent into
 //!   the unit's reaping domain; macOS has no equivalent orphan-adoption
 //!   primitive;
@@ -46,13 +46,14 @@ use std::time::Duration;
 use nix::errno::Errno;
 use nix::sys::signal::{Signal, killpg};
 use nix::unistd::Pid;
+use tokio::io::AsyncWriteExt;
 
 /// Only a private snapshot pathname travels in the supervisor environment.
 /// The native process owner retains this mode-0600 file until settlement;
 /// environment values never become one execve argument/environment string.
-pub(crate) const COMMAND_ENVIRONMENT_FILE_ENV: &str = "RUSTX_COMMAND_ENVIRONMENT_FILE";
+pub const COMMAND_ENVIRONMENT_FILE_ENV: &str = "RUSTX_COMMAND_ENVIRONMENT_FILE";
 
-pub(crate) fn snapshot_command_environment(
+pub fn snapshot_command_environment(
     entries: &[(String, String)],
 ) -> Result<tempfile::NamedTempFile, String> {
     let mut file = tempfile::Builder::new()
@@ -66,7 +67,7 @@ pub(crate) fn snapshot_command_environment(
 
 /// Decode at the final child boundary. Supervisors do not install these values
 /// into their own environment or forward the private pathname to the command.
-pub(crate) fn command_environment() -> Result<Vec<(String, String)>, String> {
+pub fn command_environment() -> Result<Vec<(String, String)>, String> {
     use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
     let path = std::env::var_os(COMMAND_ENVIRONMENT_FILE_ENV)
         .ok_or("missing command environment snapshot")?;
@@ -85,41 +86,41 @@ pub(crate) fn command_environment() -> Result<Vec<(String, String)>, String> {
 }
 
 /// The outer supervisor role name.
-pub(crate) const ROLE_OUTER: &str = "outer";
+pub const ROLE_OUTER: &str = "outer";
 /// The inner supervisor role name.
-pub(crate) const ROLE_INNER: &str = "inner";
+pub const ROLE_INNER: &str = "inner";
 
 /// The shell's canonical exit status frame kind:
 /// `{ exit_code: i32 LE, signaled: u8, signal: i32 LE }`.
-pub(crate) const MSG_SHELL_EXITED: u8 = 0x02;
+pub const MSG_SHELL_EXITED: u8 = 0x02;
 /// All unit-owned children are reaped (kernel `ECHILD` reached).
-pub(crate) const MSG_ALL_CHILDREN_REAPED: u8 = 0x03;
+pub const MSG_ALL_CHILDREN_REAPED: u8 = 0x03;
 /// A process-control failure; payload is the human-readable message.
-pub(crate) const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
+pub const MSG_PROCESS_CONTROL_FAILURE: u8 = 0x04;
 /// One attempted group signal for test observability:
 /// `{ pgid: i32 LE, signal: i32 LE, emitted: u8 }`.
-pub(crate) const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
+pub const MSG_SIGNAL_ATTEMPT: u8 = 0x05;
 /// Inner -> owner: setup is complete and the owned child has not yet been
 /// spawned; payload is the unit PGID (`i32 LE`).
-pub(crate) const MSG_ANCHOR_READY: u8 = 0x06;
+pub const MSG_ANCHOR_READY: u8 = 0x06;
 /// Inner -> owner: the owned child was successfully spawned in the fixed
 /// group.
-pub(crate) const MSG_OWNERSHIP_ESTABLISHED: u8 = 0x07;
+pub const MSG_OWNERSHIP_ESTABLISHED: u8 = 0x07;
 /// Supervisor -> owner: setup ended before any owned process was spawned.
-pub(crate) const MSG_NO_OWNERSHIP: u8 = 0x08;
+pub const MSG_NO_OWNERSHIP: u8 = 0x08;
 /// Owner -> supervisor: run the `TERM` -> grace -> `KILL` sequence.
-pub(crate) const MSG_TERMINATE: u8 = 0x10;
+pub const MSG_TERMINATE: u8 = 0x10;
 /// Owner -> inner: the owner retained the anchor identity and authorizes
 /// the owned-child spawn.
-pub(crate) const MSG_START: u8 = 0x11;
+pub const MSG_START: u8 = 0x11;
 /// Owner -> outer: the authoritative terminal frame was parsed.
-pub(crate) const MSG_TERMINAL_ACK: u8 = 0x12;
+pub const MSG_TERMINAL_ACK: u8 = 0x12;
 /// Owner -> outer: the owner accepted and retained the outer control
 /// connection. This is the runtime->outer startup gate: before it arrives
 /// the outer owns nothing and may not create any part of the unit
 /// hierarchy, so a control-setup failure at the owner can only ever find a
 /// gated outer with no inner and no server tree.
-pub(crate) const MSG_OWNER_ATTACHED: u8 = 0x13;
+pub const MSG_OWNER_ATTACHED: u8 = 0x13;
 
 /// The inner supervisor's exit status for a normal completion: it reached
 /// the kernel `ECHILD` terminal child state (or no owned process tree was
@@ -534,8 +535,8 @@ pub(crate) enum ContainmentOutcome {
 /// result.
 pub(crate) fn contain_group(pgid: i32) -> ContainmentOutcome {
     let result = killpg(Pid::from_raw(pgid), Signal::SIGKILL);
-    crate::tools::native::bash_supervisor::diagnostics::record(
-        crate::tools::native::bash_supervisor::diagnostics::Event::Signal {
+    crate::bash_supervisor::diagnostics::record(
+        crate::bash_supervisor::diagnostics::Event::Signal {
             pgid,
             signal: libc::SIGKILL,
             result: Some(result.map_or_else(|error| error as i32, |()| 0)),
@@ -589,7 +590,7 @@ fn classify_containment_result(result: nix::Result<()>) -> ContainmentOutcome {
 /// keeps the group observable and turns an actually-empty owned group into
 /// an `Err` (unproven timeout), never into a false terminal result.
 #[cfg(target_os = "macos")]
-pub(crate) fn prove_group_absent(pgid: i32) -> Result<(), String> {
+pub fn prove_group_absent(pgid: i32) -> Result<(), String> {
     let deadline = std::time::Instant::now() + GROUP_ABSENCE_TIMEOUT;
     loop {
         if group_absence_probe(
@@ -606,10 +607,7 @@ pub(crate) fn prove_group_absent(pgid: i32) -> Result<(), String> {
 /// Kept pure so the Darwin fail-closed deadline/EPERM contract is testable
 /// without waiting for a real orphan or changing the production deadline.
 #[cfg(any(target_os = "macos", test))]
-pub(crate) fn group_absence_probe(
-    observed: nix::Result<()>,
-    expired: bool,
-) -> Result<bool, String> {
+pub fn group_absence_probe(observed: nix::Result<()>, expired: bool) -> Result<bool, String> {
     match observed {
         Err(Errno::ESRCH) => Ok(true),
         Ok(()) | Err(Errno::EPERM) if expired => Err(
@@ -631,7 +629,7 @@ pub(crate) fn group_absence_probe(
 /// draining ([`FrameReader::pop`]) are deliberately separate so a frame can
 /// never be lost through an ignored return value.
 #[derive(Debug, Default)]
-pub(crate) struct FrameReader {
+pub struct FrameReader {
     buf: Vec<u8>,
 }
 
@@ -763,7 +761,7 @@ fn wait_control_writable(
 /// Commits one complete frame, or shuts down the channel on delivery failure.
 /// No caller can append another frame after an abandoned partial prefix.
 /// Per-send nonblocking mode also bounds calls made before `O_NONBLOCK` is set.
-pub(crate) fn write_frame(
+pub fn write_frame(
     socket: &mut impl std::os::fd::AsFd,
     kind: u8,
     payload: &[u8],
@@ -798,7 +796,7 @@ pub(crate) fn write_frame(
 ///   waitable child of rustX without a prior authoritative terminal event.
 ///   This is **not** a terminal proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EmergencyContainment {
+pub enum EmergencyContainment {
     /// The anchor was retained, the fallback signal was issued while that
     /// identity was retained, the group-scoped wait reached `ECHILD`, and
     /// the anchor was then released.
@@ -823,22 +821,21 @@ pub(crate) enum EmergencyContainment {
 /// pgid. No broad wait (`waitpid(-1)`, `waitid(P_ALL)`) exists here, so
 /// unrelated adopted children are never consumed.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn emergency_contain_group(
+pub fn emergency_contain_group(
     pgid: i32,
     anchor_unavailable: bool,
 ) -> Result<EmergencyContainment, String> {
-    use crate::runtime::process_wait::{Id, waitid};
+    use crate::process_wait::{Id, waitid};
     use nix::errno::Errno;
     use nix::sys::signal::Signal;
     use nix::sys::wait::{WaitPidFlag, WaitStatus};
-    #[cfg(not(test))]
-    let _ = anchor_unavailable;
-
-    #[cfg(test)]
     if anchor_unavailable {
-        // The regression seam: the anchor reads as not waitable without a
-        // prior authoritative terminal event. The semantic state is what
-        // matters — never an actual pid reuse.
+        // The trusted regression seam: the caller's fixture control declares
+        // the anchor reads as not waitable without a prior authoritative
+        // terminal event. The semantic state is what matters — never an
+        // actual pid reuse. Production always passes `false`; the flag is a
+        // parameter, not a build-cfg, so root test fixtures keep working
+        // across the package boundary.
         return Ok(EmergencyContainment::AnchorUnavailable);
     }
     let anchor = Pid::from_raw(pgid);
@@ -889,7 +886,7 @@ pub(crate) fn emergency_contain_group(
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) fn emergency_contain_group(
+pub fn emergency_contain_group(
     _pgid: i32,
     _anchor_unavailable: bool,
 ) -> Result<EmergencyContainment, String> {
@@ -925,8 +922,8 @@ pub(crate) fn emergency_contain_group(
 /// subreaper when the owner died) — and the cached pgid is then **never**
 /// signalled and no terminality is claimed.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(crate) fn contain_adopted_group(pgid: i32) -> Result<EmergencyContainment, String> {
-    use crate::runtime::process_wait::{Id, waitid};
+pub fn contain_adopted_group(pgid: i32) -> Result<EmergencyContainment, String> {
+    use crate::process_wait::{Id, waitid};
     use nix::errno::Errno;
     use nix::sys::signal::Signal;
     use nix::sys::wait::{WaitPidFlag, WaitStatus};
@@ -973,7 +970,7 @@ pub(crate) fn contain_adopted_group(pgid: i32) -> Result<EmergencyContainment, S
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) fn contain_adopted_group(_pgid: i32) -> Result<EmergencyContainment, String> {
+pub fn contain_adopted_group(_pgid: i32) -> Result<EmergencyContainment, String> {
     Err("nested unit containment requires Linux or macOS process supervision".to_owned())
 }
 
@@ -1168,6 +1165,46 @@ mod signal_contract_tests {
             ContainmentOutcome::Unproven(_)
         ));
     }
+}
+
+/// Sends the one termination request to the invocation supervisor.
+///
+/// A write failure means the supervisor is already gone, which implies its
+/// terminal child-set events are already in flight or were received; the
+/// supervision loop's read side remains authoritative.
+#[cfg(unix)]
+pub async fn send_terminate<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) -> bool {
+    let frame = [1u8, 0, 0, 0, MSG_TERMINATE];
+    stream.write_all(&frame).await.is_ok()
+}
+
+#[cfg(unix)]
+pub async fn send_start<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) -> Result<(), String> {
+    let frame = [1u8, 0, 0, 0, MSG_START];
+    stream
+        .write_all(&frame)
+        .await
+        .map_err(|error| format!("cannot acknowledge the ownership gate: {error}"))
+}
+
+/// Opens the runtime->outer startup gate: the owner accepted and retained
+/// the outer control connection, so the outer may create the unit
+/// hierarchy. Until this frame is written the outer owns nothing.
+#[cfg(unix)]
+pub async fn send_owner_attached<W: tokio::io::AsyncWrite + Unpin>(
+    stream: &mut W,
+) -> Result<(), String> {
+    let frame = [1u8, 0, 0, 0, MSG_OWNER_ATTACHED];
+    stream
+        .write_all(&frame)
+        .await
+        .map_err(|error| format!("cannot open the interactive startup gate: {error}"))
+}
+
+#[cfg(unix)]
+pub async fn send_terminal_ack<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) {
+    let frame = [1u8, 0, 0, 0, MSG_TERMINAL_ACK];
+    let _ = stream.write_all(&frame).await;
 }
 
 #[cfg(test)]

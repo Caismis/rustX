@@ -42,40 +42,40 @@ async fn expired_absence_observation_can_recover_without_signaling_a_released_gr
     let (runtime, supervisor) = std::os::unix::net::UnixStream::pair().unwrap();
     runtime.set_nonblocking(true).unwrap();
     let mut stream = tokio::net::UnixStream::from_std(runtime).unwrap();
-    let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
-        &vec![("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
-    )
+    let environment_snapshot = crate::supervised_unit::snapshot_command_environment(&vec![(
+        "PATH".into(),
+        "/usr/local/bin:/usr/bin:/bin".into(),
+    )])
     .expect("environment snapshot");
-    let mut outer =
-        tokio::process::Command::new(crate::runtime::process_runner::supervisor_binary())
-            .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
-            .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
-                environment_snapshot.path(),
-            )
-            .env(COMMAND_ENV, "sleep 30")
-            .env(FAIL_SIGNAL_ENV, "1")
-            .env(diagnostics::TRACE_ENV, &trace_path)
-            .env(diagnostics::GROUP_ABSENCE_GATE_ENV, &gate_path)
-            .stdin(Stdio::from(OwnedFd::from(supervisor)))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .expect("real outer supervisor");
+    let mut outer = tokio::process::Command::new(crate::invocation::supervisor_binary())
+        .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
+        .env(
+            crate::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            environment_snapshot.path(),
+        )
+        .env(COMMAND_ENV, "sleep 30")
+        .env(FAIL_SIGNAL_ENV, "1")
+        .env(diagnostics::TRACE_ENV, &trace_path)
+        .env(diagnostics::GROUP_ABSENCE_GATE_ENV, &gate_path)
+        .stdin(Stdio::from(OwnedFd::from(supervisor)))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("real outer supervisor");
     let mut reader = FrameReader::new();
     let (kind, payload) = next_frame(&mut stream, &mut reader, &trace_path).await;
     assert_eq!(kind, MSG_ANCHOR_READY);
     let pgid = i32::from_le_bytes(payload.try_into().unwrap());
     assert!(pgid > 0, "the invocation owns a positive process-group id");
-    crate::runtime::process_runner::send_start(&mut stream)
+    crate::supervised_unit::send_start(&mut stream)
         .await
         .unwrap();
     assert_eq!(
         next_frame(&mut stream, &mut reader, &trace_path).await.0,
         MSG_OWNERSHIP_ESTABLISHED
     );
-    assert!(crate::runtime::process_runner::send_terminate(&mut stream).await);
+    assert!(crate::supervised_unit::send_terminate(&mut stream).await);
     let mut signals = Vec::new();
     let mut failures = Vec::new();
     // The gate is reached only after fallback signaling and anchor release.
@@ -115,7 +115,7 @@ async fn expired_absence_observation_can_recover_without_signaling_a_released_gr
         ]
     );
     assert_eq!(killpg(Pid::from_raw(pgid), None), Err(Errno::ESRCH));
-    crate::runtime::process_runner::send_terminal_ack(&mut stream).await;
+    crate::supervised_unit::send_terminal_ack(&mut stream).await;
     assert!(
         tokio::time::timeout(Duration::from_secs(20), outer.wait())
             .await

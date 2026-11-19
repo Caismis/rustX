@@ -7,11 +7,11 @@
 
 fn main() {
     let exit = match std::env::var("RUSTX_SUPERVISOR_ROLE").as_deref() {
-        Ok(rustx::tools::native::bash_supervisor::ROLE_OUTER) => {
-            rustx::tools::native::bash_supervisor::run_outer_supervisor()
+        Ok(rustx_process_supervisor::bash_supervisor::ROLE_OUTER) => {
+            rustx_process_supervisor::bash_supervisor::run_outer_supervisor()
         }
-        Ok(rustx::tools::native::bash_supervisor::ROLE_INNER) => {
-            rustx::tools::native::bash_supervisor::run_inner_supervisor()
+        Ok(rustx_process_supervisor::bash_supervisor::ROLE_INNER) => {
+            rustx_process_supervisor::bash_supervisor::run_inner_supervisor()
         }
         _ => 1,
     };

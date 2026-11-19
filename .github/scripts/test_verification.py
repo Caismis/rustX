@@ -243,7 +243,7 @@ class Planning(unittest.TestCase):
         self.assertEqual(v.classify(modified("crates/confined-fs/src/lib.rs"))["surfaces"], ["rust"])
         run = v.plan("pull_request", [], modified("crates/execution-client/src/main.rs"))["run"]
         self.assertTrue(run["rust-fast"])
-        for path in ("src/runtime/interactive_supervisor.rs", "src/runtime/supervised_unit.rs"):
+        for path in ("crates/process-supervisor/src/interactive_supervisor.rs", "crates/process-supervisor/src/supervised_unit.rs"):
             with self.subTest(path=path):
                 self.assertTrue(v.plan("pull_request", [], modified(path))["run"]["web-client"])
         run = v.plan("pull_request", [], modified("README.md"))["run"]

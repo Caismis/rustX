@@ -278,10 +278,10 @@ use nix::sys::signal::{Signal, killpg};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::{Pid, read};
 
-use crate::runtime::process_wait::{Id, waitid};
+use crate::process_wait::{Id, waitid};
 #[cfg(target_os = "macos")]
-use crate::runtime::supervised_unit::prove_group_absent;
-use crate::runtime::supervised_unit::{
+use crate::supervised_unit::prove_group_absent;
+use crate::supervised_unit::{
     ContainmentOutcome, FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL,
     MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED,
     MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK,
@@ -291,10 +291,10 @@ use crate::runtime::supervised_unit::{
 };
 
 /// The outer supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
-pub const ROLE_OUTER: &str = crate::runtime::supervised_unit::ROLE_OUTER;
+pub const ROLE_OUTER: &str = crate::supervised_unit::ROLE_OUTER;
 
 /// The inner supervisor role name in `RUSTX_SUPERVISOR_ROLE`.
-pub const ROLE_INNER: &str = crate::runtime::supervised_unit::ROLE_INNER;
+pub const ROLE_INNER: &str = crate::supervised_unit::ROLE_INNER;
 
 /// The environment variable carrying the `/bin/bash -c` command into the
 /// supervisor (the command travels in argv today; the environment simply
@@ -338,7 +338,7 @@ pub const FAIL_CONTAINMENT_ENV: &str = "RUSTX_TEST_FAIL_CONTAINMENT";
 
 // All protocol constants, exit codes, structural primitives, and the
 // `TERM` -> grace -> `KILL` timings come from the shared supervisor-unit
-// core (`crate::runtime::supervised_unit`), so the Bash and interactive
+// core (`crate::supervised_unit`), so the Bash and interactive
 // units share one ownership model.
 
 /// Runs the outer supervisor; never returns.
@@ -546,9 +546,7 @@ fn run_outer() -> i32 {
                 // This is one recovery attempt, not a retry or a group signal.
                 // Abnormal exit still uses retained-anchor fallback containment.
                 if anchor == InnerAnchor::Running && !anchor_stop_handled {
-                    match crate::runtime::process_wait::observe_stopped_child(Pid::from_raw(
-                        inner_pid,
-                    )) {
+                    match crate::process_wait::observe_stopped_child(Pid::from_raw(inner_pid)) {
                         Ok(WaitStatus::Stopped(..)) => {
                             anchor_stop_handled = true;
                             trace(TraceEvent::AnchorStopObserved);
@@ -684,8 +682,7 @@ fn run_outer() -> i32 {
 #[cfg(target_os = "macos")]
 fn observe_group_absence(pgid: i32) -> Result<(), String> {
     if diagnostics::expired_group_presence() {
-        return crate::runtime::supervised_unit::group_absence_probe(Err(Errno::EPERM), true)
-            .map(|_| ());
+        return crate::supervised_unit::group_absence_probe(Err(Errno::EPERM), true).map(|_| ());
     }
     prove_group_absent(pgid)
 }
@@ -732,7 +729,7 @@ fn await_terminal_ack() {
 /// id is provably allocated to this invocation — and never afterwards.
 ///
 /// The raw result is classified into
-/// [`ContainmentOutcome`](crate::runtime::supervised_unit::ContainmentOutcome):
+/// [`ContainmentOutcome`](crate::supervised_unit::ContainmentOutcome):
 /// `Contained` (`Ok` or `ESRCH`) versus `Unproven` (`EPERM` and every other
 /// error).
 fn containment_signal(stream: &mut ControlStream, pgid: i32) -> ContainmentOutcome {
@@ -863,7 +860,7 @@ fn run_inner() -> i32 {
             let _ = std::fs::rename(pending, path);
         }
     }
-    let command_environment = match crate::runtime::supervised_unit::command_environment() {
+    let command_environment = match crate::supervised_unit::command_environment() {
         Ok(environment) => environment,
         Err(error) => {
             let _ = stream.write_preownership_failure(&error);
@@ -1094,13 +1091,12 @@ fn run_inner() -> i32 {
 /// supervisor control socket remains separate from all business streams.
 fn standalone_invocation(shell_command: &str) -> Result<(Command, Option<std::fs::File>), String> {
     use std::os::unix::fs::MetadataExt;
-    let Some(encoded) = std::env::var_os(crate::runtime::process_runner::PROGRAM_INVOCATION_ENV)
-    else {
+    let Some(encoded) = std::env::var_os(crate::invocation::PROGRAM_INVOCATION_ENV) else {
         let mut command = Command::new("/bin/bash");
         command.arg("-c").arg(shell_command).stdin(Stdio::null());
         return Ok((command, None));
     };
-    let invocation: crate::runtime::process_runner::ProgramInvocation =
+    let invocation: crate::invocation::ProgramInvocation =
         serde_json::from_str(encoded.to_str().ok_or("invalid program invocation")?)
             .map_err(|_| "invalid program invocation")?;
     let metadata = std::fs::metadata(".").map_err(|_| "command directory unavailable")?;
@@ -1252,7 +1248,7 @@ impl ControlStream {
     /// Writes one length-prefixed frame: `[u32 LE length][kind][payload]`.
     #[allow(clippy::unused_self)] // the handle exists to be explicit about the control stream
     fn write_frame(&mut self, kind: u8, payload: &[u8]) -> Result<(), String> {
-        crate::runtime::supervised_unit::write_frame(&mut std::io::stdin(), kind, payload)?;
+        crate::supervised_unit::write_frame(&mut std::io::stdin(), kind, payload)?;
         match kind {
             MSG_ALL_CHILDREN_REAPED => trace(TraceEvent::TerminalPublished),
             MSG_PROCESS_CONTROL_FAILURE => trace(TraceEvent::ControlFailure),
@@ -1358,7 +1354,7 @@ mod anchor_reaping_tests {
     //!   [`FrameReader`] with both frames and needs no kernel at all.
 
     use super::*;
-    use crate::runtime::process_runner::supervisor_binary;
+    use crate::invocation::supervisor_binary;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixStream;
     use std::path::Path;
@@ -1407,14 +1403,15 @@ mod anchor_reaping_tests {
         anchor_pid_file: &Path,
     ) -> (std::process::Child, UnixStream, tempfile::NamedTempFile) {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
-        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
-            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
-        )
+        let environment_snapshot = crate::supervised_unit::snapshot_command_environment(&[(
+            "PATH".into(),
+            "/usr/local/bin:/usr/bin:/bin".into(),
+        )])
         .expect("environment snapshot");
         let child = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                crate::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
                 environment_snapshot.path(),
             )
             .env(COMMAND_ENV, command)
@@ -1441,14 +1438,15 @@ mod anchor_reaping_tests {
         anchor_pid_file: &Path,
     ) -> (std::process::Child, UnixStream, tempfile::NamedTempFile) {
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
-        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
-            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
-        )
+        let environment_snapshot = crate::supervised_unit::snapshot_command_environment(&[(
+            "PATH".into(),
+            "/usr/local/bin:/usr/bin:/bin".into(),
+        )])
         .expect("environment snapshot");
         let child = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                crate::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
                 environment_snapshot.path(),
             )
             .env(COMMAND_ENV, command)
@@ -1777,14 +1775,15 @@ mod anchor_reaping_tests {
             sleep_pid_file.display()
         );
         let (stream_a, stream_b) = UnixStream::pair().expect("control socket pair");
-        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
-            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
-        )
+        let environment_snapshot = crate::supervised_unit::snapshot_command_environment(&[(
+            "PATH".into(),
+            "/usr/local/bin:/usr/bin:/bin".into(),
+        )])
         .expect("environment snapshot");
         let mut outer = std::process::Command::new(supervisor_binary())
             .env("RUSTX_SUPERVISOR_ROLE", ROLE_OUTER)
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                crate::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
                 environment_snapshot.path(),
             )
             .env(COMMAND_ENV, &command)

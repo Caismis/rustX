@@ -68,11 +68,16 @@ use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use futures_util::future::BoxFuture;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::AsyncReadExt;
 
 use crate::runtime::cancellation::CancellationSignal;
 #[cfg(unix)]
-use crate::runtime::supervised_unit::{EmergencyContainment, emergency_contain_group};
+use rustx_process_supervisor::invocation::{
+    PROGRAM_INVOCATION_ENV, ProgramInvocation, supervisor_binary,
+};
+use rustx_process_supervisor::supervised_unit::{
+    EmergencyContainment, emergency_contain_group, send_terminal_ack, send_terminate,
+};
 #[cfg(unix)]
 use std::os::unix::process::ExitStatusExt;
 #[cfg(test)]
@@ -124,19 +129,6 @@ pub(crate) struct SupervisedCommandSpec {
     /// The runtime cancellation signal owning the invocation.
     pub cancellation: CancellationSignal,
 }
-
-/// Private supervisor launch data. It never comes from the child environment.
-/// The ordinary Bash path leaves this absent; standalone callers supply argv
-/// without shell parsing and retain the same process-tree settlement owner.
-#[derive(Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct ProgramInvocation {
-    pub argv: Vec<String>,
-    pub stdin_socket: Option<PathBuf>,
-    pub terminal: Option<PathBuf>,
-    pub cwd_identity: (u64, u64),
-}
-
-pub(crate) const PROGRAM_INVOCATION_ENV: &str = "RUSTX_SUPERVISOR_PROGRAM";
 
 /// The settlement kind when cancellation/timeout owns the invocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -644,15 +636,14 @@ async fn wait_for_terminal_release(_control: Option<&RunnerTestControl>) {
 }
 
 // The frame protocol constants come from the shared supervisor-unit core
-// (`crate::runtime::supervised_unit`), so the runner and both supervisor
+// (`rustx_process_supervisor::supervised_unit`), so the runner and both supervisor
 // units share one wire protocol.
 #[cfg(unix)]
-pub(crate) use crate::runtime::supervised_unit::MSG_ALL_CHILDREN_REAPED;
+pub(crate) use rustx_process_supervisor::supervised_unit::MSG_ALL_CHILDREN_REAPED;
 #[cfg(unix)]
-pub(crate) use crate::runtime::supervised_unit::{
-    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNER_ATTACHED, MSG_OWNERSHIP_ESTABLISHED,
-    MSG_PROCESS_CONTROL_FAILURE, MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START, MSG_TERMINAL_ACK,
-    MSG_TERMINATE,
+pub(crate) use rustx_process_supervisor::supervised_unit::{
+    MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE,
+    MSG_SHELL_EXITED, MSG_SIGNAL_ATTEMPT, MSG_START,
 };
 
 /// The test-only control seams of one owned invocation.
@@ -670,7 +661,7 @@ pub(crate) use crate::runtime::supervised_unit::{
 pub(crate) struct RunnerTestControl {
     #[cfg(test)]
     pub(crate) anchor_stop_socket: Option<std::path::PathBuf>,
-    pub(crate) diagnostics: crate::tools::native::bash_supervisor::diagnostics::FixtureControl,
+    pub(crate) diagnostics: rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl,
     #[cfg(all(test, target_os = "linux"))]
     pub(crate) pause_at_shell_exit: bool,
     #[cfg(test)]
@@ -727,7 +718,7 @@ impl RunnerTestControl {
         Self {
             anchor_stop_socket: None,
             diagnostics:
-                crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
+                rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl::default(),
             #[cfg(target_os = "linux")]
             pause_at_shell_exit: false,
             lifecycle: RunnerLifecycleHook::new(),
@@ -757,7 +748,7 @@ impl RunnerTestControl {
     pub(crate) fn new() -> Self {
         Self {
             diagnostics:
-                crate::tools::native::bash_supervisor::diagnostics::FixtureControl::default(),
+                rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl::default(),
         }
     }
 
@@ -805,7 +796,7 @@ pub(crate) struct SupervisedCommandRunner {
     settled: Option<Settled>,
     exit_status: Option<ExitStatus>,
     terminate_sent: bool,
-    trace: Option<crate::tools::native::bash_supervisor::diagnostics::Trace>,
+    trace: Option<rustx_process_supervisor::bash_supervisor::diagnostics::Trace>,
     terminate_deadline: Option<tokio::time::Instant>,
     terminal_event_held: bool,
     /// The nested containment gate of this unit (Issue #145).
@@ -868,7 +859,10 @@ impl SupervisedCommandRunner {
         self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
     }
 
-    fn trace_event(&mut self, event: crate::tools::native::bash_supervisor::diagnostics::Event) {
+    fn trace_event(
+        &mut self,
+        event: rustx_process_supervisor::bash_supervisor::diagnostics::Event,
+    ) {
         if let Some(trace) = &mut self.trace {
             trace.record(event);
         }
@@ -878,7 +872,7 @@ impl SupervisedCommandRunner {
     ///
     /// The runtime child-subreaper capability is a pre-ownership
     /// prerequisite, consulted lazily, one-time, idempotently (see
-    /// `crate::runtime::process_supervision`) before the supervisor unit
+    /// `rustx_process_supervisor::process_supervision`) before the supervisor unit
     /// spawns, so `START` — which authorizes the command spawn — is never
     /// sent before catastrophic fallback authority exists.
     ///
@@ -925,7 +919,8 @@ impl SupervisedCommandRunner {
                 "injected child-subreaper initialization failure".to_owned(),
             ));
         }
-        if let Err(error) = crate::runtime::process_supervision::ensure_child_subreaper() {
+        if let Err(error) = rustx_process_supervisor::process_supervision::ensure_child_subreaper()
+        {
             return Err(RunnerSpawnError::Subreaper(error));
         }
         let (stream_a, stream_b) = std::os::unix::net::UnixStream::pair()
@@ -949,12 +944,13 @@ impl SupervisedCommandRunner {
         let mut supervisor = tokio::process::Command::new(&supervisor_path);
         supervisor.current_dir(&spec.cwd);
         supervisor.env_clear();
-        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
-            &spec.command_environment,
-        )
-        .map_err(RunnerSpawnError::ControlChannel)?;
+        let environment_snapshot =
+            rustx_process_supervisor::supervised_unit::snapshot_command_environment(
+                &spec.command_environment,
+            )
+            .map_err(RunnerSpawnError::ControlChannel)?;
         supervisor.env(
-            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            rustx_process_supervisor::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
             environment_snapshot.path(),
         );
         if let Some(control) = &control {
@@ -962,7 +958,7 @@ impl SupervisedCommandRunner {
             #[cfg(test)]
             if let Some(path) = &control.anchor_stop_socket {
                 supervisor.env(
-                    crate::tools::native::bash_supervisor::diagnostics::ANCHOR_STOP_GATE_ENV,
+                    rustx_process_supervisor::bash_supervisor::diagnostics::ANCHOR_STOP_GATE_ENV,
                     path,
                 );
             }
@@ -1048,7 +1044,7 @@ impl SupervisedCommandRunner {
                 trace: control
                     .as_ref()
                     .and_then(|control| control.diagnostics.trace.as_ref())
-                    .map(crate::tools::native::bash_supervisor::diagnostics::Trace::new),
+                    .map(rustx_process_supervisor::bash_supervisor::diagnostics::Trace::new),
                 terminate_deadline: None,
                 terminal_event_held: false,
                 anchor_gate: crate::runtime::nested_containment::AnchorGate::Idle,
@@ -1093,7 +1089,7 @@ impl SupervisedCommandRunner {
                     self.settled = Some(Settled::Cancelled);
                     let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
-                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
+                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 () = async {
@@ -1105,14 +1101,14 @@ impl SupervisedCommandRunner {
                     self.settled = Some(Settled::TimedOut);
                     let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
-                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
+                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 () = wait_for_forced_timeout(self.control.as_ref()), if self.settled.is_none() && !self.terminate_sent => {
                     self.settled = Some(Settled::TimedOut);
                     let sent = send_terminate(&mut self.stream).await;
                     self.terminate_sent = true;
-                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
+                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                     self.terminate_deadline = Some(tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION);
                 }
                 event = self.event_reader.read(&mut self.incoming), if self.supervisor_channel == SupervisorChannel::Connected => match event {
@@ -1179,7 +1175,7 @@ impl SupervisedCommandRunner {
                         if self.failure.is_none() && self.settled.is_none() && self.exit_status.is_none() {
                             self.failure = Some(ProcessControlError::UnexpectedSupervisorExit.to_string());
                         }
-                        self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminalObserved);
+                        self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminalObserved);
                         send_terminal_ack(&mut self.stream).await;
                         #[cfg(test)]
                         if let Some(control) = self.control.as_ref() {
@@ -1238,7 +1234,7 @@ impl SupervisedCommandRunner {
                                     .await
                                 {
                                     self.direct_child_reaped = true;
-                                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
+                                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::DirectChildReaped);
                                 }
                             }
                             ProcessLifecycle::Terminal => {}
@@ -1265,7 +1261,7 @@ impl SupervisedCommandRunner {
                                     .await
                                 {
                                     self.direct_child_reaped = true;
-                                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
+                                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::DirectChildReaped);
                                 }
                             }
                             ProcessLifecycle::Terminal => {}
@@ -1287,7 +1283,7 @@ impl SupervisedCommandRunner {
                             if !self.terminate_sent {
                                 let sent = send_terminate(&mut self.stream).await;
                                 self.terminate_sent = true;
-                                self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::TerminateSent { sent });
+                                self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::TerminateSent { sent });
                                 self.terminate_deadline = Some(
                                     tokio::time::Instant::now() + BASH_TERMINATION_CONFIRMATION,
                                 );
@@ -1373,7 +1369,7 @@ impl SupervisedCommandRunner {
             match wait {
                 Ok(_) => {
                     self.direct_child_reaped = true;
-                    self.trace_event(crate::tools::native::bash_supervisor::diagnostics::Event::DirectChildReaped);
+                    self.trace_event(rustx_process_supervisor::bash_supervisor::diagnostics::Event::DirectChildReaped);
                     #[cfg(test)]
                     if let Some(control) = self.control.as_ref() {
                         control.lifecycle.mark_direct_child_reaped();
@@ -1462,71 +1458,6 @@ impl SupervisedCommandRunner {
 /// runner lives below the tools layer, so the value is mirrored here.
 #[cfg(unix)]
 const BASH_TERMINATION_CONFIRMATION: Duration = Duration::from_secs(6);
-
-/// Locates a companion binary built from the same package (`bash-supervisor`,
-/// `interactive-supervisor`, or `workflow-renderer`) beside the current
-/// executable.
-pub(crate) fn companion_binary(name: &str) -> PathBuf {
-    std::env::current_exe()
-        .expect("current executable")
-        .parent()
-        .expect("current executable directory")
-        .join(format!("{name}{}", std::env::consts::EXE_SUFFIX))
-}
-
-/// Locates the `bash-supervisor` companion binary.
-#[cfg(unix)]
-pub(crate) fn supervisor_binary() -> PathBuf {
-    companion_binary("bash-supervisor")
-}
-
-/// Locates the `interactive-supervisor` companion binary.
-#[cfg(unix)]
-pub(crate) fn interactive_supervisor_binary() -> PathBuf {
-    companion_binary("interactive-supervisor")
-}
-
-/// Sends the one termination request to the invocation supervisor.
-///
-/// A write failure means the supervisor is already gone, which implies its
-/// terminal child-set events are already in flight or were received; the
-/// supervision loop's read side remains authoritative.
-#[cfg(unix)]
-pub(crate) async fn send_terminate<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) -> bool {
-    let frame = [1u8, 0, 0, 0, MSG_TERMINATE];
-    stream.write_all(&frame).await.is_ok()
-}
-
-#[cfg(unix)]
-pub(crate) async fn send_start<W: tokio::io::AsyncWrite + Unpin>(
-    stream: &mut W,
-) -> Result<(), String> {
-    let frame = [1u8, 0, 0, 0, MSG_START];
-    stream
-        .write_all(&frame)
-        .await
-        .map_err(|error| format!("cannot acknowledge the ownership gate: {error}"))
-}
-
-/// Opens the runtime->outer startup gate: the owner accepted and retained
-/// the outer control connection, so the outer may create the unit
-/// hierarchy. Until this frame is written the outer owns nothing.
-#[cfg(unix)]
-pub(crate) async fn send_owner_attached<W: tokio::io::AsyncWrite + Unpin>(
-    stream: &mut W,
-) -> Result<(), String> {
-    let frame = [1u8, 0, 0, 0, MSG_OWNER_ATTACHED];
-    stream
-        .write_all(&frame)
-        .await
-        .map_err(|error| format!("cannot open the interactive startup gate: {error}"))
-}
-
-#[cfg(unix)]
-pub(crate) async fn send_terminal_ack<W: tokio::io::AsyncWrite + Unpin>(stream: &mut W) {
-    let frame = [1u8, 0, 0, 0, MSG_TERMINAL_ACK];
-    let _ = stream.write_all(&frame).await;
-}
 
 /// One connection's asynchronous control decoder. Partial header/payload bytes
 /// belong to this owner, never to a cancellable `select!` arm. Each `read` is
@@ -2098,7 +2029,7 @@ mod tests {
     #[cfg(unix)]
     #[allow(clippy::too_many_lines)] // One native cancellation/readiness ordering proof.
     async fn cancel_at_nested_readiness(acknowledge_first: bool) {
-        use crate::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+        use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
 
         let mut harness = gated_authority(true);
         let directory = tempfile::tempdir().expect("fixture directory");
@@ -2202,7 +2133,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn incomplete_start_frames_fail_closed_and_physically_settle() {
-        use crate::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+        use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
         for bytes in 0..5 {
             let directory = tempfile::tempdir().unwrap();
             let marker = directory.path().join("business-started");
@@ -2591,8 +2522,9 @@ mod tests {
         use crate::runtime::cancellation::CancellationSignal;
         use crate::runtime::process_runner::{
             CapturedProcessResult, ProcessOutcomeIntent, RunnerBackedProcessRunner,
-            SupervisedCommandSpec, SupervisedProcessRunner, supervisor_binary,
+            SupervisedCommandSpec, SupervisedProcessRunner,
         };
+        use rustx_process_supervisor::invocation::supervisor_binary;
 
         const MODE_ENV: &str = "RUSTX_TEST_COMPANION_MODE";
         const WITNESS_ENV: &str = "RUSTX_TEST_COMPANION_WITNESS";

@@ -490,11 +490,18 @@ def stage_binary_beside(source: Path, dest_dir: Path) -> None:
         raise PreparationError(f"checksum mismatch after staging `{dest}` from `{source}`")
 
 
-def client_bin_command(bin_cmd: list[str]) -> list[str]:
-    """Derive the Execution Client build from the root ``--bins`` command.
+# Companion packages whose binaries the root test harnesses compose
+# through the executable-sibling contract: the Execution Client the process
+# tests drive, and the physical supervisor helpers
+# (`rustx-process-supervisor`: `bash-supervisor`, `interactive-supervisor`).
+COMPANION_PACKAGES = ("rustx-execution-client", "rustx-process-supervisor")
 
-    Package selection becomes ``-p rustx-execution-client``; the root
-    crate's feature selectors are dropped so the client builds in its own
+
+def companion_bin_command(bin_cmd: list[str], package: str) -> list[str]:
+    """Derive a companion package's build from the root ``--bins`` command.
+
+    Package selection becomes ``-p <package>``; the root
+    crate's feature selectors are dropped so the companion builds in its own
     ordinary default mode, while target, target-dir, profile, and
     lock/offline flags carry over unchanged.
     """
@@ -504,12 +511,12 @@ def client_bin_command(bin_cmd: list[str]) -> list[str]:
     while i < len(bin_cmd):
         token = bin_cmd[i]
         if token in ("-p", "--package"):
-            cmd.extend(["-p", "rustx-execution-client"])
+            cmd.extend(["-p", package])
             saw_package = True
             i += 2
             continue
         if token.startswith("--package="):
-            cmd.append("--package=rustx-execution-client")
+            cmd.append(f"--package={package}")
             saw_package = True
             i += 1
             continue
@@ -525,7 +532,7 @@ def client_bin_command(bin_cmd: list[str]) -> list[str]:
         cmd.append(token)
         i += 1
     if not saw_package:
-        cmd.extend(["-p", "rustx-execution-client"])
+        cmd.extend(["-p", package])
     return cmd
 
 
@@ -582,41 +589,55 @@ def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], 
         has_lib=has_lib,
     )
     if pkg_name == "rustx":
-        # The root package's process tests compose the real Execution
-        # Client; the trusted sibling is built with the same target,
-        # target-dir, profile, and lock flags — never the root crate's
-        # feature selectors — and staged beside every emitted harness.
-        client_id, _, client_manifest, client_bin_targets, client_targets = (
-            load_package_metadata(
-                test_cmd[0], metadata_flags, "rustx-execution-client", work_dir
-            )
-        )
-        client_records = run_cargo_json(client_bin_command(bin_cmd), work_dir)
-        _, client_binaries, _ = collect_package_artifacts(
-            client_records, client_id, client_manifest, client_targets
-        )
-        missing_client = sorted(set(client_bin_targets) - set(client_binaries))
-        if missing_client:
-            raise PreparationError(
-                f"Cargo did not emit required client binary artifacts: {', '.join(missing_client)}"
-            )
-        if not binaries:
-            raise PreparationError(
-                "client staging requires the ordinary package binaries it must sit beside"
-            )
+        # The root package's tests compose companion-package binaries — the
+        # Execution Client and the physical supervisor helpers; each trusted
+        # sibling is built with the same target, target-dir, profile, and
+        # lock flags — never the root crate's feature selectors — and staged
+        # beside every emitted harness.
         root_dir = Path(next(iter(binaries.values()))["executable"]).resolve().parent
         root_profile = profile_signature(next(iter(binaries.values())))
-        for name, row in client_binaries.items():
-            if profile_signature(row) != root_profile:
-                raise PreparationError(
-                    f"client binary `{name}` profile differs from the root binaries'"
+        for companion in COMPANION_PACKAGES:
+            companion_id, _, companion_manifest, companion_bin_targets, companion_targets = (
+                load_package_metadata(
+                    test_cmd[0], metadata_flags, companion, work_dir
                 )
-            if Path(row["executable"]).resolve().parent != root_dir:
+            )
+            companion_records = run_cargo_json(
+                companion_bin_command(bin_cmd, companion), work_dir
+            )
+            _, companion_binaries, _ = collect_package_artifacts(
+                companion_records, companion_id, companion_manifest, companion_targets
+            )
+            # The companion package's own harnesses (for example the
+            # process-supervisor lib tests that exec `bash-supervisor`)
+            # resolve their helpers through the same executable-sibling
+            # contract, so they are staging destinations too.
+            _, _, companion_harnesses = collect_package_artifacts(
+                test_records, companion_id, companion_manifest, companion_targets
+            )
+            harnesses.extend(companion_harnesses)
+            missing_companion = sorted(
+                set(companion_bin_targets) - set(companion_binaries)
+            )
+            if missing_companion:
                 raise PreparationError(
-                    f"client binary `{name}` targets a different directory than the root binaries"
+                    f"Cargo did not emit required companion binary artifacts: {', '.join(missing_companion)}"
                 )
-        # Feature names are package-local and never compared across crates.
-        binaries.update(client_binaries)
+            if not binaries:
+                raise PreparationError(
+                    "companion staging requires the ordinary package binaries it must sit beside"
+                )
+            for name, row in companion_binaries.items():
+                if profile_signature(row) != root_profile:
+                    raise PreparationError(
+                        f"companion binary `{name}` profile differs from the root binaries'"
+                    )
+                if Path(row["executable"]).resolve().parent != root_dir:
+                    raise PreparationError(
+                        f"companion binary `{name}` targets a different directory than the root binaries"
+                    )
+            # Feature names are package-local and never compared across crates.
+            binaries.update(companion_binaries)
     staged_count = stage_binaries(binaries, harnesses)
     harness_paths = [Path(row["executable"]) for row in harnesses]
     binary_paths = {name: Path(row["executable"]) for name, row in binaries.items()}

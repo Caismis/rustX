@@ -127,7 +127,7 @@ pub(super) async fn render_with_control(
 }
 
 fn renderer_binary() -> PathBuf {
-    crate::runtime::process_runner::companion_binary("workflow-renderer")
+    rustx_process_supervisor::invocation::companion_binary("workflow-renderer")
 }
 
 /// Called only by the dedicated single-threaded renderer binary.

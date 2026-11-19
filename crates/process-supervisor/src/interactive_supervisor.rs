@@ -138,10 +138,10 @@ use nix::sys::signal::Signal;
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
 use nix::unistd::Pid;
 
-use crate::runtime::process_wait::{Id, waitid};
+use crate::process_wait::{Id, waitid};
 #[cfg(target_os = "macos")]
-use crate::runtime::supervised_unit::prove_group_absent;
-use crate::runtime::supervised_unit::{
+use crate::supervised_unit::prove_group_absent;
+use crate::supervised_unit::{
     ContainmentOutcome, FrameReader, INNER_EXIT_CONTAINMENT, INNER_EXIT_NORMAL,
     MSG_ALL_CHILDREN_REAPED, MSG_ANCHOR_READY, MSG_NO_OWNERSHIP, MSG_OWNER_ATTACHED,
     MSG_OWNERSHIP_ESTABLISHED, MSG_PROCESS_CONTROL_FAILURE, MSG_SIGNAL_ATTEMPT, MSG_START,
@@ -151,28 +151,27 @@ use crate::runtime::supervised_unit::{
 };
 
 /// The environment variable naming the rustX-facing control socket.
-pub(crate) const RUSTX_CONTROL_ENV: &str = "RUSTX_INTERACTIVE_CONTROL";
+pub const RUSTX_CONTROL_ENV: &str = "RUSTX_INTERACTIVE_CONTROL";
 /// The environment variable naming the inner-facing control socket.
-pub(crate) const INNER_CONTROL_ENV: &str = "RUSTX_INTERACTIVE_INNER_CONTROL";
+pub const INNER_CONTROL_ENV: &str = "RUSTX_INTERACTIVE_INNER_CONTROL";
 
 /// Test-only injection: the outer supervisor exits before connecting to
 /// rustX (the driver's accept-vs-wait handshake regression).
-pub(crate) const OUTER_FAIL_ENV: &str = "RUSTX_TEST_INTERACTIVE_OUTER_FAIL";
+pub const OUTER_FAIL_ENV: &str = "RUSTX_TEST_INTERACTIVE_OUTER_FAIL";
 /// Test-only injection: the inner supervisor fails the server spawn.
-pub(crate) const FAIL_SERVER_SPAWN_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SERVER_SPAWN";
+pub const FAIL_SERVER_SPAWN_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SERVER_SPAWN";
 /// Test-only injection: the inner supervisor refuses every group signal.
-pub(crate) const FAIL_SIGNAL_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SIGNAL";
+pub const FAIL_SIGNAL_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SIGNAL";
 /// Test-only injection: the inner supervisor fails its SIGTERM handler
 /// installation (a pre-ownership setup failure).
-pub(crate) const FAIL_SIGTERM_HANDLER_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SIGTERM";
+pub const FAIL_SIGTERM_HANDLER_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SIGTERM";
 /// Test-only observability: the inner supervisor writes its own pid (the
 /// unit's process-group id) to this file.
-pub(crate) const ANCHOR_PID_FILE_ENV: &str = "RUSTX_INTERACTIVE_ANCHOR_PID_FILE";
+pub const ANCHOR_PID_FILE_ENV: &str = "RUSTX_INTERACTIVE_ANCHOR_PID_FILE";
 /// Test-only injection: the inner supervisor exits before connecting its
 /// control socket. The value names the pid file the inner writes first, so
 /// the regression can prove the pre-ownership inner was reaped.
-pub(crate) const INNER_EXIT_BEFORE_CONNECT_ENV: &str =
-    "RUSTX_TEST_INTERACTIVE_INNER_EXIT_BEFORE_CONNECT";
+pub const INNER_EXIT_BEFORE_CONNECT_ENV: &str = "RUSTX_TEST_INTERACTIVE_INNER_EXIT_BEFORE_CONNECT";
 /// The inner supervisor's exit status for the test-only
 /// exits-before-connecting injection.
 const INNER_EXIT_BEFORE_CONNECT_STATUS: i32 = 43;
@@ -180,21 +179,20 @@ const INNER_EXIT_BEFORE_CONNECT_STATUS: i32 = 43;
 /// its control connection is established and before `MSG_ANCHOR_READY`, so
 /// the inner is a connected direct child whose pid is provably not a
 /// process-group id. The value names the pid file the inner writes first.
-pub(crate) const FAIL_SETSID_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SETSID";
+pub const FAIL_SETSID_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_SETSID";
 /// Test-only injection: the inner supervisor connects its control socket
 /// and then stalls forever before `MSG_ANCHOR_READY`. The value names the
 /// pid file the inner writes right after connecting, so a regression can
 /// order "the inner exists and is connected" against an outer loss without
 /// a sleep.
-pub(crate) const INNER_STALL_BEFORE_ANCHOR_ENV: &str =
-    "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR";
+pub const INNER_STALL_BEFORE_ANCHOR_ENV: &str = "RUSTX_TEST_INTERACTIVE_INNER_STALL_BEFORE_ANCHOR";
 /// Trusted semantic fixture: the setsid-failure inner remains alive until
 /// killed, then the outer consumes its exact wait status outside `Child`.
 /// Configured only by `InteractiveTestControl`, never command environment.
-pub(crate) const FAIL_PRE_ANCHOR_REAP_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP";
+pub const FAIL_PRE_ANCHOR_REAP_ENV: &str = "RUSTX_TEST_INTERACTIVE_FAIL_PREANCHOR_REAP";
 /// Trusted passive lifecycle trace. Configured only by
 /// `InteractiveTestControl`, never command environment.
-pub(crate) const TRACE_ENV: &str = "RUSTX_TEST_INTERACTIVE_TRACE";
+pub const TRACE_ENV: &str = "RUSTX_TEST_INTERACTIVE_TRACE";
 
 /// Writes one fixed lifecycle trace line to the inherited stderr, which the
 /// runtime driver already drains into the bounded stderr preview.
@@ -504,9 +502,7 @@ pub fn run_outer(arguments: &[String]) -> i32 {
                     }
                 }
                 if anchor == AnchorState::Running {
-                    match crate::runtime::process_wait::observe_stopped_child(Pid::from_raw(
-                        inner_pid,
-                    )) {
+                    match crate::process_wait::observe_stopped_child(Pid::from_raw(inner_pid)) {
                         Ok(WaitStatus::Stopped(..)) => {
                             let _ =
                                 nix::sys::signal::kill(Pid::from_raw(inner_pid), Signal::SIGKILL);
@@ -1417,7 +1413,7 @@ pub fn run_inner(arguments: &[String]) -> i32 {
         let _ = write_frame(&mut control, MSG_NO_OWNERSHIP, &[]);
         return INNER_EXIT_NORMAL;
     }
-    let environment = match crate::runtime::supervised_unit::command_environment() {
+    let environment = match crate::supervised_unit::command_environment() {
         Ok(environment) => environment,
         Err(error) => {
             let _ = write_frame(&mut control, MSG_PROCESS_CONTROL_FAILURE, error.as_bytes());
@@ -1695,8 +1691,8 @@ mod coalesced_gate_tests {
         INNER_CONTROL_ENV, INNER_EXIT_NORMAL, MSG_ANCHOR_READY, MSG_NO_OWNERSHIP,
         MSG_OWNER_ATTACHED, MSG_OWNERSHIP_ESTABLISHED, MSG_START, MSG_TERMINATE, RUSTX_CONTROL_ENV,
     };
-    use crate::runtime::process_runner::interactive_supervisor_binary;
-    use crate::runtime::supervised_unit::FrameReader;
+    use crate::invocation::interactive_supervisor_binary;
+    use crate::supervised_unit::FrameReader;
 
     /// The deadlock guard of every wait in this module; never a correctness
     /// assertion.
@@ -1877,9 +1873,10 @@ mod coalesced_gate_tests {
         let server_marker = fixture.path().join("server-started");
         let socket = unique_socket("owner-attached");
         let listener = UnixListener::bind(&socket).expect("bind the rustX control socket");
-        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
-            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
-        )
+        let environment_snapshot = crate::supervised_unit::snapshot_command_environment(&[(
+            "PATH".into(),
+            "/usr/local/bin:/usr/bin:/bin".into(),
+        )])
         .expect("environment snapshot");
         let mut outer = Command::new(interactive_supervisor_binary())
             .arg("outer")
@@ -1892,7 +1889,7 @@ mod coalesced_gate_tests {
             .current_dir(fixture.path())
             .env_clear()
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                crate::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
                 environment_snapshot.path(),
             )
             .env(RUSTX_CONTROL_ENV, &socket)
@@ -1953,9 +1950,10 @@ mod coalesced_gate_tests {
         let fixture = tempfile::tempdir().expect("fixture dir");
         let socket = unique_socket("start-gate");
         let listener = UnixListener::bind(&socket).expect("bind the inner control socket");
-        let environment_snapshot = crate::runtime::supervised_unit::snapshot_command_environment(
-            &[("PATH".into(), "/usr/local/bin:/usr/bin:/bin".into())],
-        )
+        let environment_snapshot = crate::supervised_unit::snapshot_command_environment(&[(
+            "PATH".into(),
+            "/usr/local/bin:/usr/bin:/bin".into(),
+        )])
         .expect("environment snapshot");
         let mut inner = Command::new(interactive_supervisor_binary())
             .arg("inner")
@@ -1965,7 +1963,7 @@ mod coalesced_gate_tests {
             .current_dir(fixture.path())
             .env_clear()
             .env(
-                crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+                crate::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
                 environment_snapshot.path(),
             )
             .env(INNER_CONTROL_ENV, &socket)

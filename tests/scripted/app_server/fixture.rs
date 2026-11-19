@@ -343,7 +343,7 @@ impl Fixture {
             CredentialSnapshot::new([("TEST_KEY".into(), "fixture".into())]),
             LocalRuntimeDependencies {
                 child_program: matches!(tool, Some("review" | "delivery-child"))
-                    .then(|| crate::runtime::process_runner::companion_binary("rustx")),
+                    .then(|| rustx_process_supervisor::invocation::companion_binary("rustx")),
                 ..LocalRuntimeDependencies::default()
             },
             residency,

@@ -50,7 +50,7 @@ impl BashTool {
     #[doc(hidden)]
     #[must_use]
     pub fn with_diagnostic_fixture(
-        diagnostics: crate::tools::native::bash_supervisor::diagnostics::FixtureControl,
+        diagnostics: rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl,
     ) -> Self {
         let mut runner = RunnerTestControl::new();
         runner.diagnostics = diagnostics;
@@ -171,7 +171,7 @@ impl BashTestControl {
     #[must_use]
     pub(crate) fn with_diagnostics(
         mut self,
-        diagnostics: super::supervisor::diagnostics::FixtureControl,
+        diagnostics: rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl,
     ) -> Self {
         self.runner.diagnostics = diagnostics;
         self

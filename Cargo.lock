@@ -4740,6 +4740,7 @@ dependencies = [
  "rustx-execution-protocol",
  "rustx-execution-server",
  "rustx-execution-transport",
+ "rustx-process-supervisor",
  "rustx-text-edit",
  "schemars",
  "serde",
@@ -4850,6 +4851,18 @@ dependencies = [
  "tempfile",
  "tungstenite",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "rustx-process-supervisor"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

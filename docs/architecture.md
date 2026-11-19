@@ -3275,7 +3275,7 @@ Control-channel EOF is never a post-ownership process-terminal event. Normal
 terminality linearizes at the outer's group-scoped `ECHILD` and its
 `AllChildrenReaped` frame. On Linux, catastrophic loss of both supervisors
 uses the runtime's **process-level kernel coordination primitive** — the
-child-subreaper capability owned by `src/runtime/process_supervision.rs`,
+child-subreaper capability owned by `crates/process-supervisor/src/process_supervision.rs`,
 with lazy one-time, idempotent, sticky activation — to retain the adopted
 inner anchor, contain its group, and reach a second group-scoped `ECHILD`.
 Kernel adoption does not assign arbitrary children to Bash lifecycle
@@ -4323,7 +4323,7 @@ MCP stdio uses the runtime-owned interactive supervisor unit, whose control
 sockets are separate from the server's stdin/stdout protocol pair. The unit
 is the M5 Bash supervisor shape applied to a long-lived server, composed
 from the same shared structural ownership core
-(`src/runtime/supervised_unit`): an inner supervisor calls `setsid()`,
+(`crates/process-supervisor/src/supervised_unit.rs`): an inner supervisor calls `setsid()`,
 applies the fixed-membership restriction on Linux (macOS has no seccomp
 equivalent), and issues `TERM -> grace -> KILL` with `killpg` against its
 own process group; an outer supervisor is the reaper of last resort with the

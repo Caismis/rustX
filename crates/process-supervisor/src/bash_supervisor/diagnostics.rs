@@ -105,20 +105,20 @@ pub struct Entry {
     pub event: Event,
 }
 
-pub(crate) struct Trace {
+pub struct Trace {
     path: PathBuf,
     remaining: usize,
 }
 
 impl Trace {
-    pub(crate) fn new(path: impl Into<PathBuf>) -> Self {
+    pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             path: path.into(),
             remaining: 32,
         }
     }
 
-    pub(crate) fn record(&mut self, event: Event) {
+    pub fn record(&mut self, event: Event) {
         if self.remaining == 0 {
             return;
         }
@@ -142,7 +142,7 @@ impl Trace {
     }
 }
 
-pub(crate) fn record(event: Event) {
+pub fn record(event: Event) {
     // Each dedicated supervisor has a single trace. The runner uses its own
     // explicitly configured instance, never this process environment.
     static TRACE: std::sync::OnceLock<std::sync::Mutex<Option<Trace>>> = std::sync::OnceLock::new();
@@ -165,7 +165,7 @@ pub struct FixtureControl {
 }
 
 impl FixtureControl {
-    pub(crate) fn configure(&self, supervisor: &mut tokio::process::Command) {
+    pub fn configure(&self, supervisor: &mut tokio::process::Command) {
         if let Some(path) = &self.trace {
             supervisor.env(TRACE_ENV, path);
         }
@@ -173,15 +173,6 @@ impl FixtureControl {
             supervisor.env(TERM_GATE_ENV, path);
         }
     }
-}
-
-/// Constructs the explicitly trusted executor used by external regression fixtures.
-#[doc(hidden)]
-#[must_use]
-pub fn fixture_executor(
-    control: FixtureControl,
-) -> std::sync::Arc<dyn crate::tools::executor::ToolExecutor> {
-    std::sync::Arc::new(crate::tools::native::bash::BashTool::with_diagnostic_fixture(control))
 }
 
 /// Explicit fixture-only pause after the native stop observation. Diagnostics

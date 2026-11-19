@@ -3,9 +3,10 @@ use super::protocol::{ErrorData, NotificationMethod, RequestId, RpcError};
 use super::rpc_error::domain;
 use crate::runtime::CancellationSignal;
 use crate::runtime::process_runner::{
-    ProcessOutcomeIntent, ProgramInvocation, SupervisedCommandRunner, SupervisedCommandSpec,
+    ProcessOutcomeIntent, SupervisedCommandRunner, SupervisedCommandSpec,
 };
 use base64::Engine as _;
+use rustx_process_supervisor::invocation::ProgramInvocation;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::os::fd::OwnedFd;

@@ -470,7 +470,7 @@ summarizes them and the lane check below verifies them against Cargo:
   every emitted test harness executable so unit tests of `bash-supervisor`,
   `interactive-supervisor`, and `workflow-renderer` use the same
   executable-sibling contract as production without a duplicate default-feature
-  `cargo build --bins`. The four binary targets define no unit test today, and
+  `cargo build --bins`. The binary targets define no unit test today, and
   of the example harnesses only `session_list_benchmark` (workload checker)
   and `check_test_lanes` (the lane checker's own tests) do. Bins and
   examples stay selected so Cargo's own target discovery picks up a future

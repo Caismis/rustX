@@ -3844,7 +3844,7 @@ Discovery does not hash or watch package payloads.
 - **M7 interactive MCP stdio supervision.** The interactive supervisor unit
   is the M5 Bash supervisor shape applied to a long-lived server, composed
   from the same shared structural ownership core
-  (`src/runtime/supervised_unit`): the inner calls `setsid()`, installs the
+  (`crates/process-supervisor/src/supervised_unit.rs`): the inner calls `setsid()`, installs the
   fixed-membership seccomp restriction on Linux (a `setsid`/`setpgid` escape
   attempt fails with `EPERM`; macOS has no equivalent), ignores the group
   `TERM`, and issues
@@ -5121,7 +5121,7 @@ MCP lifecycle owner's responsibility; it cannot republish configuration.
   reaper.** On Linux, rustX activates `PR_SET_CHILD_SUBREAPER` as a
   runtime-level prerequisite for catastrophic supervisor-loss recovery. The
   capability is owned by the runtime coordination layer
-  (`src/runtime/process_supervision.rs`), activated lazily once per process,
+  (`crates/process-supervisor/src/process_supervision.rs`), activated lazily once per process,
   idempotently and sticky, before any supervised ownership exists. Kernel
   adoption does **not** by itself assign arbitrary adopted children to
   lifecycle ownership: in M5 and M7, only registered supervisor units rely on

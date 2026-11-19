@@ -297,8 +297,8 @@ jobs:
   # provider, or a network beyond loopback fixture servers. (Unit tests of
   # boundary-owning modules still exercise their module's own primitive —
   # the bash tool's unit tests spawn bash, the uv backend's run uv — which
-  # is what `--bins` is for: it builds the `bash-supervisor` binary those
-  # unit tests exec.)
+  # is what `--bins` is for: it builds the `rustx-process-supervisor`
+  # package's `bash-supervisor` binary those unit tests exec.)
   #
   # Semantic class and compilation placement are different axes: the lib
   # test binary also contains the in-crate *boundary conformance* suites, so

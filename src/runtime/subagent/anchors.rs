@@ -43,7 +43,7 @@
 //! The owner therefore settles every still-retained anchor **after** the
 //! direct child is reaped and before it publishes an outcome. Containment
 //! reuses the one proven primitive
-//! ([`emergency_contain_group`](crate::runtime::supervised_unit::emergency_contain_group)):
+//! ([`emergency_contain_group`](rustx_process_supervisor::supervised_unit::emergency_contain_group)):
 //! retain the adopted anchor with `WNOWAIT`, issue one anchored `SIGKILL`,
 //! and prove the group terminal with a group-scoped `ECHILD`.
 //!
@@ -211,7 +211,7 @@ pub(crate) async fn contain_retained(retained: Vec<(ProcessUnitId, i32)>) -> Nes
 
 #[cfg(unix)]
 async fn contain_one(pgid: i32) -> Result<(), String> {
-    use crate::runtime::supervised_unit::{EmergencyContainment, contain_adopted_group};
+    use rustx_process_supervisor::supervised_unit::{EmergencyContainment, contain_adopted_group};
     // The containment primitive blocks on kernel waits, so it runs on the
     // blocking pool.
     match tokio::task::spawn_blocking(move || contain_adopted_group(pgid)).await {

@@ -14,7 +14,7 @@
 //! drain/quiescence boundaries; it is not a generic scheduler or plugin
 //! lifecycle system. M5 implements only the narrow internal
 //! process-supervision capability required for Bash catastrophic
-//! supervisor-loss recovery (`crate::runtime::process_supervision`): Linux
+//! supervisor-loss recovery (`rustx_process_supervisor::process_supervision`): Linux
 //! uses one-time child-subreaper activation; macOS uses its direct
 //! process-group path without an equivalent orphan-adoption primitive. That
 //! is coordination infrastructure, not a generic process manager and not a
@@ -39,13 +39,6 @@ pub(crate) mod interaction;
 /// The rustX-side driver of one long-lived interactive process (MCP stdio
 /// servers), owning physical settlement of the interactive supervisor unit.
 pub(crate) mod interactive_process;
-/// The long-lived interactive supervisor unit (M5-equivalent ownership).
-/// The binary entry points are reachable only from the dedicated
-/// `interactive-supervisor` bin and from tests via self-exec; they are
-/// documented-hidden binary entry points, never runtime API.
-#[doc(hidden)]
-#[cfg(unix)]
-pub mod interactive_supervisor;
 /// Runtime-owned monotonic elapsed time for deterministic policy deadlines.
 /// This is separate from the UTC [`RuntimeClock`] timestamp boundary.
 pub mod monotonic;
@@ -57,29 +50,6 @@ pub(crate) mod read_layout;
 /// Generic containment of nested supervised process units created inside a
 /// subagent child (Issue #145).
 pub(crate) mod nested_containment;
-/// Non-Unix interactive supervisor entry points are intentionally unavailable
-/// because the runtime's process-unit implementation uses Unix process
-/// groups and Unix-domain control sockets.
-#[doc(hidden)]
-#[cfg(not(unix))]
-pub mod interactive_supervisor {
-    /// The control socket environment variable used by the Unix supervisor.
-    pub const RUSTX_CONTROL_ENV: &str = "RUSTX_INTERACTIVE_CONTROL";
-
-    /// Non-Unix platforms cannot provide the supervisor's process-group
-    /// ownership proof.
-    pub fn run_outer(_arguments: &[String]) -> i32 {
-        eprintln!("interactive supervisor requires Unix process supervision");
-        1
-    }
-
-    /// Non-Unix platforms cannot provide the supervisor's process-group
-    /// ownership proof.
-    pub fn run_inner(_arguments: &[String]) -> i32 {
-        eprintln!("interactive supervisor requires Unix process supervision");
-        1
-    }
-}
 /// The runtime-owned semantic observation contract (Issue #61): the
 /// observation vocabulary and the leaf pending-observation queue. Runtime
 /// Client projection types never appear here; the Runtime Client adapter
@@ -97,15 +67,6 @@ pub(crate) mod process_death;
 /// coordination only — it is not part of
 /// the public runtime API.
 pub(crate) mod process_runner;
-/// The runtime-level Linux/macOS process-supervision prerequisite used by
-/// Bash catastrophic fallback. Internal coordination only — it is not part
-/// of the public runtime API.
-pub(crate) mod process_supervision;
-/// The platform adapter for the `waitid` primitive. Linux uses `nix`'s
-/// implementation; macOS uses its libc implementation because `nix` does not
-/// currently expose `waitid` on Apple targets.
-#[cfg(unix)]
-pub(crate) mod process_wait;
 /// Durable startup recovery (Issue #12, M9a): the reconstruct → classify →
 /// reconcile → resume pipeline the conversation runtime owns. Recovery policy
 /// lives here, above the durable store and below nothing: no client, no
@@ -124,10 +85,6 @@ pub mod resources;
 /// owner is the driver task; the message bus is always the destination
 /// conversation's ordinary durable inbound path.
 pub mod subagent;
-/// The shared structural ownership core of every rustX-owned supervised
-/// process unit (M5 Bash and M7 interactive MCP stdio). Internal
-/// coordination only — it is not part of the public runtime API.
-pub(crate) mod supervised_unit;
 pub mod types;
 /// Native bounded Workflow definitions, immutable compiled programs, and
 /// catalog admission (Issue #83).

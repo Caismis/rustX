@@ -676,7 +676,7 @@ pub(crate) async fn spawn_staged(
     // lazily inside the child (as the child's own local runner does) would
     // make the child a subreaper, not this process, and the anchors this
     // process retains would be unreachable.
-    if let Err(detail) = crate::runtime::process_supervision::ensure_child_subreaper() {
+    if let Err(detail) = rustx_process_supervisor::process_supervision::ensure_child_subreaper() {
         return Err(discard_unstaged_resources(
             runtime_root,
             SpawnError::ContainmentPrerequisite { detail },
@@ -3198,7 +3198,7 @@ mod tests {
         // here is exactly what `spawn_staged` does before it launches the
         // child whose root was already reserved by the caller.
         assert_eq!(
-            crate::runtime::process_supervision::ensure_child_subreaper(),
+            rustx_process_supervisor::process_supervision::ensure_child_subreaper(),
             Ok(()),
             "the supported platforms must be able to establish the prerequisite"
         );

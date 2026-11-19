@@ -753,7 +753,7 @@ pub(super) struct SupervisedProbe;
 impl ProgramProbe for SupervisedProbe {
     fn run(&self, request: ProgramRequest) -> BoxFuture<'_, Result<ProgramOutput, String>> {
         Box::pin(async move {
-            let invocation = crate::runtime::process_runner::ProgramInvocation {
+            let invocation = rustx_process_supervisor::invocation::ProgramInvocation {
                 argv: request.argv,
                 stdin_socket: None,
                 terminal: None,

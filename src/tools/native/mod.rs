@@ -213,15 +213,11 @@ pub(crate) fn definitions(
         .collect()
 }
 
-// The per-invocation Bash supervisor process entry points are reachable
-// only from the supervisor binary and from test binaries via self-exec;
-// they are documented-hidden binary entry points, never tool-plane API. The
-// supervisor is an implementation detail of Bash execution ownership, so it
-// is owned by the Bash module and only re-exported here under its binary
-// entry-point path.
-#[cfg(unix)]
+// The trusted fixture executor is a root-side Bash construction that hands
+// the supervisor package's diagnostics contract to the real tool path; it is
+// a documented-hidden test capability, never tool-plane API.
 #[doc(hidden)]
-pub use bash::supervisor as bash_supervisor;
+pub use bash::fixture_executor;
 
 use crate::runtime::workflow::{WorkflowCatalog, WorkflowRuntime};
 use crate::tools::background::ConversationBackgroundRegistry;

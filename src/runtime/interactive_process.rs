@@ -51,12 +51,14 @@ use std::sync::{Arc, Mutex};
 
 use tokio::io::AsyncReadExt;
 
-use crate::runtime::interactive_supervisor::RUSTX_CONTROL_ENV;
 use crate::runtime::process_runner::{
-    MAX_PROCESS_OUTPUT_BYTES, SupervisorEvent, SupervisorEventReader, send_owner_attached,
-    send_start, send_terminal_ack, send_terminate,
+    MAX_PROCESS_OUTPUT_BYTES, SupervisorEvent, SupervisorEventReader,
 };
-use crate::runtime::supervised_unit::{EmergencyContainment, emergency_contain_group};
+use rustx_process_supervisor::interactive_supervisor::RUSTX_CONTROL_ENV;
+use rustx_process_supervisor::supervised_unit::{EmergencyContainment, emergency_contain_group};
+use rustx_process_supervisor::supervised_unit::{
+    send_owner_attached, send_start, send_terminal_ack, send_terminate,
+};
 
 /// The published physical settlement of one interactive supervisor unit.
 ///
@@ -209,48 +211,51 @@ impl InteractiveTestControl {
     fn configure_supervisor(&self, supervisor: &mut tokio::process::Command) {
         if let Some(value) = &self.outer_fail {
             supervisor.env(
-                crate::runtime::interactive_supervisor::OUTER_FAIL_ENV,
+                rustx_process_supervisor::interactive_supervisor::OUTER_FAIL_ENV,
                 value,
             );
         }
         if let Some(value) = &self.fail_signal {
             supervisor.env(
-                crate::runtime::interactive_supervisor::FAIL_SIGNAL_ENV,
+                rustx_process_supervisor::interactive_supervisor::FAIL_SIGNAL_ENV,
                 value,
             );
         }
         if let Some(value) = &self.anchor_pid_file {
             supervisor.env(
-                crate::runtime::interactive_supervisor::ANCHOR_PID_FILE_ENV,
+                rustx_process_supervisor::interactive_supervisor::ANCHOR_PID_FILE_ENV,
                 value,
             );
         }
         if let Some(value) = &self.inner_exit_before_connect {
             supervisor.env(
-                crate::runtime::interactive_supervisor::INNER_EXIT_BEFORE_CONNECT_ENV,
+                rustx_process_supervisor::interactive_supervisor::INNER_EXIT_BEFORE_CONNECT_ENV,
                 value,
             );
         }
         if let Some(value) = &self.fail_setsid {
             supervisor.env(
-                crate::runtime::interactive_supervisor::FAIL_SETSID_ENV,
+                rustx_process_supervisor::interactive_supervisor::FAIL_SETSID_ENV,
                 value,
             );
         }
         if let Some(value) = &self.inner_stall_before_anchor {
             supervisor.env(
-                crate::runtime::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV,
+                rustx_process_supervisor::interactive_supervisor::INNER_STALL_BEFORE_ANCHOR_ENV,
                 value,
             );
         }
         if self.fail_pre_anchor_reap {
             supervisor.env(
-                crate::runtime::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
+                rustx_process_supervisor::interactive_supervisor::FAIL_PRE_ANCHOR_REAP_ENV,
                 "1",
             );
         }
         if self.trace {
-            supervisor.env(crate::runtime::interactive_supervisor::TRACE_ENV, "1");
+            supervisor.env(
+                rustx_process_supervisor::interactive_supervisor::TRACE_ENV,
+                "1",
+            );
         }
     }
 
@@ -420,7 +425,7 @@ impl SupervisedInteractiveProcess {
         // prerequisite: the catastrophic fallback authority must exist
         // before the supervisor unit spawns (mirrors the short-lived
         // supervised-command runner).
-        crate::runtime::process_supervision::ensure_child_subreaper()?;
+        rustx_process_supervisor::process_supervision::ensure_child_subreaper()?;
 
         let InteractiveProcessSpec {
             program,
@@ -435,7 +440,7 @@ impl SupervisedInteractiveProcess {
         ));
         let listener = tokio::net::UnixListener::bind(&socket_path)
             .map_err(|error| format!("cannot bind interactive control socket: {error}"))?;
-        let supervisor_path = crate::runtime::process_runner::interactive_supervisor_binary();
+        let supervisor_path = rustx_process_supervisor::invocation::interactive_supervisor_binary();
         let mut supervisor = tokio::process::Command::new(&supervisor_path);
         supervisor.arg("outer").arg(&program).args(&args);
         supervisor
@@ -445,9 +450,9 @@ impl SupervisedInteractiveProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let environment_snapshot =
-            crate::runtime::supervised_unit::snapshot_command_environment(&environment)?;
+            rustx_process_supervisor::supervised_unit::snapshot_command_environment(&environment)?;
         supervisor.env(
-            crate::runtime::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
+            rustx_process_supervisor::supervised_unit::COMMAND_ENVIRONMENT_FILE_ENV,
             environment_snapshot.path(),
         );
         #[cfg(test)]
@@ -1994,7 +1999,9 @@ mod interactive_tests {
     /// import turned one match arm into a catch-all binding on macOS.
     #[test]
     fn fixture_controls_configure_exactly_the_selected_supervisor_seams() {
-        use crate::runtime::interactive_supervisor::{FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV};
+        use rustx_process_supervisor::interactive_supervisor::{
+            FAIL_PRE_ANCHOR_REAP_ENV, FAIL_SETSID_ENV,
+        };
         use std::collections::BTreeMap;
         let mut control = InteractiveTestControl::new();
         control.fail_setsid = Some("/fixture/inner.pid".to_owned());
@@ -2054,8 +2061,8 @@ mod interactive_tests {
                     "pre-anchor owner did not settle; inner_pid_file_exists: {}; outer_pid: \
                      {outer_pid}; outer_observation: {:?}; driver: {:?}; stderr:\n{}\nprocesses:\n{}",
                     inner_pid_file.exists(),
-                    crate::runtime::process_wait::waitid(
-                        crate::runtime::process_wait::Id::Pid(nix::unistd::Pid::from_raw(
+                    rustx_process_supervisor::process_wait::waitid(
+                        rustx_process_supervisor::process_wait::Id::Pid(nix::unistd::Pid::from_raw(
                             i32::try_from(outer_pid).unwrap()
                         )),
                         nix::sys::wait::WaitPidFlag::WNOHANG

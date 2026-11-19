@@ -153,6 +153,21 @@ const REQUIREMENTS: &[Requirement] = &[
         "rustx-execution-client:test websocket",
         "",
     ),
+    // The extracted process-supervisor package carries the supervisor
+    // fixture suites; a dropped step must fail even where completeness
+    // already covers it.
+    Requirement::new(
+        Profile::Fast,
+        Platform::Linux,
+        "rustx-process-supervisor:lib",
+        "",
+    ),
+    Requirement::new(
+        Profile::Full,
+        Platform::Linux,
+        "rustx-process-supervisor:lib",
+        "",
+    ),
 ];
 
 /// The module name that marks a capacity test: its value comes from its scale

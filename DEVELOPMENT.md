@@ -25,7 +25,16 @@ Build explicitly after native changes; the launcher never builds implicitly.
 an actionable error before any process starts. For the combined Web and TUI
 compositions, `bash-supervisor`,
 `interactive-supervisor` and `workflow-renderer` must be executable beside the resolved `rustx` binary;
-`cargo build --bins` builds them together. A standalone Server needs no
+`cargo build --bins` builds them together. The supervisor helpers are the
+independently buildable `rustx-process-supervisor` package
+(`cargo build -p rustx-process-supervisor --bins --locked`): it owns the
+physical process-supervision halves (dedicated `bash-supervisor` and
+`interactive-supervisor` binaries plus their shared supervised-unit core,
+the `waitid` adapter, and the child-subreaper prerequisite) with no
+dependency on the root runtime. This is physical supervisor extraction
+only — the root runtime still owns the `process_runner` driver,
+cancellation, and nested containment, and Bash is not migrated behind the
+execution Server/Client boundary (T24 remains partial). A standalone Server needs no
 siblings to start: `cargo build -p rustx --bin rustx --locked` is sufficient
 to run `rustx app-server` and list cold Sessions without mounting their
 Workspaces. Native paths/values pass through unchanged; native parsers own validation.

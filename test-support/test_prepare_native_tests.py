@@ -754,7 +754,7 @@ fn upstream_unused_warning_witness() {}
 
 class ClientBinCommandTests(unittest.TestCase):
     def test_replaces_package_and_drops_root_feature_selectors(self) -> None:
-        cmd = prep.client_bin_command(
+        cmd = prep.companion_bin_command(
             [
                 "cargo",
                 "build",
@@ -775,7 +775,8 @@ class ClientBinCommandTests(unittest.TestCase):
                 "--target-dir",
                 "target/custom",
                 "--profile=test",
-            ]
+            ],
+            "rustx-execution-client",
         )
         self.assertEqual(
             cmd,
@@ -796,8 +797,9 @@ class ClientBinCommandTests(unittest.TestCase):
         )
 
     def test_appends_package_selection_when_absent(self) -> None:
-        cmd = prep.client_bin_command(
-            ["cargo", "build", "--bins", "--message-format=json", "--locked"]
+        cmd = prep.companion_bin_command(
+            ["cargo", "build", "--bins", "--message-format=json", "--locked"],
+            "rustx-execution-client",
         )
         self.assertEqual(
             cmd,
@@ -813,12 +815,23 @@ class ClientBinCommandTests(unittest.TestCase):
         )
 
     def test_rewrites_equals_spelled_package(self) -> None:
-        cmd = prep.client_bin_command(
-            ["cargo", "build", "--bins", "--package=rustx", "--locked"]
+        cmd = prep.companion_bin_command(
+            ["cargo", "build", "--bins", "--package=rustx", "--locked"],
+            "rustx-execution-client",
         )
         self.assertEqual(
             cmd,
             ["cargo", "build", "--bins", "--package=rustx-execution-client", "--locked"],
+        )
+
+    def test_rewrites_for_process_supervisor(self) -> None:
+        cmd = prep.companion_bin_command(
+            ["cargo", "build", "--bins", "--package=rustx", "--locked"],
+            "rustx-process-supervisor",
+        )
+        self.assertEqual(
+            cmd,
+            ["cargo", "build", "--bins", "--package=rustx-process-supervisor", "--locked"],
         )
 
 

@@ -109,7 +109,7 @@ pub(crate) async fn watch_terminal_order() {
 }
 
 pub(crate) async fn revocation_before_start() {
-    use crate::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
     struct ReleaseOnDrop(crate::runtime::process_runner::RunnerStartHold);
     impl Drop for ReleaseOnDrop {
         fn drop(&mut self) {

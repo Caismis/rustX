@@ -89,7 +89,7 @@ static CHILD_SUBREAPER: OnceLock<Result<(), String>> = OnceLock::new();
 /// attempt, sticky for the process lifetime. macOS returns `Ok(())`.
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // one scalar prctl syscall, no pointer arguments
-pub(crate) fn ensure_child_subreaper() -> Result<(), String> {
+pub fn ensure_child_subreaper() -> Result<(), String> {
     CHILD_SUBREAPER
         .get_or_init(|| {
             // SAFETY: prctl with PR_SET_CHILD_SUBREAPER and a literal 1 is
@@ -110,14 +110,14 @@ pub(crate) fn ensure_child_subreaper() -> Result<(), String> {
 /// after the outer supervisor is lost cannot use Linux orphan adoption.
 #[cfg(target_os = "macos")]
 #[allow(clippy::unnecessary_wraps)]
-pub(crate) fn ensure_child_subreaper() -> Result<(), String> {
+pub fn ensure_child_subreaper() -> Result<(), String> {
     Ok(())
 }
 
 /// Other platforms are outside the supported Unix process-supervision
 /// boundary.
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-pub(crate) fn ensure_child_subreaper() -> Result<(), String> {
+pub fn ensure_child_subreaper() -> Result<(), String> {
     Err("Bash process supervision requires Linux or macOS".to_owned())
 }
 

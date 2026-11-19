@@ -545,7 +545,7 @@ impl Child {
         );
         let dependencies = LocalRuntimeDependencies {
             child_program: real_child
-                .then(|| crate::runtime::process_runner::companion_binary("rustx")),
+                .then(|| rustx_process_supervisor::invocation::companion_binary("rustx")),
             ..LocalRuntimeDependencies::default()
         };
         let registry = if real_child {
@@ -1934,7 +1934,7 @@ async fn compose_workflow_emulator_child(
     let paths = lab_paths(root);
     let launch = paths.try_resolve().expect("resolve workflow lab launch");
     let runtime_config = launch.config().clone();
-    let child_program = crate::runtime::process_runner::companion_binary("rustx");
+    let child_program = rustx_process_supervisor::invocation::companion_binary("rustx");
     assert!(
         child_program.is_file(),
         "workflow crash child requires built `rustx` binary at {}",

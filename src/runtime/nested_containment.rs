@@ -72,7 +72,7 @@
 //! child died. On Linux that adoption is exactly `PR_SET_CHILD_SUBREAPER`,
 //! and it must be installed in the top-level parent *before* the child is
 //! spawned — a subreaper installed afterwards does not retroactively adopt.
-//! [`crate::runtime::process_supervision::ensure_child_subreaper`] is
+//! [`rustx_process_supervisor::process_supervision::ensure_child_subreaper`] is
 //! therefore consulted before staging, and preparation fails rather than
 //! claiming containment it cannot perform.
 //!
@@ -632,7 +632,7 @@ mod global_authority_tests {
 
 #[cfg(all(test, unix))]
 mod containment_tests {
-    use crate::runtime::supervised_unit::{EmergencyContainment, contain_adopted_group};
+    use rustx_process_supervisor::supervised_unit::{EmergencyContainment, contain_adopted_group};
 
     /// A direct child of this process in its own process group is a valid
     /// adopted anchor: containment retains its identity, kills the group,

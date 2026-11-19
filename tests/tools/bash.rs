@@ -25,7 +25,7 @@ use rustx::tools::types::{
 
 fn fixture_with_trace(trace: &std::path::Path) -> crate::common::NativeFixture {
     fixture_with_control(
-        &rustx::tools::native::bash_supervisor::diagnostics::FixtureControl {
+        &rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl {
             trace: Some(trace.to_path_buf()),
             before_term_socket: None,
         },
@@ -33,9 +33,9 @@ fn fixture_with_trace(trace: &std::path::Path) -> crate::common::NativeFixture {
 }
 
 fn fixture_with_control(
-    control: &rustx::tools::native::bash_supervisor::diagnostics::FixtureControl,
+    control: &rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl,
 ) -> crate::common::NativeFixture {
-    use rustx::tools::native::bash_supervisor::diagnostics::fixture_executor;
+    use rustx::tools::native::fixture_executor;
     let mut fixture = native_fixture();
     let mut registry = rustx::tools::executor::ToolRegistry::new();
     for definition in fixture.registry.definitions() {
@@ -201,7 +201,7 @@ async fn bash_foreground_timeout_is_timed_out() {
 
 #[tokio::test]
 async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Keep the socket path within Darwin's native path bound.
@@ -307,7 +307,7 @@ async fn bash_foreground_cancellation_sends_term_to_the_process_group() {
 
 #[tokio::test]
 async fn bash_kill_escalates_when_term_is_ignored() {
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
     let dir = tempfile::tempdir().unwrap();
     let trace = dir.path().join("signals");
     let fixture = fixture_with_trace(&trace);
@@ -371,7 +371,7 @@ impl Drop for SignalReleaseGuard {
 async fn bash_cancellation_terminates_descendants_of_the_process_group() {
     use nix::sys::signal::kill;
     use nix::unistd::{Pid, getpgid};
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     // Keep the socket path within Darwin's native path bound.
@@ -634,7 +634,7 @@ async fn bash_cancellation_does_not_kill_unrelated_processes() {
 #[tokio::test]
 async fn bash_background_cancellation_uses_the_same_process_group_path() {
     use rustx::tools::background::BackgroundLifecycle;
-    use rustx::tools::native::bash_supervisor::diagnostics::{Entry, Event};
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event};
     let trace_dir = tempfile::tempdir().unwrap();
     let trace = trace_dir.path().join("supervision.jsonl");
     let fixture = fixture_with_trace(&trace);
@@ -1594,9 +1594,7 @@ async fn background_cancel_records_term_before_trap_and_physical_terminal() {
 
 async fn background_cancel_at_native_gate() {
     use rustx::tools::background::BackgroundLifecycle;
-    use rustx::tools::native::bash_supervisor::diagnostics::{
-        Entry, Event, FixtureControl, fixture_executor,
-    };
+    use rustx_process_supervisor::bash_supervisor::diagnostics::{Entry, Event, FixtureControl};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     // Bounded native socket namespace, independent of macOS TMPDIR length.
     let dir = tempfile::Builder::new()
@@ -1632,7 +1630,7 @@ async fn background_cancel_at_native_gate() {
         ready_path.display()
     );
     let registry = fixture.runtime.background();
-    let executor = fixture_executor(FixtureControl {
+    let executor = rustx::tools::native::fixture_executor(FixtureControl {
         trace: Some(trace.clone()),
         before_term_socket: Some(socket),
     });
@@ -1754,7 +1752,7 @@ async fn background_cancel_at_native_gate() {
 #[tokio::test]
 async fn ordinary_environment_cannot_arm_supervisor_term_gate() {
     tokio::time::timeout(Duration::from_secs(15), async {
-        use rustx::tools::native::bash_supervisor::diagnostics::TERM_GATE_ENV;
+        use rustx_process_supervisor::bash_supervisor::diagnostics::TERM_GATE_ENV;
         let dir = tempfile::Builder::new().prefix("rx-env-").tempdir_in("/tmp").unwrap();
         let socket = dir.path().join("gate");
         let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
@@ -1791,7 +1789,7 @@ async fn ordinary_environment_cannot_arm_supervisor_term_gate() {
 
 #[tokio::test]
 async fn ordinary_environment_cannot_enable_supervisor_controls() {
-    use rustx::tools::native::bash_supervisor::diagnostics::TRACE_ENV;
+    use rustx_process_supervisor::bash_supervisor::diagnostics::TRACE_ENV;
     use std::fmt::Write;
     let dir = tempfile::tempdir().unwrap();
     let trace = dir.path().join("trace");

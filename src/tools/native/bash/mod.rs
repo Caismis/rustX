@@ -74,7 +74,7 @@
 //!
 //! Linux's process-wide `PR_SET_CHILD_SUBREAPER` activation is a runtime
 //! coordination-layer capability, not a Bash-local setting or generic
-//! reaper. It is owned by [`crate::runtime::process_supervision`] and
+//! reaper. It is owned by [`rustx_process_supervisor::process_supervision`] and
 //! established before `START` authorizes the Bash spawn. macOS has no
 //! equivalent; its normal path relies on Bash waiting for ordinary
 //! background jobs, and a lost supervisor cannot claim the Linux
@@ -157,36 +157,9 @@ mod capture;
 mod executor;
 pub(crate) mod handoff;
 mod input;
-mod text;
-// The supervisor is not a separate tool: it is an implementation detail of
-// Bash execution ownership, owned by this module.
-#[cfg(unix)]
-#[doc(hidden)]
-pub mod supervisor;
-#[cfg(not(unix))]
-#[doc(hidden)]
-pub mod supervisor {
-    /// The supervisor role names remain available to the dedicated binary,
-    /// which reports the unsupported platform explicitly at runtime.
-    pub const ROLE_OUTER: &str = "outer";
-    pub const ROLE_INNER: &str = "inner";
-
-    /// Unix is required for the process-group ownership proof used by the
-    /// Bash supervisor.
-    pub fn run_outer_supervisor() -> ! {
-        eprintln!("Bash supervisor requires Unix process supervision");
-        std::process::exit(1);
-    }
-
-    /// Unix is required for the process-group ownership proof used by the
-    /// Bash supervisor.
-    pub fn run_inner_supervisor() -> ! {
-        eprintln!("Bash supervisor requires Unix process supervision");
-        std::process::exit(1);
-    }
-}
 #[cfg(test)]
 mod tests;
+mod text;
 
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::types::ToolInvocationPolicy;
@@ -216,6 +189,17 @@ pub(super) fn output_schema() -> serde_json::Value {
         "required": ["exit_code", "stdout", "stderr", "combined"],
         "additionalProperties": false,
     })
+}
+
+/// Constructs the explicitly trusted executor used by external regression
+/// fixtures. The `BashTool` wiring stays root-owned; the fixture control
+/// itself is the supervisor package's physical diagnostics contract.
+#[doc(hidden)]
+#[must_use]
+pub fn fixture_executor(
+    control: rustx_process_supervisor::bash_supervisor::diagnostics::FixtureControl,
+) -> std::sync::Arc<dyn crate::tools::executor::ToolExecutor> {
+    std::sync::Arc::new(BashTool::with_diagnostic_fixture(control))
 }
 
 pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::ToolDefinition {

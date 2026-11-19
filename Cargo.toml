@@ -6,6 +6,7 @@ members = [
     "crates/execution-protocol",
     "crates/execution-server",
     "crates/execution-transport",
+    "crates/process-supervisor",
     "crates/text-edit",
 ]
 # A bare `cargo test`/`cargo build` at the root selects every member, so the
@@ -19,6 +20,7 @@ default-members = [
     "crates/execution-protocol",
     "crates/execution-server",
     "crates/execution-transport",
+    "crates/process-supervisor",
     "crates/text-edit",
 ]
 resolver = "3"
@@ -49,14 +51,6 @@ path = "src/lib.rs"
 [[bin]]
 name = "rustx"
 path = "src/main.rs"
-
-[[bin]]
-name = "bash-supervisor"
-path = "src/bin/bash_supervisor.rs"
-
-[[bin]]
-name = "interactive-supervisor"
-path = "src/bin/interactive_supervisor.rs"
 
 [[bin]]
 name = "workflow-renderer"
@@ -160,6 +154,7 @@ rustx-confined-fs = { path = "crates/confined-fs" }
 rustx-execution-protocol = { path = "crates/execution-protocol" }
 rustx-execution-server = { path = "crates/execution-server" }
 rustx-execution-transport = { path = "crates/execution-transport" }
+rustx-process-supervisor = { path = "crates/process-supervisor" }
 rustx-text-edit = { path = "crates/text-edit" }
 biodivine-lib-bdd = "0.6.3"
 minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }
