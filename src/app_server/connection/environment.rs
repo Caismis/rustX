@@ -7,7 +7,8 @@ use base64::Engine as _;
 pub(in crate::app_server) fn error(error: std::io::Error) -> RpcError {
     let kind = error.kind();
     if let Some(inner) = error.into_inner()
-        && inner.is::<crate::local_runtime::environment::files::CommitUnknown>()
+        && (inner.is::<crate::local_runtime::environment::files::CommitUnknown>()
+            || inner.is::<rustx_execution_server::WriteOutcomeUnknown>())
     {
         return domain(ErrorData::OutcomeUnknown);
     }
@@ -214,6 +215,100 @@ impl AppServerConnection {
                 })
                 .await
             }
+            Method::FsWriteFile {
+                session_id,
+                path,
+                data_base64,
+                expected_revision,
+            } => {
+                // The encoded bound gates before any decode: an encoding
+                // that cannot fit inside the decoded cap is refused up
+                // front; the decoded bytes are bounded again after.
+                if data_base64.len() > rustx_execution_protocol::MAX_RAW_CHUNK_BYTES.div_ceil(3) * 4
+                {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(data_base64)
+                    .map_err(|_| domain(ErrorData::InvalidParams))?;
+                if bytes.len() > rustx_execution_protocol::MAX_RAW_CHUNK_BYTES {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let manager = self.host.manager().clone();
+                let closed = self.service_events.closed.clone();
+                // Detached blocking work retains admission through the
+                // physical commit. Dropping a transport waiter cannot
+                // free its capacity.
+                tokio::task::spawn_blocking(move || {
+                    let _owner = owner;
+                    if closed.is_cancelled() {
+                        return Err(domain(ErrorData::ConnectionClosed));
+                    }
+                    // Non-creating lookup: no endpoint means no admitted
+                    // Client — absence is unavailability, never a
+                    // fallback to Server-local file I/O.
+                    let endpoint = manager
+                        .execution_endpoint(&session_id)
+                        .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
+                    // Logical authorization only: the admitted workspace
+                    // must sit under a configured root, checked before the
+                    // prepare and again inside the commit gate.
+                    let authorized = || {
+                        manager
+                            .process_policy()
+                            .environment_roots
+                            .iter()
+                            .any(|root| endpoint.workspace().starts_with(root))
+                    };
+                    if !authorized() {
+                        return Err(domain(ErrorData::EnvironmentUnauthorized));
+                    }
+                    let metadata = endpoint
+                        .write_file(
+                            std::path::Path::new(&path),
+                            &bytes,
+                            expected_revision.as_deref(),
+                            |_| {
+                                // The last caller gate, invoked on the
+                                // retained prepared original immediately
+                                // before the commit frame is written:
+                                // the same grant must still cover the
+                                // admitted workspace and the caller must
+                                // still be connected.
+                                if !authorized() {
+                                    return Err(std::io::Error::new(
+                                        std::io::ErrorKind::PermissionDenied,
+                                        "environment root unauthorized",
+                                    ));
+                                }
+                                if closed.is_cancelled() {
+                                    return Err(std::io::Error::new(
+                                        std::io::ErrorKind::ConnectionAborted,
+                                        "connection closed",
+                                    ));
+                                }
+                                Ok(())
+                            },
+                        )
+                        .map_err(|io| match io.kind() {
+                            std::io::ErrorKind::NotConnected | std::io::ErrorKind::BrokenPipe => {
+                                domain(ErrorData::ExecutionUnavailable)
+                            }
+                            std::io::ErrorKind::WouldBlock => {
+                                domain(ErrorData::EnvironmentCapacityOrConflict)
+                            }
+                            std::io::ErrorKind::ConnectionAborted => {
+                                domain(ErrorData::ConnectionClosed)
+                            }
+                            _ => error(io),
+                        })?;
+                    // A known-successful write is durable: it is never
+                    // reported as cancelled or rolled back past this point.
+                    Ok(MethodResult::FileMetadata { metadata })
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OutcomeUnknown))?
+            }
             method => {
                 let environment = self.host.manager().environment.clone();
                 let closed = self.service_events.closed.clone();
@@ -225,21 +320,6 @@ impl AppServerConnection {
                         return Err(domain(ErrorData::ConnectionClosed));
                     }
                     match method {
-                        Method::FsWriteFile {
-                            path,
-                            data_base64,
-                            expected_revision,
-                        } => {
-                            if data_base64.len() > 699_052 {
-                                return Err(domain(ErrorData::InvalidParams));
-                            }
-                            let bytes = base64::engine::general_purpose::STANDARD
-                                .decode(data_base64)
-                                .map_err(|_| domain(ErrorData::InvalidParams))?;
-                            environment
-                                .write(&path, &bytes, expected_revision.as_deref())
-                                .map(|metadata| MethodResult::FileMetadata { metadata })
-                        }
                         Method::FsCreateDirectory { path, recursive } => environment
                             .create_directory(&path, recursive)
                             .map(|()| MethodResult::EnvironmentAccepted {}),

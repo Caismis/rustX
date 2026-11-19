@@ -876,3 +876,174 @@ fn a_partial_admission_delivery_times_out_the_client() {
     drop(stream);
     assert_eq!(rig.binding.status().phase, BindingPhase::Reserved);
 }
+
+#[test]
+fn a_conditional_write_commits_reads_back_and_conflicts_on_stale_revision() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalWrite,
+    ]));
+    fs::write(rig.workspace_path.join("file"), b"before").unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // The authorized gate runs on the prepared original: a real stamp,
+    // never a re-stat by the Server.
+    let first = connection
+        .write_file(Path::new("file"), b"after", None, |original| {
+            assert!(original.is_none());
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(first.kind(), io::ErrorKind::AlreadyExists);
+
+    let source_stamp = rustx_confined_fs::FileMetadata::of(
+        &std::fs::File::open(rig.workspace_path.join("file")).unwrap(),
+    )
+    .unwrap();
+    let written = connection
+        .write_file(
+            Path::new("file"),
+            b"after",
+            Some(&source_stamp.revision),
+            |original| {
+                // The gate sees the retained prepared original — the
+                // exact revision the request carried.
+                assert_eq!(original.unwrap().revision, source_stamp.revision);
+                Ok(())
+            },
+        )
+        .unwrap();
+    assert_eq!(fs::read(rig.workspace_path.join("file")).unwrap(), b"after");
+
+    // Read-after-write on the same connection serves the new bytes.
+    let range = connection
+        .read_range(Path::new("file"), 0, 64, Some(&written.revision))
+        .unwrap();
+    assert_eq!(range.bytes, b"after");
+
+    // A stale expected revision is a conflict, not a write.
+    let stale = connection
+        .write_file(
+            Path::new("file"),
+            b"third",
+            Some(&source_stamp.revision),
+            |_| panic!("a conflicting write never reaches the gate"),
+        )
+        .unwrap_err();
+    assert_eq!(stale.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(fs::read(rig.workspace_path.join("file")).unwrap(), b"after");
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn a_denied_gate_aborts_the_stage_and_leaves_the_target_untouched() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalWrite,
+    ]));
+    fs::write(rig.workspace_path.join("file"), b"before").unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // The prepare must succeed first: expected the real revision so the
+    // staged preparation exists when the gate denies it.
+    let original = rustx_confined_fs::FileMetadata::of(
+        &std::fs::File::open(rig.workspace_path.join("file")).unwrap(),
+    )
+    .unwrap();
+    let error = connection
+        .write_file(
+            Path::new("file"),
+            b"staged",
+            Some(&original.revision),
+            |_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "gate")),
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    // The abort removed the private stage: no `.rustx-write-*` sibling
+    // survives and the target bytes are untouched.
+    let staged: Vec<_> = fs::read_dir(&rig.workspace_path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_str().unwrap().starts_with(".rustx-write-"))
+        .collect();
+    assert_eq!(staged, Vec::<std::ffi::OsString>::new());
+    assert_eq!(
+        fs::read(rig.workspace_path.join("file")).unwrap(),
+        b"before"
+    );
+
+    // The aborted connection stays live: a fresh create-only write
+    // commits on the same ticket scope.
+    let metadata = connection
+        .write_file(Path::new("created"), b"new", None, |_| Ok(()))
+        .unwrap();
+    assert_eq!(
+        fs::read(rig.workspace_path.join("created")).unwrap(),
+        b"new"
+    );
+    assert_eq!(
+        fs::metadata(rig.workspace_path.join("created"))
+            .map(|m| m.len())
+            .unwrap(),
+        metadata.size.get()
+    );
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+#[test]
+fn a_revoked_binding_after_prepare_leaves_no_stage_and_no_commit() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalWrite,
+    ]));
+    fs::write(rig.workspace_path.join("file"), b"before").unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    // The caller gate revokes the binding after the prepare but before
+    // the commit is dispatched: zero commit frames cross, the physical
+    // stream is shut down so the idle client exits, and its unpublished
+    // private stage is cleaned up by the dropped owner. The prepare must
+    // succeed first — the real revision is expected so the staged
+    // preparation exists when the revoke lands.
+    let original = rustx_confined_fs::FileMetadata::of(
+        &std::fs::File::open(rig.workspace_path.join("file")).unwrap(),
+    )
+    .unwrap();
+    let error = connection
+        .write_file(
+            Path::new("file"),
+            b"staged",
+            Some(&original.revision),
+            |_| {
+                rig.binding.revoke();
+                Ok(())
+            },
+        )
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    drop(connection);
+    expect_success(&mut child);
+    let staged: Vec<_> = fs::read_dir(&rig.workspace_path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_str().unwrap().starts_with(".rustx-write-"))
+        .collect();
+    assert_eq!(staged, Vec::<std::ffi::OsString>::new());
+    assert_eq!(
+        fs::read(rig.workspace_path.join("file")).unwrap(),
+        b"before"
+    );
+}

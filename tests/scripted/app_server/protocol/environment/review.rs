@@ -239,30 +239,37 @@ pub(crate) async fn watch_recheck() {
     else {
         panic!("stat")
     };
-    let (renamed, at_commit) = tokio::sync::oneshot::channel();
-    let (release, proceed) = std::sync::mpsc::channel();
-    crate::local_runtime::environment::files::write_commit_hook(
-        &path,
-        Box::new(move || {
-            renamed.send(()).unwrap();
-            proceed
-                .recv()
-                .expect("release atomic write before directory fsync");
-        }),
-    );
     let mut checks = Vec::new();
     for source in [&path, &directory] {
         let (observed, checked) = tokio::sync::oneshot::channel();
         crate::app_server::filesystem::observe_recheck(source.clone(), observed);
         checks.push(checked);
     }
+    // Local watch I/O exclusion is held on an independent task while the
+    // real Client completes the atomic fs/writeFile: every native
+    // callback's identity check must observe WouldBlock inside the held
+    // window — the Client mutation never needs the Server's I/O gate.
+    let (held, locked) = tokio::sync::oneshot::channel();
+    let (release, unlocked) = std::sync::mpsc::channel();
+    let native = fixture.manager.environment.clone();
+    let source = directory.clone();
+    let lock = tokio::task::spawn_blocking(move || {
+        native.with_paths(&[source.to_str().unwrap()], |_| {
+            held.send(()).unwrap();
+            unlocked.recv().unwrap();
+            Ok(())
+        })
+    });
+    bounded(locked).await.unwrap();
     let worker = connection.clone();
     let target = path.display().to_string();
+    let write_session = session_id.clone();
     let write = tokio::spawn(async move {
         call(
             &worker,
             3,
             Method::FsWriteFile {
+                session_id: write_session,
                 path: target,
                 data_base64: "YWZ0ZXI=".into(),
                 expected_revision: Some(metadata.revision),
@@ -270,15 +277,15 @@ pub(crate) async fn watch_recheck() {
         )
         .await
     });
-    bounded(at_commit).await.unwrap();
-    // Rename is complete, fsync/unlock have not happened, and both real native
-    // callbacks have hit WouldBlock before the test releases the writer.
+    // The Client write completed while the exclusion held, and both real
+    // native callbacks hit WouldBlock before the lock is released.
     for check in checks {
         bounded(check).await.unwrap();
     }
     assert_eq!(capacity.available_permits(), 30);
-    release.send(()).unwrap();
     bounded(write).await.unwrap();
+    release.send(()).unwrap();
+    bounded(lock).await.unwrap().unwrap();
     loop {
         if let NotificationMethod::FsChanged(change) =
             bounded(connection.next_notification()).await.notification

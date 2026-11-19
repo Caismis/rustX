@@ -7,9 +7,10 @@
 //! the bound Unix socket, then serves the Server's typed requests until
 //! EOF: `Ping` liveness and the implemented physical operations — bounded
 //! revision-checked `ReadRange`, `GetMetadata` stat'ed without following
-//! the leaf, and bounded `ReadDirectory` paging — all executed through
-//! `rustx-confined-fs`, the same primitives the Agent Server itself uses.
-//! No process, MCP, or Python I/O exists here.
+//! the leaf, bounded `ReadDirectory` paging, and the ticketed
+//! `PrepareWrite`/`CommitWrite`/`AbortWrite` conditional write — all
+//! executed through `rustx-confined-fs`, the same primitives the Agent
+//! Server itself uses. No process, MCP, or Python I/O exists here.
 //!
 //! The workspace is local policy, never a server request: `--workspace`
 //! must match the bootstrap workspace byte for byte or the client refuses
@@ -21,9 +22,10 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::{env, fs};
 
@@ -36,6 +38,8 @@ use rustx_execution_protocol::{
     EntryStamp, FileStamp, Hello, HelloReply, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
     MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, PageEntry, ReadError, is_normalized_absolute_path,
 };
+
+mod mutation;
 
 /// `O_NOFOLLOW` refuses a symlinked final component; `O_NONBLOCK` makes a
 /// misidentified special file (FIFO, device) fail instead of blocking.
@@ -134,6 +138,7 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
             Capability::Connection,
             Capability::ReadRange,
             Capability::DirectoryMetadata,
+            Capability::ConditionalWrite,
         ]),
         credential: bootstrap.credential,
     };
@@ -242,6 +247,10 @@ fn verify_admission(hello: &Hello, admission: &Admission) -> Result<(), String> 
 /// a closed idle connection ends the process successfully. A truncated or
 /// malformed record is an error, never a silent end.
 fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String> {
+    // One serialized writer state per connection: at most one staged
+    // preparation lives at a time, and it is dropped — cleaning up its own
+    // private stage — when the owner is dropped at EOF or revoke.
+    let mut writes = mutation::Writes::new();
     loop {
         let Some(request) =
             read_optional_record::<ClientRequest>(stream).map_err(|_| String::from("request"))?
@@ -275,14 +284,27 @@ fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String>
                 limit,
                 expected_revision.as_deref(),
             ),
+            ClientRequest::PrepareWrite {
+                relative_path,
+                expected_revision,
+                data_base64,
+            } => writes.prepare(
+                root,
+                &relative_path,
+                expected_revision.as_deref(),
+                &data_base64,
+            ),
+            ClientRequest::CommitWrite { ticket } => writes.commit(ticket),
+            ClientRequest::AbortWrite { ticket } => writes.abort(ticket),
         };
         write_record(stream, &reply).map_err(|_| String::from("reply"))?;
     }
 }
 
-/// Performs the one physical operation: `relative_path` must be normal
-/// components only, `max_bytes` within `1..=`[`MAX_RAW_CHUNK_BYTES`], and
-/// the bytes verified under the file's revision. Errors cross the wire as
+/// Performs the one physical operation: `relative_path` must pass the
+/// shared lexical gate and name a file — never the empty root —
+/// `max_bytes` within `1..=`[`MAX_RAW_CHUNK_BYTES`], and the bytes
+/// verified under the file's revision. Errors cross the wire as
 /// stable [`ReadError`] codes only — never raw paths.
 fn read_range(
     root: &PackageDirectory,
@@ -294,10 +316,7 @@ fn read_range(
     let bound = usize::try_from(max_bytes).unwrap_or(usize::MAX);
     if !(1..=MAX_RAW_CHUNK_BYTES).contains(&bound)
         || relative_path.as_os_str().is_empty()
-        || relative_path.is_absolute()
-        || !relative_path
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
+        || relative_entry(relative_path).is_err()
     {
         return ClientReply::Error {
             kind: ReadError::Invalid,
@@ -355,13 +374,19 @@ fn read_error(error: &std::io::Error) -> ReadError {
 }
 
 /// The lexical gate every physical request shares: normal components
-/// only, never absolute. An empty path — legal for the query operations —
+/// only, never absolute. The raw spelling is checked, not `components()`
+/// — an interior `.` or `..` segment that `components()` normalizes away
+/// and a NUL byte are refused exactly like a leading `.`; every other
+/// byte, control characters included, is ordinary literal name data on
+/// both DTO sides. An empty path — legal for the query operations —
 /// names the workspace root itself.
 fn relative_entry(relative_path: &Path) -> Result<&Path, ReadError> {
+    let raw = relative_path.as_os_str().as_bytes();
     if relative_path.is_absolute()
-        || !relative_path
-            .components()
-            .all(|part| matches!(part, Component::Normal(_)))
+        || raw.contains(&0)
+        || raw
+            .split(|byte| *byte == b'/')
+            .any(|segment| segment == b"." || segment == b"..")
     {
         return Err(ReadError::Invalid);
     }

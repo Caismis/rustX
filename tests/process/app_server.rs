@@ -583,7 +583,8 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
         assert!(page.entries[0].metadata.is_symlink);
         assert!(page.entries[1].metadata.is_file);
 
-        // Session B's unbound queries fail the same way its read did.
+        // Session B's unbound queries — and its write — fail the same way
+        // its read did. The unbound decoy is never a fallback target.
         for method in [
             Method::FsGetMetadata {
                 session_id: f.sessions[1].clone(),
@@ -603,12 +604,26 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
                 limit: 16,
                 expected_revision: None,
             },
+            Method::FsWriteFile {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .join("marker")
+                    .display()
+                    .to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"planted"),
+                expected_revision: None,
+            },
         ] {
             let Response::Failure(failure) = rpc(&client, 12, method).await else {
                 panic!("Session B query must fail")
             };
             assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
         }
+        assert_eq!(
+            std::fs::read(f.root.path().join("b/marker")).unwrap(),
+            b"decoy"
+        );
 
         client.close().await;
         terminate(&child);
@@ -680,7 +695,7 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
         let launcher = bin.join("rustx-execution-client");
         std::fs::write(
             &launcher,
-            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --ro-bind \"$bin/physical\" \"$4\" -- \"$bin/client-real\" \"$@\"\n",
+            "#!/bin/sh\nset -eu\nbin=${0%/*}\nexec /usr/bin/bwrap --die-with-parent --ro-bind / / --bind \"$bin/physical\" \"$4\" -- \"$bin/client-real\" \"$@\"\n",
         )
         .unwrap();
         std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -792,7 +807,84 @@ async fn explicit_composition_reads_from_client_mount_namespace() {
             Some(ErrorData::EnvironmentResourceNotFound)
         );
 
-        // After the exchange the Server's view is untouched: still no
+        // The physical overlay is the only writable mount: fs/writeFile
+        // with the expected revision publishes new marker bytes inside
+        // the Client's mount view — the Server's view never gains one.
+        let rewritten = b"mount-view proof rewritten";
+        let MethodResult::FileMetadata { metadata: written } = result(
+            &client,
+            Method::FsWriteFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(rewritten),
+                expected_revision: Some(expected.revision.clone()),
+            },
+        )
+        .await
+        else {
+            panic!("fs/writeFile through the Client's mount view")
+        };
+        assert_eq!(std::fs::read(physical.join("marker")).unwrap(), rewritten);
+        assert_eq!(
+            std::fs::metadata(workspace.join("marker"))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::NotFound
+        );
+        // The returned stamp is the Client's published descriptor: the
+        // replace allocated a new inode, so the identity is new too —
+        // it must describe the file now at the physical path exactly.
+        let published = rustx_confined_fs::FileMetadata::of(
+            &std::fs::File::open(physical.join("marker")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(written.identity, published.identity);
+        assert_eq!(written.revision, published.revision);
+        assert_ne!(written.revision, expected.revision);
+        let MethodResult::FileChunk { chunk } = result(
+            &client,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: Some(written.revision.clone()),
+            },
+        )
+        .await
+        else {
+            panic!("read-after-write through the Client's mount view")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap(),
+            rewritten
+        );
+
+        // A Session that never bound a Client cannot write at all — the
+        // Server-side decoy is not a fallback target.
+        let Response::Failure(failure) = rpc(
+            &client,
+            12,
+            Method::FsWriteFile {
+                session_id: SessionId::new("ses_00000000-0000-7000-8000-000000000099"),
+                path: decoy.display().to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"planted"),
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("an unbound Session's write must fail")
+        };
+        assert_eq!(
+            failure.error.data,
+            Some(ErrorData::ExecutionUnavailable)
+        );
+        assert_eq!(std::fs::read(&decoy).unwrap(), b"server-side only");
+
+        // After the exchanges the Server's view is untouched: still no
         // marker, the decoy intact.
         assert_eq!(
             std::fs::metadata(workspace.join("marker"))

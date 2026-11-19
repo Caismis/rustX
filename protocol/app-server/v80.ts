@@ -93,6 +93,7 @@ export type Request1 =
   | {
       method: 'fs/writeFile';
       params: {
+        sessionId: SessionId;
         path: string;
         dataBase64: string;
         expectedRevision?: string | null;

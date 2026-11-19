@@ -168,6 +168,8 @@ pub enum Method {
     },
     #[serde(rename = "fs/writeFile")]
     FsWriteFile {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         path: String,
         #[serde(rename = "dataBase64")]
         data_base64: String,

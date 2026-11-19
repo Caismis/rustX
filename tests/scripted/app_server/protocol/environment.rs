@@ -933,6 +933,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         1,
         Method::FsWriteFile {
+            session_id: session_id.clone(),
             path: path.clone(),
             data_base64: base64::engine::general_purpose::STANDARD.encode(b"before"),
             expected_revision: None,
@@ -947,6 +948,7 @@ pub(crate) async fn filesystem_scenario() {
             &connection,
             2,
             Method::FsWriteFile {
+                session_id: session_id.clone(),
                 path: path.clone(),
                 data_base64: "YWZ0ZXI=".into(),
                 expected_revision: None
@@ -957,6 +959,7 @@ pub(crate) async fn filesystem_scenario() {
     );
     let revision = metadata.revision;
     let write = Method::FsWriteFile {
+        session_id: session_id.clone(),
         path: path.clone(),
         data_base64: "YWZ0ZXI=".into(),
         expected_revision: Some(revision.clone()),

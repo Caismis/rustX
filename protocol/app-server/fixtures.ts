@@ -4967,6 +4967,7 @@ export const fixtures = [
     "id": "environment-5",
     "method": "fs/writeFile",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/file",
       "dataBase64": "aGk=",
       "expectedRevision": "native-revision"

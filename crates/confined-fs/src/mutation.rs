@@ -156,15 +156,18 @@ impl WriteTarget {
         self.original.as_ref().map(|(_, metadata)| metadata)
     }
 
-    /// Stages `writer`'s bytes into a private `.rustx-write-{uuid}` sibling
+    /// Stages `writer`'s bytes into a `O_EXCL` `.rustx-write-{uuid}` sibling
     /// under the retained parent.
     ///
     /// The retained chain and the leaf's revision are re-verified before
     /// the sibling is `O_EXCL`/`O_NOFOLLOW`-created; an existing target's
-    /// mode is copied from the retained original descriptor — the target
-    /// is never re-opened for it. The sibling is `sync_all`'d before the
-    /// [`StagedWrite`] is released, and a [`StagedWrite`] dropped without
-    /// publishing removes its own staging name.
+    /// mode is copied from the retained original descriptor onto the
+    /// sibling — the target is never re-opened for it. The sibling's name
+    /// is unique, not protected: a hostile writer could still replace it
+    /// before [`publish`](StagedWrite::publish), whose device:inode proof
+    /// refuses that case before the crossing. The sibling is `sync_all`'d
+    /// before the [`StagedWrite`] is released, and a [`StagedWrite`]
+    /// dropped without publishing removes its own staging name.
     ///
     /// # Errors
     ///

@@ -69,7 +69,7 @@ async fn native_and_browser_share_validation_and_jwt_expiry_only_affects_new_adm
                 let MethodResult::Initialized {capabilities,..}=rpc(&mut socket,Method::Initialize(InitializeParams {protocol_version:APP_SERVER_PROTOCOL_VERSION,client:ClientIdentity {name:if browser {"browser"}else{"native"}.into(),version:"1".into()},presentation:PresentationCapabilities::default()})).await else {panic!("initialized")};
                 assert!(capabilities.shared_writable_clients);
                 let path=f.workspaces[0].join(format!("trusted-environment-{index}-{browser}"));
-                assert!(matches!(rpc(&mut socket,Method::FsWriteFile {path:path.display().to_string(),data_base64:"dHJ1c3RlZA==".into(),expected_revision:None}).await,MethodResult::FileMetadata {..}));
+                assert!(matches!(rpc(&mut socket,Method::FsWriteFile {session_id:session_id.clone(),path:path.display().to_string(),data_base64:"dHJ1c3RlZA==".into(),expected_revision:None}).await,MethodResult::FileMetadata {..}));
                 assert!(matches!(rpc(&mut socket,Method::FsGetMetadata {session_id:session_id.clone(),path:path.display().to_string()}).await,MethodResult::FileMetadata {..}));
                 let params=serde_json::from_value(serde_json::json!({"command":["/usr/bin/printf","trusted"],"cwd":f.workspaces[0]})).unwrap();
                 let MethodResult::CommandExec {result}=rpc(&mut socket,Method::CommandExec(params)).await else {panic!("equal command eligibility")};

@@ -283,6 +283,10 @@ pub enum Capability {
     /// following the leaf, and bounded directory paging, under the
     /// binding workspace.
     DirectoryMetadata,
+    /// The implemented conditional write: one staged `PrepareWrite` plus a
+    /// ticketed `CommitWrite`/`AbortWrite` per request, carried out by the
+    /// private commit kernel under the binding workspace.
+    ConditionalWrite,
     /// Data-side bounded glob/grep, conditional edit, document decoding.
     Search,
     /// Managed processes under Server-assigned `OperationId`s.
@@ -505,7 +509,8 @@ pub type HelloReply = Result<Admission, Reject>;
 ///
 /// The Server is the only initiator; the Client answers every request with
 /// exactly one [`ClientReply`]. `Ping`/`Pong` is the liveness control flow;
-/// `ReadRange`, `GetMetadata`, and `ReadDirectory` are the implemented
+/// `ReadRange`, `GetMetadata`, `ReadDirectory`, and the ticketed
+/// `PrepareWrite`/`CommitWrite`/`AbortWrite` sequence are the implemented
 /// physical operations — there is no raw or arbitrary message path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -542,6 +547,34 @@ pub enum ClientRequest {
         /// The revision the directory must still hold, when checked.
         expected_revision: Option<String>,
     },
+    /// First phase of one conditional write: retain the exact named target
+    /// under the binding workspace, verify the expected original, and stage
+    /// the payload privately. Nothing named by `relative_path` mutates until
+    /// the matching `CommitWrite` — the base64 payload decodes to at most
+    /// [`MAX_RAW_CHUNK_BYTES`].
+    PrepareWrite {
+        /// The exact named target: strictly normalized relative path below
+        /// the binding workspace whose leaf is the file to write.
+        relative_path: PathBuf,
+        /// Decimal u64 revision of the required current file. `None`
+        /// requires the target to be absent (create-only).
+        expected_revision: Option<String>,
+        /// The full payload, base64-encoded; never staged raw.
+        data_base64: String,
+    },
+    /// Second phase: publish the staged payload of the one live
+    /// `WritePrepared` ticket on this connection. The publish crossing is
+    /// irreversible; a consumed ticket can never commit or abort again.
+    CommitWrite {
+        /// The exact ticket returned by the live `WritePrepared` reply.
+        ticket: DecimalU64,
+    },
+    /// Abandons the one live `WritePrepared` ticket on this connection,
+    /// removing its private stage. The ticket is consumed.
+    AbortWrite {
+        /// The exact ticket returned by the live `WritePrepared` reply.
+        ticket: DecimalU64,
+    },
 }
 
 /// The Client's one typed reply to a [`ClientRequest`].
@@ -575,6 +608,26 @@ pub enum ClientReply {
         /// The index the next page starts at, absent at the end.
         next_offset: Option<u32>,
     },
+    /// A `PrepareWrite` staged privately and verified: the ticket is a
+    /// Client-assigned nonzero scalar unique to this connection, `original`
+    /// is the retained target's verified stamp, `None` for a create-only
+    /// target. At most one ticket is live per connection at a time.
+    WritePrepared {
+        ticket: DecimalU64,
+        original: Option<FileStamp>,
+    },
+    /// A `CommitWrite` published and verified: the returned stamp describes
+    /// the retained published descriptor, never a path reopened by name.
+    Written {
+        ticket: DecimalU64,
+        metadata: FileStamp,
+    },
+    /// An `AbortWrite` consumed its ticket and removed the private stage.
+    WriteAborted { ticket: DecimalU64 },
+    /// The `CommitWrite` publish crossing already happened but a later
+    /// stage failed: the named outcome is unknowable and must be reported
+    /// as such — never as a pre-commit denial.
+    CommitUnknown { ticket: DecimalU64 },
     /// The request failed; `kind` carries only the stable reason.
     Error {
         /// Why the operation failed — never a raw path or payload.

@@ -34466,6 +34466,9 @@
             "params": {
               "type": "object",
               "properties": {
+                "sessionId": {
+                  "$ref": "#/$defs/SessionId"
+                },
                 "path": {
                   "type": "string"
                 },
@@ -34481,6 +34484,7 @@
               },
               "additionalProperties": false,
               "required": [
+                "sessionId",
                 "path",
                 "dataBase64"
               ]

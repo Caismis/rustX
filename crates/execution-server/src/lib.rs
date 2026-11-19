@@ -109,6 +109,7 @@ impl ConnectionOwner {
         if inner.phase == BindingPhase::Live && inner.connection.as_ref() == Some(connection) {
             inner.phase = BindingPhase::Detached;
             inner.connection = None;
+            inner.stream = None;
         }
     }
 }
@@ -116,6 +117,11 @@ impl ConnectionOwner {
 struct Inner {
     phase: BindingPhase,
     connection: Option<ConnectionId>,
+    /// A shutdown-capable duplicate of the live connection's stream. It is
+    /// never written or read — it exists so [`Binding::revoke`] can close
+    /// the physical stream and wake a peer that no dispatch thread
+    /// currently holds, without waiting on the data lock.
+    stream: Option<UnixStream>,
 }
 
 impl Binding {
@@ -147,6 +153,7 @@ impl Binding {
             inner: Arc::new(ConnectionOwner(Mutex::new(Inner {
                 phase: BindingPhase::Reserved,
                 connection: None,
+                stream: None,
             }))),
         };
         Ok((binding, credential))
@@ -175,7 +182,7 @@ impl Binding {
     /// Returns the [`Reject`] matching the first failed check. Rejects
     /// never echo the submitted credential.
     pub fn connect(&self, hello: &Hello, connection: ConnectionId) -> Result<Admission, Reject> {
-        match self.connect_gated(hello, connection, None) {
+        match self.connect_gated(hello, connection, None, None) {
             Ok(result) => result,
             Err(_) => unreachable!("no deadline is checked without one"),
         }
@@ -184,12 +191,15 @@ impl Binding {
     /// [`connect`](Self::connect) behind an optional deadline rechecked
     /// inside the binding mutex, immediately before commit: an expired
     /// handshake can never become `Live` and consumes nothing — the
-    /// binding stays `Reserved`.
+    /// binding stays `Reserved`. `stream`, when given, is a shutdown-only
+    /// duplicate of the admitted connection stored in the live slot as the
+    /// revoke handle.
     fn connect_gated(
         &self,
         hello: &Hello,
         connection: ConnectionId,
         deadline: Option<Instant>,
+        stream: Option<UnixStream>,
     ) -> io::Result<Result<Admission, Reject>> {
         let mut inner = self.inner();
         let offered: [u8; 32] = Sha256::digest(hello.credential.as_bytes()).into();
@@ -236,6 +246,7 @@ impl Binding {
                 }
                 inner.phase = BindingPhase::Live;
                 inner.connection = Some(connection);
+                inner.stream = stream;
                 Ok(Ok(Admission {
                     version: PROTOCOL_VERSION,
                     session: self.reservation.session.clone(),
@@ -263,11 +274,19 @@ impl Binding {
     /// Revokes the binding immediately and terminally.
     ///
     /// A revoked binding rejects every future Hello and is never
-    /// dispatchable again, whatever its previous phase.
+    /// dispatchable again, whatever its previous phase. The duplicated
+    /// live stream, when one is held, is shut down in the same critical
+    /// section: a peer that is not currently locked for an exchange —
+    /// including one holding an unpublished staged write — observes EOF,
+    /// drops its per-connection write state, and cleans up its private
+    /// stage. The shutdown never waits on the connection's data lock.
     pub fn revoke(&self) {
         let mut inner = self.inner();
         inner.phase = BindingPhase::Revoked;
         inner.connection = None;
+        if let Some(stream) = inner.stream.take() {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
     }
 
     /// A consistent snapshot of the binding's phase and live connection.
@@ -365,13 +384,21 @@ impl Binding {
         mut stream: UnixStream,
         deadline: Instant,
     ) -> io::Result<Result<LocalConnection, Reject>> {
+        // The revoke shutdown handle is duplicated before the handshake
+        // wrapper takes the stream's only borrow.
+        let revoke_handle = stream.try_clone()?;
         // The handshake wrapper itself normalizes the stream to
         // nonblocking mode, whatever flag an accept inherited.
         let mut handshake = Handshake::new(&mut stream, deadline)?;
         let hello: Hello = read_record(&mut handshake)?;
         let capabilities = hello.capabilities.clone();
         let connection = fresh_connection_id()?;
-        match self.connect_gated(&hello, connection.clone(), Some(deadline))? {
+        match self.connect_gated(
+            &hello,
+            connection.clone(),
+            Some(deadline),
+            Some(revoke_handle),
+        )? {
             Ok(admission) => {
                 self.deliver(&mut handshake, &connection, &admission)?;
                 Ok(Ok(LocalConnection {
@@ -842,7 +869,190 @@ impl LocalConnection {
             next_offset: *next_offset,
         })
     }
+
+    /// The conditional write: `relative_path` under the binding workspace
+    /// becomes exactly `bytes` when `expected_revision` still names the
+    /// current file — or the target did not exist for `None`.
+    ///
+    /// The peer must have advertised [`Capability::ConditionalWrite`] at
+    /// admission or the call is [`io::ErrorKind::Unsupported`] and no
+    /// request is sent; `bytes` is bounded by [`MAX_RAW_CHUNK_BYTES`]
+    /// before anything crosses the wire. The write is two phases on this
+    /// same connection: one `PrepareWrite` retains the target and stages
+    /// the payload privately, then — after `authorize` has re-checked its
+    /// caller's gate against the prepared original — one `CommitWrite`
+    /// publishes it, or one `AbortWrite` removes the stage when the gate
+    /// denies and still admits the frame.
+    ///
+    /// The replies are verified, never trusted: the ticket must be a
+    /// nonzero scalar the same connection commits or aborts under, and
+    /// the prepared `original` must satisfy exactly the expectation that
+    /// was sent — `Some` stamp with the expected revision for a replace,
+    /// `None` for a create-only target. A violation retires the stream.
+    ///
+    /// The phases have different failure contracts. Before the commit
+    /// request's first byte, every failure is a clean pre-commit error:
+    /// the staged object cannot have published. Once that first byte is
+    /// written the publish crossing may already have happened, so a
+    /// transport error, a malformed reply, or a mismatched ticket retires
+    /// the connection and returns a [`WriteOutcomeUnknown`]-downcastable
+    /// error instead of a denial — an authoritative re-read is required,
+    /// never a retry. An explicit typed [`ClientReply::Error`] still
+    /// propagates as a refused write, and an explicit
+    /// [`ClientReply::CommitUnknown`] with the correct ticket reports the
+    /// same unknowable outcome.
+    ///
+    /// `authorize` runs on the verified prepared original before the
+    /// commit is dispatched — the caller's last gate, invoked with
+    /// `Some(&original)` for a replace or `None` for a create-only
+    /// target. A denial sends `AbortWrite` while the gate still admits
+    /// it and never commits.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
+    /// write capability, [`io::ErrorKind::InvalidInput`] for an oversized
+    /// payload, the [`ReadError`] the Client reported mapped onto an I/O
+    /// error kind, the `authorize` error verbatim when its gate denies, a
+    /// [`WriteOutcomeUnknown`]-downcastable error once the outcome cannot
+    /// be known, or [`io::ErrorKind::InvalidData`] for a malformed or
+    /// untruthful reply.
+    pub fn write_file(
+        &mut self,
+        relative_path: &Path,
+        bytes: &[u8],
+        expected_revision: Option<&str>,
+        authorize: impl FnOnce(Option<&FileStamp>) -> io::Result<()>,
+    ) -> io::Result<FileStamp> {
+        if !self.capabilities.contains(&Capability::ConditionalWrite) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no conditional write capability",
+            ));
+        }
+        if bytes.len() > MAX_RAW_CHUNK_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "file write exceeds chunk limit",
+            ));
+        }
+        let reply = self.exchange(&ClientRequest::PrepareWrite {
+            relative_path: relative_path.to_path_buf(),
+            expected_revision: expected_revision.map(str::to_owned),
+            data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+        })?;
+        if let ClientReply::Error { kind } = reply {
+            return Err(read_error(kind));
+        }
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        let ClientReply::WritePrepared { ticket, original } = reply else {
+            return Err(self.retire(violation("unexpected reply to write prepare")));
+        };
+        if ticket.get() == 0 {
+            return Err(self.retire(violation("write reply carries a zero ticket")));
+        }
+        // The reported original must satisfy exactly the expectation that
+        // was sent — a valid stamp matching the revision for a replace, or
+        // no original at all for a create-only target.
+        let expectation_holds = match (expected_revision, &original) {
+            (Some(expected), Some(original)) => {
+                original.revision == expected && stamp_violation(original).is_none()
+            }
+            (None, None) => true,
+            _ => false,
+        };
+        if !expectation_holds {
+            return Err(self.retire(violation("write reply ignores the expected revision")));
+        }
+        if let Err(error) = authorize(original.as_ref()) {
+            // The gate denied before commit: remove the stage while the
+            // binding still admits the frame, and never commit. A
+            // malformed abort reply is a protocol violation like any
+            // other — the original denial is still what the caller sees.
+            if self.gate().is_ok() {
+                match self.exchange(&ClientRequest::AbortWrite { ticket }) {
+                    Ok(ClientReply::WriteAborted { ticket: echoed }) if echoed == ticket => {}
+                    Ok(_) => {
+                        self.retire(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "unexpected reply to write abort",
+                        ));
+                    }
+                    Err(_) => {}
+                }
+            }
+            return Err(error);
+        }
+        self.commit_write(ticket, bytes.len() as u64)
+    }
+
+    /// The commit half of [`write_file`](Self::write_file): the request is
+    /// encoded and gated before its first byte, so a denial there is still
+    /// a clean pre-commit error. Once the first byte is written the publish
+    /// crossing may already have happened — every later failure retires the
+    /// connection and reports [`WriteOutcomeUnknown`], never a denial and
+    /// never a retry. A `Written` receipt is trusted only when its stamp
+    /// is valid *and* its size equals the exact byte count this connection
+    /// submitted: a receipt describing different bytes cannot prove the
+    /// publish, so the outcome stays unknown.
+    fn commit_write(&mut self, ticket: DecimalU64, expected_size: u64) -> io::Result<FileStamp> {
+        let encoded = encode_record(&ClientRequest::CommitWrite { ticket })?;
+        self.gate()?;
+        let outcome_unknown =
+            |connection: &mut Self| connection.retire(io::Error::other(WriteOutcomeUnknown));
+        let Ok(reply) = encoded
+            .write_to(&mut self.stream)
+            .and_then(|()| read_record(&mut self.stream))
+        else {
+            return Err(outcome_unknown(self));
+        };
+        match reply {
+            // An explicit typed refusal means the Client never crossed:
+            // it propagates as an ordinary pre-commit error.
+            ClientReply::Error { kind } => Err(read_error(kind)),
+            // The Client crossed but its later stages failed — the same
+            // unknowable outcome as a lost acknowledgement. The reply
+            // itself is valid and the ticket is consumed, so the
+            // connection is not retired for this one.
+            ClientReply::CommitUnknown { ticket: echoed } if echoed == ticket => {
+                Err(io::Error::other(WriteOutcomeUnknown))
+            }
+            ClientReply::Written {
+                ticket: echoed,
+                metadata,
+            } if echoed == ticket => {
+                if stamp_violation(&metadata).is_none() && metadata.size.get() == expected_size {
+                    Ok(metadata)
+                } else {
+                    Err(outcome_unknown(self))
+                }
+            }
+            _ => Err(outcome_unknown(self)),
+        }
+    }
 }
+
+/// The commit outcome is unknowable: the `CommitWrite` request was
+/// already written — or the Client already reported crossing — when the
+/// reply could not be delivered, trusted, or finished.
+///
+/// The write may or may not have published. It is never a clean
+/// pre-commit denial and must never be retried blindly: callers downcast
+/// the `io::Error` to this marker, report an unknown outcome, and learn
+/// the truth only from an authoritative re-read.
+#[derive(Debug)]
+pub struct WriteOutcomeUnknown;
+
+impl std::fmt::Display for WriteOutcomeUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "write commit outcome unknown; authoritative reread required"
+        )
+    }
+}
+
+impl std::error::Error for WriteOutcomeUnknown {}
 
 /// The shared content-revision check: a SHA-256 stamp is exactly 64
 /// lowercase hexadecimal characters, nothing else.
@@ -1486,9 +1696,12 @@ mod tests {
 
         // The same check inside arbitration, right before commit: an
         // expired budget cannot become Live and consumes nothing.
-        let Err(error) =
-            binding.connect_gated(&hello, ConnectionId::new("conn-1"), Some(Instant::now()))
-        else {
+        let Err(error) = binding.connect_gated(
+            &hello,
+            ConnectionId::new("conn-1"),
+            Some(Instant::now()),
+            None,
+        ) else {
             panic!("an expired deadline must fail before commit");
         };
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
@@ -1930,5 +2143,375 @@ mod tests {
 
         assert_eq!(binding.status().phase, BindingPhase::Detached);
         assert!(connection.ping().is_err());
+    }
+
+    fn write_stamp(revision: &str) -> FileStamp {
+        FileStamp {
+            size: DecimalU64::new(4),
+            revision: revision.to_owned(),
+            identity: String::from("1:1"),
+            modified_at_ms: None,
+        }
+    }
+
+    fn write_rig() -> (Binding, Hello) {
+        reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::ConditionalWrite,
+        ]))
+    }
+
+    fn assert_outcome_unknown(error: &io::Error) {
+        let unknown = match error.get_ref() {
+            Some(source) => source.is::<WriteOutcomeUnknown>(),
+            None => false,
+        };
+        assert!(unknown, "{error:?}");
+    }
+
+    #[test]
+    fn a_peer_without_the_write_capability_gets_no_request() {
+        let (binding, hello) = reserved(BTreeSet::from([Capability::Connection]));
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let error = connection
+            .write_file(Path::new("file"), b"bytes", None, |_| Ok(()))
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+        peer.set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        assert!(read_record::<ClientRequest>(&mut peer).is_err());
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_conditional_write_prepares_authorizes_and_commits_on_one_connection() {
+        let (binding, hello) = write_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::PrepareWrite {
+                relative_path,
+                expected_revision,
+                data_base64,
+            } = request
+            else {
+                panic!("expected a prepare request");
+            };
+            assert_eq!(relative_path, PathBuf::from("file"));
+            assert_eq!(expected_revision.as_deref(), Some("a".repeat(64).as_str()));
+            assert_eq!(
+                base64::engine::general_purpose::STANDARD
+                    .decode(&data_base64)
+                    .unwrap(),
+                b"data"
+            );
+            write_record(
+                &mut peer,
+                &ClientReply::WritePrepared {
+                    ticket: DecimalU64::new(1),
+                    original: Some(write_stamp(&"a".repeat(64))),
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::CommitWrite { ticket } = request else {
+                panic!("expected a commit request");
+            };
+            assert_eq!(ticket, DecimalU64::new(1));
+            write_record(
+                &mut peer,
+                &ClientReply::Written {
+                    ticket,
+                    metadata: write_stamp(&"b".repeat(64)),
+                },
+            )
+            .unwrap();
+        });
+        let authorized = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = authorized.clone();
+        let metadata = connection
+            .write_file(
+                Path::new("file"),
+                b"data",
+                Some(&"a".repeat(64)),
+                |original| {
+                    // The gate sees the verified prepared original, not a
+                    // re-stat: the exact revision that was requested.
+                    assert_eq!(original.unwrap().revision, "a".repeat(64).as_str());
+                    observed.store(true, std::sync::atomic::Ordering::Release);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert!(authorized.load(std::sync::atomic::Ordering::Acquire));
+        assert_eq!(metadata.revision, "b".repeat(64));
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_prepared_reply_that_ignores_the_expectation_retires_the_stream() {
+        let (binding, hello) = write_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+            // The peer reports an original that does not satisfy the
+            // expected revision it was sent.
+            write_record(
+                &mut peer,
+                &ClientReply::WritePrepared {
+                    ticket: DecimalU64::new(1),
+                    original: Some(write_stamp(&"b".repeat(64))),
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .write_file(Path::new("file"), b"data", Some(&"a".repeat(64)), |_| {
+                panic!("the gate never runs on an untruthful prepare")
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_denied_commit_gate_aborts_the_stage_and_never_commits() {
+        let (binding, hello) = write_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::WritePrepared {
+                    ticket: DecimalU64::new(1),
+                    original: None,
+                },
+            )
+            .unwrap();
+            // The only frame after a gate denial is the abort — never a
+            // commit.
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::AbortWrite { ticket } = request else {
+                panic!("expected an abort request, never a commit");
+            };
+            assert_eq!(ticket, DecimalU64::new(1));
+            write_record(&mut peer, &ClientReply::WriteAborted { ticket }).unwrap();
+        });
+        let error = connection
+            .write_file(Path::new("file"), b"data", None, |original| {
+                assert!(original.is_none());
+                Err(io::Error::new(io::ErrorKind::PermissionDenied, "gate"))
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_lost_commit_acknowledgement_reports_an_unknown_outcome() {
+        let (binding, hello) = write_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::WritePrepared {
+                    ticket: DecimalU64::new(1),
+                    original: Some(write_stamp(&"a".repeat(64))),
+                },
+            )
+            .unwrap();
+            // The commit request is consumed and the peer vanishes before
+            // its reply: exactly one commit frame, then silence — the
+            // publish may or may not have happened and no retry can tell.
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::CommitWrite { ticket } = request else {
+                panic!("expected a commit request");
+            };
+            assert_eq!(ticket, DecimalU64::new(1));
+            peer.shutdown(std::net::Shutdown::Both).unwrap();
+        });
+        let error = connection
+            .write_file(
+                Path::new("file"),
+                b"data",
+                Some(&"a".repeat(64)),
+                |_| Ok(()),
+            )
+            .unwrap_err();
+        assert_outcome_unknown(&error);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn an_explicit_commit_unknown_reports_an_unknown_outcome() {
+        let (binding, hello) = write_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::WritePrepared {
+                    ticket: DecimalU64::new(1),
+                    original: None,
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::CommitWrite { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::CommitUnknown {
+                    ticket: DecimalU64::new(1),
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        let error = connection
+            .write_file(Path::new("file"), b"data", None, |_| Ok(()))
+            .unwrap_err();
+        assert_outcome_unknown(&error);
+        // The explicit typed reply is a valid answer — the connection is
+        // not retired for it and stays dispatchable.
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_written_receipt_with_the_wrong_size_reports_an_unknown_outcome() {
+        let (binding, hello) = write_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::WritePrepared {
+                    ticket: DecimalU64::new(1),
+                    original: None,
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::CommitWrite { .. }));
+            // The ticket is right and the stamp is well-formed, but the
+            // size describes different bytes than were submitted: the
+            // publish cannot be proven, so the outcome is unknown.
+            write_record(
+                &mut peer,
+                &ClientReply::Written {
+                    ticket: DecimalU64::new(1),
+                    metadata: FileStamp {
+                        size: DecimalU64::new(3),
+                        revision: "b".repeat(64),
+                        identity: String::from("1:1"),
+                        modified_at_ms: None,
+                    },
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .write_file(Path::new("file"), b"data", None, |_| Ok(()))
+            .unwrap_err();
+        assert_outcome_unknown(&error);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_mismatched_commit_ticket_reports_an_unknown_outcome() {
+        let (binding, hello) = write_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::WritePrepared {
+                    ticket: DecimalU64::new(1),
+                    original: None,
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::CommitWrite { .. }));
+            // A `Written` under a foreign ticket after the commit byte is
+            // unknowable — the reply accounting can never be trusted.
+            write_record(
+                &mut peer,
+                &ClientReply::Written {
+                    ticket: DecimalU64::new(9),
+                    metadata: write_stamp(&"b".repeat(64)),
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .write_file(Path::new("file"), b"data", None, |_| Ok(()))
+            .unwrap_err();
+        assert_outcome_unknown(&error);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_revoked_binding_after_prepare_sends_no_commit_frame() {
+        let (binding, hello) = write_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::WritePrepared {
+                    ticket: DecimalU64::new(1),
+                    original: None,
+                },
+            )
+            .unwrap();
+            peer
+        });
+        let error = connection
+            .write_file(Path::new("file"), b"data", None, |_| {
+                // The caller's last gate revokes the binding between the
+                // prepared reply and the commit dispatch: the commit
+                // frame is gated out before its first byte.
+                binding.revoke();
+                Ok(())
+            })
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        let mut peer = answer.join().unwrap();
+        // Zero commit frames: the revoke shutdown already closed the
+        // physical stream, so the peer observes EOF — never a request.
+        let mut buffer = [0u8; 16];
+        assert_eq!(peer.read(&mut buffer).unwrap(), 0);
+        assert_eq!(binding.status().phase, BindingPhase::Revoked);
     }
 }

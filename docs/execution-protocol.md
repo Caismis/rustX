@@ -64,13 +64,15 @@ and directory-page readers —
   over `rustx-confined-fs`, preserving every existing semantic.
 
 These layers perform authenticated negotiation, binding arbitration,
-local bootstrap, and three physical operations — the bounded
-revision-checked range read, entry metadata, and bounded directory
-pages. There is no production dispatch beyond them,
-no process spawn of business work, no write path, and no remote
+local bootstrap, and four physical operations — the bounded
+revision-checked range read, entry metadata, bounded directory
+pages, and the two-phase conditional write. There is no production
+dispatch beyond them,
+no process spawn of business work, and no remote
 transport; none may exist until the gates below exist. Nothing claims
 unimplemented I/O: a runtime Hello advertises `Capability::Connection`,
-`Capability::ReadRange`, and `Capability::DirectoryMetadata`, exactly
+`Capability::ReadRange`, `Capability::DirectoryMetadata`, and
+`Capability::ConditionalWrite`, exactly
 what the Client implements, never
 `Files`.
 
@@ -248,11 +250,14 @@ publishes the trusted-channel bundle:
   stream is shut down still nonblocking.
 - `LocalConnection` exposes only typed, Server-initiated exchanges —
   `ping()` (`Ping`/`Pong`), `read_range(...)` (`ReadRange`/`Range`),
-  `entry_metadata(...)` (`GetMetadata`/`Metadata`), and
-  `directory_page(...)` (`ReadDirectory`/`Directory`) — never a raw
+  `entry_metadata(...)` (`GetMetadata`/`Metadata`),
+  `directory_page(...)` (`ReadDirectory`/`Directory`), and
+  `write_file(...)` (the `PrepareWrite`/`CommitWrite`/`AbortWrite`
+  sequence) — never a raw
   message path. Each first consults the capabilities the peer actually
-  advertised in its Hello: a connection that never claimed `ReadRange`
-  or `DirectoryMetadata` gets `io::ErrorKind::Unsupported` and
+  advertised in its Hello: a connection that never claimed `ReadRange`,
+  `DirectoryMetadata`, or `ConditionalWrite` gets
+  `io::ErrorKind::Unsupported` and
   no request is written. Every exchange serializes the request with
   `encode_record` *before* the gate, so an unencodable request fails
   without touching the binding or the wire, then re-acquires the binding
@@ -346,6 +351,53 @@ reported `invalid` by the Client rather than emitted. Malformed replies — wron
 unordered or illegal names, bad stamps — retire the stream and detach
 the binding exactly like a malformed `Range`.
 
+### Conditional writes (implemented)
+
+There is no raw write request. `ClientRequest::PrepareWrite {
+relative_path, expected_revision, data_base64 }` carries the strict
+relative path, an optional revision the retained original must equal
+(`None` means create-only), and the whole payload — base64, length
+checked before decode, decoded bound `MAX_RAW_CHUNK_BYTES` — answered
+by `ClientReply::WritePrepared { ticket, original }`. The ticket is a
+`DecimalU64` the Client issues monotonically from `1` per admitted
+connection, never reused and never issued past `u64::MAX`; exactly one
+preparation may be live per connection. `ClientRequest::CommitWrite {
+ticket }` and `ClientRequest::AbortWrite { ticket }` act only on the
+exact live ticket — a zero, foreign, stale, or repeated ticket is a
+stable `invalid` and leaves the live preparation untouched. A commit
+answers `ClientReply::Written { ticket, metadata }` carrying the
+published descriptor's stamp, or `ClientReply::CommitUnknown { ticket
+}` when publication may have crossed but the completion is unknowable;
+an abort answers `ClientReply::WriteAborted { ticket }`. The Server
+trusts a `Written` receipt only when its stamp is valid *and* its
+`size` equals the exact submitted byte count — a receipt describing
+different bytes cannot prove the publish, so it reports the unknown
+outcome and retires like any other post-commit violation.
+
+The Client implements the sequence on the shared
+`rustx-confined-fs` kernel: `WriteTarget::prepare` retains the exact
+target descriptor and verified original stamp without mutating the
+named file, `stage` writes the payload into a private `O_EXCL` sibling
+`.rustx-write-{uuid}` under the retained parent, and
+`StagedWrite::publish` re-verifies the chain and the leaf stamp at the
+retained descriptors before `linkat`/`renameat` crosses — the check and
+the publish are honest pre-commit verifications, never a claimed CAS;
+external writers can still rename between them. The Server side keeps
+the same `LocalConnection` locked across prepare, the caller's
+`authorize` gate run on the verified prepared `original`, and the
+commit or abort dispatch — the path is never reparsed or reopened.
+Once the first commit byte is attempted, a transport failure,
+malformed reply, or mismatched ticket retires the stream and returns
+an `io::Error` wrapping `rustx_execution_server::WriteOutcomeUnknown`
+— the published state is unknowable and the operation is never
+retried; an explicit well-formed `CommitUnknown` for the live ticket
+maps to the same error without retiring, because the reply accounting
+stayed intact. The `WriteOutcomeUnknown` marker downcasts through
+`error.get_ref()`. A binding revoked after the prepare but before the
+commit is dispatched gates the commit frame out entirely — the revoke
+shuts the retained duplicate stream down, the idle Client exits on
+EOF, and its dropped write state cleans the unpublished stage.
+
 `rustx-execution-client --binding-file PATH --workspace PATH` is the
 physical Client:
 
@@ -380,7 +432,8 @@ physical Client:
   verification, and `finish()` restoring blocking mode before the client
   enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
-  capability set `{Connection, ReadRange, DirectoryMetadata}` — the
+  capability set `{Connection, ReadRange, DirectoryMetadata,
+  ConditionalWrite}` — the
   operations this build physically implements — constructed by the
   client, never read from the mutable bundle.
 - After sending the Hello it reads one `HelloReply`; a reject is
@@ -389,9 +442,12 @@ physical Client:
   the client proceeds.
 - The client then serves only typed requests until a clean EOF before a
   record ends it: `Ping` → `Pong`, `ReadRange` answered through the
-  retained `PackageDirectory` via `rustx_confined_fs::read_range`, and
+  retained `PackageDirectory` via `rustx_confined_fs::read_range`,
   `GetMetadata`/`ReadDirectory` answered through its
-  `entry_metadata`/`directory_page`. EOF
+  `entry_metadata`/`directory_page`, and
+  `PrepareWrite`/`CommitWrite`/`AbortWrite` answered through the
+  `WriteTarget`/`StagedWrite` kernel by the per-connection `Writes`
+  owner. EOF
   after a successful handshake never permits the credential file to be
   replayed: the binding is `Detached` and the Server answers
   `RecoveryRequired`.
@@ -530,8 +586,9 @@ envelope.
 - No remote transport exists: only the synchronous length-prefixed
   record framing and the local Unix-socket bootstrap are implemented.
   WSS/TLS, health budgets, and recovery windows are pending.
-- No write, spawn, MCP session, Python, managed output, or any file
-  operation beyond the range read and the two query operations exists
+- No spawn, MCP session, Python, managed output, or any file
+  operation beyond the range read, the two query operations, and the
+  two-phase conditional write exists
   behind `Admission`;
   `Binding::status()` is observation only, and a `Live` phase is a
   connection fact, not an integration claim. `Capability::Files` and
@@ -559,14 +616,26 @@ envelope.
   `/` cwd, sealed stdio and `kill_on_drop`), race its connect against
   `LOCAL_HANDSHAKE_TIMEOUT`, admit it through the blocking handshake, and
   stop+reap it inside the drain deadline; bare mode composes nothing.
-  `fs/readFile`, `fs/getMetadata`, and `fs/readDirectory` now route
+  `fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, and
+  `fs/writeFile` now route
   through this owner: the App Server resolves the request's `sessionId`
   through the non-creating `execution_endpoint` lookup (absence is
   `ExecutionUnavailable`, never a fallback), authorizes the admitted
   workspace against the configured environment roots before and after
   the exchange, and projects the returned `RangeRead`, `EntryStamp`,
   or `DirectoryListing` — including their source-descriptor
-  `FileStamp`s — into the wire shapes. Every other
+  `FileStamp`s — into the wire shapes. The write adds its own
+  mutation admission: the workspace grant and the caller-closed flag
+  are checked before the prepare and again inside the commit gate on
+  the retained prepared original, `WriteOutcomeUnknown` maps to
+  `ErrorData::OutcomeUnknown`, and a known-successful commit is never
+  reported as cancelled or rolled back. What is proven is the
+  authenticated binding, the retained target, the two-phase commit,
+  and the unknown-outcome contract; revoking a Client while its stage
+  is unpublished closes the physical stream so the stage is dropped —
+  what is *not* yet proven is revoking a commit already inside the
+  Client's physical publish gate, which remains control work for a
+  later change. Every other
   filesystem method still flows through the prior environment readers
   (delegating to `rustx-confined-fs`); their migration remains
   outstanding.

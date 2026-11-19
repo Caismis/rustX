@@ -145,7 +145,7 @@ not merely at enqueue. Commands are not durable jobs and are never replayed.
 | Method | Contract |
 | --- | --- |
 | `fs/readFile` | Revision-checked base64 chunk with offset and continuation, served by the Session's admitted Execution Client. |
-| `fs/writeFile` | Single-file atomic replace/create with an expected revision. |
+| `fs/writeFile` | Two-phase atomic replace/create with an expected revision, committed by the Session's admitted Execution Client. |
 | `fs/readDirectory` | Bounded, sorted direct-entry page and revision, served by the Session's admitted Execution Client. |
 | `fs/getMetadata` | Native type, size, identity, revision and optional modification time, served by the Session's admitted Execution Client. |
 | `fs/createDirectory` | One directory or bounded path-wise parent creation. |
@@ -156,19 +156,27 @@ not merely at enqueue. Commands are not durable jobs and are never replayed.
 
 ```json
 {"jsonrpc":"2.0","id":"read-1","method":"fs/readFile","params":{"sessionId":"ses_00000000-0000-7000-8000-000000000001","path":"/absolute/workspace/file","offset":"0","maxBytes":65536,"expectedRevision":null}}
-{"jsonrpc":"2.0","id":"write-1","method":"fs/writeFile","params":{"path":"/absolute/workspace/file","dataBase64":"aGk=","expectedRevision":"revision-from-native-read"}}
+{"jsonrpc":"2.0","id":"write-1","method":"fs/writeFile","params":{"sessionId":"ses_00000000-0000-7000-8000-000000000001","path":"/absolute/workspace/file","dataBase64":"aGk=","expectedRevision":"revision-from-native-read"}}
 ```
 
 Unbounded native u64 values, including file sizes/offsets and output sequence,
 follow the existing exact decimal-string wire codec. Page indices and bounded
 counts remain safe JSON integers. Use generated types and wire fixtures.
 
-Read frames carry at most 64 KiB of decoded file data per range; writes remain
-at most 512 KiB of decoded file data pending their own execution migration.
-`fs/readFile`, `fs/getMetadata`, and `fs/readDirectory` carry `sessionId` and
+Read frames carry at most 64 KiB of decoded file data per range, and one
+write's decoded payload is bounded by the same 64 KiB (the encoded length is
+gated before decoding).
+`fs/readFile`, `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` carry
+`sessionId` and
 dispatch through that Session's admitted Execution Client — a Session with no
-composed Client fails `ExecutionUnavailable`; write, copy, remove,
-create-directory, and watch remain on the prior environment path.
+composed Client fails `ExecutionUnavailable`; copy, remove,
+create-directory, and watch remain on the prior environment path. The write
+commits through a two-phase prepare/commit: the expected revision is verified
+against the retained target at prepare, the environment-root grant and the
+caller's open state are re-checked immediately before the commit frame, and a
+commit whose outcome crossed without an acknowledgement answers
+`OutcomeUnknown` — never a retry and never a false cancellation after a known
+success.
 Reads can continue
 through a large file with the same expected revision. Existing native upload and
 chunked delivery contracts remain available for their existing source domains;

@@ -4,9 +4,6 @@ use crate::package_io::PackageDirectory;
 use rustix::fs::{AtFlags, Mode, OFlags};
 use std::fs::File;
 use std::io::{self, Read, Write};
-#[cfg(test)]
-use std::os::unix::fs::MetadataExt;
-
 use std::path::{Component, Path};
 
 // The physical metadata/chunk contract and its stamping live in
@@ -148,32 +145,6 @@ pub(crate) fn read_range(
 }
 
 impl Environment {
-    pub(crate) fn write(
-        &self,
-        path: &str,
-        bytes: &[u8],
-        expected: Option<&str>,
-    ) -> io::Result<FileMetadata> {
-        if bytes.len() > CHUNK_BYTES {
-            return Err(invalid(
-                "file write exceeds chunk limit; use native upload transfer for larger files",
-            ));
-        }
-        self.with_paths(&[path], |paths| {
-            let (_, root, relative) = &paths[0];
-            let (directory, leaf) = parent(root, relative)?;
-            atomic_write(
-                &directory,
-                &leaf,
-                expected,
-                FileAuthority {
-                    destination: root,
-                    source: None,
-                },
-                |output| output.write_all(bytes),
-            )
-        })
-    }
     pub(crate) fn create_directory(&self, path: &str, recursive: bool) -> io::Result<()> {
         self.with_paths(&[path], |paths| {
             let (_, root, relative) = &paths[0];
@@ -262,7 +233,8 @@ impl Environment {
 /// The physical prepare/stage/publish/finish kernel is shared in
 /// `rustx_confined_fs`; this adapter only threads the product's
 /// cancellation gate and test hooks through it. `expected` = `None` is
-/// create-only — the commit never overwrites a concurrent file.
+/// create-only — the commit never overwrites a concurrent file. It
+/// exists for the local recursive copy, which still writes natively.
 fn atomic_write(
     directory: &PackageDirectory,
     leaf: &std::ffi::OsStr,
@@ -273,8 +245,6 @@ fn atomic_write(
     let target = directory.prepare_write(leaf, expected)?;
     let staged = target.stage(write)?;
     let visible = authority.commit(move || staged.publish())?;
-    #[cfg(test)]
-    committed_write(directory, leaf);
     visible.finish_with(|directory| {
         #[cfg(test)]
         if FAIL_DIRECTORY_SYNC.replace(false) {
@@ -282,39 +252,6 @@ fn atomic_write(
         }
         directory.sync_all()
     })
-}
-#[cfg(test)]
-type WriteCommitHook = Box<dyn FnOnce() + Send>;
-#[cfg(test)]
-type WriteCommitKey = (u64, u64, std::ffi::OsString);
-#[cfg(test)]
-static WRITE_COMMITS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::BTreeMap<WriteCommitKey, WriteCommitHook>>,
-> = std::sync::LazyLock::new(std::sync::Mutex::default);
-#[cfg(test)]
-pub(crate) fn write_commit_hook(path: &Path, hook: WriteCommitHook) {
-    let metadata = std::fs::metadata(path.parent().unwrap()).unwrap();
-    WRITE_COMMITS.lock().unwrap().insert(
-        (
-            metadata.dev(),
-            metadata.ino(),
-            path.file_name().unwrap().to_owned(),
-        ),
-        hook,
-    );
-}
-#[cfg(test)]
-fn committed_write(directory: &PackageDirectory, leaf: &std::ffi::OsStr) {
-    let metadata = File::from(directory.descriptor().try_clone().unwrap())
-        .metadata()
-        .unwrap();
-    let hook = WRITE_COMMITS
-        .lock()
-        .unwrap()
-        .remove(&(metadata.dev(), metadata.ino(), leaf.into()));
-    if let Some(hook) = hook {
-        hook();
-    }
 }
 #[cfg(test)]
 thread_local! {static FAIL_DIRECTORY_SYNC:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
@@ -527,11 +464,17 @@ mod tests {
     }
     #[test]
     fn atomic_faults_conflicts_and_permissions_preserve_the_current_file() {
-        let (_temporary, environment, root) = fixture();
+        let (_temporary, _environment, root) = fixture();
         let path = format!("{root}/file");
-        let written = environment.write(&path, b"original", None).unwrap();
+        std::fs::write(&path, b"original").unwrap();
         let directory = PackageDirectory::open(Path::new(&root)).unwrap();
-        let revision = Some(written.revision.as_str());
+        let revision = Some(
+            directory
+                .entry_metadata(Path::new("file"))
+                .unwrap()
+                .revision,
+        );
+        let revision = revision.as_deref();
         let root_authority = authority(&root);
         assert!(
             atomic_write(
@@ -572,13 +515,21 @@ mod tests {
             vec![std::path::PathBuf::from("file")]
         );
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o750)).unwrap();
-        let revision = environment
-            .with_paths(&[&path], |paths| metadata(&paths[0].1, &paths[0].2))
+        let revision = directory
+            .entry_metadata(Path::new("file"))
             .unwrap()
             .revision;
-        environment
-            .write(&path, b"replacement", Some(&revision))
-            .unwrap();
+        atomic_write(
+            &directory,
+            std::ffi::OsStr::new("file"),
+            Some(&revision),
+            FileAuthority {
+                destination: &root_authority,
+                source: None,
+            },
+            |file| file.write_all(b"replacement"),
+        )
+        .unwrap();
         assert_eq!(
             std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
             0o750
@@ -586,18 +537,12 @@ mod tests {
     }
     #[test]
     fn parent_replacement_before_commit_cannot_redirect_an_atomic_write() {
-        let (temporary, environment, root) = fixture();
-        environment
-            .create_directory(&format!("{root}/parent"), false)
-            .unwrap();
-        environment
-            .write(&format!("{root}/parent/file"), b"original", None)
-            .unwrap();
+        let (temporary, _environment, root) = fixture();
+        std::fs::create_dir(temporary.path().join("parent")).unwrap();
+        std::fs::write(temporary.path().join("parent/file"), b"original").unwrap();
         let directory = PackageDirectory::open(&Path::new(&root).join("parent")).unwrap();
-        let revision = environment
-            .with_paths(&[format!("{root}/parent/file").as_str()], |paths| {
-                metadata(&paths[0].1, &paths[0].2)
-            })
+        let revision = directory
+            .entry_metadata(Path::new("file"))
             .unwrap()
             .revision;
         let outside = tempfile::tempdir().unwrap();
@@ -634,8 +579,10 @@ mod tests {
     fn root_revocation_during_staging_prevents_commit_without_waiting_on_file_io() {
         let (_temporary, environment, root) = fixture();
         let path = format!("{root}/file");
-        let revision = environment
-            .write(&path, b"original", None)
+        std::fs::write(&path, b"original").unwrap();
+        let revision = PackageDirectory::open(Path::new(&root))
+            .unwrap()
+            .entry_metadata(Path::new("file"))
             .unwrap()
             .revision;
         let result = environment.with_paths(&[&path], |paths| {
@@ -661,16 +608,35 @@ mod tests {
     }
     #[test]
     fn failure_after_publication_reports_unknown_outcome_and_keeps_committed_bytes() {
-        let (_temporary, environment, root) = fixture();
+        let (_temporary, _environment, root) = fixture();
         let path = format!("{root}/file");
-        let revision = environment
-            .write(&path, b"original", None)
-            .unwrap()
-            .revision;
+        let root_authority = authority(&root);
+        let directory = PackageDirectory::open(Path::new(&root)).unwrap();
+        let leaf = std::ffi::OsStr::new("file");
+        let revision = atomic_write(
+            &directory,
+            leaf,
+            None,
+            FileAuthority {
+                destination: &root_authority,
+                source: None,
+            },
+            |file| file.write_all(b"original"),
+        )
+        .unwrap()
+        .revision;
         FAIL_DIRECTORY_SYNC.set(true);
-        let error = environment
-            .write(&path, b"committed", Some(&revision))
-            .unwrap_err();
+        let error = atomic_write(
+            &directory,
+            leaf,
+            Some(&revision),
+            FileAuthority {
+                destination: &root_authority,
+                source: None,
+            },
+            |file| file.write_all(b"committed"),
+        )
+        .unwrap_err();
         assert!(error.get_ref().unwrap().is::<CommitUnknown>());
         assert_eq!(std::fs::read(path).unwrap(), b"committed");
     }
@@ -678,9 +644,7 @@ mod tests {
     #[test]
     fn root_replacement_requires_a_new_native_grant() {
         let (temporary, environment, root) = fixture();
-        environment
-            .write(&format!("{root}/file"), b"original", None)
-            .unwrap();
+        std::fs::write(format!("{root}/file"), b"original").unwrap();
         let retired = temporary.path().with_extension("retired");
         std::fs::rename(temporary.path(), &retired).unwrap();
         std::fs::create_dir(temporary.path()).unwrap();

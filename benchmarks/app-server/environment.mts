@@ -1,7 +1,7 @@
 /** Measurements only. Uses the existing typed product protocol client, never a new SDK/demo.
- * fs/readFile dispatches through the Session's admitted Execution Client; this benchmark
- * does not compose one for dynamically started Sessions, so its read step is not an
- * end-to-end baseline until per-Session composition exists here. */
+ * fs/readFile and fs/writeFile dispatch through the Session's admitted Execution Client;
+ * this benchmark does not compose one for dynamically started Sessions, so those steps
+ * are not an end-to-end baseline until per-Session composition exists here. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
@@ -35,7 +35,7 @@ for(const mode of [{name:'environment-one-client',clients:1,sessions:1,slow:fals
     const activeClients=mode.slow?hosts.length-1:hosts.length;
     const cycle=async(index:number)=>{
       const client=hosts[Math.abs(index)%activeClients].client,cwd=workspaces[Math.abs(index)%workspaces.length],path=join(cwd,`cycle-${index}`),watchId=`cycle-${index}`;
-      const {metadata}=await client.call('fs/writeFile',{path,dataBase64:Buffer.from('measured').toString('base64'),expectedRevision:null},'file_metadata');
+      const {metadata}=await client.call('fs/writeFile',{sessionId:sessionIds[Math.abs(index)%workspaces.length],path,dataBase64:Buffer.from('measured').toString('base64'),expectedRevision:null},'file_metadata');
       const {chunk}=await client.call('fs/readFile',{sessionId:sessionIds[Math.abs(index)%workspaces.length],path,offset:'0',maxBytes:64,expectedRevision:metadata.revision},'file_chunk');assert.equal(Buffer.from(chunk.dataBase64,'base64').toString(),'measured');
       await client.call('fs/watch',{watchId,path:cwd},'environment_accepted');
       const {result}=await client.call('command/exec',{command:['/usr/bin/printf','%s','measured'],cwd,env:{EXPLICIT:'authorized'},processId:null,tty:false,streamStdin:false,streamStdoutStderr:false,outputBytesCap:65536,timeoutMs:10000,size:null},'command_exec');

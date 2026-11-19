@@ -24,8 +24,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, TryLockError};
 
 use rustx_execution_protocol::{
-    Capability, ClientInstanceId, EntryKind, EntryStamp, EnvironmentId, Generation, Reject,
-    is_normalized_absolute_path, transport::LOCAL_HANDSHAKE_TIMEOUT,
+    Capability, ClientInstanceId, EntryKind, EntryStamp, EnvironmentId, FileStamp, Generation,
+    Reject, is_normalized_absolute_path, transport::LOCAL_HANDSHAKE_TIMEOUT,
 };
 use rustx_execution_server::{Binding, DirectoryListing, LocalConnection, RangeRead, Reservation};
 
@@ -257,6 +257,41 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    /// The conditional write through the admitted Client: `path` resolves
+    /// once against the reserved workspace at dispatch, then the whole
+    /// prepare–authorize–commit sequence runs on that same connection.
+    ///
+    /// `path` names the exact file leaf — never the workspace root. The
+    /// relative path the gate produces is sent to the Client; it is never
+    /// re-parsed or re-opened by the Server after approval — the physical
+    /// target the Client retains under its own workspace is the only one
+    /// that exists. `authorize` is invoked by the connection with the
+    /// prepared original — `Some(&stamp)` for a replace, `None` for a
+    /// create-only target — as the caller's last gate before the commit
+    /// frame is written.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same gating kinds as [`read_range`](Self::read_range)
+    /// plus the write path's own: [`io::ErrorKind::Unsupported`] without
+    /// the Client's write capability, the `authorize` denial verbatim,
+    /// and a `rustx_execution_server::WriteOutcomeUnknown`-downcastable
+    /// error once the commit outcome cannot be known.
+    pub fn write_file(
+        &self,
+        path: &Path,
+        bytes: &[u8],
+        expected_revision: Option<&str>,
+        authorize: impl FnOnce(Option<&FileStamp>) -> io::Result<()>,
+    ) -> io::Result<rustx_confined_fs::FileMetadata> {
+        self.with_connection(|connection| {
+            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            connection
+                .write_file(&relative, bytes, expected_revision, authorize)
+                .map(project_stamp)
+        })
+    }
+
     /// Serializes one synchronous exchange on the admitted connection:
     /// `WouldBlock` while another dispatch holds it — a bounded busy
     /// signal, never a queue — and `NotConnected` before admission.
@@ -347,6 +382,20 @@ fn workspace_entry(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
         return Ok(PathBuf::new());
     }
     workspace_relative(workspace, path)
+}
+
+/// Projects a verified wire `FileStamp` onto the shared product shape —
+/// used by replies whose wire file type is implicitly regular.
+fn project_stamp(stamp: FileStamp) -> rustx_confined_fs::FileMetadata {
+    rustx_confined_fs::FileMetadata {
+        is_directory: false,
+        is_file: true,
+        is_symlink: false,
+        size: stamp.size.get(),
+        revision: stamp.revision,
+        identity: stamp.identity,
+        modified_at_ms: stamp.modified_at_ms,
+    }
 }
 
 /// Projects a validated wire stamp onto the shared product shape —
@@ -1045,6 +1094,15 @@ mod tests {
         client.set_nonblocking(false).unwrap();
     }
 
+    /// Asserts the peer socket is at EOF — only a terminal revoke shuts
+    /// the physical stream; an ordinary denied dispatch stays quiet.
+    fn wire_is_closed(client: &mut UnixStream) {
+        client.set_nonblocking(true).unwrap();
+        let mut byte = [0u8; 1];
+        assert_eq!(client.read(&mut byte).unwrap(), 0);
+        client.set_nonblocking(false).unwrap();
+    }
+
     #[tokio::test]
     async fn the_endpoint_dispatches_one_bounded_read_for_its_own_session() {
         let (_root, manager, sessions) = fixture(2).await;
@@ -1220,12 +1278,13 @@ mod tests {
         manager.execution.fence(&sessions[0]);
         assert_eq!(endpoint.binding().status().phase, BindingPhase::Revoked);
         // The typed gate denies before the wire: the client socket carries
-        // only the earlier admission reply, nothing new.
+        // only the earlier admission reply — and then EOF, because the
+        // revoke already shut the physical stream to wake an idle peer.
         let error = endpoint
             .read_range(Path::new("file"), 0, 64, None)
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
-        wire_is_quiet(&mut client);
+        wire_is_closed(&mut client);
         // Draining permanently closes claims for Sessions that were never
         // bound — the permanent gate, not endpoint status, refuses them.
         manager.begin_draining();

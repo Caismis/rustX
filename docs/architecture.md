@@ -7773,7 +7773,8 @@ current layer status.
 - `rustx-execution-server` is a library owned by the Agent. It owns binding
   reservation, credential authentication, arbitration, connection lifecycle,
   and typed request dispatch (`Ping`, `ReadRange`, `GetMetadata`,
-  `ReadDirectory`). Binding uniqueness is per
+  `ReadDirectory`, and the `PrepareWrite`/`CommitWrite`/`AbortWrite`
+  conditional-write sequence). Binding uniqueness is per
   `Binding`, not per `Session`: each binding admits at most one live
   connection, and a `Detached` binding is closed to every new Hello until the
   live-instance recovery work in #577.
@@ -7793,8 +7794,9 @@ current layer status.
   explicit composer: it claims the endpoint, launches the trusted sibling
   Client (empty environment, sealed stdio, killed-and-reaped on failure
   and at drain) and admits it before transport readiness; bare mode
-  still launches nothing. `fs/readFile`, `fs/getMetadata`, and
-  `fs/readDirectory` are routed through the endpoint's serialized
+  still launches nothing. `fs/readFile`, `fs/getMetadata`,
+  `fs/readDirectory`, and `fs/writeFile` are routed through the
+  endpoint's serialized
   exchanges (with `sessionId` on the wire and `ExecutionUnavailable`
   for an uncomposed Session); the remaining filesystem methods stay on
   their prior paths until their own migrations land.
