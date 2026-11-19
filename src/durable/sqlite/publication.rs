@@ -22,7 +22,7 @@ use super::{
 use crate::durable::{
     ConversationStoreError, PublicationStore, TranscriptCommitReceipt, TranscriptCursor,
 };
-use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+use crate::events::types::{EphemeralObservation, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::MessageBlock;
 use crate::model::snapshot::RequestSnapshot;
 use crate::publication::{
@@ -213,7 +213,8 @@ impl PublicationStore for SqliteConversationStore {
             &self.conversation_id,
             &persisted.event,
             Arc::clone(&receipt.observation),
-        );
+        )
+        .map(EphemeralObservation::new);
         process_death::reach("before:commit_canonical_publication");
         transaction.commit().map_err(|error| {
             crate::durable::sqlite::sqlite_error(

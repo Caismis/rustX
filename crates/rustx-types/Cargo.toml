@@ -18,6 +18,7 @@ tempfile = "3"
 rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "functions", "preupdate_hook", "fallible_uint"] }
 serde = { version = "1", features = ["derive", "rc"] }
 schemars = { version = "1", features = ["chrono04"] }
+strum = { version = "0.27.2", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 futures-util = "0.3"
 libc = "0.2"

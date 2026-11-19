@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 use super::observation_response_tests::{response_complete, response_message, response_start};
 
 pub(super) fn count_event_writes(store: &SqliteConversationStore) -> Arc<Mutex<(usize, usize)>> {
@@ -766,7 +767,7 @@ fn prepared_tool_definition_child_rejection_keeps_own_fact_and_later_catalog_ind
     let (message, event, occurrence) = inspection_assistant(&store, &request);
     assert_eq!(event_insert::take_work(), (1, 0));
     assert_eq!(*writes.lock().unwrap(), (1, 0));
-    assert!(!event.observation.as_ref().unwrap().source_unavailable);
+    assert!(!event.observation.native_batch().unwrap().source_unavailable);
     let cut = store.observation_read_cut().unwrap();
     assert!(matches!(
         store.observation_trace_tool_definition(&cut, &occurrence),

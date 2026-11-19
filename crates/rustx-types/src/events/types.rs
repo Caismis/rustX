@@ -62,7 +62,7 @@
 //! High-frequency Assistant streaming content is **not** an Event Journal
 //! fact (Issue #108). Assistant text, reasoning, refusal, and tool-call
 //! argument increments belong to the durable publication plane
-//! ([`crate::publication`]), which owns its own bounded coalescing policy,
+//! (the `publication` plane), which owns its own bounded coalescing policy,
 //! its own staging rows, and its own terminal marker. The Journal keeps the
 //! low-frequency recovery-significant semantic facts only, so its size is
 //! O(execution facts) rather than O(provider deltas).
@@ -128,7 +128,7 @@ pub enum SubagentOwnershipKind {
 /// The current schema version of [`RuntimeEventEnvelope`].
 ///
 /// This version stamps the *envelope*, and it is deliberately independent of
-/// [`SQLITE_SCHEMA_VERSION`](crate::durable::sqlite::SQLITE_SCHEMA_VERSION). Adding a
+/// `SQLITE_SCHEMA_VERSION`. Adding a
 /// new [`RuntimeEvent`] variant — including Issue #83's Workflow facts —
 /// changes what a journal may *contain*, not how an envelope is framed, and a
 /// store whose journal predates a variant is refused wholesale by the
@@ -146,8 +146,48 @@ pub struct ToolObservationOccurrence {
 }
 
 /// The envelope around every durable runtime event.
+/// The committing store's ephemeral observation receipt carried on an envelope.
+///
+/// The receipt is committer-private: the envelope transports it unchanged for
+/// the same transaction's in-process consumers and never serializes it. Only
+/// the committing store knows the concrete batch type it packed.
+#[derive(Clone)]
+pub struct EphemeralObservation(std::sync::Arc<dyn std::any::Any + Send + Sync>);
+
+impl EphemeralObservation {
+    /// Packs a committer-owned receipt for envelope transport.
+    pub fn new<T: Send + Sync + 'static>(receipt: std::sync::Arc<T>) -> Self {
+        Self(receipt)
+    }
+
+    /// The receipt for its committer's own concrete type, otherwise `None`.
+    #[must_use]
+    pub fn get<T: 'static>(&self) -> Option<&T> {
+        self.0.downcast_ref::<T>()
+    }
+
+    /// The receipt `Arc` for its committer's concrete type, preserving pointer
+    /// identity with the packed value.
+    #[must_use]
+    pub fn as_arc<T: Send + Sync + 'static>(&self) -> Option<std::sync::Arc<T>> {
+        std::sync::Arc::clone(&self.0).downcast::<T>().ok()
+    }
+
+    /// The mutable receipt for its committer's concrete type when the packed
+    /// `Arc` is uniquely owned.
+    pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
+        std::sync::Arc::get_mut(&mut self.0)?.downcast_mut::<T>()
+    }
+}
+
+impl std::fmt::Debug for EphemeralObservation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("EphemeralObservation")
+    }
+}
 #[allow(clippy::struct_field_names)] // `event_id` and `event` are protocol-specified field names.
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+
 pub struct RuntimeEventEnvelope {
     /// Explicit event schema version; never inferred from the crate version.
     pub schema_version: u16,
@@ -164,7 +204,7 @@ pub struct RuntimeEventEnvelope {
     /// Finite immutable source receipt; never part of the durable Event protocol.
     #[serde(skip)]
     #[schemars(skip)]
-    pub observation: Option<std::sync::Arc<crate::durable::observation::NativeObservationBatch>>,
+    pub observation: Option<EphemeralObservation>,
     /// The conversation this event belongs to.
     pub conversation_id: ConversationId,
     /// The attempt this event belongs to, when applicable.
@@ -200,9 +240,15 @@ impl PartialEq for RuntimeEventEnvelope {
 /// payload fields are rejected so stale or contradictory encodings cannot
 /// silently deserialize.
 #[derive(
-    Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema, strum::AsRefStr,
+    Debug,
+    Clone,
+    PartialEq,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+    strum::AsRefStr,
+    strum::VariantNames,
 )]
-#[cfg_attr(test, derive(strum::VariantNames))]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 #[strum(serialize_all = "snake_case")]
 pub enum RuntimeEvent {

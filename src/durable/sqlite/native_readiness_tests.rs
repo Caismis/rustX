@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::observation::NativeObservationBatch;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
@@ -16,6 +17,7 @@ fn canonical_batch(store: &SqliteConversationStore, label: &str) -> Arc<NativeOb
         .unwrap()
         .0
         .observation
+        .native_arc()
         .unwrap()
 }
 
@@ -271,7 +273,7 @@ fn native_readiness_releases_terminal_transcript_without_releasing_prior_journal
         ))
         .unwrap();
     store
-        .mark_native_observation_ready(terminal.observation.as_deref().unwrap())
+        .mark_native_observation_ready(terminal.observation.native_batch().unwrap())
         .unwrap();
     assert_eq!(store.observation_ready_frontier(0, 2).unwrap(), 0);
     assert_eq!(
@@ -293,7 +295,7 @@ fn native_readiness_releases_terminal_transcript_without_releasing_prior_journal
             .native_direct
     );
     store
-        .mark_native_observation_ready(started.observation.as_deref().unwrap())
+        .mark_native_observation_ready(started.observation.native_batch().unwrap())
         .unwrap();
     assert_eq!(store.observation_ready_frontier(0, 2).unwrap(), 2);
 }

@@ -352,3 +352,131 @@ impl fmt::Display for WorkflowIdError {
 }
 
 impl std::error::Error for WorkflowIdError {}
+
+/// The published Workflow read-model vocabulary carried in event payloads.
+pub mod read_model {
+    use schemars::JsonSchema;
+    use serde::{Deserialize, Serialize};
+
+    /// What a node is currently waiting for.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[derive(JsonSchema)]
+    pub enum WorkflowWait {
+        Tool,
+        Agent,
+        Model,
+        Capacity,
+        Questionnaire,
+        Approval,
+        Review,
+        Settlement,
+    }
+
+    /// The fixed Workflow node kinds.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    #[derive(JsonSchema)]
+    pub enum WorkflowNodeKind {
+        Template,
+        List,
+        Aggregate,
+        Classifier,
+        Block,
+        Agent,
+        Model,
+        Tool,
+        Branch,
+        Start,
+        Review,
+        Loop,
+        Iteration,
+        LoopEnd,
+        Assigner,
+        Return,
+    }
+}
+
+/// A control-flow port of a fixed Workflow node.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum WorkflowPort {
+    /// The true successor.
+    True,
+    /// The false successor.
+    False,
+    /// An additional named ELIF exit.
+    Case(String),
+    /// The ordinary outgoing port.
+    Next,
+    /// A Model's failure exit under its fail-branch strategy.
+    Fail,
+}
+
+use serde::Serializer;
+
+impl WorkflowPort {
+    #[must_use]
+    pub fn case(id: &str) -> Self {
+        if id == "true" {
+            Self::True
+        } else {
+            Self::Case(id.to_owned())
+        }
+    }
+}
+
+impl Serialize for WorkflowPort {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(match self {
+            Self::True => "true",
+            Self::False => "false",
+            Self::Next => "next",
+            Self::Fail => "fail",
+            Self::Case(id) => id,
+        })
+    }
+}
+
+impl schemars::JsonSchema for WorkflowPort {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "WorkflowPort".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        serde_json::json!({"anyOf":[{"type":"boolean"},{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"}]})
+            .try_into()
+            .expect("schema object")
+    }
+}
+
+impl<'de> Deserialize<'de> for WorkflowPort {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum RawPort {
+            Boolean(bool),
+            Text(String),
+        }
+        match RawPort::deserialize(deserializer)? {
+            RawPort::Boolean(true) => Ok(Self::True),
+            RawPort::Boolean(false) => Ok(Self::False),
+            RawPort::Text(text) => match text.as_str() {
+                "true" => Ok(Self::True),
+                "false" => Ok(Self::False),
+                "next" => Ok(Self::Next),
+                "fail" => Ok(Self::Fail),
+                _ if valid_local_key(&text) => Ok(Self::Case(text)),
+                _ => Err(serde::de::Error::custom("invalid workflow edge port")),
+            },
+        }
+    }
+}
+
+/// Whether a string is a valid local Workflow key (port, label, node id).
+#[must_use]
+pub fn valid_local_key(key: &str) -> bool {
+    !key.is_empty()
+        && key.len() <= 64
+        && key
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+}

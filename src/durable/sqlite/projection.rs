@@ -12,11 +12,14 @@ use crate::context::checkpoint::{
     ProjectionActivationId, compile_checkpoint,
 };
 use crate::context::resources::{JournalFrontier, LedgerFrontier, ResourceLimits};
+use crate::durable::observation::NativeObservationBatch;
 use crate::durable::projection::{
     ProjectionCheckpoint, ProjectionCommitInput, ProjectionCommitReceipt, ProjectionOwner,
 };
 use crate::durable::sqlite::statements::FixedStatements;
-use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+use crate::events::types::{
+    EVENT_SCHEMA_VERSION, EphemeralObservation, RuntimeEvent, RuntimeEventEnvelope,
+};
 use crate::runtime::identity::{
     AttemptId, CheckpointId, CompactionOperationId, ConversationId, EventId,
 };
@@ -849,7 +852,8 @@ pub(super) fn receipt(
     receipt.completed.observation =
         super::projection_publication::read(connection, id, &digest(&json), &receipt.completed)
             .ok()
-            .flatten();
+            .flatten()
+            .map(EphemeralObservation::new);
     Ok(Some(receipt))
 }
 
@@ -1118,7 +1122,11 @@ pub(super) fn commit(
         transaction,
         &result.operation_id,
         &digest(&json),
-        result.completed.observation.as_deref(),
+        result
+            .completed
+            .observation
+            .as_ref()
+            .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>()),
     )?;
     Ok(result)
 }

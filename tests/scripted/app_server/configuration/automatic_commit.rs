@@ -2110,7 +2110,7 @@ async fn an_environment_value_change_is_recorded_without_its_value() {
 async fn an_authorized_environment_change_is_execution_policy() {
     bounded(async {
         use crate::runtime::configuration_commit::{
-            ConfigurationChange, ConfigurationChangeReason, ConfigurationDomain,
+            ConfigurationChangeReason, ConfigurationDomain, configuration_change_between,
         };
         let fixture = Fixture::with_session_count(None, 1).await;
         let id = fixture.sessions[0].id.clone();
@@ -2130,7 +2130,7 @@ async fn an_authorized_environment_change_is_execution_policy() {
         let (first, second) = (prepared("value-alpha"), prepared("value-bravo"));
         let change = |old: &crate::runtime::RuntimeResourceSnapshot,
                       new: &crate::runtime::RuntimeResourceSnapshot| {
-            ConfigurationChange::between(
+            configuration_change_between(
                 ConfigurationChangeReason::Source,
                 (1, 2),
                 (old, &model),

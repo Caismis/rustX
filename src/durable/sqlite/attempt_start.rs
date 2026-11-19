@@ -7,6 +7,7 @@ use super::{
     TransactionBehavior, observation_receipt, process_death,
 };
 use crate::durable::sqlite::journal::persist_event_tx_deferred;
+use crate::events::types::EphemeralObservation;
 
 pub(super) fn commit(
     store: &SqliteConversationStore,
@@ -62,7 +63,8 @@ pub(super) fn commit(
         &store.conversation_id,
         (&attempt.event, Some(&attempt.facts)),
         (&turn.event, Some(&turn.facts)),
-    );
+    )
+    .map(EphemeralObservation::new);
     attempt.event.observation.clone_from(&receipt);
     turn.event.observation = receipt;
     transaction.commit().map_err(|error| {

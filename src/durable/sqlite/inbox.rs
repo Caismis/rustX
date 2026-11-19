@@ -20,9 +20,9 @@ use super::{
 };
 use crate::durable::{
     AcceptedInbound, ConversationStoreError, InboundDraft, InboxStore, PendingBatch,
-    PendingInboundItem, TranscriptCursor,
+    PendingInboundItem, TranscriptCursor, observation::NativeObservationBatch,
 };
-use crate::events::types::{RuntimeEvent, RuntimeEventEnvelope};
+use crate::events::types::{EphemeralObservation, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::types::{
     InboundKind, MessageBlock, UserContentBlock, UserMessageBlock, UserSource,
 };
@@ -102,7 +102,9 @@ impl InboxStore for SqliteConversationStore {
             .event;
             receipt = Some(Arc::new(crate::durable::GoalObservationReceipt {
                 view: crate::observation::goal::RuntimeClientGoalView::from_native(Some(goal)),
-                native: event.observation,
+                native: event
+                    .observation
+                    .and_then(|ephemeral| ephemeral.as_arc::<NativeObservationBatch>()),
                 pending: None,
             }));
             tx.commit().map_err(|error| {
@@ -187,7 +189,9 @@ impl InboxStore for SqliteConversationStore {
         refresh_pending_receipt(&tx, &self.conversation_id, &mut accepted)?;
         accepted.goal_observation = Some(Arc::new(crate::durable::GoalObservationReceipt {
             view: crate::observation::goal::RuntimeClientGoalView::from_native(Some(&goal)),
-            native: event.observation,
+            native: event
+                .observation
+                .and_then(|ephemeral| ephemeral.as_arc::<NativeObservationBatch>()),
             pending: accepted.pending_observation.clone(),
         }));
         process_death::reach("before:accept_goal_round");
@@ -300,9 +304,9 @@ impl InboxStore for SqliteConversationStore {
         )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
         if let Some(native) = &mut persisted.event.observation {
-            Arc::make_mut(native)
-                .pending
-                .clone_from(&accepted.pending_observation);
+            if let Some(batch) = native.get_mut::<NativeObservationBatch>() {
+                batch.pending.clone_from(&accepted.pending_observation);
+            }
         }
         transaction.commit().map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("accept/event commit: {error}"))
@@ -406,9 +410,9 @@ impl InboxStore for SqliteConversationStore {
         )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
         if let Some(native) = &mut persisted.event.observation {
-            Arc::make_mut(native)
-                .pending
-                .clone_from(&accepted.pending_observation);
+            if let Some(batch) = native.get_mut::<NativeObservationBatch>() {
+                batch.pending.clone_from(&accepted.pending_observation);
+            }
         }
         transaction.commit().map_err(|error| {
             crate::durable::sqlite::sqlite_error(
@@ -454,14 +458,18 @@ impl InboxStore for SqliteConversationStore {
         let mut adopted =
             self.adopt_pending_tx(&transaction, &mut validation, watermark, attempt_id)?;
         if let Some(event) = &mut adopted.adoption {
-            event.observation = adopted.canonical_receipts.first().and_then(|receipt| {
-                observation_receipt::canonical(
-                    &transaction,
-                    &self.conversation_id,
-                    event,
-                    Arc::clone(&receipt.observation),
-                )
-            });
+            event.observation = adopted
+                .canonical_receipts
+                .first()
+                .and_then(|receipt| {
+                    observation_receipt::canonical(
+                        &transaction,
+                        &self.conversation_id,
+                        event,
+                        Arc::clone(&receipt.observation),
+                    )
+                })
+                .map(EphemeralObservation::new);
         }
         process_death::reach("before:adopt_pending_batch");
         transaction.commit().map_err(|error| {

@@ -1,6 +1,7 @@
 //! The canonical Message Ledger, Surface, and transcript domain.
 
 use crate::durable::sqlite::statements::FixedStatements;
+use crate::events::types::EphemeralObservation;
 #[cfg(test)]
 mod tests;
 
@@ -995,7 +996,8 @@ impl CanonicalStore for SqliteConversationStore {
                 &persisted.event,
                 Arc::clone(&receipt.observation),
             )
-        };
+        }
+        .map(EphemeralObservation::new);
         transaction.commit().map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("canonical event commit: {error}"))
         })?;
@@ -1063,15 +1065,18 @@ impl CanonicalStore for SqliteConversationStore {
                 .collect::<Vec<_>>(),
             range,
         )?;
-        let shared = receipts.first().and_then(|receipt| {
-            observation_receipt::tool_results(
-                &transaction,
-                &self.conversation_id,
-                &persisted,
-                messages,
-                Arc::clone(&receipt.observation),
-            )
-        });
+        let shared = receipts
+            .first()
+            .and_then(|receipt| {
+                observation_receipt::tool_results(
+                    &transaction,
+                    &self.conversation_id,
+                    &persisted,
+                    messages,
+                    Arc::clone(&receipt.observation),
+                )
+            })
+            .map(EphemeralObservation::new);
         for event in &mut persisted {
             event.observation.clone_from(&shared);
         }

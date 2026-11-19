@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use serde::de::{MapAccess, Visitor};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -23,6 +23,7 @@ use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvel
 use crate::runtime::identity::SubagentId;
 use crate::runtime::identity::{EventId, ToolCallId};
 pub use crate::tools::executor::WORKFLOW_OUTPUT_TOOL_NAME;
+pub use rustx_types::runtime::workflow::WorkflowPort;
 
 use super::subagent::SubagentName;
 
@@ -822,78 +823,6 @@ pub struct WorkflowEdgeDefinition {
     /// The Branch case, Agent route or fail port. Ordinary nodes omit it.
     #[serde(default)]
     pub port: Option<WorkflowPort>,
-}
-
-/// A control-flow port of a fixed Workflow node.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum WorkflowPort {
-    /// The true successor.
-    True,
-    /// The false successor.
-    False,
-    /// An additional named ELIF exit.
-    Case(String),
-    /// The ordinary outgoing port.
-    Next,
-    /// A Model's failure exit under its fail-branch strategy.
-    Fail,
-}
-
-impl WorkflowPort {
-    #[must_use]
-    pub fn case(id: &str) -> Self {
-        if id == "true" {
-            Self::True
-        } else {
-            Self::Case(id.to_owned())
-        }
-    }
-}
-
-impl Serialize for WorkflowPort {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(match self {
-            Self::True => "true",
-            Self::False => "false",
-            Self::Next => "next",
-            Self::Fail => "fail",
-            Self::Case(id) => id,
-        })
-    }
-}
-
-impl schemars::JsonSchema for WorkflowPort {
-    fn schema_name() -> std::borrow::Cow<'static, str> {
-        "WorkflowPort".into()
-    }
-    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-        serde_json::json!({"anyOf":[{"type":"boolean"},{"type":"string","minLength":1,"maxLength":64,"pattern":"^[A-Za-z0-9_-]+$"}]})
-            .try_into()
-            .expect("schema object")
-    }
-}
-
-impl<'de> Deserialize<'de> for WorkflowPort {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum RawPort {
-            Boolean(bool),
-            Text(String),
-        }
-        match RawPort::deserialize(deserializer)? {
-            RawPort::Boolean(true) => Ok(Self::True),
-            RawPort::Boolean(false) => Ok(Self::False),
-            RawPort::Text(text) => match text.as_str() {
-                "true" => Ok(Self::True),
-                "false" => Ok(Self::False),
-                "next" => Ok(Self::Next),
-                "fail" => Ok(Self::Fail),
-                _ if valid_local_key(&text) => Ok(Self::Case(text)),
-                _ => Err(serde::de::Error::custom("invalid workflow edge port")),
-            },
-        }
-    }
 }
 
 /// A compiled, immutable executable workflow.

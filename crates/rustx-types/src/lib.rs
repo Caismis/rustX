@@ -7,6 +7,7 @@
 pub mod events {
     pub mod interaction;
     pub mod review;
+    pub mod types;
 }
 pub mod package_io;
 pub mod toml_authoring;

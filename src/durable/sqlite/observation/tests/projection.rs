@@ -1,5 +1,6 @@
 //! Bounded observation regressions: projection.
 
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::sqlite::observation::tests::occupancy_origin::occupancy_origin_native;
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::*;
@@ -35,7 +36,7 @@ pub(in crate::durable::sqlite) fn observation_projection_input(
 pub(in crate::durable::sqlite) fn projection_receipt_witness(
     receipt: &crate::durable::projection::ProjectionCommitReceipt,
 ) -> &crate::durable::observation::ObservationEventWitness {
-    let batch = receipt.completed.observation.as_ref().unwrap();
+    let batch = receipt.completed.observation.native_batch().unwrap();
     assert_eq!(batch.read_cut.read.journal, receipt.completed.sequence);
     let crate::durable::observation::NativeObservationTransition::Single(witness) =
         &batch.transition
@@ -56,7 +57,7 @@ pub(in crate::durable::sqlite) fn assert_projection_receipt_head(
         receipt
             .completed
             .observation
-            .as_ref()
+            .native_batch()
             .unwrap()
             .read_cut
             .read
@@ -406,7 +407,7 @@ fn t10_t12_t19_uncertain_projection_receipt_retains_the_original_publication_cut
         .unwrap();
     assert!(!first.newly_committed);
     assert_projection_receipt_head(&first);
-    let original = first.completed.observation.as_ref().unwrap();
+    let original = first.completed.observation.native_batch().unwrap();
     assert_eq!(original.read_cut.read.journal, first.completed.sequence);
     store
         .append_canonical(&user_message("later-recovery-input", "later immutable C"))
@@ -425,7 +426,7 @@ fn t10_t12_t19_uncertain_projection_receipt_retains_the_original_publication_cut
         .projection_receipt(&operation, &fingerprint)
         .unwrap()
         .unwrap();
-    let retained = replay.completed.observation.as_ref().unwrap();
+    let retained = replay.completed.observation.native_batch().unwrap();
     assert_projection_receipt_head(&replay);
     assert_eq!(
         projection_receipt_witness(&replay).occupancy,

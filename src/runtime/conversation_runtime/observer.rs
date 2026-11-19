@@ -7,6 +7,7 @@ use super::{
     InboundObserver, InteractionObserver, InteractionOutcome, InteractionRef, MessageBlock,
     PublicationAudit, PublicationFrame, PublicationStreamStart, RuntimeEvent, RuntimeInner, Weak,
 };
+use crate::durable::observation::NativeObservationBatch;
 
 /// The observation seam implementation bridging the authoritative runtime
 /// owners into the shared leaf observation queue.
@@ -93,7 +94,10 @@ impl RuntimeObserver {
         let Some(fanout) = inner.pending.get() else {
             return;
         };
-        let batch = committed.observation.as_deref();
+        let batch = committed
+            .observation
+            .as_ref()
+            .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>());
         if !fanout.native_owner(observation, batch).is_installed() {
             fanout.source_failed();
             return;

@@ -677,3 +677,25 @@ pub struct NativeToolResultCommit {
     pub metadata: crate::observation::content::ContentRef,
     pub content: Vec<ContentBinding>,
 }
+
+#[cfg(test)]
+/// Native-batch reads for the envelope's opaque ephemeral carrier. Only the
+/// committing store's tests and in-process observers read back the concrete
+/// batch; the envelope itself never interprets it.
+pub(crate) trait EnvelopeNativeObservation {
+    /// The packed native observation batch.
+    fn native_batch(&self) -> Option<&NativeObservationBatch>;
+    /// The packed native batch `Arc`, preserving pointer identity.
+    fn native_arc(&self) -> Option<std::sync::Arc<NativeObservationBatch>>;
+}
+
+#[cfg(test)]
+impl EnvelopeNativeObservation for Option<crate::events::types::EphemeralObservation> {
+    fn native_batch(&self) -> Option<&NativeObservationBatch> {
+        self.as_ref()?.get::<NativeObservationBatch>()
+    }
+
+    fn native_arc(&self) -> Option<std::sync::Arc<NativeObservationBatch>> {
+        self.as_ref()?.as_arc::<NativeObservationBatch>()
+    }
+}

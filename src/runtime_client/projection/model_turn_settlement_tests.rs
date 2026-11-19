@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::{ModelTurnBoundary, ModelTurnSettlement};
 use crate::durable::observation::{
     ModelTurnObservationBoundary, NativeObservationBatch, NativeObservationTransition,
@@ -32,11 +33,11 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
         let started = append_source_attempt_start(&store, "model-family-attempt");
         for projection in [&mut actual, &mut expected] {
             publish_source_fact(projection, |projection| {
-                projection.apply_native_batch(started.observation.as_deref().unwrap());
+                projection.apply_native_batch(started.observation.native_batch().unwrap());
             });
         }
         store
-            .mark_native_observation_ready(started.observation.as_deref().unwrap())
+            .mark_native_observation_ready(started.observation.native_batch().unwrap())
             .unwrap();
         let turn = store
             .append_event(source_tool_event(
@@ -47,11 +48,11 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
             .unwrap();
         for projection in [&mut actual, &mut expected] {
             publish_source_fact(projection, |projection| {
-                projection.apply_native_batch(turn.observation.as_deref().unwrap());
+                projection.apply_native_batch(turn.observation.native_batch().unwrap());
             });
         }
         store
-            .mark_native_observation_ready(turn.observation.as_deref().unwrap())
+            .mark_native_observation_ready(turn.observation.native_batch().unwrap())
             .unwrap();
         let request = raw_publication_snapshot(crate::context::resources::LedgerFrontier(
             store.observation_read_cut().unwrap().ledger_through,
@@ -61,11 +62,11 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
             .unwrap();
         for projection in [&mut actual, &mut expected] {
             publish_source_fact(projection, |projection| {
-                projection.apply_native_batch(requested.started.observation.as_deref().unwrap());
+                projection.apply_native_batch(requested.started.observation.native_batch().unwrap());
             });
         }
         store
-            .mark_native_observation_ready(requested.started.observation.as_deref().unwrap())
+            .mark_native_observation_ready(requested.started.observation.native_batch().unwrap())
             .unwrap();
         let mut pending = None;
         for index in 0..pending_count {
@@ -176,7 +177,7 @@ fn model_turn_family_matches_ordered_native_members_and_keeps_assistant_before_l
                 }),
             })
             .unwrap();
-        let family = committed.provider.observation.as_deref().unwrap();
+        let family = committed.provider.observation.native_batch().unwrap();
         let NativeObservationTransition::ModelTurnSettlement {
             provider,
             canonical,

@@ -9,7 +9,7 @@
 
 pub use rustx_types::events::interaction;
 pub use rustx_types::events::review;
-pub mod types;
+pub use rustx_types::events::types;
 
 /// The narrow optional non-durable execution-fact projection of the tool
 /// plane.

@@ -1,5 +1,6 @@
 use super::*;
 use crate::context::checkpoint::{CheckpointItem, CheckpointMessage};
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::reading::AuxiliaryAuditSnapshot;
 use crate::durable::{AuxiliaryStore, CanonicalStore, JournalStore, ProjectionStore};
 use crate::durable::{ConversationStore, SqliteConversationStore};
@@ -294,11 +295,11 @@ fn assert_original_publication_replays(
     use crate::durable::observation::NativeObservationTransition;
     let original = original
         .observation
-        .as_ref()
+        .native_batch()
         .expect("fresh original publication evidence");
     let replayed = replayed
         .observation
-        .as_ref()
+        .native_batch()
         .expect("replayed original publication evidence");
     assert_eq!(original.read_cut, replayed.read_cut);
     assert_eq!(original.ready_before, replayed.ready_before);

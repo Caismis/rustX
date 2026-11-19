@@ -10,6 +10,7 @@ use super::{
 };
 use crate::durable::sqlite::canonical::ledger::append_transcript_reference;
 use crate::durable::sqlite::statements::FixedStatements;
+use crate::events::types::EphemeralObservation;
 
 /// Only the schema seen at connection installation may bypass a schema scan.
 /// Never seat a later cookie: a savepoint rollback followed by different DDL
@@ -603,7 +604,8 @@ fn finish(
                 trace_total,
             )
         })
-        .flatten();
+        .flatten()
+        .map(EphemeralObservation::new);
     Ok(Inserted {
         transcript_cursor: row.transcript,
         facts: append_facts::Facts {

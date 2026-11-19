@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::{CommittedModelTurn, ModelTurnBoundary, ModelTurnSettlement};
 
 struct FinalFixture {
@@ -737,9 +738,9 @@ fn final_family_events(result: &CommittedModelTurn) -> Vec<&RuntimeEventEnvelope
 }
 fn assert_final_shared_family(
     result: &CommittedModelTurn,
-) -> &Arc<crate::durable::observation::NativeObservationBatch> {
+) -> std::sync::Arc<crate::durable::observation::NativeObservationBatch> {
     let events = final_family_events(result);
-    let shared = result.provider.observation.as_ref().unwrap();
+    let shared = result.provider.observation.native_arc().unwrap();
     let last = events.last().unwrap().sequence;
     assert_eq!(shared.journal_range, Some((result.provider.sequence, last)));
     assert_eq!(shared.read_cut.read.journal, last);
@@ -758,7 +759,7 @@ fn assert_final_shared_family(
     );
     for (index, event) in events.iter().enumerate() {
         assert_eq!(event.sequence, result.provider.sequence + index as u64);
-        assert!(Arc::ptr_eq(shared, event.observation.as_ref().unwrap()));
+        assert!(Arc::ptr_eq(&shared, &event.observation.native_arc().unwrap()));
     }
     shared
 }
@@ -907,7 +908,7 @@ fn final_model_adoption_family_keeps_assistant_when_more_than_eight_users_replac
     assert_eq!(pending.total, 1);
     assert_eq!(pending.head[0].sequence, remaining.sequence.get());
     assert_eq!(fixture.store.load_canonical().unwrap().len(), 13);
-    fixture.store.mark_native_observation_ready(shared).unwrap();
+    fixture.store.mark_native_observation_ready(&shared).unwrap();
     let state = final_readiness(&fixture.store);
     let last = shared.journal_range.unwrap().1;
     assert!(
@@ -989,13 +990,13 @@ fn final_model_missing_pending_receipt_marks_the_entire_adoption_family_unavaila
         "CREATE TRIGGER damage_final_pending AFTER UPDATE OF observation_witness ON events WHEN json_extract(NEW.event_json,'$.event.type')='inbound_turn_adopted' BEGIN UPDATE pending_inbound SET observation_header=x'7b'; END;"
     ).unwrap();
     let result = fixture.settle(Some(selected.watermark)).unwrap();
-    let shared = result.provider.observation.as_ref().unwrap();
+    let shared = result.provider.observation.native_arc().unwrap();
     assert!(shared.source_unavailable);
     assert!(shared.pending.is_none());
     assert!(
         final_family_events(&result)
             .iter()
-            .all(|event| Arc::ptr_eq(shared, event.observation.as_ref().unwrap()))
+            .all(|event| Arc::ptr_eq(&shared, &event.observation.native_arc().unwrap()))
     );
     assert!(
         result
@@ -1068,7 +1069,7 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
     fixture.store.lock().unwrap().execute_batch(&format!(
         "CREATE TEMP TRIGGER refuse_final_release BEFORE INSERT ON event_observation_direct WHEN NEW.hi={last} BEGIN SELECT RAISE(FAIL,'refuse final family release'); END;"
     )).unwrap();
-    assert!(fixture.store.mark_native_observation_ready(shared).is_err());
+    assert!(fixture.store.mark_native_observation_ready(&shared).is_err());
     assert_eq!(final_readiness(&reader), original);
     assert_eq!(final_readiness(&fixture.store), original);
     assert_eq!(
@@ -1107,7 +1108,7 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
             }
         }))
         .unwrap();
-    fixture.store.mark_native_observation_ready(shared).unwrap();
+    fixture.store.mark_native_observation_ready(&shared).unwrap();
     fixture
         .store
         .lock()
@@ -1163,7 +1164,7 @@ fn final_model_family_release_is_one_transaction_and_failure_rolls_back_every_fl
         last
     );
     let changes = fixture.store.lock().unwrap().total_changes();
-    fixture.store.mark_native_observation_ready(shared).unwrap();
+    fixture.store.mark_native_observation_ready(&shared).unwrap();
     assert_eq!(fixture.store.lock().unwrap().total_changes(), changes);
 }
 
@@ -1506,9 +1507,7 @@ fn publication_header_reuses_one_body_capture_and_only_rebinds_changed_tool_bloc
         assert!(
             !committed
                 .canonical
-                .observation
-                .as_ref()
-                .unwrap()
+                .observation.native_batch().unwrap()
                 .source_unavailable,
             "{kind}"
         );
@@ -1595,15 +1594,11 @@ fn publication_header_keeps_shared_failure_repair_and_custom_trigger_order() {
         assert_eq!(
             actual
                 .canonical
-                .observation
-                .as_ref()
-                .unwrap()
+                .observation.native_batch().unwrap()
                 .source_unavailable,
             expected
                 .canonical
-                .observation
-                .as_ref()
-                .unwrap()
+                .observation.native_batch().unwrap()
                 .source_unavailable,
             "{fault}"
         );

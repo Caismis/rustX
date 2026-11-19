@@ -36,7 +36,9 @@ use super::{
 };
 use crate::durable::{ConversationStoreError, EventPage, JournalStore, TranscriptCursor};
 use crate::events::interaction::InteractionSubject;
-use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
+use crate::events::types::{
+    EVENT_SCHEMA_VERSION, EphemeralObservation, RuntimeEvent, RuntimeEventEnvelope,
+};
 use crate::message::types::{MessageBlock, UserMessageBlock};
 use crate::model::snapshot::RequestSnapshot;
 use crate::runtime::identity::{ConversationId, EventId, MessageId};
@@ -388,7 +390,8 @@ impl JournalStore for SqliteConversationStore {
                     &self.conversation_id,
                     &persisted_terminal.event,
                     &persisted_output.event,
-                );
+                )
+                .map(EphemeralObservation::new);
                 persisted_terminal.event.observation.clone_from(&shared);
                 persisted_output.event.observation = shared;
                 process_death::reach_event(
@@ -1155,7 +1158,8 @@ fn persist_event_isolated(
                 None,
             )
         })
-        .flatten();
+        .flatten()
+        .map(EphemeralObservation::new);
     Ok(PersistedEvent {
         event,
         transcript_cursor,

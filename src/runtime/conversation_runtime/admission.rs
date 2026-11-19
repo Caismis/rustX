@@ -3,6 +3,7 @@
 //! Attempt.
 
 use super::*;
+use crate::durable::observation::NativeObservationBatch;
 
 /// The runtime admission worker's wake boundary.
 ///
@@ -830,7 +831,11 @@ impl RuntimeInner {
         if let Some(adoption) = adoption
             && let Some(fanout) = self.pending.get()
         {
-            if let Some(receipt) = adoption.observation.as_deref() {
+            if let Some(receipt) = adoption
+                .observation
+                .as_ref()
+                .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>())
+            {
                 RuntimeObserver::publish_native_batch(self, fanout, receipt, adoption.sequence);
             } else {
                 fanout.source_failed();

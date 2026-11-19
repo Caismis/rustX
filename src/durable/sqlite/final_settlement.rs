@@ -27,6 +27,7 @@ use crate::durable::sqlite::publication::validate_publication_generation;
 use crate::durable::sqlite::request::snapshot::ensure_publication_stream_tx;
 use crate::durable::sqlite::request::snapshot::require_started_request_with_validation;
 use crate::durable::sqlite::statements::FixedStatements;
+use crate::events::types::EphemeralObservation;
 impl SqliteConversationStore {
     pub(super) fn publication_terminal_tx(
         &self,
@@ -692,7 +693,8 @@ fn install_model_settlement_observation(
         events,
         Arc::new(release),
         pending,
-    );
+    )
+    .map(EphemeralObservation::new);
     provider.event.observation.clone_from(&shared);
     canonical.observation.clone_from(&shared);
     if let Some(boundary) = boundary {

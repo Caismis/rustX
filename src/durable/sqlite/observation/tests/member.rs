@@ -1,5 +1,6 @@
 //! Bounded observation regressions: member.
 
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::sqlite::observation::tests::statistics::statistics_inherited_seed;
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::*;
@@ -77,7 +78,7 @@ fn t09_t12_t19_pending_layout_cleanup_failure_cannot_refuse_native_adoption() {
             store.read_events(Some(before.journal), 1).unwrap().events[0].event,
             event.event
         );
-        assert!(!event.observation.as_ref().unwrap().source_unavailable);
+        assert!(!event.observation.native_batch().unwrap().source_unavailable);
         assert!(!adopted.canonical_receipts[0].observation.source_unavailable);
         assert_eq!(adopted.pending_observation.as_ref().unwrap().total, 0);
         assert_stale_pending_layout_is_unreachable(
@@ -284,7 +285,13 @@ pub(in crate::durable::sqlite) fn commit_original_tool_result(
         )
         .unwrap();
     assert_eq!(receipt.ledger_position, 2);
-    assert!(!committed.observation.as_ref().unwrap().source_unavailable);
+    assert!(
+        !committed
+            .observation
+            .native_batch()
+            .unwrap()
+            .source_unavailable
+    );
     assert_eq!(
         store.load_messages(&[message.id().clone()]).unwrap(),
         vec![message]
@@ -312,7 +319,13 @@ fn t08_t12_t19_successful_tool_j_before_c_keeps_original_content_and_available_s
         before.ledger_through, 1,
         "own successful J precedes result C"
     );
-    assert!(!terminal.observation.as_ref().unwrap().source_unavailable);
+    assert!(
+        !terminal
+            .observation
+            .native_batch()
+            .unwrap()
+            .source_unavailable
+    );
     let witness = store
         .observation_event_witness(terminal.sequence, terminal.sequence)
         .unwrap()
@@ -390,7 +403,13 @@ fn t08_t12_t19_request_metadata_requires_the_original_message_producer_path() {
         .commit_model_turn_start(&[], &snapshot, Utc::now())
         .unwrap()
         .started;
-    assert!(!started.observation.as_ref().unwrap().source_unavailable);
+    assert!(
+        !started
+            .observation
+            .native_batch()
+            .unwrap()
+            .source_unavailable
+    );
     let path = vec![
         "tools".into(),
         "0".into(),
@@ -1056,7 +1075,7 @@ fn t10_t14_t19_terminal_witness_enrichment_failure_preserves_original_failed_can
             witness.transcript_cursor.is_none(),
             "failed auxiliary enrichment cannot claim native T ownership"
         );
-        let batch = terminal.observation.as_ref().unwrap();
+        let batch = terminal.observation.native_batch().unwrap();
         assert!(batch.source_unavailable);
         let summary = store
             .observation_attempt_summary(&attempt, terminal.sequence)
@@ -1115,7 +1134,13 @@ pub(in crate::durable::sqlite) fn assert_faulted_terminal_originals(
         assert!(terminal.observation.is_none());
     } else {
         assert!(witness.unwrap().source_unavailable);
-        assert!(terminal.observation.as_ref().unwrap().source_unavailable);
+        assert!(
+            terminal
+                .observation
+                .native_batch()
+                .unwrap()
+                .source_unavailable
+        );
     }
     let cut = store.observation_read_cut().unwrap();
     assert_eq!(cut.read.journal, terminal.sequence);
@@ -1164,7 +1189,7 @@ pub(in crate::durable::sqlite) fn assert_unfaulted_event_fallback(
             .unwrap()
             .source_unavailable
     );
-    assert!(!next.observation.as_ref().unwrap().source_unavailable);
+    assert!(!next.observation.native_batch().unwrap().source_unavailable);
     let present:bool=store.lock().unwrap().query_row(
         "SELECT observation_witness IS NOT NULL AND length(observation_witness)<=16384 AND observation_unavailable=0 FROM events WHERE sequence=?1",[next.sequence],|row|row.get(0),
     ).unwrap();

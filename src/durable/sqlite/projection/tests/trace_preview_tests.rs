@@ -1,4 +1,5 @@
 use super::*;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::{CanonicalStore, JournalStore, ProjectionStore};
 use crate::observation::bounded::decode_domain_value;
 use crate::observation::cut::CheckpointReadCut;
@@ -126,7 +127,7 @@ fn t08_t14_compaction_trace_preview_preserves_original_utf8_bound_and_truncation
     assert!(!preview.text.is_empty() && preview.text.len() <= 512);
     assert!(original.starts_with(&preview.text));
     assert!(original.is_char_boundary(preview.text.len()));
-    let batch = receipt.completed.observation.as_ref().unwrap();
+    let batch = receipt.completed.observation.native_batch().unwrap();
     let crate::durable::observation::NativeObservationTransition::Single(witness) =
         &batch.transition
     else {

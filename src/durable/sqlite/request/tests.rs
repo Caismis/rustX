@@ -1,6 +1,7 @@
 //! Request snapshot and model-turn start regressions of the SQLite store.
 
 use crate::context::assembly::ContextGeneration;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::sqlite::schema::shape::*;
 use crate::durable::sqlite::schema::*;
 use crate::durable::sqlite::test_support::*;
@@ -2307,12 +2308,21 @@ fn t14_t19_t20_native_receipts_capture_only_released_predecessor_prefix() {
         event
     };
     let first = store.append_event(make("first")).unwrap();
-    assert_eq!(first.observation.as_ref().unwrap().ready_before, Some(0));
+    assert_eq!(
+        first.observation.native_batch().unwrap().ready_before,
+        Some(0)
+    );
     store.mark_observation_ready(1, 1).unwrap();
     let held = store.append_event(make("held")).unwrap();
-    assert_eq!(held.observation.as_ref().unwrap().ready_before, Some(1));
+    assert_eq!(
+        held.observation.native_batch().unwrap().ready_before,
+        Some(1)
+    );
     let later = store.append_event(make("later")).unwrap();
-    assert_eq!(later.observation.as_ref().unwrap().ready_before, Some(1));
+    assert_eq!(
+        later.observation.native_batch().unwrap().ready_before,
+        Some(1)
+    );
     let canonical = store
         .append_canonical(&user_message("prefix-canonical", "canonical"))
         .unwrap();
@@ -2323,7 +2333,7 @@ fn t14_t19_t20_native_receipts_capture_only_released_predecessor_prefix() {
     store.mark_observation_ready(2, 2).unwrap();
     assert_eq!(store.observation_ready_frontier(0, 3).unwrap(), 3);
     assert_eq!(
-        later.observation.as_ref().unwrap().ready_before,
+        later.observation.native_batch().unwrap().ready_before,
         Some(1),
         "later publication cannot retag frozen append evidence"
     );
@@ -2350,7 +2360,7 @@ fn t10_t14_t19_native_single_receipt_preserves_large_other_reason_and_exact_cut(
         .unwrap();
     let source = started
         .observation
-        .as_ref()
+        .native_batch()
         .expect("source-owned Single receipt");
     assert_eq!(source.read_cut.read.journal, 1);
     assert_eq!(source.journal_range, Some((1, 1)));
@@ -2370,7 +2380,7 @@ fn t10_t14_t19_native_single_receipt_preserves_large_other_reason_and_exact_cut(
         .unwrap();
     let receipt = settled
         .observation
-        .as_ref()
+        .native_batch()
         .expect("native terminal receipt");
     let crate::durable::observation::NativeObservationTransition::Single(witness) =
         &receipt.transition
@@ -2477,7 +2487,7 @@ fn t14_t19_t20_status_receipt_preserves_giant_source_identity_and_placement() {
         .commit_model_turn_start(&[canonical], &snapshot, time)
         .unwrap();
     assert_eq!(committed.status_sources.len(), 1);
-    let native = committed.started.observation.as_ref().unwrap();
+    let native = committed.started.observation.native_batch().unwrap();
     let crate::durable::observation::NativeObservationTransition::RequestStart { statuses, .. } =
         &native.transition
     else {

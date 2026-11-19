@@ -14,6 +14,7 @@ use crate::agent::cancellation::StartAdjudication;
 use crate::agent::observer::AgentExecutionObserver;
 use crate::context::tokens::ObservedAnchor;
 use crate::context::tokens::ProviderObservedInput;
+use crate::durable::observation::NativeObservationBatch;
 use crate::durable::{ModelTurnStartCommit, ModelTurnStartCommitDisposition};
 use crate::events::types::AttemptFailure;
 use crate::message::types::MessageBlock;
@@ -60,7 +61,10 @@ fn publish_model_turn_start_events(
                 &event.event,
                 event.sequence,
                 event.tool_occurrence.as_ref(),
-                event.observation.as_deref(),
+                event
+                    .observation
+                    .as_ref()
+                    .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>()),
             );
         }
     }

@@ -1,5 +1,6 @@
 //! Bounded observation regressions of the SQLite store.
 
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::*;
 use crate::durable::{CanonicalStore, JournalStore, ObservationStore};
@@ -42,7 +43,13 @@ fn t10_t19_t20_readiness_layout_failure_never_refuses_native_journal_commit() {
     store.lock().unwrap().execute_batch("CREATE TEMP TRIGGER readiness_layout_failure BEFORE INSERT ON event_observation_readiness WHEN NEW.sequence=2 BEGIN SELECT RAISE(FAIL,'derived readiness failure'); END;").unwrap();
     let second = store.append_event(make("second")).unwrap();
     assert_eq!(second.sequence, 2, "original native Journal committed");
-    assert!(second.observation.as_ref().unwrap().source_unavailable);
+    assert!(
+        second
+            .observation
+            .native_batch()
+            .unwrap()
+            .source_unavailable
+    );
     let flags: (bool, bool) = store.lock().unwrap().query_row(
         "SELECT observation_readiness_missing,observation_unavailable FROM events WHERE sequence=2",
         [], |row| Ok((row.get(0)?,row.get(1)?)),
@@ -117,7 +124,13 @@ fn t10_t19_t20_readiness_repair_preserves_independent_auxiliary_failure() {
     event.turn_id = Some(TurnId::new("1"));
     let committed = store.append_event(event).unwrap();
     assert_eq!(committed.sequence, 1);
-    assert!(committed.observation.as_ref().unwrap().source_unavailable);
+    assert!(
+        committed
+            .observation
+            .native_batch()
+            .unwrap()
+            .source_unavailable
+    );
     let flags = |store: &SqliteConversationStore| -> (bool, bool) {
         store.lock().unwrap().query_row(
             "SELECT observation_readiness_missing,observation_unavailable FROM events WHERE sequence=1",
@@ -164,7 +177,7 @@ fn t10_t19_t20_readiness_repair_preserves_independent_auxiliary_failure() {
     healthy.turn_id = Some(TurnId::new("2"));
     let next = store.append_event(healthy).unwrap();
     assert_eq!(next.sequence, 2);
-    assert!(!next.observation.as_ref().unwrap().source_unavailable);
+    assert!(!next.observation.native_batch().unwrap().source_unavailable);
     assert!(
         !store
             .observation_event_witness(2, 2)
@@ -251,7 +264,14 @@ fn t10_t15_t20_trace_count_hole_is_unavailable_without_refusing_native_commit() 
         second.sequence, 2,
         "native fact committed despite derived fault"
     );
-    assert!(second.observation.unwrap().trace_total.is_none());
+    assert!(
+        second
+            .observation
+            .native_batch()
+            .unwrap()
+            .trace_total
+            .is_none()
+    );
     assert!(store.observation_trace_total(2).is_err());
     assert_eq!(store.observation_trace_total(1).unwrap(), 1);
     let connection = store.lock().unwrap();
@@ -325,7 +345,7 @@ fn t12_t19_native_failure_receipt_and_range_preserve_public_normalization() {
         "metadata seek never hydrates an enormous original Event ID"
     );
     assert!(serde_json::to_vec(&witness).unwrap().len() <= 16_384);
-    let receipt = event.observation.as_ref().unwrap();
+    let receipt = event.observation.native_batch().unwrap();
     assert!(receipt.failure_deferred);
     assert_eq!(receipt.failure_sequence, Some(2));
     assert!(receipt.failure_readable_end > 3000);

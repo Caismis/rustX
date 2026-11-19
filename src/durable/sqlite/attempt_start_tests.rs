@@ -1,3 +1,4 @@
+use crate::durable::observation::EnvelopeNativeObservation;
 fn candidates(store: &SqliteConversationStore) -> [RuntimeEventEnvelope; 2] {
     let attempt = AttemptId::new("atomic-first-turn");
     let started = envelope(
@@ -32,8 +33,8 @@ fn attempt_first_turn_commits_once_with_one_authenticated_observation_family() {
     store.lock().unwrap().commit_hook(None::<fn() -> bool>).unwrap();
     assert_eq!(commits.load(Ordering::SeqCst), 1);
     assert_eq!((attempt.sequence, turn.sequence), (1, 2));
-    let batch = attempt.observation.as_ref().unwrap();
-    assert!(Arc::ptr_eq(batch, turn.observation.as_ref().unwrap()));
+    let batch = attempt.observation.native_arc().unwrap();
+    assert!(Arc::ptr_eq(&batch, &turn.observation.native_arc().unwrap()));
     assert_eq!(batch.journal_range, Some((1, 2)));
     assert_eq!(batch.read_cut.read.journal, 2);
     assert!(!batch.source_unavailable);

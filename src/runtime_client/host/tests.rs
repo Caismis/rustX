@@ -2,6 +2,7 @@ use crate::durable::AuxiliaryStore;
 use crate::durable::CanonicalStore;
 use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::scripted_suites::support::audit::assert_permission_reminder;
 mod compaction_head_tests;
 mod delivery_tests;
@@ -4655,7 +4656,7 @@ async fn trace_snapshot_cut_excludes_commits_after_cursor_capture() {
     assert!(
         crate::runtime::observation::PublicationProjectionCommit::native_batch(
             &sink,
-            committed.observation.as_deref().unwrap(),
+            committed.observation.native_batch().unwrap(),
         )
         .is_installed()
     );

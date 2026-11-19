@@ -15,6 +15,7 @@ use crate::durable::JournalStore;
 use crate::durable::ObservationStore;
 use crate::durable::PublicationStore;
 use crate::durable::RequestStore;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::events::interaction::{InteractionSettlement, InteractionSubject};
 use crate::events::types::{EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope};
 use crate::message::content::TextBlock;
@@ -640,7 +641,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
             ))
             .unwrap();
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(attempt_started.observation.as_deref().unwrap());
+            projection.apply_native_batch(attempt_started.observation.native_batch().unwrap());
         });
 
         let snapshot = raw_publication_snapshot(crate::context::resources::LedgerFrontier(
@@ -649,7 +650,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
         let started = store
             .commit_model_turn_start(&[], &snapshot, chrono::Utc::now())
             .unwrap();
-        let started_native = started.started.observation.as_deref().unwrap();
+        let started_native = started.started.observation.native_batch().unwrap();
         let NativeObservationTransition::RequestStart {
             started: started_witness,
             ..
@@ -697,7 +698,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
                 },
             ))
             .unwrap();
-        let terminal_native = terminal.observation.as_deref().unwrap();
+        let terminal_native = terminal.observation.native_batch().unwrap();
         let NativeObservationTransition::Single(terminal_witness) = &terminal_native.transition
         else {
             panic!("primary request terminal has one native witness");
@@ -775,7 +776,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
             )
             .unwrap();
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(call_started.event.observation.as_deref().unwrap());
+            projection.apply_native_batch(call_started.event.observation.native_batch().unwrap());
         });
         let request_started = store
             .commit_auxiliary_request_start(
@@ -789,7 +790,8 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
             )
             .unwrap();
         publish_source_fact(&mut projection, |projection| {
-            projection.apply_native_batch(request_started.event.observation.as_deref().unwrap());
+            projection
+                .apply_native_batch(request_started.event.observation.native_batch().unwrap());
         });
         let auxiliary_terminal = crate::durable::auxiliary::auxiliary_settlement_envelope(
             store.conversation_id().clone(),
@@ -834,7 +836,7 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
             .as_ref()
             .unwrap()
             .observation
-            .as_deref()
+            .native_batch()
             .unwrap();
         let NativeObservationTransition::Single(auxiliary_witness) = &auxiliary_native.transition
         else {
@@ -847,7 +849,8 @@ fn r1_primary_request_usage_survives_reduced_native_witness_and_auxiliary_interl
         let before_auxiliary = projection.cursor;
         publish_source_fact(&mut projection, |projection| {
             projection.apply_native_batch(auxiliary_native);
-            projection.apply_native_batch(auxiliary.call_settled.observation.as_deref().unwrap());
+            projection
+                .apply_native_batch(auxiliary.call_settled.observation.native_batch().unwrap());
         });
         let auxiliary_events = collect(&mut projection, before_auxiliary);
         assert!(auxiliary_events.iter().flat_map(|event| event.event.facts()).any(|fact|
@@ -2603,7 +2606,7 @@ fn t14_t19_worker_read_fence_keeps_one_native_cut_before_publication() {
         ))
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(first.observation.as_deref().unwrap());
+        projection.apply_native_batch(first.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(first.sequence, first.sequence)
@@ -2644,7 +2647,7 @@ fn t14_t19_worker_read_fence_keeps_one_native_cut_before_publication() {
     second_event.turn_id = Some(TurnId::new("2"));
     let second = store.append_event(second_event).unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(second.observation.as_deref().unwrap());
+        projection.apply_native_batch(second.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(second.sequence, second.sequence)
@@ -3854,7 +3857,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
             attempt_id: attempt(),
         }))
         .unwrap();
-    projection.apply_native_batch(started.observation.as_ref().unwrap());
+    projection.apply_native_batch(started.observation.native_batch().unwrap());
     let call = ToolCall {
         id: ToolCallId::new("call_before_start"),
         tool_id: ToolId::new("tool-before-start"),
@@ -3874,7 +3877,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
         )
         .unwrap();
     projection.bootstrap_durable_message(&attempt(), &assistant);
-    projection.apply_native_batch(assistant_event.observation.as_ref().unwrap());
+    projection.apply_native_batch(assistant_event.observation.native_batch().unwrap());
     let result = cancelled_result(
         CancellationReason::RuntimeShutdown,
         ToolCancellationPhase::BeforeStart,
@@ -3899,7 +3902,7 @@ fn issue136_before_start_commit_preserves_execution_distinction() {
             })],
         )
         .unwrap();
-    projection.apply_native_batch(events[0].observation.as_ref().unwrap());
+    projection.apply_native_batch(events[0].observation.native_batch().unwrap());
     let events = collect(&mut projection, before_commit);
     let facts: Vec<_> = events
         .iter()
@@ -5517,7 +5520,7 @@ fn native_running_tool_fixture() -> (
     let (mut projection, store) = initialized_source_projection();
     let started = append_source_attempt_start(&store, "progress-attempt-start");
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(started.observation.as_deref().unwrap());
+        projection.apply_native_batch(started.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(started.sequence, started.sequence)
@@ -5545,7 +5548,7 @@ fn native_running_tool_fixture() -> (
         )
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(committed.observation.as_deref().unwrap());
+        projection.apply_native_batch(committed.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(committed.sequence, committed.sequence)
@@ -5575,7 +5578,7 @@ fn native_running_tool_fixture() -> (
     assert!(!prepared.native_direct);
     assert!(prepared.tool_occurrence.is_some());
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(started.observation.as_deref().unwrap());
+        projection.apply_native_batch(started.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(started.sequence, started.sequence)
@@ -5649,7 +5652,7 @@ fn t14_t19_prepared_started_witness_preserves_exact_live_progress_and_terminal_f
         ))
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(terminal.observation.as_deref().unwrap());
+        projection.apply_native_batch(terminal.observation.native_batch().unwrap());
     });
     let settled = projection.checkpoint_candidate().unwrap();
     assert!(settled.cursor > before.cursor);
@@ -5760,7 +5763,7 @@ fn t14_t20_native_direct_receipts_wait_for_the_exact_earlier_source_prefix() {
         "native goal 72"
     );
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(earlier.observation.as_ref().unwrap());
+        projection.apply_native_batch(earlier.observation.native_batch().unwrap());
     });
     assert_eq!(
         projection.source_cut.as_ref().unwrap(),
@@ -5862,7 +5865,7 @@ fn t14_t20_no_j_canonical_and_pending_cuts_do_not_authorize_a_held_journal_owner
     assert_eq!(projection.checkpoint_read_cut(), published);
     assert!(projection.working_read_cut().source_cut.is_none());
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(earlier.observation.as_ref().unwrap());
+        projection.apply_native_batch(earlier.observation.native_batch().unwrap());
     });
     assert_eq!(projection.source_cut.as_ref().unwrap(), &latest);
     assert_eq!(
@@ -6390,7 +6393,7 @@ fn t19_unobserved_transcript_position_fences_a_later_transition_until_its_owner_
     let (mut projection, store) = initialized_source_projection();
     let started = append_source_attempt_start(&store, "t-prefix-start");
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(started.observation.as_deref().unwrap());
+        projection.apply_native_batch(started.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(started.sequence, started.sequence)
@@ -6440,7 +6443,7 @@ fn t19_unobserved_transcript_position_fences_a_later_transition_until_its_owner_
         Err(crate::runtime_client::RuntimeClientError::ReadCutExpired)
     ));
     publish_source_fact(&mut projection, |projection| {
-        projection.apply_native_batch(earlier.observation.as_deref().unwrap());
+        projection.apply_native_batch(earlier.observation.native_batch().unwrap());
     });
     store
         .mark_observation_direct(earlier.sequence, earlier.sequence)
@@ -6535,7 +6538,7 @@ fn t16_pending_adoption_receipt_releases_only_its_matching_mutation_fence() {
         .as_ref()
         .unwrap()
         .observation
-        .as_deref()
+        .native_batch()
         .unwrap();
     publish_source_fact(&mut projection, |projection| {
         projection.apply_native_batch(native);

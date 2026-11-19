@@ -44,7 +44,8 @@ use crate::durable::{
     ModelTurnStartCommitDisposition, RequestSnapshotPage, RequestStore,
 };
 use crate::events::types::{
-    EVENT_SCHEMA_VERSION, RuntimeEvent, RuntimeEventEnvelope, contribution_emission_event_id,
+    EVENT_SCHEMA_VERSION, EphemeralObservation, RuntimeEvent, RuntimeEventEnvelope,
+    contribution_emission_event_id,
 };
 use crate::message::types::MessageBlock;
 use crate::model::snapshot::RequestSnapshot;
@@ -461,7 +462,8 @@ pub(super) fn request_start_observation_tx(
             .map(|receipt| Arc::clone(&receipt.observation)),
         snapshot,
         &status_sources,
-    );
+    )
+    .map(EphemeralObservation::new);
     started.observation.clone_from(&shared);
     let mut contribution_emissions = contribution_emissions;
     for emission in &mut contribution_emissions {

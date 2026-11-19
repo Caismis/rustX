@@ -13,6 +13,7 @@ use super::{
     MAX_CONTEXT_OVERFLOW_RETRIES_PER_MODEL_TURN, MAX_TRANSIENT_MODEL_RETRIES_PER_LOGICAL_STEP,
 };
 use crate::context::AcceptedContext;
+use crate::durable::observation::NativeObservationBatch;
 use crate::events::types::RuntimeEventEnvelope;
 use crate::events::types::{AttemptFailure, RuntimeEvent};
 use crate::message::types::{AssistantContentBlock, ContentBlockIndex, ToolCallOccurrenceRef};
@@ -936,7 +937,10 @@ impl<'a> AgentExecution<'a> {
                 &adoption.event,
                 adoption.sequence,
                 adoption.tool_occurrence.as_ref(),
-                adoption.observation.as_deref(),
+                adoption
+                    .observation
+                    .as_ref()
+                    .and_then(|ephemeral| ephemeral.get::<NativeObservationBatch>()),
             );
         }
         self.pending_fresh_inbound = Some(fresh);

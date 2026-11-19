@@ -1,6 +1,7 @@
 //! Request snapshot and model-turn start regressions: span integrity.
 
 use crate::durable::ConversationStoreError;
+use crate::durable::observation::EnvelopeNativeObservation;
 use crate::durable::sqlite::test_support::*;
 use crate::durable::sqlite::*;
 use crate::durable::{CanonicalStore, JournalStore, ObservationStore, RequestStore};
@@ -170,7 +171,13 @@ fn t10_t19_original_span_insert_failure_rolls_back_optional_layout_and_preserves
         1,
         "the real optional insert trigger fired"
     );
-    assert!(!started.observation.as_ref().unwrap().source_unavailable);
+    assert!(
+        !started
+            .observation
+            .native_batch()
+            .unwrap()
+            .source_unavailable
+    );
     assert_independent_request_start_fact(&store, started.sequence, &snapshot);
     assert_eq!(
         store.load_request_snapshot(&snapshot.request_id).unwrap(),
