@@ -530,7 +530,9 @@ fn validated_turn(
         .as_ref()
         .and_then(|execution| execution.occupancy.as_ref())
     {
-        reading.validate()?;
+        reading
+            .validate()
+            .map_err(|message| ConversationStoreError::InvalidReference(message.into()))?;
     }
     Ok(turn)
 }

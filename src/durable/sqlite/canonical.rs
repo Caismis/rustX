@@ -1628,7 +1628,9 @@ pub(super) fn read_inherited_occupancy(
     let reading: Option<crate::context::occupancy::ContextOccupancy> =
         decode(&json, "bootstrap occupancy")?;
     if let Some(reading) = &reading {
-        reading.validate()?;
+        reading
+            .validate()
+            .map_err(|message| ConversationStoreError::InvalidReference(message.into()))?;
     }
     Ok(reading)
 }

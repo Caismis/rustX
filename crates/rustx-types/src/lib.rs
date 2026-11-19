@@ -140,6 +140,7 @@ pub mod local_runtime {
 pub mod context {
     pub mod assembly;
     pub mod checkpoint;
+    pub mod occupancy;
     pub mod resources;
     pub mod system_prompt;
 }

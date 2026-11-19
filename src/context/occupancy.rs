@@ -1,8 +1,5 @@
 //! Native context readings: a provider-measured request or the deterministic
 //! rebuilt context committed by compaction. Neither uses browser-visible history.
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
 use crate::context::tokens::bytes_to_tokens;
 #[cfg(test)]
 use crate::durable::ConversationStore;
@@ -12,46 +9,7 @@ use crate::durable::presentation::{FactQuery, FactScope};
 #[cfg(test)]
 use crate::events::types::RuntimeEvent;
 
-/// Latest native context reading for this Conversation, with explicit provenance.
-/// Unsent composer text is never included.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ContextOccupancy {
-    /// True for the native rebuilt-context estimate after compaction.
-    #[serde(default)]
-    pub estimated: bool,
-    /// Normalized request input, or the committed rebuilt-context estimate.
-    pub input_tokens: u64,
-    /// Capacity frozen in the request or compaction's native model snapshot.
-    pub context_window_tokens: u64,
-    /// Provider-facing historical model, never substituted from current config.
-    pub model: String,
-    /// Heuristic composition of the same request's input.
-    pub breakdown: ContextBreakdown,
-}
-
-impl ContextOccupancy {
-    pub(crate) fn validate(&self) -> Result<(), ConversationStoreError> {
-        if self.context_window_tokens == 0 {
-            return Err(ConversationStoreError::InvalidReference(
-                "an inherited occupancy reading has no valid context window".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-/// Where one request's measured input went, priced by the provider-neutral
-/// `ceil(bytes / 4)` estimate. System prompt and Tool definitions are priced
-/// heuristically; messages are the remainder of the measured or estimated total.
-/// The parts sum to that total unless the component estimates alone exceed it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ContextBreakdown {
-    pub system_tokens: u64,
-    pub tool_tokens: u64,
-    pub message_tokens: u64,
-}
+pub use rustx_types::context::occupancy::{ContextBreakdown, ContextOccupancy};
 
 /// Project the latest native context reading at a finite cut.
 /// New requests and compaction in progress preserve the last reading. A committed

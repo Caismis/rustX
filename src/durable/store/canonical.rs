@@ -499,7 +499,9 @@ impl LineageSeed {
                 .as_ref()
                 .and_then(|execution| execution.occupancy.as_ref())
             {
-                reading.validate()?;
+                reading
+                    .validate()
+                    .map_err(|message| ConversationStoreError::InvalidReference(message.into()))?;
             }
             let unique_owner =
                 owners.insert((turn.id.conversation_id.clone(), turn.id.attempt_id.clone()));
