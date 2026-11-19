@@ -5,7 +5,7 @@ import { AgentConversationContext } from './subagent-context';
 import { useConversationPreferences } from '../conversation-preferences';
 import { useTranslation } from '../../locale/react';
 import type { MessageBlock, UserContentBlock, AssistantContentBlock, InFlightBlock } from '../../../../protocol/app-server/v80';
-import { MarkdownText } from '../../presentation/markdown/MarkdownText';
+import { AssistantMarkdown } from '../../presentation/markdown/AssistantMarkdown';
 import { Artifact } from '../components/Artifact';
 import { UserMessage, AssistantMessage, MessageFile } from '../../presentation/agent/Message';
 import { Reasoning } from '../../presentation/agent/Reasoning';
@@ -53,7 +53,7 @@ function UserMessageContent({ message, label, actions, editor }: { message: Extr
 }
 function MessageText({ messageId, publicationStream, index, text, markdown, streaming, renderText }: { messageId?: string; publicationStream?: string; index: number; text: string; markdown: boolean; streaming: boolean; renderText?: (text: string) => ReactNode }) {
   const { source, read, presentation } = useContentSource(), binding = messageId ? messageContentBinding(presentation, messageId, index, publicationStream) : undefined;
-  const render = renderText ?? ((value: string) => markdown ? <MarkdownText text={value} streaming={streaming}/> : <span>{value}</span>);
+  const render = renderText ?? ((value: string) => markdown ? <AssistantMarkdown text={value} streaming={streaming}/> : <span>{value}</span>);
   // Native metadata describes its own header. The browser's finite live-byte
   // cache can omit an otherwise inline native field, so compare actual bytes.
   const deferred = binding && (binding.deferred || new TextEncoder().encode(text).length !== binding.content_ref.readable_end);

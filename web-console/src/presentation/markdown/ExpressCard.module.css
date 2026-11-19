@@ -1,0 +1,11 @@
+.surface { margin-block: .75rem; color: var(--dsw-alias-label-primary); overflow-wrap: anywhere; }
+.Card { min-width: 0; padding: 1rem; border: 1px solid var(--dsw-alias-border-l3); border-radius: var(--dsw-radius-md, 8px); background: var(--dsw-alias-bg-layer-1); }
+.Column { display: flex; flex-direction: column; gap: .45rem; }
+.Row { display: flex; align-items: baseline; flex-wrap: wrap; gap: .3rem 1rem; }
+.Row > :last-child:not(:first-child) { margin-inline-start: auto; }
+.list { margin: .25rem 0 0; padding: 0; list-style: none; }
+.list > li { padding-block: .55rem; }
+.list > li + li, .divider { border: 0; border-top: 1px solid var(--dsw-alias-border-l3); }
+.heading { margin: 0; font-weight: 600; line-height: 1.35; }
+.caption { color: var(--dsw-alias-label-secondary); font-size: .875em; }
+.text, .caption { white-space: pre-wrap; }

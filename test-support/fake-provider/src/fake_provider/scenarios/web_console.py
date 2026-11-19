@@ -769,3 +769,35 @@ def web_bash_promotion() -> Scenario:
 
 
 SCENARIOS["web_bash_promotion"] = web_bash_promotion
+
+
+def web_a2ui_express() -> Scenario:
+    sample = '''评分如下。
+
+```
+<a2ui>
+$/title = "模型嘉豪指数"
+$/subtitle = "模型与评价"
+$/models = [
+  {name: "Claude Mythos 5.2", verdict: "赛级嘉豪"},
+  {name: "Gemini 4 Neon", verdict: "Carbon 换皮"}
+]
+root = Card(Column([
+  Text($/title, "h3"),
+  Text($/subtitle, "caption"),
+  List([
+    Row([Text($/models/0/name), Text($/models/0/verdict, "caption")]),
+    Row([Text($/models/1/name), Text($/models/1/verdict, "caption")])
+  ])
+]))
+</a2ui>
+```
+
+以上为示例。'''
+    return Scenario("web_a2ui_express", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Render ratings",)),
+        Stream(Text(sample), Finish()),
+    ))
+
+
+SCENARIOS["web_a2ui_express"] = web_a2ui_express

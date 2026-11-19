@@ -46,6 +46,7 @@ import tailCss from './TurnTail.module.css';
 import css from '../../presentation/agent/Chat.module.css';
 import { messageContentBinding, useContentSource } from './ObservationSource';
 import { SourceContent } from './SourceContent';
+import { AssistantMarkdown } from '../../presentation/markdown/AssistantMarkdown';
 import { MarkdownText } from '../../presentation/markdown/MarkdownText';
 import type { PublicationHead } from '../../client/publication-heads';
 import type { RuntimeClientProjectionHeadView } from '../../../../protocol/app-server/v80';
@@ -619,7 +620,7 @@ function DescriptorContent({ descriptor, editor, actions }: { descriptor: Runtim
     return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions} attachments={attachments.length ? <Content blocks={blocks} include={attachments} messageAttachments/> : undefined}>{editor ?? <Content blocks={blocks} include={blocks.map((_,index)=>index).filter(index=>!attachments.includes(index))}/>}</UserMessage>
       : <AssistantMessage label={tx('agent:message.assistant-response')}><Content messageId={descriptor.identity ?? undefined} blocks={blocks} include={blocks.flatMap((block,index)=>block.type==='tool_call'?[]:[index])} markdown/></AssistantMessage>;
   }
-  const content = <SourceContent explicit bindings={bindings} owned={source?.owned ?? (() => false)} read={source ? read : undefined} presentationOwner={presentation?.owner}>{text => <MarkdownText text={text}/>}</SourceContent>;
+  const content = <SourceContent explicit bindings={bindings} owned={source?.owned ?? (() => false)} read={source ? read : undefined} presentationOwner={presentation?.owner}>{text => descriptor.role === 'assistant' ? <AssistantMarkdown text={text}/> : <MarkdownText text={text}/>}</SourceContent>;
   return descriptor.role === 'user' ? <UserMessage label={tx('agent:message.your-message')} actions={actions}>{editor ?? content}</UserMessage>
     : <AssistantMessage label={tx('agent:message.assistant-response')}>{content}</AssistantMessage>;
 }
