@@ -41,7 +41,7 @@
 //! the first payload enters an empty buffer it owns one absolute deadline;
 //! later canonical provider events never reset it. The runtime [`MonotonicClock`](rustx_types::runtime::monotonic::MonotonicClock) owns
 //! the wake-up mechanism, so deterministic tests use
-//! [`ManualMonotonicClock`](crate::runtime::ManualMonotonicClock) and never a
+//! [`ManualMonotonicClock`](rustx_types::runtime::monotonic::ManualMonotonicClock) and never a
 //! sleep.
 //!
 //! # Three mutually exclusive settlements
