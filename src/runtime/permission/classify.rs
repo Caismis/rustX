@@ -79,7 +79,7 @@ pub fn classify_tool_kind(
 
 /// Whether any built-in mode can escalate a call to this tool. Without call
 /// arguments, Bash and file mutations use their non-fast-path classification.
-pub fn supports_elevation(tool: &ToolDefinition) -> bool {
+pub(crate) fn supports_elevation(tool: &ToolDefinition) -> bool {
     use super::{BuiltinPermissionAction, ExecutionPermissionMode, builtin_action_for};
     let (kind, _) = classify_tool_kind(
         &tool.id,
