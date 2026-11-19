@@ -1,4 +1,7 @@
-/** Measurements only. Uses the existing typed product protocol client, never a new SDK/demo. */
+/** Measurements only. Uses the existing typed product protocol client, never a new SDK/demo.
+ * fs/readFile dispatches through the Session's admitted Execution Client; this benchmark
+ * does not compose one for dynamically started Sessions, so its read step is not an
+ * end-to-end baseline until per-Session composition exists here. */
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {spawn,execFileSync} from 'node:child_process';
@@ -21,19 +24,19 @@ for(const mode of [{name:'environment-one-client',clients:1,sessions:1,slow:fals
   const token='environment-measurement-private-token';writeFileSync(join(root,'token'),token,{mode:0o600});
   writeFileSync(join(root,'rustx.toml'),`[app_server]\nenvironment_roots=[${JSON.stringify(workspace)}]\n[agent.model]\nmodel="measure/chat-model"\n[agent.tools]\nbuiltin=[]\n[providers.measure]\nbase_url=${JSON.stringify(provider.url())}\napi_key="$MEASURE_KEY"\n[models."measure/chat-model"]\nprovider="measure"\nid="chat-model"\nprotocol="openai_chat_completions"\ncontext_window=128000\nmax_output_tokens=1024\n[models."measure/chat-model".capabilities]\ninput_modalities=["text"]\noutput_modalities=["text"]\n[models."measure/chat-model".compat]\nchat_reasoning_replay="omit"\n`);
   const child=spawn(binary,['app-server','--config',join(root,'rustx.toml'),'--runtime-root',join(root,'runtime'),'--listen','ws://127.0.0.1:0','--token-file',join(root,'token')],{env:{...process.env,HOME:home,MEASURE_KEY:'fixture'},stdio:['ignore','ignore','pipe']});
-  const exited=once(child,'exit'),hosts:AppServerHost[]=[],workspaces:string[]=[];
+  const exited=once(child,'exit'),hosts:AppServerHost[]=[],workspaces:string[]=[],sessionIds:string[]=[];
   let proxy:Awaited<ReturnType<typeof slowProxy>>|undefined;
   const bounded=<T>(promise:Promise<T>)=>new Promise<T>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Measurement operation timed out')),120_000);promise.then(value=>{clearTimeout(timer);resolve(value);},error=>{clearTimeout(timer);reject(error);});});
   try {
     const endpoint=await bounded(new Promise<string>((resolve,reject)=>{const lines=createInterface({input:child.stderr});let diagnostic='';lines.on('line',line=>{diagnostic=(diagnostic+'\n'+line).slice(-4096);if(line.startsWith('rustx app-server listening '))resolve(line.slice('rustx app-server listening '.length));});child.once('exit',()=>reject(Error(diagnostic)));}));
     if(mode.slow)proxy=await slowProxy(endpoint);
     for(let client=0;client<mode.clients;client++)hosts.push(await AppServerHost.connectRemote({endpoint:mode.slow&&client===mode.clients-1?proxy!.endpoint:endpoint,token}));
-    for(let index=0;index<mode.sessions;index++) {const cwd=join(workspace,`session-${index}`);mkdirSync(cwd);workspaces.push(cwd);await hosts[0].client.call('thread/start',{settings:{cwd},dynamicTools:[]},'session_transition');}
+    for(let index=0;index<mode.sessions;index++) {const cwd=join(workspace,`session-${index}`);mkdirSync(cwd);workspaces.push(cwd);const {session}=await hosts[0].client.call('thread/start',{settings:{cwd},dynamicTools:[]},'session_transition');sessionIds.push(session.id);}
     const activeClients=mode.slow?hosts.length-1:hosts.length;
     const cycle=async(index:number)=>{
       const client=hosts[Math.abs(index)%activeClients].client,cwd=workspaces[Math.abs(index)%workspaces.length],path=join(cwd,`cycle-${index}`),watchId=`cycle-${index}`;
       const {metadata}=await client.call('fs/writeFile',{path,dataBase64:Buffer.from('measured').toString('base64'),expectedRevision:null},'file_metadata');
-      const {chunk}=await client.call('fs/readFile',{path,offset:'0',maxBytes:64,expectedRevision:metadata.revision},'file_chunk');assert.equal(Buffer.from(chunk.dataBase64,'base64').toString(),'measured');
+      const {chunk}=await client.call('fs/readFile',{sessionId:sessionIds[Math.abs(index)%workspaces.length],path,offset:'0',maxBytes:64,expectedRevision:metadata.revision},'file_chunk');assert.equal(Buffer.from(chunk.dataBase64,'base64').toString(),'measured');
       await client.call('fs/watch',{watchId,path:cwd},'environment_accepted');
       const {result}=await client.call('command/exec',{command:['/usr/bin/printf','%s','measured'],cwd,env:{EXPLICIT:'authorized'},processId:null,tty:false,streamStdin:false,streamStdoutStderr:false,outputBytesCap:65536,timeoutMs:10000,size:null},'command_exec');
       assert.equal(result.status,'completed');assert.equal(Buffer.from(result.stdoutBase64,'base64').toString(),'measured');

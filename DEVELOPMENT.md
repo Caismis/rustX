@@ -54,6 +54,30 @@ these arguments and the native exit status propagates.
 For headless/integration use without pnpm, use `target/debug/rustx app-server`
 with an explicit native transport; see [App Server](docs/app-server-protocol.md).
 
+**Local Execution Client composition** — explicit opt-in, never a default:
+
+```sh
+cargo build --locked -p rustx --bin rustx
+cargo build --locked -p rustx-execution-client --bin rustx-execution-client
+target/debug/rustx app-server \
+  --runtime-root /absolute/path/runtime \
+  --listen stdio \
+  --local-execution-session ses_01900000-0000-7000-8000-000000000001 \
+  --local-execution-workspace /independently/trusted/workspace
+```
+
+The flags are paired and launch exactly one Client for the named Session;
+bare `app-server` discovers and spawns nothing. The Session must already
+exist in the runtime catalog. `--local-execution-workspace` is independently
+trusted: it is validated lexically and must byte-for-byte equal the
+workspace the Session's reserved binding claims — the Server never queries
+workspace metadata to establish it. The Client executable must be the
+`rustx-execution-client` built beside the `rustx` binary; it is never
+resolved from PATH or HOME. The child runs with an empty environment,
+`/` as its working directory, and sealed stdio — it receives only the
+binding file and workspace on its command line, and the Server owns and
+reaps it through drain.
+
 **TUI** — existing TUI composition root and `AppServerHost.spawnLocal`:
 
 ```sh

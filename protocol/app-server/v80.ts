@@ -83,6 +83,7 @@ export type Request1 =
   | {
       method: 'fs/readFile';
       params: {
+        sessionId: SessionId;
         path: string;
         offset: string;
         maxBytes: number;
@@ -1440,14 +1441,14 @@ export type CatalogKind = 'tools' | 'resources' | 'templates';
 export type SkillContentKind = 'instructions' | 'metadata';
 /**
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ConversationId".
- */
-export type ConversationId = string;
-/**
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "SessionId".
  */
 export type SessionId = string;
+/**
+ * This interface was referenced by `ProtocolTypes`'s JSON-Schema
+ * via the `definition` "ConversationId".
+ */
+export type ConversationId = string;
 /**
  * Process-local live composition identity. Never a durable or transport identity.
  *
@@ -6711,6 +6712,9 @@ export type ErrorData =
     }
   | {
       kind: 'environment_capacity_or_conflict';
+    }
+  | {
+      kind: 'execution_unavailable';
     }
   | {
       reason: AuxiliaryFailure;

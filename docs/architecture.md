@@ -7786,8 +7786,16 @@ current layer status.
   `admit_local_stream` and one serialized `read_range` exchange (busy
   refusal, lexical workspace gate, binding live-check at send time) — is
   the Session's live dispatch owner. The claim is not reachable through
-  the App Server protocol and nothing spawns a Client yet; the App
-  Server's fs/readFile rewiring to it is still pending.
+  the App Server protocol. The paired `--local-execution-session` /
+  `--local-execution-workspace` flags make the App Server itself the
+  explicit composer: it claims the endpoint, launches the trusted sibling
+  Client (empty environment, sealed stdio, killed-and-reaped on failure
+  and at drain) and admits it before transport readiness; bare mode
+  still launches nothing. `fs/readFile` is routed through the
+  endpoint's serialized `read_range` (with `sessionId` on the wire and
+  `ExecutionUnavailable` for an uncomposed Session); the remaining
+  filesystem methods stay on their prior paths until their own
+  migrations land.
 - `rustx-execution-client` is a standalone binary performing physical
   workspace/environment I/O inside the workspace view it was launched under.
   Its production workspace dependencies are the protocol and

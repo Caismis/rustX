@@ -347,9 +347,20 @@ impl Binding {
     }
 
     /// `accept_local` against an explicit absolute deadline — one budget
-    /// armed at entry that covers the Hello read, the arbitration, and
-    /// the admission delivery, never re-armed.
-    fn accept_local_deadline(
+    /// that covers the Hello read, the arbitration, and the admission
+    /// delivery, never re-armed.
+    ///
+    /// A composer that performs its own bounded wait before admission
+    /// (an accept deadline, a task queue) arms one absolute deadline and
+    /// passes it here so the handshake shares the already-elapsed budget;
+    /// a deadline that has already lapsed fails the first check.
+    ///
+    /// # Errors
+    ///
+    /// Returns the transport or socket error when the record cannot be
+    /// read or written. An authenticated-but-refused Hello is not an I/O
+    /// error: it returns `Ok(Err(Reject))`.
+    pub fn accept_local_deadline(
         &self,
         mut stream: UnixStream,
         deadline: Instant,

@@ -25,6 +25,7 @@ use std::sync::{Arc, Mutex, TryLockError};
 
 use rustx_execution_protocol::{
     Capability, ClientInstanceId, EnvironmentId, Generation, Reject, is_normalized_absolute_path,
+    transport::LOCAL_HANDSHAKE_TIMEOUT,
 };
 use rustx_execution_server::{Binding, LocalConnection, RangeRead, Reservation};
 
@@ -46,6 +47,9 @@ pub struct LocalExecutionEndpoint {
     connection: Mutex<Option<LocalConnection>>,
     listener: UnixListener,
     bootstrap: PathBuf,
+    /// The reserved logical workspace — trusted catalog identity,
+    /// recorded once at claim time, never probed on disk.
+    workspace: PathBuf,
     _private: tempfile::TempDir,
 }
 
@@ -81,7 +85,7 @@ impl LocalExecutionEndpoint {
             environment: EnvironmentId::new(uuid::Uuid::now_v7().to_string()),
             instance: ClientInstanceId::new(uuid::Uuid::now_v7().to_string()),
             generation: Generation::new(NonZeroU64::MIN),
-            workspace,
+            workspace: workspace.clone(),
             required_capabilities: BTreeSet::from([Capability::Connection]),
         };
         let (binding, listener) =
@@ -91,8 +95,16 @@ impl LocalExecutionEndpoint {
             connection: Mutex::new(None),
             listener,
             bootstrap: root.join("b"),
+            workspace,
             _private: private,
         })
+    }
+
+    /// The exact logical workspace this binding reserved — the trusted
+    /// catalog identity recorded at claim time, never probed on disk.
+    #[must_use]
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
     }
 
     /// The owner-only bootstrap bundle path the trusted composer hands to
@@ -130,7 +142,31 @@ impl LocalExecutionEndpoint {
     ///
     /// Panics if the connection mutex is poisoned.
     pub fn admit_local_stream(&self, stream: UnixStream) -> io::Result<Result<(), Reject>> {
-        match self.binding.accept_local(stream)? {
+        self.admit_local_stream_deadline(
+            stream,
+            std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT,
+        )
+    }
+
+    /// `admit_local_stream` against an absolute deadline armed by the
+    /// caller — one budget covering the whole admission handshake, shared
+    /// with whatever bounded wait produced the stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns the transport error when the handshake cannot complete. An
+    /// authenticated-but-refused Hello is not an I/O error: the reject is
+    /// delivered on the wire and returned as `Ok(Err(Reject))`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the connection mutex is poisoned.
+    pub fn admit_local_stream_deadline(
+        &self,
+        stream: UnixStream,
+        deadline: std::time::Instant,
+    ) -> io::Result<Result<(), Reject>> {
+        match self.binding.accept_local_deadline(stream, deadline)? {
             Ok(connection) => {
                 let mut slot = self.connection.lock().expect("endpoint connection");
                 assert!(
@@ -214,6 +250,18 @@ fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
             "path is outside the Session workspace",
         )
     };
+    // `components()`/`strip_prefix()` silently normalize interior `.` and
+    // repeated separators, so the raw spelling is checked first: no `.`
+    // or `..` segment and no control or NUL byte anywhere in the path.
+    let raw = path.as_os_str().as_bytes();
+    if raw.is_empty()
+        || raw.iter().any(u8::is_ascii_control)
+        || raw
+            .split(|byte| *byte == b'/')
+            .any(|segment| segment == b"." || segment == b"..")
+    {
+        return Err(denied());
+    }
     let relative = if path.is_absolute() {
         path.strip_prefix(workspace).map_err(|_| denied())?
     } else {
@@ -221,12 +269,9 @@ fn workspace_relative(workspace: &Path, path: &Path) -> io::Result<PathBuf> {
     };
     let mut has_file = false;
     for component in relative.components() {
-        let Component::Normal(part) = component else {
+        let Component::Normal(_) = component else {
             return Err(denied());
         };
-        if part.as_bytes().iter().any(u8::is_ascii_control) {
-            return Err(denied());
-        }
         has_file = true;
     }
     if !has_file {
@@ -905,6 +950,10 @@ mod tests {
             PathBuf::from("../escape"),
             published.workspace.join("../escape"),
             published.workspace.join("a/../../x"),
+            // `components()`/`strip_prefix()` would silently normalize
+            // the interior `.` away — the raw segment must be refused.
+            published.workspace.join("./blob"),
+            PathBuf::from("a/./blob"),
             published.workspace.clone(),
             PathBuf::new(),
             PathBuf::from("a\0b"),

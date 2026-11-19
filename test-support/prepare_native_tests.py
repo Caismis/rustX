@@ -227,7 +227,7 @@ def load_package_metadata(
     metadata_flags: list[str],
     package_name: str | None,
     cwd: Path,
-) -> tuple[str, Path, dict[str, Path], dict[tuple[tuple[str, ...], str], Path]]:
+) -> tuple[str, str, Path, dict[str, Path], dict[tuple[tuple[str, ...], str], Path]]:
     """Query ``cargo metadata`` for exact checkout package identity and targets."""
     cmd = [cargo_exe, "metadata", "--no-deps", "--format-version", "1", *metadata_flags]
     result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
@@ -269,6 +269,7 @@ def load_package_metadata(
         pkg = roots[0]
 
     pkg_id = pkg["id"]
+    pkg_name = pkg["name"]
     manifest_path = Path(pkg["manifest_path"]).resolve()
     bin_targets: dict[str, Path] = {}
     all_targets: dict[tuple[tuple[str, ...], str], Path] = {}
@@ -279,7 +280,7 @@ def load_package_metadata(
         all_targets[(kind, name)] = src_path
         if "bin" in kind:
             bin_targets[name] = src_path
-    return pkg_id, manifest_path, bin_targets, all_targets
+    return pkg_id, pkg_name, manifest_path, bin_targets, all_targets
 
 
 def _relay_diagnostic(row: dict) -> None:
@@ -489,6 +490,45 @@ def stage_binary_beside(source: Path, dest_dir: Path) -> None:
         raise PreparationError(f"checksum mismatch after staging `{dest}` from `{source}`")
 
 
+def client_bin_command(bin_cmd: list[str]) -> list[str]:
+    """Derive the Execution Client build from the root ``--bins`` command.
+
+    Package selection becomes ``-p rustx-execution-client``; the root
+    crate's feature selectors are dropped so the client builds in its own
+    ordinary default mode, while target, target-dir, profile, and
+    lock/offline flags carry over unchanged.
+    """
+    cmd: list[str] = []
+    saw_package = False
+    i = 0
+    while i < len(bin_cmd):
+        token = bin_cmd[i]
+        if token in ("-p", "--package"):
+            cmd.extend(["-p", "rustx-execution-client"])
+            saw_package = True
+            i += 2
+            continue
+        if token.startswith("--package="):
+            cmd.append("--package=rustx-execution-client")
+            saw_package = True
+            i += 1
+            continue
+        if token in ("--features", "-F"):
+            i += 2
+            continue
+        if token.startswith("--features="):
+            i += 1
+            continue
+        if token in ("--all-features", "--no-default-features"):
+            i += 1
+            continue
+        cmd.append(token)
+        i += 1
+    if not saw_package:
+        cmd.extend(["-p", "rustx-execution-client"])
+    return cmd
+
+
 def stage_binaries(binaries: dict[str, dict], harnesses: list[dict]) -> int:
     """Stage every package binary beside every emitted test harness executable."""
     harness_exes = {Path(row["executable"]).resolve() for row in harnesses}
@@ -513,7 +553,7 @@ def stage_binaries(binaries: dict[str, dict], harnesses: list[dict]) -> int:
 def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], list[Path]]:
     work_dir = (cwd or Path.cwd()).resolve()
     test_cmd, bin_cmd, metadata_flags, package_name = split_cargo_invocation(argv)
-    pkg_id, manifest_path, bin_targets, all_targets = load_package_metadata(
+    pkg_id, pkg_name, manifest_path, bin_targets, all_targets = load_package_metadata(
         test_cmd[0], metadata_flags, package_name, work_dir
     )
     has_lib = any(kind == ("lib",) or "rlib" in kind for kind, _ in all_targets)
@@ -541,6 +581,42 @@ def prepare(argv: list[str], cwd: Path | None = None) -> tuple[dict[str, Path], 
         libraries=libraries,
         has_lib=has_lib,
     )
+    if pkg_name == "rustx":
+        # The root package's process tests compose the real Execution
+        # Client; the trusted sibling is built with the same target,
+        # target-dir, profile, and lock flags — never the root crate's
+        # feature selectors — and staged beside every emitted harness.
+        client_id, _, client_manifest, client_bin_targets, client_targets = (
+            load_package_metadata(
+                test_cmd[0], metadata_flags, "rustx-execution-client", work_dir
+            )
+        )
+        client_records = run_cargo_json(client_bin_command(bin_cmd), work_dir)
+        _, client_binaries, _ = collect_package_artifacts(
+            client_records, client_id, client_manifest, client_targets
+        )
+        missing_client = sorted(set(client_bin_targets) - set(client_binaries))
+        if missing_client:
+            raise PreparationError(
+                f"Cargo did not emit required client binary artifacts: {', '.join(missing_client)}"
+            )
+        if not binaries:
+            raise PreparationError(
+                "client staging requires the ordinary package binaries it must sit beside"
+            )
+        root_dir = Path(next(iter(binaries.values()))["executable"]).resolve().parent
+        root_profile = profile_signature(next(iter(binaries.values())))
+        for name, row in client_binaries.items():
+            if profile_signature(row) != root_profile:
+                raise PreparationError(
+                    f"client binary `{name}` profile differs from the root binaries'"
+                )
+            if Path(row["executable"]).resolve().parent != root_dir:
+                raise PreparationError(
+                    f"client binary `{name}` targets a different directory than the root binaries"
+                )
+        # Feature names are package-local and never compared across crates.
+        binaries.update(client_binaries)
     staged_count = stage_binaries(binaries, harnesses)
     harness_paths = [Path(row["executable"]) for row in harnesses]
     binary_paths = {name: Path(row["executable"]) for name, row in binaries.items()}

@@ -4955,6 +4955,7 @@ export const fixtures = [
     "id": "environment-4",
     "method": "fs/readFile",
     "params": {
+      "sessionId": "ses_00000000-0000-7000-8000-000000000001",
       "path": "/workspace/file",
       "offset": "0",
       "maxBytes": 65536,

@@ -309,7 +309,13 @@ class ValidationAndStagingTests(unittest.TestCase):
             mock.patch.object(
                 prep,
                 "load_package_metadata",
-                return_value=(self.pkg_id, self.manifest, self.bin_targets, self.all_targets),
+                return_value=(
+                    self.pkg_id,
+                    "p",
+                    self.manifest,
+                    self.bin_targets,
+                    self.all_targets,
+                ),
             ),
             mock.patch.object(prep, "run_cargo_json", return_value=records),
         ):
@@ -744,6 +750,76 @@ fn upstream_unused_warning_witness() {}
                 with self.assertRaises(prep.PreparationError):
                     prep.prepare(cmd, cwd=self.root)
             self.assertIn("missing_symbol_in_upstream", stderr_fail.getvalue())
+
+
+class ClientBinCommandTests(unittest.TestCase):
+    def test_replaces_package_and_drops_root_feature_selectors(self) -> None:
+        cmd = prep.client_bin_command(
+            [
+                "cargo",
+                "build",
+                "--bins",
+                "--message-format=json",
+                "-p",
+                "rustx",
+                "--all-features",
+                "--features",
+                "prod",
+                "-F",
+                "extra",
+                "--features=inline",
+                "--no-default-features",
+                "--locked",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--target-dir",
+                "target/custom",
+                "--profile=test",
+            ]
+        )
+        self.assertEqual(
+            cmd,
+            [
+                "cargo",
+                "build",
+                "--bins",
+                "--message-format=json",
+                "-p",
+                "rustx-execution-client",
+                "--locked",
+                "--target",
+                "x86_64-unknown-linux-gnu",
+                "--target-dir",
+                "target/custom",
+                "--profile=test",
+            ],
+        )
+
+    def test_appends_package_selection_when_absent(self) -> None:
+        cmd = prep.client_bin_command(
+            ["cargo", "build", "--bins", "--message-format=json", "--locked"]
+        )
+        self.assertEqual(
+            cmd,
+            [
+                "cargo",
+                "build",
+                "--bins",
+                "--message-format=json",
+                "--locked",
+                "-p",
+                "rustx-execution-client",
+            ],
+        )
+
+    def test_rewrites_equals_spelled_package(self) -> None:
+        cmd = prep.client_bin_command(
+            ["cargo", "build", "--bins", "--package=rustx", "--locked"]
+        )
+        self.assertEqual(
+            cmd,
+            ["cargo", "build", "--bins", "--package=rustx-execution-client", "--locked"],
+        )
 
 
 if __name__ == "__main__":

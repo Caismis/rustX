@@ -71,6 +71,95 @@ impl AppServerConnection {
                 self.watches.unwatch(&watch_id)?;
                 Ok(MethodResult::EnvironmentAccepted {})
             }
+            Method::FsReadFile {
+                session_id,
+                path,
+                offset,
+                max_bytes,
+                expected_revision,
+            } => {
+                // Parameter gate before any work is enqueued — the schema
+                // range and this bound are the same physical limit.
+                if !(1..=rustx_execution_protocol::MAX_RAW_CHUNK_BYTES).contains(&max_bytes) {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let manager = self.host.manager().clone();
+                let closed = self.service_events.closed.clone();
+                // Detached blocking work retains admission through the
+                // exchange; a dropped transport waiter never frees it.
+                tokio::task::spawn_blocking(move || {
+                    let _owner = owner;
+                    if closed.is_cancelled() {
+                        return Err(domain(ErrorData::ConnectionClosed));
+                    }
+                    // Non-creating lookup: no endpoint means no admitted
+                    // Client — absence is unavailability, not an error a
+                    // fallback could hide.
+                    let endpoint = manager
+                        .execution_endpoint(&session_id)
+                        .map_err(|_| domain(ErrorData::ExecutionUnavailable))?;
+                    // Logical authorization only: the admitted workspace
+                    // must sit under a configured root. A configured
+                    // subtree grant never widens upward to the whole
+                    // workspace, and nothing here opens or stats it.
+                    let authorized = || {
+                        manager
+                            .process_policy()
+                            .environment_roots
+                            .iter()
+                            .any(|root| endpoint.workspace().starts_with(root))
+                    };
+                    if !authorized() {
+                        return Err(domain(ErrorData::EnvironmentUnauthorized));
+                    }
+                    let bounded =
+                        u32::try_from(max_bytes).map_err(|_| domain(ErrorData::InvalidParams))?;
+                    let range = endpoint
+                        .read_range(
+                            std::path::Path::new(&path),
+                            offset,
+                            bounded,
+                            expected_revision.as_deref(),
+                        )
+                        .map_err(|io| match io.kind() {
+                            std::io::ErrorKind::NotConnected | std::io::ErrorKind::BrokenPipe => {
+                                domain(ErrorData::ExecutionUnavailable)
+                            }
+                            std::io::ErrorKind::WouldBlock => {
+                                domain(ErrorData::EnvironmentCapacityOrConflict)
+                            }
+                            _ => error(io),
+                        })?;
+                    // A policy change during the exchange never reaches
+                    // the caller — authorization and liveness are checked
+                    // again before bytes are exposed.
+                    if !authorized() {
+                        return Err(domain(ErrorData::EnvironmentUnauthorized));
+                    }
+                    if closed.is_cancelled() {
+                        return Err(domain(ErrorData::ConnectionClosed));
+                    }
+                    Ok(MethodResult::FileChunk {
+                        chunk: rustx_confined_fs::FileChunk {
+                            data_base64: base64::engine::general_purpose::STANDARD
+                                .encode(range.bytes),
+                            offset: range.offset,
+                            next_offset: range.next_offset,
+                            metadata: rustx_confined_fs::FileMetadata {
+                                is_directory: false,
+                                is_file: true,
+                                is_symlink: false,
+                                size: range.metadata.size.get(),
+                                revision: range.metadata.revision,
+                                identity: range.metadata.identity,
+                                modified_at_ms: range.metadata.modified_at_ms,
+                            },
+                        },
+                    })
+                })
+                .await
+                .map_err(|_| domain(ErrorData::OutcomeUnknown))?
+            }
             method => {
                 let environment = self.host.manager().environment.clone();
                 let closed = self.service_events.closed.clone();
@@ -82,14 +171,6 @@ impl AppServerConnection {
                         return Err(domain(ErrorData::ConnectionClosed));
                     }
                     match method {
-                        Method::FsReadFile {
-                            path,
-                            offset,
-                            max_bytes,
-                            expected_revision,
-                        } => environment
-                            .read(&path, offset, max_bytes, expected_revision.as_deref())
-                            .map(|chunk| MethodResult::FileChunk { chunk }),
                         Method::FsWriteFile {
                             path,
                             data_base64,

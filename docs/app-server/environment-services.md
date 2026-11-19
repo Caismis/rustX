@@ -144,7 +144,7 @@ not merely at enqueue. Commands are not durable jobs and are never replayed.
 
 | Method | Contract |
 | --- | --- |
-| `fs/readFile` | Revision-checked base64 chunk with offset and continuation. |
+| `fs/readFile` | Revision-checked base64 chunk with offset and continuation, served by the Session's admitted Execution Client. |
 | `fs/writeFile` | Single-file atomic replace/create with an expected revision. |
 | `fs/readDirectory` | Bounded, sorted direct-entry page and revision. |
 | `fs/getMetadata` | Native type, size, identity, revision and optional modification time. |
@@ -155,7 +155,7 @@ not merely at enqueue. Commands are not durable jobs and are never replayed.
 | `conversation/changes`, `conversation/changeDiff` | Existing native captured file changes and Diff for the exact attached Conversation. |
 
 ```json
-{"jsonrpc":"2.0","id":"read-1","method":"fs/readFile","params":{"path":"/absolute/workspace/file","offset":"0","maxBytes":65536,"expectedRevision":null}}
+{"jsonrpc":"2.0","id":"read-1","method":"fs/readFile","params":{"sessionId":"ses_00000000-0000-7000-8000-000000000001","path":"/absolute/workspace/file","offset":"0","maxBytes":65536,"expectedRevision":null}}
 {"jsonrpc":"2.0","id":"write-1","method":"fs/writeFile","params":{"path":"/absolute/workspace/file","dataBase64":"aGk=","expectedRevision":"revision-from-native-read"}}
 ```
 
@@ -163,7 +163,9 @@ Unbounded native u64 values, including file sizes/offsets and output sequence,
 follow the existing exact decimal-string wire codec. Page indices and bounded
 counts remain safe JSON integers. Use generated types and wire fixtures.
 
-Read/write frames carry at most 512 KiB of decoded file data. Reads can continue
+Read frames carry at most 64 KiB of decoded file data per range; writes remain
+at most 512 KiB of decoded file data pending their own execution migration.
+Reads can continue
 through a large file with the same expected revision. Existing native upload and
 chunked delivery contracts remain available for their existing source domains;
 this method does not synthesize an upload or committed delivery. Listings retain

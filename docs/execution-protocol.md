@@ -515,11 +515,23 @@ envelope.
   `WouldBlock` busy rather than queued, a workspace check rejects
   paths outside the Session's reserved workspace lexically, and the
   binding's live-connection gate authorizes every send at dispatch
-  time. Nothing spawns a Client yet — a composition caller that wants
-  bytes must launch and admit one itself. The App Server's fs/readFile
-  wiring is still pending: product reads keep flowing through
-  `src/package_io.rs` and the environment file readers (delegating to
-  `rustx-confined-fs`) until a later change actually rewires them.
+  time. `app-server --local-execution-session
+  --local-execution-workspace` is that caller: the paired flags claim the
+  Session's endpoint, launch the trusted sibling Client (sibling-of-
+  `current_exe()` only — never PATH or HOME — with an empty environment,
+  `/` cwd, sealed stdio and `kill_on_drop`), race its connect against
+  `LOCAL_HANDSHAKE_TIMEOUT`, admit it through the blocking handshake, and
+  stop+reap it inside the drain deadline; bare mode composes nothing.
+  `fs/readFile` now routes through this owner: the App Server resolves
+  the request's `sessionId` through the non-creating
+  `execution_endpoint` lookup (absence is `ExecutionUnavailable`, never
+  a fallback), authorizes the admitted workspace against the configured
+  environment roots before and after the exchange, and projects the
+  returned `RangeRead` — including its source-descriptor
+  `RegularFileStamp` — into the wire `FileChunk`. Every other
+  filesystem method still flows through the prior environment readers
+  (delegating to `rustx-confined-fs`); their migration remains
+  outstanding.
 
 ## Test ownership (T01–T73) and optional O-SUM
 

@@ -156,9 +156,12 @@ pub enum Method {
     },
     #[serde(rename = "fs/readFile")]
     FsReadFile {
+        #[serde(rename = "sessionId")]
+        session_id: SessionId,
         path: String,
         offset: u64,
         #[serde(rename = "maxBytes")]
+        #[schemars(range(min = 1, max = 65536))]
         max_bytes: usize,
         #[serde(rename = "expectedRevision")]
         expected_revision: Option<String>,
@@ -1383,6 +1386,9 @@ pub enum ErrorData {
     EnvironmentUnauthorized,
     EnvironmentResourceNotFound,
     EnvironmentCapacityOrConflict,
+    /// The Session's local execution endpoint does not exist or its
+    /// admitted Client is gone; there is no fallback reader.
+    ExecutionUnavailable,
     Auxiliary {
         reason: crate::runtime::auxiliary::submission::AuxiliaryFailure,
     },

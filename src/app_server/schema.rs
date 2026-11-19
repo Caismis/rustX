@@ -1639,6 +1639,9 @@ fn environment_fixtures(fixtures: &mut Vec<ProtocolMessage>) {
             process_id: "process-fixture".into(),
         },
         Method::FsReadFile {
+            session_id: crate::local_runtime::session::SessionId::new(
+                "ses_00000000-0000-7000-8000-000000000001",
+            ),
             path: path.clone(),
             offset: 0,
             max_bytes: 65536,

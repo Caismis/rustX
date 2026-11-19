@@ -202,10 +202,13 @@ pub(crate) async fn output_after_cap() {
 
 pub(crate) async fn watch_recheck() {
     use futures_util::FutureExt as _;
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
     let connection = Arc::new(AppServerConnection::new(fixture.host.clone()));
     initialize(&connection).await;
+    // fs/readFile dispatches through Session A's admitted Execution Client.
+    let mut execution = fixture.start_execution(0).await;
+    let session_id = fixture.sessions[0].id.clone();
     let directory = fixture.workspaces[0].join("review-watch");
     std::fs::create_dir(&directory).unwrap();
     let path = directory.join("document");
@@ -318,6 +321,7 @@ pub(crate) async fn watch_recheck() {
         &connection,
         4,
         Method::FsReadFile {
+            session_id: session_id.clone(),
             path: next.display().to_string(),
             offset: 0,
             max_bytes: 64,
@@ -372,6 +376,7 @@ pub(crate) async fn watch_recheck() {
         },
     )
     .await;
+    execution.kill().await.unwrap();
     connection.close();
     assert_eq!(
         bounded(fixture.host.drain()).await,

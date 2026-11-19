@@ -384,6 +384,53 @@ impl Fixture {
         let id = self.sessions[index].id.clone();
         tokio::spawn(async move { manager.load(&id, None).await })
     }
+    /// Launches the real staged Execution Client sibling for the Session at
+    /// `index` and admits it on the Session's reserved endpoint — the same
+    /// composition the App Server performs, with the trusted executable
+    /// resolved only as this test harness's sibling.
+    ///
+    /// The child is caller-owned: `kill_on_drop` applies, and callers stop
+    /// and reap it explicitly. Panics when the preparation stage did not
+    /// place a client binary beside the harness — there is no fallback.
+    pub(super) async fn start_execution(&self, index: usize) -> tokio::process::Child {
+        let endpoint = self
+            .manager
+            .reserve_local_execution(&self.sessions[index].id)
+            .await
+            .unwrap();
+        let binary = std::env::current_exe()
+            .unwrap()
+            .with_file_name("rustx-execution-client");
+        assert!(
+            binary.is_file(),
+            "staged Execution Client is absent: {binary:?}"
+        );
+        let std_listener = endpoint.listener().try_clone().unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::UnixListener::from_std(std_listener).unwrap();
+        let child = tokio::process::Command::new(&binary)
+            .arg("--binding-file")
+            .arg(endpoint.bootstrap_path())
+            .arg("--workspace")
+            .arg(endpoint.workspace())
+            .current_dir("/")
+            .env_clear()
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        bounded(async {
+            let (stream, _) = listener.accept().await?;
+            tokio::task::spawn_blocking(move || endpoint.admit_local_stream(stream.into_std()?))
+                .await?
+        })
+        .await
+        .unwrap()
+        .unwrap();
+        child
+    }
     pub(super) async fn close(&self) {
         for gate in &self.gates {
             gate.release();

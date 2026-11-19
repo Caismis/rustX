@@ -8576,4 +8576,9 @@ local Execution Protocol over Unix sockets:
   replaced — and serializes each synchronous typed exchange: a concurrent
   dispatch is refused as busy rather than queued, and only the binding's
   live-connection gate, evaluated at send time, authorizes bytes on the
-  wire.
+  wire. When the App Server composes it explicitly
+  (`--local-execution-session`/`--local-execution-workspace`), the Client
+  is a Server-owned child — spawned only as the trusted sibling
+  executable with an empty environment, admitted before transport
+  readiness, and killed-and-reaped on launch failure and inside the
+  drain deadline; no retry or replacement ever occurs.

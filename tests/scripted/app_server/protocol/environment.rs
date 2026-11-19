@@ -694,10 +694,13 @@ pub(crate) async fn observed_mutation_hint(
 
 #[cfg(target_os = "macos")]
 pub(crate) async fn macos_watch_scenario() {
-    let fixture = Fixture::with_session_count(None, 0).await;
+    let fixture = Fixture::with_session_count(None, 1).await;
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
+    // fs/readFile dispatches through Session A's admitted Execution Client.
+    let mut execution = fixture.start_execution(0).await;
+    let session_id = fixture.sessions[0].id.clone();
     let source = fixture.workspaces[0].join("bounded-watch");
     std::fs::create_dir(&source).unwrap();
     let existing = source.join("existing");
@@ -718,14 +721,19 @@ pub(crate) async fn macos_watch_scenario() {
         1,
         "only the two immediate native sources consume descriptors"
     );
-    macos_watch_existing(&connection, &source).await;
-    macos_watch_membership(&connection, &source, &capacity).await;
+    macos_watch_existing(&connection, &session_id, &source).await;
+    macos_watch_membership(&connection, &session_id, &source, &capacity).await;
     macos_watch_capacity(&connection, &source, &capacity).await;
+    execution.kill().await.unwrap();
     connection.close();
 }
 
 #[cfg(target_os = "macos")]
-async fn macos_watch_existing(connection: &AppServerConnection, source: &Path) {
+async fn macos_watch_existing(
+    connection: &AppServerConnection,
+    session_id: &crate::local_runtime::session::SessionId,
+    source: &Path,
+) {
     use std::os::unix::fs::PermissionsExt;
     let mut phases = FixturePhase::new("macOS descriptor existing children");
     let existing = source.join("existing");
@@ -735,7 +743,7 @@ async fn macos_watch_existing(connection: &AppServerConnection, source: &Path) {
         std::fs::write(&existing, b"after").unwrap();
     })
     .await;
-    macos_watch_read(connection, &existing, b"after").await;
+    macos_watch_read(connection, session_id, &existing, b"after").await;
     let mode = std::fs::metadata(&child_directory)
         .unwrap()
         .permissions()
@@ -762,6 +770,7 @@ async fn macos_watch_existing(connection: &AppServerConnection, source: &Path) {
 #[cfg(target_os = "macos")]
 async fn macos_watch_membership(
     connection: &AppServerConnection,
+    session_id: &crate::local_runtime::session::SessionId,
     source: &Path,
     capacity: &tokio::sync::Semaphore,
 ) {
@@ -773,13 +782,13 @@ async fn macos_watch_membership(
     })
     .await;
     assert_eq!(capacity.available_permits(), 0);
-    macos_watch_read(connection, &created, b"new").await;
+    macos_watch_read(connection, session_id, &created, b"new").await;
     phases.enter("created child contents");
     observed_mutation_hint(connection, "macos", source, &created, || {
         std::fs::write(&created, b"changed").unwrap();
     })
     .await;
-    macos_watch_read(connection, &created, b"changed").await;
+    macos_watch_read(connection, session_id, &created, b"changed").await;
     phases.enter("remove child descriptor");
     observed_mutation_hint(connection, "macos", source, source, || {
         std::fs::remove_file(&created).unwrap();
@@ -800,7 +809,7 @@ async fn macos_watch_membership(
         std::fs::write(&renamed, b"changed again").unwrap();
     })
     .await;
-    macos_watch_read(connection, &renamed, b"changed again").await;
+    macos_watch_read(connection, session_id, &renamed, b"changed again").await;
     phases.finish();
 }
 
@@ -877,11 +886,17 @@ async fn macos_retirement_hint(connection: &AppServerConnection) {
 }
 
 #[cfg(target_os = "macos")]
-async fn macos_watch_read(connection: &AppServerConnection, path: &Path, expected: &[u8]) {
+async fn macos_watch_read(
+    connection: &AppServerConnection,
+    session_id: &crate::local_runtime::session::SessionId,
+    path: &Path,
+    expected: &[u8],
+) {
     let MethodResult::FileChunk { chunk } = call(
         connection,
         99,
         Method::FsReadFile {
+            session_id: session_id.clone(),
             path: path.display().to_string(),
             offset: 0,
             max_bytes: 64,
@@ -905,6 +920,10 @@ pub(crate) async fn filesystem_scenario() {
     grant(&fixture);
     let connection = AppServerConnection::new(fixture.host.clone());
     initialize(&connection).await;
+    // fs/readFile dispatches through Session A's admitted Execution
+    // Client; the child stays owned until it is reaped at the end.
+    let mut execution = fixture.start_execution(0).await;
+    let session_id = fixture.sessions[0].id.clone();
     let path = fixture.workspaces[0].join("document").display().to_string();
     let MethodResult::FileMetadata { metadata } = call(
         &connection,
@@ -947,6 +966,7 @@ pub(crate) async fn filesystem_scenario() {
         &connection,
         5,
         Method::FsReadFile {
+            session_id: session_id.clone(),
             path: path.clone(),
             offset: 0,
             max_bytes: 2,
@@ -964,6 +984,7 @@ pub(crate) async fn filesystem_scenario() {
             &connection,
             6,
             Method::FsReadFile {
+                session_id: session_id.clone(),
                 path: path.clone(),
                 offset: 0,
                 max_bytes: 2,
@@ -989,6 +1010,7 @@ pub(crate) async fn filesystem_scenario() {
                 &connection,
                 7,
                 Method::FsReadFile {
+                    session_id: session_id.clone(),
                     path: denied,
                     offset: 0,
                     max_bytes: 32,
@@ -1139,6 +1161,7 @@ pub(crate) async fn filesystem_scenario() {
         .await,
         ErrorData::EnvironmentUnauthorized
     );
+    execution.kill().await.unwrap();
     connection.close();
 }
 

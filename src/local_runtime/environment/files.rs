@@ -188,26 +188,6 @@ impl Environment {
     pub(crate) fn metadata(&self, path: &str) -> io::Result<FileMetadata> {
         self.with_paths(&[path], |paths| metadata(&paths[0].1, &paths[0].2))
     }
-    pub(crate) fn read(
-        &self,
-        path: &str,
-        offset: u64,
-        max_bytes: usize,
-        expected: Option<&str>,
-    ) -> io::Result<FileChunk> {
-        if !(1..=CHUNK_BYTES).contains(&max_bytes) {
-            return Err(invalid("file read exceeds chunk limit"));
-        }
-        self.with_paths(&[path], |paths| {
-            let (_, root, relative) = &paths[0];
-            let (directory, leaf) = parent(root, relative)?;
-            let chunk = read_range(&directory, Path::new(&leaf), offset, max_bytes, expected)?;
-            if root.cancelled.is_cancelled() || chunk.metadata != metadata(root, relative)? {
-                return Err(conflict());
-            }
-            Ok(chunk)
-        })
-    }
     pub(crate) fn write(
         &self,
         path: &str,
@@ -843,18 +823,10 @@ mod tests {
         std::fs::rename(temporary.path(), &retired).unwrap();
         std::fs::create_dir(temporary.path()).unwrap();
         std::fs::write(temporary.path().join("file"), b"replacement").unwrap();
-        assert!(
-            environment
-                .read(&format!("{root}/file"), 0, 32, None)
-                .is_err()
-        );
+        assert!(environment.metadata(&format!("{root}/file")).is_err());
         environment.configure(&[]);
         environment.configure(&[Path::new(&root).to_path_buf()]);
-        assert!(
-            environment
-                .read(&format!("{root}/file"), 0, 32, None)
-                .is_ok()
-        );
+        assert!(environment.metadata(&format!("{root}/file")).is_ok());
         std::fs::remove_dir_all(retired).unwrap();
     }
     #[test]
@@ -876,7 +848,7 @@ mod tests {
         );
         assert!(
             environment
-                .read(&format!("{root}/link/private"), 0, 16, None)
+                .metadata(&format!("{root}/link/private"))
                 .is_err()
         );
         environment

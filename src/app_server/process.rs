@@ -1,4 +1,6 @@
 //! Standalone user-scoped composition, independent of the local Session launcher.
+mod local_execution;
+
 use super::host::AppServerHost;
 use super::{
     connection::AppServerConnection,
@@ -47,6 +49,14 @@ pub(crate) struct AppServerArgs {
     /// Separate Product Host-only file-read credential; never the browser token.
     #[arg(long)]
     product_host_token_file: Option<PathBuf>,
+    /// Launch the sibling Execution Client bound to this exact existing
+    /// Session. Requires --local-execution-workspace; bare mode launches none.
+    #[arg(long, requires = "local_execution_workspace")]
+    local_execution_session: Option<String>,
+    /// Independently trusted workspace that must equal the Session's
+    /// reserved workspace exactly. Requires --local-execution-session.
+    #[arg(long, requires = "local_execution_session")]
+    local_execution_workspace: Option<PathBuf>,
 }
 impl AppServerArgs {
     pub(crate) fn into_request(self) -> Request {
@@ -61,6 +71,8 @@ impl AppServerArgs {
             audience: self.audience,
             max_clock_skew_seconds: self.max_clock_skew_seconds,
             product_host_token: self.product_host_token_file,
+            local_execution_session: self.local_execution_session,
+            local_execution_workspace: self.local_execution_workspace,
         }
     }
 }
@@ -78,6 +90,8 @@ pub struct Request {
     audience: Option<String>,
     max_clock_skew_seconds: Option<u64>,
     product_host_token: Option<PathBuf>,
+    local_execution_session: Option<String>,
+    local_execution_workspace: Option<PathBuf>,
 }
 
 // These roots are exposed by SourceSettings in the JSON protocol. This is
@@ -346,6 +360,19 @@ async fn run(options: Request) -> Result<(), String> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .map_err(|error| error.to_string())?;
     let shutdown = CancellationToken::new();
+    // Explicit opt-in only: the paired flags reserve the Session's local
+    // binding and launch the sibling Client before transport readiness.
+    // Bare mode never discovers a default Session or a client binary.
+    let mut local_client = match (
+        &options.local_execution_session,
+        &options.local_execution_workspace,
+    ) {
+        (Some(id), Some(workspace)) => {
+            Some(local_execution::launch(host.manager(), id, workspace).await?)
+        }
+        (None, None) => None,
+        _ => return Err("local execution requires both Session and workspace".into()),
+    };
     let transport_host = host.clone();
     let transport_stop = shutdown.clone();
     let stdio_mode = options.listen == "stdio";
@@ -400,6 +427,29 @@ async fn run(options: Request) -> Result<(), String> {
     reaper_stop.cancel();
     eprintln!("rustx app-server: Draining; new semantic admission closed");
     let graceful = async {
+        // Explicit composition teardown runs first, before any work is
+        // awaited: an early drain error must never strand the child. The
+        // binding was revoked, not closed — an honest Client exits only
+        // when its stream breaks — so an observed exit is accepted
+        // (`try_wait`), an already-gone peer tolerated (ESRCH), and a
+        // live one is SIGKILLed; every child is reaped.
+        if let Some(mut child) = local_client.take() {
+            if child
+                .try_wait()
+                .map_err(|error| format!("local execution: {error}"))?
+                .is_none()
+            {
+                match child.start_kill() {
+                    Ok(()) => {}
+                    Err(error) if error.raw_os_error() == Some(nix::libc::ESRCH) => {}
+                    Err(error) => return Err(format!("local execution: {error}")),
+                }
+            }
+            child
+                .wait()
+                .await
+                .map_err(|error| format!("local execution: {error}"))?;
+        }
         let scheduler_completion = async {
             match scheduler_early_result.take() {
                 Some(result) => result,

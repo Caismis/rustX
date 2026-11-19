@@ -277,6 +277,272 @@ async fn standalone_server_reads_cold_sessions_without_workspace_or_helpers() {
     .await;
 }
 
+fn isolated_server_bin(root: &std::path::Path) -> PathBuf {
+    let bin = root.join("bin-only");
+    std::fs::create_dir(&bin).unwrap();
+    let rustx = bin.join("rustx");
+    std::fs::hard_link(env!("CARGO_BIN_EXE_rustx"), &rustx)
+        .or_else(|_| std::fs::copy(env!("CARGO_BIN_EXE_rustx"), &rustx).map(|_| ()))
+        .unwrap();
+    rustx
+}
+
+fn isolated_server_pair(root: &std::path::Path) -> PathBuf {
+    let bin = root.join("bin-pair");
+    std::fs::create_dir(&bin).unwrap();
+    let stage = |name: &str, source: &std::path::Path| {
+        let destination = bin.join(name);
+        std::fs::hard_link(source, &destination)
+            .or_else(|_| std::fs::copy(source, &destination).map(|_| ()))
+            .unwrap();
+        destination
+    };
+    // The Client is only ever the artifact preparation staged beside this
+    // harness — never a runtime build, a PATH lookup, or a fallback path.
+    let client = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    assert!(
+        client.is_file(),
+        "staged Execution Client is absent: {client:?}"
+    );
+    stage("rustx-execution-client", &client);
+    stage("rustx", std::path::Path::new(env!("CARGO_BIN_EXE_rustx")))
+}
+
+fn local_exec_command(
+    binary: &std::path::Path,
+    f: &Fixture,
+    session: &str,
+    workspace: &std::path::Path,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(f.root.path())
+        .env_clear()
+        .env("HOME", f.root.path().join("home"))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["app-server", "--runtime-root"])
+        .arg(f.root.path().join("runtime"))
+        .args(["--listen", "stdio"])
+        .arg("--local-execution-session")
+        .arg(session)
+        .arg("--local-execution-workspace")
+        .arg(workspace)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    command
+}
+
+#[tokio::test]
+async fn local_execution_rejects_a_workspace_that_is_not_the_reserved_one() {
+    bounded(async {
+        let f = Fixture::new().await;
+        // The sibling Client is absent, so a workspace error proves the
+        // check fires before anything is spawned.
+        let rustx = isolated_server_bin(f.root.path());
+        // The fixture root is a normalized absolute path but is not the
+        // Session's recorded workspace.
+        let child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), f.root.path())
+            .spawn()
+            .unwrap();
+        let output = child.wait_with_output().await.unwrap();
+        assert!(!output.status.success(), "unexpected success");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("not the Session's reserved workspace"),
+            "{stderr}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn local_execution_fails_exactly_when_the_sibling_client_is_absent() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let rustx = isolated_server_bin(f.root.path());
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        let child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+            .spawn()
+            .unwrap();
+        let output = child.wait_with_output().await.unwrap();
+        assert!(!output.status.success(), "unexpected success");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("client executable is absent beside the server"),
+            "{stderr}"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn local_execution_rejects_an_unknown_session() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let rustx = isolated_server_bin(f.root.path());
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        let child = local_exec_command(
+            &rustx,
+            &f,
+            "ses_00000000-0000-7000-8000-000000000001",
+            &workspace,
+        )
+        .spawn()
+        .unwrap();
+        let output = child.wait_with_output().await.unwrap();
+        assert!(!output.status.success(), "unexpected success");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("local execution:"), "{stderr}");
+        assert!(!stderr.contains("client executable is absent"), "{stderr}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn local_execution_arguments_must_be_paired() {
+    bounded(async {
+        let f = Fixture::new().await;
+        let output = Command::new(env!("CARGO_BIN_EXE_rustx"))
+            .current_dir(f.root.path())
+            .env("HOME", f.root.path().join("home"))
+            .args(["app-server", "--runtime-root"])
+            .arg(f.root.path().join("runtime"))
+            .args(["--listen", "stdio"])
+            .arg("--local-execution-session")
+            .arg(f.sessions[0].as_str())
+            .output()
+            .await
+            .unwrap();
+        assert!(!output.status.success(), "unpaired flag must fail");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(stderr.contains("local-execution-workspace"), "{stderr}");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn explicit_composition_launches_and_reaps_the_sibling_client() {
+    bounded(async {
+        use base64::Engine as _;
+        use rustx::app_server::protocol::*;
+        let f = Fixture::new().await;
+        // Both catalog workspaces are configured roots for this composition.
+        let authored = f.root.path().join("home/rustx/rustx.toml");
+        let mut source: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&authored).unwrap()).unwrap();
+        source.as_table_mut().unwrap().insert(
+            "app_server".into(),
+            toml::Value::try_from(serde_json::json!({
+                "environment_roots": [
+                    std::fs::canonicalize(f.root.path().join("a")).unwrap(),
+                    std::fs::canonicalize(f.root.path().join("b")).unwrap(),
+                ]
+            }))
+            .unwrap(),
+        );
+        std::fs::write(&authored, toml::to_string_pretty(&source).unwrap()).unwrap();
+
+        // Same filename in both workspaces: only Session A may be served.
+        let marker = b"only through the admitted client";
+        std::fs::write(f.root.path().join("a/marker"), marker).unwrap();
+        std::fs::write(f.root.path().join("b/marker"), b"decoy").unwrap();
+
+        let rustx = isolated_server_pair(f.root.path());
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        let mut child = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(child.stdout.take().unwrap(), child.stdin.take().unwrap());
+        initialize_client(&client).await;
+        // Readiness proves the Client connected and was admitted before
+        // the transport went up — the launch is real, not deferred.
+
+        let MethodResult::FileChunk { chunk } = result(
+            &client,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readFile through the admitted Client")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap(),
+            marker
+        );
+        assert_eq!(chunk.next_offset, None);
+        // The stamp is the source-descriptor truth of the fixture file.
+        let expected = rustx_confined_fs::FileMetadata::of(
+            &std::fs::File::open(f.root.path().join("a/marker")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(chunk.metadata.revision, expected.revision);
+        assert_eq!(chunk.metadata.identity, expected.identity);
+        assert_eq!(chunk.metadata.size, expected.size);
+
+        // Session B holds no endpoint: its decoy is never served.
+        let Response::Failure(failure) = rpc(
+            &client,
+            10,
+            Method::FsReadFile {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .join("marker")
+                    .display()
+                    .to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("Session B read must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+
+        // An oversized range never leaves the parameter gate.
+        let Response::Failure(failure) = rpc(
+            &client,
+            11,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 65537,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("oversize read must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::InvalidParams));
+
+        client.close().await;
+        terminate(&child);
+        let output = child.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn app_server_websocket_real_process_shared_conformance_and_listener_survives() {
     bounded(Box::pin(async {
