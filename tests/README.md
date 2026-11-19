@@ -449,6 +449,7 @@ summarizes them and the lane check below verifies them against Cargo:
 | `contracts`, `provider` targets | pure contracts / adapter translation | rust-contracts |
 | `durable`, `process`, `subagent`, `tools`, `conformance`, `cfg3_catalog`, `cfg3_managed_output` | boundary conformance | rust-boundaries |
 | `rustx-execution-client:test bootstrap` | execution-boundary integration | rust-fast and rust-boundaries |
+| `rustx-execution-client:test websocket` | execution-boundary WebSocket transport | rust-fast and rust-boundaries |
 | `rustx-execution-client:bins` | execution-boundary unit | rust-fast |
 | `test-support/fake-provider` pytest | emulator's own tests | rust-boundaries |
 

@@ -64,7 +64,8 @@ fn rig_with(required_capabilities: BTreeSet<Capability>) -> Rig {
     let bundle = private_path.join("bootstrap");
     let mut reserved = reservation(&workspace_path);
     reserved.required_capabilities = required_capabilities;
-    let (binding, listener) = Binding::reserve_local(reserved, &socket, &bundle).unwrap();
+    let (binding, listener, _published) =
+        Binding::reserve_local(reserved, &socket, &bundle).unwrap();
     Rig {
         private,
         _workspace: workspace,

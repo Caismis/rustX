@@ -5,6 +5,7 @@ members = [
     "crates/execution-client",
     "crates/execution-protocol",
     "crates/execution-server",
+    "crates/execution-transport",
     "crates/text-edit",
 ]
 # A bare `cargo test`/`cargo build` at the root selects every member, so the
@@ -17,6 +18,7 @@ default-members = [
     "crates/execution-client",
     "crates/execution-protocol",
     "crates/execution-server",
+    "crates/execution-transport",
     "crates/text-edit",
 ]
 resolver = "3"
@@ -157,6 +159,7 @@ zip = { version = "8.6", default-features = false, features = ["deflate"] }
 rustx-confined-fs = { path = "crates/confined-fs" }
 rustx-execution-protocol = { path = "crates/execution-protocol" }
 rustx-execution-server = { path = "crates/execution-server" }
+rustx-execution-transport = { path = "crates/execution-transport" }
 rustx-text-edit = { path = "crates/text-edit" }
 biodivine-lib-bdd = "0.6.3"
 minijinja = { version = "=2.24.0", features = ["fuel", "json", "unstable_machinery"] }

@@ -136,9 +136,21 @@ const REQUIREMENTS: &[Requirement] = &[
         "",
     ),
     Requirement::new(
+        Profile::Fast,
+        Platform::Linux,
+        "rustx-execution-client:test websocket",
+        "",
+    ),
+    Requirement::new(
         Profile::Full,
         Platform::Linux,
         "rustx-execution-client:test bootstrap",
+        "",
+    ),
+    Requirement::new(
+        Profile::Full,
+        Platform::Linux,
+        "rustx-execution-client:test websocket",
         "",
     ),
 ];

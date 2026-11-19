@@ -11,24 +11,31 @@ impl SessionRuntimeManager {
     /// Permanently close native initialization admission before host drain inventories.
     pub(crate) fn begin_draining(&self) -> Vec<Arc<super::Initialization>> {
         self.configuration.resource_io.cancel();
-        let mut registry = self.registry.0.lock().expect("registry mutex");
-        registry.draining = true;
-        self.execution.fence_all();
-        let mut initializations = Vec::new();
-        for entry in registry.entries.values() {
-            match entry {
-                Entry::StorageOnly(_) => {}
-                Entry::Loading(flight) => initializations.push(flight.initialization.clone()),
-                Entry::Unloading {
-                    flight,
-                    _runtime: runtime,
-                } => {
-                    initializations.push(flight.initialization.clone());
-                    initializations.push(runtime.initialization.clone());
+        let initializations = {
+            let mut registry = self.registry.0.lock().expect("registry mutex");
+            registry.draining = true;
+            let mut initializations = Vec::new();
+            for entry in registry.entries.values() {
+                match entry {
+                    Entry::StorageOnly(_) => {}
+                    Entry::Loading(flight) => initializations.push(flight.initialization.clone()),
+                    Entry::Unloading {
+                        flight,
+                        _runtime: runtime,
+                    } => {
+                        initializations.push(flight.initialization.clone());
+                        initializations.push(runtime.initialization.clone());
+                    }
+                    Entry::Loaded(runtime) => {
+                        initializations.push(runtime.initialization.clone());
+                    }
                 }
-                Entry::Loaded(runtime) => initializations.push(runtime.initialization.clone()),
             }
-        }
+            initializations
+        };
+        // Endpoint fencing does bounded network I/O per connection —
+        // it must never run while the registry mutex is held.
+        self.execution.fence_all();
         for initialization in &initializations {
             initialization.request_retirement();
         }

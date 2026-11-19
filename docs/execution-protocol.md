@@ -209,6 +209,14 @@ publishes the trusted-channel bundle:
   bootstrap-write failure; a partially written bootstrap file is removed
   by the file that created it — a preexisting `bootstrap_path` is
   refused, not deleted.
+- Publication retains the proof of what it created: the `create_new`
+  file descriptor, the verified parent-directory descriptor, and the
+  file name. Teardown — failure cleanup and endpoint `Drop` alike —
+  removes the bundle only while `fstatat(AT_SYMLINK_NOFOLLOW)` through
+  that descriptor still proves the same type, device, and inode; a
+  replaced, symlinked, FIFO, or identical-bytes foreign file at the
+  path is preserved untouched, and no pathname is ever reopened, so a
+  FIFO replacement cannot block drain.
 - The published `Bootstrap` carries only the reservation's own facts —
   socket path, protocol version, session, environment, instance,
   generation, workspace, and the credential. It never carries
@@ -289,6 +297,92 @@ publishes the trusted-channel bundle:
   `usable` is dropped, the binding is disconnected, and the socket is
   shut down; it is never reused with a reply accounting that cannot be
   trusted.
+
+### WebSocket transport (implemented)
+
+The shared `rustx-execution-transport` crate carries every record the
+same typed way on both channel kinds: `RecordChannel::{Unix, WebSocket}`
+sends exactly one bounded `EncodedRecord` per WebSocket binary message
+and decodes it through the same `decode_record_body` JSON bound as the
+Unix length-prefixed frame — identical `MAX_RECORD_BYTES`, identical
+serde, identical application semantics. The WebSocket RFC 6455 framing
+and TLS record layer are transport mechanics only; they carry no
+protocol meaning and are not a substitute for the independent
+control/backpressure work still tracked under T11 — RFC ping/pong does
+not discharge it.
+
+Endpoint policy (`ExecutionUrl::validate`, enforced before any connect
+or credential transmission): the path is exactly `/execution/v1`; the
+authority must be a literal numeric IP (`SocketAddr` or bare IP with the
+scheme default port); `ws://` is permitted only for a literal loopback
+IP while any other destination requires `wss://`; userinfo, queries,
+fragments, hostnames (which would need blocking DNS inside the bounded
+budget), and non-ASCII or overlong URLs are all refused. On `wss` the
+rustls handshake — WebPKI roots plus an optional operator-provisioned
+`--tls-ca-file` PEM bundle for a private CA, IP SAN verified — completes
+before the HTTP upgrade, so no credential bytes ever flow before
+certificate and address validation; there is no flag to disable
+verification. The server side of the upgrade refuses a wrong path and
+any browser `Origin` header.
+
+`Binding::reserve_websocket(reservation, listen, bootstrap_path,
+public_url)` reserves the same binding for a TCP listener: the listen
+address must be a numeric loopback `SocketAddr` (port `0` is allowed
+for local tests), and the published `Bootstrap.endpoint` is
+`WebSocket { url }` — the bound `ws://127.0.0.1:PORT/execution/v1`
+address, or the operator's `--execution-public-url`
+`wss://…/execution/v1` ingress endpoint when one is given. Remote TLS is
+terminated by that operator-provisioned ingress, which must forward to
+the loopback listener only; the Server never trusts proxy headers and
+never publishes anything else. The bundle is published by the same
+`create_new` + `0600` private-directory discipline as the Unix path.
+One Session holds exactly one endpoint mode — a `Unix` listener or a
+`WebSocket` listener, chosen at reservation — and a colliding Session
+claim reuses the existing reservation or is refused, never allocates a
+second Client.
+
+`admit_websocket_stream_deadline` runs the identical Hello/admission
+arbitration on an accepted TCP stream: credential first, then protocol
+version and identity, one absolute deadline from upgrade through
+admission, one live connection at most, `Detached`/`Revoked` terminals
+unchanged. The App Server's remote accept loop is bounded
+(at most four concurrent upgrades) and keeps accepting after failed or
+malformed upgrades until first admission or drain — each accepted peer
+carries the absolute deadline armed at accept time, so a flood of
+queued upgrades cannot outlive it, and the loop settles in-flight
+workers under a bounded wait rather than admitting past drain. After
+EOF there is no replacement without the recovery proof of #577.
+Revocation shuts a duplicated raw `TcpStream` — independent of any
+writer lock — which wakes a blocked WebSocket read exactly the way the
+Unix `shutdown` does. Close semantics mirror the Unix contract:
+`receive_optional` returns `Ok(None)` only for a genuine RFC 6455
+Close frame (the analogue of clean TCP EOF between records); a
+reset-without-close or a truncated frame mid-message is a transport
+error, never a silent end — the same distinction
+`read_optional_record` draws for the Unix stream.
+
+Teardown fences before it closes: the binding is marked `Revoked` and
+its duplicated shutdown handle seized in one atomic step under the
+binding lock — new admissions die at the gate immediately — and no
+registry, slot, or residency lock is ever held while network work
+runs. An idle stored connection then earns the orderly close: the
+Close frame is sent and flushed under a bounded teardown budget and
+the transport is shut down, never waiting for the peer's answering
+Close. A busy exchange, an in-flight handshake, or a committed stream
+not yet stored is interrupted by the seized handle's raw shutdown
+instead, so a stuck peer can never stall a fence or a drain;
+revocation and protocol failure close abruptly by the same design.
+
+The operator entry point is `rustx app-server --execution-session
+SESSION --execution-ws-listen 127.0.0.1:PORT --execution-bootstrap-out
+/private/dir/bundle [--execution-public-url wss://…/execution/v1]`,
+which conflicts with the local `--local-execution-*` composition flags
+and never launches a Client: the Session's workspace is resolved only
+from the trusted catalog, the reservation is published, and management
+keeps serving while the accept loop waits. The operator privately
+provisions the bundle (and any `--tls-ca-file`) to an independently
+started `rustx-execution-client --binding-file … --workspace …`; no
+Server environment or credential material is transmitted to it.
 
 ### Workspace confinement and range reads (implemented)
 
@@ -827,9 +921,12 @@ envelope.
 
 ## Explicitly not claimed
 
-- No remote transport exists: only the synchronous length-prefixed
-  record framing and the local Unix-socket bootstrap are implemented.
-  WSS/TLS, health budgets, and recovery windows are pending.
+- The remote transport is a real authenticated WebSocket channel with
+  identical record/Session semantics as the Unix socket, bound to
+  loopback plaintext `ws` or an operator-provisioned `wss` ingress —
+  there is no Server-side TLS listener, no cross-host proxy, and no
+  health/recovery windows (recovery stays #577, independent
+  control/backpressure stays T11).
 - No spawn, MCP session, Python, managed output, or any file
   operation beyond the range read, the two query operations, the
   two-phase conditional write, the conditional edit, the two

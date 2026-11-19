@@ -78,6 +78,36 @@ resolved from PATH or HOME. The child runs with an empty environment,
 binding file and workspace on its command line, and the Server owns and
 reaps it through drain.
 
+**Remote WebSocket composition** — explicit opt-in, operator-provisioned
+Client:
+
+```sh
+rustx app-server \
+  --runtime-root /absolute/path/runtime \
+  --listen stdio \
+  --execution-session ses_01900000-0000-7000-8000-000000000001 \
+  --execution-ws-listen 127.0.0.1:0 \
+  --execution-bootstrap-out /private/dir/bootstrap
+# Optionally add --execution-public-url wss://IP:PORT/execution/v1 when a
+# trusted ingress terminates TLS and forwards to the loopback listener.
+
+# On the Client host, out of band:
+rustx-execution-client --binding-file /private/dir/bootstrap \
+  --workspace /independently/trusted/workspace \
+  [--tls-ca-file /private/dir/ca.pem]
+```
+
+The three `--execution-*` flags conflict with `--local-execution-*` and
+never launch a Client; the workspace is resolved only from the Session's
+trusted catalog. `--execution-ws-listen` must be a numeric loopback
+address; plaintext `ws` is bound there while `--execution-public-url`
+publishes an operator `wss` endpoint to the `0600` `create_new` bundle.
+The Client validates the endpoint before connecting — literal numeric IP,
+path exactly `/execution/v1`, `ws` only for loopback — and `wss`
+certificate/IP-SAN verification completes before any credential flows;
+`--tls-ca-file` adds a private CA, never disables verification.
+
+
 **TUI** — existing TUI composition root and `AppServerHost.spawnLocal`:
 
 ```sh

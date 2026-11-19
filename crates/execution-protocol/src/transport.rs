@@ -112,6 +112,29 @@ impl EncodedRecord {
         writer.write_all(&length.to_be_bytes())?;
         writer.write_all(&self.0)
     }
+
+    /// The bounded JSON body itself — the payload of exactly one WebSocket
+    /// binary message, or the body of one length-prefixed Unix frame.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Decodes one record body produced by [`encode_record`] — the shared
+/// bounded-deserialize path for transports that deliver already-framed
+/// bodies (the WebSocket binary message). The byte limit matches the Unix
+/// framing exactly; parse failures never expose payload bytes.
+///
+/// # Errors
+///
+/// Returns `InvalidData` for an empty or over-limit body, or a payload
+/// that is not the expected record type.
+pub fn decode_record_body<T: DeserializeOwned>(body: &[u8]) -> io::Result<T> {
+    if body.is_empty() || body.len() > MAX_RECORD_BYTES {
+        return Err(invalid("invalid record length"));
+    }
+    serde_json::from_slice(body).map_err(|_| invalid("invalid record payload"))
 }
 
 /// Serializes `record` into a bounded buffer that fails at

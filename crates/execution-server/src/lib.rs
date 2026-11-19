@@ -8,25 +8,29 @@
 
 use std::collections::BTreeSet;
 use std::io;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::net::TcpListener;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use base64::Engine as _;
 use constant_time_eq::constant_time_eq_32;
+#[cfg(test)]
+use rustx_execution_protocol::transport::read_record;
 use rustx_execution_protocol::{
-    Admission, BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply,
-    ClientRequest, ConnectionId, DecimalU64, EditRefusal, EntryStamp, EnvironmentId, FileStamp,
-    Generation, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
-    MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES, MAX_EDIT_FILE_BYTES,
-    MAX_EDIT_REPLACEMENTS, MAX_EDIT_REQUEST_BYTES, MAX_RAW_CHUNK_BYTES, MAX_SEARCH_CONTEXT_LINES,
-    MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, MAX_WRITE_BYTES, PROTOCOL_VERSION,
-    PageEntry, ReadError, Reject, SearchSpec, SessionId, TextReplacement, WriteExpectation,
-    is_normalized_absolute_path,
-    transport::{DeadlineStream, PAGE_REQUEST_TIMEOUT, encode_record, read_record, write_record},
+    Admission, BindingCredential, Bootstrap, BootstrapEndpoint, Capability, ClientInstanceId,
+    ClientReply, ClientRequest, ConnectionId, DecimalU64, EditRefusal, EntryStamp, EnvironmentId,
+    FileStamp, Generation, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES,
+    MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES,
+    MAX_EDIT_FILE_BYTES, MAX_EDIT_REPLACEMENTS, MAX_EDIT_REQUEST_BYTES, MAX_RAW_CHUNK_BYTES,
+    MAX_SEARCH_CONTEXT_LINES, MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES,
+    MAX_WRITE_BYTES, PROTOCOL_VERSION, PageEntry, ReadError, Reject, SearchSpec, SessionId,
+    TextReplacement, WriteExpectation, is_normalized_absolute_path,
+    transport::{PAGE_REQUEST_TIMEOUT, encode_record, write_record},
 };
+use rustx_execution_transport::{ChannelShutdown, RecordChannel};
 use sha2::{Digest, Sha256};
 
 /// The deadline for a Client to present its Hello on an accepted local
@@ -121,11 +125,13 @@ impl ConnectionOwner {
 struct Inner {
     phase: BindingPhase,
     connection: Option<ConnectionId>,
-    /// A shutdown-capable duplicate of the live connection's stream. It is
-    /// never written or read — it exists so [`Binding::revoke`] can close
-    /// the physical stream and wake a peer that no dispatch thread
-    /// currently holds, without waiting on the data lock.
-    stream: Option<UnixStream>,
+    /// A shutdown-capable duplicate of the live connection's transport —
+    /// the Unix socket for a local binding or the raw TCP socket behind a
+    /// WebSocket. It is never written or read: it exists so
+    /// [`Binding::revoke`] can close the physical stream and wake a peer
+    /// that no dispatch thread currently holds, without waiting on the
+    /// data lock.
+    stream: Option<ChannelShutdown>,
 }
 
 impl Binding {
@@ -195,15 +201,15 @@ impl Binding {
     /// [`connect`](Self::connect) behind an optional deadline rechecked
     /// inside the binding mutex, immediately before commit: an expired
     /// handshake can never become `Live` and consumes nothing — the
-    /// binding stays `Reserved`. `stream`, when given, is a shutdown-only
-    /// duplicate of the admitted connection stored in the live slot as the
-    /// revoke handle.
+    /// binding stays `Reserved`. `stream`, when given, is the shutdown-only
+    /// duplicate of the admitted transport stored in the live slot as the
+    /// revoke handle — identical for Unix and WebSocket channels.
     fn connect_gated(
         &self,
         hello: &Hello,
         connection: ConnectionId,
         deadline: Option<Instant>,
-        stream: Option<UnixStream>,
+        stream: Option<ChannelShutdown>,
     ) -> io::Result<Result<Admission, Reject>> {
         let mut inner = self.inner();
         let offered: [u8; 32] = Sha256::digest(hello.credential.as_bytes()).into();
@@ -275,21 +281,34 @@ impl Binding {
         self.inner.disconnect(connection);
     }
 
-    /// Revokes the binding immediately and terminally.
+    /// Fences the binding atomically: marks it `Revoked`, clears the
+    /// live connection record, and seizes the duplicated shutdown
+    /// handle under the one inner lock. The state change and the handle
+    /// transfer linearize with `connect_gated`'s commit, so a handshake
+    /// either stored its handle before the fence — the fence then owns
+    /// it — or meets `Revoked` at the gate and is refused. The caller,
+    /// never the lock, decides when to invoke the handle: `fence`
+    /// itself performs no I/O.
     ///
     /// A revoked binding rejects every future Hello and is never
-    /// dispatchable again, whatever its previous phase. The duplicated
-    /// live stream, when one is held, is shut down in the same critical
-    /// section: a peer that is not currently locked for an exchange —
-    /// including one holding an unpublished staged write — observes EOF,
-    /// drops its per-connection write state, and cleans up its private
-    /// stage. The shutdown never waits on the connection's data lock.
-    pub fn revoke(&self) {
+    /// dispatchable again, whatever its previous phase.
+    #[must_use]
+    pub fn fence(&self) -> Option<ChannelShutdown> {
         let mut inner = self.inner();
         inner.phase = BindingPhase::Revoked;
         inner.connection = None;
-        if let Some(stream) = inner.stream.take() {
-            let _ = stream.shutdown(std::net::Shutdown::Both);
+        inner.stream.take()
+    }
+
+    /// Revokes the binding immediately and terminally: [`Self::fence`]
+    /// then the seized handle's hard shutdown. A peer that is not
+    /// currently locked for an exchange — including one holding an
+    /// unpublished staged write — observes EOF, drops its
+    /// per-connection write state, and cleans up its private stage. The
+    /// shutdown never waits on the connection's data lock.
+    pub fn revoke(&self) {
+        if let Some(handle) = self.fence() {
+            handle.shutdown();
         }
     }
 
@@ -334,16 +353,104 @@ impl Binding {
         reservation: Reservation,
         socket_path: &Path,
         bootstrap_path: &Path,
-    ) -> io::Result<(Self, UnixListener)> {
-        require_private_child(socket_path)?;
-        require_private_child(bootstrap_path)?;
+    ) -> io::Result<(Self, UnixListener, PublishedBundle)> {
+        let socket_slot = require_private_child(socket_path)?;
+        let bootstrap_slot = require_private_child(bootstrap_path)?;
         let (binding, credential) = Self::reserve(reservation)?;
         let listener = UnixListener::bind(socket_path)?;
-        if let Err(error) = publish_bootstrap(socket_path, bootstrap_path, &binding, credential) {
-            let _ = std::fs::remove_file(socket_path);
-            return Err(error);
+        let socket_stat = socket_slot.stat_child();
+        match publish_bootstrap(
+            BootstrapEndpoint::Unix {
+                socket_path: socket_path.to_path_buf(),
+            },
+            &bootstrap_slot,
+            &binding,
+            credential,
+        ) {
+            Err(error) => {
+                // The bound socket is removed only while it is still the
+                // socket this call created — dev/inode proof through the
+                // retained directory descriptor, never a blind unlink.
+                if let Ok(proof) = socket_stat {
+                    socket_slot.remove_if(&proof);
+                }
+                Err(error)
+            }
+            Ok(bundle) => Ok((binding, listener, bundle)),
         }
-        Ok((binding, listener))
+    }
+
+    /// Reserves a binding and binds a WebSocket execution listener on an
+    /// explicit numeric loopback address — the endpoint the remote
+    /// composition publishes instead of a Unix socket.
+    ///
+    /// The actual listener is always cleartext loopback `ws://`: a public
+    /// `wss://` endpoint is reachable only through operator-provisioned
+    /// TLS ingress that terminates TLS and forwards to this loopback
+    /// listener (proxy headers are never trusted — the binding still
+    /// authenticates the Client Hello). `public_url`, when given, is the
+    /// validated `wss://…/execution/v1` URL the bootstrap publishes;
+    /// otherwise the bootstrap publishes this listener's `ws://` address
+    /// directly.
+    ///
+    /// Like [`Self::reserve_local`], the binding, listener, and bootstrap
+    /// file are created atomically: failure removes anything this call
+    /// created and leaves the binding unreserved. `listen` must be a
+    /// literal loopback address — port `0` selects an ephemeral port for
+    /// tests. `bootstrap_path` must be a new direct child of an
+    /// owner-only (`0700`) directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::InvalidInput`] for a non-loopback address,
+    /// an invalid `public_url`, or an untrusted bootstrap path;
+    /// [`io::ErrorKind::AlreadyExists`] when the bootstrap path already
+    /// exists; and the underlying OS error for bind/write failures.
+    pub fn reserve_websocket(
+        reservation: Reservation,
+        listen: std::net::SocketAddr,
+        bootstrap_path: &Path,
+        public_url: Option<&str>,
+    ) -> io::Result<(Self, TcpListener, PublishedBundle)> {
+        // The listener is a loopback-only plaintext endpoint: a remote
+        // `wss://` reachability story terminates TLS at operator ingress,
+        // never inside this process. Refusing non-loopback binds here
+        // keeps an accidental `0.0.0.0` from exposing the upgrade.
+        if !listen.ip().is_loopback() {
+            return Err(invalid_input(
+                "WebSocket execution listener must bind a loopback address",
+            ));
+        }
+        let bootstrap_slot = require_private_child(bootstrap_path)?;
+        let url = match public_url {
+            Some(url) => {
+                // The public endpoint must be a validated wss URL on the
+                // exact protocol path — the same shape a Client demands.
+                let validated = rustx_execution_transport::ExecutionUrl::validate(url)
+                    .map_err(|reason| invalid_input_static(&reason))?;
+                if !validated.is_secure() {
+                    return Err(invalid_input(
+                        "public execution endpoint must be a wss:// URL",
+                    ));
+                }
+                url.to_owned()
+            }
+            None => String::new(),
+        };
+        let (binding, credential) = Self::reserve(reservation)?;
+        let listener = TcpListener::bind(listen)?;
+        let url = if url.is_empty() {
+            format!("ws://{}/execution/v1", listener.local_addr()?)
+        } else {
+            url
+        };
+        let bundle = publish_bootstrap(
+            BootstrapEndpoint::WebSocket { url },
+            &bootstrap_slot,
+            &binding,
+            credential,
+        )?;
+        Ok((binding, listener, bundle))
     }
 
     /// Performs the handshake on one accepted local stream.
@@ -385,16 +492,31 @@ impl Binding {
     /// error: it returns `Ok(Err(Reject))`.
     pub fn accept_local_deadline(
         &self,
-        mut stream: UnixStream,
+        stream: UnixStream,
+        deadline: Instant,
+    ) -> io::Result<Result<LocalConnection, Reject>> {
+        self.accept_channel_deadline(RecordChannel::unix(stream), deadline)
+    }
+
+    /// Performs the handshake on one already-upgraded record channel —
+    /// the transport-agnostic form of [`Self::accept_local_deadline`],
+    /// identical in budget, arbitration, and delivery semantics for Unix
+    /// and WebSocket transports alike.
+    ///
+    /// # Errors
+    ///
+    /// Returns the transport or socket error when the record cannot be
+    /// read or written. An authenticated-but-refused Hello is not an I/O
+    /// error: it returns `Ok(Err(Reject))`.
+    pub fn accept_channel_deadline(
+        &self,
+        mut channel: RecordChannel,
         deadline: Instant,
     ) -> io::Result<Result<LocalConnection, Reject>> {
         // The revoke shutdown handle is duplicated before the handshake
-        // wrapper takes the stream's only borrow.
-        let revoke_handle = stream.try_clone()?;
-        // The handshake wrapper itself normalizes the stream to
-        // nonblocking mode, whatever flag an accept inherited.
-        let mut handshake = DeadlineStream::new(&mut stream, deadline)?;
-        let hello: Hello = read_record(&mut handshake)?;
+        // takes the channel's only borrow.
+        let revoke_handle = channel.shutdown_handle()?;
+        let hello: Hello = channel.receive(Some(deadline))?;
         let capabilities = hello.capabilities.clone();
         let connection = fresh_connection_id()?;
         match self.connect_gated(
@@ -404,40 +526,42 @@ impl Binding {
             Some(revoke_handle),
         )? {
             Ok(admission) => {
-                self.deliver(&mut handshake, &connection, &admission)?;
+                self.deliver(&mut channel, deadline, &connection, &admission)?;
                 Ok(Ok(LocalConnection {
                     owner: self.inner.clone(),
-                    stream,
+                    channel,
                     usable: true,
+                    closed: false,
                     capabilities,
                     connection,
                     admission,
                 }))
             }
             Err(reject) => {
-                write_record(&mut handshake, &HelloReply::Err(reject))?;
-                handshake.finish()?;
+                let encoded = encode_record(&HelloReply::Err(reject))?;
+                channel.send(&encoded, Some(deadline))?;
                 Ok(Err(reject))
             }
         }
     }
 
     /// Writes the admission and completes the handshake deadline. On any
-    /// failure after the commit — an expired deadline, a transport error,
-    /// or blocking mode that cannot be restored — the committed connection
-    /// is disconnected again and the stream shut down: a binding never
-    /// stays live on a connection the peer does not know it owns.
+    /// failure after the commit — an expired deadline or a transport
+    /// error — the committed connection is disconnected again and the
+    /// channel shut down: a binding never stays live on a connection the
+    /// peer does not know it owns.
     fn deliver(
         &self,
-        stream: &mut DeadlineStream<'_>,
+        channel: &mut RecordChannel,
+        deadline: Instant,
         connection: &ConnectionId,
         admission: &Admission,
     ) -> io::Result<()> {
-        let delivered =
-            write_record(stream, &HelloReply::Ok(admission.clone())).and_then(|()| stream.finish());
+        let delivered = encode_record(&HelloReply::Ok(admission.clone()))
+            .and_then(|encoded| channel.send(&encoded, Some(deadline)));
         if let Err(error) = delivered {
             self.disconnect(connection);
-            let _ = stream.get_mut().shutdown(std::net::Shutdown::Both);
+            channel.shutdown();
             return Err(error);
         }
         Ok(())
@@ -457,8 +581,11 @@ impl Binding {
 /// reply could still be outstanding, and later calls fail closed.
 pub struct LocalConnection {
     owner: Arc<ConnectionOwner>,
-    stream: UnixStream,
+    channel: RecordChannel,
     usable: bool,
+    /// Whether the orderly transport close was already sent: `close`
+    /// and `Drop` never send it twice.
+    closed: bool,
     capabilities: BTreeSet<Capability>,
     connection: ConnectionId,
     admission: Admission,
@@ -596,6 +723,26 @@ impl LocalConnection {
         }
     }
 
+    /// Orderly teardown: the transport's graceful close — a real
+    /// RFC 6455 Close frame sent and flushed under the teardown budget,
+    /// or the Unix stream's `shutdown(2)` — then the binding's live
+    /// record disconnects and the channel is shut down. There is no
+    /// wait for the peer's answering Close. Unlike `retire` the
+    /// connection is not marked failed: a later dispatch still meets
+    /// the binding's typed `PermissionDenied` denial, never a bare
+    /// retired-connection error. Idempotent: an already orderly-closed
+    /// connection only disconnects and shuts down.
+    pub fn close(&mut self) {
+        if self.usable && !self.closed {
+            self.closed = true;
+            let _ = self
+                .channel
+                .close_graceful(Some(Instant::now() + ORDERLY_CLOSE_BUDGET));
+        }
+        self.owner.disconnect(&self.connection);
+        self.channel.shutdown();
+    }
+
     /// Marks the stream unusable, disconnects the binding, and shuts the
     /// socket down: after a protocol violation, truncation, or unexpected
     /// reply the peer's response accounting is unknowable, so the
@@ -603,7 +750,7 @@ impl LocalConnection {
     fn retire(&mut self, error: io::Error) -> io::Error {
         self.usable = false;
         self.owner.disconnect(&self.connection);
-        let _ = self.stream.shutdown(std::net::Shutdown::Both);
+        self.channel.shutdown();
         error
     }
 
@@ -633,8 +780,8 @@ impl LocalConnection {
     /// cancelled caller — returns its error before a single request byte
     /// is written and never retires the connection. `sent` runs once the
     /// whole request frame is on the wire, before the reply is read.
-    /// With `deadline`, the write and the read share one
-    /// [`DeadlineStream`] armed to it; a timeout, partial reply, or any
+    /// With `deadline`, the write and the read share one channel armed to
+    /// the same absolute `Instant`; a timeout, partial reply, or any
     /// transport failure after admission retires the connection — the
     /// reply accounting is then unknowable, so there are no retries.
     fn exchange_admitted(
@@ -647,21 +794,11 @@ impl LocalConnection {
         let encoded = encode_record(request)?;
         self.gate()?;
         admit()?;
-        let result = match deadline {
-            Some(deadline) => (|| -> io::Result<ClientReply> {
-                let mut stream = DeadlineStream::new(&mut self.stream, deadline)?;
-                encoded.write_to(&mut stream)?;
-                sent();
-                let reply = read_record(&mut stream)?;
-                stream.finish()?;
-                Ok(reply)
-            })(),
-            None => (|| -> io::Result<ClientReply> {
-                encoded.write_to(&mut self.stream)?;
-                sent();
-                read_record(&mut self.stream)
-            })(),
-        };
+        let result = self
+            .channel
+            .send(&encoded, deadline)
+            .map(|()| sent())
+            .and_then(|()| self.channel.receive(deadline));
         match result {
             Ok(reply) => Ok(reply),
             Err(error) => Err(self.retire(error)),
@@ -2167,18 +2304,10 @@ impl LocalConnection {
         admit()?;
         let outcome_unknown =
             |connection: &mut Self| connection.retire(io::Error::other(WriteOutcomeUnknown));
-        let result = match deadline {
-            Some(deadline) => (|| -> io::Result<ClientReply> {
-                let mut stream = DeadlineStream::new(&mut self.stream, deadline)?;
-                encoded.write_to(&mut stream)?;
-                let reply = read_record(&mut stream)?;
-                stream.finish()?;
-                Ok(reply)
-            })(),
-            None => encoded
-                .write_to(&mut self.stream)
-                .and_then(|()| read_record(&mut self.stream)),
-        };
+        let result = self
+            .channel
+            .send(&encoded, deadline)
+            .and_then(|()| self.channel.receive(deadline));
         let Ok(reply) = result else {
             return Err(outcome_unknown(self));
         };
@@ -2479,9 +2608,20 @@ fn read_error(kind: ReadError) -> io::Error {
     io::Error::new(error_kind, PhysicalError(kind))
 }
 
+/// The small absolute budget a still-healthy connection gets to send its
+/// WebSocket Close frame at orderly teardown — long enough for loopback,
+/// short enough that a dead peer cannot stall `Drop`.
+const ORDERLY_CLOSE_BUDGET: Duration = Duration::from_secs(1);
+
 impl Drop for LocalConnection {
+    /// Orderly teardown sends the transport's graceful close first — a
+    /// WebSocket peer reads a real RFC 6455 Close frame, not a bare TCP
+    /// reset — then detaches the binding. Failure paths (`retire`,
+    /// `disconnect`, `revoke`) already shut the channel down abruptly
+    /// and never take this path: a forced close must not masquerade as a
+    /// clean finish.
     fn drop(&mut self) {
-        self.owner.disconnect(&self.connection);
+        self.close();
     }
 }
 
@@ -2498,21 +2638,47 @@ fn fresh_connection_id() -> io::Result<ConnectionId> {
     Ok(ConnectionId::new(id))
 }
 
+/// The retained proof of one published bootstrap bundle: the open file
+/// descriptor from `create_new`, the private parent directory descriptor,
+/// and the file name. Teardown compares `fstatat(AT_SYMLINK_NOFOLLOW)`
+/// against this proof and unlinks only when device and inode still match
+/// — a replaced, symlinked, FIFO, or identical-bytes foreign file is
+/// preserved, and no pathname is ever reopened.
+pub struct PublishedBundle {
+    file: std::fs::File,
+    parent: PrivateParent,
+}
+
+impl PublishedBundle {
+    /// Removes the bundle only while it is still provably this process's
+    /// file. An `Err` from `stat_child` — already unlinked, or the parent
+    /// renamed away — just preserves whatever is there.
+    pub fn remove(&self) {
+        let Ok(proof) = nix::sys::stat::fstat(&self.file) else {
+            return;
+        };
+        self.parent.remove_if(&proof);
+    }
+}
+
 /// Writes the bootstrap bundle as exactly one framed record into a
-/// freshly created owner-only file.
+/// freshly created owner-only file inside `parent` — `O_CREAT|O_EXCL`
+/// through the verified directory descriptor, so the pathname is never
+/// re-resolved.
 ///
 /// If `create_new` refuses an existing path, nothing is touched. Once the
-/// file exists and is ours, any later failure removes it — failed
-/// publication never leaves a partial bootstrap behind.
+/// file exists and is ours, any later failure removes it by the same
+/// dev/inode proof teardown uses — failed publication never leaves a
+/// partial bootstrap behind and never deletes a foreign replacement.
 fn publish_bootstrap(
-    socket_path: &Path,
-    bootstrap_path: &Path,
+    endpoint: BootstrapEndpoint,
+    parent: &PrivateParent,
     binding: &Binding,
     credential: BindingCredential,
-) -> io::Result<()> {
+) -> io::Result<PublishedBundle> {
     let reservation = &binding.reservation;
     let bootstrap = Bootstrap {
-        socket_path: socket_path.to_path_buf(),
+        endpoint,
         version: PROTOCOL_VERSION,
         session: reservation.session.clone(),
         environment: reservation.environment.clone(),
@@ -2521,11 +2687,25 @@ fn publish_bootstrap(
         workspace: reservation.workspace.clone(),
         credential,
     };
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(bootstrap_path)?;
+    // The parent descriptor the returned proof will own is duplicated
+    // before the file exists: a dup failure here fails cleanly, while a
+    // late one could strand a published credential.
+    let publication = PrivateParent {
+        dir: parent.dir.try_clone()?,
+        name: parent.name.clone(),
+    };
+    let fd = nix::fcntl::openat(
+        &parent.dir,
+        parent.name.as_os_str(),
+        nix::fcntl::OFlag::O_WRONLY
+            | nix::fcntl::OFlag::O_CREAT
+            | nix::fcntl::OFlag::O_EXCL
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_CLOEXEC,
+        nix::sys::stat::Mode::from_bits_truncate(0o600),
+    )
+    .map_err(io::Error::from)?;
+    let mut file = std::fs::File::from(fd);
     let result = (|| {
         // Enforce the mode explicitly so the process umask cannot weaken
         // or strengthen it.
@@ -2533,23 +2713,91 @@ fn publish_bootstrap(
         write_record(&mut file, &bootstrap)?;
         file.sync_all()
     })();
-    if result.is_err() {
-        drop(file);
-        let _ = std::fs::remove_file(bootstrap_path);
+    if let Err(error) = result {
+        if let Ok(proof) = nix::sys::stat::fstat(&file) {
+            publication.remove_if(&proof);
+        }
+        return Err(error);
     }
-    result
+    Ok(PublishedBundle {
+        file,
+        parent: publication,
+    })
+}
+
+/// The verified private parent of a publication target: the directory's
+/// own descriptor and the child's file name. `create_new` publication and
+/// identity-proved teardown both run through this descriptor, so the
+/// pathname is never reopened and a swapped or renamed ancestor cannot
+/// redirect an unlink to a foreign file.
+struct PrivateParent {
+    dir: std::fs::File,
+    name: std::ffi::OsString,
+}
+
+impl PrivateParent {
+    /// `fstatat(AT_SYMLINK_NOFOLLOW)` on the child through the retained
+    /// directory descriptor — never a pathname lookup, never an `open`,
+    /// so a FIFO replacement cannot block teardown and a symlink is seen
+    /// as a symlink.
+    fn stat_child(&self) -> io::Result<nix::sys::stat::FileStat> {
+        nix::sys::stat::fstatat(
+            &self.dir,
+            self.name.as_os_str(),
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .map_err(io::Error::from)
+    }
+
+    /// Unlinks the child only while `fstatat` still proves it is the file
+    /// `proof` describes — same type, device, and inode. A replaced,
+    /// symlinked, or foreign file is preserved untouched.
+    fn remove_if(&self, proof: &nix::sys::stat::FileStat) {
+        let Ok(current) = self.stat_child() else {
+            return;
+        };
+        if file_is_regular(current.st_mode)
+            && current.st_dev == proof.st_dev
+            && current.st_ino == proof.st_ino
+        {
+            let _ = nix::unistd::unlinkat(
+                &self.dir,
+                self.name.as_os_str(),
+                nix::unistd::UnlinkatFlags::NoRemoveDir,
+            );
+        }
+    }
+}
+
+fn file_is_regular(mode: nix::sys::stat::mode_t) -> bool {
+    nix::sys::stat::SFlag::from_bits_truncate(mode).contains(nix::sys::stat::SFlag::S_IFREG)
 }
 
 /// Requires `path` to be a normalized absolute direct child of an
-/// existing owner-only (`0700`) directory owned by this process's euid.
-fn require_private_child(path: &Path) -> io::Result<()> {
+/// existing owner-only (`0700`) directory owned by this process's euid,
+/// reached through a chain containing no symlinks: the parent is opened
+/// by a real no-follow walk — `openat(O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC)`
+/// per component from `/` — so the returned descriptor is provably the
+/// verified directory; a later ancestor rename or symlink swap cannot
+/// redirect a lookup done through it.
+fn require_private_child(path: &Path) -> io::Result<PrivateParent> {
     if !is_normalized_absolute_path(path) {
         return Err(invalid_input("path must be a normalized absolute path"));
     }
     let Some(parent) = path.parent() else {
         return Err(invalid_input("path has no parent directory"));
     };
-    let metadata = std::fs::symlink_metadata(parent)
+    let Some(name) = path.file_name() else {
+        return Err(invalid_input("path has no file name"));
+    };
+    // The parent is pinned by a real no-follow walk: every ancestor is
+    // `openat`'d `O_DIRECTORY|O_NOFOLLOW` from `/`, so the descriptor is
+    // provably the verified directory itself — a later ancestor rename
+    // or symlink swap cannot redirect a lookup done through it.
+    let dir = rustx_execution_transport::open_dir_nofollow(parent)
+        .map_err(|_| invalid_input("parent directory is missing or unreadable"))?;
+    let metadata = dir
+        .metadata()
         .map_err(|_| invalid_input("parent directory is missing or unreadable"))?;
     if !metadata.file_type().is_dir()
         || metadata.uid() != euid()
@@ -2559,7 +2807,10 @@ fn require_private_child(path: &Path) -> io::Result<()> {
             "parent must be an owner-only private directory",
         ));
     }
-    Ok(())
+    Ok(PrivateParent {
+        dir,
+        name: name.to_owned(),
+    })
 }
 
 fn euid() -> u32 {
@@ -2568,6 +2819,10 @@ fn euid() -> u32 {
 
 fn invalid_input(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+fn invalid_input_static(message: &str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message.to_owned())
 }
 
 #[cfg(test)]
@@ -2901,6 +3156,110 @@ mod tests {
         assert_eq!(std::fs::read(&bundle).unwrap(), b"occupied");
     }
 
+    /// Reserves a real binding inside a private `0700` directory and
+    /// returns its retained published-bundle proof for tamper tests.
+    fn reserved_bundle(
+        workspace: &Path,
+    ) -> (tempfile::TempDir, std::path::PathBuf, PublishedBundle) {
+        use std::os::unix::fs::PermissionsExt;
+        let private = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(private.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        let socket = private.path().join("s");
+        let bundle = private.path().join("b");
+        let (_binding, _listener, published) =
+            Binding::reserve_local(reservation_in(workspace), &socket, &bundle).unwrap();
+        (private, bundle, published)
+    }
+
+    #[test]
+    fn published_bundle_remove_preserves_foreign_replacements() {
+        use std::os::unix::fs::FileTypeExt;
+
+        let workspace = tempfile::tempdir().unwrap();
+        let (private, bundle, published) = reserved_bundle(workspace.path());
+        let original = std::fs::read(&bundle).unwrap();
+        assert!(
+            std::fs::symlink_metadata(&bundle)
+                .unwrap()
+                .file_type()
+                .is_file()
+        );
+
+        // Identical bytes on a different inode: the foreign file is
+        // never ours, so it is preserved byte-for-byte.
+        std::fs::remove_file(&bundle).unwrap();
+        std::fs::write(&bundle, &original).unwrap();
+        published.remove();
+        assert_eq!(std::fs::read(&bundle).unwrap(), original);
+
+        // A FIFO replacement is never opened — removal is prompt and
+        // the FIFO survives untouched.
+        std::fs::remove_file(&bundle).unwrap();
+        nix::unistd::mkfifo(
+            &bundle,
+            nix::sys::stat::Mode::S_IRUSR | nix::sys::stat::Mode::S_IWUSR,
+        )
+        .unwrap();
+        published.remove();
+        assert!(
+            std::fs::symlink_metadata(&bundle)
+                .unwrap()
+                .file_type()
+                .is_fifo()
+        );
+
+        // A symlink replacement — even one pointing at a real user file
+        // inside the same directory — preserves both link and target.
+        std::fs::remove_file(&bundle).unwrap();
+        let target = private.path().join("target");
+        std::fs::write(&target, b"user data").unwrap();
+        std::os::unix::fs::symlink(&target, &bundle).unwrap();
+        published.remove();
+        assert!(
+            std::fs::symlink_metadata(&bundle)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&target).unwrap(), b"user data");
+        std::fs::remove_file(&bundle).unwrap();
+        std::fs::remove_file(&target).unwrap();
+
+        // And while our own file still occupies the path, removal does
+        // unlink exactly it.
+        std::fs::write(&bundle, &original).unwrap();
+        let (private2, bundle2, published2) = reserved_bundle(workspace.path());
+        let _ = private;
+        published2.remove();
+        assert!(!bundle2.exists());
+        assert!(private2.path().join("s").exists());
+    }
+
+    #[test]
+    fn published_bundle_remove_survives_ancestor_rename() {
+        let workspace = tempfile::tempdir().unwrap();
+        let (private, bundle, published) = reserved_bundle(workspace.path());
+
+        // Renaming the parent away moves the real directory — and the
+        // retained descriptor still tracks it, so our file inside is
+        // removed while a foreign replacement at the original path is
+        // never even seen.
+        let destination = tempfile::tempdir().unwrap();
+        let moved = destination.path().join("moved");
+        std::fs::rename(private.path(), &moved).unwrap();
+        std::fs::create_dir(private.path()).unwrap();
+        std::fs::write(private.path().join("b"), b"foreign").unwrap();
+
+        published.remove();
+        assert!(!moved.join("b").exists(), "our file was removed");
+        assert_eq!(
+            std::fs::read(private.path().join("b")).unwrap(),
+            b"foreign",
+            "the foreign replacement is preserved"
+        );
+        let _ = bundle;
+    }
+
     #[test]
     fn extra_advertised_capabilities_do_not_relax_requirements() {
         let (binding, credential) = Binding::reserve(reservation()).unwrap();
@@ -2920,6 +3279,103 @@ mod tests {
         let mut hello = valid_hello(&credential);
         hello.capabilities = capabilities;
         (binding, hello)
+    }
+
+    /// One real loopback WebSocket channel admitted through
+    /// `accept_channel_deadline` — the genuine RFC 6455 upgrade on the
+    /// client side, never a UDS stand-in. Returns the live connection
+    /// and the peer channel for driving typed replies.
+    fn ws_connection(
+        binding: &Binding,
+        hello: &Hello,
+    ) -> (LocalConnection, rustx_execution_transport::RecordChannel) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        thread::scope(|scope| {
+            let server = scope.spawn(|| {
+                let (stream, _) = listener.accept().unwrap();
+                let channel = rustx_execution_transport::accept(stream, deadline).unwrap();
+                binding
+                    .accept_channel_deadline(channel, deadline)
+                    .unwrap()
+                    .unwrap()
+            });
+            let endpoint = rustx_execution_transport::ExecutionUrl::validate(&format!(
+                "ws://{address}/execution/v1"
+            ))
+            .unwrap();
+            let mut client = rustx_execution_transport::connect(&endpoint, deadline, None).unwrap();
+            client
+                .send(&encode_record(hello).unwrap(), Some(deadline))
+                .unwrap();
+            let reply: HelloReply = client.receive(Some(deadline)).unwrap();
+            assert!(matches!(reply, HelloReply::Ok(_)));
+            (server.join().unwrap(), client)
+        })
+    }
+
+    #[test]
+    fn a_failed_local_preencode_never_retires_a_websocket_connection() {
+        let (binding, hello) = reserved(required());
+        let (mut connection, mut client) = ws_connection(&binding, &hello);
+        // A request that cannot be encoded fails locally before the gate
+        // and before a single byte reaches the wire — the channel is
+        // never retired for it.
+        let oversized = ClientRequest::WriteChunk {
+            ticket: DecimalU64::new(1),
+            offset: DecimalU64::new(0),
+            data_base64: "a".repeat(MAX_RECORD_BYTES + 1),
+        };
+        assert!(connection.exchange(&oversized).is_err());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let pong = thread::spawn(move || {
+            let request: ClientRequest = client.receive(Some(deadline)).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            client
+                .send(&encode_record(&ClientReply::Pong).unwrap(), Some(deadline))
+                .unwrap();
+        });
+        connection.ping().unwrap();
+        pong.join().unwrap();
+    }
+
+    #[test]
+    fn websocket_exchange_carries_identical_typed_records() {
+        let (binding, hello) = reserved(required());
+        let (mut connection, mut client) = ws_connection(&binding, &hello);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = client.receive(Some(deadline)).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            client
+                .send(&encode_record(&ClientReply::Pong).unwrap(), Some(deadline))
+                .unwrap();
+        });
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn websocket_revocation_wakes_a_blocked_exchange() {
+        let (binding, hello) = reserved(required());
+        let (mut connection, _client) = ws_connection(&binding, &hello);
+        // The peer never replies: the exchange blocks until revoke shuts
+        // the raw TCP handle the binding committed at admission.
+        let exchange = thread::spawn(move || {
+            connection
+                .read_range(Path::new("file"), 0, 64, None)
+                .unwrap_err()
+        });
+        thread::sleep(Duration::from_millis(100));
+        binding.revoke();
+        let error = exchange.join().unwrap();
+        assert!(
+            !matches!(error.kind(), io::ErrorKind::TimedOut),
+            "revocation woke the blocked exchange: {error:?}"
+        );
+        assert_eq!(binding.status().phase, BindingPhase::Revoked);
     }
 
     #[test]
@@ -3108,10 +3564,10 @@ mod tests {
         // is delivered: the committed connection is disconnected and the
         // stream shut down, never left live on a peer that cannot know
         // it owns the connection.
-        let (_peer, mut stream) = UnixStream::pair().unwrap();
-        let mut handshake = DeadlineStream::new(&mut stream, Instant::now()).unwrap();
+        let (_peer, stream) = UnixStream::pair().unwrap();
+        let mut channel = RecordChannel::unix(stream);
         let error = binding
-            .deliver(&mut handshake, &connection, &admission)
+            .deliver(&mut channel, Instant::now(), &connection, &admission)
             .unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::TimedOut);
         assert_eq!(binding.status().phase, BindingPhase::Detached);

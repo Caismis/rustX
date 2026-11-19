@@ -57,6 +57,28 @@ pub(crate) struct AppServerArgs {
     /// reserved workspace exactly. Requires --local-execution-session.
     #[arg(long, requires = "local_execution_session")]
     local_execution_workspace: Option<PathBuf>,
+    /// Reserve this Session's execution binding for a remote Execution
+    /// Client over WebSocket; no Client is launched — the operator
+    /// provisions the bundle privately. Conflicts with the local
+    /// composition flags.
+    #[arg(
+        long,
+        requires_all = ["execution_ws_listen", "execution_bootstrap_out"],
+        conflicts_with = "local_execution_session"
+    )]
+    execution_session: Option<String>,
+    /// The numeric loopback `IP:PORT` the execution WebSocket listener
+    /// binds. Port 0 selects an ephemeral port.
+    #[arg(long, requires = "execution_session")]
+    execution_ws_listen: Option<std::net::SocketAddr>,
+    /// The `0600` bootstrap bundle the operator hands to the remote
+    /// Client; its parent is created or must already be owner-only 0700.
+    #[arg(long, requires = "execution_session")]
+    execution_bootstrap_out: Option<PathBuf>,
+    /// The public `wss://…/execution/v1` ingress endpoint published in
+    /// the bundle instead of the loopback address.
+    #[arg(long, requires = "execution_ws_listen")]
+    execution_public_url: Option<String>,
 }
 impl AppServerArgs {
     pub(crate) fn into_request(self) -> Request {
@@ -73,6 +95,10 @@ impl AppServerArgs {
             product_host_token: self.product_host_token_file,
             local_execution_session: self.local_execution_session,
             local_execution_workspace: self.local_execution_workspace,
+            execution_session: self.execution_session,
+            execution_ws_listen: self.execution_ws_listen,
+            execution_bootstrap_out: self.execution_bootstrap_out,
+            execution_public_url: self.execution_public_url,
         }
     }
 }
@@ -92,6 +118,10 @@ pub struct Request {
     product_host_token: Option<PathBuf>,
     local_execution_session: Option<String>,
     local_execution_workspace: Option<PathBuf>,
+    execution_session: Option<String>,
+    execution_ws_listen: Option<std::net::SocketAddr>,
+    execution_bootstrap_out: Option<PathBuf>,
+    execution_public_url: Option<String>,
 }
 
 // These roots are exposed by SourceSettings in the JSON protocol. This is
@@ -373,6 +403,34 @@ async fn run(options: Request) -> Result<(), String> {
         (None, None) => None,
         _ => return Err("local execution requires both Session and workspace".into()),
     };
+    // Remote mode only publishes the reservation and runs its bounded
+    // accept loop — the operator-owned Client arrives when it arrives;
+    // management serves unblocked meanwhile. The task stops on drain.
+    let mut remote_accept = match (
+        &options.execution_session,
+        &options.execution_ws_listen,
+        &options.execution_bootstrap_out,
+        &options.execution_public_url,
+    ) {
+        (Some(id), Some(listen), Some(bootstrap), public_url) => Some(
+            local_execution::launch_remote(
+                host.manager(),
+                id,
+                *listen,
+                bootstrap.clone(),
+                public_url.clone(),
+                shutdown.clone(),
+            )
+            .await?,
+        ),
+        (None, None, None, None) => None,
+        _ => {
+            return Err(
+                "remote execution requires --execution-session, --execution-ws-listen and --execution-bootstrap-out"
+                    .into(),
+            );
+        }
+    };
     let transport_host = host.clone();
     let transport_stop = shutdown.clone();
     let stdio_mode = options.listen == "stdio";
@@ -449,6 +507,12 @@ async fn run(options: Request) -> Result<(), String> {
                 .wait()
                 .await
                 .map_err(|error| format!("local execution: {error}"))?;
+        }
+        // The accept loop stops on the drain token; awaiting its handle
+        // guarantees the listener clone is released before the endpoint's
+        // teardown completes.
+        if let Some(accept) = remote_accept.take() {
+            let _ = accept.await;
         }
         let scheduler_completion = async {
             match scheduler_early_result.take() {

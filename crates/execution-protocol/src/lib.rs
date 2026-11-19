@@ -1196,6 +1196,29 @@ pub enum ReadError {
     Busy,
 }
 
+/// The transport endpoint a [`Bootstrap`] binds the Client to.
+///
+/// One binding publishes exactly one mode: the owner-only Unix socket for
+/// the local sibling composition, or the validated WebSocket URL for an
+/// operator-provisioned remote Client. Endpoint *shape* is validated at
+/// use time by `rustx-execution-transport` — this type is the serde DTO
+/// only and performs no I/O.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "transport", rename_all = "lowercase", deny_unknown_fields)]
+pub enum BootstrapEndpoint {
+    /// The Unix socket the Client connects to.
+    Unix {
+        /// Absolute path of the Server's listening socket.
+        socket_path: PathBuf,
+    },
+    /// The WebSocket execution URL: `ws://IP:PORT/execution/v1` on literal
+    /// loopback, or `wss://IP:PORT/execution/v1` elsewhere.
+    WebSocket {
+        /// The exact URL the Client validates and connects to.
+        url: String,
+    },
+}
+
 /// The server-published bootstrap bundle for one local binding.
 ///
 /// It is delivered out of band as exactly one framed record in an
@@ -1207,8 +1230,8 @@ pub enum ReadError {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bootstrap {
-    /// The Unix socket the Client connects to.
-    pub socket_path: PathBuf,
+    /// The endpoint the Client connects to.
+    pub endpoint: BootstrapEndpoint,
     /// The protocol revision the Server expects.
     pub version: u16,
     /// The Session the binding belongs to.

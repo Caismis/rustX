@@ -74,7 +74,8 @@ def sample(client, size, operation):
         secret = secrets.token_hex(32)
         bundle = private / "b"
         with os.fdopen(os.open(bundle, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as f:
-            f.write(pack(dict(identity, socket_path=address, credential=secret)))
+            f.write(pack(dict(identity, endpoint={
+                "transport": "unix", "socket_path": address}, credential=secret)))
         proc = subprocess.Popen([client, "--binding-file", bundle, "--workspace", workspace],
                                 cwd="/", env={}, stdin=subprocess.DEVNULL)
         try:

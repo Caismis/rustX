@@ -322,7 +322,13 @@ impl Driver {
                 binary.is_file(),
                 "staged Execution Client is absent: {binary:?}"
             );
-            let std_listener = endpoint.listener().try_clone().unwrap();
+            let rustx::local_runtime::session_runtime_manager::ExecutionListener::Unix(
+                std_listener,
+            ) = endpoint.listener()
+            else {
+                panic!("the reserved local endpoint is a Unix listener");
+            };
+            let std_listener = std_listener.try_clone().unwrap();
             std_listener.set_nonblocking(true).unwrap();
             let listener = tokio::net::UnixListener::from_std(std_listener).unwrap();
             let child = tokio::process::Command::new(&binary)

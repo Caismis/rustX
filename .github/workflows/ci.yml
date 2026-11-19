@@ -243,6 +243,9 @@ jobs:
       - name: Run the Execution Client boundary
         run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
 
+      - name: Run the Execution Client WebSocket boundary
+        run: cargo test -p rustx-execution-client --test websocket --all-features --locked
+
       # The binary's own unit tests (e.g. `mutation::`) live outside the
       # `bootstrap` integration target; FULL's contracts lane already runs
       # workspace `--bins`, but FAST must not skip them.
@@ -482,6 +485,9 @@ jobs:
 
       - name: Run the Execution Client boundary
         run: cargo test -p rustx-execution-client --test bootstrap --all-features --locked
+
+      - name: Run the Execution Client WebSocket boundary
+        run: cargo test -p rustx-execution-client --test websocket --all-features --locked
 
       # See the same step in `rust-contracts`; this lane's targets are the
       # lib test harness and the external boundary targets. With

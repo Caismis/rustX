@@ -67,12 +67,40 @@ pub struct LocalExecutionEndpoint {
     /// signal. Management callers never take it: they still answer
     /// `WouldBlock` immediately.
     agent_writer: Arc<Semaphore>,
-    listener: UnixListener,
+    listener: ExecutionListener,
     bootstrap: PathBuf,
     /// The reserved logical workspace — trusted catalog identity,
     /// recorded once at claim time, never probed on disk.
     workspace: PathBuf,
-    _private: tempfile::TempDir,
+    /// The fd-and-dirfd proof of the bundle `create_new` wrote at
+    /// reservation. `Drop` removes the file only while `fstatat` still
+    /// matches this proof — a foreign replacement is never unlinked and
+    /// a FIFO at the path can never block teardown.
+    bundle: rustx_execution_server::PublishedBundle,
+    /// The private directory owning the local composition's socket and
+    /// bootstrap. A remote-mode endpoint publishes its bundle into an
+    /// operator-owned `0700` directory instead, so this is `None` there.
+    _private: Option<tempfile::TempDir>,
+}
+
+/// The transport a Session's execution endpoint was reserved with. It is
+/// decided at claim time — before any socket or credential exists — and
+/// an occupied slot refuses a different transport rather than swapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExecutionTransport {
+    /// The owner-only Unix socket of the local sibling composition.
+    Unix,
+    /// The loopback TCP WebSocket listener of the remote composition.
+    WebSocket,
+}
+
+/// The single live listener of one reserved endpoint — exactly one mode,
+/// never both.
+pub enum ExecutionListener {
+    /// The Unix listener of the local sibling composition.
+    Unix(UnixListener),
+    /// The loopback TCP listener of the remote composition.
+    WebSocket(std::net::TcpListener),
 }
 
 impl LocalExecutionEndpoint {
@@ -110,17 +138,63 @@ impl LocalExecutionEndpoint {
             workspace: workspace.clone(),
             required_capabilities: BTreeSet::from([Capability::Connection]),
         };
-        let (binding, listener) =
+        let (binding, listener, bundle) =
             Binding::reserve_local(reservation, &root.join("s"), &root.join("b"))?;
         Ok(Self {
             binding,
             connection: Mutex::new(None),
             data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
             agent_writer: Arc::new(Semaphore::new(1)),
-            listener,
+            listener: ExecutionListener::Unix(listener),
             bootstrap: root.join("b"),
+            bundle,
             workspace,
-            _private: private,
+            _private: Some(private),
+        })
+    }
+
+    /// Reserves a WebSocket binding: the loopback TCP listener plus the
+    /// `0600` bootstrap bundle the operator privately hands to the remote
+    /// Client. `bootstrap` must be a new path inside an existing
+    /// owner-only `0700` directory the caller owns — a collision with a
+    /// user file is refused by `create_new` and left untouched.
+    ///
+    /// `public_url`, when given, is the operator's `wss://…/execution/v1`
+    /// ingress endpoint published in the bundle instead of the loopback
+    /// `ws://` address.
+    fn new_websocket(
+        session: &SessionId,
+        workspace: PathBuf,
+        listen: std::net::SocketAddr,
+        bootstrap: PathBuf,
+        public_url: Option<&str>,
+    ) -> io::Result<Self> {
+        if !is_normalized_absolute_path(&workspace) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "workspace must be a normalized absolute path",
+            ));
+        }
+        let reservation = Reservation {
+            session: rustx_execution_protocol::SessionId::new(session.as_str()),
+            environment: EnvironmentId::new(uuid::Uuid::now_v7().to_string()),
+            instance: ClientInstanceId::new(uuid::Uuid::now_v7().to_string()),
+            generation: Generation::new(NonZeroU64::MIN),
+            workspace: workspace.clone(),
+            required_capabilities: BTreeSet::from([Capability::Connection]),
+        };
+        let (binding, listener, bundle) =
+            Binding::reserve_websocket(reservation, listen, &bootstrap, public_url)?;
+        Ok(Self {
+            binding,
+            connection: Mutex::new(None),
+            data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
+            agent_writer: Arc::new(Semaphore::new(1)),
+            listener: ExecutionListener::WebSocket(listener),
+            bootstrap,
+            bundle,
+            workspace,
+            _private: None,
         })
     }
 
@@ -138,9 +212,9 @@ impl LocalExecutionEndpoint {
         &self.bootstrap
     }
 
-    /// The bound local listener for this binding.
+    /// The bound listener for this binding — exactly one transport mode.
     #[must_use]
-    pub fn listener(&self) -> &UnixListener {
+    pub fn listener(&self) -> &ExecutionListener {
         &self.listener
     }
 
@@ -190,16 +264,49 @@ impl LocalExecutionEndpoint {
         stream: UnixStream,
         deadline: std::time::Instant,
     ) -> io::Result<Result<(), Reject>> {
-        match self.binding.accept_local_deadline(stream, deadline)? {
+        let admitted = self.binding.accept_local_deadline(stream, deadline)?;
+        Ok(self.store(admitted))
+    }
+
+    /// Admits the Client on one accepted WebSocket TCP peer: the RFC 6455
+    /// upgrade — path and `Origin` enforcement included — runs inside
+    /// `rustx_execution_transport::accept` under the same absolute
+    /// deadline as the Hello handshake that follows, then the identical
+    /// credential/identity arbitration and admission delivery run through
+    /// the binding's transport-agnostic accept.
+    ///
+    /// # Errors
+    ///
+    /// Returns the transport error when the upgrade or handshake cannot
+    /// complete. An authenticated-but-refused Hello is not an I/O error:
+    /// the reject is delivered on the wire and returned as
+    /// `Ok(Err(Reject))`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the connection mutex is poisoned.
+    pub fn admit_websocket_stream_deadline(
+        &self,
+        stream: std::net::TcpStream,
+        deadline: std::time::Instant,
+    ) -> io::Result<Result<(), Reject>> {
+        let channel = rustx_execution_transport::accept(stream, deadline)?;
+        let admitted = self.binding.accept_channel_deadline(channel, deadline)?;
+        Ok(self.store(admitted))
+    }
+
+    /// Stores the one admitted connection — at most one, never replaced.
+    fn store(&self, admitted: Result<LocalConnection, Reject>) -> Result<(), Reject> {
+        match admitted {
             Ok(connection) => {
                 let mut slot = self.connection.lock().expect("endpoint connection");
                 assert!(
                     slot.replace(connection).is_none(),
                     "a binding admits at most one live connection"
                 );
-                Ok(Ok(()))
+                Ok(())
             }
-            Err(reject) => Ok(Err(reject)),
+            Err(reject) => Err(reject),
         }
     }
 
@@ -631,11 +738,47 @@ impl LocalExecutionEndpoint {
         dispatch(connection)
     }
 
-    /// The single arbitration point the endpoint itself arbitrates
-    /// through — module-internal: callers dispatch through the typed
-    /// methods, never around them.
+    /// The shared authority binding behind this endpoint — test-facing:
+    /// fencing asserts the phase it drove.
+    #[cfg(test)]
     fn binding(&self) -> &Binding {
         &self.binding
+    }
+
+    /// Fences the endpoint: the binding is marked `Revoked` and its
+    /// shutdown handle seized in one atomic step — new admissions die
+    /// at the gate immediately — then, and only for an idle stored
+    /// connection, the bounded orderly Close. A busy exchange or a
+    /// handshake still in flight is interrupted by the seized handle's
+    /// raw shutdown instead; this never waits on the connection's data
+    /// lock, so a stuck peer can never stall a fence or a drain.
+    fn fence_connection(&self) {
+        let shutdown = self.binding.fence();
+        match self.connection.try_lock() {
+            Ok(mut guard) => match guard.as_mut() {
+                // An idle stored connection earns the orderly Close.
+                // The disconnect inside `close` is a no-op against the
+                // already-fenced binding.
+                Some(connection) => connection.close(),
+                // Committed but not yet stored — or never stored: the
+                // seized handle interrupts the physical stream itself.
+                None => {
+                    if let Some(shutdown) = shutdown {
+                        shutdown.shutdown();
+                    }
+                }
+            },
+            // A live exchange holds the data lock: interrupt the
+            // physical stream so the dispatch's next I/O fails and the
+            // connection retires on its own. Never wait on the mutex;
+            // a poisoned guard gets the same treatment — the peer is
+            // interrupted either way.
+            Err(TryLockError::WouldBlock | TryLockError::Poisoned(_)) => {
+                if let Some(shutdown) = shutdown {
+                    shutdown.shutdown();
+                }
+            }
+        }
     }
 
     /// Retires the one admitted connection so its Client clears every
@@ -1460,11 +1603,25 @@ impl PartialEq for SessionExecutionScope {
 
 impl Eq for SessionExecutionScope {}
 
+impl Drop for LocalExecutionEndpoint {
+    /// Removes the bootstrap bundle — but only while `fstatat` through
+    /// the retained parent descriptor still proves the file is the one
+    /// `create_new` wrote (same type, device, and inode). A replaced,
+    /// symlinked, FIFO, or identical-bytes foreign file at the path is
+    /// preserved untouched, and no pathname is ever reopened.
+    fn drop(&mut self) {
+        self.bundle.remove();
+    }
+}
+
 /// The claimable state of one Session's execution endpoint.
 struct Slot {
     /// The catalog workspace captured at claim; compared exactly, never
     /// re-derived while the slot lives.
     workspace: PathBuf,
+    /// The transport fixed by the first claim — a claim for the other
+    /// mode is refused, never swapped.
+    transport: ExecutionTransport,
     phase: Mutex<Phase>,
 }
 
@@ -1496,18 +1653,30 @@ impl Slot {
 
     /// Terminally closes the slot: an in-flight publication is refused, a
     /// published binding is revoked under its own mutex, and its endpoint
-    /// stays owned by the slot until the slot drops outside locks. No
-    /// filesystem I/O happens here.
+    /// stays owned by the slot until the slot drops outside locks. The
+    /// phase transition happens under the slot's own lock *before* any
+    /// I/O; the fence itself — bounded network work at worst — always
+    /// runs after that lock is released, so neither the phase lock nor
+    /// any caller's registry/residency lock is ever held while a peer
+    /// is closed.
     fn close(&self) {
-        let mut phase = self.phase.lock().expect("execution slot phase");
-        match &*phase {
-            Phase::Preparing => *phase = Phase::Closed(None),
-            Phase::Published(endpoint) => {
-                let endpoint = endpoint.clone();
-                endpoint.binding().revoke();
-                *phase = Phase::Closed(Some(endpoint));
+        let endpoint = {
+            let mut phase = self.phase.lock().expect("execution slot phase");
+            match &*phase {
+                Phase::Preparing => {
+                    *phase = Phase::Closed(None);
+                    None
+                }
+                Phase::Published(endpoint) => {
+                    let endpoint = endpoint.clone();
+                    *phase = Phase::Closed(Some(endpoint.clone()));
+                    Some(endpoint)
+                }
+                Phase::Closed(_) => None,
             }
-            Phase::Closed(_) => {}
+        };
+        if let Some(endpoint) = endpoint {
+            endpoint.fence_connection();
         }
     }
 }
@@ -1556,13 +1725,25 @@ pub(super) struct SessionExecutionRegistry(Mutex<HashMap<SessionId, Arc<Slot>>>)
 
 impl SessionExecutionRegistry {
     /// Claims the Session's execution slot under the registry mutex alone.
-    /// An occupied slot must name the identical workspace; an occupied claim
-    /// is never swapped to a different path.
-    fn claim(&self, session: &SessionId, workspace: PathBuf) -> Result<Claim, RuntimeManagerError> {
+    /// An occupied slot must name the identical workspace *and* transport;
+    /// an occupied claim is never swapped to a different path or mode — a
+    /// cross-transport request for a published endpoint is refused, never
+    /// a second allocation.
+    fn claim(
+        &self,
+        session: &SessionId,
+        workspace: PathBuf,
+        transport: ExecutionTransport,
+    ) -> Result<Claim, RuntimeManagerError> {
         let mut slots = self.0.lock().expect("execution registry mutex");
         if let Some(slot) = slots.get(session) {
             if slot.workspace.as_os_str() != workspace.as_os_str() {
                 return Err(error("Session workspace changed since the execution claim"));
+            }
+            if slot.transport != transport {
+                return Err(error(
+                    "Session execution transport differs from the existing claim",
+                ));
             }
             let phase = slot.phase.lock().expect("execution slot phase");
             return match &*phase {
@@ -1575,6 +1756,7 @@ impl SessionExecutionRegistry {
         // exactly one claimant ever prepares.
         let slot = Arc::new(Slot {
             workspace,
+            transport,
             phase: Mutex::new(Phase::Preparing),
         });
         slots.insert(session.clone(), slot.clone());
@@ -1673,6 +1855,61 @@ impl SessionRuntimeManager {
         &self,
         session: &SessionId,
     ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
+        self.reserve_execution(session, ExecutionTransport::Unix, |session, workspace| {
+            LocalExecutionEndpoint::new(session, workspace)
+        })
+        .await
+    }
+
+    /// Reserves the Session's execution endpoint for the remote
+    /// composition: one loopback WebSocket listener plus the `0600`
+    /// bootstrap bundle the operator hands to the Client out of band.
+    /// `bootstrap` must be a new path inside an existing owner-only
+    /// `0700` directory; `public_url` is the optional `wss` ingress
+    /// endpoint the bundle publishes instead of the loopback address.
+    ///
+    /// Workspace authority stays exactly the same as the local path: it
+    /// is resolved from the trusted Session catalog under the same
+    /// residency gates — never from remote-supplied data.
+    ///
+    /// # Errors
+    ///
+    /// Shares [`reserve_local_execution`](Self::reserve_local_execution)'s
+    /// contract, plus `InvalidInput`-shaped failures for a non-loopback
+    /// `listen` or an invalid `public_url`.
+    pub async fn reserve_websocket_execution(
+        &self,
+        session: &SessionId,
+        listen: std::net::SocketAddr,
+        bootstrap: PathBuf,
+        public_url: Option<String>,
+    ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
+        self.reserve_execution(
+            session,
+            ExecutionTransport::WebSocket,
+            move |session, workspace| {
+                LocalExecutionEndpoint::new_websocket(
+                    session,
+                    workspace,
+                    listen,
+                    bootstrap,
+                    public_url.as_deref(),
+                )
+            },
+        )
+        .await
+    }
+
+    /// The shared claim-and-prepare entry every transport reservation
+    /// routes through: identical residency gates, identical registry
+    /// claim, identical workspace authority — only the endpoint
+    /// preparation differs by transport.
+    async fn reserve_execution(
+        &self,
+        session: &SessionId,
+        transport: ExecutionTransport,
+        prepare: impl FnOnce(&SessionId, PathBuf) -> io::Result<LocalExecutionEndpoint> + Send + 'static,
+    ) -> Result<Arc<LocalExecutionEndpoint>, RuntimeManagerError> {
         let claim = {
             let catalog = self.sessions.catalog.lock().await;
             let (_, settings) = catalog.lineage(session, None).map_err(error)?;
@@ -1685,7 +1922,8 @@ impl SessionRuntimeManager {
             if registry.retiring_sessions.contains(session) {
                 return Err(error("Session retirement has fenced runtime admission"));
             }
-            self.execution.claim(session, settings.cwd.clone())
+            self.execution
+                .claim(session, settings.cwd.clone(), transport)
             // Both guards release here, before any I/O or await.
         };
         match claim? {
@@ -1694,11 +1932,9 @@ impl SessionRuntimeManager {
                 // The spawned preparation owns publication: a dropped
                 // caller never reissues and never strands the slot.
                 let session = session.clone();
-                spawn_preparation(slot, move |workspace| {
-                    LocalExecutionEndpoint::new(&session, workspace)
-                })
-                .await
-                .map_err(error)?
+                spawn_preparation(slot, move |workspace| prepare(&session, workspace))
+                    .await
+                    .map_err(error)?
             }
         }
     }
@@ -1767,8 +2003,8 @@ mod tests {
     use base64::Engine as _;
     use rustx_execution_protocol::transport::{read_record, write_record};
     use rustx_execution_protocol::{
-        Bootstrap, ClientReply, ClientRequest, DecimalU64, FileStamp, Hello, HelloReply,
-        MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError,
+        Bootstrap, BootstrapEndpoint, ClientReply, ClientRequest, DecimalU64, FileStamp, Hello,
+        HelloReply, MAX_RAW_CHUNK_BYTES, PROTOCOL_VERSION, ReadError,
     };
     use rustx_execution_server::BindingPhase;
 
@@ -1793,12 +2029,22 @@ mod tests {
         read_record(&mut file).unwrap()
     }
 
+    fn socket_path(bundle: &Bootstrap) -> &Path {
+        match &bundle.endpoint {
+            BootstrapEndpoint::Unix { socket_path } => socket_path,
+            BootstrapEndpoint::WebSocket { .. } => panic!("a unix bundle is expected"),
+        }
+    }
+
     fn create(
         registry: &SessionExecutionRegistry,
         session: &SessionId,
         workspace: &Path,
     ) -> Arc<Slot> {
-        match registry.claim(session, workspace.to_path_buf()).unwrap() {
+        match registry
+            .claim(session, workspace.to_path_buf(), ExecutionTransport::Unix)
+            .unwrap()
+        {
             Claim::Create(slot) => slot,
             Claim::Existing(_) => panic!("no endpoint has been published yet"),
         }
@@ -1826,7 +2072,7 @@ mod tests {
                 let workspace = &workspace;
                 handles.push(scope.spawn(move || {
                     barrier.wait();
-                    registry.claim(session, workspace.clone())
+                    registry.claim(session, workspace.clone(), ExecutionTransport::Unix)
                 }));
             }
             handles
@@ -1847,7 +2093,10 @@ mod tests {
         }
         let slot = slot.expect("exactly one claimant prepares");
         let endpoint = prepare(&slot, &session, &workspace);
-        let published = match registry.claim(&session, workspace.clone()).unwrap() {
+        let published = match registry
+            .claim(&session, workspace.clone(), ExecutionTransport::Unix)
+            .unwrap()
+        {
             Claim::Existing(endpoint) => endpoint,
             Claim::Create(_) => panic!("the published endpoint is claimed as-is"),
         };
@@ -1877,7 +2126,10 @@ mod tests {
         let b_bundle = bundle(&b);
         assert_eq!(a_bundle.workspace, b_bundle.workspace);
         assert_ne!(a_bundle.session, b_bundle.session);
-        assert_ne!(a_bundle.socket_path, b_bundle.socket_path);
+        assert_ne!(
+            socket_path(&a_bundle).to_path_buf(),
+            socket_path(&b_bundle).to_path_buf()
+        );
         assert_ne!(a_bundle.environment, b_bundle.environment);
         assert_ne!(a_bundle.instance, b_bundle.instance);
         assert_ne!(
@@ -1904,7 +2156,7 @@ mod tests {
         assert_eq!(endpoint.binding().status().phase, BindingPhase::Reserved);
         assert!(!slot.publish(&endpoint));
         drop(endpoint);
-        match registry.claim(&session, workspace.clone()) {
+        match registry.claim(&session, workspace.clone(), ExecutionTransport::Unix) {
             Err(error) => assert!(error.to_string().contains("recovery"), "{error}"),
             Ok(_) => panic!("a fenced claim is never reissued"),
         }
@@ -1939,11 +2191,17 @@ mod tests {
         forward.await.unwrap();
         // The worker published despite the dropped waiter: the registry
         // hands every later claim the identical endpoint.
-        let first = match registry.claim(&session, workspace.clone()).unwrap() {
+        let first = match registry
+            .claim(&session, workspace.clone(), ExecutionTransport::Unix)
+            .unwrap()
+        {
             Claim::Existing(endpoint) => endpoint,
             Claim::Create(_) => panic!("preparation published without a waiter"),
         };
-        let second = match registry.claim(&session, workspace.clone()).unwrap() {
+        let second = match registry
+            .claim(&session, workspace.clone(), ExecutionTransport::Unix)
+            .unwrap()
+        {
             Claim::Existing(endpoint) => endpoint,
             Claim::Create(_) => panic!("preparation published without a waiter"),
         };
@@ -2111,7 +2369,10 @@ mod tests {
             ]),
             credential: published.credential.clone(),
         };
-        let (accepted, _) = endpoint.listener().accept().unwrap();
+        let (accepted, _) = match endpoint.listener() {
+            ExecutionListener::Unix(listener) => listener.accept().unwrap(),
+            ExecutionListener::WebSocket(_) => panic!("unix endpoint expected"),
+        };
         write_record(client, &hello).unwrap();
         assert!(matches!(
             endpoint.admit_local_stream(accepted).unwrap(),
@@ -2169,7 +2430,7 @@ mod tests {
             &endpoint
         ));
         let published = bundle(&endpoint);
-        let mut client = std::os::unix::net::UnixStream::connect(&published.socket_path).unwrap();
+        let mut client = std::os::unix::net::UnixStream::connect(socket_path(&published)).unwrap();
         admit(&endpoint, &mut client);
         assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
 
@@ -2253,7 +2514,7 @@ mod tests {
         let (_root, manager, sessions) = fixture(1).await;
         let endpoint = manager.reserve_local_execution(&sessions[0]).await.unwrap();
         let published = bundle(&endpoint);
-        let mut client = std::os::unix::net::UnixStream::connect(&published.socket_path).unwrap();
+        let mut client = std::os::unix::net::UnixStream::connect(socket_path(&published)).unwrap();
         admit(&endpoint, &mut client);
 
         // Leaf and root metadata, then a bounded page of the root.
@@ -2312,7 +2573,7 @@ mod tests {
         let (_root, manager, sessions) = fixture(2).await;
         let endpoint = manager.reserve_local_execution(&sessions[0]).await.unwrap();
         let published = bundle(&endpoint);
-        let mut client = std::os::unix::net::UnixStream::connect(&published.socket_path).unwrap();
+        let mut client = std::os::unix::net::UnixStream::connect(socket_path(&published)).unwrap();
         admit(&endpoint, &mut client);
         assert_eq!(endpoint.binding().status().phase, BindingPhase::Live);
         manager.execution.fence(&sessions[0]);
@@ -2379,7 +2640,7 @@ mod tests {
         drop(again);
         drop(endpoint);
         assert!(
-            !std::path::Path::new(&published.socket_path).exists(),
+            !socket_path(&published).exists(),
             "the retired endpoint's private directory was removed"
         );
     }
@@ -2404,7 +2665,7 @@ mod tests {
         let slot = create(&registry, &session, &workspace);
         let endpoint = prepare(&slot, &session, &workspace);
         let published = bundle(&endpoint);
-        let mut client = UnixStream::connect(&published.socket_path).unwrap();
+        let mut client = UnixStream::connect(socket_path(&published)).unwrap();
         let hello = Hello {
             version: PROTOCOL_VERSION,
             session: published.session.clone(),
@@ -2415,7 +2676,10 @@ mod tests {
             capabilities,
             credential: published.credential.clone(),
         };
-        let (accepted, _) = endpoint.listener().accept().unwrap();
+        let (accepted, _) = match endpoint.listener() {
+            ExecutionListener::Unix(listener) => listener.accept().unwrap(),
+            ExecutionListener::WebSocket(_) => panic!("unix endpoint expected"),
+        };
         write_record(&mut client, &hello).unwrap();
         assert!(matches!(
             endpoint.admit_local_stream(accepted).unwrap(),
@@ -2426,6 +2690,86 @@ mod tests {
             HelloReply::Ok(_)
         ));
         (registry, session, endpoint, client, workspace, dir)
+    }
+
+    /// A busy exchange parks on the reply read holding the connection's
+    /// data lock; the fence must still complete — atomically and without
+    /// ever waiting on that lock — by interrupting the physical stream,
+    /// and the revoked binding must refuse every later admission without
+    /// the peer ever cooperating. `PAGE_REQUEST_TIMEOUT` is 60 s: every
+    /// completion below is awaited on a 10 s channel bound, comfortably
+    /// proving the fence did not wait out the pending request.
+    #[test]
+    fn a_busy_peer_cannot_stall_the_fence_and_the_binding_stays_revoked() {
+        let registry = SessionExecutionRegistry::default();
+        let session = SessionId::generate();
+        let (dir, workspace) = workspace();
+        let slot = create(&registry, &session, &workspace);
+        let endpoint = prepare(&slot, &session, &workspace);
+        let mut client = UnixStream::connect(socket_path(&bundle(&endpoint))).unwrap();
+        admit(&endpoint, &mut client);
+
+        // Park a real dispatch on the reply read: the peer takes the
+        // request off the wire — proving the exchange is in flight and
+        // the data lock is held — then deliberately never answers.
+        let dispatched = endpoint.clone();
+        let (parked_tx, parked_rx) = std::sync::mpsc::channel::<()>();
+        let exchange = std::thread::spawn(move || {
+            parked_tx.send(()).unwrap();
+            dispatched.entry_metadata(&workspace)
+        });
+        parked_rx.recv().unwrap();
+        match read_record::<ClientRequest>(&mut client).unwrap() {
+            ClientRequest::GetMetadata { .. } => {}
+            request => panic!("unexpected in-flight request: {request:?}"),
+        }
+
+        // The fence runs on its own thread only so the test can bound its
+        // completion: a fence that waited on the held data lock would
+        // park for the whole 60-second exchange deadline.
+        let (fenced_tx, fenced_rx) = std::sync::mpsc::channel::<()>();
+        let fencer = std::thread::spawn(move || {
+            slot.close();
+            fenced_tx.send(()).unwrap();
+        });
+        fenced_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the fence never waits on a busy exchange");
+
+        // The interrupted exchange surfaces an I/O error — the raw
+        // shutdown woke its reply read — long before its deadline.
+        let result = exchange.join().expect("the dispatch thread exits");
+        assert!(result.is_err(), "a fenced exchange cannot complete");
+
+        // The binding is terminally revoked: a second well-formed Hello is
+        // refused, and no admission ever lands on this endpoint again.
+        let mut second = UnixStream::connect(socket_path(&bundle(&endpoint))).unwrap();
+        let (accepted, _) = match endpoint.listener() {
+            ExecutionListener::Unix(listener) => listener.accept().unwrap(),
+            ExecutionListener::WebSocket(_) => panic!("unix endpoint expected"),
+        };
+        let published = bundle(&endpoint);
+        write_record(
+            &mut second,
+            &Hello {
+                version: PROTOCOL_VERSION,
+                session: published.session.clone(),
+                environment: published.environment.clone(),
+                instance: published.instance.clone(),
+                generation: published.generation,
+                workspace: published.workspace.clone(),
+                capabilities: BTreeSet::from([Capability::Connection]),
+                credential: published.credential.clone(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            endpoint.admit_local_stream(accepted).unwrap(),
+            Err(rustx_execution_protocol::Reject::Revoked)
+        );
+        fencer.join().unwrap();
+        drop(dir);
+        drop(registry);
     }
 
     fn admitted_lines_endpoint() -> (

@@ -167,13 +167,17 @@ impl ExecutionFixture {
             // Bounded connect: the listener accepts nonblocking inside the
             // production handshake window, and an early Client exit fails
             // fast instead of waiting out the bound.
-            endpoint
-                .listener()
+            let rustx::local_runtime::session_runtime_manager::ExecutionListener::Unix(listener) =
+                endpoint.listener()
+            else {
+                panic!("the reserved local endpoint is a Unix listener");
+            };
+            listener
                 .set_nonblocking(true)
                 .expect("nonblocking listener");
             let deadline = Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
             let stream = loop {
-                match endpoint.listener().accept() {
+                match listener.accept() {
                     Ok((stream, _)) => break stream,
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
                         if let Some(status) = child.0.try_wait().expect("client status") {

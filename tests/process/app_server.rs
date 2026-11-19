@@ -146,6 +146,16 @@ async fn bounded<T>(future: impl Future<Output = T>) -> T {
         .await
         .expect("outer liveness guard")
 }
+/// Reaps a detached `std` client process on scope exit.
+struct ReapChild(std::process::Child);
+
+impl Drop for ReapChild {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 fn terminate(child: &Child) {
     kill(
         Pid::from_raw(i32::try_from(child.id().unwrap()).unwrap()),
@@ -334,6 +344,98 @@ fn local_exec_command(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
     command
+}
+
+/// The remote composition: the App Server binds a loopback WebSocket
+/// listener and publishes the bootstrap bundle for the operator —
+/// never launches a Client itself.
+fn remote_exec_command(
+    binary: &std::path::Path,
+    f: &Fixture,
+    session: &str,
+    bundle: &std::path::Path,
+) -> Command {
+    let mut command = Command::new(binary);
+    command
+        .current_dir(f.root.path())
+        .env_clear()
+        .env("HOME", f.root.path().join("home"))
+        .env("PATH", "/usr/bin:/bin")
+        .args(["app-server", "--runtime-root"])
+        .arg(f.root.path().join("runtime"))
+        .args(["--listen", "stdio"])
+        .arg("--execution-session")
+        .arg(session)
+        .args(["--execution-ws-listen", "127.0.0.1:0"])
+        .arg("--execution-bootstrap-out")
+        .arg(bundle)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    command
+}
+
+/// The operator step of the remote composition: the staged real Client
+/// started independently against the provisioned bundle — no
+/// environment, sealed stdio, exactly the documented invocation.
+fn staged_client_command(
+    bundle: &std::path::Path,
+    workspace: &std::path::Path,
+) -> std::process::Command {
+    let executable = std::env::current_exe()
+        .unwrap()
+        .with_file_name("rustx-execution-client");
+    assert!(
+        executable.is_file(),
+        "staged Execution Client is absent: {executable:?}"
+    );
+    let mut command = std::process::Command::new(&executable);
+    command
+        .arg("--binding-file")
+        .arg(bundle)
+        .arg("--workspace")
+        .arg(workspace)
+        .current_dir("/")
+        .env_clear()
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    command
+}
+
+/// Polls a Session-routed read until the background accept loop admits
+/// the operator-spawned Client — bounded like the handshake budget.
+async fn await_admission(client: &driver::Driver, session: &SessionId, path: &std::path::Path) {
+    use rustx::app_server::protocol::*;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        match rpc(
+            client,
+            10,
+            Method::FsReadFile {
+                session_id: session.clone(),
+                path: path.display().to_string(),
+                offset: 0,
+                max_bytes: 16,
+                expected_revision: None,
+            },
+        )
+        .await
+        {
+            Response::Success(_) => return,
+            Response::Failure(failure)
+                if failure.error.data == Some(ErrorData::ExecutionUnavailable) =>
+            {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "Client was not admitted within the bound"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+            other @ Response::Failure(_) => panic!("admission probe: {other:?}"),
+        }
+    }
 }
 
 /// Grants exactly these environment roots in the fixture's authored
@@ -633,6 +735,487 @@ async fn explicit_composition_launches_and_reaps_the_sibling_client() {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    })
+    .await;
+}
+
+/// Remote-mode product proof: `rustx app-server --execution-*` publishes a
+/// `0600` WebSocket bootstrap, an operator-spawned staged Client connects
+/// through a genuine RFC 6455 upgrade — never a UDS stand-in — and
+/// Session-routed `fs` dispatch crosses the WebSocket channel while a
+/// second unbound Session is refused exactly as on the Unix transport.
+#[tokio::test]
+async fn remote_execution_serves_session_reads_over_websocket() {
+    bounded(async {
+        use base64::Engine as _;
+        use rustx::app_server::protocol::*;
+        use std::os::unix::fs::PermissionsExt;
+        let f = Fixture::new().await;
+        let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+        grant_environment_roots(&f, std::slice::from_ref(&workspace));
+        let marker = "remote ws payload — déjà vu".as_bytes();
+        std::fs::write(workspace.join("marker"), marker).unwrap();
+
+        let rustx = isolated_server_bin(f.root.path());
+        let private = f.root.path().join("private");
+        std::fs::create_dir(&private).unwrap();
+        std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let bundle = private.join("bootstrap");
+        let mut server = remote_exec_command(&rustx, &f, f.sessions[0].as_str(), &bundle)
+            .spawn()
+            .unwrap();
+        let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+        initialize_client(&client).await;
+        // Readiness implies the reservation published: the bundle is the
+        // `0600` create_new file the operator hands to the Client.
+        let mode = std::fs::metadata(&bundle)
+            .unwrap_or_else(|_| panic!("bootstrap bundle was not published"))
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "bootstrap must be owner-only");
+
+        let execution = staged_client_command(&bundle, &workspace).spawn().unwrap();
+        let mut execution = ReapChild(execution);
+
+        // Admission runs in the background accept loop while management
+        // already serves: the first Session-routed read polls until the
+        // admitted Client answers, bounded like the handshake budget.
+        await_admission(&client, &f.sessions[0], &workspace.join("marker")).await;
+        let MethodResult::FileChunk { chunk } = result(
+            &client,
+            Method::FsReadFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+                offset: 0,
+                max_bytes: 256,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/readFile through the WS-admitted Client")
+        };
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&chunk.data_base64)
+                .unwrap(),
+            marker
+        );
+        assert_eq!(chunk.next_offset, None);
+
+        // The same routed metadata and conditional write cross the WS
+        // channel — identical semantics to the Unix transport.
+        let MethodResult::FileMetadata { metadata } = result(
+            &client,
+            Method::FsGetMetadata {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("marker").display().to_string(),
+            },
+        )
+        .await
+        else {
+            panic!("fs/getMetadata through the WS-admitted Client")
+        };
+        assert!(metadata.is_file && !metadata.is_symlink);
+
+        let MethodResult::FileMetadata { metadata: written } = result(
+            &client,
+            Method::FsWriteFile {
+                session_id: f.sessions[0].clone(),
+                path: workspace.join("written").display().to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(b"ws written"),
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("fs/writeFile through the WS-admitted Client")
+        };
+        assert_ne!(written.revision, "");
+        assert_eq!(
+            std::fs::read(workspace.join("written")).unwrap(),
+            b"ws written"
+        );
+
+        // Session B holds no endpoint — its routed read is refused
+        // exactly as on the Unix transport.
+        let Response::Failure(failure) = rpc(
+            &client,
+            11,
+            Method::FsReadFile {
+                session_id: f.sessions[1].clone(),
+                path: std::fs::canonicalize(f.root.path().join("b"))
+                    .unwrap()
+                    .join("marker")
+                    .display()
+                    .to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        )
+        .await
+        else {
+            panic!("Session B read must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+
+        client.close().await;
+        terminate(&server);
+        let output = server.wait_with_output().await.unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        // Orderly server teardown sends the WebSocket Close frame — the
+        // Client observes a clean EOF and exits successfully on its own.
+        let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = execution.0.try_wait().unwrap() {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < bound,
+                "Client did not exit on channel EOF"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(status.success(), "gracefully closed Client must exit 0");
+    })
+    .await;
+}
+
+/// Identical seed content for the parity transcript — the same bytes,
+/// names, and link under both transports so the transcripts may differ
+/// only by transport, never by seed.
+fn seed_workspace(workspace: &std::path::Path, decoy_dir: &std::path::Path) {
+    std::fs::write(workspace.join("marker"), "såme payload — déjà vu ☃\n").unwrap();
+    std::fs::write(
+        workspace.join("s p a c e ü.txt"),
+        "escaped bytes — こんにちは\n",
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("marker", workspace.join("link")).unwrap();
+    std::fs::write(decoy_dir.join("marker"), b"decoy").unwrap();
+}
+
+/// The identical seeded operation sequence both transports must serve
+/// byte-for-byte identical: UTF-8 and escaped-name reads, symlink
+/// metadata, the directory page, the missing-file typed failure, a
+/// conditional write that commits then conflicts, and the unbound
+/// Session's refused read and write. The transcript records only
+/// deterministic outcomes — revisions and identities are proven
+/// non-empty but never compared, since they are per-write identities.
+async fn seeded_operations(
+    client: &driver::Driver,
+    session_a: &SessionId,
+    session_b: &SessionId,
+    workspace_a: &std::path::Path,
+    decoy_marker: &std::path::Path,
+) -> Vec<String> {
+    use base64::Engine as _;
+    use rustx::app_server::protocol::*;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let mut transcript = Vec::new();
+    let read_at = |path: &std::path::Path| Method::FsReadFile {
+        session_id: session_a.clone(),
+        path: path.display().to_string(),
+        offset: 0,
+        max_bytes: 256,
+        expected_revision: None,
+    };
+
+    // UTF-8 content read with a proven revision.
+    let MethodResult::FileChunk { chunk } =
+        result(client, read_at(&workspace_a.join("marker"))).await
+    else {
+        panic!("seeded marker read")
+    };
+    let bytes = b64.decode(&chunk.data_base64).unwrap();
+    transcript.push(format!(
+        "read:marker:{}:{}:{}:{}",
+        String::from_utf8(bytes).unwrap(),
+        chunk.next_offset.is_none(),
+        !chunk.metadata.revision.is_empty(),
+        !chunk.metadata.identity.is_empty()
+    ));
+
+    // Escaped-name UTF-8 read.
+    let MethodResult::FileChunk { chunk } =
+        result(client, read_at(&workspace_a.join("s p a c e ü.txt"))).await
+    else {
+        panic!("seeded escaped-name read")
+    };
+    transcript.push(format!(
+        "read:escaped:{}",
+        String::from_utf8(b64.decode(&chunk.data_base64).unwrap()).unwrap()
+    ));
+
+    // Symlink metadata is stamped exactly.
+    let MethodResult::FileMetadata { metadata } = result(
+        client,
+        Method::FsGetMetadata {
+            session_id: session_a.clone(),
+            path: workspace_a.join("link").display().to_string(),
+        },
+    )
+    .await
+    else {
+        panic!("seeded symlink metadata")
+    };
+    transcript.push(format!(
+        "meta:link:{}:{}:{}",
+        metadata.is_symlink, metadata.is_file, metadata.size
+    ));
+
+    // The directory page names both seeded names in the same order.
+    let MethodResult::DirectoryPage { page } = result(
+        client,
+        Method::FsReadDirectory {
+            session_id: session_a.clone(),
+            path: workspace_a.display().to_string(),
+            offset: 0,
+            limit: 16,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("seeded directory page")
+    };
+    transcript.push(format!(
+        "dir:{}:{}",
+        page.entries
+            .iter()
+            .map(|entry| format!(
+                "{}:{}:{}",
+                entry.file_name, entry.metadata.is_file, entry.metadata.is_symlink
+            ))
+            .collect::<Vec<_>>()
+            .join("|"),
+        page.next_offset.is_none()
+    ));
+
+    // A missing file is the same typed failure on both transports.
+    let Response::Failure(failure) = rpc(
+        client,
+        21,
+        Method::FsReadFile {
+            session_id: session_a.clone(),
+            path: workspace_a.join("absent").display().to_string(),
+            offset: 0,
+            max_bytes: 64,
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("the missing file must fail")
+    };
+    assert_eq!(
+        failure.error.data,
+        Some(ErrorData::EnvironmentResourceNotFound)
+    );
+    transcript.push("absent:EnvironmentResourceNotFound".to_string());
+
+    // A conditional write commits, a stale revision conflicts typed,
+    // and the committed revision chains the next write.
+    let MethodResult::FileMetadata { metadata: first } = result(
+        client,
+        Method::FsWriteFile {
+            session_id: session_a.clone(),
+            path: workspace_a.join("written").display().to_string(),
+            data_base64: b64.encode("written — 1\n"),
+            expected_revision: None,
+        },
+    )
+    .await
+    else {
+        panic!("seeded write")
+    };
+    assert_ne!(first.revision, "");
+    transcript.push("write:created".to_string());
+
+    // The committed revision chains the next write.
+    let MethodResult::FileMetadata { metadata: second } = result(
+        client,
+        Method::FsWriteFile {
+            session_id: session_a.clone(),
+            path: workspace_a.join("written").display().to_string(),
+            data_base64: b64.encode("written — 2\n"),
+            expected_revision: Some(first.revision.clone()),
+        },
+    )
+    .await
+    else {
+        panic!("the chained write must commit")
+    };
+    assert_ne!(second.revision, "");
+    assert_ne!(second.revision, first.revision);
+    assert_eq!(
+        std::fs::read(workspace_a.join("written")).unwrap(),
+        "written — 2\n".as_bytes()
+    );
+    transcript.push("write:chained".to_string());
+
+    // A genuinely stale revision — valid format, superseded value —
+    // is the same typed conflict on both transports.
+    let Response::Failure(failure) = rpc(
+        client,
+        22,
+        Method::FsWriteFile {
+            session_id: session_a.clone(),
+            path: workspace_a.join("written").display().to_string(),
+            data_base64: b64.encode("stale\n"),
+            expected_revision: Some(first.revision.clone()),
+        },
+    )
+    .await
+    else {
+        panic!("the stale write must fail")
+    };
+    transcript.push(format!("write:stale:{:?}", failure.error.data));
+    assert_eq!(
+        std::fs::read(workspace_a.join("written")).unwrap(),
+        "written — 2\n".as_bytes(),
+        "the conflicted write never landed"
+    );
+
+    // The unbound Session's read and write are refused identically.
+    for (id, call) in [
+        (
+            23,
+            Method::FsReadFile {
+                session_id: session_b.clone(),
+                path: decoy_marker.display().to_string(),
+                offset: 0,
+                max_bytes: 64,
+                expected_revision: None,
+            },
+        ),
+        (
+            24,
+            Method::FsWriteFile {
+                session_id: session_b.clone(),
+                path: decoy_marker.display().to_string(),
+                data_base64: b64.encode("planted"),
+                expected_revision: None,
+            },
+        ),
+    ] {
+        let Response::Failure(failure) = rpc(client, id, call).await else {
+            panic!("the unbound Session call must fail")
+        };
+        assert_eq!(failure.error.data, Some(ErrorData::ExecutionUnavailable));
+    }
+    assert_eq!(std::fs::read(decoy_marker).unwrap(), b"decoy");
+    transcript.push("unbound:ExecutionUnavailable".to_string());
+
+    transcript
+}
+
+/// Phase one of the parity proof: the seeded sequence over the local
+/// Unix sibling composition — readiness itself proves the sibling was
+/// launched and admitted before the transport served.
+async fn seeded_transcript_over_unix() -> Vec<String> {
+    let f = Fixture::new().await;
+    let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+    grant_environment_roots(&f, std::slice::from_ref(&workspace));
+    seed_workspace(&workspace, &f.root.path().join("b"));
+
+    let rustx = isolated_server_pair(f.root.path());
+    let mut server = local_exec_command(&rustx, &f, f.sessions[0].as_str(), &workspace)
+        .spawn()
+        .unwrap();
+    let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+    initialize_client(&client).await;
+    let transcript = seeded_operations(
+        &client,
+        &f.sessions[0],
+        &f.sessions[1],
+        &workspace,
+        &f.root.path().join("b/marker"),
+    )
+    .await;
+    client.close().await;
+    terminate(&server);
+    let output = server.wait_with_output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    transcript
+}
+
+/// Phase two: the identical sequence over the remote WebSocket
+/// composition — operator-spawned Client admitted through the genuine
+/// RFC 6455 upgrade.
+async fn seeded_transcript_over_websocket() -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fixture::new().await;
+    let workspace = std::fs::canonicalize(f.root.path().join("a")).unwrap();
+    grant_environment_roots(&f, std::slice::from_ref(&workspace));
+    seed_workspace(&workspace, &f.root.path().join("b"));
+
+    let rustx = isolated_server_bin(f.root.path());
+    let private = f.root.path().join("private");
+    std::fs::create_dir(&private).unwrap();
+    std::fs::set_permissions(&private, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let bundle = private.join("bootstrap");
+    let mut server = remote_exec_command(&rustx, &f, f.sessions[0].as_str(), &bundle)
+        .spawn()
+        .unwrap();
+    let client = driver::jsonl(server.stdout.take().unwrap(), server.stdin.take().unwrap());
+    initialize_client(&client).await;
+    let execution = staged_client_command(&bundle, &workspace).spawn().unwrap();
+    let mut execution = ReapChild(execution);
+    await_admission(&client, &f.sessions[0], &workspace.join("marker")).await;
+    let transcript = seeded_operations(
+        &client,
+        &f.sessions[0],
+        &f.sessions[1],
+        &workspace,
+        &f.root.path().join("b/marker"),
+    )
+    .await;
+    client.close().await;
+    terminate(&server);
+    let output = server.wait_with_output().await.unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let bound = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = execution.0.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            std::time::Instant::now() < bound,
+            "Client did not exit on channel EOF"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert!(
+        status.success(),
+        "gracefully closed Client must exit 0, got {status}"
+    );
+    transcript
+}
+
+/// Transport parity proof: the identical seeded operation sequence is
+/// served byte-for-byte identical — same bytes, same ordering, same
+/// typed failures — over the local Unix composition and the remote
+/// WebSocket composition.
+#[tokio::test]
+async fn websocket_and_unix_transports_serve_identical_seeded_operations() {
+    bounded(async {
+        let unix = seeded_transcript_over_unix().await;
+        let websocket = seeded_transcript_over_websocket().await;
+        assert_eq!(unix, websocket);
     })
     .await;
 }

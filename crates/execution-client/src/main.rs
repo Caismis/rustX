@@ -4,7 +4,9 @@
 //! server-published [`Bootstrap`] from an owner-only file, opens the bound
 //! workspace as a [`PackageDirectory`] held by descriptor for the whole
 //! session, performs the authenticated `Hello`/`Admission` handshake over
-//! the bound Unix socket, then serves the Server's typed requests until
+//! the bound endpoint — the owner-only Unix socket for the local sibling
+//! composition, or the validated `ws`/`wss` execution URL a remote
+//! deployment publishes — then serves the Server's typed requests until
 //! EOF: `Ping` liveness and the implemented physical operations — bounded
 //! revision-checked `ReadRange`, `GetMetadata` stat'ed without following
 //! the leaf, bounded `ReadDirectory` paging, the ticketed
@@ -18,15 +20,18 @@
 //! The workspace is local policy, never a server request: `--workspace`
 //! must match the bootstrap workspace byte for byte or the client refuses
 //! to connect at all. Secrets never appear in argv or the environment: the
-//! credential exists only inside the `0600` bootstrap file, and the peer's
-//! euid is verified before it is sent. Every error is a static message;
-//! record payloads are never echoed.
+//! credential exists only inside the `0600` bootstrap file; on a Unix
+//! endpoint the peer's euid is verified before it is sent, and on a `wss`
+//! endpoint certificate and hostname validation complete first — there is
+//! no flag that weakens either. An operator private CA enters only through
+//! `--tls-ca-file`. Every error is a static message; record payloads are
+//! never echoed.
 
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -34,23 +39,19 @@ use std::{env, fs};
 
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::transport::{
-    DeadlineStream, LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, read_optional_record,
-    read_record, write_record,
+    LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT, encode_record, read_record,
 };
 use rustx_execution_protocol::{
-    Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, EntryKind,
-    EntryStamp, FileStamp, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES,
+    Admission, Bootstrap, BootstrapEndpoint, Capability, ClientReply, ClientRequest, DecimalU64,
+    EntryKind, EntryStamp, FileStamp, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES,
     MAX_DIRECTORY_PAGE_ENTRIES, MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES,
     MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, ReadError,
     is_normalized_absolute_path,
 };
+use rustx_execution_transport::{ExecutionUrl, RecordChannel};
 
 mod mutation;
 mod search;
-
-/// `O_NOFOLLOW` refuses a symlinked final component; `O_NONBLOCK` makes a
-/// misidentified special file (FIFO, device) fail instead of blocking.
-const SECURE_OPEN_FLAGS: i32 = nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK;
 
 // The document decoder's policy constants and the wire's must be the
 // same values — the decoder crate cannot depend on the protocol crate,
@@ -69,30 +70,39 @@ const _: () = {
 fn main() -> ExitCode {
     let mut args = env::args_os();
     let _program = args.next();
-    let (binding_file, workspace) = match (
-        args.next(),
-        args.next(),
-        args.next(),
-        args.next(),
-        args.next(),
-    ) {
-        (
-            Some(binding_flag),
-            Some(binding_path),
-            Some(workspace_flag),
-            Some(workspace_path),
-            None,
-        ) if binding_flag == OsStr::new("--binding-file")
-            && workspace_flag == OsStr::new("--workspace") =>
-        {
-            (PathBuf::from(binding_path), PathBuf::from(workspace_path))
-        }
-        _ => {
-            eprintln!("usage: rustx-execution-client --binding-file PATH --workspace PATH");
-            return ExitCode::from(2);
-        }
+    let usage = || {
+        eprintln!(
+            "usage: rustx-execution-client --binding-file PATH --workspace PATH [--tls-ca-file PATH]"
+        );
+        ExitCode::from(2)
     };
-    match run(&binding_file, &workspace) {
+    let Some(binding_flag) = args.next() else {
+        return usage();
+    };
+    let Some(binding_path) = args.next() else {
+        return usage();
+    };
+    let Some(workspace_flag) = args.next() else {
+        return usage();
+    };
+    let Some(workspace_path) = args.next() else {
+        return usage();
+    };
+    if binding_flag != OsStr::new("--binding-file") || workspace_flag != OsStr::new("--workspace") {
+        return usage();
+    }
+    let ca_file = match (args.next(), args.next(), args.next()) {
+        (None, None, None) => None,
+        (Some(flag), Some(path), None) if flag == OsStr::new("--tls-ca-file") => {
+            Some(PathBuf::from(path))
+        }
+        _ => return usage(),
+    };
+    match run(
+        &PathBuf::from(binding_path),
+        &PathBuf::from(workspace_path),
+        ca_file.as_deref(),
+    ) {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("rustx-execution-client: {message}");
@@ -101,19 +111,43 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
+fn run(binding_file: &Path, workspace: &Path, ca_file: Option<&Path>) -> Result<(), String> {
     // The credential endpoint and the socket endpoint must both live under
-    // owner-only directories, or either could have been planted.
-    require_private_parent(binding_file)?;
-    let mut file = open_private_file(binding_file)?;
+    // owner-only directories, or either could have been planted — and each
+    // check runs against the pinned no-follow parent descriptor, never a
+    // re-resolved pathname.
+    let binding_parent = require_private_parent(binding_file)?;
+    let mut file = open_private_file(&binding_parent, file_name(binding_file)?)?;
     let bootstrap: Bootstrap = read_record(&mut file).map_err(|_| invalid())?;
     // The file is exactly one record; trailing bytes are a corruption.
     match file.read(&mut [0u8; 1]) {
         Ok(0) => {}
         _ => return Err(invalid()),
     }
-    require_private_parent(&bootstrap.socket_path)?;
-    require_socket(&bootstrap.socket_path)?;
+    // The endpoint is validated before any connect or credential
+    // transmission: the Unix socket gets the same owner-only path checks
+    // as before, and the WebSocket URL must satisfy the strict numeric-IP
+    // `ws`(loopback)/`wss` policy — an insecure or ambiguous endpoint is
+    // rejected outright, and a `--tls-ca-file` given for a Unix or
+    // cleartext endpoint is refused rather than silently ignored.
+    let endpoint = match &bootstrap.endpoint {
+        BootstrapEndpoint::Unix { socket_path } => {
+            if ca_file.is_some() {
+                return Err(String::from("untrusted endpoint"));
+            }
+            let socket_parent = require_private_parent(socket_path)?;
+            require_socket(&socket_parent, file_name(socket_path)?)?;
+            Endpoint::Unix(socket_path.clone())
+        }
+        BootstrapEndpoint::WebSocket { url } => {
+            let validated =
+                ExecutionUrl::validate(url).map_err(|_| String::from("untrusted endpoint"))?;
+            if !validated.is_secure() && ca_file.is_some() {
+                return Err(String::from("untrusted endpoint"));
+            }
+            Endpoint::WebSocket(validated)
+        }
+    };
 
     // A bundle naming a protocol this build does not speak is refused
     // before any workspace or socket work.
@@ -135,16 +169,28 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
     let root = PackageDirectory::open(&bootstrap.workspace)
         .map_err(|_| String::from("untrusted workspace"))?;
 
-    let mut stream =
-        UnixStream::connect(&bootstrap.socket_path).map_err(|_| String::from("unreachable"))?;
-    // One absolute budget armed when the socket is established covers
-    // peer proof, the Hello write, the reply read, and the admission
-    // verification — it never re-arms, so a byte-at-a-time peer cannot
-    // stretch it.
+    // One absolute budget armed before the transport is established
+    // covers peer proof, the Hello write, the reply read, and the
+    // admission verification — it never re-arms, so a byte-at-a-time peer
+    // cannot stretch it.
     let deadline = std::time::Instant::now() + LOCAL_HANDSHAKE_TIMEOUT;
-    // The credential is sent only to a peer owned by this same euid; a
-    // socket planted by another user never sees it.
-    require_peer_owner(&stream)?;
+    let mut channel = match endpoint {
+        Endpoint::Unix(socket_path) => {
+            let stream =
+                UnixStream::connect(&socket_path).map_err(|_| String::from("unreachable"))?;
+            // The credential is sent only to a peer owned by this same
+            // euid; a socket planted by another user never sees it.
+            require_peer_owner(&stream)?;
+            RecordChannel::unix(stream)
+        }
+        Endpoint::WebSocket(endpoint) => {
+            // TLS (when `wss`) completes inside connect — before the Hello
+            // credential is ever written — and both sides share the armed
+            // deadline.
+            rustx_execution_transport::connect(&endpoint, deadline, ca_file)
+                .map_err(|_| String::from("unreachable"))?
+        }
+    };
 
     let hello = Hello {
         version: PROTOCOL_VERSION,
@@ -167,17 +213,25 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
         ]),
         credential: bootstrap.credential,
     };
-    let mut handshake =
-        DeadlineStream::new(&mut stream, deadline).map_err(|error| handshake_error(&error))?;
-    write_record(&mut handshake, &hello).map_err(|error| handshake_error(&error))?;
-    let reply: HelloReply = read_record(&mut handshake).map_err(|error| handshake_error(&error))?;
+    let encoded = encode_record(&hello).map_err(|error| handshake_error(&error))?;
+    channel
+        .send(&encoded, Some(deadline))
+        .map_err(|error| handshake_error(&error))?;
+    let reply: HelloReply = channel
+        .receive(Some(deadline))
+        .map_err(|error| handshake_error(&error))?;
     let admission = reply.map_err(|reject| format!("rejected: {reject}"))?;
     verify_admission(&hello, &admission)?;
-    handshake
-        .finish()
-        .map_err(|error| handshake_error(&error))?;
 
-    serve(&mut stream, &root)
+    serve(&mut channel, &root)
+}
+
+/// The validated connection target derived from the bootstrap endpoint.
+enum Endpoint {
+    /// Owner-only Unix socket for the local sibling composition.
+    Unix(PathBuf),
+    /// Strictly validated WebSocket URL for the remote composition.
+    WebSocket(ExecutionUrl),
 }
 
 /// The peer's euid must equal this process's euid — the socket's other end
@@ -207,15 +261,28 @@ fn require_peer_owner(stream: &UnixStream) -> Result<(), String> {
     }
 }
 
-/// Opens the bootstrap file refusing symlink and special-file endpoints,
-/// then proves it is a regular file, singly linked, owned by this euid,
-/// and exactly mode `0600`.
-fn open_private_file(path: &Path) -> Result<fs::File, String> {
-    let file = fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(SECURE_OPEN_FLAGS)
-        .open(path)
-        .map_err(|_| invalid())?;
+/// The final component of `path` — the name every pinned `openat` and
+/// `fstatat` looks up under the verified parent descriptor.
+fn file_name(path: &Path) -> Result<&OsStr, String> {
+    path.file_name()
+        .ok_or_else(|| String::from("untrusted location"))
+}
+
+/// Opens `name` under the pinned `dir` refusing symlink and special-file
+/// endpoints, then proves it is a regular file, singly linked, owned by
+/// this euid, and exactly mode `0600`.
+fn open_private_file(dir: &fs::File, name: &OsStr) -> Result<fs::File, String> {
+    let fd = nix::fcntl::openat(
+        dir,
+        name,
+        nix::fcntl::OFlag::O_RDONLY
+            | nix::fcntl::OFlag::O_NOFOLLOW
+            | nix::fcntl::OFlag::O_CLOEXEC
+            | nix::fcntl::OFlag::O_NONBLOCK,
+        nix::sys::stat::Mode::empty(),
+    )
+    .map_err(|_| invalid())?;
+    let file = fs::File::from(fd);
     let metadata = file.metadata().map_err(|_| invalid())?;
     if !metadata.file_type().is_file()
         || metadata.uid() != nix::unistd::geteuid().as_raw()
@@ -227,29 +294,39 @@ fn open_private_file(path: &Path) -> Result<fs::File, String> {
     Ok(file)
 }
 
-/// Requires the direct parent of `path` to be an existing non-symlink
-/// owner-only (`0700`) directory owned by this euid.
-fn require_private_parent(path: &Path) -> Result<(), String> {
+/// Requires the direct parent of `path` to be an existing owner-only
+/// (`0700`) directory owned by this euid, pinned by a real no-follow walk:
+/// the shared `open_dir_nofollow` `openat`s every component from `/` with
+/// `O_DIRECTORY|O_NOFOLLOW|O_CLOEXEC`, so the returned descriptor is
+/// provably the verified directory — no ancestor swap or rename can
+/// redirect a lookup done through it.
+fn require_private_parent(path: &Path) -> Result<fs::File, String> {
     let Some(parent) = path.parent() else {
         return Err(String::from("untrusted location"));
     };
-    let metadata = fs::symlink_metadata(parent).map_err(|_| String::from("untrusted location"))?;
-    if !metadata.file_type().is_dir()
-        || metadata.uid() != nix::unistd::geteuid().as_raw()
-        || metadata.mode() & 0o777 != 0o700
-    {
+    let dir = rustx_execution_transport::open_dir_nofollow(parent)
+        .map_err(|_| String::from("untrusted location"))?;
+    let metadata = dir
+        .metadata()
+        .map_err(|_| String::from("untrusted location"))?;
+    if metadata.uid() != nix::unistd::geteuid().as_raw() || metadata.mode() & 0o777 != 0o700 {
         return Err(String::from("untrusted location"));
     }
-    Ok(())
+    Ok(dir)
 }
 
-/// Requires `path` to exist as a real socket, not a symlink to one.
-fn require_socket(path: &Path) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path).map_err(|_| String::from("unreachable"))?;
-    if !metadata.file_type().is_socket() {
-        return Err(String::from("unreachable"));
+/// Requires `name` under the pinned `dir` to be a real socket, not a
+/// symlink to one: `fstatat(AT_SYMLINK_NOFOLLOW)` sees the object itself.
+fn require_socket(dir: &fs::File, name: &OsStr) -> Result<(), String> {
+    let stat = nix::sys::stat::fstatat(dir, name, nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW)
+        .map_err(|_| String::from("unreachable"))?;
+    if nix::sys::stat::SFlag::from_bits_truncate(stat.st_mode)
+        .contains(nix::sys::stat::SFlag::S_IFSOCK)
+    {
+        Ok(())
+    } else {
+        Err(String::from("unreachable"))
     }
-    Ok(())
 }
 
 /// The admission must echo this binding's own reservation fields — its
@@ -271,14 +348,15 @@ fn verify_admission(hello: &Hello, admission: &Admission) -> Result<(), String> 
 /// Serves the Server's typed requests until a clean EOF before a record —
 /// a closed idle connection ends the process successfully. A truncated or
 /// malformed record is an error, never a silent end.
-fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String> {
+fn serve(channel: &mut RecordChannel, root: &PackageDirectory) -> Result<(), String> {
     // One serialized writer state per connection: at most one staged
     // preparation lives at a time, and it is dropped — cleaning up its own
     // private stage — when the owner is dropped at EOF or revoke.
     let mut writes = mutation::Writes::new();
     loop {
-        let Some(request) =
-            read_optional_record::<ClientRequest>(stream).map_err(|_| String::from("request"))?
+        let Some(request) = channel
+            .receive_optional::<ClientRequest>(None)
+            .map_err(|_| String::from("request"))?
         else {
             return Ok(());
         };
@@ -365,7 +443,10 @@ fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String>
                 std::time::Instant::now() + PAGE_REQUEST_TIMEOUT,
             ),
         };
-        write_record(stream, &reply).map_err(|_| String::from("reply"))?;
+        let encoded = encode_record(&reply).map_err(|_| String::from("reply"))?;
+        channel
+            .send(&encoded, None)
+            .map_err(|_| String::from("reply"))?;
     }
 }
 
