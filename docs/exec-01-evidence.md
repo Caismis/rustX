@@ -37,6 +37,39 @@ The merge of `origin/main` (50d0e5728) removed the macOS CI lanes (`rust-platfor
 
 ## Measurement record
 
+**Measured Client boundary, not a full Agent benchmark.** On Linux
+`7.0.0-43-generic` x86_64, the debug Client (binary SHA-256
+`f0d0e7d899716cfa8bf89cb7c46759255aa34b3341d390978d6f135c5f8dd004`)
+served the following near-EOF requests to a Python UDS measuring peer.
+Reproduce with `python3 test-support/measure_execution_reads.py /absolute/path/to/rustx-execution-client`.
+The fixture is deterministic: blocks of 128-byte lines followed by the same
+unterminated 13-byte UTF-8 marker containing a quote, backslash and tab. Each
+row has three fresh peer/Client runs, warm page cache, one outstanding
+request, one data RPC (handshake/calibration excluded), no save. TX/RX count
+actual framed bytes including both four-byte prefixes. Elapsed time is the
+median request/reply round trip; HWM is the maximum Client VmHWM across the
+three processes, including startup. `rchar` is a process counter calibrated
+against a no-file Ping: it measures logical reads, not storage-device I/O.
+
+| Operation | Input bytes | Selected bytes | TX/RX bytes | Client rchar excluding socket | Client HWM KiB | Median ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| ReadLines | 1,048,589 | 13 | 97/262 | 1,048,589 | 14,128 | 8.80 |
+| ReadLines | 8,388,621 | 13 | 98/263 | 8,388,621 | 14,048 | 69.96 |
+| ReadLines | 67,108,877 | 13 | 99/265 | 67,108,877 | 14,208 | 510.23 |
+| Grep | 1,048,589 | 25 | 149/130 | 2,097,260 | 17,716 | 4.68 |
+| Grep | 8,388,621 | 26 | 149/131 | 16,777,324 | 17,416 | 32.03 |
+| Grep | 67,108,877 | 27 | 149/132 | 134,217,836 | 17,400 | 243.09 |
+
+The Client reads the full source for line counts and UTF-8 validation.
+Grep validates before searching the same descriptor; its observed `rchar`
+exceeded two source lengths by 82 bytes for each size. That extra count is
+not attributed to input content. Grep's displayed line-number width changes
+with input size, but each result contains exactly one match. The Python peer
+HWM was 18,492–18,680 KiB: **not** product Server RSS. These measurements do
+not establish a release-mode regression delta, queue saturation behavior, or
+Agent Server memory. Revision `a24cbf6e6` supported neither operation over
+the wire: a range-read comparison would measure different work.
+
 Before changing selection or buffering algorithms, retain `a24cbf6e6` as the read-only comparison revision. Do not equate selecting a byte range with selecting lines or matches. Use the same release toolchain/profile, host, private roots and file generator for both variants. Record the generator seed, file byte lengths, offsets, UTF-8/escaping distribution and expected selected bytes. Use growing inputs and a fixed selected result, including near EOF. Count bytes at the Client file reader and complete encoded frames in both directions (including prefix), not just decoded result size. Count requests, not syscalls. Record Server and Client peak memory separately, data/control high-water marks and elapsed time per repetition. Report unsupported baseline operations as not comparable. No before/after delta or end-to-end performance result has yet been measured.
 
 ## Final-head gate
