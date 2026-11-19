@@ -160,37 +160,7 @@ pub(crate) fn terminal(status: ToolExecutionStatus) -> ToolExecutionResult {
     }
 }
 
-/// Facts selected by the invocation owner, independently of caller framing.
-#[derive(
-    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
-)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum InvocationFact {
-    Deadline { kind: ToolDeadlineKind },
-    CancellationRequested { cause: ToolCancellationCause },
-    SettlementObserved { certainty: ToolSettlementCertainty },
-    SettlementControlFailed { reason: String },
-}
-
-/// Native execution facts for callers without canonical `ToolCall` framing.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum NativeInvocationFact {
-    Prepared {
-        tool_name: String,
-        arguments_digest: String,
-    },
-    Started,
-    Progress {
-        progress: ToolProgress,
-    },
-    Lifecycle {
-        fact: InvocationFact,
-    },
-    Completed {
-        status: ToolExecutionStatus,
-    },
-}
+pub use rustx_types::tools::invocation::{InvocationFact, NativeInvocationFact};
 
 /// Frozen policy and clock authority for one foreground invocation.
 pub(crate) struct ForegroundInvocation<'a> {
