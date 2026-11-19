@@ -15,6 +15,7 @@
     "rebuild.sh",
     "configure-build.py",
     "audit-build.py",
+    "step-bulk-lexer.patch",
     "README.md",
     "LICENSE.md"
   ]
