@@ -801,3 +801,47 @@ root = Card(Column([
 
 
 SCENARIOS["web_a2ui_express"] = web_a2ui_express
+
+
+def web_a2ui_controls() -> Scenario:
+    card = """<a2ui>
+$/score = 3
+$/enabled = false
+$/name = "原名"
+$/date = "2026-11-19"
+$/selection = ["A"]
+root = Card(Column([
+  Slider("评分", 0, 10, $/score), Text($/score),
+  CheckBox("显示详情", $/enabled), Text($/enabled),
+  TextField("名称", $/name), Text($/name),
+  DateTimeInput($/date, true, false, _, _, "日期"), Text($/date),
+  ChoicePicker("分组", "multipleSelection", [{label:"乙组",value:"B"}], $/selection, "chips"),
+  Button(Text("提交到会话"), "primary", Event("submit"))
+]))
+</a2ui>"""
+    return Scenario("web_a2ui_controls", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Show controls",)),
+        Stream(Text(card + "\n\n" + card), Finish()),
+    ))
+
+
+SCENARIOS["web_a2ui_controls"] = web_a2ui_controls
+
+
+def web_a2ui_charts() -> Scenario:
+    card = """<a2ui>
+$/sales = [{month: "一月", units: -2}, {month: "二月", units: 3}, {month: "三月", units: 10}]
+root = Card(Column([
+  Slider("二月销量", 0, 10, $/sales/1/units),
+  Table($/sales, ["month", "units"], "销量明细"),
+  LineChart($/sales, "month", "units", "销量趋势"),
+  BarChart($/sales, "month", "units", "月度销量")
+]))
+</a2ui>"""
+    return Scenario("web_a2ui_charts", Step(
+        Expect(protocol=OPENAI_CHAT_COMPLETIONS, model="console-model", body_contains=("Show charts",)),
+        Stream(Text(card), Finish()),
+    ))
+
+
+SCENARIOS["web_a2ui_charts"] = web_a2ui_charts

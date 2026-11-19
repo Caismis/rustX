@@ -1,9 +1,9 @@
 import { Fragment, useMemo } from 'react';
 import { MarkdownText } from './MarkdownText';
-import { parseExpress, type ExpressNode } from './a2ui-express';
+import { parseExpress, type ExpressSurface } from './a2ui-express';
 import { ExpressCard } from './ExpressCard';
 
-type Part = { start: number; text: string; tree?: ExpressNode };
+type Part = { start: number; text: string; tree?: ExpressSurface };
 
 function expressParts(source: string): Part[] {
   if (!source.includes('<a2ui>') && !source.includes('a2ui')) return [{ start: 0, text: source }];
@@ -15,7 +15,7 @@ function expressParts(source: string): Part[] {
     const tree = parseExpress(body);
     if (!tree) return;
     if (consumed < start) parts.push({ start: consumed, text: source.slice(consumed, start) });
-    parts.push({ start, text: '', tree });
+    parts.push({ start, text: body, tree });
     consumed = end;
   }
   for (const line of source.matchAll(/^.*(?:\r?\n|$)/gm)) {
@@ -48,6 +48,6 @@ function expressParts(source: string): Part[] {
 export function AssistantMarkdown({ text, streaming = false }: { text: string; streaming?: boolean }) {
   const parts = useMemo(() => expressParts(text), [text]);
   return <>{parts.map((part, index) => <Fragment key={part.start}>
-    {part.tree ? <ExpressCard node={part.tree}/> : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
+    {part.tree ? <ExpressCard key={part.text} surface={part.tree}/> : <MarkdownText text={part.text} streaming={streaming && index === parts.length - 1}/>}
   </Fragment>)}</>;
 }

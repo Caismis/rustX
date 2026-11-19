@@ -1,21 +1,28 @@
-/**
- * A2UI "express" reader for assistant Markdown: parses the compact DSL —
- * `$/path = value` data bindings plus `root = Component(...)` — into a
- * resolved {@link ExpressNode} tree. Any malformed, partial, or incomplete
- * input yields null so callers can fall back to rendering the raw source.
- * Read-only: the tree carries text and variant only; interactivity is out of
- * scope. No external SDK.
- */
+/** Bounded reader for assistant-authored Express surfaces. */
+const signatures = {
+  Slider: ['label', 'min', 'max', 'value', 'steps', 'weight'],
+  CheckBox: ['label', 'value', 'weight'],
+  TextField: ['label', 'value', 'placeholder', 'variant', 'weight'],
+  ChoicePicker: ['label', 'variant', 'options', 'value', 'displayStyle', 'filterable', 'weight'],
+  DateTimeInput: ['value', 'enableDate', 'enableTime', 'min', 'max', 'label', 'weight'],
+  Button: ['child', 'variant', 'action', 'weight'],
+  Table: ['rows', 'columns', 'title'],
+  LineChart: ['rows', 'x', 'y', 'title'],
+  BarChart: ['rows', 'x', 'y', 'title'],
+} satisfies Record<string, string[]>;
 
-/** Component kinds the express grammar admits. */
-export type ExpressKind = 'Card' | 'Column' | 'List' | 'Row' | 'Divider' | 'Text';
-
-/** One resolved express node: containers nest children; Text carries text/variant. */
+export type ExpressKind = 'Text' | 'Column' | 'List' | 'Card' | 'Row' | 'Divider' | keyof typeof signatures;
 export interface ExpressNode {
   kind: ExpressKind;
   children: ExpressNode[];
   text?: string;
   variant?: string;
+  props?: Record<string, unknown>;
+  bindings?: Record<string, string[]>;
+}
+export interface ExpressSurface {
+  root: ExpressNode;
+  data: Record<string, unknown>;
 }
 
 type Token =
@@ -146,11 +153,14 @@ type ScalarExpr =
   | { type: 'literal'; value: string | number | boolean | null }
   | { type: 'ref'; path: string[] };
 
+type PropertyExpr = { type: 'value'; value: unknown } | { type: 'ref'; path: string[] };
+
 /** Pre-resolution component: containers hold raw children; Text holds its operand. */
 type RawNode = { reference: string } | {
   kind: ExpressKind;
   children: RawNode[];
   textExpr?: ScalarExpr;
+  properties?: Record<string, PropertyExpr>;
   variant?: string;
 }
 
@@ -161,7 +171,7 @@ interface Program {
   data: Record<string, unknown>;
 }
 
-const COMPONENT_KINDS = new Set<string>(['Card', 'Column', 'List', 'Row', 'Divider', 'Text']);
+const COMPONENT_KINDS = new Set<string>(['Card', 'Column', 'List', 'Row', 'Divider', 'Text', ...Object.keys(signatures)]);
 const INDEX_SEGMENT = /^\d+$/;
 // Bounds recursion on untrusted input; ~256 nesting levels is far beyond any
 // legitimate card, and deeper input falls back to the raw source.
@@ -340,6 +350,10 @@ class Parser {
         variant = parsed;
       }
       node = { kind, children: [], textExpr, variant };
+    } else if (Object.hasOwn(signatures, kind)) {
+      const parsed = this.parseProperties(kind as keyof typeof signatures, depth);
+      if (!parsed) return null;
+      node = parsed;
     } else if (kind === 'Divider') {
       let variant: string | undefined;
       if (!this.atPunct(')')) {
@@ -360,6 +374,55 @@ class Parser {
       node = { kind, children };
     }
     return this.expectPunct(')') ? node : null;
+  }
+
+  private parseProperties(kind: keyof typeof signatures, depth: number): RawNode | null {
+    const names: readonly string[] = signatures[kind];
+    const seen = new Set<string>();
+    const properties: Record<string, PropertyExpr> = Object.create(null);
+    const children: RawNode[] = [];
+    let index = 0;
+    while (!this.atPunct(')')) {
+      let key = names[index++];
+      const first = this.peek(), next = this.tokens[this.pos + 1];
+      if (first.type === 'ident' && next?.type === 'punct' && next.value === '=') {
+        key = first.value;
+        this.pos += 2;
+      }
+      const argument = this.peek();
+      if (!key || !names.includes(key) || seen.has(key)) return null;
+      seen.add(key);
+      if (argument.type === 'ident' && argument.value === '_') {
+        this.pos++;
+      } else if (key === 'child') {
+        const child = this.parseComponent(depth + 1);
+        if (!child) return null;
+        children.push(child);
+      } else if (key === 'action') {
+        // Consume an opaque, balanced action expression. No action reaches the renderer.
+        if (argument.type !== 'ident' || argument.value !== 'Event') return null;
+        this.pos++;
+        if (!this.expectPunct('(')) return null;
+        let nesting = 1;
+        while (nesting > 0) {
+          const token = this.peek();
+          if (token.type === 'eof') return null;
+          if (this.atPunct('(')) nesting++;
+          if (this.atPunct(')')) nesting--;
+          this.pos++;
+        }
+      } else if (argument.type === 'ref') {
+        properties[key] = argument;
+        this.pos++;
+      } else {
+        const value = this.parseValue(depth + 1);
+        if (!value) return null;
+        properties[key] = { type: 'value', value: evalValue(value) };
+      }
+      if (!this.expectPunct(',')) break;
+    }
+    if (kind === 'Button' && children.length !== 1) return null;
+    return { kind, properties, children };
   }
 
   /** One child position: a component, or an array literal flattened to nodes. */
@@ -486,7 +549,7 @@ function resolveNode(node: RawNode, program: Program, budget: { remaining: numbe
   if (node.kind === 'Text') {
     const text = node.textExpr === undefined ? '' : resolveScalar(node.textExpr, program.data);
     if (text === null) return null;
-    return { kind: 'Text', children: [], text, ...(node.variant === undefined ? {} : { variant: node.variant }) };
+    return { kind: 'Text', children: [], text, ...(node.textExpr?.type === 'ref' ? { bindings: { text: node.textExpr.path } } : {}), ...(node.variant === undefined ? {} : { variant: node.variant }) };
   }
   if (node.kind === 'Divider') {
     return { kind: 'Divider', children: [], ...(node.variant === undefined ? {} : { variant: node.variant }) };
@@ -497,7 +560,32 @@ function resolveNode(node: RawNode, program: Program, budget: { remaining: numbe
     if (resolved === null) return null;
     children.push(resolved);
   }
-  return { kind: node.kind, children };
+  if (!node.properties) return { kind: node.kind, children };
+  const props: Record<string, unknown> = Object.create(null);
+  const bindings: Record<string, string[]> = Object.create(null);
+  for (const [key, expr] of Object.entries(node.properties)) {
+    if (expr.type === 'ref') {
+      bindings[key] = expr.path;
+      const value = lookupPath(program.data, expr.path);
+      props[key] = value === MISSING ? undefined : value;
+    } else {
+      props[key] = expr.value;
+    }
+  }
+  if (['Table', 'LineChart', 'BarChart'].includes(node.kind)) {
+    if (!Array.isArray(props.rows) || !props.rows.every(row => row && typeof row === 'object' && !Array.isArray(row))) return null;
+    const strings = (value: unknown) => Array.isArray(value) && value.every(item => typeof item === 'string');
+    if (node.kind === 'Table' ? props.columns !== undefined && !strings(props.columns)
+      : typeof props.x !== 'string' || !(typeof props.y === 'string' || strings(props.y))) return null;
+    // Bound rendered cells and plotted points, including repeated named components.
+    const fields = node.kind === 'Table'
+      ? (Array.isArray(props.columns) && props.columns.length ? props.columns.length : new Set(props.rows.flatMap(row => Object.keys(row))).size)
+      : (Array.isArray(props.y) ? props.y.length : 1);
+    if (!fields && node.kind !== 'Table') return null;
+    budget.remaining -= props.rows.length * Math.max(fields, 1);
+    if (budget.remaining < 0) return null;
+  }
+  return { kind: node.kind, children, props, bindings };
 }
 
 /** Strip an optional `<a2ui>...</a2ui>` wrapper so callers may pass either form. */
@@ -516,10 +604,38 @@ function unwrapA2ui(source: string): string {
  * @param source - Express DSL text (optionally `<a2ui>`-wrapped).
  * @returns The resolved root node, or null when the input is not valid express.
  */
-export function parseExpress(source: string): ExpressNode | null {
+export function parseExpress(source: string): ExpressSurface | null {
   const tokens = tokenize(unwrapA2ui(source));
   if (tokens === null) return null;
   const program = new Parser(tokens).parse();
   if (program === null) return null;
-  return resolveNode(program.root, program, { remaining: 4096 }, 0);
+  const root = resolveNode(program.root, program, { remaining: 4096 }, 0);
+  return root && { root, data: program.data };
+}
+
+/** Copy only containers on the edited path. Each mounted surface owns its own model. */
+export function writeBinding(data: Record<string, unknown>, path: string[], value: unknown): Record<string, unknown> {
+  function write(parent: unknown, index: number): unknown {
+    if (index === path.length) return value;
+    const key = path[index]!;
+    if (Array.isArray(parent)) {
+      if (!INDEX_SEGMENT.test(key)) return parent;
+      const copy = parent.slice();
+      copy[Number(key)] = write(parent[Number(key)], index + 1);
+      return copy;
+    }
+    const copy = Object.assign(Object.create(null), parent && typeof parent === 'object' ? parent : undefined);
+    copy[key] = write(copy[key], index + 1);
+    return copy;
+  }
+  return write(data, 0) as Record<string, unknown>;
+}
+
+export function boundProps(node: ExpressNode, data: Record<string, unknown>): Record<string, unknown> {
+  const props = { ...node.props };
+  for (const [key, path] of Object.entries(node.bindings ?? {})) {
+    const value = lookupPath(data, path);
+    props[key] = value === MISSING ? undefined : value;
+  }
+  return props;
 }

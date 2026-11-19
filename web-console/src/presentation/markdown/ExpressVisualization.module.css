@@ -1,0 +1,138 @@
+/* Express Table/LineChart/BarChart nodes: semantic table plus SVG charts.
+   All colors resolve through the dsw theme aliases so light/dark both work. */
+
+.tableScroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.tableScroll:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
+}
+
+.tableScroll table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+.caption {
+  padding: 0 0 0.5rem;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+  text-align: start;
+}
+
+.tableScroll th {
+  padding: 8px 14px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l3);
+  color: var(--dsw-alias-label-secondary);
+  font: var(--dsw-font-markdown-table-head);
+  text-align: start;
+  white-space: nowrap;
+}
+
+.tableScroll td {
+  padding: 8px 14px;
+  border-bottom: 0.5px solid var(--dsw-alias-border-l2);
+  color: var(--dsw-alias-label-primary);
+  font: var(--dsw-font-markdown-table);
+  overflow-wrap: anywhere;
+}
+
+.tableScroll th:first-child,
+.tableScroll td:first-child {
+  padding-left: 0;
+}
+
+.tableScroll th:last-child,
+.tableScroll td:last-child {
+  padding-right: 0;
+}
+
+.tableScroll .numeric {
+  text-align: end;
+  font-variant-numeric: tabular-nums;
+}
+
+.tableScroll .missing {
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.figure {
+  min-width: 0;
+  margin: 0.75rem 0;
+}
+
+.title {
+  display: block;
+  margin: 0 0 0.4rem;
+  color: var(--dsw-alias-label-primary);
+  font-weight: 600;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.grid {
+  stroke: var(--dsw-alias-border-l1);
+  stroke-width: 1;
+}
+
+.zero,
+.axis {
+  stroke: var(--dsw-alias-border-l3);
+  stroke-width: 1;
+}
+
+.tick {
+  fill: var(--dsw-alias-label-tertiary);
+  font-family: var(--ds-font-family-code);
+  font-size: 10px;
+}
+
+.line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.point {
+  stroke: var(--dsw-alias-bg-layer-1);
+  stroke-width: 1;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem 1rem;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 0.8rem;
+  list-style: none;
+}
+
+.legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.swatch {
+  flex: none;
+  width: 0.65em;
+  height: 0.65em;
+  border-radius: 2px;
+}
+
+.empty {
+  margin: 0.5rem 0;
+  color: var(--dsw-alias-label-tertiary);
+  font-size: 0.875em;
+}

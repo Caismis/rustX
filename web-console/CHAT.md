@@ -690,3 +690,25 @@ intakes. First-submit sealing transfers ownership to FirstSubmissions before cre
 admission/discard releases those files. A known rejected create returns files to the original live intake for editing.
 User-input count/byte limits are distinct from transfer limits and are independently
 validated by the native receipt collection owner before turn admission.
+
+## A2UI Express controls and charts
+
+Assistant replies can include an Express surface between `<a2ui>` and `</a2ui>` on their own lines, or in an `a2ui` code fence. Bind a control and a display component to the same data path to update the display locally. Each surface has its own values. Reopening a rendered message initializes the controls from its source. Action buttons display their labels and do not submit a chat turn.
+
+The rustX display catalog adds three components for arrays of row objects.
+
+| Component | Positional arguments |
+| --- | --- |
+| `Table` | Rows, ordered column keys, title |
+| `LineChart` | Rows, x key, numeric y key or array of y keys, title |
+| `BarChart` | Rows, x key, numeric y key or array of y keys, title |
+
+```a2ui
+$/sales = [{month: "January", units: -2}, {month: "February", units: 3}, {month: "March", units: 10}]
+root = Card(Column([
+  Slider("February units", 0, 10, $/sales/1/units),
+  Table($/sales, ["month", "units"], "Sales data"),
+  LineChart($/sales, "month", "units", "Trend"),
+  BarChart($/sales, "month", "units", "Monthly totals")
+]))
+```

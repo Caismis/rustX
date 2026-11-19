@@ -1,0 +1,40 @@
+.control { display: flex; flex-direction: column; gap: .3rem; min-width: 0; }
+.controlLabel { color: var(--dsw-alias-label-secondary); font-size: .875em; }
+.field {
+  width: 100%; min-width: 0; padding: .4rem .55rem;
+  border: 0.5px solid var(--dsw-alias-border-l4); border-radius: var(--dsw-radius-md, 8px);
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+  font: inherit; font-size: .875em;
+}
+.field:focus { outline: none; border-color: var(--dsw-alias-brand-primary); }
+.field::placeholder { color: var(--dsw-alias-label-dimmed); }
+textarea.field { resize: vertical; }
+.check, .choice { display: flex; align-items: center; gap: .5rem; cursor: pointer; }
+.check input, .choice input { accent-color: var(--dsw-alias-brand-primary); margin: 0; }
+.slider { display: flex; align-items: center; gap: .6rem; }
+.slider input[type='range'] { flex: 1; min-width: 0; accent-color: var(--dsw-alias-brand-primary); }
+.sliderValue { min-width: 2ch; text-align: right; color: var(--dsw-alias-label-secondary); font-variant-numeric: tabular-nums; }
+.choiceList { display: flex; flex-direction: column; gap: .3rem; }
+.chips { display: flex; flex-wrap: wrap; gap: .4rem; }
+.chip {
+  padding: .25rem .7rem; border: 0.5px solid var(--dsw-alias-border-l4); border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+  font: inherit; font-size: .875em; cursor: pointer;
+}
+.chipActive, .chip[aria-pressed='true'] {
+  border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary);
+}
+.button, .buttonPrimary, .buttonBorderless {
+  padding: .4rem .9rem; border-radius: var(--dsw-radius-md, 8px);
+  font: inherit; font-size: .875em; cursor: default;
+}
+.button {
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-primary);
+}
+.buttonPrimary {
+  border: 0.5px solid var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-brand-primary); color: var(--dsw-alias-bg-layer-1);
+}
+.buttonBorderless { border: none; background: transparent; color: var(--dsw-alias-brand-primary); padding-inline: .2rem; }
+.button:disabled { opacity: .6; }
