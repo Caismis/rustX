@@ -6,43 +6,62 @@
 //! the budget is adopted into the conversation-owned registry. Cancellation
 //! still kills that one process.
 
-use crate::runtime::cancellation::CancellationSignal;
+use crate::runtime::cancellation::ExecutionCancellation;
 use crate::runtime::types::CancellationReason;
 use crate::tools::background::{BackgroundDispatchOutcome, PrivateBashStage};
 use crate::tools::executor::ProgressReporter;
-use crate::tools::native::support::{cancelled_result, failed_result};
+use crate::tools::invocation::ForegroundHandoff;
 use crate::tools::types::ToolExecutionResult;
-use std::time::Duration;
 
 /// Drives one private Bash stage until it finishes, the caller cancels, or the
 /// foreground budget expires.
 pub(crate) async fn drive_private_bash(
     mut stage: PrivateBashStage,
-    budget: Duration,
-    cancellation: &CancellationSignal,
-    cancel_reason: CancellationReason,
+    handoff: &ForegroundHandoff,
+    cancellation: &ExecutionCancellation,
     progress: &dyn ProgressReporter,
 ) -> ToolExecutionResult {
-    let sleep = tokio::time::sleep(budget);
+    let sleep = tokio::time::sleep(handoff.budget);
     tokio::pin!(sleep);
+    let flush_progress = |stage: &mut PrivateBashStage| {
+        while let Some(update) = stage.take_progress() {
+            progress.report(update);
+        }
+    };
     let mut stopping = false;
     loop {
         if let Some(result) = stage.take_result() {
+            flush_progress(&mut stage);
             return stage.release_finished(result);
         }
         tokio::select! {
             biased;
             () = cancellation.cancelled(), if !stopping => {
                 stopping = true;
-                stage.cancel(cancel_reason);
+                stage.cancel(cancellation.reason());
             }
             () = &mut sleep, if !stopping => {
-                return match stage.adopt(cancellation).await {
-                    Ok(BackgroundDispatchOutcome::Accepted { result, .. }
-                        | BackgroundDispatchOutcome::ForegroundFinished(result)) => result,
-                    Ok(BackgroundDispatchOutcome::RolledBack) => cancelled_result(cancel_reason),
-                    Err(error) => failed_result(error.to_string()),
-                };
+                match stage.adopt(cancellation.signal()).await {
+                    Ok(BackgroundDispatchOutcome::Accepted { result, .. }) => {
+                        handoff.record_transfer();
+                        flush_progress(&mut stage);
+                        return result;
+                    }
+                    Ok(BackgroundDispatchOutcome::ForegroundFinished(result)) => {
+                        flush_progress(&mut stage);
+                        return result;
+                    }
+                    Ok(BackgroundDispatchOutcome::RolledBack) | Err(_) => {
+                        // Ownership is still here. Ask the process to stop,
+                        // then take its actual settlement and output.
+                        stopping = true;
+                        stage.cancel(if cancellation.is_cancelled() {
+                            cancellation.reason()
+                        } else {
+                            CancellationReason::RuntimeShutdown
+                        });
+                    }
+                }
             }
             progress_event = stage.wait_event() => {
                 if let Some(update) = progress_event {

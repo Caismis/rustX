@@ -1690,11 +1690,13 @@ explicit `timeout` overrides it, capped at 600 seconds. A strictly shorter
 runtime hard deadline takes priority and terminates the foreground execution.
 A command that finishes within the budget returns a normal foreground result
 without a job listing or a terminal inbound. A command still running at the
-budget is adopted into the conversation-owned registry and the call returns
-the handoff. Cancellation of
-the call still kills that one process. Progress reported while the call waits
-stays on the foreground progress path. If Goal admission temporarily excludes a new job,
-Bash runs in the foreground with that budget as its execution timeout.
+budget can be adopted into the conversation-owned registry, at which point
+the call returns the handoff. Until that ownership commit, the foreground
+invocation owns cancellation and collects the real terminal output if the
+handoff is refused. After commit, the job owns the same process. Progress
+reported before transfer stays on the foreground path. If Goal admission
+temporarily excludes a new job, Bash runs in the foreground with that budget
+as its execution timeout.
 
 The real `ConversationRuntime::shutdown()` path is covered by a deterministic
 regression: it observes the Runtime Client pending event, linearizes

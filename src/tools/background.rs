@@ -35,7 +35,9 @@
 //!   a later attempt cancellation can never reclaim the detached execution.
 //!
 //! There is no unchecked window between the deciding observations and the
-//! prepared→owned registry transition.
+//! prepared→owned registry transition. Bash handoff uses the same ownership
+//! commit for an already-started foreground process. A refusal leaves that
+//! operation in its private stage so the foreground owner can settle it.
 //!
 //! # Background live output (Issue #86)
 //!
@@ -730,6 +732,20 @@ impl Drop for PreparedBackgroundDispatch {
     }
 }
 
+enum BackgroundOwnershipTransfer {
+    Parked(Box<PreparedBackgroundDispatch>),
+    Handoff(ToolExecutionId),
+}
+
+impl BackgroundOwnershipTransfer {
+    fn execution_id(&self) -> &ToolExecutionId {
+        match self {
+            Self::Parked(dispatch) => &dispatch.execution_id,
+            Self::Handoff(id) => id,
+        }
+    }
+}
+
 /// A Bash process running before any background job is visible.
 pub(crate) struct PrivateBashStage {
     registry: ConversationBackgroundRegistry,
@@ -769,6 +785,10 @@ impl PrivateBashStage {
             .and_then(|prepared| prepared.private_result.take())
     }
 
+    pub(crate) fn take_progress(&mut self) -> Option<ToolProgress> {
+        self.progress_rx.try_recv().ok()
+    }
+
     /// Drops the private stage without publishing a job or a terminal inbound.
     pub(crate) fn release_finished(mut self, result: ToolExecutionResult) -> ToolExecutionResult {
         self.registry.state().prepared.remove(&self.execution_id);
@@ -780,26 +800,22 @@ impl PrivateBashStage {
     }
 
     pub(crate) async fn adopt(
-        self,
+        &mut self,
         cancellation: &CancellationSignal,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         let outcome = self
             .registry
-            .commit_dispatch_owned(self.dispatch, cancellation)
+            .commit_ownership(
+                BackgroundOwnershipTransfer::Handoff(self.execution_id.clone()),
+                cancellation,
+            )
             .await;
-        // A refused handoff still owns a real shell. Its cancellation settles
-        // the process group before the foreground call returns.
-        if !matches!(
+        if matches!(
             outcome,
             Ok(BackgroundDispatchOutcome::Accepted { .. }
                 | BackgroundDispatchOutcome::ForegroundFinished(_))
-        ) && self
-            .registry
-            .state()
-            .prepared
-            .contains_key(&self.execution_id)
-        {
-            self.settled.notified().await;
+        ) {
+            self.dispatch.committed = true;
         }
         outcome
     }
@@ -909,7 +925,7 @@ struct PreparedRecord {
     /// A foreground Bash stage. The process may run before ownership commit,
     /// but the record stays out of listing and publishes no terminal inbound
     /// until [`ConversationBackgroundRegistry::commit_dispatch_owned`].
-    private_stage: bool,
+    private_owner: Option<ExecutionCancellation>,
     settled: Arc<Notify>,
     private_result: Option<ToolExecutionResult>,
     progress_tx: Option<tokio::sync::mpsc::Sender<ToolProgress>>,
@@ -946,6 +962,8 @@ struct BackgroundRegistryState {
     commit_hook: Option<Arc<test_sync::CommitBoundaryHook>>,
     #[cfg(test)]
     publication_hook: Option<Arc<test_sync::CommitBoundaryHook>>,
+    #[cfg(test)]
+    ownership_wait: Option<Arc<Notify>>,
 }
 
 /// The conversation-owned authoritative background registry.
@@ -1013,6 +1031,8 @@ impl ConversationBackgroundRegistry {
                 commit_hook: None,
                 #[cfg(test)]
                 publication_hook: None,
+                #[cfg(test)]
+                ownership_wait: None,
             })),
             resources,
             state_version,
@@ -1331,7 +1351,7 @@ impl ConversationBackgroundRegistry {
             },
             gate,
             runner,
-            private_stage: false,
+            private_owner: None,
             settled: Arc::new(Notify::new()),
             private_result: None,
             progress_tx: None,
@@ -1353,11 +1373,14 @@ impl ConversationBackgroundRegistry {
     pub(crate) fn abort_prepared_for_drain(&self) {
         let mut state = self.state();
         state.prepared.retain(|execution_id, prepared| {
-            if prepared.private_stage {
-                prepared
-                    .record
-                    .cancel_reason
-                    .get_or_insert(CancellationReason::RuntimeShutdown);
+            if let Some(owner) = &prepared.private_owner {
+                prepared.record.cancel_reason.get_or_insert_with(|| {
+                    if owner.is_cancelled() {
+                        owner.reason()
+                    } else {
+                        CancellationReason::RuntimeShutdown
+                    }
+                });
                 prepared.record.cancellation.cancel();
                 return true;
             }
@@ -1382,6 +1405,18 @@ impl ConversationBackgroundRegistry {
         prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
+        self.commit_ownership(
+            BackgroundOwnershipTransfer::Parked(Box::new(prepared)),
+            attempt_cancellation,
+        )
+        .await
+    }
+
+    async fn commit_ownership(
+        &self,
+        mut transfer: BackgroundOwnershipTransfer,
+        attempt_cancellation: &CancellationSignal,
+    ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         let admission = self
             .resources
             .mailbox
@@ -1390,11 +1425,14 @@ impl ConversationBackgroundRegistry {
                 conversation_id: self.conversation_id.clone(),
             })?;
         let gate = self.state().durability_gate.clone();
+        #[cfg(test)]
+        if let Some(notify) = self.state().ownership_wait.take() {
+            notify.notify_one();
+        }
         let permission = match gate.as_ref() {
             Some(gate) => Some(tokio::select! {
                 biased;
                 () = attempt_cancellation.cancelled() => {
-                    drop(prepared);
                     return Ok(BackgroundDispatchOutcome::RolledBack);
                 }
                 permission = gate.enter_ownership_commit_async() => permission,
@@ -1405,7 +1443,16 @@ impl ConversationBackgroundRegistry {
         let cancellation = attempt_cancellation.clone();
         tokio::task::spawn_blocking(move || {
             let _admission = admission;
-            registry.commit_dispatch_with_permission(prepared, &cancellation, permission.as_ref())
+            let outcome = registry.commit_dispatch_with_permission(
+                transfer.execution_id(),
+                &cancellation,
+                permission.as_ref(),
+            );
+            if let BackgroundOwnershipTransfer::Parked(prepared) = &mut transfer {
+                prepared.committed =
+                    matches!(outcome, Ok(BackgroundDispatchOutcome::Accepted { .. }));
+            }
+            outcome
         })
         .await
         .map_err(|error| BackgroundDispatchError::Durable {
@@ -1421,12 +1468,18 @@ impl ConversationBackgroundRegistry {
     #[cfg(test)]
     pub fn commit_dispatch(
         &self,
-        prepared: PreparedBackgroundDispatch,
+        mut prepared: PreparedBackgroundDispatch,
         attempt_cancellation: &CancellationSignal,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
         let gate = self.state().durability_gate.clone();
         let permission = gate.as_ref().map(DurabilityGate::enter_ownership_commit);
-        self.commit_dispatch_with_permission(prepared, attempt_cancellation, permission.as_ref())
+        let outcome = self.commit_dispatch_with_permission(
+            &prepared.execution_id,
+            attempt_cancellation,
+            permission.as_ref(),
+        );
+        prepared.committed = matches!(outcome, Ok(BackgroundDispatchOutcome::Accepted { .. }));
+        outcome
     }
 
     /// Stage two: commits the prepared dispatch (the linearization point).
@@ -1463,7 +1516,7 @@ impl ConversationBackgroundRegistry {
     #[allow(clippy::too_many_lines)] // Ownership COMMIT, rollback and native installation form one boundary.
     fn commit_dispatch_with_permission(
         &self,
-        mut prepared: PreparedBackgroundDispatch,
+        execution_id: &ToolExecutionId,
         attempt_cancellation: &CancellationSignal,
         ownership_permission: Option<&Result<DurabilityCommitGuard, OwnershipCommitRefused>>,
     ) -> Result<BackgroundDispatchOutcome, BackgroundDispatchError> {
@@ -1497,8 +1550,7 @@ impl ConversationBackgroundRegistry {
             // Reject: roll the prepared dispatch back completely — the
             // runner is aborted while still parked behind its start gate —
             // and report the runtime-owned health diagnostic.
-            self.discard_prepared_record(&mut state, &prepared.execution_id);
-            prepared.committed = true;
+            self.discard_parked_record(&mut state, execution_id);
             drop(state);
             self.notify_state_change();
             self.resources.mailbox.wake().notify_one();
@@ -1531,30 +1583,23 @@ impl ConversationBackgroundRegistry {
         // closure is refused; the closure wins first and drain follows it.
         let commit_result = self.resources.mailbox.with_running_commit(|| {
             if self.resources.mailbox.is_bound_inactive() {
-                self.discard_prepared_record(&mut state, &prepared.execution_id);
-                prepared.committed = true;
+                self.discard_parked_record(&mut state, execution_id);
                 return Err(BackgroundDispatchError::ConversationInactive {
                     conversation_id: self.conversation_id.clone(),
                 });
             }
             if attempt_cancellation.is_cancelled() {
-                // The deciding cancellation observation and the rollback
-                // share this critical section: the prepared record is
-                // removed and the runner aborted here, and the prepared
-                // handle's drop semantics are neutralized so no second
-                // rollback path exists.
-                self.discard_prepared_record(&mut state, &prepared.execution_id);
-                prepared.committed = true;
+                // An unstarted dispatch rolls back at this cut. A private
+                // foreground operation keeps its result and output here.
+                self.discard_parked_record(&mut state, execution_id);
                 return Ok(BackgroundDispatchOutcome::RolledBack);
             }
-            let Some(mut prepared_record) = state.prepared.remove(&prepared.execution_id) else {
-                prepared.committed = true;
+            let Some(mut prepared_record) = state.prepared.remove(execution_id) else {
                 return Ok(BackgroundDispatchOutcome::RolledBack);
             };
             if let Some(result) = prepared_record.private_result.take() {
-                prepared.committed = true;
                 return Ok(BackgroundDispatchOutcome::ForegroundFinished(
-                    self.finish_private_output(&prepared.execution_id, result),
+                    self.finish_private_output(execution_id, result),
                 ));
             }
             // Issue #12 (M9a): the durable ownership fact commits **before**
@@ -1567,7 +1612,7 @@ impl ConversationBackgroundRegistry {
             // reason about an execution the store never saw.
             let ownership = background_ownership_event(
                 &self.conversation_id,
-                &prepared.execution_id,
+                execution_id,
                 &prepared_record.record,
                 self.resources.clock.now(),
             );
@@ -1578,11 +1623,8 @@ impl ConversationBackgroundRegistry {
             {
                 Ok(committed) => committed,
                 Err(error) => {
-                    state
-                        .prepared
-                        .insert(prepared.execution_id.clone(), prepared_record);
-                    self.discard_prepared_record(&mut state, &prepared.execution_id);
-                    prepared.committed = true;
+                    state.prepared.insert(execution_id.clone(), prepared_record);
+                    self.discard_parked_record(&mut state, execution_id);
                     return Err(BackgroundDispatchError::Durable {
                         detail: error.to_string(),
                     });
@@ -1593,16 +1635,16 @@ impl ConversationBackgroundRegistry {
                 hook.enter();
             }
             let result = accepted_result(
-                &prepared.execution_id,
+                execution_id,
                 &prepared_record.record.tool_name,
                 &self
                     .resources
                     .tool_output
-                    .background_output_path(&prepared.execution_id),
+                    .background_output_path(execution_id),
             );
-            let execution_id = prepared.execution_id.clone();
+            let execution_id = execution_id.clone();
             let gate = prepared_record.gate.clone();
-            if prepared_record.private_stage {
+            if prepared_record.private_owner.is_some() {
                 prepared_record.record.executor_started = true;
                 prepared_record.record.lifecycle = BackgroundLifecycle::Running;
             }
@@ -1621,7 +1663,6 @@ impl ConversationBackgroundRegistry {
                     Some(0),
                 );
             }
-            prepared.committed = true;
             gate.notify_one();
             Ok(BackgroundDispatchOutcome::Accepted {
                 execution_id,
@@ -1633,8 +1674,7 @@ impl ConversationBackgroundRegistry {
             // record private. Roll it back before the counted admission is
             // released, so quiescence cannot become visible with a stale
             // prepared runner still owned by this dispatch.
-            self.discard_prepared_record(&mut state, &prepared.execution_id);
-            prepared.committed = true;
+            self.discard_parked_record(&mut state, execution_id);
         }
         // `ownership_permission` (the gate guard) drops with this scope,
         // after the record publication above: the DurabilityFailed commit
@@ -1669,6 +1709,7 @@ impl ConversationBackgroundRegistry {
         executor: &Arc<dyn ToolExecutor>,
         environment: ToolEnvironment,
         mcp_leases: McpRuntimeLeaseSet,
+        owner: ExecutionCancellation,
     ) -> Result<PrivateBashStage, BackgroundDispatchError> {
         let dispatch =
             self.prepare_dispatch_with_mcp_leases(invocation, executor, environment, mcp_leases)?;
@@ -1681,7 +1722,7 @@ impl ConversationBackgroundRegistry {
                 .ok_or_else(|| BackgroundDispatchError::ConversationInactive {
                     conversation_id: self.conversation_id.clone(),
                 })?;
-            prepared.private_stage = true;
+            prepared.private_owner = Some(owner);
             prepared.progress_tx = Some(progress_tx);
             let settled = prepared.settled.clone();
             prepared.gate.notify_one();
@@ -2678,6 +2719,22 @@ impl ConversationBackgroundRegistry {
         }
     }
 
+    /// A handoff refusal leaves the running operation and its output with
+    /// the foreground caller. Only an unstarted detached dispatch rolls back.
+    fn discard_parked_record(
+        &self,
+        state: &mut BackgroundRegistryState,
+        execution_id: &ToolExecutionId,
+    ) {
+        if state
+            .prepared
+            .get(execution_id)
+            .is_some_and(|p| p.private_owner.is_none())
+        {
+            self.discard_prepared_record(state, execution_id);
+        }
+    }
+
     /// The shared prepared-dispatch rollback under the held registry lock:
     /// aborts the parked runner and discards its allocated live-output
     /// file.
@@ -2687,7 +2744,7 @@ impl ConversationBackgroundRegistry {
         execution_id: &ToolExecutionId,
     ) -> bool {
         if let Some(prepared) = state.prepared.get_mut(execution_id)
-            && prepared.private_stage
+            && prepared.private_owner.is_some()
             && prepared.private_result.is_none()
         {
             // Detach the caller's progress receiver and let the running shell
@@ -2725,6 +2782,11 @@ impl ConversationBackgroundRegistry {
             // Keep the explicit physical generation owners alive from
             // dispatch publication until the detached execution settles.
             let _mcp_leases = mcp_leases;
+            let mut private_owner = registry
+                .state()
+                .prepared
+                .get(&execution_id)
+                .and_then(|prepared| prepared.private_owner.clone());
             registry.mark_running(&execution_id);
             let reporter = BackgroundProgressReporter {
                 registry: registry.clone(),
@@ -2776,6 +2838,21 @@ impl ConversationBackgroundRegistry {
                 } = crate::tools::executor::start_tool_execution(&*executor, invocation, context);
                 tokio::pin!(completion);
                 tokio::pin!(settlement);
+                let drive_completion = std::future::poll_fn(|cx| {
+                    if let Some(owner) = private_owner.take() {
+                        // The first physical poll can spawn Bash. Serialize it
+                        // with the live foreground cancellation grant.
+                        owner
+                            .with_active(|| completion.as_mut().poll(cx))
+                            .unwrap_or_else(|| {
+                                std::task::Poll::Ready(
+                                    crate::tools::native::support::cancelled_result(owner.reason()),
+                                )
+                            })
+                    } else {
+                        completion.as_mut().poll(cx)
+                    }
+                });
                 tokio::select! {
                 biased;
                 () = cancellation.cancelled() => {
@@ -2796,7 +2873,7 @@ impl ConversationBackgroundRegistry {
                         }
                     }
                 },
-                result = completion.as_mut() => result,
+                result = drive_completion => result,
                 }
             };
             registry.deliver_runner_result(&execution_id, result);
@@ -2808,7 +2885,7 @@ impl ConversationBackgroundRegistry {
     fn deliver_runner_result(&self, execution_id: &ToolExecutionId, result: ToolExecutionResult) {
         let mut state = self.state();
         if let Some(prepared) = state.prepared.get_mut(execution_id)
-            && prepared.private_stage
+            && prepared.private_owner.is_some()
         {
             let settled = prepared.settled.clone();
             if prepared.progress_tx.is_some() {
@@ -3295,7 +3372,7 @@ mod tests {
     use crate::durable::{CanonicalStore, InboxStore, JournalStore};
     use std::sync::Arc;
 
-    use tokio::sync::watch;
+    use tokio::sync::{Notify, watch};
 
     use super::test_sync::CommitBoundaryHook;
     use super::{
@@ -3311,6 +3388,7 @@ mod tests {
     use crate::tools::deadline::ToolProgressCapability;
     use crate::tools::environment::ToolEnvironment;
     use crate::tools::executor::{ToolExecutionContext, ToolExecutor};
+    use crate::tools::invocation::ForegroundHandoff;
     use crate::tools::types::{
         ToolExecutionResult, ToolExecutionStatus, ToolInvocation, ToolInvocationMode, ToolProgress,
         ToolResultContent,
@@ -3340,6 +3418,7 @@ mod tests {
     fn stage_bash(
         fixture: &TestRegistry,
         executor: &Arc<dyn ToolExecutor>,
+        cancellation: &crate::agent::cancellation::AgentCancellation,
     ) -> crate::tools::background::PrivateBashStage {
         fixture
             .registry
@@ -3348,6 +3427,7 @@ mod tests {
                 executor,
                 ToolEnvironment::new(),
                 crate::tools::mcp::McpRuntimeLeaseSet::default(),
+                cancellation.execution_cancellation(),
             )
             .expect("private stage")
     }
@@ -3357,7 +3437,9 @@ mod tests {
         let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e611");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
-        let stage = stage_bash(&fixture, &executor);
+        let cancellation =
+            crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
+        let stage = stage_bash(&fixture, &executor, &cancellation);
         started.wait_for(|started| *started).await.unwrap();
         assert_eq!(
             fixture.registry.listing(false, 16).matched,
@@ -3367,9 +3449,8 @@ mod tests {
         release.send_replace(true);
         let result = crate::tools::native::drive_private_bash(
             stage,
-            std::time::Duration::from_secs(5),
-            &crate::runtime::CancellationSignal::new(),
-            crate::runtime::types::CancellationReason::UserRequested,
+            &ForegroundHandoff::new(std::time::Duration::from_secs(5)),
+            &cancellation.execution_cancellation(),
             &RecordingProgress,
         )
         .await;
@@ -3443,28 +3524,29 @@ mod tests {
         let executor: Arc<dyn ToolExecutor> = Arc::new(PrintingExecutor {
             started: started_tx,
         });
-        let stage = stage_bash(&fixture, &executor);
+        let cancellation =
+            crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
+        let stage = stage_bash(&fixture, &executor, &cancellation);
         started.wait_for(|started| *started).await.unwrap();
         assert_eq!(fixture.registry.listing(false, 16).matched, 0);
-        let cancellation = crate::runtime::CancellationSignal::new();
         let progress = CollectProgress(std::sync::Mutex::new(Vec::new()));
-        let cancel = cancellation.clone();
-        let drive = crate::tools::native::drive_private_bash(
-            stage,
-            std::time::Duration::from_secs(30),
-            &cancellation,
-            crate::runtime::types::CancellationReason::UserRequested,
-            &progress,
-        );
-        let result = tokio::time::timeout(std::time::Duration::from_secs(5), async move {
-            cancel.cancel();
-            drive.await
-        })
-        .await
-        .expect("cancellation settles the private stage");
+        let execution = cancellation.execution_cancellation();
+        let handoff = ForegroundHandoff::new(std::time::Duration::from_secs(30));
+        assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        stage.cancel(cancellation.reason());
+        // Both progress and settlement are ready before the foreground owner
+        // is polled. It must deliver the progress before returning the result.
+        tokio::time::timeout(std::time::Duration::from_secs(5), stage.settled.notified())
+            .await
+            .expect("the process has settled");
+        let result =
+            crate::tools::native::drive_private_bash(stage, &handoff, &execution, &progress).await;
         assert!(matches!(
             result.status,
-            ToolExecutionStatus::Cancelled { .. }
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                ..
+            }
         ));
         assert_eq!(fixture.registry.listing(false, 16).matched, 0);
         assert!(fixture.mailbox.select_pending_batch().unwrap().is_none());
@@ -3479,14 +3561,15 @@ mod tests {
         let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e612");
         let (executor, mut started, release) = IgnoreCancellationExecutor::new(success());
         let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
-        let stage = stage_bash(&fixture, &executor);
+        let cancellation =
+            crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
+        let stage = stage_bash(&fixture, &executor, &cancellation);
         started.wait_for(|started| *started).await.unwrap();
         assert_eq!(fixture.registry.listing(false, 16).matched, 0);
         let result = crate::tools::native::drive_private_bash(
             stage,
-            std::time::Duration::from_millis(30),
-            &crate::runtime::CancellationSignal::new(),
-            crate::runtime::types::CancellationReason::UserRequested,
+            &ForegroundHandoff::new(std::time::Duration::from_millis(30)),
+            &cancellation.execution_cancellation(),
             &RecordingProgress,
         )
         .await;
@@ -3494,15 +3577,108 @@ mod tests {
             matches!(result.content.first(), Some(ToolResultContent::Json { value }) if value["tool"] == "bash" && value["job_id"].is_string())
         );
         assert_eq!(fixture.registry.listing(true, 16).matched, 1);
+        assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
         release.send_replace(true);
         let listed = fixture.registry.listing(false, 16);
         let execution_id = listed.snapshots[0].execution_id.clone();
-        fixture
+        let settled = fixture
             .registry
             .wait_until_terminal(&execution_id)
             .await
             .unwrap();
+        assert_eq!(settled.state, BackgroundLifecycle::Succeeded);
         assert!(fixture.mailbox.select_pending_batch().unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn private_bash_checks_attempt_cancellation_before_its_first_physical_poll() {
+        let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e614");
+        let (executor, started, _release) = IgnoreCancellationExecutor::new(success());
+        let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+        let cancellation =
+            crate::agent::cancellation::AgentCancellation::new(CancellationReason::UserRequested);
+        let stage = stage_bash(&fixture, &executor, &cancellation);
+
+        // This is a current-thread test. The gate was opened, but the runner
+        // gets its first opportunity only after the attempt is cancelled.
+        assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+        tokio::time::timeout(std::time::Duration::from_secs(5), stage.settled.notified())
+            .await
+            .expect("the runner settles before the handoff driver is polled");
+        assert!(!*started.borrow());
+        let result = stage
+            .take_result()
+            .expect("cancelled before physical entry");
+        let result = stage.release_finished(result);
+        assert!(matches!(
+            result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: CancellationReason::RuntimeShutdown,
+                ..
+            }
+        ));
+        assert_eq!(fixture.registry.listing(false, 16).matched, 0);
+        assert!(fixture.mailbox.select_pending_batch().unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn refused_bash_handoff_keeps_the_foreground_settlement_and_output() {
+        for status in [
+            ToolExecutionStatus::Success,
+            ToolExecutionStatus::OutcomeUnknown {
+                detail: "external effect could not be confirmed".into(),
+            },
+        ] {
+            let fixture = registry("conv_5229248d-eb62-70e9-8cd9-7c339ef1e615");
+            let gate = Arc::new(crate::runtime::types::DurabilityGate::new());
+            let hold = gate
+                .enter_ownership_commit()
+                .expect("park the handoff without taking the registry lock");
+            fixture.registry.install_durability_gate(gate.clone());
+            let adoption_wait = Arc::new(Notify::new());
+            fixture.registry.state().ownership_wait = Some(adoption_wait.clone());
+            let mut completion = success();
+            completion.status = status.clone();
+            completion.content.push(ToolResultContent::Text(
+                crate::message::content::TextBlock {
+                    text: "physical result".into(),
+                },
+            ));
+            let (executor, mut started, release) =
+                IgnoreCancellationExecutor::new(completion.clone());
+            let executor: Arc<dyn ToolExecutor> = Arc::new(executor);
+            let cancellation = crate::agent::cancellation::AgentCancellation::new(
+                CancellationReason::UserRequested,
+            );
+            let stage = stage_bash(&fixture, &executor, &cancellation);
+            started.wait_for(|started| *started).await.unwrap();
+            assert!(stage.take_result().is_none());
+            let settled = stage.settled.clone();
+            let execution = cancellation.execution_cancellation();
+            let handoff = ForegroundHandoff::new(std::time::Duration::ZERO);
+            let drive = crate::tools::native::drive_private_bash(
+                stage,
+                &handoff,
+                &execution,
+                &RecordingProgress,
+            );
+            let controller = async {
+                adoption_wait.notified().await;
+                release.send_replace(true);
+                settled.notified().await;
+                assert!(cancellation.request_cancel(CancellationReason::RuntimeShutdown));
+                drop(hold);
+            };
+            let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                tokio::join!(drive, controller)
+            })
+            .await
+            .expect("the foreground stage settles after adoption is refused");
+            assert_eq!(result.status, status);
+            assert_eq!(result.content, completion.content);
+            assert_eq!(fixture.registry.listing(false, 16).matched, 0);
+            assert!(fixture.mailbox.select_pending_batch().unwrap().is_none());
+        }
     }
 
     // --- The background domain's own bounded discovery read model (#180) ---
