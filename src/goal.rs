@@ -12,7 +12,6 @@ use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 use crate::durable::{AcceptedInbound, ConversationStore, ConversationStoreError, InboundDraft};
-use crate::runtime::identity::MessageId;
 pub use rustx_types::goal::{GoalOrigin, GoalPhase, GoalRef, GoalSnapshot};
 
 /// Default number of driver-admitted autonomous rounds.
@@ -196,36 +195,7 @@ pub(crate) fn transition(current: Option<&GoalSnapshot>, write: GoalWrite) -> Go
         }
     }
 }
-
-/// Bounded audit vocabulary; no objective/history and no recovery authority.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum GoalFact {
-    Written {
-        previous: Option<GoalRef>,
-        current: GoalRef,
-        phase: GoalPhase,
-        change: GoalChange,
-    },
-    RoundAdmitted {
-        previous: GoalRef,
-        current: GoalRef,
-        round: u32,
-        message_id: MessageId,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum GoalChange {
-    Create,
-    Pause,
-    Resume,
-    Block,
-    Complete,
-    Edit,
-    Budget,
-}
+pub use rustx_types::goal::{GoalChange, GoalFact};
 
 impl GoalWrite {
     pub(crate) fn change(&self) -> GoalChange {

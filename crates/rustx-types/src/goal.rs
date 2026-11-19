@@ -51,3 +51,33 @@ pub struct GoalSnapshot {
     pub origin: GoalOrigin,
     pub last_round_message_id: Option<MessageId>,
 }
+
+/// Bounded audit vocabulary; no objective/history and no recovery authority.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum GoalFact {
+    Written {
+        previous: Option<GoalRef>,
+        current: GoalRef,
+        phase: GoalPhase,
+        change: GoalChange,
+    },
+    RoundAdmitted {
+        previous: GoalRef,
+        current: GoalRef,
+        round: u32,
+        message_id: MessageId,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalChange {
+    Create,
+    Pause,
+    Resume,
+    Block,
+    Complete,
+    Edit,
+    Budget,
+}
