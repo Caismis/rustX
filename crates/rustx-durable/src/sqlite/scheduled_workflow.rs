@@ -500,7 +500,7 @@ impl ScheduledWorkflowStore for SqliteConversationStore {
             let Some(h) = head(tx, id)? else {
                 return Ok(None);
             };
-            #[cfg(test)]
+            #[cfg(any(test, feature = "test-hooks"))]
             if let Some(probe) = self.head_read_probe.lock().unwrap().take() {
                 probe();
             }

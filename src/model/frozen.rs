@@ -239,6 +239,29 @@ impl FrozenModelSpec {
         export(&mut self.summary.0.binding, "SUMMARY");
     }
 
+    /// Restores the resolved credentials escrowed out of this authority by
+    /// [`FrozenModelSpec::export_process_credentials`], so a reloaded durable
+    /// authority materializes without the spawning process's environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns the credential-resolution failure when the snapshot does not
+    /// carry an escrowed reference this binding names.
+    pub(crate) fn restore_admitted_credentials(
+        &mut self,
+        credentials: &dyn CredentialEnvironment,
+    ) -> Result<(), ModelInvocationError> {
+        self.primary.binding.resolved_credential = Some(resolve_frozen_credential(
+            &self.primary.binding,
+            credentials,
+        )?);
+        self.summary.0.binding.resolved_credential = Some(resolve_frozen_credential(
+            &self.summary.0.binding,
+            credentials,
+        )?);
+        Ok(())
+    }
+
     /// Freezes one desired configuration against an already-admitted
     /// binding registry.
     ///
