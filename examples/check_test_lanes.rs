@@ -100,12 +100,7 @@ const REQUIREMENTS: &[Requirement] = &[
         "doc",
         "context::status::AgentStatusSurfaceView",
     ),
-    Requirement::new(
-        Profile::Full,
-        Platform::Linux,
-        "doc",
-        "ConversationState",
-    ),
+    Requirement::new(Profile::Full, Platform::Linux, "doc", "ConversationState"),
     Requirement::new(
         Profile::Full,
         Platform::Linux,
