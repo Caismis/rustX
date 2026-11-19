@@ -99,7 +99,7 @@ def web_user_message_versions() -> Scenario:
         Step(expected("Draft a harbor summary."),
              Stream(Text("The harbor version is complete."), Finish())),
         Step(expected("Draft an orchard summary.", "Draft a harbor summary.", "The harbor version is complete."),
-             Stream(Text("The orchard version is complete."), Finish())),
+             Stream(Text("The orchard "), Gate("edited-stream"), Text("version is complete."), Finish())),
         Step(expected("Draft an orchard summary.", "Draft a harbor summary.", "The harbor version is complete.",
                       "The orchard version is complete."),
              Stream(Text("The regenerated orchard version is complete."), Finish())),

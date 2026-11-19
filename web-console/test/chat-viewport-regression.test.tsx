@@ -156,3 +156,49 @@ it('protects a small upward gesture from streaming before the scroll sample sett
   f.update(1300); paint();
   expect(f.port.scrollTop).toBe(990);
 });
+function memoryFixture(memoryKey: string, initialHistoryLoading = false) {
+  const view = render(<div data-testid="port" data-conversation-scroll>
+    <ChatViewport memoryKey={memoryKey} initialHistoryLoading={initialHistoryLoading} latestLabel="Latest"><div>History</div></ChatViewport>
+  </div>);
+  const port = view.getByTestId('port');
+  Object.defineProperties(port, { scrollHeight: { get: () => 2000 }, clientHeight: { get: () => 100 } });
+  paint();
+  return { port, view };
+}
+it('restores a detached reading position for the same memory key', () => {
+  const first = memoryFixture('session-a');
+  expect(first.port.scrollTop).toBe(1900);
+  act(() => { first.port.scrollTop = 900; first.port.dispatchEvent(new Event('scroll')); first.port.dispatchEvent(new Event('scrollend')); });
+  paint();
+  first.view.unmount();
+  const second = memoryFixture('session-a');
+  expect(second.port.scrollTop).toBe(900);
+  expect(second.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+});
+it('keeps following across remounts and never leaks positions between memory keys', () => {
+  const first = memoryFixture('session-b');
+  act(() => { first.port.scrollTop = 800; first.port.dispatchEvent(new Event('scroll')); first.port.dispatchEvent(new Event('scrollend')); });
+  paint();
+  first.view.unmount();
+  const follower = memoryFixture('session-c');
+  expect(follower.port.scrollTop).toBe(1900);
+  expect(follower.view.queryByRole('button', { name: 'Latest' })).toBeNull();
+  follower.view.unmount();
+  const other = memoryFixture('session-d');
+  expect(other.port.scrollTop).toBe(1900);
+  expect(other.view.queryByRole('button', { name: 'Latest' })).toBeNull();
+});
+it('parks a pending restore at the tail until the reading window is representable', () => {
+  const first = memoryFixture('session-e');
+  act(() => { first.port.scrollTop = 900; first.port.dispatchEvent(new Event('scroll')); first.port.dispatchEvent(new Event('scrollend')); });
+  paint();
+  first.view.unmount();
+  const pending = memoryFixture('session-e', true);
+  expect(pending.port.scrollTop).toBe(1900);
+  pending.view.rerender(<div data-testid="port" data-conversation-scroll>
+    <ChatViewport memoryKey="session-e" latestLabel="Latest"><div>History</div></ChatViewport>
+  </div>);
+  paint();
+  expect(pending.port.scrollTop).toBe(900);
+  expect(pending.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
+});

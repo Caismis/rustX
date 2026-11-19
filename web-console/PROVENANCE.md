@@ -5699,3 +5699,35 @@ Current UI references are refreshed for the added primary navigation. The former
 Workflow reference is frozen byte-for-byte in the comparator fixtures so its
 historical CI observations remain independently verifiable. Existing comparison
 policies, regions and deltas are unchanged.
+
+## Session scroll memory (2026-11-19)
+
+Reference inspected: DeepSeek Harness `ddefc45fbc7f8e46dd73185e68295696d1297887`,
+`packages/client/ui-chat/src/client/apply.ts`, `chat/use-chat-reading.ts` and
+`chat/use-chat-viewport.ts` (per-session `ChatScrollPosition` bookmark of
+anchor key, anchor offset and scroll offset), and ZCode
+`packages/ui/src/lib/chatSessionScrollMemory.ts` plus
+`packages/ui/src/v4/ConversationTimeline.tsx` (bounded per-session scroll
+memory whose pending restore refuses release while a temporary clamp could
+be mistaken for the final anchor). No source code is copied; rustX keeps its
+own anchor/intent coordinator.
+
+Only the selected Session mounts `ConversationLive`, so `ChatViewport` state
+was discarded on every A → B → A switch and each warm revisit restarted in
+follow mode at the tail. `ChatViewport` now keeps a bounded (200-entry)
+presentation-only `Map` keyed by Session, endpoint, authority and Conversation, saved on unmount from the
+maintained reading position — including an unsampled reader gesture — and
+restored on mount before the first layout frame. Following sessions store no
+position. A restored detached position whose anchor rows are not yet
+representable parks at the tail while `initialHistoryLoading` holds, then
+releases on the first matching anchor or the completed-window fallback;
+temporary clamps never become the saved position. Reader gestures, explicit
+latest, turn navigation and reading-scope resets still retire the pending
+restore. Native history reads, attachment fences and retry/trajectory owners
+are unchanged.
+
+Validation: `test/chat-viewport-regression.test.tsx` covers same-key
+restore, key isolation and the pending-restore park. The real-browser
+`test/e2e/session-switch-reading.spec.ts` seeds two 72-turn native histories
+and measures click → stable correct text plus scroll retention across warm
+B → A → B → A switches.

@@ -34,6 +34,20 @@ it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progres
   expect(deriveSessionProductState(tx, connected, view).status).toBe('reconnect');
 });
 
+it('an edited-message send is quiet progress, never a regeneration or interruption banner', () => {
+  const tx = translator('en');
+  const view: SessionView = { ...base(), target: undefined, attachment: 'detached', attachmentIntent: 'wanted' };
+  const project = (source = view) => deriveSessionProductState(tx, connected, source, 'A', 'edit');
+  // The handoff gap must not claim a regeneration nor surface as a reconnect.
+  expect(project()).toEqual({ status: 'connecting', severity: 'quiet', label: undefined });
+  expect(project().label).not.toBe(tx('common:session-product.regenerating'));
+  expect(project().label).not.toBe(tx('common:session-product.connection-interrupted'));
+  expect(project().recovery).toBeUndefined();
+  // Real failures still outrank the quiet handoff.
+  expect(project({ ...view, attachment: 'error', error: 'Read failed' }).status).toBe('unavailable');
+  expect(deriveSessionProductState(tx, { ...connected, connection: 'stale' }, view, 'A', 'edit').status).toBe('reconnect');
+});
+
 it.each([
   ['awaiting first checkpoint', { threadStatus: undefined, observationState: 'attached' }, {}, 'connecting', undefined],
   ['loading checkpoint', { threadStatus: undefined, observationState: 'checkpointLoading' }, {}, 'connecting', undefined],

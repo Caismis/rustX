@@ -239,6 +239,8 @@ export class TraceReads {
     ) };
   }
   private traceReads = new Map<string, { dirty: boolean; work: Promise<void> }>();
+  /** Attachment+epoch scopes whose empty live head already recovered once. */
+  private readonly traceHeadRecoveries = new Map<string, string>();
   repairDomain(id: string) {
     const observation = this.port.observe(id);
     if (!observation) return;
@@ -302,8 +304,38 @@ export class TraceReads {
   loadInitialTrace(id: string) {
     if (isDurableColdRead(this.port.state().views[id])) return this.readInitialPreview(id);
     const trace = this.port.state().views[id]?.trace;
-    if (!trace || trace.located || trace.loading || trace.error || trace.page.next_cursor == null || traceWindowReady(trace.page.records)) return Promise.resolve();
+    if (!trace || trace.located || trace.loading || trace.error) return Promise.resolve();
+    if (trace.page.next_cursor == null) {
+      // A complete but empty live head can precede the first published Trace
+      // records while the Conversation already owns canonical messages. Recover
+      // the authoritative head once per attachment/trace scope; genuine empty
+      // Conversations simply confirm empty and never loop.
+      if (trace.page.records.length === 0) return this.recoverTraceHead(id, trace);
+      return Promise.resolve();
+    }
+    if (traceWindowReady(trace.page.records)) return Promise.resolve();
     return this.loadEarlierTrace(id, true);
+  }
+  /** Re-read the live Trace head once for the current attachment and cache
+   * epoch. Fenced exactly like older-page reads; it publishes only the native
+   * `session/trace` reply and surfaces failures on the cache. */
+  private recoverTraceHead(id: string, trace: TraceCache): Promise<void> {
+    const observation = this.port.observe(id);
+    if (!observation) return Promise.resolve();
+    const { target } = observation;
+    const scope = `${target.attachment_id}:${trace.epoch}`;
+    if (this.traceHeadRecoveries.get(id) === scope) return Promise.resolve();
+    this.traceHeadRecoveries.set(id, scope);
+    const authority = this.traceAuthorities.get(id);
+    const current = () => observation.current()
+      && this.traceAuthorities.get(id) === authority
+      && this.port.state().views[id]?.trace?.epoch === trace.epoch;
+    this.port.setSession(id, { trace: { ...trace, loading: true, error: undefined } });
+    return this.refreshDomain(id).catch(error => {
+      if (current()) this.port.setSession(id, { trace: { ...this.port.state().views[id]!.trace!, error: String(error) } });
+    }).finally(() => {
+      if (current()) this.port.setSession(id, { trace: { ...this.port.state().views[id]!.trace!, loading: false } });
+    });
   }
   async loadEarlierTrace(id: string, initial = false, gapBefore?: string) {
     if (isDurableColdRead(this.port.state().views[id])) return this.readPreview(id, () => true, true);
@@ -440,7 +472,7 @@ export class TraceReads {
     return detail;
   }
   /** Retired observation work keeps no Trace read or authority. */
-  retire(id: string) { this.traceReads.delete(id); this.traceAuthorities.delete(id); this.previewLoads.delete(id); }
+  retire(id: string) { this.traceReads.delete(id); this.traceAuthorities.delete(id); this.previewLoads.delete(id); this.traceHeadRecoveries.delete(id); }
   /** A lost connection ends every Trace read and authority. */
-  disconnect() { this.traceReads.clear(); this.traceAuthorities.clear(); this.previewLoads.clear(); }
+  disconnect() { this.traceReads.clear(); this.traceAuthorities.clear(); this.previewLoads.clear(); this.traceHeadRecoveries.clear(); }
 }

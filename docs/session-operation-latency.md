@@ -1,5 +1,24 @@
 # Session operation latency investigation
 
+### Click to stable transcript (two one-turn Sessions)
+
+The short-switch browser regression seeds two distinct prompts and replies. It
+timestamps the actual sidebar click, looks for the destination's prompt **and**
+reply (without the source markers), then confirms scrollport and composer
+geometry over five animation frames. The confirmation time includes those
+frames; it is not time spent waiting on the server.
+
+In two local passes on the pinned Chromium build, the first open of each
+Session selected its sidebar row in 24–34 ms, displayed the correct body in
+149–217 ms and confirmed stable geometry in 212–272 ms. First opens resolved
+the native Session/Node, fetched durable history and attached/subscribed to
+the runtime. Already-open A–B–A switches displayed the body in 27–41 ms and
+confirmed stability in 78–80 ms, without a blank frame, skeleton, or fresh
+attachment. These are fixture measurements, not a remote-service SLA. The
+separate two-by-72-turn regression leaves each Session at a different reading
+position and checks that switching back restores it rather than jumping to
+the newest reply.
+
 ## Web navigation follow-up — 2026-11-19
 
 The production Web build and isolated `web_fork_feedback` fixture distinguish

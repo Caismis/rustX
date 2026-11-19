@@ -282,9 +282,10 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   const messageVersionFocus = publishedVersion?.kind === 'node' && publishedVersion.sessionId === activeSessionId
     ? publishedVersion : undefined;
   const destination = routeState.context.pending?.destination;
-  const sessionTransition = routeState.context.retry ? { sessionId: routeState.context.retry.view.id, action: 'retry' as const }
+  const sessionTransition = routeState.context.retry
+    ? { sessionId: routeState.context.retry.view.id, action: routeState.context.retry.edited ? 'edit' as const : 'retry' as const }
     : destination?.kind === 'fork-session' ? { sessionId: destination.sessionId, action: 'fork' as const }
-    : destination?.kind === 'retry-message' ? { sessionId: destination.sessionId, action: 'retry' as const }
+    : destination?.kind === 'retry-message' ? { sessionId: destination.sessionId, action: destination.replacementText !== undefined ? 'edit' as const : 'retry' as const }
     : destination?.kind === 'transition' && (destination.action === 'fork' || destination.action === 'retry') ? { sessionId: destination.sessionId, action: destination.action } : undefined;
   const forkingResponse = destination?.kind === 'transition' && destination.action === 'fork' ? destination.response : undefined;
   const runGlobal = (action: () => Promise<unknown>, current: () => boolean = () => true) => {

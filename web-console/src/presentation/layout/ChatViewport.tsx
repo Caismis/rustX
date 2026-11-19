@@ -5,8 +5,14 @@ import { IconChevronDownOutline14 } from '../primitives/icons/index.tsx';
 
 interface Anchor { key: string; top: number }
 interface ReadingPosition { anchors: Anchor[]; top: number }
+interface SavedReading { following: boolean; reading?: ReadingPosition }
 const FOLLOW_THRESHOLD = 25;
 const SCROLL_SAMPLE_MS = 500;
+const SCROLL_MEMORY_LIMIT = 200;
+/** Detached reading survives the selected-only mount lifecycle, like Harness's
+ * per-session ChatScrollPosition map and ZCode's scroll memory. A saved
+ * position is presentation state only; native history owners are unchanged. */
+const scrollMemory = new Map<string, SavedReading>();
 /** A Turn reads from its prompt. The native anchor is the Turn's first owned
  * row (process or response), so a jump lands on the user prompt rows that
  * immediately open it. Otherwise the first Turn hides the conversation start. */
@@ -19,6 +25,8 @@ function turnStart(row: HTMLElement) {
 interface ViewportProps {
   /** Stable logical reading identity; attachment admission is a separate owner. */
   resetKey?: unknown;
+  /** Session-scoped identity for detached-reading memory across remounts. */
+  memoryKey?: string;
   children: ReactNode;
   overlay?: ReactNode;
   latestLabel?: string;
@@ -46,6 +54,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   private deferredScrollSample = false;
   private pendingReading?: ReadingPosition;
   private reading?: ReadingPosition;
+  private pendingRestore?: ReadingPosition;
   private following = true;
   private writtenTop = 0;
   private mounted = false;
@@ -117,13 +126,26 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       const rows = this.rows();
       const anchor = this.reading.anchors.find(anchor => rows.some(row => row.dataset.chatAnchorKey === anchor.key));
       const row = anchor && rows.find(row => row.dataset.chatAnchorKey === anchor.key);
-      desired = row && anchor ? el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top : this.reading.top;
+      if (row && anchor) {
+        desired = el.scrollTop + row.getBoundingClientRect().top - el.getBoundingClientRect().top - anchor.top;
+        this.pendingRestore = undefined;
+      } else if (this.pendingRestore && this.props.initialHistoryLoading) {
+        // A saved position outside the still-loading window is not yet
+        // representable. Park at the tail instead of clamping into a false one;
+        // the restore releases when its anchor rows materialize.
+        desired = floor;
+      } else {
+        desired = this.reading.top;
+        this.pendingRestore = undefined;
+      }
     }
     desired = Math.max(0, Math.min(floor, desired));
     // The sole automatic scroll-position assignment in Chat.
     if (Math.abs(el.scrollTop - desired) > 0.5) el.scrollTop = desired;
     this.writtenTop = el.scrollTop;
-    this.reading = this.following ? undefined : this.position();
+    // A pending restore keeps its saved anchors; the parked tail position is
+    // not the reader's position and must not replace them.
+    this.reading = this.following ? undefined : this.pendingRestore ? this.reading : this.position();
     this.publishActive();
   };
   private publishActive = () => {
@@ -164,6 +186,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     const previous = Math.min(this.writtenTop, floor);
     if (top < previous || Math.abs(top - previous) > 0.5) {
       this.retireNavigation();
+      this.pendingRestore = undefined;
       this.pendingReading = position ?? this.position();
       if (top > previous && Math.abs(floor - top) < 1) {
         this.cancelScrollSample();
@@ -201,6 +224,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   /** Explicit action changes intent; positioning still belongs to the frame. */
   returnToBottom = () => {
     this.cancelScrollSample();
+    this.pendingRestore = undefined;
     this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
     this.retireNavigation();
     this.explicitLatest = true;
@@ -211,6 +235,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
   beginNavigation = (retired?: () => void) => {
     this.cancelScrollSample();
     this.retireNavigation();
+    this.pendingRestore = undefined;
     this.retireGesture = retired;
     this.writtenTop = this.scroller()?.scrollTop ?? this.writtenTop;
     const intent = this.intent;
@@ -229,6 +254,13 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     // A resident session scroller can retain the previous view's position.
     // Its initial offset is layout state, not a new reader gesture.
     this.writtenTop = scroller.scrollTop;
+    const saved = this.props.memoryKey === undefined ? undefined : scrollMemory.get(this.props.memoryKey);
+    if (saved && !saved.following && saved.reading) {
+      this.following = false;
+      this.reading = saved.reading;
+      this.pendingRestore = saved.reading;
+      if (!this.state.detached) this.setState({ detached: true });
+    }
     scroller.addEventListener('scroll', this.onScroll);
     scroller.addEventListener('scrollend', this.sampleScroll);
     scroller.addEventListener('beforeinput', this.onComposerBeforeInput, true);
@@ -253,7 +285,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (floor < this.writtenTop && el.scrollTop === floor) this.writtenTop = floor;
     // Preserve the original anchor across multiple commits before the frame.
     const position = this.position();
-    if (!this.following && this.frame === undefined) this.reading = position;
+    if (!this.following && !this.pendingRestore && this.frame === undefined) this.reading = position;
     return { first: this.rows()[0]?.dataset.chatAnchorKey, position, top: el.scrollTop, floor: Math.max(0, el.scrollHeight - el.clientHeight) };
   }
   componentDidUpdate(_previous: Readonly<ViewportProps>, _state: unknown, before: { first?: string; position?: ReadingPosition; top?: number; floor?: number }) {
@@ -261,6 +293,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (_previous.resetKey !== this.props.resetKey) {
       this.cancelScrollSample();
       this.retireNavigation();
+      this.pendingRestore = undefined;
       this.following = true; this.reading = undefined;
       this.writtenTop = this.scroller()?.scrollTop ?? 0;
       if (this.state.detached) this.setState({ detached: false });
@@ -280,6 +313,14 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     if (_previous !== this.props) this.markLayoutDirty();
   }
   componentWillUnmount() {
+    const key = this.props.memoryKey;
+    if (key) {
+      if (scrollMemory.size >= SCROLL_MEMORY_LIMIT) scrollMemory.delete(scrollMemory.keys().next().value!);
+      // Refs may already be detached here; the maintained reading position is
+      // the freshest semantic capture, including an unsampled reader gesture.
+      const reading = this.following ? undefined : this.pendingReading ?? this.reading;
+      scrollMemory.set(key, { following: this.following, ...(reading ? { reading } : {}) });
+    }
     this.scroller()?.querySelector('[data-composer-seat]')?.removeAttribute('data-sticky-overflow');
     this.scroller()?.removeEventListener('scroll', this.onScroll);
     this.scroller()?.removeEventListener('scrollend', this.sampleScroll);

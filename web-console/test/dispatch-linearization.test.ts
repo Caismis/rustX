@@ -18,8 +18,10 @@ it.each(['capacity', 'validation'] as const)('%s revocation is unsent and frees 
   if (blockers.length) for (const row of s.requests.filter(r => r.request.method === 'session/summary').slice(-blockers.length)) s.reply(row.request);
   resume(); await Promise.all(blockers); await release;
   expect(await outcome).toBeInstanceOf(RequestNotDispatched); expect(count(s, 'inbound/queue')).toBe(0); expect(s.client.getSnapshot().uncertain).toEqual([]);
-  s.held.delete('session/summary'); await s.client.attach('A'); await s.client.refresh('A');
-  expect(s.claims()).toHaveLength(1); expect(count(s, 'session/checkpoint')).toBe(3);
+  s.held.delete('session/summary'); await s.client.attach('A');
+  const beforeRefresh = count(s, 'session/checkpoint');
+  await s.client.refresh('A');
+  expect(s.claims()).toHaveLength(1); expect(count(s, 'session/checkpoint')).toBe(beforeRefresh + 1);
 });
 it.each(['throw', 'close'] as const)('synchronous send %s is one attempted uncertain outcome, not native acceptance', async failure => {
   const s = await setup(), send = s.socket.send.bind(s.socket); let attempts = 0, acknowledgements = 0;

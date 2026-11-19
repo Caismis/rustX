@@ -2,7 +2,9 @@ import type { Translate } from '../locale/translation';
 import type { ClientView, SessionView } from '../client/contracts';
 
 export type SessionRecovery = 'connect' | 'connection-settings' | 'open' | 'refresh';
-export type SessionTransition = 'fork' | 'retry';
+/** `edit` is an edited-message send: a lineage handoff that must read as quiet
+ * progress, never as a regeneration or a connection fault. */
+export type SessionTransition = 'fork' | 'retry' | 'edit';
 export interface SessionProductState {
   status: 'idle' | 'working' | 'queued' | 'stopping' | 'connecting' | 'reconnect' | 'unavailable' | 'uncertain' | 'failure' | 'waiting';
   label?: string;
@@ -48,7 +50,9 @@ export function deriveSessionProductState(tx: Translate, state: Pick<ClientView,
   // A deliberate lineage handoff can briefly release its attachment while the
   // physical connection stays healthy. This is progress, not recovery.
   if (transition && state.connection === 'connected' && !view?.error) return {
-    status: 'connecting', severity: 'quiet', label: tx(transition === 'fork' ? 'common:session-product.forking' : 'common:session-product.regenerating'),
+    status: 'connecting', severity: 'quiet',
+    label: transition === 'fork' ? tx('common:session-product.forking')
+      : transition === 'retry' ? tx('common:session-product.regenerating') : undefined,
   };
   if (state.connection === 'connected' && (view?.error || view?.attachment === 'error')) return {
     status: 'unavailable', severity: 'warning', label: tx('common:session-product.observation-unavailable'), recovery,

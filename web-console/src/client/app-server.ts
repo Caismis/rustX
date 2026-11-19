@@ -110,7 +110,7 @@ export class AppServerClient {
   private acquiring = new Set<string>();
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
-  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v80').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v80').RuntimeClientCheckpoint;bytes:number}>();
   /** A disconnect or a retired claim can leave the native runtime resident.
    * Keep each view's last contiguous applied observation so a later attach
    * can resume it instead of paying a fresh cold checkpoint read; the
@@ -121,11 +121,11 @@ export class AppServerClient {
     if(!chain)return;
     const {target,snapshot,checkpoint}=view??{};
     const applied=chain.applied;
-    if(!target||!snapshot||!checkpoint||!applied||view?.cursor!==applied){if(target)this.resumeSeeds.delete(id);return;}
+    if(!target||!snapshot||!checkpoint||!applied||view?.cursor!==applied||checkpoint.read_cut.revision!==applied){if(target)this.resumeSeeds.delete(id);return;}
     const bytes=new TextEncoder().encode(JSON.stringify(snapshot)).length;
     if(bytes>1_048_576){this.resumeSeeds.delete(id);return;}
     this.resumeSeeds.delete(id);
-    this.resumeSeeds.set(id,{target,snapshot,checkpoint,cursor:applied,bytes});
+    this.resumeSeeds.set(id,{target,snapshot,checkpoint,bytes});
     this.evictResumeSeeds();
   }
   private retainAppliedObservations() {
@@ -308,7 +308,7 @@ export class AppServerClient {
           &&previous.target.runtime_incarnation===result.target.runtime_incarnation;
         let checkpoint:import('../../../protocol/app-server/v80').RuntimeClientCheckpoint;
         let observed:RuntimeClientSnapshot;
-        if(resumable){checkpoint={...previous.checkpoint,cursor:previous.cursor};observed=previous.snapshot;}
+        if(resumable){checkpoint=previous.checkpoint;observed=previous.snapshot;}
         else {
           this.setSession(id,{observationState:'checkpointLoading'});
           checkpoint=(await this.request({method:'session/checkpoint',params:{target:result.target,trace_records:[]}},'checkpoint',undefined,current)).checkpoint;

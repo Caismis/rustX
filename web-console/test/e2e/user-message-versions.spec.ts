@@ -47,6 +47,9 @@ test('edits and retries a user message, then pages through durable conversation 
     const next = nextVersion(userMessage);
     const chatTab = page.getByRole('tab', { name: 'Chat', exact: true });
     const trajectoryTab = page.getByRole('tab', { name: 'Trajectory', exact: true });
+    // An edited-message send must never surface as a regeneration or an
+    // interruption: the handoff is quiet native progress only.
+    const misleadingBanner = page.getByText(/Preparing a new response|Connection interrupted|Regenerating/, { exact: false });
     const ledger = page.getByRole('table', { name: 'Trace ledger', exact: true });
     const traceUserMessage = ledger.locator('[data-kind="user"]');
     const inspector = page.getByRole('complementary', { name: 'Event details', exact: true });
@@ -129,14 +132,31 @@ test('edits and retries a user message, then pages through durable conversation 
       await expect(answer(original.answer)).toBeHidden();
       await expect(attachedFile).toBeVisible();
       await expectPrompts(original.prompt);
+      await expect(misleadingBanner).toHaveCount(0);
     } finally {
       wire.releaseHeld('session/branch');
     }
     await expectInference(2);
+    await fixture.gate('edited-stream');
+    try {
+      await trajectoryTab.click();
+      await expect(traceUserMessage).toBeVisible();
+      await traceUserMessage.click();
+      await expect(inspector).toContainText(edited.prompt.split('\n')[0]);
+      await expect(misleadingBanner).toHaveCount(0);
+      await chatTab.click();
+    } finally {
+      await fixture.release('edited-stream');
+    }
     await expectPrompts(original.prompt, edited.prompt);
     expect(editorReceipts()).toEqual([receipt]);
     await expectVersion(edited, 2, 2);
     await expect(answer(original.answer)).toBeHidden();
+    await expect(misleadingBanner).toHaveCount(0);
+    // The regenerated answer is an ordinary transcript row at the bottom, not a
+    // detached retry preview: the final canonical message row carries it.
+    const messageRows = chat.locator('[data-chat-anchor-key^="message:"]');
+    await expect(messageRows.last()).toContainText(edited.answer);
     await trajectoryTab.click();
     await expectTraceVersion(edited, 2, 2);
     await chatTab.click();
