@@ -18,9 +18,17 @@
 //! - [`FileMetadata`]/[`FileChunk`]/[`DirectoryEntry`]/[`DirectoryPage`] are
 //!   the shared wire shapes; their serde field names and `schemars` schema
 //!   are the established contract.
+//! - [`WriteTarget`]/[`StagedWrite`]/[`PublishedWrite`] are the shared
+//!   physical commit kernel: retain a verified target, stage a private
+//!   sibling, publish by descriptor-relative `linkat`/`renameat`, and
+//!   report any post-crossing failure as [`CommitUnknown`].
 //!
 //! There is no Agent, cancellation, store, or process dependency here — only
 //! files and directories.
+
+mod mutation;
+
+pub use mutation::{CommitUnknown, PublishedWrite, StagedWrite, WriteTarget};
 
 use std::ffi::OsStr;
 use std::fs::File;

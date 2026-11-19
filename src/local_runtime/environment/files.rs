@@ -12,7 +12,9 @@ use std::path::{Component, Path};
 // The physical metadata/chunk contract and its stamping live in
 // `rustx_confined_fs`, shared with the Execution Client; they are re-exported
 // so there is exactly one business type on each side of the workspace.
-pub use rustx_confined_fs::{DirectoryEntry, DirectoryPage, FileChunk, FileMetadata};
+pub use rustx_confined_fs::{
+    CommitUnknown, DirectoryEntry, DirectoryPage, FileChunk, FileMetadata,
+};
 
 pub const CHUNK_BYTES: usize = 512 * 1024;
 const DIRECTORY_ENTRIES: usize = 4096;
@@ -62,14 +64,6 @@ pub(crate) fn denied() -> io::Error {
 pub(crate) fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, message)
 }
-#[derive(Debug)]
-pub(crate) struct CommitUnknown;
-impl std::fmt::Display for CommitUnknown {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("filesystem commit or partial outcome requires authoritative reread")
-    }
-}
-impl std::error::Error for CommitUnknown {}
 fn uncertain(_: io::Error) -> io::Error {
     io::Error::other(CommitUnknown)
 }
@@ -177,8 +171,7 @@ impl Environment {
                     source: None,
                 },
                 |output| output.write_all(bytes),
-            )?;
-            metadata(root, relative).map_err(uncertain)
+            )
         })
     }
     pub(crate) fn create_directory(&self, path: &str, recursive: bool) -> io::Result<()> {
@@ -266,80 +259,29 @@ impl Environment {
     }
 }
 
+/// The physical prepare/stage/publish/finish kernel is shared in
+/// `rustx_confined_fs`; this adapter only threads the product's
+/// cancellation gate and test hooks through it. `expected` = `None` is
+/// create-only — the commit never overwrites a concurrent file.
 fn atomic_write(
     directory: &PackageDirectory,
     leaf: &std::ffi::OsStr,
     expected: Option<&str>,
     authority: FileAuthority<'_>,
     write: impl FnOnce(&mut File) -> io::Result<()>,
-) -> io::Result<()> {
-    let observed = match open(directory, leaf) {
-        Ok(file) => Some(FileMetadata::of(&file)?),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    if observed.as_ref().map(|value| value.revision.as_str()) != expected {
-        return Err(conflict());
-    }
-    if observed.as_ref().is_some_and(|value| !value.is_file) {
-        return Err(invalid("write target must be a regular file"));
-    }
-    let temporary = format!(".rustx-write-{}", uuid::Uuid::now_v7());
-    let mut output = File::from(rustix::fs::openat(
-        directory.descriptor(),
-        temporary.as_str(),
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::from_raw_mode(0o600),
-    )?);
-    let mut committed = false;
-    let result = (|| {
-        if observed.is_some() {
-            output.set_permissions(open(directory, leaf)?.metadata()?.permissions())?;
-        }
-        write(&mut output)?;
-        output.sync_all()?;
-        authority.commit(|| {
-            directory.verify()?;
-            let current = match open(directory, leaf) {
-                Ok(file) => Some(FileMetadata::of(&file)?),
-                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-                Err(error) => return Err(error),
-            };
-            if observed != current {
-                return Err(conflict());
-            }
-            if expected.is_none() {
-                // A create never overwrites a concurrently created OS file.
-                rustix::fs::linkat(
-                    directory.descriptor(),
-                    temporary.as_str(),
-                    directory.descriptor(),
-                    leaf,
-                    AtFlags::empty(),
-                )?;
-                committed = true;
-                rustix::fs::unlinkat(directory.descriptor(), temporary.as_str(), AtFlags::empty())?;
-            } else {
-                rustix::fs::renameat(
-                    directory.descriptor(),
-                    temporary.as_str(),
-                    directory.descriptor(),
-                    leaf,
-                )?;
-                committed = true;
-            }
-            Ok(())
-        })?;
+) -> io::Result<FileMetadata> {
+    let target = directory.prepare_write(leaf, expected)?;
+    let staged = target.stage(write)?;
+    let visible = authority.commit(move || staged.publish())?;
+    #[cfg(test)]
+    committed_write(directory, leaf);
+    visible.finish_with(|directory| {
         #[cfg(test)]
-        committed_write(directory, leaf);
-        sync_directory(directory)
-    })();
-    let _ = rustix::fs::unlinkat(directory.descriptor(), temporary.as_str(), AtFlags::empty());
-    if committed {
-        result.map_err(uncertain)
-    } else {
-        result
-    }
+        if FAIL_DIRECTORY_SYNC.replace(false) {
+            return Err(io::Error::other("injected directory sync failure"));
+        }
+        directory.sync_all()
+    })
 }
 #[cfg(test)]
 type WriteCommitHook = Box<dyn FnOnce() + Send>;
@@ -376,13 +318,6 @@ fn committed_write(directory: &PackageDirectory, leaf: &std::ffi::OsStr) {
 }
 #[cfg(test)]
 thread_local! {static FAIL_DIRECTORY_SYNC:std::cell::Cell<bool>=const {std::cell::Cell::new(false)};}
-fn sync_directory(directory: &PackageDirectory) -> io::Result<()> {
-    #[cfg(test)]
-    if FAIL_DIRECTORY_SYNC.replace(false) {
-        return Err(io::Error::other("injected directory sync failure"));
-    }
-    File::from(directory.descriptor().try_clone()?).sync_all()
-}
 
 fn take_entry(depth: usize, remaining: &mut usize) -> io::Result<()> {
     if depth > 32 || *remaining == 0 {
@@ -569,6 +504,7 @@ fn copy(
         }
         Ok(())
     })
+    .map(|_| ())
 }
 
 #[cfg(test)]

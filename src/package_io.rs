@@ -64,6 +64,21 @@ impl PackageDirectory {
         self.inner.descend(relative).map(|inner| Self { inner })
     }
 
+    /// Retains `leaf` under this directory as a mutation target — the
+    /// shared commit kernel. The target owns a duplicate of this verified
+    /// directory descriptor; the caller's handle is unchanged.
+    pub(crate) fn prepare_write(
+        &self,
+        leaf: &std::ffi::OsStr,
+        expected: Option<&str>,
+    ) -> std::io::Result<rustx_confined_fs::WriteTarget> {
+        rustx_confined_fs::WriteTarget::prepare(
+            self.inner.child(std::ffi::OsStr::new("."))?,
+            leaf,
+            expected,
+        )
+    }
+
     /// Metadata of `relative` inside this directory — the shared
     /// implementation stat's the leaf without following it.
     pub(crate) fn entry_metadata(
