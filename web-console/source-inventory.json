@@ -2945,12 +2945,12 @@
       "retained_dependencies": [
         "../../locale/react",
         "../primitives/Tooltip",
-        "../primitives/icons",
         "./HomeSidebar.module.css",
+        "./SidebarIcon",
         "clsx",
         "react"
       ],
-      "local_sha256": "b8246f03efdc1d9ddc0603791e7440a27db65962f126805fb14ae0392cae16bc",
+      "local_sha256": "fc0e824bab7b53a6fa6617bcf9a74d5288d08343f7c91c4a195c37157b74fd8f",
       "classification": "B",
       "additional_sources": [
         {

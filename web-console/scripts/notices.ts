@@ -68,7 +68,6 @@ for (const asset of ['dist/license.occt-import-js.txt', 'dist/license.occt.txt']
   packages.set(`occt-import-js ${cadVersion} (${asset})`, readFileSync(join(dirname(cadPackage), asset), 'utf8').replace(/\r\n/g, '\n'));
 }
 packages.set('Lucide 0.468.0 (vendored git-fork and wrench icons)', readFileSync(join(root, 'public/LICENSE-Lucide.txt'), 'utf8'));
-packages.set('Lucide 1.17.0 (vendored Cable icon used by ZCode)', readFileSync(join(root, 'public/LICENSE-Lucide-1.17.txt'), 'utf8'));
 const output = 'Production install dependency notices for rustX Web Console\nIncludes the complete pinned install closure; only selected modules enter the browser bundle.\nModified CAD runtime source and rebuild instructions: cad-runtime-source/README.md\n\n' + [...packages].sort(([a], [b]) => a.localeCompare(b)).map(([name, license]) => `===== ${name} =====\n${license.trim().replace(/[ \t]+$/gm, '')}\n`).join('\n');
 const path = join(root, 'public/THIRD-PARTY-NOTICES.txt');
 if (process.argv.includes('--write')) writeFileSync(path, output);

@@ -59615,9 +59615,9 @@
   },
   {
     "reference": "model-advanced-light-390-linux.png",
-    "evidence": "Pinned Playwright 1.63.0 Linux captures under the Harness-restyled baseline alternate which corner pixel of the context input's rounded border rasterizes darker by one channel level; observed sites (33,236) and (34,237), one changed pixel per capture.",
-    "referenceSha256": "69af01b53408bc1f03c4c446440d93bada71b5d96bfe799209289235e97dff88",
-    "captureSha256": "bcbd796e2bab83f6dc8dc4bc7a8ee6c43a0a7d9d13ecad3baabc38f5d45941b3",
+    "evidence": "Pinned Playwright 1.63.0 Linux captures measured alternating one-level rasterizer noise at the context input corner. The refreshed sidebar reference uses the darker measured pixel at (33,236). The light variant comes from the previous sidebar reference. The input-corner crop differs at that one pixel; the recorded regions and channel bounds are unchanged.",
+    "referenceSha256": "e7622a046740b04d795acc933e032def5c23af0daf6354ecc099904a5cd1b6ae",
+    "captureSha256": "69af01b53408bc1f03c4c446440d93bada71b5d96bfe799209289235e97dff88",
     "regions": [
       {
         "label": "Context input corner coverage",
@@ -59643,15 +59643,15 @@
         33,
         236,
         [
-          223,
-          223,
-          223,
+          222,
+          222,
+          222,
           255
         ],
         [
-          222,
-          222,
-          222,
+          223,
+          223,
+          223,
           255
         ]
       ]

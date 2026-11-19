@@ -1,4 +1,4 @@
-import type { Server } from '../fixture';
+import { checkpoint, traceRefreshed, type Server } from '../fixture';
 import type { ChangesSummary, RuntimeClientSnapshot } from '../../../protocol/app-server/v80';
 
 export function workspaceChangesFixture(server:Server,current:RuntimeClientSnapshot) {
@@ -22,6 +22,10 @@ export function workspaceChangesFixture(server:Server,current:RuntimeClientSnaps
     return {path:`/workspace/A/${display}`,display,added:longDiff && i === 0 ? 41 : 2,deleted:1,binary:false,oversized:false};
   }),total:count,added:count*2+(longDiff ? 39 : 0),deleted:count});
   server.handlers.set('conversation/changes',()=>({type:'workspace_changes',summary}));
+  server.handlers.set('session/trace', request => ({
+    type: 'trace', refreshed: traceRefreshed(request),
+    page: { records: [], next_cursor: null, read_cut: checkpoint(server.snapshots.get('A')!, String(server.cursor)).read_cut },
+  }));
   server.handlers.set('conversation/changeDiff',request=>({type:'workspace_change_diff',comparison:request.method==='conversation/changeDiff'&&request.params.index<6 ? {
     hunks:longDiff && request.params.index === 0
       ? [{old_start:19,new_start:27,old_text:'export const old = 1;\n',new_text:longAddition+Array.from({length:40},(_,i)=>`export const value${i} = ${i};\n`).join('')}]

@@ -78,13 +78,11 @@ import { createWorkflowPort } from './workflows/port';
 import { WorkflowsSurface } from './workflows/ui/WorkflowsSurface';
 import { ResourceSurface } from './resources/ResourceSurface';
 import {McpIcon} from './resources/mcp/McpIcon';
-import {IconAgentPresetOutline16,IconCodeOutline16} from '../presentation/primitives/icons';
-import { IconWorkflow } from './workflows/ui/icons';
+import { SidebarIcon } from '../presentation/sidebar/SidebarIcon';
 import { TaskManagerPage } from './scheduler/TaskManagerPage';
 import { TaskDetail, TaskTabTitle } from './scheduler/TaskDetail';
 import { TaskNavigationProvider, SchedulerNotices } from './scheduler/SessionTasks';
 import { taskKey, parseTaskKey, type TaskRef } from './scheduler/model';
-import { IconClockOutline16, IconHomeOutline16, IconSettingsOutline16 } from '../presentation/primitives/icons';
 import schedulerCss from './scheduler/scheduler.module.css';
 import { readShellLayout, saveShellLayout } from './shell-preferences';
 
@@ -386,14 +384,14 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
   return <TaskNavigationProvider value={{ openTask: (task, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openTask(taskKey(task), title); }, openTasks: () => shell.send({ type: 'SCHEDULES' }) }}><SubagentScope onMode={setConversationMode} client={client} sessionId={activeSessionId} openAside={(id, title) => { previewOwner.showWorkbench(); fileWorkbench.current?.openAgent(id, title); }}><PreviewContext value={{ openPreview: artifact => { previewOpener.current = document.activeElement as HTMLElement; previewOwner.openPreview(artifact); setPreviewFocus(value => value + 1); }, download: artifact => { void previewOwner.download(artifact); } }}><ChangesReviewContext value={request => { previewOpener.current=document.activeElement as HTMLElement; previewOwner.showWorkbench(); fileWorkbench.current?.openChanges(request); }}><AppFrame home={home} initialSidebarPreference={initialSidebarPreference} onSidebarPreferenceChange={saveShellLayout} sidebarPublication={routeState.context.publication} dismissSidebarLabel={tx('sidebar:toggle.dismiss')} onSidebarDismiss={retirePendingSidebarNavigation}
     primary={geometry => <PrimaryNavigationRail label={tx('sidebar:navigation.label')} activeId={home ? 'home' : primaryRoute.kind}
       items={[
-        { id: 'home', label: tx('sidebar:navigation.home'), icon: <IconHomeOutline16 size={18}/>, controls: 'home-sidebar', expanded: geometry.sidebarExpanded, select: () => { if (home) geometry.expandSidebar(); else shell.send({ type: 'HOME' }); } },
-        { id: 'workflows', label: tx('workflows:nav.label'), icon: <IconWorkflow size={18}/>, select: () => shell.send({ type: 'WORKFLOWS' }) },
-        { id: 'subagents', label: tx('resources:subagents.nav'), icon: <IconAgentPresetOutline16/>, select: () => shell.send({type:'RESOURCES',module:'subagents'}) },
-        { id: 'mcp', label: tx('resources:mcp.title'), icon: <McpIcon/>, select: () => shell.send({type:'RESOURCES',module:'mcp'}) },
-        { id: 'skills', label: tx('resources:skills.title'), icon: <IconCodeOutline16/>, select: () => shell.send({type:'RESOURCES',module:'skills'}) },
-        { id: 'schedules', label: tx('sidebar:navigation.schedules'), icon: <IconClockOutline16 size={18}/>, select: () => shell.send({ type: 'SCHEDULES' }) },
+        { id: 'home', label: tx('sidebar:navigation.home'), icon: <SidebarIcon name="house"/>, controls: 'home-sidebar', expanded: geometry.sidebarExpanded, select: () => { if (home) geometry.expandSidebar(); else shell.send({ type: 'HOME' }); } },
+        { id: 'workflows', label: tx('workflows:nav.label'), icon: <SidebarIcon name="workflow"/>, select: () => shell.send({ type: 'WORKFLOWS' }) },
+        { id: 'subagents', label: tx('resources:subagents.nav'), icon: <SidebarIcon name="bot"/>, select: () => shell.send({type:'RESOURCES',module:'subagents'}) },
+        { id: 'mcp', label: tx('resources:mcp.title'), icon: <McpIcon size={18}/>, select: () => shell.send({type:'RESOURCES',module:'mcp'}) },
+        { id: 'skills', label: tx('resources:skills.title'), icon: <SidebarIcon name="braces"/>, select: () => shell.send({type:'RESOURCES',module:'skills'}) },
+        { id: 'schedules', label: tx('sidebar:navigation.schedules'), icon: <SidebarIcon name="clock"/>, select: () => shell.send({ type: 'SCHEDULES' }) },
       ]}
-      settings={{ id: 'settings', label: tx('settings:settings.settings'), icon: <IconSettingsOutline16 size={18}/>, select: () => shell.send({ type: 'SETTINGS' }) }}
+      settings={{ id: 'settings', label: tx('settings:settings.settings'), icon: <SidebarIcon name="settings"/>, select: () => shell.send({ type: 'SETTINGS' }) }}
       feedback={<ConnectionFeedback client={client} connection={connection} wide={false} settings={openConnectionSettings}/>}/>}
     sidebar={geometry => <HomeSidebar width={geometry.width} toggleSidebar={geometry.toggleSidebar} startSession={() => { createInWorkspace(workspace); geometry.dismissSidebar(); }}
       browser={<WorkspaceNavigation pins={pins} transition={sessionTransition} associations={associations} key={state.authorityRevision ?? 0} host={workspaceHost} client={client} state={state} endpoint={endpoint}

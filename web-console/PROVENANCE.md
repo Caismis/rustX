@@ -2968,11 +2968,14 @@ Behavioral and layout reference: local ZCode
 transactions and supports its own MCP fields rather than inventing unsupported
 ZCode protocol options. No bundled ZCode servers are included.
 
-The MCP glyph reuses the exact Lucide `Cable` path data from `lucide-react@1.17.0`,
-the version pinned by ZCode's lockfile:
-https://unpkg.com/lucide-react@1.17.0/dist/esm/icons/cable.mjs
-The ISC license is shipped in `public/LICENSE-Lucide-1.17.txt` and the generated
-third-party notices. Only the React SVG wrapper is local.
+The sidebar, MCP server list, and Agent tool settings use the Model Context
+Protocol glyph from the pinned `@lobehub/icons-static-svg` package. The license
+is included in the generated third-party notices.
+
+Sidebar navigation and its two header controls use a small, synchronous subset
+of the pinned Iconify Lucide collection (ISC), reproduced by
+`node scripts/sidebar-icons.ts`. Both packages are recorded in the generated
+third-party notices.
 
 
 Child statistics now use App Server v39's native `agent/statistics` reading.

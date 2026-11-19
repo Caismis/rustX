@@ -1,7 +1,6 @@
 import type { ReactNode } from 'react';
 import type { SessionMessageVersion, SessionMessageVersionFamily } from '../../../../protocol/app-server/v80';
 import { useTranslation } from '../../locale/react';
-import { BundledIcon } from '../../presentation/primitives/BundledIcon';
 import { Button } from '../../presentation/primitives/Button';
 import { IconChevronLeftOutline14, IconChevronRightOutline14, IconEditOutline16 } from '../../presentation/primitives/icons';
 import { StateDot } from '../../presentation/primitives/StateDot';
@@ -70,11 +69,11 @@ export function MessageVersionPager({ family, onSwitch, disabled, compact }: {
     <span className={css.pager} data-compact={compact || undefined}
       onClick={event => event.stopPropagation()} onDoubleClick={event => event.stopPropagation()}>
       <VersionAction label={tx('agent:message-version.previous')} disabled={disabled || !previous} onClick={() => { if (previous) onSwitch(previous); }}>
-        <BundledIcon name="lucide:chevron-left" size={14} fallback={<IconChevronLeftOutline14 />} />
+        <IconChevronLeftOutline14 />
       </VersionAction>
       <span className={css.position} role="status">{tx('agent:message-version.position', { current: current_index + 1, total })}</span>
       <VersionAction label={tx('agent:message-version.next')} disabled={disabled || !next} onClick={() => { if (next) onSwitch(next); }}>
-        <BundledIcon name="lucide:chevron-right" size={14} fallback={<IconChevronRightOutline14 />} />
+        <IconChevronRightOutline14 />
       </VersionAction>
     </span>
   );
@@ -89,8 +88,7 @@ export function UserMessageVersions({
       {family && <MessageVersionPager family={family} disabled={unavailable} onSwitch={onSwitch} />}
       <VersionAction label={labels.edit} tooltip={busy ? labels.loading : labels.edit}
         disabled={unavailable} busy={busy} onClick={onEdit}>
-        {busy ? <StateDot state="ongoing" /> :
-          <BundledIcon name="lucide:pencil" size={15} fallback={<IconEditOutline16 />} />}
+        {busy ? <StateDot state="ongoing" /> : <IconEditOutline16 size={15} />}
       </VersionAction>
       <span className={css.visuallyHidden} role="status">{busy ? labels.loading : ''}</span>
     </span>
