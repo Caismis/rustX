@@ -178,6 +178,21 @@ impl EphemeralObservation {
     pub fn get_mut<T: 'static>(&mut self) -> Option<&mut T> {
         std::sync::Arc::get_mut(&mut self.0)?.downcast_mut::<T>()
     }
+
+    /// The mutable receipt for its committer's concrete type, cloning the
+    /// packed value first when the `Arc` is shared (copy-on-write). `None`
+    /// when the packed value is a different concrete type.
+    ///
+    /// Other holders keep observing the pre-update value, matching
+    /// `Arc::make_mut` semantics for the concrete payload.
+    pub fn make_mut<T: Clone + Send + Sync + 'static>(&mut self) -> Option<&mut T> {
+        self.0.downcast_ref::<T>()?;
+        if std::sync::Arc::get_mut(&mut self.0).is_none() {
+            let shared = std::sync::Arc::clone(&self.0).downcast::<T>().ok()?;
+            self.0 = std::sync::Arc::new((*shared).clone());
+        }
+        std::sync::Arc::get_mut(&mut self.0)?.downcast_mut::<T>()
+    }
 }
 
 impl std::fmt::Debug for EphemeralObservation {
@@ -1219,7 +1234,10 @@ pub enum AttemptLimit {
 
 #[cfg(test)]
 mod tests {
-    use super::{AttemptFailure, AttemptLimit, AttemptOutcome, RuntimeEvent, RuntimeEventEnvelope};
+    use super::{
+        AttemptFailure, AttemptLimit, AttemptOutcome, EphemeralObservation, RuntimeEvent,
+        RuntimeEventEnvelope,
+    };
     use crate::model::error::{ModelError, ModelErrorKind};
     use crate::model::finish::ModelFinishReason;
     use crate::runtime::identity::{AttemptId, ConversationId, EventId, ToolCallId, ToolId};
@@ -1704,6 +1722,28 @@ mod tests {
             completed,
             vec![(call_b, 20), (call_a, 40)],
             "completions remain attributable despite reversed order"
+        );
+    }
+
+    #[test]
+    fn ephemeral_observation_make_mut_updates_shared_receipts_copy_on_write() {
+        #[derive(Clone, Debug, PartialEq)]
+        struct Receipt {
+            pending: u64,
+        }
+
+        let mut observation =
+            EphemeralObservation::new(std::sync::Arc::new(Receipt { pending: 1 }));
+        let shared = observation.clone();
+        observation
+            .make_mut::<Receipt>()
+            .expect("the packed receipt is present")
+            .pending = 2;
+        assert_eq!(observation.get::<Receipt>().map(|r| r.pending), Some(2));
+        assert_eq!(
+            shared.get::<Receipt>().map(|r| r.pending),
+            Some(1),
+            "other holders keep observing the pre-update receipt"
         );
     }
 }

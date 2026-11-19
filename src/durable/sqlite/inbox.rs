@@ -304,7 +304,7 @@ impl InboxStore for SqliteConversationStore {
         )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
         if let Some(native) = &mut persisted.event.observation
-            && let Some(batch) = native.get_mut::<NativeObservationBatch>()
+            && let Some(batch) = native.make_mut::<NativeObservationBatch>()
         {
             batch.pending.clone_from(&accepted.pending_observation);
         }
@@ -410,7 +410,7 @@ impl InboxStore for SqliteConversationStore {
         )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
         if let Some(native) = &mut persisted.event.observation
-            && let Some(batch) = native.get_mut::<NativeObservationBatch>()
+            && let Some(batch) = native.make_mut::<NativeObservationBatch>()
         {
             batch.pending.clone_from(&accepted.pending_observation);
         }

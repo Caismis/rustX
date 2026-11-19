@@ -325,7 +325,7 @@ export type Request1 =
       method: 'session/projections';
       params: {
         target: AttachmentTarget;
-        after: ProjectionActivationId;
+        after: string;
         limit: number;
       };
     }
@@ -924,7 +924,7 @@ export type Request1 =
         session_id: SessionId;
         node_id?: SessionNodeId | null;
         ledger: LedgerFrontier;
-        activation: ProjectionActivationId;
+        activation: string;
       };
     }
   | {
@@ -1547,13 +1547,6 @@ export type CanonicalContentLocator =
  * via the `definition` "SessionNodeId".
  */
 export type SessionNodeId = string;
-/**
- * Checkpoint activation order, independent of the Ledger and Journal domains.
- *
- * This interface was referenced by `ProtocolTypes`'s JSON-Schema
- * via the `definition` "ProjectionActivationId".
- */
-export type ProjectionActivationId = string;
 /**
  * Immutable historical context content, independent of canonical message identity.
  *
@@ -4751,6 +4744,8 @@ export type WorkflowState =
       type: 'settled';
     };
 /**
+ * What a node is currently waiting for.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowWait".
  */
@@ -4765,6 +4760,8 @@ export type WorkflowWait =
 export type WorkflowExecutionOutcome =
   'completed' | 'failed' | 'cancelled' | 'denied' | 'timed_out' | 'outcome_unknown';
 /**
+ * The fixed Workflow node kinds.
+ *
  * This interface was referenced by `ProtocolTypes`'s JSON-Schema
  * via the `definition` "WorkflowNodeKind".
  */
@@ -11375,7 +11372,7 @@ export interface RuntimeClientCompactionView {
    */
   checkpoint_id: string;
   /**
-   * Checkpoint activation order, independent of the Ledger and Journal domains.
+   * The activation coordinate, independent of canonical and Journal order.
    */
   activation_id: string;
   tokens_before: TokenMeasurement;
@@ -11403,7 +11400,7 @@ export interface TokenMeasurement {
  */
 export interface ProjectionPage {
   records: RuntimeClientProjectionHeadView[];
-  next_activation?: ProjectionActivationId | null;
+  next_activation?: string | null;
 }
 /**
  * Projection ownership is independent of the local execution trajectory.
@@ -11413,7 +11410,7 @@ export interface ProjectionPage {
  */
 export interface RuntimeClientProjectionHeadView {
   checkpoint_id: CheckpointId;
-  activation_id: ProjectionActivationId;
+  activation_id: string;
   /**
    * Insert the historical marker after this native transcript position.
    * Captured at activation; independent of Ledger and Journal coordinates.
@@ -11435,7 +11432,7 @@ export interface RuntimeClientProjectionHeadView {
  */
 export interface OriginActivation {
   conversation_id: ConversationId;
-  activation: ProjectionActivationId;
+  activation: string;
   completed_journal: JournalFrontier;
 }
 /**
@@ -11664,8 +11661,6 @@ export interface TraceRequestOutcome {
   generation?: TraceGeneration | null;
 }
 /**
- * Normalized token accounting for one generation.
- *
  * Providers do not expose identical token metrics; this is the stable
  * common core. Provider SDK usage objects never appear here.
  * Missing provider metrics remain absent; a reported zero is `Some(0)`.
@@ -18124,8 +18119,6 @@ export interface ListDelta13 {
   patches?: ListItemDelta3[];
 }
 /**
- * Normalized token accounting for one generation.
- *
  * Providers do not expose identical token metrics; this is the stable
  * common core. Provider SDK usage objects never appear here.
  * Missing provider metrics remain absent; a reported zero is `Some(0)`.
