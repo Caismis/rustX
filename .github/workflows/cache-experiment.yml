@@ -16,7 +16,9 @@
 #                         top (sccache covers what the target dir does not).
 #
 # A first push publishes the exp caches (cold numbers); the next push
-# restores them (warm numbers). Restore/save times come from the cache step
+# restores them (warm numbers). Cold run on cf6c3cc40 measured:
+#   A rust-cache+ws: restore 40s/2.1GB, ext 237.85s, lib-test 822.45s
+#   B sccache ghac : 941 hits/5 misses (99.5%), ext 303.59s, lib 238.59s Restore/save times come from the cache step
 # durations; compile times from /usr/bin/time -l; sccache hit rates from
 # `sccache --show-stats`.
 name: Cache experiment
