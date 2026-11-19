@@ -38,6 +38,7 @@ function defaultToolRequestWidth(splitWidth: number): number {
 
 export interface TrajectoryProps {
   cache: TraceCache;
+  messageHistory?: TrajectoryRowActions['messageHistory'];
   onLatest?: () => void;
   loadEarlier: (gapBefore?: string) => void;
   onSelect: (id?: string) => void;
@@ -45,7 +46,7 @@ export interface TrajectoryProps {
 }
 
 /** Native owner selection stays in the read cache; display/facet lives locally. */
-export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
+export function Trajectory({ cache, messageHistory, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
@@ -212,7 +213,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
       sourceMode: 'history',
     }, trigger);
   }, [runCanvas, workflowNodes, cache.details, cache.fields, cache.readCuts, completeWorkflowNodes]);
-  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, workflows: workflowMap, openedWorkflows,
+  const actions: TrajectoryRowActions = { select, toggleTurn, toggleCalls, foldableTurns, callOwners, requestNumbers, messageHistory, workflows: workflowMap, openedWorkflows,
     openWorkflowNodeCanvas: runCanvas ? openNodeCanvas : undefined,
     openWorkflowRootCanvas: runCanvas ? openRootCanvas : undefined,
     toggleWorkflow: id => {
@@ -244,7 +245,7 @@ export function Trajectory({ cache, loadEarlier, onSelect, onLoadDetail, onLates
     ? <TrajectoryInspector key={`${cache.epoch}:${selection.display_key}`} item={selectedItem} detail={selectedDetail?.detail} onLoadEarlier={loadEarlier} detailPage={selectedDetail?.page} detailReader={selectedDetail?.reader} loading={selectedDetail?.loading} stale={selectedDetail?.stale} error={selectedDetail?.error}
       facet={selection.facet} onFacet={setFacet} onLoadDetail={onLoadDetail} onClose={close} location={location}
       records={records} executions={executions} requestNumbers={requestNumbers} completeHistory={completeHistoryThrough(cache.page.records, selected.id, cache.page.next_cursor, cache.gaps)} onOpen={openRecord}
-      onOpenWorkflowCanvas={inspectorOpenCanvas} />
+      onOpenWorkflowCanvas={inspectorOpenCanvas} messageHistory={messageHistory} />
     : unresolvedWorkflow ? <WorkflowNodeReadInspector node={unresolvedWorkflow.instance} error={workflowNodes.get(selection!.owner_record_id)?.error}
       onRetry={() => retryWorkflowNodes(selection!.owner_record_id)} onClose={close} /> : null;
   const splitStyle = toolRequestOffset === null ? undefined : { '--trajectory-tool-request-width': `calc(58cqw - ${toolRequestOffset}px)` } as CSSProperties;

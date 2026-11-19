@@ -402,15 +402,19 @@ impl RuntimeInner {
             let pending = page.map_or_else(Vec::new, |page| {
                 page.headers
                     .into_iter()
-                    .filter_map(|header| match header.message.display {
-                        Some(MessageBlock::User(message)) => {
-                            Some(InboundItem::from_observation_header(
-                                header.revision,
-                                header.sequence,
-                                message,
-                            ))
+                    .filter_map(|header| {
+                        let input_id = header.input_id;
+                        match header.message.display {
+                            Some(MessageBlock::User(message)) => {
+                                Some(InboundItem::from_observation_header(
+                                    header.revision,
+                                    header.sequence,
+                                    message,
+                                    input_id,
+                                ))
+                            }
+                            _ => None,
                         }
-                        _ => None,
                     })
                     .collect()
             });

@@ -405,28 +405,21 @@ it('a live pending replay releases scoped answer uncertainty without another aut
   expect(server.replies).toHaveLength(1);
 });
 
-it('32-view capacity is actionable through Sidebar close, without eviction or stopping server work', async () => {
-  const ids = Array.from({ length: 33 }, (_, i) => `session-${i}`);
+it('opening past the recent inactive limit detaches the oldest idle view instead of refusing', async () => {
+  const ids = Array.from({ length: 12 }, (_, i) => `session-${i}`);
   server.snapshots = new Map(ids.map(id => [id, snapshot(id)]));
   server.workspaceHost.classifyLocations = async cwds => cwds.map(() => ({ authorized: true }));
-  await mount(ids.slice(0, 32));
-  fireEvent.click(screen.getByRole('button', { name: 'Search Sessions' }));
-  await act(async () => fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'session-32' } }));
-  await select('session-32');
-  expect(screen.getByRole('alert').textContent).toContain('Close a view from its Sidebar Session actions');
-  expect(server.claims()).toHaveLength(32);
-  fireEvent.click(screen.getByRole('button', { name: 'Clear search' }));
-  await act(async () => server.client.listSessions(0, ''));
-  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
-  fireEvent.click(screen.getByRole('menuitem', { name: 'Close view' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Session session-0' })));
-  fireEvent.click(screen.getByRole('button', { name: 'Search Sessions' }));
-  await act(async () => fireEvent.change(screen.getByLabelText('Search Session metadata'), { target: { value: 'session-32' } }));
-  await select('session-32');
-  expect(screen.getByLabelText('Session title').textContent).toBe('Session session-32');
-  expect(server.claims()).toHaveLength(32);
-  expect(methods().filter(method => method === 'session/detach')).toHaveLength(1);
+  await mount(ids.slice(0, 11));
+  const before = methods().length;
+  await select('session-11');
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(screen.getByLabelText('Session title').textContent).toBe('Session session-11');
+  expect(methods().slice(before).filter(method => method === 'session/detach')).toEqual(['session/detach']);
+  expect(server.requests.filter(row => row.request.method === 'session/detach').at(-1)?.request.params).toMatchObject({ target: { session_id: 'session-1' } });
+  expect(server.loaded.has('session-1')).toBe(true);
+  expect(server.client.getSnapshot().views['session-1'].snapshot).toBeUndefined();
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/interrupt');
+  expect(server.claims().some(claim => claim.session_id === 'session-11')).toBe(true);
 });
 
 it('deletion shows the catalog title and impact, never raw identity/CAS, while sending the exact revision', async () => {
@@ -449,23 +442,17 @@ it('deletion shows the catalog title and impact, never raw identity/CAS, while s
   expect(screen.queryByText('This Session no longer exists.')).toBeNull();
 });
 
-it('unlisted restored views cannot strand the finite view capacity', async () => {
+it('unlisted restored views are dropped without a detach and cannot block opening', async () => {
   await server.connect();
   const missing = Array.from({ length: 32 }, (_, i) => `missing-${i}`);
   localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint, openViews: missing, route: { kind: 'new-conversation' } }));
   await act(async () => { render(<App client={server.client} workspaceHost={server.workspaceHost} />); });
-  await select('A');
-  expect(screen.getByText(/^32 Session views/).closest('[role="alert"]')?.textContent).toContain('32 Session views');
   const before = methods().length;
-  fireEvent.click(screen.getByRole('button', { name: 'View options' }));
-  await act(async () => fireEvent.click(screen.getByRole('menuitem', { name: 'Close all views' })));
-  expect(JSON.parse(localStorage.getItem('rustx-console-view-v3')!).openViews).toEqual([]);
-  expect(missing.every(id => server.client.getSnapshot().views[id].attachmentIntent === 'released')).toBe(true);
-  // Resetting the automatically selected Workspace may cancel its unsent
-  // preparation; no missing Session has a native controller to detach.
-  expect(methods().slice(before).filter(method => method !== 'mcp/draftCancel')).toEqual([]);
   await select('A');
+  expect(screen.queryByText(/^32 Session views/)).toBeNull();
   expect(screen.getByLabelText('Session title').textContent).toBe('Session A');
+  expect(methods().slice(before)).not.toContain('session/detach');
+  expect(missing.every(id => server.client.getSnapshot().views[id] === undefined)).toBe(true);
   expect(methods()).not.toContain('session/unload'); expect(methods()).not.toContain('turn/interrupt');
 });
 

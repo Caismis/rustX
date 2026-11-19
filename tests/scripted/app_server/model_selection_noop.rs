@@ -59,7 +59,10 @@ async fn fixture() -> Fixture {
         })
         .await
         .unwrap();
-    super::configuration::settled(&f, 0).await;
+    super::configuration::applied(&f, 0).await;
+    while !f.manager.applications.lock().worker_idle() {
+        tokio::task::yield_now().await;
+    }
     published_activation(&f.manager.configuration_host(id).unwrap()).await;
     f
 }
@@ -279,6 +282,9 @@ async fn identical_explicit_selection_is_inert_after_automatic_commit() {
         let f = fixture().await;
         edit_instructions(&f).await;
         super::configuration::applied(&f, 0).await;
+        while !f.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
         assert_noop(&f, None).await;
         let resources = f
             .manager
@@ -366,7 +372,10 @@ async fn identical_explicit_selection_is_inert_after_reload() {
         let f = fixture().await;
         f.manager.unload(&f.id(0).await).await.unwrap();
         f.load(0).await.unwrap().unwrap();
-        super::configuration::settled(&f, 0).await;
+        super::configuration::applied(&f, 0).await;
+        while !f.manager.applications.lock().worker_idle() {
+            tokio::task::yield_now().await;
+        }
         published_activation(&f.manager.configuration_host(&f.sessions[0].id).unwrap()).await;
         assert_noop(&f, None).await;
         f.close().await;

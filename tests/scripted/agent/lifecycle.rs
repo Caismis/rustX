@@ -2067,7 +2067,10 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
     use crate::runtime::ApprovalMode;
     use crate::runtime::permission::review::{PermissionReviewVerdict, ScriptedPermissionReviewer};
     for name in ["write", "edit", "bash"] {
-        for decision in ["allow", "deny", "cancel", "full_access", "automatic_deny"] {
+        for decision in ["allow", "deny", "cancel", "full_access", "automatic_deny"]
+            .into_iter()
+            .chain((name == "write").then_some("oversized_allow"))
+        {
             let fixture = common::native_fixture();
             let definition = fixture
                 .registry
@@ -2100,7 +2103,10 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 }),
                 _ => unreachable!(),
             };
-            if decision == "automatic_deny" {
+            if decision == "oversized_allow" {
+                arguments["content"] = "x".repeat(70 * 1024).into();
+            }
+            if matches!(decision, "automatic_deny" | "oversized_allow") {
                 arguments
                     .as_object_mut()
                     .unwrap()
@@ -2124,7 +2130,7 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
             let mode = match decision {
                 "full_access" => ApprovalMode::FullAccess,
-                "automatic_deny" => ApprovalMode::Automatic,
+                "automatic_deny" | "oversized_allow" => ApprovalMode::Automatic,
                 _ => ApprovalMode::Plan,
             };
             let policy = ConfiguredApprovalPolicy::new(mode).with_reviewer(Arc::new(
@@ -2191,7 +2197,7 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                 } else {
                     tx.send(InteractionOutcome::Responded {
                         response: InteractionResponse::Approval {
-                            decision: if decision == "allow" {
+                            decision: if matches!(decision, "allow" | "oversized_allow") {
                                 ApprovalDecision::Allow
                             } else {
                                 ApprovalDecision::Deny {
@@ -2203,7 +2209,7 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                     .unwrap();
                 }
             }
-            if decision == "allow" || decision == "full_access" {
+            if matches!(decision, "allow" | "oversized_allow" | "full_access") {
                 handle.await_started().await;
                 handle.release_and_await_completion().await;
             }
@@ -2261,7 +2267,13 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
             } else {
                 assert_eq!(starts, 1);
                 assert_eq!(handle.invocations().len(), 1);
-                assert_eq!(handle.invocations()[0].mode, ToolInvocationMode::Foreground);
+                // Foreground Bash privately stages its executor for timeout handoff.
+                let executor_mode = if name == "bash" {
+                    ToolInvocationMode::Background
+                } else {
+                    ToolInvocationMode::Foreground
+                };
+                assert_eq!(handle.invocations()[0].mode, executor_mode);
             }
             if matches!(decision, "full_access" | "automatic_deny") {
                 assert!(

@@ -113,7 +113,7 @@ export async function readTraceMessages(reader: TraceFieldReader, cut: Checkpoin
     const body = await readTraceBlocks(reader, cut, message.collections, current, undefined, message.locator);
     blocks.push(...body ?? (message.preview ? [{ type: 'text' as const, text: message.preview }] : []));
   }
-  return { blocks, source: messages[0]?.source, attachments: messages.flatMap(message => message.attachments) };
+  return { messages, blocks, source: messages[0]?.source, attachments: messages.flatMap(message => message.attachments) };
 }
 /** Request fields retain the native child ordinals and original value windows. */
 export async function readRequestField(reader: TraceFieldReader, cut: CheckpointReadCut, domain: string, current: () => boolean): Promise<unknown> {

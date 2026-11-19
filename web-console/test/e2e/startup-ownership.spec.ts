@@ -42,6 +42,10 @@ for (const language of ['en', 'zh']) test(`create ACK renders Conversation befor
   await expect(page.locator('[data-draft-conversation]')).toHaveCount(0);
   await expect(page.locator('#session-view')).toHaveAttribute('data-phase', 'active');
   await expect(page.locator('[data-first-submission]')).toHaveAttribute('data-first-submission', 'attaching');
+  const bars = page.locator('[data-first-submission="attaching"] > span[aria-hidden="true"]');
+  await expect(bars).toHaveCount(3);
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await expect(bars.first()).toHaveCSS('animation-name', 'none');
   await expect.poll(() => methods(page)).toContain('thread/resume');
   expect((await methods(page)).filter(m => ['session/uploadPrepare', 'inbound/queue', 'session/setModel'].includes(m))).toEqual([]);
   await expect(page.locator('button[data-session-id=created]')).toHaveCount(0);

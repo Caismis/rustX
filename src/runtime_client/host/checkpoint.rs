@@ -280,12 +280,6 @@ impl ClientInner {
         offset: u64,
         limit: usize,
     ) -> Result<super::super::checkpoint::CheckpointPage, RuntimeClientError> {
-        #[derive(serde::Serialize, schemars::JsonSchema)]
-        struct PendingSummary {
-            sequence: crate::runtime::inbound::InboundSequence,
-            revision: u64,
-            message: Option<crate::message::types::UserMessageBlock>,
-        }
         let source = self
             .store
             .pending_header_page(&source_cut.read, (offset > 0).then_some(offset), limit)
@@ -293,29 +287,7 @@ impl ClientInner {
         let items = source
             .headers
             .into_iter()
-            .map(|header| {
-                let message = match header.message.display {
-                    Some(crate::message::types::MessageBlock::User(message)) => Some(message),
-                    _ => None,
-                };
-                let value = crate::observation::bounded::structural_value(&PendingSummary {
-                    sequence: crate::runtime::inbound::InboundSequence::new(header.sequence),
-                    revision: header.revision,
-                    message,
-                });
-                crate::observation::cut::CheckpointPageItem {
-                    body_complete: None,
-                    key: None,
-                    offset: header.sequence,
-                    identity: header.message.identity.as_ref().map_or_else(
-                        || format!("pending:{}", header.sequence),
-                        ToString::to_string,
-                    ),
-                    deferred: header.message.deferred,
-                    value,
-                    content: Vec::new(),
-                }
-            })
+            .map(pending_checkpoint_item)
             .collect();
         Ok(super::super::checkpoint::CheckpointPage {
             collections: Vec::new(),
@@ -816,5 +788,146 @@ impl ClientInner {
         })
         .map_err(RuntimeClientError::observation_store_error)?;
         Ok(())
+    }
+}
+
+/// Finite pending checkpoint header. `input_id` is the original public
+/// app-server id and survives a deferred body.
+fn pending_checkpoint_item(
+    header: crate::durable::observation::PendingHeader,
+) -> crate::observation::cut::CheckpointPageItem {
+    #[derive(serde::Serialize, schemars::JsonSchema)]
+    struct PendingSummary {
+        sequence: crate::runtime::inbound::InboundSequence,
+        revision: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_id: Option<String>,
+        message: Option<crate::message::types::UserMessageBlock>,
+    }
+    let sequence = header.sequence;
+    let identity = header
+        .message
+        .identity
+        .as_ref()
+        .map_or_else(|| format!("pending:{sequence}"), ToString::to_string);
+    let mut deferred = header.message.deferred;
+    let mut summary = PendingSummary {
+        sequence: crate::runtime::inbound::InboundSequence::new(sequence),
+        revision: header.revision,
+        input_id: header.input_id,
+        message: match header.message.display {
+            Some(crate::message::types::MessageBlock::User(message)) => Some(message),
+            _ => None,
+        },
+    };
+    let mut value = crate::observation::bounded::structural_value(&summary);
+    // An oversized inline body must not erase the correlation header. The
+    // deferred checkpoint value stays this finite summary; the UserMessage is
+    // read from the pending value range and merged by the caller.
+    if value.is_none() && summary.message.take().is_some() {
+        deferred = true;
+        value = crate::observation::bounded::structural_value(&summary);
+    }
+    crate::observation::cut::CheckpointPageItem {
+        body_complete: None,
+        key: None,
+        offset: sequence,
+        identity,
+        deferred,
+        value,
+        content: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pending_checkpoint_item;
+    use crate::durable::{InboxStore, ObservationStore, SqliteConversationStore};
+    use crate::message::content::TextBlock;
+    use crate::message::types::{InboundKind, UserContentBlock, UserSource};
+    use crate::runtime::identity::ConversationId;
+
+    fn accept(
+        store: &SqliteConversationStore,
+        correlation: Option<&str>,
+        text: &str,
+    ) -> crate::durable::AcceptedInbound {
+        store
+            .accept_inbound(crate::durable::InboundDraft {
+                message_id: None,
+                source: UserSource::Human,
+                kind: InboundKind::QueuedMessage,
+                content: vec![UserContentBlock::Text(TextBlock {
+                    text: text.to_owned(),
+                })],
+                timestamp: chrono::DateTime::UNIX_EPOCH,
+                correlation: correlation.map(str::to_owned),
+            })
+            .unwrap()
+    }
+
+    #[test]
+    fn pending_checkpoint_header_keeps_app_server_input_id_when_body_is_deferred() {
+        let store = SqliteConversationStore::in_memory(ConversationId::new(
+            "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
+        ))
+        .unwrap();
+        accept(&store, Some("app-server:send-1"), "queued preview");
+        accept(&store, Some("background:execution-1"), "not a public input");
+        let deferred = accept(&store, Some("app-server:big-1"), &"x".repeat(20_000));
+        let page = store
+            .pending_header_page(&deferred.read_cut, None, 32)
+            .unwrap();
+        assert_eq!(page.headers.len(), 3);
+        assert_eq!(page.headers[0].input_id.as_deref(), Some("send-1"));
+        assert!(page.headers[1].input_id.is_none());
+        assert_eq!(page.headers[2].input_id.as_deref(), Some("big-1"));
+        assert!(
+            page.headers[2].message.deferred,
+            "oversized pending body must defer without dropping correlation"
+        );
+        let inline_item = pending_checkpoint_item(page.headers[0].clone());
+        assert_eq!(inline_item.value.as_ref().unwrap()["input_id"], "send-1");
+        assert!(inline_item.value.as_ref().unwrap()["message"].is_object());
+        let foreign_item = pending_checkpoint_item(page.headers[1].clone());
+        assert!(
+            foreign_item
+                .value
+                .as_ref()
+                .unwrap()
+                .get("input_id")
+                .is_none()
+        );
+        let deferred_item = pending_checkpoint_item(page.headers[2].clone());
+        assert!(deferred_item.deferred);
+        let deferred_value = deferred_item
+            .value
+            .expect("deferred header remains readable");
+        assert_eq!(deferred_value["input_id"], "big-1");
+        assert_ne!(
+            deferred_value["message"]["content"][0]["text"]
+                .as_str()
+                .map(str::len),
+            Some(20_000)
+        );
+
+        let mut overflow = page.headers[0].clone();
+        overflow.input_id = Some("overflow-1".into());
+        overflow.message.deferred = false;
+        let Some(crate::message::types::MessageBlock::User(message)) =
+            overflow.message.display.as_mut()
+        else {
+            panic!("inline pending header has a user body");
+        };
+        message.content = vec![UserContentBlock::Text(TextBlock {
+            text: "y".repeat(20_000),
+        })];
+        let overflow_item = pending_checkpoint_item(overflow);
+        assert!(overflow_item.deferred);
+        let overflow_value = overflow_item
+            .value
+            .expect("overflow keeps the correlation header");
+        assert_eq!(overflow_value["input_id"], "overflow-1");
+        assert!(overflow_value["message"].is_null());
     }
 }

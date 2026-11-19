@@ -1063,3 +1063,11 @@ export const IconHomeOutline16 = ({ size = 16, className }: IconProps) => (
     <path d="M1.5 7 8 1.5 14.5 7M3 6v8h3.5V9h3v5H13V6" />
   </svg>
 )
+
+/** flat-list-outline (16x16) */
+export const IconFlatListOutline16 = ({ size = 16, className }: IconProps) => (
+  <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth={1.25} xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path d="M6 3.5h7.5M6 8h7.5M6 12.5h7.5" />
+    <path d="M2.6 3.5h.01M2.6 8h.01M2.6 12.5h.01" />
+  </svg>
+)

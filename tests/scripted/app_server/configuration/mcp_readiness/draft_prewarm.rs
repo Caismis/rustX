@@ -1209,7 +1209,7 @@ async fn terminal_submission_failure_releases_residency_and_all_recovery_paths_r
                 .lock()
                 .unwrap()
                 .policy
-                .max_resident_runtimes = 1;
+                .max_resident_runtimes = Some(1);
             configure(&fixture, &[("late", &mcp)]);
             only_mcp(&fixture, 0);
             let path = fixture.workspaces[0].join("rustx.toml");

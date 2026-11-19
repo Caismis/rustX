@@ -961,12 +961,11 @@ impl<'a> AgentExecution<'a> {
     /// durably pending, and the attempt settles cancelled. Otherwise one
     /// finite watermark is selected and atomically adopted into the durable
     /// canonical ledger, then the complete batch is appended synchronously
-    /// as distinct canonical `UserMessageBlock` values in inbound sequence
+    /// as distinct canonical `UserMessageBlock` values in model delivery
     /// order — the batch is never partially consumed and never requeued. The
-    /// whole adopted batch becomes one new [`FreshInboundTurn`] in sequence
+    /// whole adopted batch becomes one new [`FreshInboundTurn`] in delivery
     /// order, so the next model request receives exactly one Agent Status
-    /// snapshot targeting the final adopted message (the highest-sequence
-    /// item).
+    /// snapshot targeting the final adopted message in that order.
     ///
     /// Returns `Ok(true)` when one complete batch was adopted, `Ok(false)`
     /// when the snapshot observed an empty inbox, and the attempt terminal

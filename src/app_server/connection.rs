@@ -940,6 +940,8 @@ impl AppServerConnection {
             &call,
             Method::SessionEditorRead { .. }
                 | Method::SessionHistory { .. }
+                | Method::SessionMessageBoundary { .. }
+                | Method::SessionMessageVersions { .. }
                 | Method::SessionStatistics { .. }
                 | Method::SessionTraceHistory { .. }
                 | Method::SessionTraceHistoryDetail { .. }

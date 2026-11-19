@@ -728,10 +728,9 @@ for (const unavailable of ['disabled', 'hidden', 'removed'] as const) test(`dism
   expect(errors).toEqual([]);
 });
 
-test('reduced motion removes Settings and banner motion', async ({ page }) => {
+test('reduced motion removes Settings transitions', async ({ page }) => {
   const errors = await start(page, '?session=preparing');
-  const dot = page.getByRole('region', { name: 'Session configuration', includeHidden: true }).locator('svg rect').first();
-  await expect(dot).toHaveCSS('animation-name', 'none');
+  await expect(banner(page)).toHaveCount(0);
   await openUserSettings(page);
   await openSettingsPage(page, 'Extensions');
   await settingsPage(page).getByRole('tab', { name: 'Built-in', exact: true }).click();
@@ -739,7 +738,6 @@ test('reduced motion removes Settings and banner motion', async ({ page }) => {
   await expect(track).toHaveCSS('transition-duration', '0s');
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   await expect(track).toHaveCSS('transition-duration', '0.15s');
-  await expect(dot).not.toHaveCSS('animation-name', 'none');
   expect(errors).toEqual([]);
 });
 
@@ -769,12 +767,8 @@ const nativeRequests = (page: Page) => page.evaluate(() => (window as unknown as
 const banner = (page: Page) => page.getByRole('region', { name: 'Session configuration' });
 
 test('Session configuration banner: preparing, waiting and failed, compact and owner-correct', async ({ page }) => {
-  // Preparing: stated as text; nothing to confirm.
   let errors = await start(page, '?session=preparing');
-  await expect(banner(page).locator('[data-state="preparing"]')).toContainText('Preparing configuration changes…');
-  await expect(banner(page).getByRole('button')).toHaveCount(0);
-  await expectAccessible(page, '[aria-label="Session configuration"]');
-  await expectStableScreenshot(page.locator('#session-view > header'), 'session-banner-preparing-light.png');
+  await expect(banner(page)).toHaveCount(0);
   expect(errors).toEqual([]);
 
   // Waiting: the prepared change applies by itself after current work; the

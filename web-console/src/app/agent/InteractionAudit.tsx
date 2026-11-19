@@ -10,10 +10,25 @@ import type { Translate } from '../../locale/translation';
 import { questionPanelKey, useQuestionPanels } from './QuestionPanels';
 import { AgentConversationContext } from './subagent-context';
 import toolCss from '../../presentation/agent/Tool.module.css';
+import { UserMessage } from '../../presentation/agent/Message';
+import { CopyMessage, MessageTime } from './TurnTail';
+import replyCss from './RecordedQuestionReply.module.css';
 
 type Item = RuntimeClientTranscriptEntry['item'];
 type Requested = Extract<Item, { type: 'interaction_requested' }>;
 type Settled = Extract<Item, { type: 'interaction_settled' }>;
+export function RecordedQuestionReply({ questions, answers, time }: { questions: QuestionSpecification[]; answers: QuestionnaireAnswerEntry[]; time: string }) {
+  const tx = useTranslation();
+  const rows = questions.map((question, index) => {
+    const value = label(questions, answers.find(entry => entry.question_index === index));
+    const text = value === undefined ? tx('tools:ask.skipped') : Array.isArray(value) ? value.join(', ')
+      : typeof value === 'boolean' ? tx(value ? 'interactions:questionnaire.true' : 'interactions:questionnaire.false') : String(value);
+    return { question: question.question, header: question.header !== question.question && question.header, text };
+  });
+  return <UserMessage label={tx('interactions:questionnaire.answers')} actions={<div className={replyCss.actions}><MessageTime time={time}/><CopyMessage text={rows.map(row => `${row.header ? `${row.header} — ` : ''}${row.question}\n${row.text}`).join('\n\n')}/></div>}>
+    <dl className={replyCss.details}>{rows.map((row, index) => <div key={index}><dt>{row.header && <small>{row.header}</small>}{row.question}</dt><dd>{row.text}</dd></div>)}</dl>
+  </UserMessage>;
+}
 /** Durable request/settlement receipts share only their exact native identity. */
 export function InteractionAudit({ item, settlement }: { item: Requested | Settled; settlement?: Settled }) {
   const tx = useTranslation(), [open, setOpen] = useState(false);

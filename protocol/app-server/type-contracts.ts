@@ -144,3 +144,10 @@ const repairedTrace = {type:'trace',refreshed:1,page:{records:[],next_cursor:nul
 // @ts-expect-error Missing anchors cannot make prefix progress implicit.
 const missingTraceProgress:MethodResult={type:'trace',page:repairedTrace.page};
 void repairedTrace;void missingTraceProgress;
+
+// Optional max_resident_runtimes defaults to unset/uncapped while allowing explicit bounded limits.
+import type { AppServerPolicy } from './v82.js';
+const uncappedPolicy: AppServerPolicy = {};
+const explicitNullPolicy: AppServerPolicy = { max_resident_runtimes: null };
+const boundedPolicy: AppServerPolicy = { max_resident_runtimes: 8 };
+void uncappedPolicy; void explicitNullPolicy; void boundedPolicy;

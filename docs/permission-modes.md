@@ -31,7 +31,10 @@ Effective `deny` cannot be overridden by elevation, review, or Full Access.
 
 ## Elevation
 
-Every model-facing tool call uses `{arguments: {...}, elevation_reason?: ...}`.
+Every model-facing tool call uses `{arguments: {...}}`. Tools that can escalate
+in Plan or Automatic also accept an optional outer `elevation_reason`. Native
+reads, Todo operations, and Goal reads and status updates omit this field.
+Creating a Goal can require approval and exposes the field.
 Model-selectable tools also require an outer `execution_mode`. Business schemas
 remain independent of these outer runtime fields, including same-named business
 properties. A nonblank elevation reason requests human escalation for the exact frozen
@@ -88,8 +91,11 @@ lowest Profile). The reviewer returns a strict `{decision, explanation}` JSON
 object (`allow`|`deny`). Invalid, timed-out, or unavailable review fails closed.
 Native review facts include the canonical task's Human/Agent provenance or the
 admitted scheduled Claim, business arguments, mutation target, matrix decision
-and structured Bash analysis. Missing or oversized evidence fails closed;
-model-authored explanations never establish user authority.
+and structured Bash analysis. A built-in `write` with up to 64 KiB of encoded
+business arguments can be reviewed in full. Larger writes go directly to human
+approval for the prepared invocation. Other tools retain the 8 KiB argument
+limit. Missing or incomplete evidence cannot authorize an automatic execution.
+Model-authored explanations never establish user authority.
 A nonblank `elevation_reason` may escalate a denial or reviewer failure to
 human Ask for the exact frozen invocation.
 

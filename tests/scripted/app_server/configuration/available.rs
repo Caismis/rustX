@@ -188,7 +188,10 @@ async fn t06_t15_configuration_save_keeps_cold_sessions_outside_residency_budget
         }
         changed.changed().await.unwrap();
     }
-    assert_eq!(fixture.manager.process_policy().max_resident_runtimes, 1);
+    assert_eq!(
+        fixture.manager.process_policy().max_resident_runtimes,
+        Some(1)
+    );
     assert_eq!(
         fixture.manager.registry.0.lock().unwrap().entries.len(),
         before

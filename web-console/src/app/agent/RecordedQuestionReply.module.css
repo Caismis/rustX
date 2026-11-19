@@ -1,0 +1,6 @@
+.details { margin: 0; }
+.details > div + div { margin-top: 12px; }
+.details dt { display: grid; gap: 3px; color: var(--dsw-alias-label-secondary); }
+.details small { font-size: var(--dsh-content-font-size-secondary, 13px); }
+.details dd { margin: 4px 0 0; }
+.actions { display: flex; align-items: center; gap: 8px; padding-right: 4px; }

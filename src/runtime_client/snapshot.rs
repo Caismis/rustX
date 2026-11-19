@@ -474,6 +474,10 @@ pub struct InboundItemView {
     /// The bounded native header defers part of its authoritative message.
     #[serde(default)]
     pub deferred: bool,
+    /// Original public app-server input id, projected only from durable
+    /// correlation `app-server:<id>`. Absent for every other producer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_id: Option<String>,
     /// The canonical inbound message.
     pub message: UserMessageBlock,
 }

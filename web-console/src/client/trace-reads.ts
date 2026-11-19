@@ -5,7 +5,7 @@ import type { AttachmentTarget, CheckpointReadCut, ProjectionDetail, TraceRecord
 import { traceWindowReady } from './history-policy';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OperationAdmission, SessionView } from './contracts';
-import type { ColdReads } from './cold-reads';
+import { isDurableColdRead, type ColdReads } from './cold-reads';
 import type { SessionReads } from './session-reads';
 
 /** What Trace reads read from and write to their client. */
@@ -26,37 +26,145 @@ export interface TraceReadPort {
  * own, independent of Runtime Client cursors and cache interval epochs. */
 export class TraceReads {
   constructor(private readonly port: TraceReadPort) {}
+  private previewLoads = new Map<string, { current: () => boolean; work: Promise<void> }>();
+  private readonly coldFieldGenerations = new WeakMap<TraceFieldReader, number>();
   /** Read-only trace is independent of slow runtime/resource initialization. */
-  async readPreview(id: string, admitted: () => boolean, older = false) {
+  readPreview(id: string, admitted: () => boolean, older = false): Promise<void> {
     const view = this.port.state().views[id], previous = older ? view?.tracePreview : undefined;
-    if (older && (!previous || previous.cache.loading || previous.cache.page.next_cursor == null)) return;
-    const scope = this.port.coldScope(id, admitted); if (!scope) return;
+    if (older && (!previous || previous.cache.loading || previous.cache.page.next_cursor == null)) return Promise.resolve();
+    const scope = this.port.coldScope(id, admitted); if (!scope) return Promise.resolve();
     const { node, conversation, current } = scope;
-    if (previous && previous.conversationId !== conversation) return;
+    if (previous && previous.conversationId !== conversation) return Promise.resolve();
     const cache = previous?.cache ?? replaceTrace({ records: [], next_cursor: null });
     const limit = TRACE_PAGE_SIZE;
-    if (!current()) return;
+    if (!current()) return Promise.resolve();
+    const durable = this.port.coldScope(id)?.current ?? current;
     if (previous) this.port.setSession(id, { tracePreview: { ...previous, cache: { ...cache, loading: true, error: undefined } } });
-    try {
-      const admission = older ? await this.port.admit(id, current) : current;
-      if (!admission) return;
-      const result = await this.port.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: older ? cache.page.next_cursor : null, limit } }, 'session_trace_history', undefined, admission);
-      if (!current()) return;
-      if (result.conversation_id !== conversation) throw new Error('Trace conversation changed.');
-      standaloneTraceCut(result.page,conversation);
-      this.port.setSession(id, { tracePreview: { conversationId: result.conversation_id, cache:{...(older ? prependTrace(this.port.state().views[id].tracePreview!.cache, result.page) : replaceTrace(result.page)),fields:this.coldFields(id,node,conversation,current)} } });
-    } catch (error) {
-      if (current()) this.port.setSession(id, { tracePreview: { conversationId: previous?.conversationId ?? '', cache: { ...(this.port.state().views[id]?.tracePreview?.cache ?? cache), loading: false, error: String(error) } } });
+    const load = { current, work: Promise.resolve() };
+    load.work = (async () => {
+      try {
+        const admission = older ? await this.port.admit(id, current) : current;
+        if (!admission) return;
+        const result = await this.port.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: older ? cache.page.next_cursor : null, limit } }, 'session_trace_history', undefined, admission);
+        if (!current()) return;
+        if (result.conversation_id !== conversation) throw new Error('Trace conversation changed.');
+        standaloneTraceCut(result.page,conversation);
+        if (older && result.page.next_cursor != null && result.page.next_cursor === cache.page.next_cursor) throw new Error('Historical Trace history did not advance.');
+        const live = this.port.state().views[id]?.tracePreview;
+        if (older && (!live || live.conversationId !== conversation || live.cache.epoch !== cache.epoch)) return;
+        this.port.setSession(id, { tracePreview: { conversationId: result.conversation_id, cache:{...(older ? prependTrace(live!.cache, result.page) : replaceTrace(result.page)),fields:this.coldFields(id,node,conversation,durable)} } });
+      } catch (error) {
+        if (current()) this.port.setSession(id, { tracePreview: { conversationId: previous?.conversationId ?? '', cache: { ...(this.port.state().views[id]?.tracePreview?.cache ?? cache), loading: false, error: String(error) } } });
+      } finally {
+        if (!older && this.previewLoads.get(id) === load) this.previewLoads.delete(id);
+        if (older && current()) {
+          const latest = this.port.state().views[id]?.tracePreview;
+          if (latest && latest.conversationId === conversation && latest.cache.epoch === cache.epoch && latest.cache.loading) {
+            this.port.setSession(id, { tracePreview: { ...latest, cache: { ...latest.cache, loading: false } } });
+          }
+        }
+      }
+    })();
+    if (!older) this.previewLoads.set(id, load);
+    return load.work;
+  }
+  private async readInitialPreview(id: string): Promise<void> {
+    const inflight = this.previewLoads.get(id);
+    if (inflight?.current()) {
+      await inflight.work;
     }
+    const existing = this.previewLoads.get(id);
+    if (existing?.current()) return existing.work;
+    const scope = this.port.coldScope(id);
+    if (!scope?.current()) return;
+    const { node, conversation, current } = scope;
+    const initial = this.port.state().views[id]?.tracePreview;
+    if (initial?.conversationId === conversation) {
+      if (initial.cache.loading || initial.cache.error) return;
+      if (initial.cache.page.next_cursor == null || traceWindowReady(initial.cache.page.records)) {
+        if (!initial.cache.fields || this.coldFieldGenerations.get(initial.cache.fields) !== this.port.state().generation) {
+          this.port.setSession(id, { tracePreview: { ...initial, cache: { ...initial.cache, fields: this.coldFields(id, node, conversation, current) } } });
+        }
+        return;
+      }
+    }
+    let admission: false | OperationAdmission = false;
+    const allowed = () => !!admission && admission.current() && current();
+    const publish = (cache: TraceCache) => {
+      if (allowed()) this.port.setSession(id, { tracePreview: { conversationId: conversation, cache } });
+    };
+    const load = { current, work: Promise.resolve() };
+    load.work = (async () => {
+      try {
+        admission = await this.port.admit(id, current);
+        if (!admission || !allowed()) return;
+        const fields = this.coldFields(id, node, conversation, current);
+        const latestPreview = this.port.state().views[id]?.tracePreview;
+        let cache: TraceCache | undefined = latestPreview?.conversationId === conversation ? latestPreview.cache : undefined;
+        if (!cache) {
+          const result = await this.port.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before: null, limit: TRACE_PAGE_SIZE } }, 'session_trace_history', undefined, admission);
+          if (!allowed()) return;
+          if (result.conversation_id !== conversation) throw new Error('Trace conversation changed.');
+          standaloneTraceCut(result.page, conversation);
+          cache = { ...replaceTrace(result.page), fields, loading: result.page.next_cursor != null && !traceWindowReady(result.page.records) };
+          publish(cache);
+        } else {
+          if (cache.loading || cache.error) return;
+          if (cache.page.next_cursor == null || traceWindowReady(cache.page.records)) {
+            if (!cache.fields || this.coldFieldGenerations.get(cache.fields) !== this.port.state().generation) publish({ ...cache, fields });
+            return;
+          }
+          cache = { ...cache, fields, loading: true, error: undefined };
+          publish(cache);
+        }
+        const visited = new Set<string>();
+        while (allowed() && cache.page.next_cursor != null && !traceWindowReady(cache.page.records)) {
+          const before: string = cache.page.next_cursor;
+          if (visited.has(before)) throw new Error('Historical Trace history did not advance.');
+          visited.add(before);
+          const result = await this.port.request({ method: 'session/traceHistory', params: { session_id: id, node_id: node, before, limit: TRACE_PAGE_SIZE } }, 'session_trace_history', undefined, admission);
+          if (!allowed()) return;
+          if (result.conversation_id !== conversation) throw new Error('Trace conversation changed.');
+          standaloneTraceCut(result.page, conversation);
+          if (result.page.next_cursor != null && result.page.next_cursor === before) throw new Error('Historical Trace history did not advance.');
+          const live = this.port.state().views[id]?.tracePreview;
+          if (!live || live.conversationId !== conversation || live.cache.epoch !== cache.epoch) return;
+          const merged = prependTrace(live.cache, result.page);
+          cache = { ...merged, fields, loading: merged.page.next_cursor != null && !traceWindowReady(merged.page.records) };
+          publish(cache);
+        }
+        if (allowed()) {
+          const live = this.port.state().views[id]?.tracePreview;
+          if (live && live.conversationId === conversation && live.cache.epoch === cache.epoch && live.cache.loading) {
+            publish({ ...live.cache, fields, loading: false });
+          }
+        }
+      } catch (error) {
+        if (!current()) return;
+        const latest = this.port.state().views[id]?.tracePreview;
+        const base = latest?.conversationId === conversation ? latest.cache : replaceTrace({ records: [], next_cursor: null });
+        this.port.setSession(id, { tracePreview: { conversationId: conversation, cache: { ...base, loading: false, error: String(error) } } });
+      } finally {
+        if (this.previewLoads.get(id) === load) this.previewLoads.delete(id);
+        const latest = this.port.state().views[id]?.tracePreview;
+        if (current() && latest?.conversationId === conversation && latest.cache.loading) {
+          this.port.setSession(id, { tracePreview: { ...latest, cache: { ...latest.cache, loading: false } } });
+        }
+      }
+    })();
+    this.previewLoads.set(id, load);
+    return load.work;
   }
   private async readPreviewDetail(id: string, record: string) {
     const preview = this.port.state().views[id]?.tracePreview;
-    if (!preview || preview.cache.details[record]?.loading || preview.cache.details[record]?.detail || preview.cache.details[record]?.page) return;
-    const scope = this.port.coldScope(id); if (!scope || preview.conversationId !== scope.conversation) return;
+    const existing = preview?.cache.details[record];
+    if (!preview || existing?.loading || existing && !existing.stale && !existing.error && (existing.detail || existing.page)) return;
+    const scope = this.port.coldScope(id); if (!scope?.current() || preview.conversationId !== scope.conversation) return;
     const node = scope.node;
     const pending = beginTraceDetail(preview.cache, record);
     const current = () => scope.current() && this.port.state().views[id]?.tracePreview?.conversationId === scope.conversation
-      && this.port.state().views[id]?.tracePreview?.cache.details[record] === pending.details[record];
+      && this.port.state().views[id]?.tracePreview?.cache.epoch === pending.epoch
+      && this.port.state().views[id]?.tracePreview?.cache.details[record]?.read === pending.details[record].read;
     this.port.setSession(id, { tracePreview: { ...preview, cache: pending } });
     try {
       const admission = await this.port.admit(id, current);
@@ -67,14 +175,25 @@ export class TraceReads {
       const detail=inlineTraceDetail(result.page,record),page=retainedTraceDetailPage(result.page,record);
       if(page&&(page.read_cut.conversation_id!==scope.conversation||page.read_cut.activation_id!=null))throw new Error('Historical Trace detail source changed.');
       if(!current())return;
-      const reader=page&&preview.cache.fields?bindTraceDetailReader(preview.cache.fields,page,()=>scope.current()&&this.port.state().views[id]?.tracePreview?.cache.epoch===pending.epoch&&this.port.state().views[id]?.tracePreview?.cache.details[record]?.page===page):undefined;
-      this.port.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.port.state().views[id].tracePreview!.cache,record,pending.epoch,detail,undefined,result.page.items.flatMap(item=>item.content),async(ref,offset,ownsView)=>{
+      const fields = this.coldFields(id, node, scope.conversation, scope.current);
+      const reader=page?bindTraceDetailReader(fields,page,()=>scope.current()&&this.port.state().views[id]?.tracePreview?.cache.epoch===pending.epoch&&this.port.state().views[id]?.tracePreview?.cache.details[record]?.page===page):undefined;
+      const live = this.port.state().views[id]?.tracePreview;
+      if (!live) return;
+      this.port.setSession(id, { tracePreview: { ...live, cache: completeTraceDetail(live.cache,record,pending.epoch,detail,undefined,result.page.items.flatMap(item=>item.content),async(ref,offset,ownsView)=>{
         const valid=()=>ownsView()&&scope.current()&&this.port.state().views[id]?.tracePreview?.cache.epoch===pending.epoch;
         if(!valid())throw new Error('Trace content view was replaced.');
         return (await this.port.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut:result.page.read_cut,content_ref:ref,offset,max_bytes:65536}},'content_chunk',undefined,valid)).chunk;
       },page,reader) } });
     } catch (error) {
-      if (current()) this.port.setSession(id, { tracePreview: { ...preview, cache: completeTraceDetail(this.port.state().views[id].tracePreview!.cache, record, pending.epoch, undefined, String(error)) } });
+      const live = this.port.state().views[id]?.tracePreview;
+      if (current() && live) this.port.setSession(id, { tracePreview: { ...live, cache: completeTraceDetail(live.cache, record, pending.epoch, undefined, String(error)) } });
+    } finally {
+      const live = this.port.state().views[id]?.tracePreview;
+      if (current() && live?.cache.details[record]?.loading) {
+        const details = { ...live.cache.details };
+        delete details[record];
+        this.port.setSession(id, { tracePreview: { ...live, cache: { ...live.cache, details } } });
+      }
     }
   }
   // Trace authority is independent of Runtime Client cursors and cache interval
@@ -102,13 +221,15 @@ export class TraceReads {
     const valid=(cut:CheckpointReadCut,owns:()=>boolean)=>{
       if(!current()||!owns()||cut.conversation_id!==conversation||cut.activation_id!=null)throw new Error('Historical Trace field source was replaced.');
     };
-    return {
+    const reader:TraceFieldReader = {
       scope:JSON.stringify([this.port.state().authorityId,this.port.state().generation,id,node,conversation]),
       value:async(cut,field,offset,owns)=>{valid(cut,owns);const result=await this.port.request({method:'session/traceValueRead',params:{session_id:id,node_id:node,cut,domain:field.domain,item_offset:field.item_offset,path:field.path,offset,max_bytes:65536}},'checkpoint_value_chunk',undefined,()=>current()&&owns());valid(cut,owns);return result.chunk;},
       content:async(cut,reference,offset,owns)=>{valid(cut,owns);if(reference.conversation_id!==conversation)throw new Error('Historical Trace content source changed.');return (await this.port.request({method:'session/traceContentRead',params:{session_id:id,node_id:node,cut,content_ref:reference,offset,max_bytes:65536}},'content_chunk',undefined,()=>current()&&owns())).chunk;},
       page:async(cut,domain,offset,owns)=>{valid(cut,owns);return (await this.port.request({method:'session/tracePage',params:{session_id:id,node_id:node,cut,domain,offset,limit:32}},'checkpoint_page',undefined,()=>current()&&owns())).page;},
       workflowNode:async(cut,instance,owns)=>{valid(cut,owns);const result=await this.port.request({method:'session/workflowTraceNode',params:{session_id:id,node_id:node,cut,instance}},'workflow_trace_node',undefined,()=>current()&&owns());valid(cut,owns);return result.node??null;},
     };
+    this.coldFieldGenerations.set(reader, this.port.state().generation);
+    return reader;
   }
   private traceAuthorities = new Map<string, number>();
   supersede(id: string, trace: TraceCache): TraceCache {
@@ -181,12 +302,13 @@ export class TraceReads {
   /** Older reads are fenced by attachment, connection and navigation epoch. */
   /** One Turn-aligned reading window, assembled from bounded native pages. */
   loadInitialTrace(id: string) {
+    if (isDurableColdRead(this.port.state().views[id])) return this.readInitialPreview(id);
     const trace = this.port.state().views[id]?.trace;
     if (!trace || trace.located || trace.loading || trace.error || trace.page.next_cursor == null || traceWindowReady(trace.page.records)) return Promise.resolve();
     return this.loadEarlierTrace(id, true);
   }
   async loadEarlierTrace(id: string, initial = false, gapBefore?: string) {
-    if (this.port.state().views[id]?.attachment === 'attaching') return this.readPreview(id, () => true, true);
+    if (isDurableColdRead(this.port.state().views[id])) return this.readPreview(id, () => true, true);
     const observation = this.port.observe(id);
     if (!observation) return;
     const { target } = observation;
@@ -262,9 +384,9 @@ export class TraceReads {
     }
   }
   selectTrace(id: string, record?: string) {
-    const preview = this.port.state().views[id]?.tracePreview;
-    if (this.port.state().views[id]?.attachment === 'attaching' && preview) { this.port.setSession(id, { tracePreview: { ...preview, cache: selectTrace(preview.cache, record) } }); return; }
-    const trace = this.port.state().views[id]?.trace;
+    const view = this.port.state().views[id], preview = view?.tracePreview;
+    if (isDurableColdRead(view) && preview) { this.port.setSession(id, { tracePreview: { ...preview, cache: selectTrace(preview.cache, record) } }); return; }
+    const trace = view?.trace;
     if (trace) this.port.setSession(id, { trace: selectTrace(trace, record) });
   }
   /**
@@ -276,7 +398,7 @@ export class TraceReads {
    * for; anything else is dropped rather than attached to a newer window.
    */
   async loadTraceDetail(id: string, record: string) {
-    if (this.port.state().views[id]?.attachment === 'attaching') return this.readPreviewDetail(id, record);
+    if (isDurableColdRead(this.port.state().views[id])) return this.readPreviewDetail(id, record);
     const observation = this.port.observe(id);
     if (!observation) return;
     const { target } = observation;
@@ -320,7 +442,7 @@ export class TraceReads {
     return detail;
   }
   /** Retired observation work keeps no Trace read or authority. */
-  retire(id: string) { this.traceReads.delete(id); this.traceAuthorities.delete(id); }
+  retire(id: string) { this.traceReads.delete(id); this.traceAuthorities.delete(id); this.previewLoads.delete(id); }
   /** A lost connection ends every Trace read and authority. */
-  disconnect() { this.traceReads.clear(); this.traceAuthorities.clear(); }
+  disconnect() { this.traceReads.clear(); this.traceAuthorities.clear(); this.previewLoads.clear(); }
 }

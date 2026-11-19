@@ -73,6 +73,8 @@ test('explicit native delivery, safe shared viewers, actual original-byte downlo
     await page.keyboard.press('Enter');
     await expect(panel.getByRole('heading', { name: 'Delivered report' })).toBeVisible();
     const contentReads: string[] = [];
+    await expect(panel.locator('[data-document-markdown]')).toContainText('Delivered report');
+    await expect(panel.getByRole('button', { name: 'View as' })).toHaveText('Markdown');
     const reading = (request: import('@playwright/test').Request) => { if (request.url().endsWith('/file-read') && request.postDataJSON()?.read?.read?.kind === 'text') contentReads.push(request.postData()!); };
     page.on('request', reading);
     writeFileSync(join(fixture.workspaceA, 'unrelated.txt'), 'Unrelated change');

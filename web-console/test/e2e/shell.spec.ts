@@ -203,7 +203,7 @@ test('Harness shell reference states and presentation-only navigation', async ({
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openClassifiedShell(page);
   await expect(page).toHaveTitle('Session A — rustX');
-  await expect(page.getByLabel('Sidebar', { exact: true })).toContainText('rustX');
+  await expect(page.getByLabel('Sidebar', { exact: true }).getByRole('img', { name: 'rustX', exact: true })).toBeVisible();
   await expect(page.locator('body')).not.toContainText('DeepSeek');
   await expect(page.locator('img[src*="deepseek" i]')).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Open Session A', exact: true })).toBeVisible();

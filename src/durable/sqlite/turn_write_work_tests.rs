@@ -109,23 +109,25 @@ fn report(tool: bool, phases: &BTreeMap<(&'static str, String), PhaseWork>) {
 fn warmed_turn_write_work_is_fixed() {
     // Include the bounded occurrence seeks that distinguish a requested tool
     // from actual execution, alongside adoption and Workflow indexing.
+    // Adoption also moves the temporary pending header onto its canonical row.
     // Schema 115's sparse Compaction Call index adds eight VM steps per
-    // native INSERT (six text / twelve tool). Keep the baseline exact.
+    // native INSERT (six text / twelve tool). Keep the integrated baseline exact.
+
     let expected = [
         TurnWork {
-            calls: 622,
+            calls: 617,
             prepares: 18,
-            steps: 20_539,
+            steps: 20_560,
             commits: 7,
-            wal_frames: 260,
+            wal_frames: 263,
             event_index_entries: 58,
         },
         TurnWork {
-            calls: 1397,
+            calls: 1392,
             prepares: 38,
-            steps: 45_708,
+            steps: 45_729,
             commits: 13,
-            wal_frames: 555,
+            wal_frames: 559,
             event_index_entries: 112,
         },
     ];

@@ -443,8 +443,6 @@ test('object keys spelled like paths stay separate fields, and rejected field te
     await page.getByRole('navigation', { name: 'Primary navigation' }).getByRole('button', { name: 'Workflows', exact: true }).click();
     await card(page, 'colliding').getByRole('button', { name: 'colliding', exact: true }).click();
 
-    // Native accepts the structure: the checklist has nothing to resolve.
-    await expect(page.getByRole('button', { name: 'Checklist', exact: true })).toBeVisible();
     const inspector = page.getByRole('complementary', { name: 'Inspector' });
 
     const done = editor(page).getByLabel('Tool node done');

@@ -409,10 +409,9 @@ fn settled_interaction(interaction_id: &InteractionId) -> RuntimeEventEnvelope {
 // Requirements 1–4: durable acceptance, compaction history, bootstrap, pages
 // ---------------------------------------------------------------------------
 
-/// Requirement 1: a user item becomes transcript-visible at durable
-/// acceptance, never at a client-local display operation.
+/// Requirement 1: a pending user item becomes transcript-visible at canonical adoption.
 #[test]
-fn requirement_01_acceptance_is_the_transcript_visibility_frontier() {
+fn requirement_01_adoption_is_the_transcript_visibility_frontier() {
     let store = SqliteConversationStore::in_memory(conversation_id()).expect("store");
     store.initialize(&[]).expect("initialize");
     assert_eq!(
@@ -429,8 +428,11 @@ fn requirement_01_acceptance_is_the_transcript_visibility_frontier() {
     let page = store
         .load_transcript_page(None, 10)
         .expect("page after acceptance");
-    assert_eq!(page_message_ids(&page), vec![accepted.message_id.as_str()]);
+    assert_eq!(page.entries, [] as [rustx::durable::TranscriptEntry; 0]);
     assert_eq!(store.load_pending().expect("pending").len(), 1);
+    store
+        .adopt_pending_batch(accepted.sequence, None)
+        .expect("adopt inbound");
 
     let rejected = store.accept_inbound(InboundDraft {
         content: Vec::new(),
@@ -688,7 +690,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
     let root = tempfile::tempdir().expect("root");
     let mut paths = startup(root.path());
     seed_composed_store(&mut paths, &[]).await;
-    {
+    let headless_ids = {
         let headless = HeadlessConversationRuntime::compose(
             &(paths).resolve(),
             &selected_dependencies(&paths),
@@ -696,22 +698,31 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
         .await
         .expect("headless composition");
         assert!(!headless.tool_runtime().is_runtime_client_bound());
+        let settled = headless.runtime().settlement_signal().notified();
+        tokio::pin!(settled);
+        settled.as_mut().enable();
         let accepted = headless
             .runtime()
             .submit_inbound(vec![UserContentBlock::Text(TextBlock {
                 text: "accepted while headless".to_owned(),
             })])
             .expect("headless inbound acceptance");
+        settled.await;
         let page = headless
             .runtime()
             .transcript_page(None, 64)
             .expect("headless page");
-        assert_eq!(page_message_ids(&page), vec![accepted.message_id.as_str()]);
+        let ids = page_message_ids(&page);
+        assert_eq!(
+            ids.first().map(String::as_str),
+            Some(accepted.message_id.as_str())
+        );
         headless
             .shutdown()
             .await
             .expect("release the native owner before reopening");
-    }
+        ids
+    };
 
     let interactive =
         LocalConversationRuntime::compose(&(paths).resolve(), &selected_dependencies(&paths))
@@ -723,10 +734,7 @@ async fn requirement_06_headless_history_is_available_to_a_later_client() {
         .expect("later attach");
     assert_eq!(
         client_page_message_ids(&initialized_snapshot(&result, interactive.host()).transcript),
-        vec![format!(
-            "{}-inbound-1",
-            interactive.runtime().conversation_id()
-        )]
+        headless_ids
     );
     interactive
         .shutdown()
@@ -1174,7 +1182,11 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
     let accepted = store
         .accept_inbound(inbound_draft(shared_id, "same opaque id"))
         .expect("accepted message");
-    let accepted_cursor = accepted.transcript_cursor.expect("accepted cursor");
+    assert!(accepted.transcript_cursor.is_none());
+    assert_eq!(
+        all_entries(&store, 10),
+        [] as [rustx::durable::TranscriptEntry; 0]
+    );
     let batch = store
         .select_pending_batch()
         .expect("select pending")
@@ -1199,6 +1211,11 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
         ))
         .expect("MessageId and PublicationStreamId collision is scoped");
 
+    assert!(publication_message.transcript_cursor.is_none());
+    store
+        .adopt_pending_batch(publication_message.sequence, None)
+        .expect("adopt publication collision message");
+
     let request_id = start_request(&store, publication_turn);
     let start = PublicationStreamStart {
         stream_id: publication_stream_id.clone(),
@@ -1218,44 +1235,22 @@ fn transcript_reference_identity_is_typed_and_collision_free() {
         .collect::<Vec<_>>();
     assert_eq!(
         cursors,
-        vec![
-            accepted_cursor.get(),
-            2,
-            publication_message
-                .transcript_cursor
-                .expect("publication collision message cursor")
-                .get(),
-            publication_cursor.transcript_cursor.get(),
-        ]
-    );
-    assert_eq!(
-        entries
-            .iter()
-            .filter(|entry| matches!(entry.item, TranscriptItem::Message { .. }))
-            .count(),
-        2
+        vec![1, 2, 3, publication_cursor.transcript_cursor.get()]
     );
     assert!(
-        entries
-            .iter()
-            .any(|entry| matches!(entry.item, TranscriptItem::InteractionRequested { .. }))
+        matches!(&entries[0].item, TranscriptItem::Message { message } if message_id(message) == &accepted.message_id)
     );
+    assert!(matches!(
+        &entries[1].item,
+        TranscriptItem::InteractionRequested { .. }
+    ));
     assert!(
-        entries
-            .iter()
-            .any(|entry| matches!(entry.item, TranscriptItem::PublicationAudit { .. }))
+        matches!(&entries[2].item, TranscriptItem::Message { message } if message_id(message) == &publication_message.message_id)
     );
-    assert_eq!(
-        store
-            .load_transcript_page(None, 10)
-            .expect("typed collision page")
-            .entries
-            .iter()
-            .filter(|entry| entry.cursor == accepted_cursor)
-            .count(),
-        1,
-        "Pending -> Ledger adoption reuses the acceptance reference"
-    );
+    assert!(matches!(
+        &entries[3].item,
+        TranscriptItem::PublicationAudit { .. }
+    ));
     assert!(matches!(
         store.append_canonical(&user_message(shared_id, "duplicate")),
         Err(ConversationStoreError::DuplicateMessageId(_))

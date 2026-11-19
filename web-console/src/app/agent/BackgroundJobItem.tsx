@@ -1,5 +1,5 @@
 /* Copyright (c) 2026 DeepSeek. MIT. JobListAction task rows adapted to native Jobs; see PROVENANCE.md. */
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { RuntimeClientJob, TraceTiming } from '../../../../protocol/app-server/v82';
 import { domainOriginalValue } from '../../../../protocol/app-server/domain-observation';
 import type { AppServerClient } from '../../client/app-server';
@@ -7,13 +7,19 @@ import { jobResultOutput } from '../../bindings/jobs';
 import { jobStateLabel } from '../../bindings/status-labels';
 import { useTranslation } from '../../locale/react';
 import { displayText, type Translate } from '../../locale/translation';
+import { useLiveJobOutput } from './useLiveJobOutput';
 import { JobStateDot } from './JobStateDot';
+import { HoverCard } from '../../presentation/primitives/HoverCard';
+import { MarqueeText, useHoverMarquee } from '../../presentation/primitives/Marquee';
 import { TerminalBlock } from '../../presentation/primitives/TerminalBlock';
-import { IconChevronDownOutline14, IconStopFill16 } from '../../presentation/primitives/icons';
+import { Tooltip } from '../../presentation/primitives/Tooltip';
+import { IconChevronDownOutline14, IconClockOutline16, IconStopFill16 } from '../../presentation/primitives/icons';
 import { ToolArtifacts } from '../components/Artifact';
 import { useActivityRequest } from '../components/useActivityRequest';
 import { jobActive, jobDot } from './job-state';
 import css from './BackgroundJobs.module.css';
+
+const KILL_FAILED_MS = 4000;
 
 /** Harness uses whole seconds and at most two adjacent units in task rows. */
 function duration(ms: number, tx: Translate): string {
@@ -33,15 +39,22 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
   const [readError, setReadError] = useState<{ source: RuntimeClientJob; message: string }>();
   const [loaded, setLoaded] = useState<{ client: AppServerClient; sessionId: string; value: RuntimeClientJob; current: () => boolean }>();
   const [retry, setRetry] = useState(0), [showFailure, setShowFailure] = useState(false);
+  const [onStop, setOnStop] = useState(false);
+  const labelRef = useRef<HTMLSpanElement>(null);
+  const marquee = useHoverMarquee(labelRef);
+  const summaryId = useId();
+
   useEffect(() => {
     setShowFailure(!!stop.error);
     if (!stop.error) return;
-    const timer = setTimeout(() => setShowFailure(false), 4000);
+    const timer = setTimeout(() => setShowFailure(false), KILL_FAILED_MS);
     return () => clearTimeout(timer);
   }, [stop.error]);
+
   const retained = loaded && loaded.client === client && loaded.sessionId === sessionId && loaded.value.job_id === job.job_id && loaded.current() ? loaded.value : undefined;
   const value = job.deferred_fields?.length ? retained ?? job : job;
   const deferred = !!value.deferred_fields?.length;
+
   useEffect(() => {
     if (!client || !sessionId) return;
     const proof = client.getSnapshot().views[sessionId]?.attachmentObservation;
@@ -62,19 +75,33 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
     })().catch(cause => { if (owned()) setReadError({ source: job, message: cause instanceof Error ? cause.message : String(cause) }); });
     return () => { observing = false; };
   }, [expanded, job, client, sessionId, retry]);
-  const live = jobActive(job), status = job.state === 'succeeded' ? tx('common:activity.job-completed') : job.state === 'cancelled' ? tx('common:activity.job-cancelled') : job.state === 'failed' ? tx('common:activity.job-failed') : jobStateLabel(tx, job.state);
+
+  const live = jobActive(job);
+  const status = job.state === 'succeeded' ? tx('common:activity.job-completed') : job.state === 'cancelled' ? tx('common:activity.job-cancelled') : job.state === 'failed' ? tx('common:activity.job-failed') : jobStateLabel(tx, job.state);
   const label = value.bash?.command ?? value.tool_name;
   const progress = value.progress ? [value.progress.message, value.progress.completed == null ? undefined : value.progress.total == null ? tx('common:activity.completed', { n: value.progress.completed }) : `${value.progress.completed} / ${value.progress.total}`].filter(Boolean).join(' · ') : undefined;
   const elapsed = live ? timing ? now - Date.parse(timing.started_at) : undefined : value.result ? Number(value.result.duration_ms) : timing?.duration_ms ? Number(timing.duration_ms) : undefined;
-  const durationCell = elapsed !== undefined && Number.isFinite(elapsed) ? <span className={css.duration}>{duration(elapsed, tx)}</span> : null;
-  const output = value.result ? jobResultOutput({ content: value.result.content }) : undefined;
+  const durationText = elapsed !== undefined && Number.isFinite(elapsed) ? duration(elapsed, tx) : undefined;
+  const durationCell = durationText !== undefined ? <span className={css.duration}>{durationText}</span> : null;
+  const tail = useLiveJobOutput(client, sessionId, expanded && live ? job.job_id : undefined, expanded && live && job.state !== 'publishing_terminal');
+  const output = value.result ? jobResultOutput({ content: value.result.content }) ?? (live ? tail?.text : undefined) : tail?.text;
   const diagnostic = value.result && value.result.status.type !== 'cancelled' ? jobResultOutput({ status: value.result.status }) : undefined;
+  const exitDetail = !live && value.result?.exit_code != null && value.result.exit_code !== 0 ? tx('tools:copy.exit-value', { p0: value.result.exit_code }) : undefined;
+  const detail = live ? progress : diagnostic ?? exitDetail;
+  const stateText = detail ?? status;
+  const dot = jobDot(job.state, value.result?.exit_code);
   const observable = live || deferred || !!output || !!diagnostic || !!value.result?.artifacts?.length || !!value.result?.managed_output;
   const pending = stop.pending || stopping;
   const detailError = readError?.source === job ? readError.message : undefined;
   const canStop = job.state === 'starting' || job.state === 'running';
   const failure = canStop && showFailure ? stop.error : undefined;
-  const stopLabel = armed ? tx('common:activity.job-stop-confirm') : failure ? tx('common:activity.job-stop-failed') : tx('common:activity.job-stop', { label });
+  const stopTitle = armed ? tx('common:activity.job-stop-confirm') : failure ? tx('common:activity.job-stop-failed') : tx('common:activity.job-stop-tooltip');
+  const stopAria = armed || failure ? stopTitle : tx('common:activity.job-stop', { label });
+
+  useEffect(() => {
+    if (!canStop) setOnStop(false);
+  }, [canStop]);
+
   const pressStop = () => {
     if (!armed) { onArm(); return; }
     onArm();
@@ -86,31 +113,76 @@ export function BackgroundJobItem({ job, timing, now, expanded, onToggle, armed,
       } catch (cause) { if (current()) onStopped(() => false); throw cause; }
     }, false);
   };
+
   const body = <>
-    <JobStateDot state={jobDot(job.state)} size={live ? 14 : 10} className={css.rowDot}/>
-    {live ? <span className={css.main}>
-      <span className={css.primary}><span className={css.label} title={label}>{label}</span></span>
-      <span className={css.secondary} title={progress || status}><span className={css.kind}>{value.tool_name}</span>{progress && <span className={css.status}>{progress}</span>}{durationCell}</span>
-    </span> : <><span className={css.kind}>{value.tool_name}</span><span className={css.label} title={label}>{label}</span><span className={css.status} title={status}>{status}</span>{durationCell}</>}
-    {observable && <span className={css.chevronBox}><IconChevronDownOutline14 size={12} className={expanded ? `${css.chevron} ${css.chevronOpen}` : css.chevron}/></span>}
+    <span className={css.glyph}><JobStateDot state={dot}/></span>
+    <MarqueeText ref={labelRef} className={css.label} data-job-label="">{label}</MarqueeText>
+    <span id={summaryId} className={css.visuallyHidden}>{`${value.tool_name} · ${stateText}`}</span>
+    {durationCell}
   </>;
-  return <li className={css.item}><section data-job-id={job.job_id} data-job-state={job.state} aria-label={tx('common:activity.job-label', { name: job.tool_name })}>
-    <div className={live ? `${css.rowLine} ${css.rowLineLive}` : css.rowLine}>
-      {observable ? <button type="button" className={live ? css.row : `${css.row} ${css.rowSettled}`} aria-label={tx(expanded ? 'common:activity.job-collapse' : 'common:activity.job-expand', { label })} aria-expanded={expanded} onClick={onToggle}>{body}</button>
-        : <span className={`${css.row} ${css.rowSettled} ${css.rowStatic}`}>{body}</span>}
-      {client && canStop && <button type="button" className={armed ? `${css.stop} ${css.stopArmed}` : failure ? `${css.stop} ${css.stopFailed}` : css.stop} disabled={stop.disabled || pending} data-kill-state={pending ? 'pending' : armed ? 'armed' : failure ? 'failed' : 'idle'} aria-label={stopLabel} title={stopLabel} onClick={pressStop}>
-        <IconStopFill16 size={10}/>{armed && <span className={css.stopLabel}>{tx('common:activity.job-stop-action')}</span>}
-      </button>}
+
+  const row = (
+    <div className={observable ? `${css.rowLine} ${css.rowInteractive}` : css.rowLine} data-job-row="" {...marquee}>
+      {observable
+        ? <button type="button" className={css.row} aria-expanded={expanded} aria-label={tx(expanded ? 'common:activity.job-collapse' : 'common:activity.job-expand', { label })} aria-describedby={summaryId} onClick={onToggle}>{body}</button>
+        : <span className={css.row} aria-describedby={summaryId}>{body}</span>}
+      {client && canStop && (
+        <Tooltip label={stopTitle} side="bottom" delayMs={500}>
+          <button
+            type="button"
+            className={armed ? `${css.stop} ${css.stopArmed}` : failure ? `${css.stop} ${css.stopFailed}` : css.stop}
+            disabled={stop.disabled || pending}
+            data-kill-state={pending ? 'pending' : armed ? 'armed' : failure ? 'failed' : 'idle'}
+            aria-label={stopAria}
+            onPointerEnter={() => setOnStop(true)}
+            onPointerLeave={() => setOnStop(false)}
+            onClick={pressStop}
+          >
+            <IconStopFill16 size={12}/>
+            {armed && <span className={css.stopLabel}>{tx('common:activity.job-stop-action')}</span>}
+          </button>
+        </Tooltip>
+      )}
+      <span className={css.chevron} aria-hidden="true">
+        {observable ? <IconChevronDownOutline14 size={14} className={expanded ? css.chevronOpen : undefined}/> : null}
+      </span>
     </div>
+  );
+
+  return <li className={css.item}><section data-job-id={job.job_id} data-job-state={job.state} aria-label={tx('common:activity.job-label', { name: job.tool_name })}>
+    <HoverCard
+      grouped
+      disabled={onStop && canStop}
+      anchor={row}
+      content={
+        <div className={css.hoverDetails} data-session-panel-details="">
+          <div className={css.hoverLine}>{value.tool_name}</div>
+          <div className={css.hoverStatus}>
+            <JobStateDot state={dot}/>
+            <span>{stateText}</span>
+          </div>
+          {durationText !== undefined && (
+            <div className={css.hoverFacts}>
+              <span className={css.hoverFact} data-fact="duration">
+                <span className={css.hoverFactIcon} aria-hidden="true"><IconClockOutline16 size={14}/></span>
+                {durationText}
+              </span>
+            </div>
+          )}
+        </div>
+      }
+    />
     {failure && <p role="alert" className={`${css.notice} ${css.noticeError}`}>{displayText(tx, failure)}</p>}
     {expanded && observable && <div className={css.panel}>
       {detailError && <div className={css.notice}><span role="alert">{detailError}</span><button type="button" className={css.sectionClear} onClick={() => setRetry(value => value + 1)}>{tx('common:activity.job-details')}</button></div>}
       {deferred ? !detailError && <div className={css.notice}>{tx('common:activity.loading')}</div> : <>
-        <TerminalBlock command={label} output={output} running={jobActive(value)} copyText={label} runStateDot={false} maxLines={Infinity} lifecycle={{ state: jobDot(job.state), label: status }} labels={{
+        {tail?.truncated && <div className={css.notice}>{tx('common:activity.job-output-gap')}</div>}
+        {tail?.error && <div className={`${css.notice} ${css.noticeError}`} role="alert">{tx('common:activity.job-output-error', { error: tail.error })}</div>}
+        <TerminalBlock command={label} output={output} running={jobActive(value)} copyText={label} runStateDot={false} maxLines={Infinity} lifecycle={{ state: dot, label: status }} labels={{
           copy: tx('tools:tool-card.copy'), copied: tx('tools:tool-card.copied'), signal: signal => tx('tools:copy.signal-value', { p0: signal }), exitCode: code => tx('tools:copy.exit-value', { p0: code }), noExitCode: tx('tools:tool-card.exit-status-unavailable'),
           running: tx('tools:tool-card.running'), failed: tx('tools:tool-card.failed'), done: tx('tools:tool-card.done'), noOutput: tx(value.result?.managed_output ? 'common:activity.job-output-retained' : 'tools:tool-card.no-output'), collapseAria: tx('tools:tool-card.collapse-output'), collapse: tx('tools:tool-card.collapse'), expandAria: n => tx('tools:tool-card.show-value-more-lines', { p0: n }), expand: n => tx('tools:tool-card.show-value-more-lines', { p0: n }),
         }}/>
-        {diagnostic && <p className={jobDot(job.state) === 'error' ? `${css.notice} ${css.noticeError}` : css.notice}>{diagnostic}</p>}
+        {diagnostic && <p className={dot === 'error' ? `${css.notice} ${css.noticeError}` : css.notice}>{diagnostic}</p>}
         {value.result?.truncation?.truncated && <p className={css.notice}>{tx('common:activity.job-output-truncated')}</p>}
         {value.result?.managed_output && 'diagnostic' in value.result.managed_output && <p className={`${css.notice} ${css.noticeError}`}>{value.result.managed_output.diagnostic}</p>}
         {value.result && <ToolArtifacts result={value.result}/>}

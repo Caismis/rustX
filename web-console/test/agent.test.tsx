@@ -14,7 +14,9 @@ import { Tool } from '../src/app/agent/Tool';
 import { ToolInspectionContext } from '../src/app/agent/tool-inspection';
 import { FileLinks } from '../src/presentation/markdown/FileLinks';
 import { RpcFailure } from '../src/client/errors';
+import { deriveSessionProductState } from '../src/bindings/session-product';
 import { toolCard } from '../src/bindings/tools';
+import { translator } from '../src/locale/translation';
 import { cfg3Effective, cfg3Source } from './cfg3-data';
 import { Server, snapshot, interaction } from './fixture';
 let server: Server;
@@ -94,6 +96,72 @@ it('selects a profile during execution without changing its frozen profile, para
  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('brief');
  expect(server.client.getSnapshot().views.A.snapshot?.attempt?.model).toEqual(frozen);
 });
+
+function sessionProduct() {
+  const state = server.client.getSnapshot();
+  return deriveSessionProductState(translator('en'), state, state.views.A);
+}
+
+it('held model and effort switches keep the confirmed label and do not publish a pending status or error', async () => {
+  modelFixture();
+  await server.attached('A');
+  render(<Control/>);
+  await openModels();
+  const trigger = screen.getByRole('button', { name: 'Model and thinking effort' });
+  const confirmed = trigger.textContent;
+  expect(confirmed).toContain('exact/model');
+  expect(confirmed).toContain('deliberate');
+  const quiet = () => {
+    const product = sessionProduct();
+    expect(product.label).toBeUndefined();
+    expect(product.status).not.toBe('uncertain');
+    expect(product.severity).not.toBe('error');
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.queryByRole('status', { name: 'Session status' })).toBeNull();
+    expect(screen.queryByText('This conversation’s model is unavailable. Choose another model to continue.')).toBeNull();
+    expect(trigger.textContent).toBe(confirmed);
+    expect(trigger.textContent).not.toMatch(/Choose model|Reading native models|pending/i);
+  };
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Thinking effort' }));
+  server.held.add('session/setModel'); server.held.add('session/checkpoint');
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'brief' })));
+  await server.waitFor('session/setModel', 1);
+  expect(trigger.getAttribute('aria-busy')).toBe('true');
+  expect(screen.getByRole('menuitemradio', { name: 'brief' }).querySelector('[data-state="ongoing"]')).not.toBeNull();
+  quiet();
+  const effort = server.requests.find(row => row.request.method === 'session/setModel')!.request;
+  await act(async () => server.reply(effort));
+  const effortRead = await server.waitFor('session/checkpoint', 2);
+  // Acknowledgement is not confirmation. The trigger keeps the admitted label
+  // while the authoritative reread is still outstanding.
+  quiet();
+  await act(async () => server.reply(effortRead));
+  await waitFor(() => expect(trigger.textContent).toContain('brief'));
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(sessionProduct().label).toBeUndefined();
+
+  await openModels();
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Model' }));
+  server.held.add('session/setModel'); server.held.add('session/checkpoint');
+  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'other' })));
+  await server.waitFor('session/setModel', 2);
+  expect(trigger.getAttribute('aria-busy')).toBe('true');
+  expect(trigger.textContent).toContain('exact/model');
+  expect(trigger.textContent).not.toContain('other');
+  expect(sessionProduct().label).toBeUndefined();
+  expect(screen.queryByRole('alert')).toBeNull();
+  const model = server.requests.filter(row => row.request.method === 'session/setModel').at(-1)!.request;
+  await act(async () => server.reply(model));
+  const modelRead = await server.waitFor('session/checkpoint', 3);
+  expect(trigger.textContent).not.toContain('other');
+  expect(sessionProduct().label).toBeUndefined();
+  await act(async () => server.reply(modelRead));
+  await waitFor(() => expect(trigger.textContent).toContain('other'));
+  expect(screen.queryByRole('alert')).toBeNull();
+  expect(sessionProduct()).toMatchObject({ status: 'idle', severity: 'quiet' });
+  expect(count('session/setModel')).toBe(2);
+});
+
 it('does not dim the model trigger during a held catalog read', async () => {
  modelFixture(); await server.attached('A'); server.held.add('session/models'); render(<Control/>);
  const trigger = screen.getByRole('button', { name: 'Model and thinking effort' }) as HTMLButtonElement;
@@ -130,9 +198,12 @@ it('lost model mutation is visible uncertainty; reconnect invalidates catalog an
  server.held.add('session/setModel');
  await act(async () => fireEvent.click(screen.getByRole('menuitemradio', { name: 'other' })));
  const request = await server.waitFor('session/setModel', 1);
+ expect(sessionProduct().label).toBeUndefined();
  await act(async () => { server.commit(request); server.socket.close(); });
  expect(server.client.getSnapshot().uncertain).toHaveLength(1);
  expect(server.client.getSnapshot().views.A.modelMutation?.status).toBe('uncertain');
+ expect(sessionProduct()).toMatchObject({ status: 'uncertain', severity: 'warning' });
+ expect(sessionProduct().label).toBeTruthy();
  expect(count('session/setModel')).toBe(1);
  catalog.splice(0, 1);
  await act(async () => { await server.connect(); await server.client.waitForAttachment('A', () => true); });
@@ -153,6 +224,8 @@ it('a rejected model selection announces outside the composer and retains the na
  expect(toast.textContent).toContain(diagnostic);
  expect(toast.parentElement).toBe(document.body);
  expect(ui.container.querySelector('[role="alert"]')).toBeNull();
+ expect(sessionProduct().status).not.toBe('uncertain');
+ expect(sessionProduct().label).toBeUndefined();
  expect(screen.getByRole('menu')).toBeTruthy();
  expect(screen.getByRole('button', { name: 'Model and thinking effort' }).textContent).toContain('exact/model');
  await expect(server.client.send('A', 'dependent turn')).rejects.toThrow('Reread native model state');

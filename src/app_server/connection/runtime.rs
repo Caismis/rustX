@@ -231,6 +231,14 @@ pub(super) async fn dispatch_runtime(
             ..
         } => read_domain(authority, "goal".into()).await,
         Method::Goal { target: _, control } => native_result(authority.goal_control(control)),
+        Method::JobOutput { job_id, .. } => {
+            let (text, truncated) =
+                tokio::task::spawn_blocking(move || authority.job_output(&job_id))
+                    .await
+                    .map_err(|_| domain(ErrorData::OperationFailed))?
+                    .map_err(client_error)?;
+            Ok(MethodResult::JobOutput { text, truncated })
+        }
         Method::JobStatus { job_id, .. } => {
             read_domain(authority, format!("jobs.{}", job_id.as_str())).await
         }
@@ -623,6 +631,15 @@ pub(super) async fn dispatch_runtime(
             expected,
         } => Ok(MethodResult::InboundMutation {
             outcome: authority.remove_pending(&expected).map_err(client_error)?,
+        }),
+        Method::InboundSteer {
+            expected_turn_id,
+            scope,
+            ..
+        } => Ok(MethodResult::InboundMutation {
+            outcome: authority
+                .steer_queued(&expected_turn_id, &scope)
+                .map_err(client_error)?,
         }),
         Method::TurnCancel { turn_id, .. } => native_result(
             route

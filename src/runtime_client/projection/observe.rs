@@ -269,31 +269,6 @@ impl RuntimeClientProjection {
             self.observe_transcript_position(cursor);
         }
         match observation {
-            #[cfg(test)]
-            ConversationObservation::InboundEnqueued(item) => {
-                if let Some(cursor) = item.transcript_cursor() {
-                    self.observe_transcript_position(cursor);
-                    self.pending_transcript
-                        .insert(item.message().id.clone(), cursor);
-                }
-            }
-            #[cfg(test)]
-            ConversationObservation::InboundDrained(batch) => {
-                for item in batch.items() {
-                    self.pending_transcript.remove(&item.message().id);
-                }
-            }
-            #[cfg(test)]
-            ConversationObservation::PendingInboundChanged(items) => {
-                self.pending_transcript = items
-                    .iter()
-                    .filter_map(|item| {
-                        item.transcript_cursor()
-                            .map(|cursor| (item.message().id.clone(), cursor))
-                    })
-                    .collect();
-            }
-
             ConversationObservation::InteractionPending {
                 audit: Some((_, cursor)),
                 ..
@@ -796,11 +771,11 @@ impl RuntimeClientProjection {
             ConversationObservation::PublicationOpened { .. }
             | ConversationObservation::Publication { .. } => &["attempt"],
             ConversationObservation::AuditSettled { .. } => &["attempt", "transcript"],
-            ConversationObservation::PendingReceipt(_) => &["inbound", "transcript"],
+            ConversationObservation::PendingReceipt(_) => &["inbound"],
             #[cfg(test)]
             ConversationObservation::InboundEnqueued(_)
             | ConversationObservation::InboundDrained(_)
-            | ConversationObservation::PendingInboundChanged(_) => &["inbound", "transcript"],
+            | ConversationObservation::PendingInboundChanged(_) => &["inbound"],
             ConversationObservation::PendingHead { .. }
             | ConversationObservation::InteractionPending { .. }
             | ConversationObservation::InteractionSettled { .. } => {

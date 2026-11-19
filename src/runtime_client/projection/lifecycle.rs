@@ -94,8 +94,6 @@ impl RuntimeClientProjection {
             #[cfg(test)]
             prepared_messages: std::collections::BTreeMap::new(),
             bootstrap_transcript_through: 0,
-            #[cfg(test)]
-            pending_transcript: std::collections::BTreeMap::new(),
             publication_start: None,
             content_metadata: ContentMetadata::new(),
             prepared_publication_content: Vec::new(),
@@ -115,6 +113,7 @@ impl RuntimeClientProjection {
             live_tool_ordinal: None,
             pending_epoch_wait: None,
             pending_mutation_revision: 0,
+            pending_observed_through: 0,
             source_state: ObservationSourceState::default(),
             prepared_outcomes: std::collections::BTreeMap::new(),
             prepared_journal: std::collections::BTreeMap::new(),
@@ -242,6 +241,10 @@ impl RuntimeClientProjection {
             .observation_cut
             .as_ref()
             .map_or(0, |cut| cut.read.mutation_revision);
+        self.pending_observed_through = seed
+            .observation_cut
+            .as_ref()
+            .map_or(0, |cut| cut.read.pending_through);
         self.source_state.source_unavailable = seed.source_failure.is_some();
         self.source_state.source_layout_failure = seed.source_failure.is_some();
         self.read_failure.clone_from(&seed.source_failure);
@@ -259,17 +262,6 @@ impl RuntimeClientProjection {
         );
         self.bootstrap_transcript_through =
             seed.transcript.entries.last().map_or(0, |e| e.cursor.get());
-        #[cfg(test)]
-        {
-            self.pending_transcript = seed
-                .inbound_pending
-                .iter()
-                .filter_map(|item| {
-                    item.transcript_cursor()
-                        .map(|cursor| (item.message().id.clone(), cursor))
-                })
-                .collect();
-        }
         self.snapshot.shutting_down = seed.shutting_down;
         self.collection_cuts
             .insert("jobs".into(), seed.background_cut);

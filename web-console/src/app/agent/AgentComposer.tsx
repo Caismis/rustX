@@ -28,13 +28,13 @@ import { Button } from '../../presentation/primitives/Button';
 import css from '../../presentation/agent/Composer.module.css';
 import { observeControlRow } from '../../presentation/agent/control-row-layout';
 const emptyContent: UserInputBlock[] = [];
-export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, submitPending = false, busy, active, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false, separateStop = false }: {
+export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, modelPicker, onRetainedRemove, onRetainedRecover, intakeOwner, uploadPolicy, onReconcile, draftOwner, draftIdentity, receiptAuthority, conversationIdentity, submissionTarget, binding = 'default', firstSubmission, disabled, submitDisabled = false, submitPending = false, busy, active, hasQueuedMessages = false, onSteerQueue, onSend, onUpload, onCancel, onCommand, commandAvailable, hasGoal = false, lineageSwitchSafe = false, initialContent = emptyContent, consumed, model, permission, onDraftSend, cancellationAvailable = active && !disabled, cancellationScope, cancellationOnly = false, separateStop = false }: {
   placeholder?: string; messageLabel?: string; busyEnterBehavior?: import('../composer/preferences').BusyEnterBehavior;
   modelPicker?: ModelPickerState;
   onRetainedRemove?: (id: string) => void; onRetainedRecover?: (retry: boolean) => void;
   intakeOwner?: AttachmentIntake; uploadPolicy?: UploadPolicy; onReconcile?: UploadPort['status'];
   draftOwner?: ComposerDraft; draftIdentity?: string; receiptAuthority?: string; conversationIdentity?: ComposerConversation; submissionTarget?: AttachmentTarget;
-  firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; submitPending?: boolean; disabled: boolean; busy: boolean; active: boolean; model?: ReactNode; permission?: ReactNode;
+  firstSubmission?: FirstSubmission; binding?: string; submitDisabled?: boolean; submitPending?: boolean; disabled: boolean; busy: boolean; active: boolean; hasQueuedMessages?: boolean; onSteerQueue?: () => Promise<void> | void; model?: ReactNode; permission?: ReactNode;
   onDraftSend?: (text: string, files: readonly File[], ids?: readonly string[], submission?: ComposerSubmission) => Promise<boolean>; cancellationAvailable?: boolean; cancellationScope?: StopScope;
   /** Exact live Root attachment permits cancellation while observation is unavailable. */
   cancellationOnly?: boolean;
@@ -100,7 +100,10 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     const selection = owner.snapshot()?.selection;
     if (selection) input.current?.setSelectionRange(selection.start, selection.end, selection.direction);
   }, [owner, editor?.incarnation]);
-  useEffect(() => { setError(''); invocation.current = undefined; if (!intakeOwner) intake.clear(); }, [editorIdentity]);
+  const activeIdentity = useRef(editorIdentity);
+  activeIdentity.current = editorIdentity;
+  const [steeringQueue, setSteeringQueue] = useState(false);
+  useEffect(() => { setError(''); invocation.current = undefined; setSteeringQueue(false); if (!intakeOwner) intake.clear(); }, [editorIdentity]);
   const query = trigger.state?.query;
   const modelInvocation = useRef<{ incarnation: number; revision: number } | undefined>(undefined);
   const [modelRequested, setModelRequested] = useState(false);
@@ -108,6 +111,14 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
   const modelMenu = !!modelPicker && (modelRequested || trigger.state?.source === 'typed' && trigger.state.query.toLowerCase() === 'model') && commandAvailable?.('model') !== false && !disabled && !busy;
   const modelRevision = modelInvocation.current ?? (trigger.state?.source === 'typed' ? editor : undefined);
   const menu = !modelMenu && !!trigger.state && !disabled && !busy;
+  const emptyDraft = !draft.trim() && files.length === 0 && restored.length === 0;
+  const canSteerQueue = !disabled && !submitDisabled && !submitPending && !busy && !owner.blocked(editor)
+    && !steeringQueue && !menu && !modelMenu && emptyDraft && active && hasQueuedMessages && !!onSteerQueue;
+  const placeholderText = placeholder ?? (canSteerQueue
+    ? tx('agent:agent-composer.steer-queue-placeholder')
+    : onDraftSend
+      ? tx('agent:agent-composer.describe-what-you-want-to-do')
+      : tx('agent:agent-composer.give-this-session-a-task'));
   const commandRows = onCommand ? matchCommands(query ?? '', commands.filter(command => available(command, active, hasGoal, lineageSwitchSafe) && (commandAvailable?.(command.id) ?? true))) : [];
   const rows: readonly { id: MenuAction }[] = [
     ...(trigger.state?.source === 'launcher' ? [{ id: 'file' as const }] : []),
@@ -159,7 +170,14 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
     if (menu && rows[highlight]) { selectMenu(rows[highlight].id); return; }
     const action = composerSubmissionPolicy(facts, gesture);
     // Enter submits a draft; it never cancels an empty running Session.
-    if (action.disabled || action.kind === 'stop') return;
+    // Unresolved uploads are the one disabled send Enter explains, matching
+    // Harness: the button stays disabled, and the key names why it held.
+    if (action.disabled || action.kind === 'stop') {
+      if (facts.uploadsPending && !facts.blocked && !facts.acknowledging && action.kind !== 'stop') {
+        setError(message('agent:submission.resolve-draft-uploads-before-sending'));
+      }
+      return;
+    }
     if (action.kind === 'command') {
       if (selectedCommand) invoke(selectedCommand);
       else { trigger.dismiss(); setError(message('agent:copy.unsupported-command-edit-the-draft-it-will-not-be-sent-as-a-prompt')); }
@@ -190,7 +208,7 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
         onRetry={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(true); else void intake.upload(id, port); }}
         onReconcile={!onRetainedRecover && (disabled || busy) ? undefined : id => { if (onRetainedRecover) onRetainedRecover(false); else void intake.reconcile(id, port); }}/>
       <div className={css.editor}>
-        <textarea ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholder ?? (onDraftSend ? tx('agent:agent-composer.describe-what-you-want-to-do') : tx('agent:agent-composer.give-this-session-a-task'))}
+        <textarea ref={input} className={css.input} aria-label={messageLabel ?? tx('agent:agent-composer.message')} placeholder={placeholderText}
           aria-controls={menu ? 'composer-commands' : undefined} aria-activedescendant={menu && rows[highlight] ? `command-${rows[highlight].id}` : undefined}
           value={draft} disabled={disabled && !cancellationEditor} readOnly={busy || cancellationEditor} rows={1} onChange={event => { if (cancellationEditor) return; setDraft(event.target.value); trigger.track(event.target.value); setError(''); }}
           onPaste={event => {
@@ -226,7 +244,27 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
             if (menu && event.key === 'Tab') { event.preventDefault(); if (event.shiftKey) trigger.dismiss(); else if (rows[highlight]) selectMenu(rows[highlight].id); return; }
             if (menu && rows.length && (event.key === 'ArrowDown' || event.key === 'ArrowUp')) { event.preventDefault(); trigger.highlight((highlight + (event.key === 'ArrowDown' ? 1 : rows.length - 1)) % rows.length); return; }
             if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229) {
-              event.preventDefault(); void submit(event.ctrlKey || event.metaKey ? 'accelerated' : 'enter');
+              if (event.altKey || event.getModifierState?.('AltGraph') || (event.ctrlKey && event.metaKey) || (event.shiftKey && (event.ctrlKey || event.metaKey))) {
+                event.preventDefault();
+                return;
+              }
+              event.preventDefault();
+              if (event.repeat) return;
+              const accelerated = event.ctrlKey || event.metaKey;
+              if (accelerated && canSteerQueue) {
+                const outcome = onSteerQueue();
+                if (outcome && typeof (outcome as Promise<unknown>).then === 'function') {
+                  const currentIdentity = editorIdentity;
+                  setSteeringQueue(true);
+                  void Promise.resolve(outcome).catch(cause => {
+                    if (activeIdentity.current === currentIdentity) setError(actionError(cause));
+                  }).finally(() => {
+                    if (activeIdentity.current === currentIdentity) setSteeringQueue(false);
+                  });
+                }
+                return;
+              }
+              void submit(accelerated ? 'accelerated' : 'enter');
             }
           }} />
       </div>
@@ -238,7 +276,10 @@ export function AgentComposer({ placeholder, messageLabel, busyEnterBehavior, mo
         </div>
         <div className={css.trailing}>
           {model}
-          {separateStop && active && <button type="button" className={css.primary} data-composer-stop aria-label={tx('agent:submission.stop')} title={tx('agent:submission.stop-double-escape')}
+          {/* A continuable child always keeps Stop beside Send. An ordinary
+              running session does the same only while the message waits for
+              acceptance, so Stop is not replaced by the sending spinner. */}
+          {active && (separateStop || sending) && <button type="button" className={css.primary} data-composer-stop aria-label={tx('agent:submission.stop')} title={tx('agent:submission.stop-double-escape')}
             disabled={!cancellationAvailable} onMouseDown={event => event.preventDefault()} onClick={onCancel}>
             <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden><rect x="3" y="3" width="10" height="10" rx="3" fill="currentColor"/></svg>
           </button>}

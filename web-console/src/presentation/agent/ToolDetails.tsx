@@ -17,6 +17,7 @@ export interface ToolDetailItem {
 export interface ToolDetailsModel {
   items: readonly ToolDetailItem[];
   summary?: string;
+  summarySuffix?: string;
   expandedSummary?: string;
   empty?: string;
   caption?: string;

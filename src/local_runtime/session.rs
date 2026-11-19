@@ -338,6 +338,9 @@ pub struct SessionSummary {
     pub updated_at: DateTime<Utc>,
     /// Active node in the session.
     pub active_node: SessionNodeId,
+    /// A Session with multiple nodes can expose message versions.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_branches: bool,
 }
 
 /// One user-message boundary the native product exposes for `/fork` and

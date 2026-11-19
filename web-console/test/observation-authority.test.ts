@@ -239,7 +239,7 @@ it('pending inbound replay during resync observes without restoring control befo
   expect(view(s).cursor).toBe('20');
   expect(s.client.isAttachmentObservationCurrent('A', proof)).toBe(true); expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(false);
   const ready = published(s, () => view(s).attachment === 'attached'); s.reply(subscription); await ready;
-  s.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target,cursor:'21',event:{type:'pending_inbound_changed',pending:[]}}});expect(view(s).cursor).toBe('21');expect(view(s).turnOutline?.error).toContain('History changed');
+  s.socket.deliver({jsonrpc:'2.0',method:'session/event',params:{target,cursor:'21',event:{type:'pending_inbound_changed',pending:[]}}});expect(view(s).cursor).toBe('21');expect(view(s).turnOutline?.error).toBeUndefined();
   expect(s.client.isAttachmentControlCurrent('A', proof)).toBe(true); expect(count(s, 'session/checkpoint')).toBe(1); expect(count(s, 'session/subscribe')).toBe(1); expect(s.claims()).toHaveLength(1);
 });
 

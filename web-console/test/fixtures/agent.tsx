@@ -164,7 +164,7 @@ if (mode === 'composer') {
       const next = structuredClone(server.snapshots.get('A')!);
       next.todos = value ? { next_id: '2', tasks: [{ id: '1', subject: 'Review the composer', status: 'in_progress', active_form: 'Reviewing the composer' }] } : null;
       next.goal = value ? { current: { objective_deferred: false, blocked_reason_deferred: false, last_round_message_id_deferred: false, fields: [], reference: { id: 'goal', revision: '1' }, objective: 'Restore the compact input contract', phase: 'paused', autonomous_round_budget: 4, autonomous_rounds_consumed: 1, origin: { kind: 'runtime_control' } } } : null;
-      next.inbound = { pending: value ? [{ sequence: '1', revision: '0', message: { id: 'queued', source: 'human', content: [{ type: 'text', text: 'Verify the native queue controls' }] } }] : [] };
+      next.inbound = { pending: value ? [{ sequence: '1', revision: '0', message: { id: 'queued', source: 'human', kind: 'queued_message', content: [{ type: 'text', text: 'Verify the native queue controls' }] } }] : [] };
       await server.update('A', next);
     },
     holdCancellation: () => { server.held.add('turn/interrupt'); },

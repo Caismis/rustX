@@ -243,7 +243,6 @@ export const fixtures = [
         "lifecycle": "Accepting",
         "policy": {
           "environment_roots": [],
-          "max_resident_runtimes": 8,
           "max_connections": 32,
           "max_external_attachments": 64,
           "idle_grace_ms": 300000,
@@ -762,6 +761,30 @@ export const fixtures = [
   {
     "jsonrpc": "2.0",
     "id": "exact-u64",
+    "method": "session/messageBoundary",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_01942a9d-1800-7000-8000-000000000002",
+      "boundary": {
+        "type": "by_ledger_position",
+        "position": 128
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "session/messageVersions",
+    "params": {
+      "session_id": "ses_00000000-0000-7000-8000-000000000001",
+      "node_id": "node_01942a9d-1800-7000-8000-000000000002",
+      "offset": 0,
+      "limit": 32
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
     "method": "inbound/edit",
     "params": {
       "target": {
@@ -792,6 +815,59 @@ export const fixtures = [
         "sequence": "9007199254740993",
         "revision": "9007199254740993"
       }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "inbound/steer",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "expectedTurnId": "attempt-fixture",
+      "scope": {
+        "kind": "row",
+        "expected": {
+          "sequence": "9007199254740993",
+          "revision": "9007199254740993"
+        }
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "inbound/steer",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "expectedTurnId": "attempt-fixture",
+      "scope": {
+        "kind": "all",
+        "through": "9007199254740993"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "method": "job/output",
+    "params": {
+      "target": {
+        "session_id": "ses_00000000-0000-7000-8000-000000000001",
+        "conversation_id": "conv_00000000-0000-7000-8000-000000000001",
+        "runtime_incarnation": "9007199254740993",
+        "attachment_id": "attachment-fixture"
+      },
+      "job_id": "exec_215a03ee-2332-70b6-8e2d-634da8066f98"
     }
   },
   {
@@ -969,6 +1045,15 @@ export const fixtures = [
         "mime_type": "text/markdown"
       },
       "data": "IyBSZXBvcnQK"
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": "exact-u64",
+    "result": {
+      "type": "job_output",
+      "text": "live output",
+      "truncated": false
     }
   },
   {
@@ -1255,6 +1340,17 @@ export const fixtures = [
       "message": "Operation rejected",
       "data": {
         "kind": "server_draining"
+      }
+    }
+  },
+  {
+    "jsonrpc": "2.0",
+    "id": 291,
+    "error": {
+      "code": -32000,
+      "message": "Operation rejected",
+      "data": {
+        "kind": "steer_unavailable"
       }
     }
   },
@@ -1883,7 +1979,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. A foreground command still running after 120 seconds, or after its timeout if set, moves to a background job instead of being killed. The optional timeout is in seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1903,7 +1999,7 @@ export const fixtures = [
                     "type": "integer",
                     "format": "uint64",
                     "minimum": 1,
-                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                    "description": "Foreground wait in seconds before the command moves to a background job\ninstead of being killed. Omitted uses the 120 second default. An explicit\nvalue overrides that budget and is capped at 600 seconds. A background\nexecution has no foreground budget. Cancellation still stops the command."
                   }
                 },
                 "required": [
@@ -2229,7 +2325,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. A foreground command still running after 120 seconds, or after its timeout if set, moves to a background job instead of being killed. The optional timeout is in seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2249,7 +2345,7 @@ export const fixtures = [
                     "type": "integer",
                     "format": "uint64",
                     "minimum": 1,
-                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                    "description": "Foreground wait in seconds before the command moves to a background job\ninstead of being killed. Omitted uses the 120 second default. An explicit\nvalue overrides that budget and is capped at 600 seconds. A background\nexecution has no foreground budget. Cancellation still stops the command."
                   }
                 },
                 "required": [
@@ -2575,7 +2671,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. A foreground command still running after 120 seconds, or after its timeout if set, moves to a background job instead of being killed. The optional timeout is in seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2595,7 +2691,7 @@ export const fixtures = [
                     "type": "integer",
                     "format": "uint64",
                     "minimum": 1,
-                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                    "description": "Foreground wait in seconds before the command moves to a background job\ninstead of being killed. Omitted uses the 120 second default. An explicit\nvalue overrides that budget and is capped at 600 seconds. A background\nexecution has no foreground budget. Cancellation still stops the command."
                   }
                 },
                 "required": [
@@ -2921,7 +3017,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. A foreground command still running after 120 seconds, or after its timeout if set, moves to a background job instead of being killed. The optional timeout is in seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -2941,7 +3037,7 @@ export const fixtures = [
                     "type": "integer",
                     "format": "uint64",
                     "minimum": 1,
-                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                    "description": "Foreground wait in seconds before the command moves to a background job\ninstead of being killed. Omitted uses the 120 second default. An explicit\nvalue overrides that budget and is capped at 600 seconds. A background\nexecution has no foreground budget. Cancellation still stops the command."
                   }
                 },
                 "required": [
@@ -3267,7 +3363,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. A foreground command still running after 120 seconds, or after its timeout if set, moves to a background job instead of being killed. The optional timeout is in seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3287,7 +3383,7 @@ export const fixtures = [
                     "type": "integer",
                     "format": "uint64",
                     "minimum": 1,
-                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                    "description": "Foreground wait in seconds before the command moves to a background job\ninstead of being killed. Omitted uses the 120 second default. An explicit\nvalue overrides that budget and is capped at 600 seconds. A background\nexecution has no foreground budget. Cancellation still stops the command."
                   }
                 },
                 "required": [
@@ -3613,7 +3709,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. A foreground command still running after 120 seconds, or after its timeout if set, moves to a background job instead of being killed. The optional timeout is in seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3633,7 +3729,7 @@ export const fixtures = [
                     "type": "integer",
                     "format": "uint64",
                     "minimum": 1,
-                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                    "description": "Foreground wait in seconds before the command moves to a background job\ninstead of being killed. Omitted uses the 120 second default. An explicit\nvalue overrides that budget and is capped at 600 seconds. A background\nexecution has no foreground budget. Cancellation still stops the command."
                   }
                 },
                 "required": [
@@ -3959,7 +4055,7 @@ export const fixtures = [
             },
             {
               "name": "bash",
-              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. The optional timeout is in seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
+              "description": "Run one non-interactive /bin/bash command inside the workspace. Provide description before command: a concise explanation of why you are running it, shown in the UI. No shell state survives between calls. A foreground command still running after 120 seconds, or after its timeout if set, moves to a background job instead of being killed. The optional timeout is in seconds, overrides that 120 second budget, and is capped at 600 seconds. A background execution immediately returns its live output file's absolute path; use Read or Grep on it to inspect the output while the command runs.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -3979,7 +4075,7 @@ export const fixtures = [
                     "type": "integer",
                     "format": "uint64",
                     "minimum": 1,
-                    "description": "The invocation deadline in seconds. When omitted, no executor-local\ndeadline applies: a foreground invocation is bounded by the generic\nAgent Loop execution-liveness hard deadline (Issue #204), and a\nbackground execution is conversation-owned and unbounded."
+                    "description": "Foreground wait in seconds before the command moves to a background job\ninstead of being killed. Omitted uses the 120 second default. An explicit\nvalue overrides that budget and is capped at 600 seconds. A background\nexecution has no foreground budget. Cancellation still stops the command."
                   }
                 },
                 "required": [

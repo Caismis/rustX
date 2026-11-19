@@ -9,7 +9,7 @@ import { PermissionSelect } from '../../presentation/agent/PermissionSelect';
 import { Button } from '../../presentation/primitives/Button';
 import { SettingsActorContext, useSettingsActor, useSettingsTarget } from '../settings/machines/react';
 import { SourceContext } from '../settings/source-context';
-import { workspaceSettingsTarget, userSettingsTarget, revisionSelector } from '../settings/projection';
+import { workspaceSettingsTarget, userSettingsTarget } from '../settings/projection';
 import { useUnitEditing } from '../settings/forms/bridge';
 import { catalogAdmits } from '../../bindings/model-catalog';
 import { approvalMutation, workspaceApprovalBlock } from './approval';
@@ -31,7 +31,7 @@ function useWorkspaceApproval(source?: SourceSettings) {
   const reading = useSelector(actor, state => state.matches({ authority: { attached: 'reading' } }));
   const revision = source?.workspace?.revision ?? '';
   const unit = useUnitEditing<ApprovalMode>({ authored: source?.workspace?.authored?.approval_mode ?? undefined, blank: 'plan', revision, mutation: approvalMutation });
-  return { actor, revision, unit, reading, loading: !source && !readError, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
+  return { actor, unit, reading, loading: !source && !readError, block: () => { const reason = workspaceApprovalBlock(actor); return reason && message(reason); } };
 }
 type WorkspaceApproval = ReturnType<typeof useWorkspaceApproval>;
 function ApprovalScope({ source, children }: { source?: SourceSettings; children: (source: SourceSettings | undefined, approval: WorkspaceApproval) => ReactNode }) {
@@ -40,24 +40,22 @@ function ApprovalScope({ source, children }: { source?: SourceSettings; children
 }
 export function WorkspacePermission({ source, approval, disabled = false }: { source?: SourceSettings; approval: WorkspaceApproval; disabled?: boolean }) {
   const tx = useTranslation();
-  const { actor, revision, unit } = approval;
-  const mutation = approvalMutation;
+  const { actor, unit } = approval;
   const blocked = disabled || !source?.prospective_approval_mode || !unit.admitted || unit.busy || unit.awaitingObservation || unit.reviewNeeded;
   const outcome = unit.outcome;
-  return <div><PermissionSelect value={source?.prospective_approval_mode ?? undefined} disabled={blocked} choose={value => {
-    unit.edit(value);
-    actor.send({ type: 'UNIT.SUBMIT', identity: unit.identity, selector: revisionSelector(mutation(null)), revision, mutation: mutation(value) });
-  }}/>
+  const saving = unit.busy || outcome.kind === 'committed';
+  const value = saving && unit.draft ? unit.displayed : source?.prospective_approval_mode ?? undefined;
+  return <div aria-busy={saving}><PermissionSelect value={value} disabled={blocked || unit.draft} choose={unit.apply}/>{!saving && <>
     {unit.draft && <small>{tx('workspace:workspace-controls.requested')}{' '}{unit.displayed === 'full_access' ? tx('workspace:workspace-controls.full-access') : unit.displayed === 'automatic' ? tx('workspace:workspace-controls.automatic') : tx('workspace:workspace-controls.plan')}</small>}
     {outcome.kind === 'conflict' && <small role="alert">{tx('workspace:workspace-controls.workspace-changed-your-selection-is-preserved')}</small>}
     {outcome.kind === 'rejected' && <small role="alert">{outcome.detail}</small>}
     {outcome.kind === 'uncertain' && <small role="alert">{tx('workspace:workspace-controls.outcome-uncertain-reread-before-another-change-no-replay')}</small>}
-    {(outcome.kind === 'committed' || outcome.kind === 'saved' && !outcome.observed) && <small role="status">{tx('workspace:workspace-controls.saved-awaiting-authoritative-observation')}</small>}
+    {outcome.kind === 'saved' && !outcome.observed && <small role="status">{tx('workspace:workspace-controls.saved-awaiting-authoritative-observation')}</small>}
     {unit.intent && !unit.busy && <Button size="sm" onClick={unit.discard}>{tx('workspace:workspace-controls.discard-requested-permission')}</Button>}
     {unit.reviewNeeded && <Button size="sm" onClick={unit.review}>{tx('workspace:workspace-controls.review-current-revision')}</Button>}
     {unit.draft && !blocked && <Button size="sm" onClick={() => unit.submit()}>{tx('workspace:workspace-controls.apply-requested-permission')}</Button>}
     {(unit.awaitingObservation || outcome.kind === 'uncertain' || outcome.kind === 'conflict') && <Button size="sm" onClick={() => actor.send({ type: 'REFRESH' })}>{tx('workspace:workspace-controls.reread-permissions')}</Button>}
-  </div>;
+  </>}</div>;
 }
 /** The native catalog a Session created in this Workspace binds. Its choices
  * are draft Session intent, never Workspace configuration or Session state. */

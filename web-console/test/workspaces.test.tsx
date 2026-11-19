@@ -1,3 +1,4 @@
+import { SessionPins } from '../src/workspaces/session-pins';
 import {summaryFor} from '../../protocol/app-server/testing';
 import { threadFor } from '../../protocol/app-server/testing.ts';
 import { RpcFailure } from '../src/client/errors';
@@ -123,7 +124,7 @@ it.each(['same scope', 'replacement Host'] as const)('UX-04 unregister completio
   const metadataChanged = vi.fn();
   await act(async () => {
     stop = owner.start();
-    render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
+    render(<WorkspaceNavigation pins={new SessionPins("test")} associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
       endpoint={endpoint} metadataChanged={metadataChanged}
       selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
       createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
@@ -236,7 +237,7 @@ it.each(['add', 'rename', 'remove'] as const)('Sidebar %s preserves the opened i
   let stop!: () => void;
   await act(async () => {
     stop = owner.start();
-    render(<WorkspaceNavigation associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
+    render(<WorkspaceNavigation pins={new SessionPins("test")} associations={owner} host={host} client={server.client} state={selectShell(server.client.getSnapshot())}
       endpoint={endpoint} metadataChanged={metadataChanged}
       selectWorkspace={vi.fn()} openSession={vi.fn()} openViews={[]} closeView={vi.fn()} closeAllViews={vi.fn()}
       createSession={vi.fn()} forkSession={vi.fn()} deleteSession={vi.fn()} />);
@@ -1062,4 +1063,133 @@ it.each(['native diagnostic', 'missing diagnostic'] as const)('explains settled 
   expect(screen.queryByText(explanation)).toBeNull();
   expect(screen.getByRole('textbox', { name: 'Message' })).toHaveProperty('value', 'Keep this draft through configuration repair');
   expect(submissions()).toEqual([]);
+});
+
+it('sidebar rows retain confirmed status across transient resync contention and recover without flashing unavailable', async () => {
+  const host = await mount();
+  const rowA = () => screen.getByRole('button', { name: 'Open Session A' }).closest('[role="treeitem"]')!;
+  const flashes: string[] = [];
+  const observer = new MutationObserver(() => {
+    if (rowA().textContent?.includes('Observation unavailable')) flashes.push(rowA().textContent ?? '');
+  });
+  observer.observe(rowA(), { childList: true, subtree: true, characterData: true });
+  try {
+    expect(rowA().textContent).not.toContain('Observation unavailable');
+    server.handlers.set('session/list', () => ({
+      type: 'sessions',
+      sessions: [{ ...server.summary('A'), thread_status: null }, server.summary('B')].map(row => summaryFor(row)),
+      next_offset: null,
+    }));
+    server.handlers.set('thread/read', request => {
+      if (request.method === 'thread/read' && request.params.threadId === 'conversation-A') {
+        throw new RpcFailure({ code: -32000, message: 'Native activity observation unavailable', data: { kind: 'observation_unavailable', diagnostic: 'metadata busy' } });
+      }
+      return { type: 'thread', thread: { id: 'conversation-B', sessionId: 'B', nodeId: 'node-B', name: null, archived: false, dynamicTools: [], status: { type: 'idle' }, statusRevision: '2', runtimeIncarnation: null } };
+    });
+    vi.useFakeTimers();
+    try {
+      await act(async () => {
+        server.socket.deliver({ jsonrpc: '2.0', method: 'thread/status/resyncRequired', params: {} });
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(server.client.getSnapshot().threadStatusSynchronized).toBe(true);
+      expect(server.client.getSnapshot().sessions.find(row => row.id === 'A')?.thread_status).toBeUndefined();
+      expect(rowA().textContent).not.toContain('Observation unavailable');
+
+      // Recovery notification arrives before the grace window expires.
+      await act(async () => {
+        server.socket.deliver({ jsonrpc: '2.0', method: 'thread/status/changed', params: { threadId: 'conversation-A', status: { type: 'active', activeFlags: [] }, revision: '99', runtimeIncarnation: null } });
+      });
+      expect(rowA().textContent).toContain('Running');
+      expect(flashes).toEqual([]);
+
+      // Unrecovered missing status after synchronization still surfaces unavailability after the grace window.
+      await act(async () => {
+        server.socket.deliver({ jsonrpc: '2.0', method: 'thread/status/resyncRequired', params: {} });
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(rowA().textContent).not.toContain('Observation unavailable');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(750);
+      });
+      expect(rowA().textContent).toContain('Observation unavailable');
+    } finally {
+      vi.useRealTimers();
+    }
+  } finally {
+    observer.disconnect();
+  }
+  expect(host.listWorkspaces).toHaveBeenCalled();
+});
+
+it('sidebar rows preserve immediate disconnected, systemError, and unconfirmed unavailable indications', async () => {
+  server.handlers.set('session/list', () => ({
+    type: 'sessions',
+    sessions: [{ ...server.summary('A'), thread_status: null }, server.summary('B')].map(row => summaryFor(row)),
+    next_offset: null,
+  }));
+  await mount();
+  const rowA = () => screen.getByRole('button', { name: 'Open Session A' }).closest('[role="treeitem"]')!;
+  const rowB = () => screen.getByRole('button', { name: 'Open Session B' }).closest('[role="treeitem"]')!;
+  expect(rowA().textContent).toContain('Observation unavailable');
+  expect(rowB().textContent).not.toContain('Observation unavailable');
+
+  await act(async () => {
+    server.socket.deliver({ jsonrpc: '2.0', method: 'thread/status/changed', params: { threadId: 'conversation-A', status: { type: 'systemError' }, revision: '10', runtimeIncarnation: null } });
+  });
+  expect(rowA().textContent).toContain('System error');
+
+  await act(async () => { await server.client.disconnect(); });
+  expect(rowA().textContent).toContain('Observation unavailable');
+  expect(rowB().textContent).toContain('Observation unavailable');
+});
+
+it('rapid cold/warm session switching keeps sidebar rows quiet while preserving real attach errors', async () => {
+  await mount();
+  const browser = screen.getByRole('tree', { name: 'Session browser' });
+  const rowA = () => screen.getByRole('button', { name: 'Open Session A' }).closest('[role="treeitem"]')!;
+  const rowB = () => screen.getByRole('button', { name: 'Open Session B' }).closest('[role="treeitem"]')!;
+  const flashes: string[] = [];
+  const observer = new MutationObserver(() => {
+    for (const item of browser.querySelectorAll('[role="treeitem"]')) {
+      if (item.textContent?.match(/Observation unavailable|Connection interrupted/)) flashes.push(item.textContent ?? '');
+    }
+  });
+  observer.observe(browser, { childList: true, characterData: true, subtree: true });
+  try {
+    // Warm A first.
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+    // Switch rapidly to cold B while session/read is held, then back to warm A before thread/resume.
+    server.held.add('session/read');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    const read = await server.waitFor('session/read', 2);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+    server.held.delete('session/read');
+    await act(async () => server.reply(read));
+    expect(flashes).toEqual([]);
+    expect(rowB().textContent).not.toContain('Connection interrupted');
+    expect(rowB().textContent).not.toContain('Observation unavailable');
+
+    // Switch to cold B while thread/resume is held, then rapidly back to warm A, then settle B warmly.
+    server.held.add('thread/resume');
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    const resume = await server.waitFor('thread/resume', 2);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+    server.held.delete('thread/resume');
+    await act(async () => server.reply(resume));
+    await waitFor(() => expect(server.client.isAttachmentControlCurrent('B', server.client.getSnapshot().views.B?.attachmentObservation)).toBe(true));
+    expect(flashes).toEqual([]);
+    expect(rowA().textContent).not.toContain('Connection interrupted');
+    expect(rowB().textContent).not.toContain('Connection interrupted');
+  } finally {
+    observer.disconnect();
+  }
+
+  // Real attach error on an unattached session still surfaces in the sidebar row.
+  await act(async () => server.client.release('B'));
+  server.handlers.set('thread/resume', () => { throw new RpcFailure({ code: -32000, message: 'B attach failed', data: { kind: 'operation_failed' } }); });
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+  await waitFor(() => expect(server.client.getSnapshot().views.B.attachment).toBe('error'));
+  await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+  expect(rowB().textContent).toContain('Observation unavailable');
 });

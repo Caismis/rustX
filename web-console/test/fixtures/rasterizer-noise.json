@@ -59703,12 +59703,21 @@
   },
   {
     "reference": "model-profiles-dark-1440-linux.png",
-    "evidence": "Pinned Playwright 1.63.0 Linux capture during the branch review. Stable captures of this unchanged checkpoint alternated between the baseline and this single one-level rounded border pixel. Re-validated under the Harness-restyled baseline: the corner pixel now rests at (60,60,62); the recorded one-level alternation keeps its bound at the same site.",
+    "evidence": "Pinned Playwright 1.63.0 Linux branch review observed a one-level variation at (26,360). CI run 44432316970, browser-evidence-shard-1, independently measured one changed pixel at (25,360) with channel delta 1 against the same baseline. Each measured site has its own one-pixel bound.",
     "referenceSha256": "f429519d31c61fc82b435c276fd9d0c4bf4c95a4fce9136d71fdf3717e63218e",
     "captureSha256": "2fddb0a1853a242c9017eae9c52ca2a2bd80714a25a86c2532c64677e21ab5fa",
     "regions": [
       {
-        "label": "Profile panel corner coverage",
+        "label": "Profile panel outer corner coverage",
+        "x": 25,
+        "y": 360,
+        "width": 1,
+        "height": 1,
+        "maxChangedPixels": 1,
+        "maxChannelDelta": 1
+      },
+      {
+        "label": "Profile panel inner corner coverage",
         "x": 26,
         "y": 360,
         "width": 1,
@@ -59717,7 +59726,20 @@
         "maxChannelDelta": 1
       }
     ],
+    "captures": [
+      {
+        "run": 44432316970,
+        "pngSha256": "8f377b8a6a37854d6ef9cd7d6694775a4a1adb6c4da673eae7e5e071e9e590c3",
+        "pixels": [[25, 360, [82, 83, 84, 255], [83, 84, 84, 255]]]
+      }
+    ],
     "pixels": [
+      [
+        25,
+        360,
+        [82, 83, 84, 255],
+        [83, 84, 84, 255]
+      ],
       [
         26,
         360,

@@ -77,6 +77,14 @@ export class RequestPipeline {
     return [...this.pending.values()].filter(item =>
       (item.request.method === 'turn/start' || item.request.method === 'turn/steer' || item.request.method === 'inbound/queue') && item.sessionId === id).length;
   }
+  sendingSubmissions(id: string): Submission[] {
+    const target = this.port.state().views[id]?.target;
+    return [...this.pending.values()].flatMap(({ request, sent, submittedWhileRunning }) => {
+      if (!sent || !submittedWhileRunning || (request.method !== 'inbound/queue' && request.method !== 'turn/steer') || !sameTarget(target, request.params.target)) return [];
+      const { inputId, content } = request.params;
+      return [{ messageId: `sending:${inputId}`, sendingInputId: inputId, content, placement: request.method === 'turn/steer' ? 'steering' : 'queued' }];
+    });
+  }
   private capacityReleased() {
     ++this.admissionRevision;
     if (this.admissionNotification) return;
@@ -247,6 +255,7 @@ export class RequestPipeline {
     pending.sent = true;
     if (hasResponseDeadline(pending.request.method) && ['rpc', 'metadata'].includes(requestLane(pending.request.method))) pending.timer = setTimeout(() => this.port.lose(generation), this.port.timeoutMs());
     try { socket.send(raw); } catch { this.port.lose(generation); }
+    if ((pending.request.method === 'inbound/queue' || pending.request.method === 'turn/steer') && pending.submittedWhileRunning && this.pending.has(String(pending.request.id))) this.port.inboundChanged(pending.request.params.target.session_id);
     try { if (typeof pending.dispatchCurrent === 'object') pending.dispatchCurrent.sent?.(); }
     catch (error) { console.error('App Server dispatch observer failed', error); }
   }
@@ -283,8 +292,8 @@ export class RequestPipeline {
       const operation = pending.request;
       if (operation.method === 'turn/start' || operation.method === 'turn/steer' || operation.method === 'inbound/queue') {
         const target = operation.params.target;
-        const accepted = 'result' in value && (value.result.type === 'inbound_accepted' || value.result.type === 'turn_input_accepted') && sameTarget(this.port.state().views[target.session_id]?.target, target)
-          ? { messageId: value.result.message_id, content: operation.params.content, submittedWhileRunning: pending.submittedWhileRunning } : undefined;
+        const accepted: Submission | undefined = 'result' in value && (value.result.type === 'inbound_accepted' || value.result.type === 'turn_input_accepted') && sameTarget(this.port.state().views[target.session_id]?.target, target)
+          ? { messageId: value.result.message_id, content: operation.params.content, placement: value.result.type === 'turn_input_accepted' ? (value.result.disposition === 'steered' ? 'steering' : 'transcript') : pending.submittedWhileRunning ? 'queued' : 'transcript' } : undefined;
         // One publication hands request ownership to exact acknowledged identity.
         // Never publish a zero count before publishing the accepted MessageId.
         this.port.inboundAnswered(target.session_id, accepted);

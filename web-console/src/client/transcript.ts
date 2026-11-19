@@ -33,7 +33,8 @@ export function entryIdentity(entry: RuntimeClientTranscriptEntry): string {
     : item.type === 'publication_audit' ? `publication:${entry.cursor}` : `interaction:${item.event_id}`;
 }
 function merge(older: RuntimeClientTranscriptEntry[], newer: RuntimeClientTranscriptEntry[]) {
-  const entries = new Map(older.map(entry => [entry.cursor, entry]));
+  const freshMessages = new Set(newer.flatMap(entry => entry.item.type === 'message' ? [entry.item.message.id] : []));
+  const entries = new Map(older.filter(entry => entry.item.type !== 'message' || !freshMessages.has(entry.item.message.id)).map(entry => [entry.cursor, entry]));
   for (const entry of newer) entries.set(entry.cursor, entry);
   // Transcript positions are specified numeric durable order, never opaque IDs.
   return [...entries.values()].sort((a, b) => BigInt(a.cursor) < BigInt(b.cursor) ? -1 : 1);
@@ -48,8 +49,10 @@ function pageRows(page: RuntimeClientTranscriptPage) {
 }
 function mergePages(older: RuntimeClientTranscriptPage, newer: RuntimeClientTranscriptPage): RuntimeClientTranscriptPage {
   const fresh = pageRows(newer);
-  const entries = merge((older.entries ?? []).filter(entry => !fresh.has(entry.cursor)), newer.entries ?? []);
-  const deferred = new Map((older.deferred_entries ?? []).filter(item => !fresh.has(item.offset)).map(item => [item.offset, item]));
+  const freshIdentities = new Set(fresh.values());
+  const entries = merge((older.entries ?? []).filter(entry => !fresh.has(entry.cursor) && !freshIdentities.has(entryIdentity(entry))), newer.entries ?? []);
+  const oldRows = pageRows(older);
+  const deferred = new Map((older.deferred_entries ?? []).filter(item => !fresh.has(item.offset) && !freshIdentities.has(oldRows.get(item.offset)!)).map(item => [item.offset, item]));
   for (const item of newer.deferred_entries ?? []) deferred.set(item.offset, item);
   for (const entry of entries) deferred.delete(entry.cursor);
   const collections = new Map((older.collections ?? []).map(frontier => [frontier.domain, frontier]));

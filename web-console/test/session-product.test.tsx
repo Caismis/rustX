@@ -2,9 +2,10 @@ import { translator } from '../src/locale/translation';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import type { ClientView, SessionView } from '../src/client/contracts';
+import { nativeTool } from './native-tool-cases';
 import { deriveSessionProductState } from '../src/bindings/session-product';
 import { App } from '../src/app/App';
-import { Server, snapshot } from './fixture';
+import { Server, settingsReceipt, snapshot } from './fixture';
 import { RpcFailure } from '../src/client/errors';
 
 const connected = { connection: 'connected' as const, uncertain: [] };
@@ -13,6 +14,13 @@ const base = (): SessionView => ({ threadStatus:{...activeStatus,status:{type:'i
   target: { session_id: 'A', conversation_id: 'conversation-A', runtime_incarnation: 'native-incarnation', attachment_id: 'native-attachment' }, snapshot: snapshot() });
 const running = () => ({ attempt_id: 'private-attempt', phase: { type: 'running' as const }, turn: 1 });
 const uncertain = { id: 'lost-request', method: 'turn/interrupt' as const, sessionId: 'A', generation: 7 };
+
+it('missing thread status is not evidence of a failed observation', () => {
+  const view = { ...base(), threadStatus: undefined };
+  const project = (observationState: SessionView['observationState']) => deriveSessionProductState(translator('en'), connected, { ...view, observationState });
+  expect(project('following').label).toBeUndefined();
+  expect(project('unavailable')).toMatchObject({ severity: 'warning', label: 'Observation unavailable' });
+});
 
 it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progress while retaining real failures', transition => {
   const tx = translator('en'), view: SessionView = { ...base(), target: undefined, attachment: 'detached', attachmentIntent: 'released' };
@@ -27,10 +35,14 @@ it.each(['fork', 'retry'] as const)('%s presents a deliberate handoff as progres
 });
 
 it.each([
+  ['awaiting first checkpoint', { threadStatus: undefined, observationState: 'attached' }, {}, 'connecting', undefined],
+  ['loading checkpoint', { threadStatus: undefined, observationState: 'checkpointLoading' }, {}, 'connecting', undefined],
+  ['awaiting subscription', { threadStatus: undefined, observationState: 'subscribePending' }, {}, 'connecting', undefined],
+  ['missing status after subscription', { threadStatus: undefined, observationState: 'following' }, {}, 'unavailable', undefined],
   ['idle', {}, {}, 'idle', undefined],
   ['working', { threadStatus:activeStatus, snapshot: { ...snapshot(), attempt: running() } }, {}, 'working', undefined],
-  ['queued accepted input', { submissions: [{ messageId: 'accepted', content: [], submittedWhileRunning: true }] }, {}, 'idle', undefined],
-  ['accepted idle input', { submissions: [{ messageId: 'accepted', content: [], submittedWhileRunning: false }] }, {}, 'idle', undefined],
+  ['queued accepted input', { submissions: [{ messageId: 'accepted', content: [], placement: 'queued' }] }, {}, 'idle', undefined],
+  ['accepted idle input', { submissions: [{ messageId: 'accepted', content: [], placement: 'transcript' }] }, {}, 'idle', undefined],
   ['unaccepted request is not queued', { inboundRequests: 1 }, {}, 'idle', undefined],
   ['cancellation acknowledgement leaves native work active', { threadStatus:activeStatus, snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'private-attempt', status: 'acknowledged' } }, {}, 'working', undefined],
   ['another native receipt does not label stale working as stopping', { threadStatus:activeStatus, snapshot: { ...snapshot(), attempt: running() }, cancellation: { attemptId: 'actual-other-attempt', status: 'acknowledged' } }, {}, 'working', undefined],
@@ -40,6 +52,8 @@ it.each([
   ['failed read with target', { attachment: 'stale' }, {}, 'unavailable', 'refresh'],
   ['failed observation after confirmed attach', { attachment: 'error' }, {}, 'unavailable', 'refresh'],
   ['opening is not recovery', { target: undefined, attachment: 'attaching' }, {}, 'connecting', undefined],
+  ['cold unattached intent is not connection interruption', { target: undefined, attachment: 'detached', attachmentIntent: 'wanted', snapshot: undefined, threadStatus: undefined }, {}, 'connecting', undefined],
+  ['cold attach failure without target preserves unavailability', { target: undefined, attachment: 'error', attachmentIntent: 'wanted', error: 'Attach failed', snapshot: undefined, threadStatus: undefined }, {}, 'unavailable', 'open'],
   ['uncertain outranks reconnect', {}, { connection: 'stale', uncertain: [uncertain] }, 'uncertain', 'connect'],
   ['uncertain survives suggestive settled state', { snapshot: { ...snapshot(), attempt: { ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } } } } }, { uncertain: [uncertain] }, 'uncertain', undefined],
   ['durability failure', { snapshot: { ...snapshot(), durability_failure: { operation: 'commit', diagnostic: 'storage-failure' } } }, {}, 'failure', undefined],
@@ -85,6 +99,18 @@ it('conversation chrome exposes product controls without developer diagnostics',
   expect(screen.queryByLabelText('Session status')).toBeNull();
   expect(screen.queryByLabelText('Native diagnostic JSON')).toBeNull();
 });
+it('keeps an unconfirmed remote fetch result out of the session chrome after Stop', async () => {
+  const server = await mount();
+  const tool = nativeTool('fetch', 'web_fetch_exa', {}, []);
+  tool.state = { type: 'settled', arguments: '{}', result: {
+    status: { type: 'outcome_unknown', detail: 'Remote termination could not be confirmed' }, duration_ms: '0',
+  } };
+  await act(async () => server.update('A', { ...snapshot(), attempt: {
+    ...running(), phase: { type: 'settled', outcome: { type: 'cancelled', reason: 'user_requested' } }, foreground: [tool],
+  } }));
+  expect(screen.queryByText('Needs verification')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'Review outcome' })).toBeNull();
+});
 it('lost cancellation remains uncertain through reconnect and a settled snapshot, with no replay', async () => {
   const server = await mount(); server.held.add('turn/interrupt');
   fireEvent.click(screen.getByRole('button', { name: 'Stop' }));
@@ -129,4 +155,67 @@ it('failed observation exposes one Refresh observation action which refreshes wi
   expect(operations).not.toContain('inbound/queue');
   expect(operations).not.toContain('turn/interrupt');
   expect(screen.queryByRole('button', { name: 'Refresh observation' })).toBeNull();
+});
+it('rapid cold switch aborted before attach stays quiet in the header and recovers on explicit return', async () => {
+  const s = new Server();
+  server = s;
+  await s.attached('A');
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['A'], route: { kind: 'session', sessionId: 'A' } }));
+  await act(async () => { render(<App client={s.client} workspaceHost={s.workspaceHost} />); });
+
+  const notices: string[] = [];
+  const header = document.querySelector('#session-view > header')!;
+  const observer = new MutationObserver(() => {
+    const title = document.querySelector('#session-title')?.textContent;
+    if (!title || title === 'New session') notices.push(`title:${String(title)}`);
+    const status = document.querySelector('#session-view [aria-label="Session status"]')?.textContent;
+    if (status) notices.push(`status:${status}`);
+  });
+  observer.observe(document.querySelector('#session-view')!, { childList: true, characterData: true, subtree: true });
+  try {
+    expect(header.className).not.toMatch(/headerBlank/);
+    s.held.add('session/read');
+    const readsBefore = s.requests.filter(row => row.request.method === 'session/read').length;
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    const read = await s.waitFor('session/read', readsBefore + 1);
+    expect(read.method === 'session/read' && read.params.session_id).toBe('B');
+    expect(document.querySelector('#session-title')?.textContent).toBe('Session B');
+    // Rapidly switch back to warm A before B dispatches thread/resume.
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session A' })));
+    expect(document.querySelector('#session-title')?.textContent).toBe('Session A');
+    s.held.delete('session/read');
+    await act(async () => s.reply(read));
+    expect(s.requests.filter(row => row.request.method === 'thread/resume' && s.sessionForThread(row.request.params.threadId) === 'B')).toHaveLength(0);
+    expect(s.client.getSnapshot().views.B).toMatchObject({ attachmentIntent: 'released', attachment: 'detached' });
+    expect(notices).toEqual([]);
+
+    // Reconnecting must not reopen B after user rapidly switched away.
+    await act(async () => { s.socket.close(); await s.connect(); });
+    expect(s.requests.filter(row => row.request.method === 'thread/resume' && s.sessionForThread(row.request.params.threadId) === 'B')).toHaveLength(0);
+
+    // Explicitly opening B attaches it once cleanly.
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Open Session B' })));
+    expect(document.querySelector('#session-title')?.textContent).toBe('Session B');
+    expect(s.requests.filter(row => row.request.method === 'thread/resume' && s.sessionForThread(row.request.params.threadId) === 'B')).toHaveLength(1);
+    expect(notices).toEqual([]);
+  } finally {
+    observer.disconnect();
+  }
+});
+it('unlisted cold session header falls back to its session id while summary is loading', async () => {
+  const s = new Server();
+  server = s;
+  s.snapshots.set('unlisted', snapshot('unlisted'));
+  s.handlers.set('session/list', () => ({ type: 'sessions', sessions: [], next_offset: null }));
+  s.handlers.set('session/settings', req => settingsReceipt({ cwd: req.method === 'session/settings' && req.params.session_id === 'unlisted' ? '/workspace/A' : '/workspace/B' }, '0'));
+  s.summaries.set('unlisted', { cwd: '/workspace/A', name: 'Recovered title' });
+  localStorage.setItem('rustx-console-view-v3', JSON.stringify({ endpoint: 'ws://127.0.0.1:8080/', openViews: ['unlisted'], route: { kind: 'session', sessionId: 'unlisted' } }));
+  s.held.add('session/summary');
+  await act(async () => { render(<App client={s.client} workspaceHost={s.workspaceHost} />); });
+  await act(async () => s.connect());
+  const read = await s.waitFor('session/summary', 1);
+  expect(document.querySelector('#session-title')?.textContent).toBe('unlisted');
+  expect(document.querySelector('#session-title')?.textContent).not.toBe('New session');
+  await act(async () => s.reply(read));
+  expect(document.querySelector('#session-title')?.textContent).toBe('Recovered title');
 });

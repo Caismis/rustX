@@ -497,9 +497,7 @@ impl RuntimeClientProjection {
                     vec![RuntimeClientEvent::InboundEnqueued {
                         sequence: item.sequence(),
                         message: view.message,
-                        transcript_cursor: item
-                            .transcript_cursor()
-                            .map(RuntimeClientTranscriptCursor::from),
+                        transcript_cursor: None,
                     }]
                 }
             }

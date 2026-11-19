@@ -492,23 +492,18 @@ pub enum RuntimeClientEvent {
         evicted_status_locator: Option<crate::observation::content::CanonicalContentLocator>,
     },
 
-    /// An inbound message was enqueued into the conversation mailbox.
-    ///
-    /// Human and runtime-originated producers share the one inbound
-    /// ordering domain; the event carries the authoritative mailbox
-    /// sequence and the canonical message.
-    /// Pending authority changed; reread the snapshot and transcript.
+    /// The mailbox pending head changed.
     PendingInboundChanged {
         /// Complete committed pending projection, in durable sequence order.
         pending: Vec<super::snapshot::InboundItemView>,
     },
+    /// An inbound message was enqueued into the conversation mailbox.
     InboundEnqueued {
         /// The mailbox-assigned inbound sequence.
         sequence: InboundSequence,
         /// The canonical inbound message.
         message: UserMessageBlock,
-        /// The durable transcript position allocated at acceptance, absent
-        /// for hidden Context-kind inbound.
+        /// Pending messages have no transcript position.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         transcript_cursor: Option<RuntimeClientTranscriptCursor>,
     },

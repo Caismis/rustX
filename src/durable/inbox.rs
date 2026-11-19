@@ -22,6 +22,15 @@ use crate::durable::{
     ConversationStore, ConversationStoreError, TranscriptCommitReceipt, TranscriptCursor,
 };
 
+/// Public input IDs are bounded ASCII tokens supplied by an app-server client.
+pub(crate) fn valid_public_input_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"_-".contains(&byte))
+}
+
 /// A producer-supplied draft of one inbound item, before acceptance.
 ///
 /// The producer supplies destination content/provenance/correlation and, for
@@ -63,7 +72,6 @@ pub struct PendingObservationReceipt {
     pub head: Vec<super::observation::PendingHeader>,
     pub selected: Option<super::observation::PendingHeader>,
     pub removed_sequence: Option<u64>,
-    pub removed_transcript: Option<TranscriptCursor>,
     pub adopted_through: Option<u64>,
     pub adopted_count: Option<u64>,
 }
@@ -106,8 +114,8 @@ pub struct AcceptedInbound {
     pub message_id: MessageId,
     /// The persisted canonical inbound message.
     pub message: UserMessageBlock,
-    /// The transcript position allocated at acceptance for visible inbound.
-    /// Adoption into the Ledger reuses this exact position.
+    /// The durable transcript cursor when the message has already been
+    /// adopted into the Ledger (on an idempotent retry); `None` while pending.
     pub transcript_cursor: Option<TranscriptCursor>,
     /// Whether this acceptance was an idempotent correlation retry of an
     /// already-committed acceptance (no new sequence was allocated).
@@ -122,6 +130,19 @@ pub struct PendingInboundRef {
     pub sequence: InboundSequence,
     /// Expected native content revision.
     pub revision: u64,
+}
+
+/// One running-turn promotion of queued rows into steering.
+///
+/// `Row` is compare-and-set on one occurrence. `All` reclassifies every
+/// eligible queued row through the observed sequence. Neither mints an identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum PendingSteerScope {
+    /// Reclassify one exact queued occurrence.
+    Row { expected: PendingInboundRef },
+    /// Reclassify eligible occurrences through the queue observed by the caller.
+    All { through: InboundSequence },
 }
 
 /// Typed pending mutation disposition; uncertainty requires authoritative reread.
@@ -166,7 +187,7 @@ pub struct PendingInboundItem {
     pub message_id: MessageId,
     /// The persisted canonical inbound message.
     pub message: UserMessageBlock,
-    /// The transcript position allocated at acceptance for visible inbound.
+    /// The canonical transcript position, populated on adoption for visible input.
     pub transcript_cursor: Option<TranscriptCursor>,
     /// The producer correlation, when one was supplied.
     pub correlation: Option<String>,
@@ -174,16 +195,16 @@ pub struct PendingInboundItem {
 
 /// One finite watermark-bounded pending batch.
 ///
-/// A batch is non-empty, its items are in strictly increasing
-/// [`InboundSequence`] order, and its watermark equals the highest selected
-/// sequence. Items accepted after the watermark belong to the next batch.
+/// A batch is non-empty, its items are in model delivery order, and its
+/// watermark equals the highest selected acceptance sequence. Items accepted
+/// after the watermark belong to the next batch.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingBatch {
     /// The conversation the batch belongs to.
     pub conversation_id: ConversationId,
     /// The watermark: the highest selected inbound sequence.
     pub watermark: InboundSequence,
-    /// The selected items in strict sequence order.
+    /// The selected items in model delivery order.
     pub items: Vec<PendingInboundItem>,
 }
 
@@ -197,7 +218,7 @@ pub struct AdoptedBatch {
     pub canonical_receipts: Vec<TranscriptCommitReceipt>,
     /// Exact pending/adoption cut captured inside the atomic claim transaction.
     pub read_cut: super::reading::ConversationReadCut,
-    /// The adopted items, in strict sequence order.
+    /// The adopted items, in canonical delivery order.
     pub items: Vec<PendingInboundItem>,
     /// The committed `InboundTurnAdopted` fact, with its Journal sequence.
     pub adoption: Option<RuntimeEventEnvelope>,
@@ -767,6 +788,11 @@ pub trait ConversationInboundCapability: Send + Sync + 'static {
         &self,
         expected: &PendingInboundRef,
     ) -> Result<PendingMutationOutcome, ConversationStoreError>;
+    /// Reclassifies queued rows into current-attempt steering without new identities.
+    fn steer_pending(
+        &self,
+        scope: &PendingSteerScope,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError>;
 
     /// Reads all committed pending rows in sequence order for repair/bootstrap.
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;
@@ -883,6 +909,12 @@ impl<T: ConversationStore + ?Sized> ConversationInboundCapability for T {
         expected: &PendingInboundRef,
     ) -> Result<PendingMutationOutcome, ConversationStoreError> {
         InboxStore::remove_pending(self, expected)
+    }
+    fn steer_pending(
+        &self,
+        scope: &PendingSteerScope,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError> {
+        InboxStore::steer_pending(self, scope)
     }
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
@@ -1081,6 +1113,12 @@ impl ConversationInboundCapability for StoreInboundCapability {
     ) -> Result<PendingMutationOutcome, ConversationStoreError> {
         self.store.remove_pending(expected)
     }
+    fn steer_pending(
+        &self,
+        scope: &PendingSteerScope,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError> {
+        self.store.steer_pending(scope)
+    }
 
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError> {
         self.store.load_pending()
@@ -1249,6 +1287,11 @@ pub trait InboxStore: Send + Sync + 'static {
     fn remove_pending(
         &self,
         expected: &PendingInboundRef,
+    ) -> Result<PendingMutationOutcome, ConversationStoreError>;
+    /// Reclassifies queued rows into current-attempt steering without new identities.
+    fn steer_pending(
+        &self,
+        scope: &PendingSteerScope,
     ) -> Result<PendingMutationOutcome, ConversationStoreError>;
     /// Reads all committed pending rows in sequence order for repair/bootstrap.
     fn load_pending(&self) -> Result<Vec<PendingInboundItem>, ConversationStoreError>;

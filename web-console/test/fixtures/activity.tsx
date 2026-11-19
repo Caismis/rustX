@@ -11,7 +11,9 @@ import { ArtifactContext } from '../../src/app/components/Artifact';
 import { ArtifactResources } from '../../src/client/artifacts';
 import { AgentCard } from '../../src/app/components/ActivityCards';
 import { RuntimeFacts } from '../runtime-facts';
-import { BackgroundJobs } from '../../src/app/agent/BackgroundJobs';
+import { SessionPanel } from '../../src/app/agent/SessionPanel';
+import { SessionPanelToggle } from '../../src/app/agent/SessionPanelToggle';
+import { SessionPanelProvider } from '../../src/app/agent/session-panel-state';
 import { InboundMessage } from '../../src/app/agent/InboundMessage';
 import type { RuntimeClientAgent, RuntimeClientJob } from '../../../protocol/app-server/v82';
 import { Server, snapshot, childConversation } from '../fixture';
@@ -49,6 +51,12 @@ server.handlers.set('agent/interrupt', () => {
   return { type: 'agent_interruption_accepted', agent_id: agent.agent_id, activation_id };
 });
 server.handlers.set('agent/wait', () => ({ type: 'agent_wait', agent_id: agent.agent_id, activation_id: agent.current_activation, outcome: agent.current_activation ? 'succeeded' : null }));
+const liveOutputs = new Map<string, { text: string; truncated: boolean }>();
+server.handlers.set('job/output', request => {
+  if (request.method !== 'job/output') throw new Error('Wrong operation');
+  const current = liveOutputs.get(request.params.job_id);
+  return { type: 'job_output', text: current?.text ?? '', truncated: current?.truncated ?? false };
+});
 server.handlers.set('job/status', () => (domainReceipt('jobs.'+(s.jobs![0]).job_id,[s.jobs![0]])));
 server.handlers.set('job/wait', () => (jobReceipt(s.jobs![0])));
 server.handlers.set('job/cancel', () => {
@@ -92,15 +100,16 @@ function ImageTrace() {
       onLoadDetail={() => {}} onClose={() => {}} records={[record]} executions={new Map()} requestNumbers={new Map()} completeHistory onOpen={() => {}}/>
   </ArtifactContext.Provider>;
 }
-declare global { interface Window { activityFixture: { jobs(count: number): Promise<void>; settle(id: string): Promise<void> } } }
+declare global { interface Window { activityFixture: { jobs(count: number): Promise<void>; settle(id: string): Promise<void>; output(id: string, text: string, truncated?: boolean): void } } }
 window.activityFixture = {
   async jobs(count) { s.jobs = Array.from({ length: count }, (_, i): RuntimeClientJob => ({ job_id: `job-${i}`, tool_id: 'tool-bash', tool_name: `Task ${i + 1}`, state: 'running', bash: { command: `printf 'task ${i + 1}'`, description: `Background task ${i + 1}` } })); await server.update('A', structuredClone(s)); },
   async settle(id) { s.jobs = s.jobs!.map(job => job.job_id === id ? { ...job, state: 'succeeded', result: { status: { type: 'success' }, duration_ms: '2500', content: [{ type: 'text', text: `Final output ${job.job_id}` }] } } : job); await server.update('A', structuredClone(s)); },
+  output(id, text, truncated = false) { liveOutputs.set(id, { text, truncated }); },
 };
 function Fixture() {
   const state = useSyncExternalStore(server.client.subscribe, server.client.getSnapshot);
   const backgroundChat = <><section aria-label="Background launch in chat"><Tool tool={{ committed_result_deferred: false, occurrence: { locator: { type: 'by_message_id', message_id: 'background-launch' }, block_index: 0 }, assembly_complete: true, message_id: 'background-launch', block_index: 0, call_id: 'launch-call', tool_id: 'tool-bash', name: 'bash', state: { type: 'settled', arguments: '{"arguments":{"command":"sleep 5"},"execution_mode":"background"}', result: { status: { type: 'success' }, duration_ms: '0', content: [{ type: 'json', value: { job_id: 'job-launched', tool: 'bash', state: 'starting', output_path: '/workspace/output.txt' } }] } } }}/></section>
     <section aria-label="Background completion in chat"><InboundMessage message={{ role: 'user', id: 'background-job-finished-terminal', source: 'runtime', kind: 'message', content: [{ type: 'text', text: 'Background execution job-finished (bash) settled: failed\n\nResult:\nBuild output failed verification' }] }}/></section></>;
-  return <div style={{ maxWidth: 760, margin: '24px auto', padding: 16 }}><header style={{ position: 'sticky', top: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 16, background: 'var(--dsw-alias-bg-base)' }}><h1 style={{ fontSize: 14, minWidth: 0, flex: 1 }}>Jobs and Agents</h1><BackgroundJobs client={server.client} sessionId="A"/><button type="button">Session actions</button></header><div id="subagent-header-actions"/>{backgroundChat}<ArtifactContext.Provider value={artifacts}><Tool tool={{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:"image-message"},block_index:0},assembly_complete:true, message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: JSON.stringify({ arguments: { path: imagePath } }), result: { status: { type: "success" }, duration_ms: "1", content: [{ type: 'text', text: imageReceipt }, { type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><AgentCard agent={state.views.A.snapshot!.agents![0]} client={server.client} sessionId="A"/><RuntimeFacts snapshot={state.views.A.snapshot!}/><div style={{ height: 1600 }} aria-label="Long conversation"/></div>;
+  return <SessionPanelProvider><div style={{ display: 'flex', flexDirection: 'column', height: '100dvh' }}><header style={{ position: 'sticky', top: 0, zIndex: 10, display: 'flex', alignItems: 'center', gap: 16, maxWidth: 760, margin: '24px auto 0', padding: '0 16px', background: 'var(--dsw-alias-bg-base)' }}><h1 style={{ fontSize: 14, minWidth: 0, flex: 1 }}>Jobs and Agents</h1><SessionPanelToggle client={server.client} sessionId="A"/><button type="button">Session actions</button></header><div style={{ position: 'relative', flex: 1, minHeight: 0, ['--dsh-chat-content-width' as string]: 'min(760px, calc(100% - 32px))' }}><SessionPanel client={server.client} sessionId="A"/><div data-fixture-transcript="" style={{ maxWidth: 760, margin: '0 auto', height: '100%', overflowY: 'auto', boxSizing: 'border-box', padding: 16 }}><div id="subagent-header-actions"/>{backgroundChat}<ArtifactContext.Provider value={artifacts}><Tool tool={{committed_result_deferred:false,occurrence:{locator:{type:'by_message_id' as const,message_id:"image-message"},block_index:0},assembly_complete:true, message_id: "image-message", block_index: 0, call_id: "read-image", tool_id: "tool-read-image", name: "read_image", state: { type: "settled", arguments: JSON.stringify({ arguments: { path: imagePath } }), result: { status: { type: "success" }, duration_ms: "1", content: [{ type: 'text', text: imageReceipt }, { type: "image", artifact_id: "artifact_1" }] } } }}/></ArtifactContext.Provider><AgentCard agent={state.views.A.snapshot!.agents![0]} client={server.client} sessionId="A"/><RuntimeFacts snapshot={state.views.A.snapshot!}/><div style={{ height: 1600 }} aria-label="Long conversation"/></div></div></div></SessionPanelProvider>;
 }
 createRoot(document.getElementById('root')!).render(new URLSearchParams(location.search).has('image-trace') ? <ImageTrace/> : <Fixture/>);

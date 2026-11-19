@@ -205,8 +205,7 @@ describe("presentation projection", () => {
     state = reduce(state, {
       cursor: runtimeCursor(41),
       event: {
-        type: "inbound_enqueued",
-        sequence: "1",
+        type: "message_committed",
         message: userMessage("message-a", "A"),
         transcript_cursor: transcriptCursor(10),
       },
@@ -366,7 +365,7 @@ describe("presentation projection", () => {
       type: "projection_transition",
       metadata: { read_cut: checkpoint(seed).read_cut, content: [], collections: [] },
       events: [
-        { type: "inbound_enqueued", sequence: "1", message, transcript_cursor: transcriptCursor(1) },
+        { type: "inbound_enqueued", sequence: "1", message },
         { type: "pending_inbound_changed", pending: [{ sequence: "1", revision: "1", message: { ...message, content: [{ type: "text", text: "edited" }] } }] },
         { type: "job_updated", position: 0, job: backgroundExecution("job-1", "running") },
       ],
@@ -379,11 +378,8 @@ describe("presentation projection", () => {
     const { transcript: _rt, transcriptNextCursor: _rn, statistics: _rs, deferredTranscriptEntries: _rd, ...repairedOwned } = repaired;
     assert.deepEqual(owned, repairedOwned);
     assert.deepEqual(next.inbound.pending?.map(item => item.revision), ["1"]);
-    // The edit inside the batch rewrites exactly the row the enqueue displayed.
-    assert.deepEqual(
-      next.transcript.map(entry => entry.kind === "committed" && entry.message.role === "user" && entry.message.content),
-      [[{ type: "text", text: "edited" }]],
-    );
+    assert.deepEqual(next.transcript, []);
+    assert.deepEqual(next.inbound.pending?.[0]?.message.content, [{ type: "text", text: "edited" }]);
     const removed = reduce(next, { cursor: runtimeCursor(2), event: { type: "pending_inbound_changed", pending: [] } });
     assert.deepEqual(removed.transcript, []);
   });
@@ -392,29 +388,6 @@ describe("presentation projection", () => {
     assert.throws(
       () => reduce(historyPresentation("conversation", { entries: [], statistics: undefined } as never), { cursor: runtimeCursor(1), event: { type: "runtime_shutdown" } }),
       /No authoritative checkpoint/,
-    );
-  });
-
-  it("adds a user transcript row only when the durable acceptance event arrives", () => {
-    const state = initial();
-    assert.equal(state.transcript.length, 0);
-    const accepted = reduce(state, {
-      cursor: runtimeCursor(1),
-      event: {
-        type: "inbound_enqueued",
-        sequence: "1",
-        message: {
-          id: "accepted-user",
-          content: [{ type: "text", text: "accepted" }],
-          source: "human",
-          kind: "message",
-        },
-        transcript_cursor: transcriptCursor(1),
-      },
-    });
-    assert.deepEqual(
-      accepted.transcript.map((entry) => entry.kind === "committed" && entry.messageId),
-      ["accepted-user"],
     );
   });
 
@@ -917,13 +890,11 @@ describe("presentation projection", () => {
         type: "inbound_enqueued",
         sequence: "1",
         message: userMessage("m1", "first"),
-        transcript_cursor: transcriptCursor(1),
       },
       {
         type: "inbound_enqueued",
         sequence: "2",
         message: userMessage("m2", "second"),
-        transcript_cursor: transcriptCursor(2),
       },
     ]);
     assert.equal(state.inbound.pending?.length, 2);
@@ -1263,57 +1234,17 @@ describe("presentation projection", () => {
     assert.equal(state.transcript.length, 0);
   });
 
-  it("fails closed for visible inbound acceptance without a transcript cursor", () => {
-    assert.throws(
-      () =>
-        reduce(initial(), {
-          cursor: runtimeCursor(42),
-          event: {
-            type: "inbound_enqueued",
-            sequence: "1",
-            message: userMessage("missing-inbound-cursor", "bad"),
-          },
-        }),
-      /visible transcript message is missing/,
-    );
-  });
-
-  it("rejects hidden Context inbound with a contradictory cursor", () => {
-    const state = initial();
-    assert.throws(
-      () =>
-        reduce(state, {
-          cursor: runtimeCursor(42),
-          event: {
-            type: "inbound_enqueued",
-            sequence: "1",
-            message: contextUserMessage("hidden-inbound", "runtime status"),
-            transcript_cursor: transcriptCursor(8),
-          },
-        }),
-      /hidden Context message must not carry/,
-    );
-    assert.equal(state.cursor, "0");
-    assert.equal(state.transcript.length, 0);
-  });
-
-  it("displays inbound input only after durable acceptance", () => {
-    const state = initial();
-    // No client-side semantic echo exists before the runtime fact arrives.
-    assert.equal(state.transcript.length, 0);
-
-    const accepted = fold(state, [
-      {
-        type: "inbound_enqueued",
-        sequence: "1",
-        message: userMessage("m1", "hello"),
-        transcript_cursor: transcriptCursor(1),
-      },
+  it("displays the user message at adoption after intervening assistant output", () => {
+    const message = userMessage("queued", "follow-up");
+    const pending = fold(initial(), [{ type: "inbound_enqueued", sequence: "1", message }]);
+    assert.deepEqual(pending.transcript, []);
+    assert.equal(pending.inbound.pending?.[0]?.message.id, message.id);
+    const adopted = fold(pending, [
+      { type: "message_committed", message: assistantMessage("reply", "first reply"), transcript_cursor: transcriptCursor(1) },
+      { type: "inbound_drained", watermark: "1", count: 1, message_ids: [message.id] },
+      { type: "message_committed", message, transcript_cursor: transcriptCursor(2) },
     ]);
-
-    assert.equal(accepted.transcript.length, 1);
-    assert.equal(accepted.transcript[0]?.kind, "committed");
-    assert.equal(accepted.inbound.pending?.[0]?.message.id, "m1");
+    assert.deepEqual(adopted.transcript.map(row => row.kind === "committed" && row.messageId), ["reply", "queued"]);
   });
 
   it("does not carry local semantic state through an authoritative repair", () => {

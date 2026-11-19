@@ -13,6 +13,46 @@ impl AppServerConnection {
     #[allow(clippy::too_many_lines)] // One arm per historical read.
     pub(super) async fn history(&self, method: Method) -> Result<MethodResult, RpcError> {
         match method {
+            Method::SessionMessageBoundary {
+                session_id,
+                node_id,
+                boundary,
+            } => {
+                use crate::observation::content::CanonicalContentLocator;
+                let valid = match &boundary {
+                    CanonicalContentLocator::ByMessageId { message_id } => {
+                        message_id.as_str().len() <= 256
+                    }
+                    CanonicalContentLocator::ByLedgerPosition { position } => {
+                        (1..=9_007_199_254_740_991).contains(position)
+                    }
+                };
+                if !valid {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let boundary = self
+                    .sessions
+                    .message_boundary(&session_id, node_id, boundary)
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionMessageBoundary { boundary })
+            }
+            Method::SessionMessageVersions {
+                session_id,
+                node_id,
+                offset,
+                limit,
+            } => {
+                if limit == 0 || limit > 32 || offset > 9_007_199_254_740_991 {
+                    return Err(domain(ErrorData::InvalidParams));
+                }
+                let page = self
+                    .sessions
+                    .message_versions(session_id, node_id, offset, limit)
+                    .await
+                    .map_err(session_error)?;
+                Ok(MethodResult::SessionMessageVersions { page })
+            }
             Method::SessionHistory {
                 session_id,
                 node_id,
