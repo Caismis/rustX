@@ -1246,7 +1246,7 @@ mod tests {
 
     #[test]
     fn request_started_round_trips_explicit_tagged_owners() {
-        use crate::model::{ModelRequestOwner, RequestIdentity};
+        use crate::model::snapshot::{ModelRequestOwner, RequestIdentity};
         use crate::runtime::identity::{AuxiliaryCallId, RequestId, TurnId};
 
         let identity = RequestIdentity {
@@ -1310,7 +1310,7 @@ mod tests {
     #[test]
     fn request_terminal_owner_is_explicit_and_classifies_auxiliary_facts() {
         use crate::model::auxiliary::AuxiliaryFingerprint;
-        use crate::model::{ModelRequestOwner, RequestIdentity};
+        use crate::model::snapshot::{ModelRequestOwner, RequestIdentity};
         use crate::runtime::identity::{AuxiliaryCallId, RequestId, TurnId};
 
         let call_id = AuxiliaryCallId::new("aux_36524fd8-f674-7fc2-8125-06d01fee0e18");
@@ -1321,7 +1321,7 @@ mod tests {
         let completed = RuntimeEvent::ModelRequestCompleted {
             owner: owner.clone(),
             request_id: RequestId::new("request"),
-            finish_reason: crate::model::ModelFinishReason::Stop,
+            finish_reason: crate::model::finish::ModelFinishReason::Stop,
             usage: None,
             generation: None,
         };
@@ -1357,10 +1357,10 @@ mod tests {
         let fingerprint = AuxiliaryFingerprint::new("a".repeat(64)).unwrap();
         let call_started = RuntimeEvent::AuxiliaryCallStarted {
             call_id: call_id.clone(),
-            purpose: crate::model::AuxiliaryAttribution::new("summary").unwrap(),
-            trigger: crate::model::AuxiliaryAttribution::new("automatic").unwrap(),
-            business_source: crate::model::AuxiliaryBusinessSource::Independent,
-            input: crate::model::AuxiliaryInputEvidence::Temporary,
+            purpose: crate::model::auxiliary::AuxiliaryAttribution::new("summary").unwrap(),
+            trigger: crate::model::auxiliary::AuxiliaryAttribution::new("automatic").unwrap(),
+            business_source: crate::model::auxiliary::AuxiliaryBusinessSource::Independent,
+            input: crate::model::auxiliary::AuxiliaryInputEvidence::Temporary,
             semantic_input_fingerprint: fingerprint.clone(),
             invocation_fingerprint: fingerprint,
             selected_message_ids: Vec::new(),

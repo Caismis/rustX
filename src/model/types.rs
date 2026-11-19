@@ -177,7 +177,6 @@ impl ModelRequest {
 
 /// Normalized token accounting for one generation.
 ///
-
 impl ModelRequest {
     /// SHA-256 of provider-visible semantic content, excluding execution identities.
     /// # Panics

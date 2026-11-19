@@ -303,10 +303,10 @@ impl InboxStore for SqliteConversationStore {
             event,
         )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
-        if let Some(native) = &mut persisted.event.observation {
-            if let Some(batch) = native.get_mut::<NativeObservationBatch>() {
-                batch.pending.clone_from(&accepted.pending_observation);
-            }
+        if let Some(native) = &mut persisted.event.observation
+            && let Some(batch) = native.get_mut::<NativeObservationBatch>()
+        {
+            batch.pending.clone_from(&accepted.pending_observation);
         }
         transaction.commit().map_err(|error| {
             crate::durable::sqlite::sqlite_error(&error, format!("accept/event commit: {error}"))
@@ -409,10 +409,10 @@ impl InboxStore for SqliteConversationStore {
             event,
         )?;
         refresh_pending_receipt(&transaction, &self.conversation_id, &mut accepted)?;
-        if let Some(native) = &mut persisted.event.observation {
-            if let Some(batch) = native.get_mut::<NativeObservationBatch>() {
-                batch.pending.clone_from(&accepted.pending_observation);
-            }
+        if let Some(native) = &mut persisted.event.observation
+            && let Some(batch) = native.get_mut::<NativeObservationBatch>()
+        {
+            batch.pending.clone_from(&accepted.pending_observation);
         }
         transaction.commit().map_err(|error| {
             crate::durable::sqlite::sqlite_error(

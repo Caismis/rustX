@@ -22,7 +22,7 @@ pub const DEFAULT_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Runtime/session execution policy for one admitted model request.
 ///
-/// This is deliberately not part of [`crate::model::ModelRequest`], request
+/// This is deliberately not part of `ModelRequest` (runtime crate), request
 /// snapshots, canonical history, or provider continuation state. An actual
 /// request receives a copy at admission and the request-local deadline state
 /// owns the phase transitions while that request is live.

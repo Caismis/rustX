@@ -208,7 +208,7 @@ impl GenerationFailure {
 /// This type is the **contract the guard enforces**, not the decision about
 /// what the limits should be. Resolving a policy belongs to the layer that
 /// already resolves a model invocation — see
-/// [`ResolvedModelInvocation::generation_safety_policy`](crate::model::invocation::ResolvedModelInvocation::generation_safety_policy)
+/// `ResolvedModelInvocation::generation_safety_policy` (runtime crate `model::invocation`)
 /// — so no relationship between the two bounds is embedded in the accounting
 /// code. They are independent inputs:
 ///
