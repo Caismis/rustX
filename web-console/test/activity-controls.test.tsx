@@ -418,7 +418,7 @@ it('old child completion cannot clear a fresh proof operation or restore its err
   expect(ui.queryByText('obsolete error')).toBeNull(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(true);
   await act(async () => { server.socket.success(await server.waitFor('agent/wait', 2), { type: 'agent_wait', agent_id: agent.agent_id, activation_id: 'fresh', outcome: 'cancelled' }); });
   expect(ui.getByText('cancelled')).toBeTruthy(); expect((ui.getByRole('button', { name: 'Wait for activation' }) as HTMLButtonElement).disabled).toBe(false);
-  expect(server.requests.filter(r=>r.request.method==='agent/wait')).toHaveLength(2);expect(server.requests.filter(r=>r.request.method==='session/checkpoint')).toHaveLength(3);
+  expect(server.requests.filter(r=>r.request.method==='agent/wait')).toHaveLength(2);expect(server.requests.filter(r=>r.request.method==='session/checkpoint')).toHaveLength(2);
   expect(server.claims()).toHaveLength(1); expect(server.maxClaims).toBe(1);
 });
 

@@ -190,6 +190,33 @@ describe('native App Server connection', () => {
     expect(s.client.getSnapshot().views.A.attachment).toBe('attached');
     expect(s.coldLoads.get('A')).toBe(1);
   });
+  it('reattach to a resident runtime resumes its retained observation without a cold checkpoint read', async () => {
+    const s = server(); await s.attached('A', 'B');
+    await s.update('B', snapshot('B'));
+    const before = s.client.getSnapshot().views.B;
+    expect(before.cursor).toBeDefined();
+    const checkpoints = () => s.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    const baseline = checkpoints();
+    await s.client.release('B');
+    await s.client.attach('B');
+    expect(checkpoints()).toBe(baseline);
+    const after = s.client.getSnapshot().views.B;
+    expect(after).toMatchObject({ attachment: 'attached', observationState: 'following' });
+    expect(after.snapshot).toBe(before.snapshot);
+    const subscribe = s.requests.filter(row => row.request.method === 'session/subscribe').at(-1)!;
+    expect(subscribe.request).toMatchObject({ method: 'session/subscribe', params: { after_cursor: before.cursor } });
+    await s.update('B', { ...snapshot('B'), shutting_down: true });
+    expect(s.client.getSnapshot().views.B.snapshot?.shutting_down).toBe(true);
+  });
+  it('reattach after the runtime was replaced still reads a fresh checkpoint', async () => {
+    const s = server(); await s.attached('A', 'B');
+    await s.client.release('B');
+    s.loaded.delete('B');
+    const baseline = s.requests.filter(row => row.request.method === 'session/checkpoint').length;
+    await s.client.attach('B');
+    expect(s.requests.filter(row => row.request.method === 'session/checkpoint')).toHaveLength(baseline + 1);
+    expect(s.client.getSnapshot().views.B).toMatchObject({ attachment: 'attached', observationState: 'following' });
+  });
   it('does not deliver a response continuation after its connection has been replaced', async () => {
     const s = server(); await s.connect(); s.held.add('session/settings');
     const read = s.client.request({ method: 'session/settings', params: { session_id: 'A' } }, 'settings');

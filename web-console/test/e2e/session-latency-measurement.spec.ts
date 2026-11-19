@@ -7,7 +7,8 @@ import type { ThreadStatusEntry } from '../../../protocol/app-server/v80';
 
 type HttpTiming = { path: string; start: number; end?: number };
 type Mark = { kind: 'click' | 'selected' | 'phase'; name: string; time: number };
-interface SessionLatency { marks: Mark[]; rpc: RequestTiming[]; http: HttpTiming[]; statuses: ThreadStatusTiming[] }
+type NavigationFrame = { time: number; selected: string | null; route: string | null; editorTop: number | null };
+interface SessionLatency { marks: Mark[]; rpc: RequestTiming[]; http: HttpTiming[]; statuses: ThreadStatusTiming[]; switches: { target: string; click: number; frames: NavigationFrame[] }[] }
 declare global { interface Window { __sessionLatency: SessionLatency } }
 
 /** Observe the production client using one browser performance clock. No RPC
@@ -15,7 +16,7 @@ declare global { interface Window { __sessionLatency: SessionLatency } }
  * method/identity/path/timing metadata is recorded; conversation content stays private. */
 async function observeLatency(page: Page) {
   await page.addInitScript(() => {
-    const evidence: SessionLatency = { marks: [], rpc: [], http: [], statuses: [] };
+    const evidence: SessionLatency = { marks: [], rpc: [], http: [], statuses: [], switches: [] };
     window.__sessionLatency = evidence;
     const NativeSocket = window.WebSocket;
     const lineage = new Map<string, { sessionId: string; nodeId: string }>();
@@ -131,9 +132,24 @@ async function observeLatency(page: Page) {
       const row: HttpTiming = { path, start: performance.now() }; evidence.http.push(row);
       try { return await originalFetch(...args); } finally { row.end = performance.now(); }
     };
+    let frameRequest = 0;
     document.addEventListener('click', event => {
       const button = event.target instanceof Element ? event.target.closest('button') : null;
       if (button) evidence.marks.push({ kind: 'click', name: button.getAttribute('aria-label') ?? button.textContent ?? '', time: performance.now() });
+      cancelAnimationFrame(frameRequest);
+      if (!button?.dataset.sessionId) return;
+      const entry = { target: button.dataset.sessionId, click: performance.now(), frames: [] as NavigationFrame[] };
+      evidence.switches.push(entry);
+      const sample = () => {
+        const time = performance.now();
+        const selected = document.querySelector('button[data-session-id][aria-current="page"]')?.getAttribute('data-session-id') ?? null;
+        const route = document.querySelector('#session-view')?.getAttribute('data-shell-route') ?? null;
+        const editorTop = document.querySelector('[data-composer-seat] textarea')?.getBoundingClientRect().top ?? null;
+        const last = entry.frames.at(-1);
+        if (!last || last.selected !== selected || last.route !== route || last.editorTop !== editorTop) entry.frames.push({ time, selected, route, editorTop });
+        if (time - entry.click < 5000 && (selected !== entry.target || route !== 'session')) frameRequest = requestAnimationFrame(sample);
+      };
+      sample();
     }, true);
     let selected: string | null = null;
     new MutationObserver(() => {
@@ -198,6 +214,8 @@ test('measure native Fork, warm navigation and resident reattachment', async ({ 
     const start = evidence.marks.find(row => row.kind === 'phase' && row.name === 'warm')!.time;
     const end = evidence.marks.find(row => row.kind === 'phase' && row.name === 'close-view')!.time;
     expect(evidence.rpc.filter(row => row.method === 'thread/resume' && row.start > start && row.start < end)).toHaveLength(0);
+    const reattach = evidence.marks.find(row => row.kind === 'phase' && row.name === 'reattach-resident')!.time;
+    expect(evidence.rpc.filter(row => row.method === 'session/checkpoint' && row.start > reattach)).toHaveLength(0);
     passed = true;
   } finally { await page.close(); await fixture.stop(passed); }
 });

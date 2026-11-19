@@ -240,8 +240,12 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     const attaching = view?.attachment === 'attaching';
     const waitingForCheckpoint = current && !view.snapshot && (view.observationState === 'attached' || view.observationState === 'checkpointLoading');
     const preview = attaching || waitingForCheckpoint ? view.statisticsPreview : undefined;
+    const pendingConversation = view?.target?.conversation_id ?? view?.nodeConversationId;
+    const lastReading = (attaching || waitingForCheckpoint) ? view?.checkpoint?.snapshot : undefined;
+    const retained = lastReading && lastReading.conversation_id === pendingConversation ? lastReading : undefined;
     return { preview: attaching ? preview : undefined, nodeId: view?.nodeId, generation: state.generation,
       target: current && view.snapshot ? view.target : undefined, observation: current && view.snapshot ? view.attachmentObservation : undefined,
+      reserveDock: !!(retained?.transcript.statistics || retained?.context?.occupancy),
       statistics: preview?.statistics ?? view?.snapshot?.transcript.statistics,
       occupancy: preview?.occupancy ?? (current || attaching ? view?.snapshot?.context?.occupancy : undefined) };
   }, shallowEqual);
@@ -253,7 +257,7 @@ export function ConversationTotals({ client, sessionId }: { client: AppServerCli
     owned:()=>client.getSnapshot().generation===facts.generation && client.getSnapshot().views[sessionId]?.attachment==='attaching'
       && client.getSnapshot().views[sessionId]?.statisticsPreview===facts.preview
       && client.getSnapshot().views[sessionId]?.nodeId===facts.nodeId,
-  }:undefined}><ConversationStats statistics={facts.statistics} occupancy={facts.occupancy}/></JournalSourceProvider>;
+  }:undefined}><ConversationStats statistics={facts.statistics} occupancy={facts.occupancy} reserveDock={facts.reserveDock}/></JournalSourceProvider>;
 }
 
 function ConversationSkeleton({ label, phase }: { label: string; phase?: string }) {

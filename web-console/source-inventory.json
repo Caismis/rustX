@@ -4556,7 +4556,7 @@
         "./token-format"
       ],
       "excluded_dependencies": [],
-      "local_sha256": "da337f191db5adcaf6bc6c88ef4643499af6b6fc8e1f70aa5398192f4d30068a"
+      "local_sha256": "f8663b41649a709da868f247bb62ed3671f59465719cd582eaee2578c682ee54"
     },
     {
       "upstream": "packages/client/ui-chat/src/client/chat/StatsPills.module.css",
@@ -4568,7 +4568,7 @@
       "license": "MIT — Copyright (c) 2026 DeepSeek",
       "retained_dependencies": [],
       "excluded_dependencies": [],
-      "local_sha256": "6dd1e5d5246899c81b9734ed4582a56d6ff211e836e9eadad2ea7cd703af2f3f",
+      "local_sha256": "2e0e4ee1be51f8933f52f800b067b622b57489c312d36ec6979fad1918734c1c",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-conversation/src/client/skeleton/InputBar.module.css",

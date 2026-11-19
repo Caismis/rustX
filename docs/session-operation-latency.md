@@ -1,5 +1,28 @@
 # Session operation latency investigation
 
+## Web navigation follow-up — 2026-11-19
+
+The production Web build and isolated `web_fork_feedback` fixture distinguish
+selecting an open view from reopening a closed view with a resident runtime.
+In the short-history baseline, the already-open destination was selected in
+about 20–29 ms; this did not reproduce a multi-second stall. Reopening the
+resident view did reproduce a layout jump: the textarea moved from y=876 to
+y=906 and back as the statistics row disappeared between resume and checkpoint.
+
+The browser now reuses a bounded, contiguous snapshot for a healthy released
+view only when the runtime incarnation and Conversation still match. It obtains
+a fresh attachment and subscribes from the applied cursor; a replaced runtime
+still needs a checkpoint. During that wait, the composer can reserve its
+previous statistics row without presenting old readings as current.
+
+In the final pinned Chromium run, the first sampled frame selecting the warm
+destination was 22 ms after the click. On reopening the resident view the
+destination was selected at 31 ms and its executable route appeared at 102 ms;
+the textarea stayed at y=876 and no `session/checkpoint` RPC was sent. These
+are individual local samples, not a latency guarantee for large histories or
+remote connections. PI Desktop's reference design also retains mounted panes
+and their scroll offsets; this change does not implement that separate feature.
+
 Measured on 2026-10-21, starting from `fe83a992`, on the local Linux host.
 This investigation separates native mutation, runtime preparation, browser
 navigation, and model generation. It does not change production behavior.

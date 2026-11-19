@@ -24,6 +24,10 @@
   display: none;
 }
 
+.pendingDock {
+  height: 30px;
+}
+
 .pill {
   display: inline-flex;
   align-items: center;

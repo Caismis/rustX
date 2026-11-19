@@ -111,15 +111,27 @@ export class AppServerClient {
   private resubscribe = new Set<string>();
   private observationChains = new Map<string, ObservationChain<RuntimeClientEvent>>();
   private resumeSeeds = new Map<string,{target:AttachmentTarget;snapshot:RuntimeClientSnapshot;checkpoint:import('../../../protocol/app-server/v80').RuntimeClientCheckpoint;cursor:string;bytes:number}>();
+  /** A disconnect or a retired claim can leave the native runtime resident.
+   * Keep each view's last contiguous applied observation so a later attach
+   * can resume it instead of paying a fresh cold checkpoint read; the
+   * Conversation/incarnation fence in observeAttached decides whether the
+   * retained copy is still the exact live one. */
+  private retainAppliedObservation(id: string, view: SessionView | undefined) {
+    const chain=this.observationChains.get(id);
+    if(!chain)return;
+    const {target,snapshot,checkpoint}=view??{};
+    const applied=chain.applied;
+    if(!target||!snapshot||!checkpoint||!applied||view?.cursor!==applied){if(target)this.resumeSeeds.delete(id);return;}
+    const bytes=new TextEncoder().encode(JSON.stringify(snapshot)).length;
+    if(bytes>1_048_576){this.resumeSeeds.delete(id);return;}
+    this.resumeSeeds.delete(id);
+    this.resumeSeeds.set(id,{target,snapshot,checkpoint,cursor:applied,bytes});
+    this.evictResumeSeeds();
+  }
   private retainAppliedObservations() {
-    for(const [id,chain] of this.observationChains) {
-      const view=this.state.views[id];
-      if(!view?.target||!view.snapshot||!view.checkpoint||!chain.applied||view.cursor!==chain.applied) {this.resumeSeeds.delete(id);continue;}
-      const bytes=new TextEncoder().encode(JSON.stringify(view.snapshot)).length;
-      if(bytes>1_048_576){this.resumeSeeds.delete(id);continue;}
-      this.resumeSeeds.delete(id);
-      this.resumeSeeds.set(id,{target:view.target,snapshot:view.snapshot,checkpoint:view.checkpoint,cursor:chain.applied,bytes});
-    }
+    for(const id of this.observationChains.keys())this.retainAppliedObservation(id,this.state.views[id]);
+  }
+  private evictResumeSeeds() {
     let bytes=Array.from(this.resumeSeeds.values()).reduce((sum,value)=>sum+value.bytes,0);
     while(this.resumeSeeds.size>32||bytes>16*1024*1024){const key=this.resumeSeeds.keys().next().value!;bytes-=this.resumeSeeds.get(key)!.bytes;this.resumeSeeds.delete(key);}
   }
@@ -205,7 +217,10 @@ export class AppServerClient {
     const changedNode=previous&&facts.nodeId!==undefined&&previous.facts.nodeId!==undefined&&facts.nodeId!==previous.facts.nodeId;
     const opening = facts.attachment === 'attaching' && previous?.epoch !== context.epoch;
     const revoked = !!previous?.facts.attachmentObservation && facts.attachmentObservation !== previous.facts.attachmentObservation;
-    if (revoked) this.retireObservationWork(id);
+    if (revoked) {
+      if (facts.attachmentIntent === 'released' && !facts.deleting && view.target && this.observationChains.get(id)?.phase === 'following' && !this.refreshes.has(id)) this.retainAppliedObservation(id, view);
+      this.retireObservationWork(id);
+    }
     const retiredClaim = !!previous?.facts.target && !facts.target;
     const attached = context.attachmentResult && context.attachmentResult !== previous?.attachmentResult && facts.attachmentObservation;
     const result = context.attachmentResult;
@@ -229,6 +244,7 @@ export class AppServerClient {
         turnOutline: undefined, turnNavigation: undefined } : {}),
     };
     if (context.deleted) {
+      this.resumeSeeds.delete(id);
       this.retireAttachmentWork(id);
       const views = { ...this.state.views }; delete views[id];
       this.publish({ views, sessions: this.state.sessions.filter(row => row.id !== id) });
@@ -241,6 +257,7 @@ export class AppServerClient {
     if (previous?.epoch !== context.epoch) this.catalog.epochChanged(id);
     if (retiredClaim || facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) this.retireAttachmentWork(id);
     if (facts.deletionCommitted && facts.deletionCommitted !== previous?.facts.deletionCommitted) {
+      this.resumeSeeds.delete(id);
       this.publish({ sessions: this.state.sessions.filter(row => row.id !== id) });
       this.deletionListeners.forEach(listener => listener(id));
       this.setSession(id, { snapshot: undefined });

@@ -146,9 +146,9 @@ function ContextMeter({ occupancy }: { occupancy: RuntimeClientContextOccupancy 
 }
 
 /** The composer dock: native whole-conversation totals and current context reading. */
-export function ConversationStats({ statistics, occupancy }: { statistics?: ConversationStatistics | null; occupancy?: RuntimeClientContextOccupancy | null }) {
+export function ConversationStats({ statistics, occupancy, reserveDock }: { statistics?: ConversationStatistics | null; occupancy?: RuntimeClientContextOccupancy | null; reserveDock?: boolean }) {
   const tx = useTranslation();
-  if (!statistics && !occupancy) return null;
+  if (!statistics && !occupancy) return reserveDock ? <div className={css.pendingDock} aria-hidden="true" data-composer-dock=""/> : null;
   return <div className={css.dock} aria-label={tx('agent:usage.session-title')} data-composer-dock="">
     {statistics && <ActivityPill statistics={statistics}/>}
     {statistics && <UsagePill statistics={statistics}/>}
