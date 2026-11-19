@@ -122,3 +122,43 @@ impl Serialize for SemanticView<'_> {
         object.end()
     }
 }
+
+/// Providers do not expose identical token metrics; this is the stable
+/// common core. Provider SDK usage objects never appear here.
+/// Missing provider metrics remain absent; a reported zero is `Some(0)`.
+/// These are native u64 quantities, not byte offsets. Observation transports
+/// use the existing exact decimal codec without narrowing provider evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ModelUsage {
+    /// Input tokens consumed by the request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    /// Output tokens produced by the response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    /// Total tokens, where the provider reports or can derive them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+    /// Optional normalized usage details.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<UsageDetails>,
+}
+
+impl ModelUsage {
+    /// Whether all normalized core metrics were observed or exactly derived.
+    #[must_use]
+    pub const fn is_complete(&self) -> bool {
+        self.input_tokens.is_some() && self.output_tokens.is_some() && self.total_tokens.is_some()
+    }
+}
+
+/// Optional normalized token details where providers expose them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct UsageDetails {
+    /// Tokens consumed by reasoning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_tokens: Option<u64>,
+    /// Input tokens served from cache.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cached_input_tokens: Option<u64>,
+}
