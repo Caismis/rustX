@@ -16,7 +16,7 @@ interface Seeded { fixture: Awaited<ReturnType<typeof startDogfood>>; a: string;
 // The browser budget stays at the repository's 120 seconds.
 const test = base.extend<{ seeded: Seeded }>({
   seeded: [async ({}, use) => {
-    const fixture = await startDogfood('web_reading_surface');
+    const fixture = await startDogfood('web_reading_surface', undefined, { imageMcp: true, handshakeSeconds: 1 });
     try {
       const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
       const ids: string[] = [];
@@ -35,6 +35,7 @@ const test = base.extend<{ seeded: Seeded }>({
         await remote.client.call('session/detach', { target: attached.target }, 'detached');
       }
       await remote.shutdown();
+      await fixture.restartApp(); // Cold native runtime as well as a cold browser attachment.
       await use({ fixture, a: ids[0], b: ids[1] });
     } finally { await fixture.stop(false); }
   }, { timeout: PREPARATION_MS }],
@@ -119,6 +120,7 @@ test('warm A-B-A session switching preserves detached reading position', async (
 
   // Cold open of A: seed the warm view, then detach at a mid-history position.
   await page.locator(`button[data-session-id="${a}"]`).click();
+  await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
   const aOpen = await waitBottom(page, 'Native reading answer 71');
   report.aFirstOpen = { settledTop: aOpen.settled.top, floor: aOpen.settled.floor, marker: aOpen.settled.marker, samples: aOpen.series.length };
   await viewport.evaluate(el => { el.scrollTop = Math.floor(el.scrollHeight * 0.35); el.dispatchEvent(new Event('scroll')); });
@@ -127,9 +129,34 @@ test('warm A-B-A session switching preserves detached reading position', async (
   report.aSaved = await sample(page, 'Native reading answer 71');
 
   // First B open (cold -> warm), detach at a different depth.
+  // Observe every rendered frame across cold history -> live checkpoint.
+  await page.evaluate(() => {
+    const frames: { y: number; gap: number }[] = [];
+    (window as any).__coldFrames = frames;
+    const record = () => {
+      if ((window as any).__coldFrames !== frames) return;
+      const port = document.querySelector<HTMLElement>('[data-conversation-scroll]');
+      const answer = [...port?.querySelectorAll<HTMLElement>('[data-chat-anchor-key]') ?? []]
+        .find(row => row.textContent?.includes('Native reading answer 143'));
+      if (answer && port) frames.push({ y: answer.getBoundingClientRect().y, gap: port.scrollHeight - port.clientHeight - port.scrollTop });
+      requestAnimationFrame(record);
+    };
+    requestAnimationFrame(record);
+  });
   await page.locator(`button[data-session-id="${b}"]`).click();
   const bOpen = await waitBottom(page, 'Native reading answer 143');
   report.bFirstOpen = { settledTop: bOpen.settled.top, floor: bOpen.settled.floor, marker: bOpen.settled.marker, samples: bOpen.series.length };
+  await expect(page.locator('#session-view')).toHaveAttribute('data-shell-route', 'session');
+  const frames = await page.evaluate(() => {
+    const frames = (window as any).__coldFrames as { y: number; gap: number }[];
+    delete (window as any).__coldFrames;
+    return frames;
+  });
+  report.coldHandoff = frames;
+  expect(frames.length).toBeGreaterThan(0);
+  expect(Math.max(...frames.map(f => Math.abs(f.gap))), 'cold transcript stays at the tail on every frame').toBeLessThan(3);
+  const positions = frames.map(f => f.y);
+  expect(Math.max(...positions) - Math.min(...positions), 'latest reply stays in place during handoff').toBeLessThan(3);
   await viewport.evaluate(el => { el.scrollTop = Math.floor(el.scrollHeight * 0.6); el.dispatchEvent(new Event('scroll')); });
   await expect(page.getByRole('button', { name: 'Return to latest', exact: true })).toBeVisible({ timeout: 10_000 });
   await page.waitForTimeout(100);

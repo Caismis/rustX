@@ -462,6 +462,8 @@ export function AppSurface({ client, workspaceHost, workspaceAuthority, connecti
       <ConversationQuestionPanels client={client} sessionId={view?.id}>
       <ArtifactContext.Provider value={artifacts}><SubagentSurface mode={conversationMode}><div className={agentCss.scrollBody} data-conversation-scroll>
       <ConversationLive previewCurrent={previewCurrent} onMode={setConversationMode} client={client} sessionId={activeSessionId} mode={conversationMode} retry={routeState.context.retry} forking={forkingResponse} historicalPending={routeState.matches('preparing')} disabled={commandOpen} onHistorical={transitionResponse}
+        versionDestination={destination?.kind === 'node' && destination.sessionId === activeSessionId
+          ? destination.conversationId : undefined}
         messageVersionFocus={messageVersionFocus}
         onRetryMessage={(locator, replacementText) => {
           const view = commandable();

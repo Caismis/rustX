@@ -266,7 +266,8 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
     scroller.addEventListener('beforeinput', this.onComposerBeforeInput, true);
     scroller.addEventListener('input', this.onComposerInput);
     if (scroller !== this.viewport.current) this.setState({ chromeHost: scroller.parentElement! });
-    this.markLayoutDirty();
+    if (scroller.clientHeight) this.commitLayout();
+    else this.markLayoutDirty();
     if (typeof ResizeObserver !== 'undefined') {
       // Resize delivery is already after layout and before paint. Queuing a
       // frame here would first paint a newly selected chat at the old offset.
@@ -297,7 +298,7 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       this.following = true; this.reading = undefined;
       this.writtenTop = this.scroller()?.scrollTop ?? 0;
       if (this.state.detached) this.setState({ detached: false });
-      this.markLayoutDirty(); return;
+      this.commitLayout(); return;
     }
     // Preserve movement that occurred before React touched the DOM, even if
     // its scroll event has not arrived. DOM replacement can then clamp the
@@ -310,7 +311,12 @@ export class ChatViewport extends Component<ViewportProps, { detached: boolean; 
       this.following = false;
       if (!this.state.detached) this.setState({ detached: true });
     }
-    if (_previous !== this.props) this.markLayoutDirty();
+    if (_previous !== this.props) {
+      // A cold preview and its live history can have very different heights.
+      // Position the newly committed rows before this frame can be painted.
+      if (_previous.initialHistoryLoading || this.props.initialHistoryLoading || !before.first && rows.length) this.commitLayout();
+      else this.markLayoutDirty();
+    }
   }
   componentWillUnmount() {
     const key = this.props.memoryKey;

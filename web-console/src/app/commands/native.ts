@@ -118,18 +118,25 @@ export class CommandSession {
     if (action !== 'fork' && !lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error(`Branch ${session.active_node} committed, but the source now has unresolved inbound or accepted work. Open it from Session tree after execution settles; do not repeat the branch.`);
     // The manager permits one resident Conversation per Session. Switch only after
     // the branch exists. A lost branch-switch/attach response also stops this sequence.
-    if (action !== 'fork') await this.client.switchNode(this.sessionId, session.active_node, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
     const continuing = () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation;
-    if (!continuing()) return;
-    await new Promise<void>((resolve, reject) => {
-      void this.client.attach(session.id, session.active_node, continuing, () => resolve()).then(resolve, reject);
-    });
+    const attach = async () => {
+      if (action !== 'fork') await this.client.switchNode(this.sessionId, session.active_node, continuing);
+      if (continuing()) await this.attachForCommand(session.id, session.active_node, continuing);
+    };
+    // The immutable editor locator belongs to the durable branch result.
+    // Read its blocks while the successor establishes its execution claim.
+    const [attachment, editor] = await Promise.allSettled([
+      attach(),
+      result.editor ? readEditor(result.editor,
+        async (block_index, offset) => (await this.client.request({ method: 'session/editorRead', params: { locator: result.editor!, block_index, offset, max_bytes: 65_536 } }, 'editor_page', undefined, continuing)).page,
+        continuing) : Promise.resolve([]),
+    ]);
+    if (attachment.status === 'rejected') throw attachment.reason;
+    if (editor.status === 'rejected') throw editor.reason;
+    const editorContent = editor.value;
     if (!continuing()) return;
     const target = this.client.target(session.id);
     if (target.conversation_id !== session.active_conversation_id) throw new Error('Transition attached a different Conversation; execution refused.');
-    const editorContent = result.editor ? await readEditor(result.editor,
-      async (block_index, offset) => (await this.client.request({ method: 'session/editorRead', params: { locator: result.editor!, block_index, offset, max_bytes: 65_536 } }, 'editor_page', undefined, continuing)).page,
-      continuing) : [];
     let replay: { target: AttachmentTarget; messageId: string } | undefined;
     if (action === 'retry') {
       if (!editorContent.length) throw new Error('Branch has no native editor input; execution refused.');
@@ -182,13 +189,19 @@ export class CommandSession {
     if (attached) this.client.assertAttachmentNode(this.target, attached.id);
     return result;
   }
+  private attachForCommand(sessionId: string, node: string, current: () => boolean) {
+    // Supplementary model/catalog reads may finish after the claim is usable.
+    return new Promise<void>((resolve, reject) => {
+      void this.client.attach(sessionId, node, current, () => resolve()).then(resolve, reject);
+    });
+  }
   async openNode(nodeId: string, conversationId: string) {
     this.requireCurrent();
     if (conversationId !== this.target.conversation_id) {
       if (!lineageSwitchSafe(this.client.getSnapshot().views[this.sessionId])) throw new Error('Wait for unresolved requests, accepted inbound and the current attempt to settle before switching lineage.');
       await this.client.switchNode(this.sessionId, nodeId, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
       if (!this.navigationCurrent() || this.client.getSnapshot().generation !== this.generation) return;
-      await this.client.attach(this.sessionId, nodeId, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
+      await this.attachForCommand(this.sessionId, nodeId, () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation);
     }
     if (!this.navigationCurrent() || this.client.getSnapshot().generation !== this.generation) return;
     if (this.client.target(this.sessionId).conversation_id !== conversationId) throw new Error('Different Conversation attached; inspect native state.');

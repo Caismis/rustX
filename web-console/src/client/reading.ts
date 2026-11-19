@@ -1,5 +1,6 @@
-import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptRepairs, repairTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
+import { HISTORY_PAGE_SIZE, TURN_PAGE_SIZE, sameReadCut, extendTranscriptWindow, installTranscriptWindow, refreshTranscript, replaceTranscript, transcriptPresentation, transcriptRepairs, repairTranscript, turnKey, turnPageCount, type TurnSelection } from './transcript';
 import { transcriptWindowReady } from './history-policy';
+import { isPlainMessageKind } from '../../../protocol/app-server/message-kind';
 import type { ConversationWindowAt, ObservedTurn, ObservedTurnPage, RuntimeClientTranscriptEntry } from '../../../protocol/app-server/v80';
 import type { SessionLifecycles } from './session-lifecycle/system';
 import type { ClientView, ConnectionRequest, OutlinePagingIntent, SessionView } from './contracts';
@@ -204,7 +205,18 @@ export class ReadingNavigation {
     if (!view?.history || !observation || !userCurrent()) return false;
     const authority = this.readingAuthority(id), intent = this.invalidateReading(id), target = observation.target;
     const current = () => observation.current() && authority() && this.readingIntents.get(id) === intent && userCurrent();
-    const anchored = () => this.port.state().views[id]?.history?.page.entries?.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId);
+    // The rendered presentation already anchors every transcript row, including
+    // the live tail beside a frozen window, and canonical message heads.
+    const anchored = () => {
+      const latest = this.port.state().views[id];
+      if (!latest?.history) return false;
+      const snapshot = latest.snapshot;
+      if (snapshot?.inbound?.pending?.some(row => row.message.id === messageId)) return false;
+      const entries = transcriptPresentation(latest.history, snapshot?.transcript ?? { entries: [] });
+      if (entries.some(entry => entry.item.type === 'message' && entry.item.message.id === messageId)) return true;
+      return !latest.history.window && !!snapshot?.messages.some(message => message.id === messageId
+        && message.role !== 'tool' && (message.role !== 'user' || isPlainMessageKind(message.kind)));
+    };
     if (anchored()) return current();
     this.port.setSession(id, { turnNavigation: { intent, pending: `message:${messageId}` } });
     try {

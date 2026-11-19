@@ -1,4 +1,4 @@
-import { useInheritedTurns, type TurnSource } from './useInheritedTurns';
+import type { useInheritedTurns } from './useInheritedTurns';
 import {traceAttemptKey,traceStepKey} from '../../../../protocol/app-server/trace-identity';
 import { useTraceContexts } from './useTraceContexts';
 import { useTranslation } from '../../locale/react';
@@ -41,7 +41,7 @@ function defaultToolRequestWidth(splitWidth: number): number {
 
 export interface TrajectoryProps {
   cache: TraceCache;
-  turnSource?: TurnSource;
+  inherited?: Pick<ReturnType<typeof useInheritedTurns>, 'turns' | 'more'>;
   messageHistory?: TrajectoryRowActions['messageHistory'];
   onLatest?: () => void;
   loadEarlier: (gapBefore?: string) => void;
@@ -50,7 +50,7 @@ export interface TrajectoryProps {
 }
 
 /** Native owner selection stays in the read cache; display/facet lives locally. */
-export function Trajectory({ cache, turnSource, messageHistory, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
+export function Trajectory({ cache, inherited = { turns: undefined, more: undefined }, messageHistory, loadEarlier, onSelect, onLoadDetail, onLatest }: TrajectoryProps) {
   const tx = useTranslation();
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<TrajectoryTimelineMode>('sequence');
@@ -73,7 +73,6 @@ export function Trajectory({ cache, turnSource, messageHistory, loadEarlier, onS
   const [pendingFocus, setPendingFocus] = useState<string | undefined>(() => selection?.display_key);
   const context = useTraceContexts(cache, selection?.owner_record_id);
   const records = context.records;
-  const inherited = useInheritedTurns(turnSource);
   const projection = useMemo(() => projectTrajectory(tx, records, inherited.turns?.length), [tx, records, inherited.turns]);
   const allItems = useMemo(() => trajectoryItems(tx, projection, cache.page.next_cursor), [tx, projection, cache.page.next_cursor]);
   const matches = useMemo(() => searchItems(projection, query), [projection, query]);

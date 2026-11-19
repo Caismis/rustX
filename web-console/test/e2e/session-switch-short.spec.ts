@@ -18,7 +18,7 @@ interface Seeded { fixture: Awaited<ReturnType<typeof startDogfood>>; a: string;
 
 const test = base.extend<{ seeded: Seeded }>({
   seeded: [async ({}, use) => {
-    const fixture = await startDogfood('web_composer_identity');
+    const fixture = await startDogfood('web_composer_identity', undefined, { imageMcp: true, handshakeSeconds: 1 });
     let passed = false;
     try {
       const remote = await AppServerHost.connectRemote({ endpoint: fixture.endpoint, token: fixture.token });
@@ -37,6 +37,7 @@ const test = base.extend<{ seeded: Seeded }>({
         await remote.client.call('session/detach', { target: attached.target }, 'detached');
       }
       await remote.shutdown();
+      await fixture.restartApp(); // Cold native runtime as well as a cold browser attachment.
       await use({ fixture, a: ids[0], b: ids[1], pass: () => { passed = true; } });
     } finally { await fixture.stop(passed); }
   }, { timeout: 60_000 }],
@@ -58,7 +59,7 @@ async function installSampler(page: Page) {
       if (button) diag.clickT = event.timeStamp || performance.now();
     }, true);
     const scrollKey = (f: any) => (f.scroll ? f.scroll.join(',') : '');
-    const allKey = (f: any) => (f.scroll ? scrollKey(f) + '|' + (f.composer ? f.composer.slice(0, 4).join(',') : 'none') : '');
+    const allKey = (f: any) => (f.scroll ? f.replyY + '|' + scrollKey(f) + '|' + (f.composer ? f.composer.slice(0, 4).join(',') : 'none') : '');
     const bodyOk = (f: any) => !!(f.reply && f.prompt && !f.other);
     const enabled = (f: any) => !!(f.composer && f.composer[9] === false && f.composer[10] === false);
     const loop = () => {
@@ -73,6 +74,8 @@ async function installSampler(page: Page) {
         const cfg = diag.cfg || {};
         f.reply = !!cfg.reply && rowText.includes(cfg.reply);
         f.prompt = !!cfg.prompt && rowText.includes(cfg.prompt);
+        const replyRow = rows.find(el => cfg.reply && el.textContent?.includes(cfg.reply));
+        f.replyY = replyRow?.getBoundingClientRect().top;
         f.other = (!!cfg.otherReply && rowText.includes(cfg.otherReply)) || (!!cfg.otherPrompt && rowText.includes(cfg.otherPrompt));
         f.skeleton = Array.from(port.querySelectorAll<HTMLElement>('[class*="skeleton"]')).some(el => { const b = el.getBoundingClientRect(); return b.width > 0 && b.height > 0; });
         f.blank = rows.length === 0 && !f.skeleton;
@@ -85,6 +88,7 @@ async function installSampler(page: Page) {
       }
       f.selected = document.querySelector('button[data-session-id][aria-current="page"]')?.getAttribute('data-session-id') ?? null;
       f.title = document.title;
+      f.live = document.querySelector('#session-view')?.getAttribute('data-shell-route') === 'session';
       diag.frames.push(f);
       requestAnimationFrame(loop);
     };
@@ -99,13 +103,14 @@ async function installSampler(page: Page) {
         const s = ok ? scrollKey(f) : '', a = ok ? allKey(f) : '';
         streak = (s && s === prevS && a === prevA) ? streak + 1 : (ok ? 1 : 0);
         prevS = s; prevA = a;
-        if (streak >= 5) return { n, done: true, settledAt: f.t };
+        if (streak >= 5 && enabled(f) && f.live) return { n, done: true, settledAt: f.t };
       }
       return { n, done: false, lastT };
     };
     w.__diagCollect = (name: string) => {
       const cfg = diag.legCfgs[name] || {};
       const frames = diag.frames.filter((f: any) => f.leg === name && diag.clickT && f.t >= diag.clickT);
+      const replyY = frames.filter(bodyOk).map((f: any) => f.replyY as number);
       let firstBodyT = -1, firstActionT = -1, stableScroll: any = null, stableAll: any = null, selectedT = -1;
       let blank = 0, stale = 0, skeleton = 0, maxGap = 0, prevT = 0;
       let s1 = 0, k1 = '', s2 = 0, k2 = '';
@@ -133,7 +138,7 @@ async function installSampler(page: Page) {
         firstBodyT: firstBodyT > 0 ? firstBodyT : null,
         firstActionT: firstActionT > 0 ? firstActionT : null,
         stableScroll, stableAll, selectedT: selectedT > 0 ? selectedT : null,
-        counts: { frames: frames.length, blank, stale, skeleton, maxGapMs: +maxGap.toFixed(1) },
+        counts: { bodyShiftPx: replyY.length ? Math.max(...replyY) - Math.min(...replyY) : null, frames: frames.length, blank, stale, skeleton, maxGapMs: +maxGap.toFixed(1) },
         editor: { incarnations: [...incarnations], revisions: [...revisions], selections: [...selections].slice(0, 10) },
         span: frames.length ? { first: frames[0].t, last: frames[frames.length - 1].t } : null,
         frames,
@@ -177,6 +182,7 @@ async function runLeg(page: Page, wire: Awaited<ReturnType<typeof wireProbe>>, s
     ...spec, clickError, settled: done, waitedMs: +waitedMs.toFixed(1),
     clickToFirstBodyMs: rel(collected.firstBodyT),
     clickToActionableMs: rel(collected.firstActionT),
+    clickToLiveMs: rel(collected.frames.find((f: any) => f.live && f.selected === spec.sessionId && f.reply)?.t),
     clickToStableScrollMs: collected.stableScroll ? rel(collected.stableScroll.end) : null,
     clickToStableGeometryMs: collected.stableAll ? rel(collected.stableAll.end) : null,
     clickToSidebarSelectedMs: rel(collected.selectedT),
@@ -236,13 +242,18 @@ test('short A-B-A session switching frame diagnostics', async ({ page, seeded })
   };
   await test.info().attach('session-switch-short-report', { body: JSON.stringify(report, null, 2), contentType: 'application/json' });
   for (const leg of results) {
-    console.log(`[leg] ${leg.name} settled=${leg.settled} waited=${leg.waitedMs}ms body=${leg.clickToFirstBodyMs}ms action=${leg.clickToActionableMs}ms stableScroll=${leg.clickToStableScrollMs}ms stableGeom=${leg.clickToStableGeometryMs}ms sidebar=${leg.clickToSidebarSelectedMs}ms counts=${JSON.stringify(leg.counts)} rpcs=${leg.rpcs.requests.map(r => r.method).join(',')}${leg.clickError ? ` ERROR=${leg.clickError}` : ''}`);
+    console.log(`[leg] ${leg.name} settled=${leg.settled} waited=${leg.waitedMs}ms body=${leg.clickToFirstBodyMs}ms live=${leg.clickToLiveMs}ms action=${leg.clickToActionableMs}ms stableScroll=${leg.clickToStableScrollMs}ms stableGeom=${leg.clickToStableGeometryMs}ms sidebar=${leg.clickToSidebarSelectedMs}ms counts=${JSON.stringify(leg.counts)} rpcs=${leg.rpcs.requests.map(r => r.method).join(',')}${leg.clickError ? ` ERROR=${leg.clickError}` : ''}`);
   }
   if (errors.length) console.log(`[pageerrors] ${errors.join(' | ')}`);
   expect(errors).toEqual([]);
   for (const leg of results) {
     expect(leg.settled, leg.name).toBe(true);
     expect(leg.clickToStableGeometryMs, leg.name).not.toBeNull();
+    if (leg.name.startsWith('p1-') && leg.name.endsWith('-first')) {
+      expect(leg.clickToLiveMs, leg.name).not.toBeNull();
+      expect(leg.clickToFirstBodyMs!, 'history visible during the delayed MCP handshake').toBeLessThan(leg.clickToLiveMs!);
+    }
+    expect(leg.counts.bodyShiftPx, leg.name).toBeLessThan(3);
     if (leg.name.includes('warm')) {
       expect(leg.counts.blank, leg.name).toBe(0);
       expect(leg.counts.skeleton, leg.name).toBe(0);

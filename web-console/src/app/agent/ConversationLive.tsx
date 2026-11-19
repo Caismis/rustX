@@ -20,6 +20,7 @@ import { QueueDock } from '../composer/QueueDock';
 import { activeAttempt, lineageSwitchSafe } from '../../bindings/projection';
 import { todoDock, goalDock, queueRows } from '../../bindings/composer-context';
 import { ChatViewport } from '../../presentation/layout/ChatViewport';
+import { useInheritedTurns } from '../trajectory/useInheritedTurns';
 import { Trajectory } from '../trajectory/Trajectory';
 import { SessionPanel } from './SessionPanel';
 import type { ResponseAction } from '../commands/native';
@@ -37,12 +38,13 @@ import { transcriptContent, transcriptPresentation, turnAnchor } from '../../cli
 import { firstSubmissions } from '../new-conversation/first-submit';
 import { ConversationRunCanvasHost } from '../workflows/run-canvas/ConversationRunCanvasHost';
 
-export function ConversationLive({ client, sessionId, mode, disabled, historicalPending, retry, forking, onHistorical, previewCurrent, onMode, messageVersionFocus, onRetryMessage, onSwitchMessageVersion }: {
+export function ConversationLive({ client, sessionId, mode, disabled, historicalPending, retry, forking, onHistorical, previewCurrent, onMode, versionDestination, messageVersionFocus, onRetryMessage, onSwitchMessageVersion }: {
   client: AppServerClient; sessionId?: string; mode: 'chat' | 'trajectory'; disabled: boolean; historicalPending?: boolean; forking?: CompletedResponseView;
   onMode?: (mode: 'chat' | 'trajectory') => void;
   retry?: ResponseRetry;
   onHistorical: (id: ResponseAction, response: CompletedResponseView) => void;
   previewCurrent?: () => boolean;
+  versionDestination?: string;
   messageVersionFocus?: { conversationId: string; messageId?: string };
   onRetryMessage?: (locator: CanonicalContentLocator, replacementText?: string) => void;
   onSwitchMessageVersion?: (version: SessionMessageVersion) => void;
@@ -175,6 +177,39 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
       {contentNode}
     </ConversationRunCanvasHost>
   );
+  const inherited = useInheritedTurns(mode === 'trajectory' && view?.hasBranches && view.readable && !view.retrying && !view.readingPreview
+    ? { client, session: view.id, conversation: view.conversation_id } : undefined);
+  const currentLedger = mode === 'trajectory' && view?.trace ? <Trajectory key={view.conversation_id} cache={view.trace} inherited={inherited} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}
+        messageHistory={switchVersion && !view.readingPreview && !view.retrying ? { versions, switchVersion, disabled: view.disabled || !view.safe || historicalPending } : undefined}/> : undefined;
+  const owner = JSON.stringify([sessionId, mode, readingOwner.endpoint, readingOwner.authority, readingOwner.authorityRevision, client.getSnapshot().generation]);
+  type VersionFrame = { conversation: string; body: ReactNode };
+  const released = useRef<(VersionFrame & { owner: string; alternate?: VersionFrame; destination?: string })>(undefined);
+  const last = released.current;
+  const sameReader = last && last.owner === owner && readingOwner.connected;
+  if (!sameReader) released.current = undefined;
+  const destination = versionDestination ?? (sameReader && messageVersionFocus?.conversationId === last.destination ? last.destination : undefined);
+  const liveBody = view?.readable && !view.retrying && !view.readingPreview
+    && (mode === 'chat' || !!view.trace && inherited.ready);
+  if (destination && sameReader && sessionId && !client.getSnapshot().views[sessionId]?.error && !view?.trace?.error
+    && (!liveBody || view.conversation_id !== destination)) {
+    // Keep the last committed version readable until its successor has rows.
+    // The inert subtree has no input or focus authority during the handoff.
+    last.destination = destination;
+    const frame = last.alternate?.conversation === destination ? last.alternate : last;
+    return wrapCanvas(<div inert style={{ display: 'contents' }}>{frame.body}</div>);
+  }
+  const present = (body: ReactNode) => {
+    // Switching tabs mid-handoff may reveal the old version after its claim
+    // was released. Its rows can still bridge the rest of this transition.
+    const provisional = !sameReader && view && destination && view.conversation_id !== destination;
+    if (view && (liveBody || provisional)) {
+      const alternate = sameReader && last.conversation !== view.conversation_id
+        ? { conversation: last.conversation, body: last.body } : released.current?.alternate;
+      released.current = { owner, conversation: view.conversation_id, body, alternate, destination: provisional ? destination : undefined };
+    }
+    return wrapCanvas(<div inert={!!provisional} style={{ display: 'contents' }}>{body}</div>);
+  };
+  if (currentLedger) return present(currentLedger);
   if (sessionId && tracePreview) return wrapCanvas(<Trajectory key={sessionId} cache={tracePreview.cache} onSelect={id => client.selectTrace(sessionId, id)} onLoadDetail={id => { if (readingOwner.connected) void client.loadTraceDetail(sessionId, id); }} loadEarlier={() => void client.loadEarlierTrace(sessionId).catch(() => {})}/>);
   if (sessionId && mode === 'trajectory' && readingOwner.coldReadable && !view?.trace) return <ChatViewport latestLabel={tx('agent:agent-transcript.return-to-latest')}>
     {readingOwner.loading && !waiting && <div className={pendingCss.navigationProgress} role="status" aria-label={tx('common:activity.loading')}/>}
@@ -183,10 +218,7 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
     {readingOwner.loading && !waiting && <div className={pendingCss.navigationProgress} role="status" aria-label={tx('common:activity.loading')}/>}
     <PendingMessage client={client} sessionId={sessionId}/>
   </ChatViewport> : null;
-  return wrapCanvas(mode === 'trajectory' && view.trace
-    ? <Trajectory key={`${view.id}:${view.target?.attachment_id}`} cache={view.trace} turnSource={view.hasBranches && view.readable && !view.retrying && !view.readingPreview ? { client, session: view.id, conversation: view.conversation_id } : undefined} onLatest={() => void client.returnToLatestTrace(view.id).then(() => client.loadInitialTrace(view.id))} onSelect={id => client.selectTrace(view.id, id)} onLoadDetail={id => { void client.loadTraceDetail(view.id, id); }} loadEarlier={before => void client.loadEarlierTrace(view.id, before).catch(() => {})}
-        messageHistory={switchVersion && !view.readingPreview && !view.retrying ? { versions, switchVersion, disabled: view.disabled || !view.safe || historicalPending } : undefined}/>
-    : <JournalSourceProvider presentationOwner={presentationOwner} historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={readingPending ? undefined : view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} memoryKey={scrollMemoryKey} latestLabel={tx('agent:agent-transcript.return-to-latest')}
+  return present(<JournalSourceProvider presentationOwner={presentationOwner} historical={view.readingPreview || !!view.history?.window} content={content} messages={view.messages} transcript={view.transcript} history={view.history?.page} source={readingPending ? undefined : view.readingPreview&&view.history?.page.source_cut?{client,sessionId:view.id,nodeId:view.nodeId,historyCut:view.history.page.source_cut,cut:()=>undefined,owned:ownsHistory}:view.target ? {client,target:view.target,cut:()=>client.getSnapshot().views[view.id]?.checkpoint?.read_cut,owned:ownsContent} : undefined}><ToolInspectionContext value={inspect}><ChatViewport chromeVisible={!scope?.selected} ref={viewport} key={view.id} resetKey={readingScope} memoryKey={scrollMemoryKey} latestLabel={tx('agent:agent-transcript.return-to-latest')}
       overlay={<>{!readingPending && <TurnNavigator key={`rail:${view.id}:${view.target?.attachment_id}`} previewCurrent={previewCurrent} client={client} sessionId={view.id} active={active} onNavigate={turn=>{
         let clientIntent: number | undefined;
         const clientCurrent = () => {

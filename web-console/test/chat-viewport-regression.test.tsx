@@ -202,3 +202,22 @@ it('parks a pending restore at the tail until the reading window is representabl
   expect(pending.port.scrollTop).toBe(900);
   expect(pending.view.getByRole('button', { name: 'Latest' })).toBeTruthy();
 });
+it('positions the arriving cold transcript synchronously instead of painting the inherited offset', () => {
+  const metrics = { height: 200 };
+  const tree = (loading: boolean) => <div data-testid="port" data-conversation-scroll>
+    <ChatViewport initialHistoryLoading={loading} latestLabel="Latest">
+      {loading ? <div>Loading</div> : <div data-chat-anchor-key="message:m1">History</div>}
+    </ChatViewport>
+  </div>;
+  const view = render(tree(true));
+  const port = view.getByTestId('port');
+  Object.defineProperties(port, { scrollHeight: { get: () => metrics.height }, clientHeight: { get: () => 100 } });
+  paint();
+  expect(port.scrollTop).toBe(100);
+  metrics.height = 9000;
+  view.rerender(tree(false));
+  // The finished transcript must be positioned before this commit can paint;
+  // a queued frame would first show the loading state's inherited offset.
+  expect(port.scrollTop).toBe(8900);
+  expect(frames.size).toBe(0);
+});

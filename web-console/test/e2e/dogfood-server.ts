@@ -88,7 +88,7 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
   process?: (process: { role: 'native' | 'provider_launcher'; pid: number }) => void;
   /** Runs after both original subprocesses exit, before fixture deletion. */
   afterExit?: () => void | Promise<void>;
-}) {
+}, options: { imageMcp?: boolean; handshakeSeconds?: number } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'rustx-web-console-'));
   const settings = join(directory, 'rustx.toml');
   const workspaceA = join(directory, 'A'), workspaceB = join(directory, 'B');
@@ -110,12 +110,13 @@ export async function startDogfood(scenario = 'web_console_dogfood', measurement
     const profiles = scenario === 'tui_multi_session' ? '\ndefault_profile = "high"\n[models."fixture/integration-model".profiles.high]\nrequest_params = \'{"reasoning_effort":"high"}\'\n[models."fixture/integration-model".profiles.low]\nmax_output_tokens = 1024\n' : '';
     const catalog = `[providers.fixture]\nprotocol = "openai_chat_completions"\nbase_url = "${providerUrl}/v1"\napi_key = "$RUSTX_CONSOLE_FIXTURE_KEY"\n` +
       [primaryModel, 'second-model'].map(id => `\n[models."fixture/${id}"]\nprovider = "fixture"\nid = "${id}"\ncontext_window = 128000\nmax_output_tokens = 4096\ncapabilities = { input_modalities = ["text"], output_modalities = ["text"] }\ncompat = { chat_reasoning_replay = "omit" }\n${id === primaryModel ? profiles : ''}`).join('');
-    if (['web_chat_history', 'web_child_capabilities'].includes(scenario)) {
+    const imageMcp = options.imageMcp || ['web_chat_history', 'web_child_capabilities'].includes(scenario);
+    if (imageMcp) {
       const agents = join(fixtureHome, 'rustx/.agents');
       mkdirSync(agents, { recursive: true });
-      writeFileSync(join(agents, 'mcp.toml'), `[mcp_servers.image_fixture]\ntype = "stdio"\ncommand = "python3"\nargs = [${JSON.stringify(resolve(root, 'web-console/test/e2e/image-mcp.py'))}]\n`);
+      writeFileSync(join(agents, 'mcp.toml'), `[mcp_servers.image_fixture]\ntype = "stdio"\ncommand = "python3"\nargs = [${[resolve(root, 'web-console/test/e2e/image-mcp.py'), String(options.handshakeSeconds ?? 0)].map(arg => JSON.stringify(arg)).join(', ')}]\n`);
     }
-    const imageSource = ['web_chat_history', 'web_child_capabilities'].includes(scenario) ? `
+    const imageSource = imageMcp ? `
 [agent.tools.sources]
 image_fixture = ["render_image"]
 ` : ['web_composer_context', 'web_harness_convergence'].includes(scenario) ? `

@@ -5,6 +5,7 @@ execution, image artifact allocation and canonical result publication.
 """
 import json
 import sys
+import time
 
 PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII="
 for line in sys.stdin:
@@ -13,6 +14,8 @@ for line in sys.stdin:
         continue
     method = request["method"]
     if method == "initialize":
+        if len(sys.argv) > 1:
+            time.sleep(float(sys.argv[1]))
         result = {"protocolVersion": request["params"]["protocolVersion"], "capabilities": {"tools": {}}, "serverInfo": {"name": "native-image-fixture", "version": "1"}}
     elif method == "tools/list":
         result = {"tools": [{"name": "render_image", "description": "Produce a deterministic one-pixel PNG", "inputSchema": {"type": "object", "properties": {}}}]}

@@ -40,6 +40,28 @@ it('exact source message uses one bounded native request without scanning interv
  server.reply(request);expect(await work).toBe(true);expect(reads()).toHaveLength(1);
  expect(cursors()).toEqual(Array.from({length:32},(_,i)=>530+i));
 });
+it('a message rendered only in the live tail beside a frozen window needs no read',async()=>{
+ await ready();
+ const jump=server.client.navigateMessage('A','m530');await serve(1);expect(await jump).toBe(true);
+ const frozen=server.client.getSnapshot().views.A.history;expect(frozen?.window).toBeTruthy();
+ await server.update('A',{...snapshot(),transcript:{entries:[entry(6064)],next_cursor:'6032'}});
+ expect(await server.client.navigateMessage('A','m6064')).toBe(true);
+ expect(reads()).toHaveLength(1);expect(server.client.getSnapshot().views.A.history).toBe(frozen);
+});
+it('a canonical message head already rendered needs no read',async()=>{
+ await ready();
+ await server.update('A',{...snapshot(),messages:[{id:'m-head',role:'user',source:'human',kind:'message',content:[{type:'text',text:'pending'}]}],transcript:{entries:Array.from({length:32},(_,i)=>entry(6032+i)),next_cursor:'6032'}});
+ expect(await server.client.navigateMessage('A','m-head')).toBe(true);expect(reads()).toHaveLength(0);
+});
+it('a frozen window keeps a canonical-only message on the native read path',async()=>{
+ await ready();
+ const jump=server.client.navigateMessage('A','m530');await serve(1);expect(await jump).toBe(true);
+ await server.update('A',{...snapshot(),messages:[{id:'m700',role:'user',source:'human',kind:'message',content:[{type:'text',text:'pending'}]}],transcript:{entries:[entry(6064)],next_cursor:'6032'}});
+ const work=server.client.navigateMessage('A','m700');
+ const request=await server.waitFor('session/transcript',2);
+ expect(request.params).toMatchObject({at:{type:'message',id:'m700',cut:null},limit:32});
+ server.reply(request);expect(await work).toBe(true);expect(reads()).toHaveLength(2);
+});
 it('obsolete source jump cannot publish or continue reading after a newer turn jump',async()=>{
  await ready();const old=server.client.navigateMessage('A','m1'),fresh=server.client.navigateTurn('A',{turn:turn(400),cut});
  await serve(2);expect(await fresh).toEqual(turn(400));const history=server.client.getSnapshot().views.A.history;

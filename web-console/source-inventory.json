@@ -920,7 +920,7 @@
           "treatment": "Toolbar markup adapted; Actual time stays a visible rustX switch."
         }
       ],
-      "local_sha256": "fe9fac7d0a937e3077072d742169c9b9b15cabe414361386c8e980fa3bad75ed"
+      "local_sha256": "475866f18cd3cc878c3dcab63b775ba582ec16729e3ac25acadd60f7eee113de"
     },
     {
       "upstream": "packages/client/ui-trajectory/src/client/TrajectoryTable.tsx",
@@ -1857,7 +1857,7 @@
         "Harness attachment identity and storage"
       ],
       "commit": "c291e7961a515f6d7af9304e7fd1d257929aef26",
-      "local_sha256": "b98bea419825e2684671fb0d8b99a51f27d2eda10a8a572bc88d8be2e9376f5c",
+      "local_sha256": "e85024b571b12fcabf7cb00a6756f0c3c68b938789eb393b6176ae108a684b29",
       "additional_sources": [
         {
           "upstream": "packages/client/ui-chat/src/client/chat/ChatView.tsx",
