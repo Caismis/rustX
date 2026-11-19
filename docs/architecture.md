@@ -7768,7 +7768,9 @@ separate local process boundary, one layer at a time. See the
 current layer status.
 
 - `rustx-execution-protocol` owns the typed records, bounded length-prefixed
-  framing, `Handshake` deadline wrapper, and `LOCAL_HANDSHAKE_TIMEOUT`. It
+  framing, the `DeadlineStream` absolute-deadline wrapper shared by the
+  handshake and the page exchanges, `LOCAL_HANDSHAKE_TIMEOUT`, and
+  `PAGE_REQUEST_TIMEOUT`. It
   depends on no other workspace crate; both boundary crates depend on it.
 - `rustx-execution-server` is a library owned by the Agent. It owns binding
   reservation, credential authentication, arbitration, connection lifecycle,
@@ -7829,9 +7831,24 @@ current layer status.
   logical-text page, and the whitelisted structured-document page
   over the isolated Unix socket — `fs/readFile`,
   `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` are served
-  by the admitted Client; the streaming `scan_text` scanner and the
-  `rustx-document-reader` decoder the pages run on are shared verbatim
-  with the native Read tool. The
+  by the admitted Client; the native Agent Read tool's physical reads
+  route through the same boundary —
+  `SessionRuntimeManager::load` composes each Session's conversation
+  with a non-owning `SessionExecutionScope` (a `SessionId` plus a
+  `Weak<SessionExecutionRegistry>` resolved at dispatch, never a claim)
+  carried on `ConversationRuntimeConfig` into the `Workspace` the
+  `ToolExecutionContext` reaches. The tool classifies the interpreted
+  path through the shared protocol classifier and issues its
+  `ReadLines`/`ReadDocument` exchange through the endpoint's bounded
+  admission — one shared `MAX_DATA_RECORDS_PER_CONNECTION` budget with
+  management queries, a single writer permit awaited on the async side
+  under `PAGE_REQUEST_TIMEOUT` with biased cancellation, and the
+  synchronous exchange run to settlement on a blocking worker; a
+  Session without an admitted Client —
+  standalone or launch-test composition binds none — is an honest
+  `Session execution unavailable`, never a Server-local filesystem
+  fallback. The model-facing paging, continuation, and diagnostics stay
+  on the Agent side, mapped from the stable `ReadError` codes. The
   product's copy, remove, create-directory, and watch paths still use
   the local path
   through `rustx`'s delegating `PackageDirectory` wrapper, and no

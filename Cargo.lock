@@ -4759,6 +4759,7 @@ dependencies = [
 name = "rustx-document-reader"
 version = "0.1.0"
 dependencies = [
+ "rustx-execution-protocol",
  "tempfile",
  "tokio",
  "xberg",

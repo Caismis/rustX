@@ -33,7 +33,7 @@ use std::{env, fs};
 
 use rustx_confined_fs::PackageDirectory;
 use rustx_execution_protocol::transport::{
-    Handshake, LOCAL_HANDSHAKE_TIMEOUT, read_optional_record, read_record, write_record,
+    DeadlineStream, LOCAL_HANDSHAKE_TIMEOUT, read_optional_record, read_record, write_record,
 };
 use rustx_execution_protocol::{
     Admission, Bootstrap, Capability, ClientReply, ClientRequest, DecimalU64, EntryKind,
@@ -163,7 +163,7 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
         credential: bootstrap.credential,
     };
     let mut handshake =
-        Handshake::new(&mut stream, deadline).map_err(|error| handshake_error(&error))?;
+        DeadlineStream::new(&mut stream, deadline).map_err(|error| handshake_error(&error))?;
     write_record(&mut handshake, &hello).map_err(|error| handshake_error(&error))?;
     let reply: HelloReply = read_record(&mut handshake).map_err(|error| handshake_error(&error))?;
     let admission = reply.map_err(|reject| format!("rejected: {reject}"))?;
@@ -549,8 +549,8 @@ fn read_document(
     }
     // The rustX whitelist picks the decoder by extension — a text source
     // has no document decode, and there is no content sniffing.
-    let rustx_document_reader::SourceKind::Document(format) =
-        rustx_document_reader::classify_source(relative)
+    let rustx_execution_protocol::SourceKind::Document(format) =
+        rustx_execution_protocol::classify_source(relative)
     else {
         return ClientReply::Error {
             kind: ReadError::UnsupportedDocument,
@@ -611,7 +611,7 @@ fn read_document(
 fn document_source(
     root: &PackageDirectory,
     relative: &Path,
-    format: rustx_document_reader::DocumentFormat,
+    format: rustx_execution_protocol::DocumentFormat,
     expected_revision: Option<&str>,
 ) -> Result<(fs::File, rustx_confined_fs::FileMetadata, String), ReadError> {
     let file = root.file(relative).map_err(|error| read_error(&error))?;

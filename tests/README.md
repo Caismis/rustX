@@ -117,7 +117,14 @@ built as a separate test binary.
 conformance drivers, settlement assertions); `tests/common/` is shared with
 the external integration targets. Boundary suites use the same fixtures —
 a boundary test may legitimately drive a scripted model adapter while its
-invariant is a real process boundary.
+invariant is a real process boundary. `tests/support/session_execution.rs`
+is the real Session-execution rig: it reserves a `SessionRuntimeManager`
+execution endpoint for a real catalog Session, launches the staged
+`rustx-execution-client` sibling, admits it, and kills/reaps the child on
+drop — compiled once for lib unit tests and once per integration target
+via `tests/common`, so any fixture that dispatches the native `read` tool
+needs a bound route (`native_fixture_with_execution`); an unbound fixture
+honestly answers `Session execution unavailable`.
 
 ## In-crate deterministic contract suites
 

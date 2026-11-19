@@ -151,10 +151,6 @@ rusqlite = { version = "0.40.2", features = ["bundled", "hooks", "functions", "p
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake", "connect"] }
 
 zip = { version = "8.6", default-features = false, features = ["deflate"] }
-# The physical structured-document decoder behind native Read (Issue #48)
-# — the rustX-owned format whitelist, bounded source acquisition, and the
-# parser-only xberg decode the physical Execution Client also serves.
-rustx-document-reader = { path = "crates/document-reader" }
 # The proven descriptor-relative filesystem primitives the physical
 # Execution Client shares; there is no parallel implementation.
 rustx-confined-fs = { path = "crates/confined-fs" }
@@ -180,6 +176,11 @@ all = "warn"
 pedantic = "warn"
 
 [dev-dependencies]
+
+# The physical structured-document decoder — production code reaches it
+# only across the Execution Client process boundary; it is linked here
+# only for parser-boundary tests.
+rustx-document-reader = { path = "crates/document-reader" }
 rusqlite = { version = "0.40.2", features = ["trace"] }
 tokio = { version = "1", features = ["test-util"] }
 axum = "0.8"

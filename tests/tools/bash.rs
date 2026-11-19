@@ -15,7 +15,8 @@
 use std::time::Duration;
 
 use crate::common::{
-    native_fixture, native_fixture_with_environment, run_tool, run_tool_with_cancellation,
+    native_fixture, native_fixture_with_environment, native_fixture_with_execution, run_tool,
+    run_tool_with_cancellation,
 };
 use rustx::runtime::CancellationSignal;
 use rustx::tools::types::{
@@ -861,7 +862,7 @@ async fn bash_small_output_creates_no_spill() {
 #[allow(clippy::too_many_lines)] // one scenario: spill, then prove read/search access
 #[tokio::test]
 async fn bash_large_output_spills_to_managed_output() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let result = run_tool(
         &fixture,
         "bash",
@@ -933,7 +934,13 @@ async fn bash_large_output_spills_to_managed_output() {
         "the middle marker line is beyond the bounded head/tail preview"
     );
 
-    // Ordinary native Read with offset/limit reads the spill file.
+    // The advertised spill path is a managed source outside the
+    // Session's admitted workspace root: native Read is confined to the
+    // binding root and honestly refuses it. The `std::fs` reads above are
+    // a Server-local inspection, not a product managed-output domain
+    // API — capturing spill bytes Server-side and serving them to the
+    // model through the Execution Client is unresolved #576 work (see
+    // exec-01-evidence T31).
     let marker_line = 1501_u64;
     let read = run_tool(
         &fixture,
@@ -945,18 +952,12 @@ async fn bash_large_output_spills_to_managed_output() {
         }),
     )
     .await;
-    assert_eq!(read.status, ToolExecutionStatus::Success);
-    let read_text = read
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolResultContent::Text(text) => Some(text.text.clone()),
-            _ => None,
-        })
-        .expect("text content");
-    assert_eq!(
-        read_text,
-        "spill-boundary-marker\n\n[1501 more lines in file. Use offset=1502 to continue.]"
+    let ToolExecutionStatus::Failed { error } = &read.status else {
+        panic!("a managed-output path must be refused by Read: {read:?}");
+    };
+    assert!(
+        !error.contains("spill-boundary-marker"),
+        "no managed-source body may leak: {error}"
     );
 
     // Ordinary native Grep searches the single spill file and the managed
@@ -1005,7 +1006,7 @@ async fn bash_large_output_spills_to_managed_output() {
 /// one-shot lossy decoding of the same bytes.
 #[tokio::test]
 async fn bash_non_utf8_output_spills_as_deterministic_text() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     // Deterministic invalid bytes (never /dev/urandom): 20000 'x' bytes
     // cross the bound, then an invalid tail.
     let result = run_tool(
@@ -1036,12 +1037,19 @@ async fn bash_non_utf8_output_spills_as_deterministic_text() {
         &text[text.len() - 16..]
     );
 
-    // The advertised path is genuinely inspectable: Read and Grep succeed.
+    // The advertised path is inspectable only through the Server-local
+    // `std::fs` read above — there is no model-facing managed-output
+    // domain API yet; serving managed captures through the Execution
+    // Client is unresolved #576 work (see exec-01-evidence T31). Native
+    // Read is confined to the Session's admitted workspace root and
+    // honestly refuses the managed source; Grep still searches it.
     let read = run_tool(&fixture, "read", serde_json::json!({"path": full_output})).await;
-    assert_eq!(
-        read.status,
-        ToolExecutionStatus::Success,
-        "Read inspects the decoded-text spill"
+    let ToolExecutionStatus::Failed { error } = &read.status else {
+        panic!("a managed-output path must be refused by Read: {read:?}");
+    };
+    assert!(
+        !error.contains("\u{FFFD}\u{FFFD}"),
+        "no managed-source body may leak: {error}"
     );
     let grep = run_tool(
         &fixture,

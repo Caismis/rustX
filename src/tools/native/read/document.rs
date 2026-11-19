@@ -1,117 +1,54 @@
-//! The native Read adapter over the shared structured-document decoder
-//! (Issue #48).
+//! Test-only support for the native Read document path.
 //!
-//! Read supports exactly one rustX-owned whitelist of structured document
-//! formats — `.pdf`, `.docx`, `.xlsx`, `.pptx` — decoded through the
-//! parser-only `xberg` backend inside `rustx-document-reader` into a
-//! deterministic Markdown projection. Everything else stays an ordinary
-//! text source. The format whitelist, classification, bounded acquisition,
-//! and parser policy live in that shared crate — the same physical decoder
-//! the Execution Client serves — so there is exactly one parser policy;
-//! this adapter only maps its results onto the historical Read
-//! diagnostics. The ownership boundary is fixed: xberg only decodes.
-//! rustX owns the supported-format policy (the closed enum, never derived
-//! from xberg's capability surface), the path contract (classification
-//! happens on the already-authorized, already-resolved Read target), the
-//! resource bounds, and the textual projection policy. xberg never sees a
-//! URI, so URL fetching and crawling are unreachable by construction;
-//! recursive embedded object extraction is impossible because rustX pins
-//! xberg's `max_archive_depth` to 0.
-//!
-//! Inference is excluded twice: the `ocr`/`ocr-pipeline`/`layout`/ML
-//! features are not compiled in at all, and `disable_ocr: true` is set at
-//! runtime, so a scanned or text-less PDF deterministically fails instead
-//! of triggering OCR.
+//! Production document handling no longer lives here: the extension
+//! whitelist and classification are the shared policy in
+//! `rustx_execution_protocol`, physical acquisition and decode belong to
+//! the Execution Client through `rustx-document-reader`, and the tool
+//! dispatches the page exchange through the Session's execution scope.
+//! What remains in this module is test support: deterministic
+//! exchange-boundary hooks the cancellation proofs synchronize on, the
+//! committed-corpus regeneration entry point, and parser-boundary tests
+//! that exercise `rustx-document-reader` (a dev-dependency) directly —
+//! parser detail belongs at the parser boundary, never at the Agent one.
 
-use std::path::Path;
-
-use rustx_document_reader::{DecodeError, SourceError};
-pub(super) use rustx_document_reader::{DocumentFormat, SourceKind, classify_source};
-
-use crate::tools::limits::MAX_DOCUMENT_SOURCE_BYTES;
-
-/// The oversized-source diagnostic shared by the bounded-acquisition and
-/// direct-decode refusals.
-fn bounded_message(target: &Path) -> String {
-    format!(
-        "{} is at least {} bytes; document reads are bounded to {MAX_DOCUMENT_SOURCE_BYTES} bytes",
-        target.display(),
-        MAX_DOCUMENT_SOURCE_BYTES + 1
-    )
-}
-
-/// Acquires and decodes one whitelisted document into its deterministic
-/// Markdown text, through the shared `rustx-document-reader` decoder.
-///
-/// The caller has already resolved and authorized `target` through the
-/// ordinary Read path contract; the source is acquired through the
-/// shared bounded read — at most `MAX_DOCUMENT_SOURCE_BYTES` is ever
-/// buffered or handed to xberg — and decoded by the shared parser policy.
-/// The function is synchronous and intended to run on a blocking thread.
-pub(super) fn decode_document(target: &Path, format: DocumentFormat) -> Result<String, String> {
-    // Acquisition: no more than `MAX_DOCUMENT_SOURCE_BYTES` of source data
-    // is ever buffered. The bound is enforced by the read itself — the
-    // bytes that enter decoding are exactly the bytes read — so no
-    // metadata race can admit an oversized source.
-    let file = std::fs::File::open(target)
-        .map_err(|error| format!("cannot read {}: {error}", target.display()))?;
-    let bytes = match rustx_document_reader::read_source(file) {
-        Ok(bytes) => bytes,
-        Err(SourceError::Io(error)) => {
-            return Err(format!("cannot read {}: {error}", target.display()));
-        }
-        Err(SourceError::OverLimit) => return Err(bounded_message(target)),
-    };
-    // The xberg decode pipeline starts here: everything before this line is
-    // rustX-owned acquisition and bounding.
-    #[cfg(test)]
-    decode_hooks::record(target);
-    match rustx_document_reader::decode(bytes, format) {
-        Ok(text) => {
-            // The decode-completion fact: the decode body reached its
-            // successful completion point and is returning its result.
-            // (This hook observes decode-body completion only; the
-            // executor's `decode.await` is what establishes blocking-task
-            // physical settlement.)
-            #[cfg(test)]
-            decode_hooks::record_decode_completed(target);
-            Ok(text)
-        }
-        Err(DecodeError::SourceTooLarge) => Err(bounded_message(target)),
-        Err(DecodeError::Runtime(error)) => {
-            Err(format!("cannot start document decode runtime: {error}"))
-        }
-        Err(DecodeError::Failed(message)) => Err(format!(
-            "cannot decode {} as {}: {message}",
-            target.display(),
-            format.label()
-        )),
-        Err(DecodeError::NoTextLayer) => Err(format!(
-            "{} has no extractable text layer; rustX never performs OCR or image inference",
-            target.display()
-        )),
-    }
-}
-
-/// Deterministic decode-synchronization hooks for tests. A test installs a
-/// hook watching one exact document path; the decoder records its start
-/// there and, when the hook is gated, blocks until the test releases it.
-/// No production behavior reads any of this.
-#[cfg(test)]
-pub(super) mod decode_hooks {
+/// Deterministic exchange-synchronization hooks for tests. A test
+/// installs a hook watching one exact path at one of two deterministic
+/// cuts inside the admitted exchange: `Admit` — the acceptance gate,
+/// after the request is encoded and the binding check passes but before
+/// the first request byte — or `Sent` — after the full request frame is
+/// written, before the reply is read. The worker records its entry at
+/// the installed cut and, when the hook is gated, blocks there until
+/// the test releases it. A successful reply is recorded separately, so
+/// tests can prove an accepted exchange's reply was awaited. No
+/// production behavior reads any of this.
+pub(crate) mod read_hooks {
     use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::sync::{Arc, Mutex};
     use tokio::sync::oneshot;
 
+    /// The deterministic cut a hook observes inside one exchange.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Cut {
+        /// The acceptance gate: after encode + binding check, before the
+        /// first request byte — a cancellation observed here still
+        /// yields zero request frames.
+        Admit,
+        /// The post-send cut: the request frame is fully written and the
+        /// reply has not been read — the accepted exchange is on the
+        /// wire and must be awaited to settlement.
+        Sent,
+    }
+
     struct Hook {
         watch: PathBuf,
+        cut: Cut,
         starts: Arc<AtomicUsize>,
-        completions: Arc<AtomicUsize>,
+        replies: Arc<AtomicUsize>,
         gate: Mutex<Option<mpsc::Receiver<()>>>,
         started: Mutex<Option<oneshot::Sender<()>>>,
-        completed: Mutex<Option<oneshot::Sender<()>>>,
+        replied: Mutex<Option<oneshot::Sender<()>>>,
     }
 
     static HOOK: Mutex<Option<Hook>> = Mutex::new(None);
@@ -126,54 +63,56 @@ pub(super) mod decode_hooks {
 
     static SESSION: Mutex<()> = Mutex::new(());
 
-    /// The installed hook: start/completion counters, start/completion
-    /// rendezvous receivers, and — for gated installs — the release handle.
-    /// Uninstalling on drop keeps other tests unaffected.
+    /// The installed hook: dispatch/reply counters, dispatch/reply
+    /// rendezvous receivers, and — for gated installs — the release
+    /// handle. Uninstalling on drop keeps other tests unaffected.
     pub struct Installed {
         starts: Arc<AtomicUsize>,
-        completions: Arc<AtomicUsize>,
+        replies: Arc<AtomicUsize>,
         started: Option<oneshot::Receiver<()>>,
-        completed: Option<oneshot::Receiver<()>>,
+        replied: Option<oneshot::Receiver<()>>,
         release: Option<mpsc::Sender<()>>,
     }
 
     impl Installed {
-        /// How many times the watched document entered the decoder.
+        /// How many times the watched target entered the dispatch worker.
         pub fn starts(&self) -> usize {
             self.starts.load(Ordering::SeqCst)
         }
 
-        /// How many times the watched decode body reached its successful
-        /// completion point.
-        pub fn completed_count(&self) -> usize {
-            self.completions.load(Ordering::SeqCst)
+        /// How many times the watched exchange produced a successful
+        /// reply.
+        pub fn replies(&self) -> usize {
+            self.replies.load(Ordering::SeqCst)
         }
 
-        /// Resolves when the watched decoder has recorded its start.
+        /// Resolves when the watched worker has recorded its dispatch
+        /// entry.
         pub async fn wait_started(&mut self) {
             if let Some(receiver) = self.started.take() {
                 let _ = receiver.await;
             }
         }
 
-        /// Whether the watched decode body has already completed.
-        pub fn decode_completed(&mut self) -> bool {
-            self.completed
+        /// Whether the watched exchange has already replied.
+        pub fn replied(&mut self) -> bool {
+            self.replied
                 .as_mut()
                 .is_some_and(|receiver| receiver.try_recv().is_ok())
         }
 
-        /// Resolves when the watched decode body has completed.
-        pub async fn wait_decode_completed(&mut self) {
-            if let Some(receiver) = self.completed.take() {
+        /// Resolves when the watched exchange has produced a successful
+        /// reply.
+        pub async fn wait_replied(&mut self) {
+            if let Some(receiver) = self.replied.take() {
                 let _ = receiver.await;
             }
         }
 
-        /// Releases a gated decoder.
+        /// Releases a gated worker.
         pub fn release(&mut self) {
             if let Some(sender) = self.release.take() {
-                sender.send(()).expect("decoder gate receiver is alive");
+                sender.send(()).expect("dispatch gate receiver is alive");
             }
         }
     }
@@ -186,21 +125,31 @@ pub(super) mod decode_hooks {
         }
     }
 
-    /// Installs start/completion counters for the watched document.
-    pub fn install(watch: &Path) -> Installed {
-        install_inner(watch, false)
-    }
-
-    /// Installs start/completion counters for the watched document plus a
-    /// gate: the decoder blocks right after recording its start until
-    /// [`Installed::release`] is called. The start and completion edges
-    /// are deterministic rendezvous points ([`Installed::wait_started`],
-    /// [`Installed::wait_decode_completed`]).
+    /// Installs admission/reply counters for the watched target at the
+    /// acceptance-gate cut plus a gate: the worker blocks inside the
+    /// acceptance gate — before the linearized `with_active` grant —
+    /// until [`Installed::release`] is called. The admission and reply
+    /// edges are deterministic rendezvous points
+    /// ([`Installed::wait_started`], [`Installed::wait_replied`]).
     pub fn install_gated(watch: &Path) -> Installed {
-        install_inner(watch, true)
+        install_inner(watch, Cut::Admit, true)
     }
 
-    fn install_inner(watch: &Path, gated: bool) -> Installed {
+    /// Installs send/reply counters for the watched target at the
+    /// post-send cut: `starts` counts request frames actually written.
+    pub fn install_sent(watch: &Path) -> Installed {
+        install_inner(watch, Cut::Sent, false)
+    }
+
+    /// Installs send/reply counters for the watched target at the
+    /// post-send cut plus a gate: the worker blocks with the request
+    /// frame already on the wire and the reply unread until
+    /// [`Installed::release`] is called.
+    pub fn install_sent_gated(watch: &Path) -> Installed {
+        install_inner(watch, Cut::Sent, true)
+    }
+
+    fn install_inner(watch: &Path, cut: Cut, gated: bool) -> Installed {
         let (release, gate) = if gated {
             let (sender, receiver) = mpsc::channel();
             (Some(sender), Some(receiver))
@@ -208,41 +157,55 @@ pub(super) mod decode_hooks {
             (None, None)
         };
         let (started_sender, started_receiver) = oneshot::channel();
-        let (completed_sender, completed_receiver) = oneshot::channel();
+        let (replied_sender, replied_receiver) = oneshot::channel();
         let starts = Arc::new(AtomicUsize::new(0));
-        let completions = Arc::new(AtomicUsize::new(0));
+        let replies = Arc::new(AtomicUsize::new(0));
         let installed = Installed {
             starts: Arc::clone(&starts),
-            completions: Arc::clone(&completions),
+            replies: Arc::clone(&replies),
             started: Some(started_receiver),
-            completed: Some(completed_receiver),
+            replied: Some(replied_receiver),
             release,
         };
         *HOOK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Hook {
             watch: watch.to_path_buf(),
+            cut,
             starts,
-            completions,
+            replies,
             gate: Mutex::new(gate),
             started: Mutex::new(Some(started_sender)),
-            completed: Mutex::new(Some(completed_sender)),
+            replied: Mutex::new(Some(replied_sender)),
         });
         installed
     }
 
-    /// Called by the decoder when the xberg decode pipeline is entered.
-    /// Counts the start for the installed hook watching this exact path,
-    /// signals the start rendezvous, and — if that hook is gated — blocks
-    /// the decoding thread until the test releases it.
-    pub fn record(target: &Path) {
+    /// Called inside the exchange's acceptance gate — after the request
+    /// is encoded and the binding check passes, before the first request
+    /// byte and before the linearized `with_active` grant. Counts the
+    /// entry for an installed admit-cut hook watching this exact path,
+    /// signals the start rendezvous, and — when gated — blocks the
+    /// dispatching thread until the test releases it.
+    pub fn record_admit(target: &Path) {
+        record_at(target, Cut::Admit);
+    }
+
+    /// Called after the whole request frame is on the wire, before the
+    /// reply is read. Same contract as [`record_admit`] at the post-send
+    /// cut.
+    pub fn record_sent(target: &Path) {
+        record_at(target, Cut::Sent);
+    }
+
+    fn record_at(target: &Path, cut: Cut) {
         let mut hook_guard = HOOK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let Some(hook) = hook_guard.as_mut() else {
             return;
         };
-        if hook.watch != target {
+        if hook.watch != target || hook.cut != cut {
             return;
         }
         hook.starts.fetch_add(1, Ordering::SeqCst);
@@ -261,19 +224,19 @@ pub(super) mod decode_hooks {
             .take();
         drop(hook_guard);
         if let Some(receiver) = receiver {
-            // Blocking the dedicated decode thread is exactly the point:
-            // the test controls when the decode may proceed.
+            // Blocking the dedicated dispatch thread is exactly the
+            // point: the test controls when the exchange may proceed.
             let _ = receiver.recv();
         }
     }
 
-    /// Called by the decoder right before it returns its result: counts
-    /// and signals decode completion for the installed hook watching this
-    /// exact path. This records that the decode body reached its
-    /// successful completion point; it says nothing about the Tokio
-    /// blocking task's own settlement, which the production executor
-    /// establishes with its `decode.await`.
-    pub fn record_decode_completed(target: &Path) {
+    /// Called by the executor when the exchange produced a successful
+    /// reply: counts and signals it for the installed hook watching this
+    /// exact path. This records that the accepted operation's reply was
+    /// received; it says nothing about the blocking task's own
+    /// settlement, which the production executor establishes with its
+    /// exchange await.
+    pub fn record_reply(target: &Path) {
         let mut hook_guard = HOOK
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -283,9 +246,9 @@ pub(super) mod decode_hooks {
         if hook.watch != target {
             return;
         }
-        hook.completions.fetch_add(1, Ordering::SeqCst);
+        hook.replies.fetch_add(1, Ordering::SeqCst);
         if let Some(sender) = hook
-            .completed
+            .replied
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .take()
@@ -298,34 +261,6 @@ pub(super) mod decode_hooks {
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-
-    use super::DocumentFormat;
-
-    /// An oversized document source is rejected by the bounded acquisition
-    /// itself, so the decoder hook proves the xberg decode is never even
-    /// entered. The file is sparse: only its length matters.
-    #[test]
-    fn oversized_sources_never_reach_the_decoder() {
-        let directory = tempfile::tempdir().expect("temporary root");
-        let path = directory.path().join("huge.docx");
-        let file = std::fs::File::create(&path).expect("sparse fixture");
-        file.set_len((crate::tools::limits::MAX_DOCUMENT_SOURCE_BYTES as u64) + 1)
-            .expect("sparse length");
-        drop(file);
-
-        let _session = super::decode_hooks::lock_session();
-        let hook = super::decode_hooks::install(&path);
-        let error =
-            super::decode_document(&path, DocumentFormat::Docx).expect_err("over the bound");
-        assert!(
-            error.contains(&format!(
-                "document reads are bounded to {} bytes",
-                crate::tools::limits::MAX_DOCUMENT_SOURCE_BYTES
-            )),
-            "unexpected failure: {error}"
-        );
-        assert_eq!(hook.starts(), 0, "an oversized source must never decode");
-    }
 
     /// Regenerates the committed fixture corpus after changing the
     /// generator. Run explicitly:
@@ -340,5 +275,60 @@ mod tests {
                 .expect("fixture directory");
             std::fs::write(&path, bytes).expect("fixture bytes");
         }
+    }
+
+    /// The rustX-owned source-size bound rejects an oversized document at
+    /// the parser boundary itself: both the bounded acquisition and the
+    /// direct decode API refuse before a parser step runs. The file is
+    /// sparse: only its length matters.
+    #[test]
+    fn oversized_sources_never_reach_the_parser() {
+        let directory = tempfile::tempdir().expect("temporary root");
+        let path = directory.path().join("huge.docx");
+        let file = std::fs::File::create(&path).expect("sparse fixture");
+        file.set_len((rustx_execution_protocol::MAX_DOCUMENT_SOURCE_BYTES as u64) + 1)
+            .expect("sparse length");
+        drop(file);
+
+        assert!(matches!(
+            rustx_document_reader::read_source(std::fs::File::open(&path).expect("fixture open")),
+            Err(rustx_document_reader::SourceError::OverLimit)
+        ));
+        assert!(matches!(
+            rustx_document_reader::decode(
+                vec![0u8; rustx_execution_protocol::MAX_DOCUMENT_SOURCE_BYTES + 1],
+                rustx_document_reader::DocumentFormat::Docx,
+            ),
+            Err(rustx_document_reader::DecodeError::SourceTooLarge)
+        ));
+    }
+
+    /// The decoder's OOXML member bound is a parser-boundary contract: two
+    /// otherwise equivalent packages from the same generator differ only
+    /// in member count, and only the one above the bound fails — with the
+    /// parser's own classification, never relayed across the Agent
+    /// boundary.
+    #[test]
+    fn archive_member_accounting_is_a_parser_boundary_contract() {
+        use super::super::testdata;
+        let under = rustx_document_reader::decode(
+            testdata::docx_with_member_count(testdata::DOCX_BASE_MEMBERS),
+            rustx_document_reader::DocumentFormat::Docx,
+        )
+        .expect("package under the member bound decodes");
+        assert!(under.contains("member accounting control"));
+
+        let error = rustx_document_reader::decode(
+            testdata::docx_with_member_count(10_001),
+            rustx_document_reader::DocumentFormat::Docx,
+        )
+        .expect_err("package over the member bound");
+        let rustx_document_reader::DecodeError::Failed(message) = error else {
+            panic!("the member bound is a parse refusal: {error:?}");
+        };
+        assert!(
+            message.contains("exceeds limit of 10000"),
+            "the member bound, not package malformation, must reject the package: {message}"
+        );
     }
 }

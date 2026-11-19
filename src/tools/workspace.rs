@@ -12,6 +12,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::local_runtime::session_runtime_manager::SessionExecutionScope;
+
 /// A workspace path resolution failure.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WorkspaceError {
@@ -50,6 +52,10 @@ impl std::error::Error for WorkspaceError {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
     root: PathBuf,
+    /// The Session's non-owning execution route, bound at composition —
+    /// `None` for a workspace nobody composed with execution, which is an
+    /// honest dispatch refusal, never a local filesystem fallback.
+    execution_scope: Option<SessionExecutionScope>,
 }
 
 impl Workspace {
@@ -75,13 +81,37 @@ impl Workspace {
         let canonical = std::fs::canonicalize(root).map_err(|error| {
             WorkspaceError::RootUnavailable(root.to_path_buf(), error.to_string())
         })?;
-        Ok(Self { root: canonical })
+        Ok(Self {
+            root: canonical,
+            // A bare workspace is always unbound: composition binds the
+            // route through `bind_execution_scope` before the runtime —
+            // and therefore this workspace — is published.
+            execution_scope: None,
+        })
     }
 
     /// The canonical workspace root.
     #[must_use]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Binds the Session's execution route — construction-time only.
+    ///
+    /// Called by the conversation runtime composition before the runtime
+    /// is published; there is no post-construction mutation path and no
+    /// caller outside the crate can attach a route.
+    pub(crate) fn bind_execution_scope(&mut self, scope: Option<SessionExecutionScope>) {
+        self.execution_scope = scope;
+    }
+
+    /// The Session's execution route, when composition bound one.
+    ///
+    /// `None` is an honest unbound route — consumers must refuse, never
+    /// fall back to a Server-local path.
+    #[must_use]
+    pub fn execution_scope(&self) -> Option<&SessionExecutionScope> {
+        self.execution_scope.as_ref()
     }
 
     /// The workspace-relative display path of a resolved canonical path.

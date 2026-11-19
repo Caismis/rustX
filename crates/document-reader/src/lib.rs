@@ -35,7 +35,6 @@
 //! stuck inside one unchecked operation still runs to its own completion.
 
 use std::io::Read;
-use std::path::Path;
 
 use xberg::{ExtractInput, ExtractionConfig, OutputFormat, extractors::security::SecurityLimits};
 
@@ -60,83 +59,27 @@ pub const MAX_PROJECTED_DOCUMENT_BYTES: usize = 64 * 1024 * 1024;
 /// `SecurityLimits` below.
 pub const DOCUMENT_DECODE_TIMEOUT_SECS: u64 = 30;
 
-/// The closed rustX-owned whitelist of structured document formats
-/// decoded through xberg.
-///
-/// Adding a variant here is the only way a new model-facing format can
-/// appear; xberg gaining support for another format never changes the
-/// contract on its own.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DocumentFormat {
-    /// Portable Document Format.
-    Pdf,
-    /// Office Open XML word processing document.
-    Docx,
-    /// Office Open XML spreadsheet.
-    Xlsx,
-    /// Office Open XML presentation.
-    Pptx,
-}
+// The rustX-owned format whitelist, source classification, and
+// extension-based classifier are protocol-level shared policy: the
+// Execution Client and the native Read tool must name exactly the same
+// `DocumentFormat`, so the types live in `rustx-execution-protocol` and
+// are re-exported here for callers of the decoder.
+pub use rustx_execution_protocol::{DocumentFormat, SourceKind, classify_source};
 
-impl DocumentFormat {
-    /// The human-readable format label used in deterministic failure
-    /// diagnostics.
-    #[must_use]
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Pdf => "PDF",
-            Self::Docx => "DOCX",
-            Self::Xlsx => "XLSX",
-            Self::Pptx => "PPTX",
+/// The exact MIME type handed to xberg. rustX chooses the decoder by
+/// extension and passes the MIME type explicitly, so xberg never
+/// content-sniffs and a mislabeled file fails in exactly one decoder.
+fn mime_type(format: DocumentFormat) -> &'static str {
+    match format {
+        DocumentFormat::Pdf => "application/pdf",
+        DocumentFormat::Docx => {
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        }
+        DocumentFormat::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        DocumentFormat::Pptx => {
+            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
         }
     }
-
-    /// The exact MIME type handed to xberg. rustX chooses the decoder by
-    /// extension and passes the MIME type explicitly, so xberg never
-    /// content-sniffs and a mislabeled file fails in exactly one decoder.
-    fn mime_type(self) -> &'static str {
-        match self {
-            Self::Pdf => "application/pdf",
-            Self::Docx => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            Self::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            Self::Pptx => {
-                "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-            }
-        }
-    }
-}
-
-/// The rustX-owned source classification of one target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
-    /// An ordinary byte source decoded as UTF-8 text by the faithful text
-    /// path.
-    Text,
-    /// A whitelisted structured document decoded through xberg.
-    Document(DocumentFormat),
-}
-
-/// Classifies one already-interpreted target by its extension.
-///
-/// The comparison is deterministic: the extension is matched
-/// case-insensitively against the closed whitelist, and only the final
-/// extension component participates. Content is never sniffed to expand or
-/// redirect the whitelist; a mislabeled file is decoded by exactly the
-/// decoder its extension selects.
-#[must_use]
-pub fn classify_source(target: &Path) -> SourceKind {
-    let Some(extension) = target.extension().and_then(|e| e.to_str()) else {
-        return SourceKind::Text;
-    };
-    let normalized = extension.to_ascii_lowercase();
-    let format = match normalized.as_str() {
-        "pdf" => DocumentFormat::Pdf,
-        "docx" => DocumentFormat::Docx,
-        "xlsx" => DocumentFormat::Xlsx,
-        "pptx" => DocumentFormat::Pptx,
-        _ => return SourceKind::Text,
-    };
-    SourceKind::Document(format)
 }
 
 /// The deterministic parser-only extraction configuration.
@@ -315,7 +258,7 @@ pub fn decode(bytes: Vec<u8>, format: DocumentFormat) -> Result<String, DecodeEr
     if bytes.len() > MAX_DOCUMENT_SOURCE_BYTES {
         return Err(DecodeError::SourceTooLarge);
     }
-    let input = ExtractInput::from_bytes(bytes, format.mime_type(), None);
+    let input = ExtractInput::from_bytes(bytes, mime_type(format), None);
     let config = extraction_config();
     // The xberg extraction API is async-only. Decode is synchronous and
     // runs on a blocking thread, so it drives the extraction on its own

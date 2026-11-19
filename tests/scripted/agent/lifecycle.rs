@@ -2714,8 +2714,9 @@ async fn native_read_is_distinguished_from_a_non_native_tool_named_read() {
         observation.tool_id == ToolId::new("tool-read") && observation.origin == ToolOrigin::Builtin
     }
 
-    // 1. The real native tool plane: the actual registered Read capability.
-    let fixture = common::native_fixture();
+    // 1. The real native tool plane: the actual registered Read capability,
+    //    bound to a real Session execution route as composition binds it.
+    let fixture = common::native_fixture_with_execution(Vec::new());
     std::fs::write(
         fixture.runtime.workspace().root().join("notes.txt"),
         "hello\n",
@@ -3360,7 +3361,7 @@ fn a_semantic_owner_has_at_most_one_observer() {
 /// model-facing name is not part of the observation at all.
 #[tokio::test]
 async fn observer_reads_the_native_read_target_from_validated_arguments() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_with_execution(Vec::new());
     std::fs::write(
         fixture.runtime.workspace().root().join("notes.txt"),
         "hello\n",

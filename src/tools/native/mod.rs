@@ -67,6 +67,8 @@ mod input;
 mod mutation;
 mod present;
 mod read;
+#[cfg(test)]
+pub(crate) use read::read_hooks;
 mod read_image;
 mod registration;
 pub(crate) use registration::input_schema;

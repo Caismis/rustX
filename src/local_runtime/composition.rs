@@ -570,6 +570,9 @@ impl LocalConversationCore {
             startup,
             &crate::runtime::cancellation::CancellationSignal::new(),
             &dynamic_tools,
+            // The standalone composition carries no Session execution
+            // route: only the SessionRuntimeManager load path binds one.
+            None,
         )
         .await
     }
@@ -589,6 +592,9 @@ impl LocalConversationCore {
         startup: McpInitialSubmission,
         cancellation: &crate::runtime::cancellation::CancellationSignal,
         host_tools: &[crate::tools::host::HostToolDefinition],
+        execution_scope: Option<
+            crate::local_runtime::session_runtime_manager::SessionExecutionScope,
+        >,
     ) -> Result<Self, LocalRuntimeError> {
         startup.note_recovery_receipt(SubmissionIntent::now()); // Keep the one-shot preparation state off the awaiting caller's stack.
         Box::pin(async move {
@@ -644,6 +650,7 @@ impl LocalConversationCore {
             .with_extensions(extensions.clone());
             tool_runtime_config.lifecycle = Some(conversation_access.clone());
             tool_runtime_config.environment = Some(base_environment.clone());
+            tool_runtime_config.execution_scope = execution_scope;
             let mut tool_runtime =
                 ConversationToolRuntime::from_config(conversation_id.clone(), tool_runtime_config)
                     .map_err(|error| LocalRuntimeError::ToolRuntime {

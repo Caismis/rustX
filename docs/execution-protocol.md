@@ -217,14 +217,14 @@ publishes the trusted-channel bundle:
   it lacks.
 
 `Binding::accept_local(stream)` performs the handshake on one accepted
-`UnixStream` under the shared `transport::Handshake` wrapper:
+`UnixStream` under the shared `transport::DeadlineStream` wrapper:
 
 - One absolute deadline is armed once at accept entry —
   `Instant::now() + LOCAL_HANDSHAKE_TIMEOUT`, the single shared 5 s
   constant owned by `rustx-execution-protocol::transport` — and covers
   the entire handshake: the Hello read and parse, arbitration, the
   admission write, and restoring blocking mode at `finish()`. It
-  is an absolute deadline, not an inactivity timeout: `Handshake`
+  is an absolute deadline, not an inactivity timeout: `DeadlineStream`
   runs the stream nonblocking for the handshake's duration — every
   I/O is attempted directly and a `WouldBlock` waits in `poll` for
   at most the *remaining* budget, re-checking the deadline after each
@@ -522,7 +522,7 @@ physical Client:
   connected peer's euid must equal this process's euid (`SO_PEERCRED`
   on Linux, `getpeereid` on macOS): a socket planted by another user
   never sees the credential.
-- The credential exchange runs under the same `transport::Handshake`
+- The credential exchange runs under the same `transport::DeadlineStream`
   budget the Server enforces: one absolute deadline armed once on the
   established socket (`Instant::now() + LOCAL_HANDSHAKE_TIMEOUT`),
   covering the Hello write, the `HelloReply` read, admission
@@ -740,7 +740,27 @@ envelope.
   later change. Every other
   filesystem method still flows through the prior environment readers
   (delegating to `rustx-confined-fs`); their migration remains
-  outstanding.
+  outstanding. The native `read` tool's physical reads route through
+  the same boundary: `SessionRuntimeManager::load` composes each
+  Session's conversation with a `SessionExecutionScope` — a non-owning
+  route that names the Session and upgrades the claim registry weakly
+  at dispatch, never keeping an endpoint, credential, or listener
+  alive — and the tool issues its `ReadLines`/`ReadDocument` page
+  exchange through it. Admission is bounded at the endpoint: at most
+  `MAX_DATA_RECORDS_PER_CONNECTION` data exchanges — Agent pages and
+  management queries sharing one budget — may be queued or in flight,
+  an over-budget dispatch is `WouldBlock`, and an admitted dispatch
+  awaits the single writer permit on the async side under one absolute
+  `PAGE_REQUEST_TIMEOUT` deadline with biased cancellation before its
+  synchronous exchange runs to settlement on a blocking worker; a
+  `TimedOut` or malformed reply retires the connection, never a
+  partial accounting. A Session without an
+  admitted Client is an honest `Session execution unavailable` — the
+  scope is never proof of admission and there is no Server-local
+  filesystem branch behind it; standalone composition and launch-test
+  composition bind no scope at all. The model-facing projection —
+  paging, continuation, and the historical diagnostics the stable
+  `ReadError` codes map to — stays on the Agent side of the wire.
 
 ## Test ownership (T01–T73) and optional O-SUM
 

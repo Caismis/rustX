@@ -31,6 +31,15 @@ pub const MAX_RECORD_BYTES: usize = MAX_ENCODED_FRAME_BYTES - PREFIX_BYTES;
 /// re-armed. Server and Client share exactly this budget.
 pub const LOCAL_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The absolute deadline for one bounded logical page exchange —
+/// `ReadLines`/`ReadDocument` — on the Server side of an admitted local
+/// connection, armed once by the dispatching caller and covering the
+/// writer wait, the worker scheduling delay, the request write, and the
+/// reply read. It is a *wire* budget only: the parser's own cooperative
+/// decode timeout is a separate, smaller policy inside the Client, and
+/// this bound says nothing about any other operation's transport.
+pub const PAGE_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
+
 /// Reads exactly one framed record.
 ///
 /// The declared length is validated before any allocation: zero and
@@ -172,12 +181,13 @@ fn invalid(message: &'static str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 
-/// One absolute-deadline I/O budget over a local handshake socket.
+/// One absolute-deadline I/O budget over a local stream — the admission
+/// handshake or a single bounded data exchange.
 ///
 /// [`new`](Self::new) puts the stream into nonblocking mode: every read
 /// and write is attempted directly, and a `WouldBlock` waits in `poll`
 /// for at most the *remaining* budget — the deadline is armed once when
-/// the socket is established and never re-arms, so a record delivered
+/// the adapter wraps the socket and never re-arms, so a record delivered
 /// byte by byte consumes the same budget as one sent at once. The
 /// deadline is re-checked after each I/O and each wait, so a peer
 /// cannot slide just under the wire with a stalled prefix. Readiness
@@ -191,19 +201,19 @@ fn invalid(message: &'static str) -> io::Error {
 /// deadline and restores blocking mode — a file-status flag, not a
 /// socket option, so it still applies when the peer has already fully
 /// closed — so the stream returns to ordinary blocking I/O. It is only
-/// ever called on a completed handshake — a failed handshake stream is
-/// shut down, never returned to service.
+/// ever called on a completed exchange — a failed stream is retired,
+/// never returned to service.
 #[cfg(unix)]
-pub struct Handshake<'a> {
+pub struct DeadlineStream<'a> {
     stream: &'a mut std::os::unix::net::UnixStream,
     deadline: Instant,
     now: fn() -> Instant,
 }
 
 #[cfg(unix)]
-impl<'a> Handshake<'a> {
-    /// Wraps `stream` with the absolute `deadline` every handshake I/O
-    /// must finish inside, switching it to nonblocking mode.
+impl<'a> DeadlineStream<'a> {
+    /// Wraps `stream` with the absolute `deadline` every I/O through this
+    /// adapter must finish inside, switching it to nonblocking mode.
     ///
     /// # Errors
     ///
@@ -220,7 +230,7 @@ impl<'a> Handshake<'a> {
         })
     }
 
-    /// Access to the wrapped stream, for shutdown on a failed handshake.
+    /// Access to the wrapped stream, for shutdown on a failed exchange.
     pub fn get_mut(&mut self) -> &mut std::os::unix::net::UnixStream {
         self.stream
     }
@@ -264,9 +274,9 @@ impl<'a> Handshake<'a> {
         }
     }
 
-    /// Ends a completed handshake: restores blocking mode so the stream
-    /// returns to ordinary I/O for the session that follows. The
-    /// deadline covers the cleanup too: it is checked before and after.
+    /// Ends a completed exchange: restores blocking mode so the stream
+    /// returns to ordinary I/O for whatever follows. The deadline covers
+    /// the cleanup too: it is checked before and after.
     ///
     /// # Errors
     ///
@@ -280,7 +290,7 @@ impl<'a> Handshake<'a> {
 }
 
 #[cfg(unix)]
-impl Read for Handshake<'_> {
+impl Read for DeadlineStream<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
             self.check()?;
@@ -299,7 +309,7 @@ impl Read for Handshake<'_> {
 }
 
 #[cfg(unix)]
-impl Write for Handshake<'_> {
+impl Write for DeadlineStream<'_> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         loop {
             self.check()?;
@@ -458,9 +468,9 @@ mod tests {
             STUB_NOW.with(|now| now.set(now.get() + by));
         }
 
-        fn stub_handshake(stream: &mut UnixStream, budget: Duration) -> Handshake<'_> {
+        fn stub_handshake(stream: &mut UnixStream, budget: Duration) -> DeadlineStream<'_> {
             stream.set_nonblocking(true).unwrap();
-            Handshake {
+            DeadlineStream {
                 stream,
                 deadline: stub_now() + budget,
                 now: stub_now,
@@ -506,7 +516,8 @@ mod tests {
             // A real (non-stub) tiny budget: the poll wait lapses and the
             // exhausted deadline reports it as TimedOut.
             let mut handshake =
-                Handshake::new(&mut stream, Instant::now() + Duration::from_millis(30)).unwrap();
+                DeadlineStream::new(&mut stream, Instant::now() + Duration::from_millis(30))
+                    .unwrap();
             let mut buf = [0u8; 1];
             assert_eq!(
                 handshake.read(&mut buf).unwrap_err().kind(),
@@ -519,7 +530,7 @@ mod tests {
             use nix::fcntl::{FcntlArg, OFlag, fcntl};
             let (mut peer, mut stream) = UnixStream::pair().unwrap();
             let deadline = Instant::now() + Duration::from_secs(5);
-            let mut handshake = Handshake::new(&mut stream, deadline).unwrap();
+            let mut handshake = DeadlineStream::new(&mut stream, deadline).unwrap();
             // The handshake drives the socket nonblocking...
             let flags =
                 OFlag::from_bits_truncate(fcntl(handshake.get_mut(), FcntlArg::F_GETFL).unwrap());
@@ -543,7 +554,7 @@ mod tests {
             // clean EOF.
             drop(peer);
             let mut handshake =
-                Handshake::new(&mut stream, Instant::now() + Duration::from_secs(5)).unwrap();
+                DeadlineStream::new(&mut stream, Instant::now() + Duration::from_secs(5)).unwrap();
             assert_eq!(
                 read_record::<ClientRequest>(&mut handshake).unwrap(),
                 ClientRequest::Ping
@@ -562,7 +573,7 @@ mod tests {
             peer.write_all(b"{\"pi").unwrap();
             drop(peer);
             let mut handshake =
-                Handshake::new(&mut stream, Instant::now() + Duration::from_secs(5)).unwrap();
+                DeadlineStream::new(&mut stream, Instant::now() + Duration::from_secs(5)).unwrap();
             assert_eq!(
                 read_record::<ClientRequest>(&mut handshake)
                     .unwrap_err()

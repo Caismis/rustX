@@ -8,6 +8,9 @@ description = "The physical structured-document decoder shared by the rustX Agen
 publish = false
 
 [dependencies]
+# The shared rustX format policy the decoder's `DocumentFormat` identity
+# comes from — DTOs and policy constants only, no product crates.
+rustx-execution-protocol = { path = "../execution-protocol" }
 # The parser-only document decode backend. rustX owns the supported-format
 # whitelist (`.pdf`, `.docx`, `.xlsx`, `.pptx`), the path contract, and all
 # extraction policy; xberg only decodes. Defaults are disabled and only the

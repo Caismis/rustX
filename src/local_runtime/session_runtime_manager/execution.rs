@@ -21,12 +21,17 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex, TryLockError};
+use std::sync::{Arc, Mutex, TryLockError, Weak};
+use std::time::Instant;
 
 use rustx_execution_protocol::{
     Capability, ClientInstanceId, EntryKind, EntryStamp, EnvironmentId, FileStamp, Generation,
-    Reject, is_normalized_absolute_path, transport::LOCAL_HANDSHAKE_TIMEOUT,
+    MAX_DATA_RECORDS_PER_CONNECTION, Reject, is_normalized_absolute_path,
+    transport::{LOCAL_HANDSHAKE_TIMEOUT, PAGE_REQUEST_TIMEOUT},
 };
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
+
+use crate::runtime::ExecutionCancellation;
 use rustx_execution_server::{
     Binding, DirectoryListing, DocumentPage, LinesPage, LocalConnection, RangeRead, Reservation,
 };
@@ -47,6 +52,20 @@ pub struct LocalExecutionEndpoint {
     /// There is no recovery path (#577), so the first `Live` peer owns the
     /// slot for the binding's whole life.
     connection: Mutex<Option<LocalConnection>>,
+    /// The total in-flight data budget on the connection — Agent page
+    /// exchanges *and* management queries share these
+    /// [`MAX_DATA_RECORDS_PER_CONNECTION`] permits, so the wire never
+    /// carries more work than one connection can account for.
+    /// Acquiring is `try_acquire` everywhere: a full budget is the
+    /// bounded busy signal, never a queue.
+    data_slots: Arc<Semaphore>,
+    /// The single Agent page writer. An admitted Agent dispatch waits
+    /// for this permit on the async side — under its absolute deadline
+    /// and cancellation, never on a blocking-pool thread — so concurrent
+    /// Agent reads take turns instead of failing the connection's busy
+    /// signal. Management callers never take it: they still answer
+    /// `WouldBlock` immediately.
+    agent_writer: Arc<Semaphore>,
     listener: UnixListener,
     bootstrap: PathBuf,
     /// The reserved logical workspace — trusted catalog identity,
@@ -95,6 +114,8 @@ impl LocalExecutionEndpoint {
         Ok(Self {
             binding,
             connection: Mutex::new(None),
+            data_slots: Arc::new(Semaphore::new(MAX_DATA_RECORDS_PER_CONNECTION)),
+            agent_writer: Arc::new(Semaphore::new(1)),
             listener,
             bootstrap: root.join("b"),
             workspace,
@@ -211,7 +232,7 @@ impl LocalExecutionEndpoint {
         max_bytes: u32,
         expected_revision: Option<&str>,
     ) -> io::Result<RangeRead> {
-        self.with_connection(|connection| {
+        self.with_connection(None, false, |connection| {
             let relative = workspace_relative(&connection.admission().workspace, path)?;
             connection.read_range(&relative, offset, max_bytes, expected_revision)
         })
@@ -230,7 +251,7 @@ impl LocalExecutionEndpoint {
     /// Returns the same gating kinds as [`read_range`](Self::read_range)
     /// and the typed exchange's own errors.
     pub fn entry_metadata(&self, path: &Path) -> io::Result<rustx_confined_fs::FileMetadata> {
-        self.with_connection(|connection| {
+        self.with_connection(None, false, |connection| {
             let relative = workspace_entry(&connection.admission().workspace, path)?;
             connection.entry_metadata(&relative).map(project_metadata)
         })
@@ -251,7 +272,7 @@ impl LocalExecutionEndpoint {
         limit: u32,
         expected_revision: Option<&str>,
     ) -> io::Result<rustx_confined_fs::DirectoryPage> {
-        self.with_connection(|connection| {
+        self.with_connection(None, false, |connection| {
             let relative = workspace_entry(&connection.admission().workspace, path)?;
             connection
                 .directory_page(&relative, offset, limit, expected_revision)
@@ -284,7 +305,7 @@ impl LocalExecutionEndpoint {
         limit: Option<u64>,
         expected_revision: Option<&str>,
     ) -> io::Result<(rustx_confined_fs::FileMetadata, rustx_confined_fs::TextPage)> {
-        self.with_connection(|connection| {
+        self.with_connection(None, false, |connection| {
             let relative = workspace_relative(&connection.admission().workspace, path)?;
             connection
                 .read_lines(&relative, offset, limit, expected_revision)
@@ -319,7 +340,7 @@ impl LocalExecutionEndpoint {
         expected_revision: Option<&str>,
         authorize: impl FnOnce(Option<&FileStamp>) -> io::Result<()>,
     ) -> io::Result<rustx_confined_fs::FileMetadata> {
-        self.with_connection(|connection| {
+        self.with_connection(None, false, |connection| {
             let relative = workspace_relative(&connection.admission().workspace, path)?;
             connection
                 .write_file(&relative, bytes, expected_revision, authorize)
@@ -353,7 +374,7 @@ impl LocalExecutionEndpoint {
         limit: Option<u64>,
         expected_revision: Option<&str>,
     ) -> io::Result<(rustx_confined_fs::FileMetadata, rustx_confined_fs::TextPage)> {
-        self.with_connection(|connection| {
+        self.with_connection(None, false, |connection| {
             let relative = workspace_relative(&connection.admission().workspace, path)?;
             connection
                 .read_document(&relative, offset, limit, expected_revision)
@@ -361,25 +382,94 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    /// One admitted Agent page dispatch — `document` selects the
+    /// whitelisted document decode, `false` the plain text page — for a
+    /// caller that already holds the shared `data` budget and the
+    /// `writer` permit. Both are retained through settlement: `data` so
+    /// the in-flight accounting covers the whole exchange, `writer` so
+    /// the next admitted Agent dispatch cannot interleave on the wire.
+    ///
+    /// The caller is a blocking worker: waiting on the connection lock
+    /// is honest serialization — at most one in-flight non-agent
+    /// exchange — never a queue. `deadline` is the caller's one absolute
+    /// wire budget, carried unchanged into the exchange; `admit` runs
+    /// after the request is encoded and the binding's live check passes,
+    /// before a single request byte — its error never retires the
+    /// connection; `sent` runs after the full frame is written.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same gating kinds as [`read_lines`](Self::read_lines)
+    /// plus the `admit` error verbatim — a cancelled caller — and
+    /// [`io::ErrorKind::TimedOut`] when the deadline lapses, which
+    /// retires the connection.
+    #[allow(clippy::too_many_arguments)] // one admitted exchange's full context
+    pub fn read_page_admitted(
+        &self,
+        path: &Path,
+        offset: u64,
+        limit: Option<u64>,
+        document: bool,
+        deadline: Instant,
+        data: OwnedSemaphorePermit,
+        _writer: OwnedSemaphorePermit,
+        admit: impl FnOnce() -> io::Result<()>,
+        sent: impl FnOnce(),
+    ) -> io::Result<rustx_confined_fs::TextPage> {
+        self.with_connection(Some(data), true, |connection| {
+            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            if document {
+                connection
+                    .read_document_admitted(&relative, offset, limit, None, deadline, admit, sent)
+                    .map(project_document)
+                    .map(|(_metadata, page)| page)
+            } else {
+                connection
+                    .read_lines_admitted(&relative, offset, limit, None, deadline, admit, sent)
+                    .map(project_lines)
+                    .map(|(_metadata, page)| page)
+            }
+        })
+    }
+
     /// Serializes one synchronous exchange on the admitted connection:
-    /// `WouldBlock` while another dispatch holds it — a bounded busy
-    /// signal, never a queue — and `NotConnected` before admission.
-    /// The connection stays locked across the whole dispatch, so the
-    /// reply accounting of one exchange is never interleaved with the
-    /// next.
+    /// `WouldBlock` while another dispatch holds it or the shared data
+    /// budget is spent — a bounded busy signal, never a queue — and
+    /// `NotConnected` before admission. The connection stays locked
+    /// across the whole dispatch, so the reply accounting of one
+    /// exchange is never interleaved with the next.
+    ///
+    /// `data_permit` is the caller's already-held share of the
+    /// [`MAX_DATA_RECORDS_PER_CONNECTION`] in-flight budget; `None` — a
+    /// management dispatch — `try_acquire`s one here and still never
+    /// waits. `wait` serializes the one admitted Agent dispatch that
+    /// holds the writer permit: it may block on the connection lock at
+    /// most one in-flight non-agent exchange rather than busy-failing.
     fn with_connection<T>(
         &self,
+        data_permit: Option<OwnedSemaphorePermit>,
+        wait: bool,
         dispatch: impl FnOnce(&mut LocalConnection) -> io::Result<T>,
     ) -> io::Result<T> {
-        let mut guard = match self.connection.try_lock() {
-            Ok(guard) => guard,
-            Err(TryLockError::WouldBlock) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::WouldBlock,
-                    "execution connection is busy",
-                ));
+        let busy = || io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy");
+        let _data = match data_permit {
+            Some(permit) => permit,
+            None => self
+                .data_slots
+                .clone()
+                .try_acquire_owned()
+                .map_err(|_| busy())?,
+        };
+        let mut guard = if wait {
+            self.connection
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        } else {
+            match self.connection.try_lock() {
+                Ok(guard) => guard,
+                Err(TryLockError::WouldBlock) => return Err(busy()),
+                Err(TryLockError::Poisoned(error)) => error.into_inner(),
             }
-            Err(TryLockError::Poisoned(error)) => error.into_inner(),
         };
         let Some(connection) = guard.as_mut() else {
             return Err(io::Error::new(
@@ -566,6 +656,205 @@ impl std::fmt::Debug for LocalExecutionEndpoint {
             .finish_non_exhaustive()
     }
 }
+
+/// A non-owning dispatch route to one Session's execution endpoint.
+///
+/// The scope names the Session and holds the claim registry weakly: it
+/// never keeps an endpoint, credential, listener, or bootstrap alive, and
+/// a runtime being unloaded or reloaded never retains or re-claims one
+/// through it. It is the one route the native Read tool has into Session
+/// execution — there is no Server-local filesystem branch behind it, so
+/// holding a scope is not admission: every dispatch still resolves the
+/// endpoint and is gated by the binding's live-connection check.
+#[derive(Clone)]
+pub struct SessionExecutionScope {
+    session: SessionId,
+    registry: Weak<SessionExecutionRegistry>,
+}
+
+impl SessionExecutionScope {
+    /// The Session's published endpoint, resolved at dispatch time — a
+    /// lookup, never a claim. An absent, preparing, fenced, or dropped
+    /// endpoint is `NotConnected`; the scope itself is never proof of
+    /// admission.
+    fn endpoint(&self) -> io::Result<Arc<LocalExecutionEndpoint>> {
+        let unavailable = || {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Session execution unavailable: no admitted Execution Client",
+            )
+        };
+        let registry = self.registry.upgrade().ok_or_else(unavailable)?;
+        registry.endpoint(&self.session).map_err(|_| unavailable())
+    }
+
+    /// One bounded logical-text page of `path` through the Session's
+    /// admitted Client — `document` selects the whitelisted structured
+    /// document decode, `false` the plain text scan. `path` is the
+    /// already-interpreted absolute target; the endpoint's lexical
+    /// workspace gate resolves it once, and the verified page is returned
+    /// with the source stamp discarded after validation.
+    ///
+    /// Admission is one shared budget: at most
+    /// [`MAX_DATA_RECORDS_PER_CONNECTION`] data exchanges — Agent pages
+    /// and management queries together — may be queued or in flight on
+    /// the connection; a full budget is `WouldBlock`, never an unbounded
+    /// queue. An admitted dispatch then waits for the single writer
+    /// permit on the async side under one absolute
+    /// [`PAGE_REQUEST_TIMEOUT`] deadline and biased cancellation — the
+    /// wait holds no blocking-pool thread. The synchronous exchange runs
+    /// on the blocking pool with both permits retained through
+    /// settlement; cancellation is linearized by `with_active` inside
+    /// the exchange's admit gate — after the request is encoded and the
+    /// binding's live check passes, before the first request byte — and
+    /// by the biased race afterwards: a cancelled post-dispatch exchange
+    /// is still awaited to wire settlement (or the deadline) so the
+    /// reply accounting is never abandoned.
+    ///
+    /// # Errors
+    ///
+    /// Returns `NotConnected` when the Session has no live endpoint,
+    /// `WouldBlock` while the shared data budget is full,
+    /// `io::ErrorKind::Interrupted` when cancellation wins any cut,
+    /// `io::ErrorKind::TimedOut` when the absolute deadline lapses, and
+    /// the endpoint's own gating and typed-exchange errors otherwise —
+    /// including the `rustx_execution_server::PhysicalError`-downcastable
+    /// refusal of a semantic source failure.
+    pub(crate) async fn read_page(
+        &self,
+        path: &Path,
+        offset: u64,
+        limit: Option<u64>,
+        document: bool,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_confined_fs::TextPage> {
+        let interrupted =
+            || io::Error::new(io::ErrorKind::Interrupted, "read cancelled before dispatch");
+        if cancellation.is_cancelled() {
+            return Err(interrupted());
+        }
+        let endpoint = self.endpoint()?;
+        let data = endpoint
+            .data_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
+            })?;
+        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        // Only admitted work waits, and the wait never parks a blocking
+        // worker: cancellation wins ties; an elapsed deadline is an
+        // honest timeout, not a release.
+        let writer = tokio::select! {
+            biased;
+            () = cancellation.cancelled() => return Err(interrupted()),
+            permit = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                endpoint.agent_writer.clone().acquire_owned(),
+            ) => {
+                permit
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "execution connection page request timed out",
+                        )
+                    })?
+                    .map_err(|_| io::Error::other("execution writer queue is closed"))?
+            }
+        };
+        let worker_path = path.to_path_buf();
+        #[cfg(test)]
+        let admit_path = worker_path.clone();
+        #[cfg(test)]
+        let sent_path = worker_path.clone();
+        #[cfg(test)]
+        let reply_path = worker_path.clone();
+        let worker_cancellation = cancellation.clone();
+        let mut exchange = tokio::task::spawn_blocking(move || {
+            if Instant::now() >= deadline || worker_cancellation.is_cancelled() {
+                return Err(if worker_cancellation.is_cancelled() {
+                    interrupted()
+                } else {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "execution connection page request timed out",
+                    )
+                });
+            }
+            let admit_cancellation = worker_cancellation.clone();
+            let admit = move || {
+                #[cfg(test)]
+                crate::tools::native::read_hooks::record_admit(&admit_path);
+                admit_cancellation
+                    .with_active(|| ())
+                    .ok_or_else(interrupted)
+            };
+            let sent = move || {
+                #[cfg(test)]
+                crate::tools::native::read_hooks::record_sent(&sent_path);
+            };
+            let result = endpoint.read_page_admitted(
+                &worker_path,
+                offset,
+                limit,
+                document,
+                deadline,
+                data,
+                writer,
+                admit,
+                sent,
+            );
+            #[cfg(test)]
+            if result.is_ok() {
+                crate::tools::native::read_hooks::record_reply(&reply_path);
+            }
+            result
+        });
+        let settled = tokio::select! {
+            biased;
+            // The cancellation authority wins the race, including ties
+            // with an exchange that completed in the same wakeup.
+            () = cancellation.cancelled() => None,
+            joined = &mut exchange => Some(joined),
+        };
+        let Some(joined) = settled else {
+            // Cancellation never detaches the admitted exchange: the
+            // blocking task — its reply and its deadline — is awaited to
+            // physical settlement before the cancelled result returns.
+            let _ = exchange.await;
+            return Err(interrupted());
+        };
+        match joined {
+            Ok(result) => result,
+            Err(error) => Err(io::Error::other(format!(
+                "read exchange task failed: {error}"
+            ))),
+        }
+    }
+}
+
+impl std::fmt::Debug for SessionExecutionScope {
+    /// Identity only: the Session and whether the claim registry is
+    /// still reachable. No credential, path, or endpoint internals are
+    /// ever rendered.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SessionExecutionScope")
+            .field("session", &self.session)
+            .field("registry_available", &self.registry.upgrade().is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PartialEq for SessionExecutionScope {
+    /// Route identity: the same Session routed through the same claim
+    /// registry. Two scopes built by different managers are different
+    /// routes even when they name the same Session.
+    fn eq(&self, other: &Self) -> bool {
+        self.session == other.session && self.registry.ptr_eq(&other.registry)
+    }
+}
+
+impl Eq for SessionExecutionScope {}
 
 /// The claimable state of one Session's execution endpoint.
 struct Slot {
@@ -846,6 +1135,24 @@ impl SessionRuntimeManager {
             // no mutex is held while the slot's phase is read.
         }
         self.execution.endpoint(session)
+    }
+
+    /// Builds the Session's non-owning execution dispatch scope for
+    /// composition handoff.
+    ///
+    /// This allocates nothing and proves nothing: the scope is the
+    /// Session identity plus a weak registry route, so it is cheap to
+    /// build for every loaded Session and never extends an endpoint's
+    /// life. Whether a dispatch works is decided at use time by the
+    /// registry lookup and the binding's live-connection check — a scope
+    /// for a Session with no admitted Client is an honest
+    /// `NotConnected`, not a fallback.
+    #[must_use]
+    pub fn execution_scope(&self, session: &SessionId) -> SessionExecutionScope {
+        SessionExecutionScope {
+            session: session.clone(),
+            registry: Arc::downgrade(&self.execution),
+        }
     }
 }
 
@@ -1471,5 +1778,292 @@ mod tests {
             !std::path::Path::new(&published.socket_path).exists(),
             "the retired endpoint's private directory was removed"
         );
+    }
+
+    /// One registry-claimed, published endpoint with a scripted peer
+    /// admitted under the `ReadLines` capability: the claim registry,
+    /// the Session it names, the endpoint, the peer socket, and the
+    /// workspace directory kept alive.
+    fn admitted_lines_endpoint() -> (
+        Arc<SessionExecutionRegistry>,
+        SessionId,
+        Arc<LocalExecutionEndpoint>,
+        UnixStream,
+        tempfile::TempDir,
+    ) {
+        let registry = Arc::new(SessionExecutionRegistry::default());
+        let session = SessionId::generate();
+        let (dir, workspace) = workspace();
+        let slot = create(&registry, &session, &workspace);
+        let endpoint = prepare(&slot, &session, &workspace);
+        let published = bundle(&endpoint);
+        let mut client = UnixStream::connect(&published.socket_path).unwrap();
+        let hello = Hello {
+            version: PROTOCOL_VERSION,
+            session: published.session.clone(),
+            environment: published.environment.clone(),
+            instance: published.instance.clone(),
+            generation: published.generation,
+            workspace: published.workspace.clone(),
+            capabilities: BTreeSet::from([Capability::Connection, Capability::ReadLines]),
+            credential: published.credential.clone(),
+        };
+        let (accepted, _) = endpoint.listener().accept().unwrap();
+        write_record(&mut client, &hello).unwrap();
+        assert!(matches!(
+            endpoint.admit_local_stream(accepted).unwrap(),
+            Ok(())
+        ));
+        assert!(matches!(
+            read_record::<HelloReply>(&mut client).unwrap(),
+            HelloReply::Ok(_)
+        ));
+        (registry, session, endpoint, client, dir)
+    }
+
+    /// An independently-created scope over `registry` for `session` —
+    /// every scope built for the same Session routes through the same
+    /// endpoint and therefore shares its permits.
+    fn scope_for(
+        registry: &Arc<SessionExecutionRegistry>,
+        session: &SessionId,
+    ) -> SessionExecutionScope {
+        SessionExecutionScope {
+            session: session.clone(),
+            registry: Arc::downgrade(registry),
+        }
+    }
+
+    /// A checked `Lines` reply for `path`: one trailing newline, so the
+    /// page is `Complete` with the file's own bytes — the size equals
+    /// the text length, the exact accounting a whole first page needs.
+    fn lines_reply(path: &Path) -> ClientReply {
+        let text = format!("{}\n", path.display());
+        ClientReply::Lines {
+            metadata: FileStamp {
+                size: DecimalU64::new(text.len() as u64),
+                revision: "a".repeat(64),
+                identity: String::from("1:1"),
+                modified_at_ms: None,
+            },
+            text,
+            total_lines: DecimalU64::new(2),
+            shown_lines: 2,
+            end: rustx_execution_protocol::LineEnd::Complete,
+        }
+    }
+
+    /// Waits until the endpoint's shared data budget drains to
+    /// `remaining` free permits — bounded so a stuck dispatch fails the
+    /// test instead of hanging it.
+    async fn wait_data_slots(endpoint: &Arc<LocalExecutionEndpoint>, remaining: usize) {
+        tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while endpoint.data_slots.available_permits() != remaining {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("data slot budget reached");
+    }
+
+    /// A scripted peer for exactly one `ReadLines` request.
+    fn answer_lines(mut client: UnixStream, expected: &Path) -> UnixStream {
+        let request: ClientRequest = read_record(&mut client).unwrap();
+        let ClientRequest::ReadLines { relative_path, .. } = request else {
+            panic!("expected a lines request");
+        };
+        assert_eq!(relative_path, expected);
+        write_record(&mut client, &lines_reply(&relative_path)).unwrap();
+        client
+    }
+
+    /// The shared data budget and the single writer permit are per
+    /// *connection*: eight admitted Agent dispatches — one holding the
+    /// wire, seven waiting on the async side — exhaust the budget, so a
+    /// ninth scope's dispatch is `WouldBlock` with a quiet wire. A
+    /// cancelled waiter releases its permit and writes no frame; every
+    /// released exchange returns its own path's bytes — no
+    /// cross-accounting between queued dispatches.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn agent_page_dispatches_share_one_bounded_writer_budget() {
+        let (registry, session, endpoint, mut client, _dir) = admitted_lines_endpoint();
+        // The parked peer: each request's path is reported, the reply is
+        // held until the test releases it — so exactly one dispatch is
+        // on the wire while the rest wait.
+        let (arrived_tx, mut arrived_rx) = tokio::sync::mpsc::unbounded_channel::<PathBuf>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let peer = std::thread::spawn(move || {
+            while let Ok(request) = read_record::<ClientRequest>(&mut client) {
+                let ClientRequest::ReadLines { relative_path, .. } = request else {
+                    panic!("expected a lines request");
+                };
+                arrived_tx.send(relative_path.clone()).unwrap();
+                if release_rx.recv().is_err() {
+                    break;
+                }
+                write_record(&mut client, &lines_reply(&relative_path)).unwrap();
+            }
+            client
+        });
+
+        let reason = crate::runtime::types::CancellationReason::UserRequested;
+        let mut tasks = Vec::new();
+        let mut signals = Vec::new();
+        for index in 0..MAX_DATA_RECORDS_PER_CONNECTION {
+            let scope = scope_for(&registry, &session);
+            let signal = crate::runtime::CancellationSignal::new();
+            signals.push(signal.clone());
+            let cancellation = crate::runtime::ExecutionCancellation::detached(signal, reason);
+            let path = PathBuf::from(format!("p{index}"));
+            tasks.push(tokio::spawn(async move {
+                (
+                    path.clone(),
+                    scope.read_page(&path, 1, None, false, &cancellation).await,
+                )
+            }));
+        }
+        // All eight admitted: the shared budget is exhausted.
+        wait_data_slots(&endpoint, 0).await;
+        // One is on the wire; the rest wait on the writer permit.
+        let active = arrived_rx.recv().await.expect("the first request arrived");
+        assert_eq!(endpoint.data_slots.available_permits(), 0);
+
+        // The ninth admitted-scope dispatch — an independently created
+        // scope — is refused by the spent budget, before the wire.
+        let ninth_scope = scope_for(&registry, &session);
+        let ninth_cancellation = crate::runtime::ExecutionCancellation::detached(
+            crate::runtime::CancellationSignal::new(),
+            reason,
+        );
+        let error = ninth_scope
+            .read_page(Path::new("p9"), 1, None, false, &ninth_cancellation)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::WouldBlock, "{error}");
+
+        // Cancel one waiter: its permit returns and no frame is ever
+        // written for its path.
+        let active_index: usize = active
+            .to_str()
+            .unwrap()
+            .strip_prefix('p')
+            .unwrap()
+            .parse()
+            .unwrap();
+        let cancelled_index = usize::from(active_index == 0);
+        signals[cancelled_index].cancel();
+        let (cancelled_path, cancelled_result) = tasks.remove(cancelled_index).await.unwrap();
+        assert_eq!(cancelled_path, PathBuf::from(format!("p{cancelled_index}")));
+        assert_eq!(
+            cancelled_result.unwrap_err().kind(),
+            io::ErrorKind::Interrupted
+        );
+        wait_data_slots(&endpoint, 1).await;
+
+        // Release every exchange in arrival order; the cancelled path
+        // never reaches the wire and each reply belongs to its request.
+        release_tx.send(()).unwrap();
+        let mut served = vec![active];
+        while served.len() < MAX_DATA_RECORDS_PER_CONNECTION - 1 {
+            let arrived =
+                tokio::time::timeout(std::time::Duration::from_secs(30), arrived_rx.recv())
+                    .await
+                    .expect("queued dispatches proceed")
+                    .expect("peer stays live");
+            assert_ne!(
+                arrived,
+                PathBuf::from(format!("p{cancelled_index}")),
+                "a cancelled waiter must never write a frame"
+            );
+            release_tx.send(()).unwrap();
+            served.push(arrived);
+        }
+        for task in tasks {
+            let (path, result) = task.await.unwrap();
+            assert_eq!(
+                result.unwrap().text,
+                format!("{}\n", path.display()),
+                "each exchange accounts for its own path"
+            );
+        }
+        drop(arrived_rx);
+        drop(release_tx);
+        // The registry's claim slot also holds an Arc to the endpoint —
+        // both must go before the connection closes and the peer's
+        // blocking read sees EOF.
+        drop(registry);
+        drop(endpoint);
+        let mut client = peer.join().unwrap();
+        wire_is_closed(&mut client);
+    }
+
+    /// An `admit` refusal runs after encode + the binding check but
+    /// before the first request byte: the caller's error returns
+    /// verbatim, the wire stays quiet, and the connection serves the
+    /// next dispatch normally — a refused admission never retires.
+    #[test]
+    fn a_refused_page_admission_writes_no_frame_and_keeps_the_connection() {
+        let (_registry, _session, endpoint, mut client, _dir) = admitted_lines_endpoint();
+        let data = endpoint.data_slots.clone().try_acquire_owned().unwrap();
+        let writer = endpoint.agent_writer.clone().try_acquire_owned().unwrap();
+        let refused = io::Error::new(io::ErrorKind::Interrupted, "read cancelled before dispatch");
+        let error = endpoint
+            .read_page_admitted(
+                Path::new("note"),
+                1,
+                None,
+                false,
+                Instant::now() + PAGE_REQUEST_TIMEOUT,
+                data,
+                writer,
+                || Err(refused),
+                || panic!("a refused admission never reaches the wire"),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(error.to_string(), "read cancelled before dispatch");
+        wire_is_quiet(&mut client);
+
+        // The connection stayed live: an ordinary page dispatch works.
+        let answer = std::thread::spawn(move || answer_lines(client, Path::new("note")));
+        let page = endpoint
+            .read_lines(Path::new("note"), 1, None, None)
+            .unwrap()
+            .1;
+        assert_eq!(page.text, "note\n");
+        let mut client = answer.join().unwrap();
+        wire_is_quiet(&mut client);
+    }
+
+    /// An absolute deadline carried into the exchange bounds the whole
+    /// round trip: an already-expired budget writes nothing, returns
+    /// `TimedOut`, and retires the connection — a partial reply
+    /// accounting can never be trusted.
+    #[test]
+    fn an_expired_page_deadline_times_out_and_retires_the_connection() {
+        let (_registry, _session, endpoint, mut client, _dir) = admitted_lines_endpoint();
+        let data = endpoint.data_slots.clone().try_acquire_owned().unwrap();
+        let writer = endpoint.agent_writer.clone().try_acquire_owned().unwrap();
+        let error = endpoint
+            .read_page_admitted(
+                Path::new("note"),
+                1,
+                None,
+                false,
+                Instant::now()
+                    .checked_sub(std::time::Duration::from_secs(1))
+                    .unwrap(),
+                data,
+                writer,
+                || Ok(()),
+                || panic!("an expired deadline never reaches the wire"),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(matches!(
+            endpoint.binding().status().phase,
+            BindingPhase::Detached
+        ));
+        wire_is_closed(&mut client);
     }
 }

@@ -13,7 +13,10 @@
 //! line addressing, slicing, the 2000-line/50KB bounds, continuation
 //! diagnostics, and result semantics.
 
+#[cfg(test)]
 mod document;
+#[cfg(test)]
+pub(crate) use document::read_hooks;
 mod input;
 #[cfg(test)]
 mod testdata;
@@ -22,7 +25,7 @@ use std::fmt::Write as _;
 
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
-use crate::tools::limits::{MAX_READ_LINES, NATIVE_FILE_TOOL_MAX_BYTES};
+use crate::tools::limits::NATIVE_FILE_TOOL_MAX_BYTES;
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
 use crate::tools::native::support::{
     cancelled_result, failed_result, interpret_path, success_text,
@@ -86,106 +89,102 @@ async fn run_read(
         Err(error) => return failed_result(error),
     };
     let target = interpret_path(context.workspace.root(), &input.path);
-    match document::classify_source(&target) {
-        document::SourceKind::Document(format) => {
-            // Admission: cancellation observable before the decoder is
-            // admitted means the decode never starts.
-            if context.cancellation.is_cancelled() {
-                return cancelled_result(context.cancellation.reason());
-            }
-            // Decoding is materially more expensive than UTF-8 validation,
-            // so it runs on the runtime's blocking-pool boundary instead of
-            // an async reactor thread. A blocking task cannot be safely
-            // abandoned once started, so cancellation never detaches it:
-            // when cancellation wins after admission, the same join handle
-            // is awaited to physical settlement and the decode's semantic
-            // result is discarded in favor of the normalized cancelled
-            // result. There is no separate document cancellation model: the
-            // invocation observes the runtime cancellation through the
-            // normal Tool Plane contract, with the Agent Loop as the
-            // authority.
-            let decode_target = target.clone();
-            let mut decode = tokio::task::spawn_blocking(move || {
-                document::decode_document(&decode_target, format)
-            });
-            let settled = tokio::select! {
-                biased;
-                // The cancellation authority wins the race, including ties
-                // with a decode that completed in the same wakeup.
-                () = context.cancellation.cancelled() => None,
-                joined = &mut decode => Some(joined),
-            };
-            let Some(joined) = settled else {
-                // Physically settle the blocking decode, discard whatever
-                // it produced, and settle the tool as cancelled.
-                let _ = decode.await;
-                return cancelled_result(context.cancellation.reason());
-            };
-            let text = match joined {
-                Ok(Ok(text)) => text,
-                Ok(Err(error)) => return failed_result(error),
-                Err(error) => {
-                    return failed_result(format!(
-                        "cannot decode {}: document decode task failed: {error}",
-                        target.display()
-                    ));
-                }
-            };
-            // The logical text of a document source is its projected
-            // Markdown: `original_bytes` reports the size of the complete
-            // untruncated output, not the size of the compressed binary
-            // source. The same streaming scanner owns the projection, so
-            // a document and a plain file share one paging contract.
-            let page = match page_limits().scan_text(text.as_bytes(), input.offset(), input.limit) {
-                Ok(page) => page,
-                Err(error) => {
-                    return failed_result(format!("cannot project {}: {error}", target.display()));
-                }
-            };
-            project_page(&page, &input)
-        }
-        document::SourceKind::Text => {
-            // Plain text never lands in memory: the file streams through
-            // the same scanner on the blocking pool, validating UTF-8
-            // across the whole source — an invalid tail behind the
-            // requested page is still the binary refusal, never served.
-            let offset = input.offset();
-            let limit = input.limit;
-            let scan_target = target.clone();
-            let page = match tokio::task::spawn_blocking(move || {
-                std::fs::File::open(&scan_target)
-                    .and_then(|file| page_limits().scan_text(file, offset, limit))
-            })
-            .await
-            {
-                Ok(Ok(page)) => page,
-                Ok(Err(error)) if error.kind() == std::io::ErrorKind::InvalidData => {
-                    return failed_result(format!(
-                        "{} is not a UTF-8 text file; binary content is never fabricated as text",
-                        target.display()
-                    ));
-                }
-                Ok(Err(error)) => {
-                    return failed_result(format!("cannot read {}: {error}", target.display()));
-                }
-                Err(error) => {
-                    return failed_result(format!(
-                        "cannot read {}: read task failed: {error}",
-                        target.display()
-                    ));
-                }
-            };
-            project_page(&page, &input)
-        }
+    // The shared whitelist picks the wire operation: a whitelisted
+    // extension dispatches the document-page exchange, everything else
+    // the plain text page. The same classification runs Client-side —
+    // one policy, never a second opinion.
+    let format = match rustx_execution_protocol::classify_source(&target) {
+        rustx_execution_protocol::SourceKind::Document(format) => Some(format),
+        rustx_execution_protocol::SourceKind::Text => None,
+    };
+    // Cancellation observable before the exchange is admitted means the
+    // dispatch never starts: no request frame is ever written for a
+    // cancelled read.
+    if context.cancellation.is_cancelled() {
+        return cancelled_result(context.cancellation.reason());
     }
+    // There is no Server-local read path: the Session's admitted
+    // Execution Client is the only physical reader, reached through the
+    // non-owning route composition bound to this workspace. An unbound
+    // route is an honest refusal, never a fallback.
+    let Some(scope) = context.workspace.execution_scope().cloned() else {
+        return failed_result("Session execution unavailable: no admitted Execution Client");
+    };
+    // The scope owns the whole dispatch: bounded admission, the single
+    // writer wait under the absolute page deadline, and the blocking
+    // exchange awaited to physical settlement even when cancellation
+    // wins — a cancelled read never detaches the wire.
+    let page = match scope
+        .read_page(
+            &target,
+            input.offset(),
+            input.limit,
+            format.is_some(),
+            &context.cancellation,
+        )
+        .await
+    {
+        Ok(page) => page,
+        Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {
+            return cancelled_result(context.cancellation.reason());
+        }
+        Err(error) => return failed_result(read_failure(&target, format, &error)),
+    };
+    project_page(&page, &input)
 }
 
-/// The page bounds the shared scanner runs under — the execution
-/// protocol's single policy, reached through the tool limits.
-fn page_limits() -> rustx_confined_fs::PageLimits {
-    rustx_confined_fs::PageLimits {
-        max_bytes: NATIVE_FILE_TOOL_MAX_BYTES,
-        max_lines: MAX_READ_LINES,
+/// Renders one physical-read failure as the user-meaningful diagnostic.
+/// The stable [`rustx_execution_protocol::ReadError`] code is recovered by
+/// downcast — message text is never parsed — and mapped onto the
+/// historical Read diagnostics using only the interpreted target and the
+/// whitelist's extension label. Parser details never cross the execution
+/// boundary, so a decode refusal reports the rustX classification.
+fn read_failure(
+    target: &std::path::Path,
+    format: Option<rustx_execution_protocol::DocumentFormat>,
+    error: &std::io::Error,
+) -> String {
+    use rustx_execution_protocol::ReadError;
+    // The unavailable condition carries its own complete diagnostic —
+    // wrapping it in "cannot read" would only obscure it.
+    if error.kind() == std::io::ErrorKind::NotConnected {
+        return error.to_string();
+    }
+    let physical = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustx_execution_server::PhysicalError>())
+        .map(|physical| physical.0);
+    match physical {
+        Some(ReadError::InvalidUtf8) => format!(
+            "{} is not a UTF-8 text file; binary content is never fabricated as text",
+            target.display()
+        ),
+        Some(ReadError::DocumentTooLarge) => format!(
+            "{} is at least {} bytes; document reads are bounded to {} bytes",
+            target.display(),
+            rustx_execution_protocol::MAX_DOCUMENT_SOURCE_BYTES + 1,
+            rustx_execution_protocol::MAX_DOCUMENT_SOURCE_BYTES
+        ),
+        Some(ReadError::NoTextLayer) => format!(
+            "{} has no extractable text layer; rustX never performs OCR or image inference",
+            target.display()
+        ),
+        Some(ReadError::DocumentDecodeFailed | ReadError::UnsupportedDocument) => format!(
+            "cannot decode {} as {}: document decode failed",
+            target.display(),
+            format.map_or("document", rustx_execution_protocol::DocumentFormat::label)
+        ),
+        Some(ReadError::NotFound) => {
+            format!("cannot read {}: the path does not exist", target.display())
+        }
+        Some(ReadError::Denied) => {
+            format!("cannot read {}: access is denied", target.display())
+        }
+        Some(ReadError::Conflict) => format!(
+            "cannot read {}: the file changed while it was being read",
+            target.display()
+        ),
+        _ => format!("cannot read {}: {error}", target.display()),
     }
 }
 
@@ -316,7 +315,9 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     async fn reads_skill_files_at_their_published_host_paths() {
         let directory = tempfile::tempdir().expect("temporary root");
-        let workspace = Workspace::new(directory.path()).expect("workspace");
+        let execution = crate::session_execution_support::ExecutionFixture::new(directory.path());
+        let mut workspace = Workspace::new(directory.path()).expect("workspace");
+        workspace.bind_execution_scope(Some(execution.scope.clone()));
         let skill_root = directory.path().join(".agents/skills");
         let skill = skill_root.join("release-guide");
         std::fs::create_dir_all(skill.join("assets")).expect("Skill root");
@@ -463,8 +464,10 @@ mod tests {
             panic!("Read returned unexpected content: {asset_result:?}");
         };
         assert!(text.text.contains("procedure"));
-        // Internal resource links use exactly the normal host-file Tool path
-        // contract; the Skill boundary adds no filesystem permission or ACL.
+        // A symlink inside the workspace is still refused: the confined
+        // read opens sources no-follow at the leaf, so link indirection —
+        // even to an in-root target — is an honest denial, never a
+        // Server-local dereference.
         let shared = directory.path().join("shared-reference.md");
         std::fs::write(&shared, "shared reference").unwrap();
         let linked = skill.join("reference.md");
@@ -472,7 +475,13 @@ mod tests {
         let (invocation, execution) =
             context("read-skill-reference-link", &linked.to_string_lossy());
         let linked = ReadTool.start(invocation, execution).completion.await;
-        assert_eq!(linked.status, ToolExecutionStatus::Success);
+        let crate::tools::types::ToolExecutionStatus::Failed { error } = &linked.status else {
+            panic!("a leaf symlink must be refused: {linked:?}");
+        };
+        assert!(
+            !error.contains("shared reference"),
+            "no linked body may leak: {error}"
+        );
 
         // A missing workspace-relative path still fails; Skill locations are
         // ordinary host paths, not virtual aliases.
@@ -487,9 +496,14 @@ mod tests {
         ));
     }
 
+    /// A Skill package whose published location escapes the Session's
+    /// admitted workspace root is honestly refused: discovery canonicalizes
+    /// the instruction link to the external file it names, and Read —
+    /// confined to the admitted root with no Server-local fallback —
+    /// reports the denial without leaking a byte of either linked file.
     #[cfg(unix)]
     #[tokio::test]
-    async fn native_read_follows_skill_instruction_and_resource_links() {
+    async fn skill_locations_escaping_the_admitted_root_are_denied() {
         let reader = TestRead::new();
         let skill_root = reader.workspace.root().join(".agents/skills");
         let skill = skill_root.join("linked-guide");
@@ -517,7 +531,11 @@ mod tests {
         let result = reader
             .read("read-linked-skill", serde_json::json!({ "path": location }))
             .await;
-        assert!(text_of(&result).contains("Read references.md"));
+        let error = failure_of(result);
+        assert!(
+            !error.contains("Read references.md"),
+            "the escaping instruction body must not leak: {error}"
+        );
         let reference = Path::new(location).with_file_name("references.md");
         let result = reader
             .read(
@@ -525,7 +543,11 @@ mod tests {
                 serde_json::json!({ "path": reference }),
             )
             .await;
-        assert!(text_of(&result).contains("Linked resource."));
+        let error = failure_of(result);
+        assert!(
+            !error.contains("Linked resource."),
+            "the escaping resource body must not leak: {error}"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -535,22 +557,15 @@ mod tests {
     /// The committed corpus of deterministic document fixtures.
     const FIXTURE_ROOT: &str = "tests/fixtures/read/documents";
 
-    /// The absolute host path of one committed fixture. Absolute host
-    /// filesystem paths are the current Read path contract, so the fixtures
-    /// are addressed exactly the way a model would address them.
-    fn fixture_path(relative: &str) -> String {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(FIXTURE_ROOT)
-            .join(relative)
-            .to_str()
-            .expect("fixture path is UTF-8")
-            .to_owned()
-    }
-
-    /// A minimal end-to-end harness: one workspace plus the full
-    /// `ToolExecutionContext`, exactly the native-tool execution boundary.
+    /// A minimal end-to-end harness: one workspace bound to a real
+    /// Session execution route (an admitted staged Execution Client)
+    /// plus the full `ToolExecutionContext`, exactly the native-tool
+    /// execution boundary. Native Read has no Server-local path, so a
+    /// harness without the route would only prove the unavailable
+    /// diagnostic.
     struct TestRead {
         _directory: tempfile::TempDir,
+        _execution: crate::session_execution_support::ExecutionFixture,
         workspace: Workspace,
         conversation_id: ConversationId,
         artifacts: ArtifactStore,
@@ -562,7 +577,10 @@ mod tests {
     impl TestRead {
         fn new() -> Self {
             let directory = tempfile::tempdir().expect("temporary root");
-            let workspace = Workspace::new(directory.path()).expect("workspace");
+            let execution =
+                crate::session_execution_support::ExecutionFixture::new(directory.path());
+            let mut workspace = Workspace::new(directory.path()).expect("workspace");
+            workspace.bind_execution_scope(Some(execution.scope.clone()));
             let conversation_id = ConversationId::new("conv_82600fb2-6716-7582-89ab-f9b94f09c78f");
             let artifacts =
                 ArtifactStore::new(conversation_id.clone(), directory.path().join("artifacts"))
@@ -574,6 +592,7 @@ mod tests {
             .expect("managed output");
             Self {
                 _directory: directory,
+                _execution: execution,
                 workspace,
                 conversation_id,
                 artifacts,
@@ -638,6 +657,24 @@ mod tests {
             let path = self.workspace.root().join(name);
             std::fs::write(&path, bytes).expect("fixture bytes");
             path.to_str().expect("workspace path is UTF-8").to_owned()
+        }
+
+        /// Copies one committed corpus fixture into the authorized
+        /// workspace under its exact name and returns the absolute host
+        /// path — the execution boundary can only serve files inside the
+        /// Session's admitted workspace root.
+        fn copy_fixture(&self, relative: &str) -> String {
+            let bytes = std::fs::read(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join(FIXTURE_ROOT)
+                    .join(relative),
+            )
+            .unwrap_or_else(|error| panic!("committed fixture {relative}: {error}"));
+            let target = self.workspace.root().join("documents").join(relative);
+            std::fs::create_dir_all(target.parent().expect("fixture parent"))
+                .expect("fixture directory");
+            std::fs::write(&target, bytes).expect("fixture copy");
+            target.to_str().expect("workspace path is UTF-8").to_owned()
         }
     }
 
@@ -716,7 +753,7 @@ mod tests {
         ];
         let read = TestRead::new();
         for (fixture, fragments) in expected_fragments {
-            let path = fixture_path(fixture);
+            let path = read.copy_fixture(fixture);
             let first = read
                 .read("first", serde_json::json!({ "path": path }))
                 .await;
@@ -751,7 +788,7 @@ mod tests {
         let result = read
             .read(
                 "multi",
-                serde_json::json!({ "path": fixture_path("pdf/multi-page-text.pdf") }),
+                serde_json::json!({ "path": read.copy_fixture("pdf/multi-page-text.pdf") }),
             )
             .await;
         assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -773,7 +810,7 @@ mod tests {
         let result = read
             .read(
                 "table",
-                serde_json::json!({ "path": fixture_path("pdf/table-heavy.pdf") }),
+                serde_json::json!({ "path": read.copy_fixture("pdf/table-heavy.pdf") }),
             )
             .await;
         assert_eq!(result.status, ToolExecutionStatus::Success);
@@ -797,7 +834,7 @@ mod tests {
         let result = read
             .read(
                 "scan",
-                serde_json::json!({ "path": fixture_path("pdf/scanned-no-text.pdf") }),
+                serde_json::json!({ "path": read.copy_fixture("pdf/scanned-no-text.pdf") }),
             )
             .await;
         let error = failure_of(result);
@@ -816,7 +853,7 @@ mod tests {
     #[tokio::test]
     async fn offset_and_limit_address_projected_markdown_lines() {
         let read = TestRead::new();
-        let path = fixture_path("xlsx/small.xlsx");
+        let path = read.copy_fixture("xlsx/small.xlsx");
         // The projected workbook has 12 lines: `## Summary`, blank, table,
         // blank, `## Data`, blank, table.
         let page = read
@@ -902,11 +939,13 @@ mod tests {
         // The honest logical size: the complete projected Markdown, not the
         // stored (compressed) .docx bytes. The decode runs on the same
         // blocking boundary the tool itself uses.
-        let workspace_root = read.workspace.root().to_path_buf();
+        // The decoder drives its own current-thread runtime, so it runs
+        // on the blocking pool here just as it does inside the Client.
+        let notes_path = read.workspace.root().join("notes.docx");
         let projected = tokio::task::spawn_blocking(move || {
-            document::decode_document(
-                &workspace_root.join("notes.docx"),
-                document::DocumentFormat::Docx,
+            rustx_document_reader::decode(
+                std::fs::read(&notes_path).expect("fixture bytes"),
+                rustx_document_reader::DocumentFormat::Docx,
             )
         })
         .await
@@ -980,39 +1019,37 @@ mod tests {
         );
     }
 
-    /// Document reads and text reads follow the same current path
-    /// interpretation: both accept absolute host filesystem paths outside
-    /// the workspace root. Both fixtures live in a separate temporary
-    /// directory (tempdir B) while the tool's workspace is another one
-    /// (tempdir A); the repository checkout is never written.
+    /// Document reads and text reads share one confinement contract: both
+    /// dispatch only inside the Session's admitted workspace root. An
+    /// absolute host path outside that root — spelled directly or reached
+    /// through a symlink inside the root — is refused by the Execution
+    /// Client, the tool reports the denial, and no body bytes can leak.
+    /// There is no Server-local read to fall back to.
+    #[cfg(unix)]
     #[tokio::test]
-    async fn document_and_text_reads_share_the_absolute_path_contract() {
+    async fn reads_outside_the_admitted_workspace_are_denied() {
         let read = TestRead::new();
         let external = tempfile::tempdir().expect("external directory");
         let document_path = external.path().join("briefing.docx");
         std::fs::write(&document_path, testdata::docx()).expect("document fixture");
         let text_path = external.path().join("notes.txt");
         std::fs::write(&text_path, "ordinary text\n").expect("text fixture");
+        let escape_link = read.workspace.root().join("escape.txt");
+        std::os::unix::fs::symlink(&text_path, &escape_link).expect("escape symlink");
 
-        let document = read
-            .read(
-                "doc",
-                serde_json::json!({ "path": document_path.to_str().expect("UTF-8 path") }),
-            )
-            .await;
-        assert_eq!(document.status, ToolExecutionStatus::Success);
-        assert!(text_of(&document).contains("## Quarterly Report"));
-
-        // The same contract for an ordinary text file in the same external
-        // location, read through its absolute host path.
-        let text_read = read
-            .read(
-                "txt",
-                serde_json::json!({ "path": text_path.to_str().expect("UTF-8 path") }),
-            )
-            .await;
-        assert_eq!(text_read.status, ToolExecutionStatus::Success);
-        assert_eq!(text_of(&text_read), "ordinary text\n");
+        for target in [&document_path, &text_path, &escape_link] {
+            let result = read
+                .read(
+                    "outside",
+                    serde_json::json!({ "path": target.to_str().expect("UTF-8 path") }),
+                )
+                .await;
+            let error = failure_of(result);
+            assert!(
+                !error.contains("Quarterly Report") && !error.contains("ordinary text"),
+                "no out-of-root body may leak: {error}"
+            );
+        }
     }
 
     /// The rustX-owned source-size bound rejects an oversized document
@@ -1062,9 +1099,17 @@ mod tests {
         );
         let over_result = read.read("over", serde_json::json!({ "path": over })).await;
         let error = failure_of(over_result);
+        // The Agent boundary reports the stable rustX classification; the
+        // parser's detailed member-limit reason stays at the parser
+        // boundary (see the document-reader test) and never crosses the
+        // execution wire.
         assert!(
-            error.contains("cannot decode") && error.contains("exceeds limit of 10000"),
-            "the member bound, not package malformation, must reject the package: {error}"
+            error.contains("cannot decode") && error.contains("as DOCX"),
+            "the member bound must surface as a decode refusal: {error}"
+        );
+        assert!(
+            !error.contains("exceeds limit"),
+            "parser detail must not cross the Agent boundary: {error}"
         );
     }
 
@@ -1099,17 +1144,20 @@ mod tests {
         );
     }
 
-    /// Cancellation observable before decode admission means the blocking
-    /// decoder is never started, and the tool settles as cancelled.
+    /// Cancellation observable before dispatch means the exchange is
+    /// never admitted — no request frame is ever written — and the tool
+    /// settles as cancelled.
     // The session guard deliberately spans the awaits: it serializes the
     // hook-using tests within this single-threaded test runtime.
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
-    async fn document_decode_is_never_admitted_after_cancellation() {
+    async fn a_cancelled_read_is_never_dispatched() {
         let read = TestRead::new();
         let path = read.write("pre-cancelled.docx", &testdata::docx());
-        let _session = document::decode_hooks::lock_session();
-        let hook = document::decode_hooks::install(std::path::Path::new(&path));
+        let _session = document::read_hooks::lock_session();
+        // The post-send cut: `starts` literally counts request frames
+        // written to the wire.
+        let hook = document::read_hooks::install_sent(std::path::Path::new(&path));
 
         let signal = crate::runtime::CancellationSignal::new();
         signal.cancel();
@@ -1124,16 +1172,64 @@ mod tests {
                 phase: crate::tools::types::ToolCancellationPhase::BeforeStart,
             }
         );
-        assert_eq!(hook.starts(), 0, "a cancelled read must never decode");
+        assert_eq!(hook.starts(), 0, "a cancelled read writes no request frame");
     }
 
-    /// Cancellation observed after decode admission: Read stays pending at
-    /// the exact cut where cancellation is observable and the admitted
-    /// blocking decode is still physically blocked, waits for that decode
-    /// body to complete before settling, discards its successful semantic
+    /// Cancellation observed while the exchange is parked inside its
+    /// acceptance gate — before the linearized `with_active` grant —
+    /// still yields zero request frames: releasing the gate lets the
+    /// grant run, and the grant refuses. The connection itself is never
+    /// touched.
+    // The session guard deliberately spans the awaits: it serializes the
+    // hook-using tests within this single-threaded test runtime.
+    #[allow(clippy::await_holding_lock)]
+    #[tokio::test]
+    async fn a_cancelled_admission_writes_no_request_frame() {
+        let read = TestRead::new();
+        let path = read.write("gate-cancelled.docx", &testdata::docx());
+        let _session = document::read_hooks::lock_session();
+        let mut hook = document::read_hooks::install_gated(std::path::Path::new(&path));
+        // A second watcher on the post-send cut is impossible (one hook
+        // at a time), so the reply counter is the evidence no frame ever
+        // reached the Client: an answered request would count a reply.
+        let signal = crate::runtime::CancellationSignal::new();
+        let mut read_future =
+            read.execute_with_signal("doc", serde_json::json!({ "path": path }), &signal);
+
+        // The worker reaches the acceptance gate and parks there.
+        let probed =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx))).await;
+        assert!(probed.is_pending(), "read must not settle immediately");
+        hook.wait_started().await;
+
+        // Cancellation becomes observable while the exchange is gated
+        // inside its own admission — before `with_active` runs.
+        signal.cancel();
+        hook.release();
+
+        let result = read_future.await;
+        assert_eq!(
+            result.status,
+            ToolExecutionStatus::Cancelled {
+                reason: crate::runtime::types::CancellationReason::UserRequested,
+                phase: crate::tools::types::ToolCancellationPhase::DuringExecution,
+            }
+        );
+        assert_eq!(hook.starts(), 1, "the admission cut was reached");
+        assert_eq!(
+            hook.replies(),
+            0,
+            "a refused admission writes no request frame, so no reply exists"
+        );
+    }
+
+    /// Cancellation observed after dispatch admission: Read stays pending
+    /// at the exact cut where cancellation is observable and the admitted
+    /// blocking exchange is still physically gated, waits for the accepted
+    /// operation's reply before settling, discards its successful semantic
     /// result, and settles as the normalized cancelled result. (Blocking-
     /// task physical settlement itself is established by the production
-    /// executor's `decode.await`; this test proves Read cannot settle
+    /// executor's `exchange.await`; this test proves Read cannot settle
     /// before that await has done its job.)
     ///
     /// The synchronization is fully deterministic (rendezvous edges and
@@ -1144,60 +1240,64 @@ mod tests {
     // hook-using tests within this single-threaded test runtime.
     #[allow(clippy::await_holding_lock)]
     #[tokio::test]
-    async fn document_read_settles_cancelled_after_decode_started() {
+    async fn document_read_settles_cancelled_after_dispatch_started() {
         let read = TestRead::new();
         // A valid document: the decode, if allowed to finish, would succeed.
         let path = read.write("gated.docx", &testdata::docx());
-        let _session = document::decode_hooks::lock_session();
-        let mut hook = document::decode_hooks::install_gated(std::path::Path::new(&path));
+        let _session = document::read_hooks::lock_session();
+        // The post-send cut: the exchange is gated with its request frame
+        // already on the wire and the reply unread — an accepted exchange
+        // the settlement await must still run to its physical end.
+        let mut hook = document::read_hooks::install_sent_gated(std::path::Path::new(&path));
 
         let signal = crate::runtime::CancellationSignal::new();
         let mut read_future =
             read.execute_with_signal("doc", serde_json::json!({ "path": path }), &signal);
 
-        // 1. First poll: admits the decode (spawns the blocking task).
+        // 1. First poll: admits the exchange (spawns the blocking task).
         let probed =
             std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx))).await;
         assert!(probed.is_pending(), "read must not settle immediately");
 
-        // 2. Start rendezvous: the decoder has definitely entered the xberg
-        //    pipeline and is about to block in the gate.
+        // 2. Start rendezvous: the dispatch worker has definitely entered
+        //    the exchange and is about to block in the gate.
         hook.wait_started().await;
 
-        // 3. While the decoder is physically blocked, Read must not report
+        // 3. While the exchange is physically gated, Read must not report
         //    any semantic result.
         let probed =
             std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx))).await;
         assert!(
             probed.is_pending(),
-            "a gated decode must not settle: {probed:?}"
+            "a gated exchange must not settle: {probed:?}"
         );
 
-        // 4. Cancellation becomes observable while the decode is paused.
+        // 4. Cancellation becomes observable while the exchange is gated.
         signal.cancel();
 
         // 5. The critical cut: cancellation observable AND the admitted
-        //    blocking decode still physically blocked. Read must remain
+        //    blocking exchange still physically gated. Read must remain
         //    pending here — it may only settle after the blocking task has
         //    physically settled.
         let probed =
             std::future::poll_fn(|cx| std::task::Poll::Ready(read_future.as_mut().poll(cx))).await;
         assert!(
             probed.is_pending(),
-            "Read must not settle while the admitted blocking decode is still physically running: {probed:?}"
+            "Read must not settle while the admitted blocking exchange is still physically running: {probed:?}"
         );
 
-        // 6. The decode body has not completed yet.
-        assert!(!hook.decode_completed());
+        // 6. The accepted exchange has not replied yet.
+        assert!(!hook.replied());
 
-        // 7–8. Release the gate, then rendezvous on decode completion.
-        //       Without the executor's settlement await this rendezvous
-        //       would race an already-settled (abandoned) tool.
+        // 7–8. Release the gate, then rendezvous on the reply the
+        //       accepted exchange must produce. Without the executor's
+        //       settlement await this rendezvous would race an
+        //       already-settled (abandoned) tool.
         hook.release();
-        hook.wait_decode_completed().await;
+        hook.wait_replied().await;
 
-        // 9. Read settles as the normalized cancelled result: the decode's
-        //    success is discarded.
+        // 9. Read settles as the normalized cancelled result: the
+        //    exchange's success is discarded.
         let result = read_future.await;
         assert_eq!(
             result.status,
@@ -1207,8 +1307,8 @@ mod tests {
             }
         );
 
-        // 10. Exactly one admission and exactly one decode completion.
+        // 10. Exactly one dispatch and exactly one reply.
         assert_eq!(hook.starts(), 1);
-        assert_eq!(hook.completed_count(), 1);
+        assert_eq!(hook.replies(), 1);
     }
 }

@@ -62,6 +62,74 @@ pub const MAX_DOCUMENT_SOURCE_BYTES: usize = 32 * 1024 * 1024;
 /// of the compressed source's byte length.
 pub const MAX_DOCUMENT_LOGICAL_BYTES: u64 = 64 * 1024 * 1024;
 
+/// The closed rustX-owned whitelist of structured document formats a
+/// `ReadDocument` may decode.
+///
+/// Adding a variant here is the only way a new model-facing format can
+/// appear; a parser gaining support for another format never changes the
+/// contract on its own. The whitelist is rustX policy shared verbatim by
+/// the Execution Client and the native Read tool — there is exactly one
+/// classification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DocumentFormat {
+    /// Portable Document Format.
+    Pdf,
+    /// Office Open XML word processing document.
+    Docx,
+    /// Office Open XML spreadsheet.
+    Xlsx,
+    /// Office Open XML presentation.
+    Pptx,
+}
+
+impl DocumentFormat {
+    /// The human-readable format label used in deterministic failure
+    /// diagnostics.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Pdf => "PDF",
+            Self::Docx => "DOCX",
+            Self::Xlsx => "XLSX",
+            Self::Pptx => "PPTX",
+        }
+    }
+}
+
+/// The rustX-owned source classification of one target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    /// An ordinary byte source decoded as UTF-8 text by the faithful text
+    /// path.
+    Text,
+    /// A whitelisted structured document decoded through the shared
+    /// parser policy.
+    Document(DocumentFormat),
+}
+
+/// Classifies one already-interpreted target by its extension.
+///
+/// The comparison is deterministic: the extension is matched
+/// case-insensitively against the closed whitelist, and only the final
+/// extension component participates. Content is never sniffed to expand or
+/// redirect the whitelist; a mislabeled file is decoded by exactly the
+/// decoder its extension selects.
+#[must_use]
+pub fn classify_source(target: &std::path::Path) -> SourceKind {
+    let Some(extension) = target.extension().and_then(|e| e.to_str()) else {
+        return SourceKind::Text;
+    };
+    let normalized = extension.to_ascii_lowercase();
+    let format = match normalized.as_str() {
+        "pdf" => DocumentFormat::Pdf,
+        "docx" => DocumentFormat::Docx,
+        "xlsx" => DocumentFormat::Xlsx,
+        "pptx" => DocumentFormat::Pptx,
+        _ => return SourceKind::Text,
+    };
+    SourceKind::Document(format)
+}
+
 /// Maximum data records queued or in flight on one connection.
 pub const MAX_DATA_RECORDS_PER_CONNECTION: usize = 8;
 

@@ -574,6 +574,7 @@ impl SessionRuntimeManager {
             startup,
             &initialization.cancellation,
             &access.node.dynamic_tools,
+            Some(self.execution_scope(&access.session.id)),
         )
         .await
         .map_err(|failure| match failure {

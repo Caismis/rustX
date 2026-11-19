@@ -23,7 +23,7 @@ use rustx_execution_protocol::{
     MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES, MAX_RAW_CHUNK_BYTES, MAX_TEXT_BYTES,
     MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry, ReadError, Reject, SessionId,
     is_normalized_absolute_path,
-    transport::{Handshake, encode_record, read_record, write_record},
+    transport::{DeadlineStream, PAGE_REQUEST_TIMEOUT, encode_record, read_record, write_record},
 };
 use sha2::{Digest, Sha256};
 
@@ -391,7 +391,7 @@ impl Binding {
         let revoke_handle = stream.try_clone()?;
         // The handshake wrapper itself normalizes the stream to
         // nonblocking mode, whatever flag an accept inherited.
-        let mut handshake = Handshake::new(&mut stream, deadline)?;
+        let mut handshake = DeadlineStream::new(&mut stream, deadline)?;
         let hello: Hello = read_record(&mut handshake)?;
         let capabilities = hello.capabilities.clone();
         let connection = fresh_connection_id()?;
@@ -427,15 +427,15 @@ impl Binding {
     /// stays live on a connection the peer does not know it owns.
     fn deliver(
         &self,
-        handshake: &mut Handshake<'_>,
+        stream: &mut DeadlineStream<'_>,
         connection: &ConnectionId,
         admission: &Admission,
     ) -> io::Result<()> {
-        let delivered = write_record(handshake, &HelloReply::Ok(admission.clone()))
-            .and_then(|()| handshake.finish());
+        let delivered =
+            write_record(stream, &HelloReply::Ok(admission.clone())).and_then(|()| stream.finish());
         if let Err(error) = delivered {
             self.disconnect(connection);
-            let _ = handshake.get_mut().shutdown(std::net::Shutdown::Both);
+            let _ = stream.get_mut().shutdown(std::net::Shutdown::Both);
             return Err(error);
         }
         Ok(())
@@ -589,12 +589,45 @@ impl LocalConnection {
     /// fails without touching the binding or the wire; any transport
     /// failure after the gate retires the connection.
     fn exchange(&mut self, request: &ClientRequest) -> io::Result<ClientReply> {
+        self.exchange_admitted(request, None, || Ok(()), || ())
+    }
+
+    /// `exchange` with an optional absolute deadline and the caller's
+    /// acceptance gate. The request is encoded and the binding's live
+    /// check passes before `admit` runs: a refused admission — a
+    /// cancelled caller — returns its error before a single request byte
+    /// is written and never retires the connection. `sent` runs once the
+    /// whole request frame is on the wire, before the reply is read.
+    /// With `deadline`, the write and the read share one
+    /// [`DeadlineStream`] armed to it; a timeout, partial reply, or any
+    /// transport failure after admission retires the connection — the
+    /// reply accounting is then unknowable, so there are no retries.
+    fn exchange_admitted(
+        &mut self,
+        request: &ClientRequest,
+        deadline: Option<Instant>,
+        admit: impl FnOnce() -> io::Result<()>,
+        sent: impl FnOnce(),
+    ) -> io::Result<ClientReply> {
         let encoded = encode_record(request)?;
         self.gate()?;
-        match encoded
-            .write_to(&mut self.stream)
-            .and_then(|()| read_record(&mut self.stream))
-        {
+        admit()?;
+        let result = match deadline {
+            Some(deadline) => (|| -> io::Result<ClientReply> {
+                let mut stream = DeadlineStream::new(&mut self.stream, deadline)?;
+                encoded.write_to(&mut stream)?;
+                sent();
+                let reply = read_record(&mut stream)?;
+                stream.finish()?;
+                Ok(reply)
+            })(),
+            None => (|| -> io::Result<ClientReply> {
+                encoded.write_to(&mut self.stream)?;
+                sent();
+                read_record(&mut self.stream)
+            })(),
+        };
+        match result {
             Ok(reply) => Ok(reply),
             Err(error) => Err(self.retire(error)),
         }
@@ -954,6 +987,41 @@ impl LocalConnection {
         limit: Option<u64>,
         expected_revision: Option<&str>,
     ) -> io::Result<LinesPage> {
+        self.read_lines_admitted(
+            relative_path,
+            offset,
+            limit,
+            expected_revision,
+            Instant::now() + PAGE_REQUEST_TIMEOUT,
+            || Ok(()),
+            || (),
+        )
+    }
+
+    /// `read_lines` against a caller-armed absolute deadline and
+    /// acceptance gate: `deadline` bounds the request write and the
+    /// reply read on the wire as one budget, `admit` runs after the
+    /// request is encoded and the binding's live check passes but before
+    /// the first request byte — its error returns verbatim and never
+    /// retires the connection — and `sent` runs once the full request
+    /// frame is written, before the reply is read.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same kinds as [`read_lines`](Self::read_lines), plus
+    /// the `admit` error verbatim and [`io::ErrorKind::TimedOut`] when
+    /// the deadline lapses mid-exchange — which retires the connection.
+    #[allow(clippy::too_many_arguments)] // one admitted exchange's full context
+    pub fn read_lines_admitted(
+        &mut self,
+        relative_path: &Path,
+        offset: u64,
+        limit: Option<u64>,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+        sent: impl FnOnce(),
+    ) -> io::Result<LinesPage> {
         if !self.capabilities.contains(&Capability::ReadLines) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -966,12 +1034,17 @@ impl LocalConnection {
                 "invalid text page request",
             ));
         }
-        let reply = self.exchange(&ClientRequest::ReadLines {
-            relative_path: relative_path.to_path_buf(),
-            offset: DecimalU64::new(offset),
-            limit: limit.map(DecimalU64::new),
-            expected_revision: expected_revision.map(str::to_owned),
-        })?;
+        let reply = self.exchange_admitted(
+            &ClientRequest::ReadLines {
+                relative_path: relative_path.to_path_buf(),
+                offset: DecimalU64::new(offset),
+                limit: limit.map(DecimalU64::new),
+                expected_revision: expected_revision.map(str::to_owned),
+            },
+            Some(deadline),
+            admit,
+            sent,
+        )?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
@@ -1064,6 +1137,41 @@ impl LocalConnection {
         limit: Option<u64>,
         expected_revision: Option<&str>,
     ) -> io::Result<DocumentPage> {
+        self.read_document_admitted(
+            relative_path,
+            offset,
+            limit,
+            expected_revision,
+            Instant::now() + PAGE_REQUEST_TIMEOUT,
+            || Ok(()),
+            || (),
+        )
+    }
+
+    /// `read_document` against a caller-armed absolute deadline and
+    /// acceptance gate, under the same contract as
+    /// [`read_lines_admitted`](Self::read_lines_admitted): one wire
+    /// budget, an admission refusal that returns before any request byte
+    /// without retiring, and a `sent` observation between the written
+    /// frame and the reply.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same kinds as [`read_document`](Self::read_document),
+    /// plus the `admit` error verbatim and [`io::ErrorKind::TimedOut`]
+    /// when the deadline lapses mid-exchange — which retires the
+    /// connection.
+    #[allow(clippy::too_many_arguments)] // one admitted exchange's full context
+    pub fn read_document_admitted(
+        &mut self,
+        relative_path: &Path,
+        offset: u64,
+        limit: Option<u64>,
+        expected_revision: Option<&str>,
+        deadline: Instant,
+        admit: impl FnOnce() -> io::Result<()>,
+        sent: impl FnOnce(),
+    ) -> io::Result<DocumentPage> {
         if !self.capabilities.contains(&Capability::DocumentPages) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -1076,12 +1184,17 @@ impl LocalConnection {
                 "invalid document page request",
             ));
         }
-        let reply = self.exchange(&ClientRequest::ReadDocument {
-            relative_path: relative_path.to_path_buf(),
-            offset: DecimalU64::new(offset),
-            limit: limit.map(DecimalU64::new),
-            expected_revision: expected_revision.map(str::to_owned),
-        })?;
+        let reply = self.exchange_admitted(
+            &ClientRequest::ReadDocument {
+                relative_path: relative_path.to_path_buf(),
+                offset: DecimalU64::new(offset),
+                limit: limit.map(DecimalU64::new),
+                expected_revision: expected_revision.map(str::to_owned),
+            },
+            Some(deadline),
+            admit,
+            sent,
+        )?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
@@ -1450,31 +1563,59 @@ fn page_accounting_violation(
     None
 }
 
+/// The stable physical-read refusal carried inside an `io::Error`.
+///
+/// A typed exchange reports a peer's `ReadError` by wrapping the code
+/// here so the caller can downcast `io::Error::get_ref` to
+/// [`PhysicalError`] and render an exact diagnostic — never by parsing
+/// message text. The display is the same stable static description; no
+/// raw path, parser message, or payload ever rides inside it.
+#[derive(Debug)]
+pub struct PhysicalError(pub ReadError);
+
+impl PhysicalError {
+    /// The stable static description of the wrapped code.
+    fn message(&self) -> &'static str {
+        match self.0 {
+            ReadError::Invalid => "physical request invalid",
+            ReadError::Denied => "physical access denied",
+            ReadError::NotFound => "physical path not found",
+            ReadError::Conflict => "physical revision conflict",
+            ReadError::InvalidUtf8 => "physical source is not UTF-8",
+            ReadError::UnsupportedDocument => "not a supported document source",
+            ReadError::DocumentTooLarge => "document exceeds the source bound",
+            ReadError::DocumentDecodeFailed => "document decode failed",
+            ReadError::NoTextLayer => "document has no extractable text layer",
+            ReadError::Unavailable => "physical operation unavailable",
+        }
+    }
+}
+
+impl std::fmt::Display for PhysicalError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for PhysicalError {}
+
 /// Maps a stable [`ReadError`] wire code onto an I/O error kind. No raw
-/// path or payload crosses here — only the kind.
+/// path or payload crosses here — only the kind, with the code preserved
+/// downcastable inside the error.
 fn read_error(kind: ReadError) -> io::Error {
-    let (error_kind, message) = match kind {
-        ReadError::Invalid => (io::ErrorKind::InvalidInput, "physical request invalid"),
-        ReadError::Denied => (io::ErrorKind::PermissionDenied, "physical access denied"),
-        ReadError::NotFound => (io::ErrorKind::NotFound, "physical path not found"),
-        ReadError::Conflict => (io::ErrorKind::AlreadyExists, "physical revision conflict"),
-        ReadError::InvalidUtf8 => (io::ErrorKind::InvalidData, "physical source is not UTF-8"),
-        ReadError::UnsupportedDocument => (
-            io::ErrorKind::Unsupported,
-            "not a supported document source",
-        ),
-        ReadError::DocumentTooLarge => (
-            io::ErrorKind::FileTooLarge,
-            "document exceeds the source bound",
-        ),
-        ReadError::DocumentDecodeFailed => (io::ErrorKind::InvalidData, "document decode failed"),
-        ReadError::NoTextLayer => (
-            io::ErrorKind::InvalidData,
-            "document has no extractable text layer",
-        ),
-        ReadError::Unavailable => (io::ErrorKind::Other, "physical operation unavailable"),
+    let error_kind = match kind {
+        ReadError::Invalid => io::ErrorKind::InvalidInput,
+        ReadError::Denied => io::ErrorKind::PermissionDenied,
+        ReadError::NotFound => io::ErrorKind::NotFound,
+        ReadError::Conflict => io::ErrorKind::AlreadyExists,
+        ReadError::InvalidUtf8 | ReadError::DocumentDecodeFailed | ReadError::NoTextLayer => {
+            io::ErrorKind::InvalidData
+        }
+        ReadError::UnsupportedDocument => io::ErrorKind::Unsupported,
+        ReadError::DocumentTooLarge => io::ErrorKind::FileTooLarge,
+        ReadError::Unavailable => io::ErrorKind::Other,
     };
-    io::Error::new(error_kind, message)
+    io::Error::new(error_kind, PhysicalError(kind))
 }
 
 impl Drop for LocalConnection {
@@ -2104,7 +2245,7 @@ mod tests {
         // stream shut down, never left live on a peer that cannot know
         // it owns the connection.
         let (_peer, mut stream) = UnixStream::pair().unwrap();
-        let mut handshake = Handshake::new(&mut stream, Instant::now()).unwrap();
+        let mut handshake = DeadlineStream::new(&mut stream, Instant::now()).unwrap();
         let error = binding
             .deliver(&mut handshake, &connection, &admission)
             .unwrap_err();

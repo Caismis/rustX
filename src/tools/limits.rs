@@ -6,14 +6,14 @@
 
 use std::time::Duration;
 
-/// The maximum bytes of one structured-document source that native Read
-/// hands to its document decoder (Issue #48). The value is the shared
-/// `rustx-document-reader` extraction-resource bound — one bound for the
-/// native decode and the Execution Client's document decode, not a
-/// model-facing output bound: decoding happens before Read's
-/// 2000-line/50KB projection, so a huge archive-backed document must be
-/// rejected before unbounded parse work starts, not after.
-pub use rustx_document_reader::MAX_DOCUMENT_SOURCE_BYTES;
+/// The maximum bytes of one structured-document source the Execution
+/// Client accepts for one document-page exchange (Issue #48). The value
+/// is the execution protocol's single wire policy — one bound for the
+/// Client's bounded acquisition and `rustx-document-reader`'s decode
+/// precheck, not a model-facing output bound: decoding happens before
+/// Read's 2000-line/50KB projection, so a huge archive-backed document
+/// must be rejected before unbounded parse work starts, not after.
+pub const MAX_DOCUMENT_SOURCE_BYTES: usize = rustx_execution_protocol::MAX_DOCUMENT_SOURCE_BYTES;
 
 /// The maximum model-facing bytes of one tool result payload.
 pub const MAX_MODEL_TOOL_RESULT_BYTES: usize = 64 * 1024;

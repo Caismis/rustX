@@ -1965,3 +1965,144 @@ pub(crate) async fn skill_catalog_page_scenario() {
     assert!(pages > 1, "byte budget trims a count-valid page");
     connection.close();
 }
+
+/// Agent Read through the real composition chain: a Session loaded with
+/// an admitted Execution Client serves `read` through the
+/// `SessionExecutionScope` `SessionRuntimeManager::load` bound into its
+/// composed workspace, while another Session — loaded through the same
+/// path but never given an execution reservation — reports the honest
+/// unavailable diagnostic for the identical lexical path. The scope is a
+/// per-dispatch lookup, never a claim: no Client is spawned or prepared
+/// for the unbound Session, and there is no Server-local read to fall
+/// back to.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_read_dispatches_only_through_the_bound_session_scope() {
+    bounded(async {
+        let fixture = Fixture::with_session_count(Some("read"), 2).await;
+        // The identical lexical name under each admitted workspace,
+        // carrying distinct physical bodies.
+        std::fs::write(
+            fixture.workspaces[0].join("note.txt"),
+            "bound-session-bytes\n",
+        )
+        .unwrap();
+        std::fs::write(
+            fixture.workspaces[1].join("note.txt"),
+            "unbound-session-bytes\n",
+        )
+        .unwrap();
+
+        // Session A: the real reservation, the real staged Client child,
+        // and a real `SessionRuntimeManager::load` — the production route
+        // that binds `execution_scope` into the composed Workspace.
+        let mut execution = fixture.start_execution(0).await;
+        let managed = fixture.load(0).await.unwrap().unwrap();
+        // Session B: the same load path, deliberately without any
+        // execution reservation.
+        let unbound = fixture.load(1).await.unwrap().unwrap();
+        assert!(
+            fixture
+                .manager
+                .execution_endpoint(&fixture.sessions[1].id)
+                .is_err(),
+            "Session B keeps no endpoint claim: no Client was ever prepared"
+        );
+
+        // The bound Session returns the exact model-facing bytes — only
+        // the admitted Client for Session A's workspace can produce them.
+        let bound_runtime = managed.inspect_runtime().expect("resident runtime A");
+        let bound = read_page_in_session(&bound_runtime, "read-bound").await;
+        assert_eq!(
+            bound.status,
+            crate::tools::types::ToolExecutionStatus::Success
+        );
+        let Some(crate::tools::types::ToolResultContent::Text(text)) = bound.content.first() else {
+            panic!("expected a textual page: {bound:?}");
+        };
+        assert_eq!(text.text, "bound-session-bytes\n");
+
+        // The unbound Session — same lexical path, physically present —
+        // gets the honest unavailable diagnostic, never a local read.
+        let unbound_runtime = unbound.inspect_runtime().expect("resident runtime B");
+        let refused = read_page_in_session(&unbound_runtime, "read-unbound").await;
+        let crate::tools::types::ToolExecutionStatus::Failed { error } = refused.status else {
+            panic!("the unbound Session must not serve a read: {refused:?}");
+        };
+        assert!(
+            error.contains("Session execution unavailable"),
+            "unexpected diagnostic: {error}"
+        );
+        assert!(
+            !error.contains("unbound-session-bytes") && !error.contains("bound-session-bytes"),
+            "no file body may leak through the refused route: {error}"
+        );
+
+        let _ = execution.kill().await;
+        fixture.close().await;
+    })
+    .await;
+}
+
+/// One `read` dispatch through the composed root Agent tool boundary —
+/// the resident runtime's own Workspace, artifacts, managed output, and
+/// environment, exactly the `ToolExecutionContext` the resident tool
+/// plane builds for a real tool call.
+async fn read_page_in_session(
+    runtime: &crate::runtime::ConversationRuntime,
+    call: &str,
+) -> crate::tools::types::ToolExecutionResult {
+    struct Silent;
+    impl crate::tools::executor::ProgressReporter for Silent {
+        fn report(&self, _progress: crate::tools::types::ToolProgress) {}
+    }
+    let progress = Silent;
+    let tool_runtime = runtime.tool_runtime();
+    let mut registry = crate::tools::executor::ToolRegistry::new();
+    crate::tools::native::register_native_tools(
+        &mut registry,
+        crate::tools::native::NativeToolResources {
+            subagent_catalog: crate::runtime::subagent::AgentCatalog::empty(),
+            background: tool_runtime.background().clone(),
+            subagents: None,
+        },
+        crate::tools::native::NativeToolPolicies::default(),
+    )
+    .expect("native registry");
+    let invocation = crate::tools::types::ToolInvocation {
+        id: crate::tools::types::ToolInvocationId::Agent {
+            call_id: crate::runtime::identity::ToolCallId::new(call),
+        },
+        tool_id: crate::runtime::identity::ToolId::new("tool-read"),
+        tool_name: "read".to_owned(),
+        mode: crate::tools::types::ToolInvocationMode::Foreground,
+        arguments: serde_json::json!({"path": "note.txt"}),
+    };
+    let context = crate::tools::executor::ToolExecutionContext {
+        stdout_capture: None,
+        workspace_changes: None,
+        model_invocation: None,
+        attempt_id: None,
+        goal: None,
+        schedule: None,
+        conversation_id: tool_runtime.conversation_id(),
+        execution_id: None,
+        cancellation: crate::runtime::ExecutionCancellation::detached(
+            crate::runtime::CancellationSignal::new(),
+            crate::runtime::types::CancellationReason::UserRequested,
+        ),
+        workspace: tool_runtime.workspace(),
+        progress: &progress,
+        artifacts: tool_runtime.artifacts(),
+        tool_output: tool_runtime.tool_output(),
+        environment: tool_runtime.environment(),
+        questionnaire_requester: None,
+        todos: None,
+        subagent: None,
+        bound_mutation: None,
+    };
+    registry
+        .executor(&crate::runtime::identity::ToolId::new("tool-read"))
+        .start(invocation, context)
+        .completion
+        .await
+}

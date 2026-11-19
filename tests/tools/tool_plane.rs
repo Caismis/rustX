@@ -6,7 +6,7 @@
 //! their finite model-facing text projections, and leave mutations unchanged
 //! when validation or atomic commit fails.
 
-use crate::common::{NativeFixture, native_fixture, run_tool};
+use crate::common::{NativeFixture, native_fixture, native_fixture_with_execution, run_tool};
 use rustx::runtime::identity::ToolExecutionId;
 use rustx::tools::types::{ToolExecutionResult, ToolExecutionStatus, ToolResultContent};
 
@@ -154,7 +154,7 @@ async fn direct_executor_validation_rejects_invalid_inputs_without_side_effects(
 
 #[tokio::test]
 async fn read_is_cwd_oriented_and_has_no_implicit_200_line_window() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let lines: Vec<String> = (1..=250).map(|index| format!("line-{index:03}")).collect();
     std::fs::write(workspace_path(&fixture, "many.txt"), lines.join("\n")).expect("fixture");
 
@@ -167,7 +167,7 @@ async fn read_is_cwd_oriented_and_has_no_implicit_200_line_window() {
 
 #[tokio::test]
 async fn read_line_accounting_handles_empty_and_final_newline_cases() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let empty = workspace_path(&fixture, "empty.txt");
     std::fs::write(&empty, b"").expect("empty fixture");
     let result = run_tool(&fixture, "read", serde_json::json!({"path": "empty.txt"})).await;
@@ -203,7 +203,7 @@ async fn read_line_accounting_handles_empty_and_final_newline_cases() {
 
 #[tokio::test]
 async fn read_normalizes_zero_offset_and_reports_user_page_continuation() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     std::fs::write(
         workspace_path(&fixture, "sample.txt"),
         "one\ntwo\nthree\nfour",
@@ -234,7 +234,7 @@ async fn read_normalizes_zero_offset_and_reports_user_page_continuation() {
 
 #[tokio::test]
 async fn native_tools_interpret_dot_and_dotdot_lexically_before_filesystem_access() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let root = fixture.runtime.workspace().root();
 
     let write = run_tool(
@@ -327,7 +327,7 @@ async fn native_tools_interpret_dot_and_dotdot_lexically_before_filesystem_acces
 
 #[tokio::test]
 async fn read_uses_contiguous_complete_line_head_for_line_and_byte_limits() {
-    let fixture = native_fixture();
+    let fixture = native_fixture_with_execution(Vec::new());
     let exact_lines: Vec<String> = (1..=2000).map(|index| format!("exact-{index}")).collect();
     std::fs::write(
         workspace_path(&fixture, "exact-lines.txt"),
@@ -538,13 +538,18 @@ async fn managed_output_is_readable_but_model_mutation_cannot_replace_a_live_ino
     assert_failed_contains(&edit, "managed tool-output root");
 
     sink.append("B").expect("append B through original inode");
+    // The managed tool-output root is a managed source, not part of the
+    // Session's admitted workspace — and this fixture binds no execution
+    // route at all: native Read reports honest unavailability instead of
+    // reaching the file through a Server-local branch. The sink inode
+    // itself stays intact, which the domain-level read below proves.
     let read = run_tool(
         &fixture,
         "read",
         serde_json::json!({"path": advertised.to_str().expect("utf8 advertised path")}),
     )
     .await;
-    assert_eq!(text_content(&read), "AB");
+    assert_failed_contains(&read, "Session execution unavailable");
     assert_eq!(std::fs::read_to_string(&advertised).unwrap(), "AB");
 }
 

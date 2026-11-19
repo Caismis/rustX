@@ -1104,7 +1104,7 @@ impl rustx::tools::executor::ToolExecutor for RendezvousNative {
 #[tokio::test]
 async fn read_search_product_defaults_run_adjacent_calls_with_independent_state() {
     for name in ["read", "glob", "grep"] {
-        let mut fixture = common::native_fixture();
+        let mut fixture = common::native_fixture_with_execution(Vec::new());
         std::fs::write(
             fixture.runtime.workspace().root().join("alpha.txt"),
             "ALPHA\n",
@@ -1246,7 +1246,7 @@ async fn run_native_script(
 
 #[tokio::test]
 async fn native_agent_loop_invocation_has_one_start_and_one_completion_in_order() {
-    let fixture = common::native_fixture();
+    let fixture = common::native_fixture_with_execution(Vec::new());
     std::fs::write(
         fixture.runtime.workspace().root().join("read.txt"),
         "hello\n",
