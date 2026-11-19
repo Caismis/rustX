@@ -20,29 +20,8 @@ use crate::runtime::identity::{
 };
 
 /// Checkpoint activation order, independent of the Ledger and Journal domains.
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    schemars::JsonSchema,
-)]
-#[serde(transparent)]
-pub struct ProjectionActivationId(pub u64);
+pub use rustx_types::context::checkpoint::{CheckpointMessageOccurrence, ProjectionActivationId};
 
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
-)]
-pub struct CheckpointMessageOccurrence {
-    pub checkpoint_id: CheckpointId,
-    pub item_index: u32,
-}
 #[derive(
     Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]

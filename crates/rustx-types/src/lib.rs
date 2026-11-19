@@ -138,6 +138,8 @@ pub mod local_runtime {
 
 pub mod context {
     pub mod assembly;
+    pub mod checkpoint;
+    pub mod resources;
     pub mod system_prompt;
 }
 
@@ -166,6 +168,7 @@ pub mod runtime {
     }
 }
 pub mod durable {
+    pub mod canonical;
     pub mod sqlite {
         pub mod content_metadata;
         pub mod event_kind_key;

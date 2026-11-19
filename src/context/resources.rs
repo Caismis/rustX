@@ -1,56 +1,12 @@
 //! Bounded detached reads of immutable compaction inputs. No execution authority.
-use serde::{Deserialize, Serialize};
 use std::io::Read as _;
 
 use crate::durable::{ConversationStore, ConversationStoreError, TranscriptCursor};
 use crate::events::types::RuntimeEventEnvelope;
 use crate::message::types::MessageBlock;
-use crate::runtime::identity::{ConversationId, MessageId};
+use crate::runtime::identity::MessageId;
 
-/// Inclusive canonical commit position, independent of Journal and activation order.
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    schemars::JsonSchema,
-)]
-#[serde(transparent)]
-pub struct LedgerFrontier(pub u64);
-
-/// Inclusive source Journal position, never an activation or Ledger position.
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Serialize,
-    Deserialize,
-    schemars::JsonSchema,
-)]
-#[serde(transparent)]
-pub struct JournalFrontier(pub u64);
-
-/// One finite read authority. Pending inbound is not a compaction dependency.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ResourceReadCut {
-    pub conversation_id: ConversationId,
-    pub ledger: LedgerFrontier,
-    pub journal: JournalFrontier,
-    pub transcript: TranscriptCursor,
-    pub projection_activation: super::checkpoint::ProjectionActivationId,
-}
+pub use rustx_types::context::resources::{JournalFrontier, LedgerFrontier, ResourceReadCut};
 
 /// Hard logical materialization bounds, including the sum of all pages in an operation.
 #[derive(Debug, Clone, Copy)]

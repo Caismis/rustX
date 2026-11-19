@@ -19,46 +19,7 @@ pub const TRANSCRIPT_BOOTSTRAP_PAGE_LIMIT: usize = 64;
 /// The largest page a transcript reader may request in one response.
 pub const TRANSCRIPT_PAGE_LIMIT_MAX: usize = 256;
 
-/// A durable transcript cursor.
-///
-/// This cursor belongs to the transcript ordering spine. It is deliberately
-/// distinct from the Runtime Client observation cursor, the Event Journal
-/// sequence, and the inbound mailbox sequence.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Serialize,
-    Deserialize,
-    schemars::JsonSchema,
-)]
-#[serde(transparent)]
-pub struct TranscriptCursor(u64);
-
-impl TranscriptCursor {
-    /// Creates a cursor from its durable ordering position.
-    #[must_use]
-    pub const fn new(value: u64) -> Self {
-        Self(value)
-    }
-
-    /// Returns the durable ordering position.
-    #[must_use]
-    pub const fn get(self) -> u64 {
-        self.0
-    }
-}
-
-impl core::fmt::Display for TranscriptCursor {
-    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(formatter, "{}", self.0)
-    }
-}
+pub use rustx_types::durable::canonical::TranscriptCursor;
 
 /// The transcript position allocated by one durable canonical-message
 /// transition.  A `None` receipt is intentional for durable context messages,
