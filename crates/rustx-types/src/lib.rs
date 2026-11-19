@@ -152,6 +152,7 @@ pub mod runtime {
     pub use rustx_identity as identity;
 
     pub mod cancellation;
+    pub mod configuration_commit;
     pub mod continuation;
     pub mod monotonic;
     pub mod process_supervision;
