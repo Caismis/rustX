@@ -87,8 +87,10 @@ pub(crate) mod observation;
 /// The `cfg(test)`-only real-process-death seam (Issue #111, FND-06): the
 /// named durable boundaries a conformance child parks at, and the control
 /// channel back to the owning parent test. Outside this crate's test build
-/// its two entry points are empty `const fn`s.
-pub(crate) mod process_death;
+/// its two entry points are empty `const fn`s. Implemented in `rustx_durable`
+/// so the durable crate's own gate call sites and the monolith's share a
+/// single control connection per process.
+pub(crate) use rustx_durable::process_death;
 /// The internal owned supervised command runner shared by native Bash and
 /// Managed Python: the M5 Bash process-group lifecycle extracted so
 /// package-manager work reuses the same rustX-owned supervisor/process-group
