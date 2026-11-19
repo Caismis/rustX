@@ -12,9 +12,7 @@ use crate::{
 use chrono::TimeZone;
 use chrono::Utc;
 use rustx_conversation::SurfaceRevision;
-use rustx_conversation::SurfaceRevision;
 use rustx_types::message::types::{InboundKind, MessageBlock, UserSource};
-use rustx_types::runtime::identity::ConversationId;
 use rustx_types::runtime::identity::{AttemptId, ConversationId};
 
 mod pending_transaction;
@@ -333,7 +331,7 @@ fn queued(text: &str) -> crate::InboundDraft {
 }
 
 fn expected(
-    sequence: crate::runtime::inbound::InboundSequence,
+    sequence: crate::inbound::InboundSequence,
     revision: u64,
 ) -> PendingInboundRef {
     PendingInboundRef { sequence, revision }
@@ -341,7 +339,7 @@ fn expected(
 
 fn steer_row(
     store: &SqliteConversationStore,
-    sequence: crate::runtime::inbound::InboundSequence,
+    sequence: crate::inbound::InboundSequence,
     revision: u64,
 ) -> PendingMutationOutcome {
     store
@@ -539,7 +537,7 @@ fn row_steer_retries_and_conflicts_do_not_insert_a_second_occurrence() {
         PendingMutationOutcome::InvalidItem
     ));
     assert!(matches!(
-        steer_row(&store, crate::runtime::inbound::InboundSequence::new(99), 0,),
+        steer_row(&store, crate::inbound::InboundSequence::new(99), 0,),
         PendingMutationOutcome::NotPending
     ));
     assert_eq!(store.load_pending().unwrap().len(), 1);

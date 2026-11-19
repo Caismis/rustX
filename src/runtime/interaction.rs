@@ -83,6 +83,14 @@ pub use crate::events::interaction::{
     SingleChoiceSpecification, TextAnswer, TextAnswerSpecification, TextFormat,
 };
 
+///
+/// This is an internal handoff from the owning Agent Execution to the
+/// conversation-owned coordinator.  Conversation and attempt identity are
+/// deliberately absent: the coordinator injects the conversation identity,
+/// and the owning execution supplies the attempt identity at the narrow
+/// request boundary.  It contains no executor, cancellation handle,
+/// canonical mutation handle, or replacement argument channel.
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ApprovalFacts {
     /// Caller-neutral invocation correlation.
     pub(crate) invocation_id: crate::tools::types::ToolInvocationId,
