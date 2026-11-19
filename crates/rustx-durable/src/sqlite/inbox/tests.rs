@@ -330,10 +330,7 @@ fn queued(text: &str) -> crate::InboundDraft {
     draft
 }
 
-fn expected(
-    sequence: crate::inbound::InboundSequence,
-    revision: u64,
-) -> PendingInboundRef {
+fn expected(sequence: crate::inbound::InboundSequence, revision: u64) -> PendingInboundRef {
     PendingInboundRef { sequence, revision }
 }
 
