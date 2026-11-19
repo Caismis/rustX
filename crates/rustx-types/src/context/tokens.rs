@@ -42,7 +42,7 @@ thread_local! {
 }
 
 #[cfg(any(test, feature = "test-fixtures"))]
-/// Bytes accounted through [`encoded_bytes`] since the last take.
+/// Bytes accounted through `encoded_bytes` since the last take.
 pub fn take_accounted_bytes() -> u64 {
     ACCOUNTED_BYTES.with(|total| total.replace(0))
 }

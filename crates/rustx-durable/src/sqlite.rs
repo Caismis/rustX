@@ -72,7 +72,7 @@ pub fn conversation_store_open_count() -> u64 {
 }
 
 /// The number of `SqliteConversationStore` opens performed on the calling
-/// thread. See [`CONVERSATION_STORE_OPENS_ON_THREAD`] for why the per-thread
+/// thread. See `CONVERSATION_STORE_OPENS_ON_THREAD` for why the per-thread
 /// delta — not the global count — is the contamination-free measurement.
 #[cfg(any(test, feature = "test-hooks"))]
 #[must_use]
@@ -646,7 +646,7 @@ fn writer_busy_delay(count: i32) -> Option<std::time::Duration> {
     (delay > 0).then(|| std::time::Duration::from_millis(delay))
 }
 
-/// Thread-local observation of [`writer_busy`] for deterministic contention
+/// Thread-local observation of `writer_busy` for deterministic contention
 /// tests: SQLite invokes the handler on the waiting writer's own thread.
 #[cfg(any(test, feature = "test-hooks"))]
 pub mod busy_probe {
