@@ -1241,3 +1241,203 @@ fn tool_results_are_declared_by_the_tool() {
         json!({"text": "a\nb"})
     );
 }
+
+/// A `NativeExecutionContext` whose native services run on an arbitrary
+/// `ConversationToolRuntime` — used to bind a real admitted Execution
+/// Client scope into the Workflow invocation path.
+fn scoped_context(
+    plane: &WorkflowTestPlane,
+    registrations: Vec<crate::tools::executor::ValidatedToolRegistration>,
+    lifecycle: crate::agent::AttemptLifecycle,
+    tool_runtime: crate::tools::runtime::ConversationToolRuntime,
+) -> crate::runtime::subagent::NativeExecutionContext {
+    let model_catalog = ModelCatalog::from_toml_slice(WORKFLOW_TEST_MODELS.as_bytes()).unwrap();
+    let models = ModelBindingRegistry::new(
+        model_catalog
+            .resolve(&MapCredentialEnvironment::default())
+            .unwrap(),
+    )
+    .unwrap();
+    let model = ModelRef::parse("local/model").unwrap();
+    let capability = Arc::new(CapabilitySnapshot::new(
+        plane.conversation_id.clone(),
+        plane.dir.path().join("workspace"),
+        CapabilityRevision::new(1),
+        Arc::new(ToolRegistry::new()), // deliberately inactive in the parent's model surface
+        Arc::new(crate::capabilities::AvailableToolCatalog::new(
+            registrations,
+        )),
+        Arc::new(SkillSnapshot::new(Vec::new())),
+        ToolEnvironment::new(),
+        Arc::new(McpRuntimeLeaseAuthority::empty()),
+        Arc::new(BTreeMap::new()),
+    ));
+    let agents = workflow_test_context_for_generation(
+        plane,
+        1,
+        "Frozen workflow agent instructions",
+        WorkflowCatalog::empty(),
+        crate::runtime::types::ApprovalMode::FullAccess,
+        None,
+    );
+    let resources = Arc::new(
+        crate::runtime::RuntimeResourceSnapshot::new(
+            RuntimeResourceRevision::new(1),
+            Vec::new(),
+            None,
+            crate::context::ContextAssembly::new(),
+            capability,
+        )
+        .with_subagent_catalog(agents.resources().subagents().clone()),
+    );
+    let mut context = crate::runtime::subagent::NativeExecutionContext::test_context(
+        crate::runtime::identity::AttemptId::new("workflow-test-attempt"),
+        resources,
+        SessionModelConfig::of(model),
+        models,
+        ApprovalMode::Plan,
+    );
+    context.native = Some(Arc::new(NativeInvocationServices {
+        task: None,
+        lifecycle,
+        runtime: tool_runtime,
+        clock: Arc::new(crate::runtime::ManualMonotonicClock::new()),
+        leaf_policy: crate::tools::deadline::ToolExecutionDeadlinePolicy::default(),
+        execution: crate::runtime::interaction::InteractionExecution::Attempt {
+            attempt_id: context.attempt_id().unwrap().clone(),
+            turn: 1,
+        },
+        scheduling: Arc::new(tokio::sync::RwLock::new(())),
+        descendants: crate::tools::invocation::NativeChildScope::default(),
+    }));
+    context
+}
+
+/// One trivial Workflow that calls the native `write` tool once, through
+/// the same Tool node protocol a production program would.
+fn write_program() -> Arc<WorkflowProgram> {
+    Arc::new(
+        compile_test(
+            serde_json::from_value::<WorkflowDefinition>(json!({
+                "description":"write through the admitted client","timeout_ms":100,
+                "block": {
+                    "input":schema(json!({}), &[]),
+                    "nodes": {"workflow_start":{"type":"start"},
+                        "write":{"type":"tool","selector":{"origin":"builtin","name":"write"},
+                            "arguments":{"type":"object","fields":{
+                                "path":{"type":"literal","value":"created.txt"},
+                                "content":{"type":"literal","value":"from workflow\n"}}},
+                            "result":{"type":"text"}},
+                        "done":{"type":"return","outputs":[]}},
+                    "edges": [{"from":"workflow_start","to":"write"},{"from":"write","to":"done"}],}
+            }))
+            .unwrap(),
+        )
+        .unwrap(),
+    )
+}
+
+/// One Workflow test plane whose `ConversationToolRuntime` dispatches
+/// through a real admitted Execution Client bound to its workspace: the
+/// full native registry is admitted to the Workflow, and the returned
+/// fixture keeps the child alive for the test.
+fn bound_plane(
+    plane: &WorkflowTestPlane,
+    lifecycle: crate::agent::AttemptLifecycle,
+) -> (
+    crate::runtime::subagent::NativeExecutionContext,
+    crate::session_execution_support::ExecutionFixture,
+) {
+    let workspace = plane.dir.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let execution = crate::session_execution_support::ExecutionFixture::new(&workspace);
+    let tool_runtime = crate::tools::runtime::ConversationToolRuntime::from_config(
+        plane.conversation_id.clone(),
+        crate::tools::runtime::ConversationRuntimeConfig {
+            execution_scope: Some(execution.scope.clone()),
+            ..crate::tools::runtime::ConversationRuntimeConfig::new(
+                &workspace,
+                plane.dir.path().join("artifacts"),
+            )
+        },
+    )
+    .unwrap();
+    let mut registry = ToolRegistry::new();
+    crate::tools::native::register_native_tools(
+        &mut registry,
+        crate::tools::native::NativeToolResources {
+            subagent_catalog: crate::runtime::subagent::AgentCatalog::empty(),
+            background: tool_runtime.background().clone(),
+            subagents: None,
+        },
+        crate::tools::native::NativeToolPolicies::default(),
+    )
+    .unwrap();
+    (
+        scoped_context(
+            plane,
+            registry.validated_registrations(),
+            lifecycle,
+            tool_runtime,
+        ),
+        execution,
+    )
+}
+
+/// The Workflow-native write contract: the `write` tool node binds its
+/// ticketed preparation on the Session's admitted Client before the
+/// permission view, authorization decides, and the commit or abort lands
+/// exactly once — all through the real child process. One workspace and
+/// one fixture serve both verdicts: a `FullAccess` run publishes, a Plan
+/// run's denial aborts the preparation and leaves the target absent.
+#[tokio::test]
+async fn workflow_write_prepares_authorizes_and_commits_through_the_client() {
+    let plane = workflow_test_plane(1);
+    let workspace = plane.dir.path().join("workspace");
+    let (context, _execution) = bound_plane(&plane, full_access_lifecycle());
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    runtime
+        .run_test_foreground(
+            write_program(),
+            ToolCallId::new("workflow-write"),
+            context,
+            json!({}),
+            cancellation,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("created.txt")).unwrap(),
+        "from workflow\n"
+    );
+
+    // The same program under Plan is denied before the commit: the
+    // ticketed preparation is aborted explicitly and nothing is written.
+    let plane = workflow_test_plane(1);
+    let workspace = plane.dir.path().join("workspace");
+    let (context, _execution) = bound_plane(
+        &plane,
+        crate::agent::AttemptLifecycle::default()
+            .with_approval_mode(crate::runtime::types::ApprovalMode::Plan),
+    );
+    let runtime = workflow_runtime(&plane);
+    let (_, cancellation) = workflow_cancellation();
+    let error = runtime
+        .run_test_foreground(
+            write_program(),
+            ToolCallId::new("workflow-write-denied"),
+            context,
+            json!({}),
+            cancellation,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.execution_status(),
+        ToolExecutionStatus::Denied {
+            reason: "plan mode allows Write/Edit only for workspace-root PLAN.md without elevation; provide elevation_reason to request human approval".into()
+        }
+    );
+    assert!(!workspace.join("created.txt").exists());
+}

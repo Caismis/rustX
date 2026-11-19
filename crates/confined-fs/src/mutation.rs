@@ -19,6 +19,7 @@ use std::fs::File;
 use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 
+use rustix::fs::{AtFlags, RenameFlags, mkdirat, renameat_with, unlinkat};
 use rustix::fs::{Mode, OFlags, openat};
 
 use crate::{FileMetadata, PackageDirectory, conflict, invalid};
@@ -41,6 +42,173 @@ impl std::error::Error for CommitUnknown {}
 
 fn unknown(_: io::Error) -> io::Error {
     io::Error::other(CommitUnknown)
+}
+
+/// One proven-owned creation inside the private staging directory:
+/// the retained containing descriptor, the entry's name, and the
+/// device:inode proven from the descriptor opened at creation.
+/// Cleanup only ever removes a name that still resolves to this exact
+/// inode — a substituted entry is never unlinked.
+struct OwnedEntry {
+    /// The open descriptor of the directory containing `name`.
+    parent: File,
+    name: OsString,
+    device: u64,
+    inode: u64,
+    directory: bool,
+}
+
+/// The `.rustx-mkdir-*` staging directory and the owned subtree built
+/// inside it. The directory itself *is* the first missing component —
+/// publish crosses it into the retained parent with one `NOREPLACE`
+/// rename, so no staged interior pathname is ever re-resolved by name.
+/// `owned` holds every successfully created interior entry in creation
+/// order so a pre-crossing failure can remove exactly what this stage
+/// made — in reverse, each re-proven by device:inode against its
+/// retained containing descriptor — and nothing else.
+struct SubtreeStage {
+    root: File,
+    owned: Vec<OwnedEntry>,
+}
+
+/// The `fstatat` stamp of `name` under `containing`, no-follow.
+fn named_stat(containing: &File, name: &OsStr) -> io::Result<nix::sys::stat::FileStat> {
+    Ok(nix::sys::stat::fstatat(
+        containing,
+        name,
+        nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+    )?)
+}
+
+impl SubtreeStage {
+    /// Creates `missing_tail` interior directories and the staged leaf
+    /// file, registering every successful creation for proven cleanup
+    /// before the next fallible step, then runs `writer` and fsyncs.
+    /// On any error the caller removes every registered entry — only
+    /// a creation that could not be proven at all can be left behind.
+    fn create_interior(
+        &mut self,
+        missing_tail: &[OsString],
+        leaf: &OsStr,
+        writer: impl FnOnce(&mut File) -> io::Result<()>,
+    ) -> io::Result<File> {
+        let mut level = self.root.try_clone()?;
+        for component in missing_tail {
+            mkdirat(&level, component.as_os_str(), Mode::from_raw_mode(0o700))?;
+            // Open the created directory for both the descent and its
+            // identity proof: the descriptor is the strongest available
+            // evidence the name still resolves to what was created.
+            let child = File::from(openat(
+                &level,
+                component.as_os_str(),
+                OFlags::RDONLY
+                    .union(OFlags::DIRECTORY)
+                    .union(OFlags::NOFOLLOW)
+                    .union(OFlags::CLOEXEC),
+                Mode::empty(),
+            )?);
+            let stat = nix::sys::stat::fstat(&child)?;
+            self.owned.push(OwnedEntry {
+                parent: level,
+                name: component.clone(),
+                device: stat.st_dev,
+                inode: stat.st_ino,
+                directory: true,
+            });
+            level = child;
+        }
+        let mut output = File::from(openat(
+            &level,
+            leaf,
+            OFlags::WRONLY
+                .union(OFlags::CREATE)
+                .union(OFlags::EXCL)
+                .union(OFlags::NOFOLLOW)
+                .union(OFlags::CLOEXEC),
+            Mode::from_raw_mode(0o600),
+        )?);
+        let stat = nix::sys::stat::fstat(&output)?;
+        self.owned.push(OwnedEntry {
+            parent: level.try_clone()?,
+            name: leaf.to_os_string(),
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            directory: false,
+        });
+        writer(&mut output)?;
+        output.sync_all()?;
+        level.sync_all()?;
+        Ok(output)
+    }
+
+    /// Proves the staging name and every registered owned entry still
+    /// resolve to the exact inodes this stage created — a substituted
+    /// staging directory, interior directory, or leaf is a denial,
+    /// never a publish or cleanup target.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::PermissionDenied`] for a substituted
+    /// name and the underlying stat error otherwise.
+    fn verify(&self, parent: &PackageDirectory, name: &OsStr) -> io::Result<()> {
+        let named = nix::sys::stat::fstatat(
+            parent.descriptor(),
+            name,
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        )?;
+        let own = nix::sys::stat::fstat(&self.root)?;
+        if (named.st_dev, named.st_ino) != (own.st_dev, own.st_ino) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "staging directory replaced",
+            ));
+        }
+        for entry in &self.owned {
+            match named_stat(&entry.parent, &entry.name) {
+                Ok(named) if (named.st_dev, named.st_ino) == (entry.device, entry.inode) => {}
+                Ok(_) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "staged subtree entry replaced",
+                    ));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(())
+    }
+
+    /// Removes only the proven-owned subtree: every registered entry in
+    /// reverse creation order — the leaf file first, directories deepest
+    /// first — each re-proven by device:inode against its retained
+    /// containing descriptor so a substituted name is never unlinked,
+    /// then the staging directory itself, proven against the root
+    /// descriptor. No recursion, no rewalking of untrusted components.
+    /// Best-effort: every step is attempted even if an earlier fails.
+    fn remove(&self, parent: &PackageDirectory, name: &OsStr) {
+        for entry in self.owned.iter().rev() {
+            if let Ok(named) = named_stat(&entry.parent, &entry.name)
+                && (named.st_dev, named.st_ino) == (entry.device, entry.inode)
+            {
+                let flags = if entry.directory {
+                    AtFlags::REMOVEDIR
+                } else {
+                    AtFlags::empty()
+                };
+                let _ = unlinkat(&entry.parent, &entry.name, flags);
+            }
+        }
+        let named = nix::sys::stat::fstatat(
+            parent.descriptor(),
+            name,
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        );
+        let own = nix::sys::stat::fstat(&self.root);
+        if matches!((own, named), (Ok(own), Ok(named)) if (own.st_dev, own.st_ino) == (named.st_dev, named.st_ino))
+        {
+            let _ = unlinkat(parent.descriptor(), name, AtFlags::REMOVEDIR);
+        }
+    }
 }
 
 /// The leaf's current no-follow stamp — `None` when it is absent.
@@ -68,12 +236,30 @@ fn recheck(
     Ok(())
 }
 
-/// A retained mutation target: the verified parent directory, the leaf
-/// name, and — for a replacement — the target's own open descriptor and
-/// stamp. [`prepare`](Self::prepare) creates no temporary file;
-/// [`stage`](Self::stage) owns the private sibling.
+/// What a ticketed preparation expects the named leaf to be.
+#[derive(Debug, Clone, Copy)]
+pub enum Expectation<'a> {
+    /// Retain whatever the leaf currently is — present or absent. This is
+    /// the pre-authorization object; it never implies publish permission.
+    Current,
+    /// Create-only: the leaf must be absent at retain and at publish.
+    Absent,
+    /// The leaf must be an existing file with exactly this revision.
+    Revision(&'a str),
+}
+
+/// A retained mutation target: the verified deepest existing ancestor
+/// directory, the still-missing interior names, the leaf name, and — for
+/// a replacement — the target's own open descriptor and stamp.
+/// [`prepare`](Self::prepare) creates no temporary file and no missing
+/// directory; [`stage`](Self::stage) owns the private sibling.
 pub struct WriteTarget {
+    /// The deepest existing ancestor — the leaf's parent when `missing`
+    /// is empty.
     parent: PackageDirectory,
+    /// Directory names still missing between `parent` and the leaf's
+    /// containing directory — empty for an existing path.
+    missing: Vec<OsString>,
     leaf: OsString,
     original: Option<(File, FileMetadata)>,
 }
@@ -82,68 +268,93 @@ impl WriteTarget {
     /// Retains `leaf` under the verified `parent` for a staged write.
     ///
     /// `leaf` must be exactly one normal component — no separator, `.`,
-    /// `..`, or NUL. `expected` is the caller's contract: `Some` requires
-    /// the leaf's current revision to match exactly; `None` is create-only
-    /// and requires the leaf to be absent. An existing target opens
-    /// through the retained parent with `O_NOFOLLOW|NONBLOCK` and only a
-    /// regular file may be replaced. The retained ancestor chain is
-    /// verified before and after the retain.
+    /// `..`, or NUL — and so must every name in `missing`, the directories
+    /// still absent between `parent` and the leaf's containing directory.
+    /// `missing` is created only inside the private staging subtree at
+    /// [`stage`](Self::stage) and only crosses into `parent` as one
+    /// `NOREPLACE` rename at publish — nothing about the target or its
+    /// missing parents changes before that crossing.
+    ///
+    /// `expected` is the caller's contract: [`Expectation::Revision`]
+    /// requires the leaf's current revision to match exactly,
+    /// [`Expectation::Absent`] requires the leaf to be absent (including
+    /// the first missing directory staying absent), and
+    /// [`Expectation::Current`] retains whatever is present — an absent
+    /// leaf yields `original() == None`. A leaf inside a missing subtree
+    /// can never satisfy a `Revision`. An existing target opens through
+    /// the retained parent with `O_NOFOLLOW|NONBLOCK` and only a regular
+    /// file may be replaced. The retained ancestor chain is verified
+    /// before and after the retain.
     ///
     /// # Errors
     ///
-    /// Returns [`io::ErrorKind::InvalidInput`] for an unsafe leaf or a
-    /// non-regular target, [`io::ErrorKind::AlreadyExists`] when the
-    /// current revision does not equal `expected`,
-    /// [`io::ErrorKind::PermissionDenied`] for a replaced ancestor, and
-    /// the underlying `openat`/`fstat` error otherwise.
+    /// Returns [`io::ErrorKind::InvalidInput`] for an unsafe leaf or
+    /// missing name or a non-regular target,
+    /// [`io::ErrorKind::AlreadyExists`] when the current state
+    /// contradicts `expected`, [`io::ErrorKind::PermissionDenied`] for a
+    /// replaced ancestor, and the underlying `openat`/`fstat` error
+    /// otherwise.
     pub fn prepare(
         parent: PackageDirectory,
         leaf: &OsStr,
-        expected: Option<&str>,
+        missing: Vec<OsString>,
+        expected: Expectation<'_>,
     ) -> io::Result<Self> {
-        let bytes = leaf.as_bytes();
-        if bytes.is_empty()
-            || bytes == b"."
-            || bytes == b".."
-            || bytes.contains(&b'/')
-            || bytes.contains(&0)
-        {
-            return Err(invalid("unsafe file name"));
+        for name in std::iter::once(leaf).chain(missing.iter().map(OsString::as_os_str)) {
+            let bytes = name.as_bytes();
+            if bytes.is_empty()
+                || bytes == b"."
+                || bytes == b".."
+                || bytes.contains(&b'/')
+                || bytes.contains(&0)
+            {
+                return Err(invalid("unsafe file name"));
+            }
         }
         parent.verify()?;
-        let original = match openat(
-            parent.descriptor(),
-            leaf,
-            OFlags::RDONLY
-                .union(OFlags::NOFOLLOW)
-                .union(OFlags::NONBLOCK)
-                .union(OFlags::CLOEXEC)
-                .union(OFlags::NOCTTY),
-            Mode::empty(),
-        )
-        .map_err(io::Error::from)
-        {
-            Ok(descriptor) => {
-                let file = File::from(descriptor);
-                let metadata = FileMetadata::of(&file)?;
-                if !metadata.is_file {
-                    return Err(invalid("write target must be a regular file"));
+        // A leaf below a missing subtree cannot exist: only an existing
+        // containing directory — `missing` empty — can name an original.
+        let original = if missing.is_empty() {
+            match openat(
+                parent.descriptor(),
+                leaf,
+                OFlags::RDONLY
+                    .union(OFlags::NOFOLLOW)
+                    .union(OFlags::NONBLOCK)
+                    .union(OFlags::CLOEXEC)
+                    .union(OFlags::NOCTTY),
+                Mode::empty(),
+            )
+            .map_err(io::Error::from)
+            {
+                Ok(descriptor) => {
+                    let file = File::from(descriptor);
+                    let metadata = FileMetadata::of(&file)?;
+                    if !metadata.is_file {
+                        return Err(invalid("write target must be a regular file"));
+                    }
+                    Some((file, metadata))
                 }
-                Some((file, metadata))
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-            Err(error) => return Err(error),
+        } else {
+            None
         };
-        if original
-            .as_ref()
-            .map(|(_, metadata)| metadata.revision.as_str())
-            != expected
-        {
+        let holds = match expected {
+            Expectation::Current => true,
+            Expectation::Absent => original.is_none(),
+            Expectation::Revision(revision) => original
+                .as_ref()
+                .is_some_and(|(_, metadata)| metadata.revision == revision),
+        };
+        if !holds {
             return Err(conflict());
         }
         parent.verify()?;
         Ok(Self {
             parent,
+            missing,
             leaf: leaf.to_os_string(),
             original,
         })
@@ -186,6 +397,18 @@ impl WriteTarget {
     ) -> io::Result<StagedWrite> {
         self.parent.verify()?;
         recheck(&self.parent, &self.leaf, self.original())?;
+        if self.missing.is_empty() {
+            return self.stage_file(writer);
+        }
+        self.stage_subtree(writer)
+    }
+
+    /// Stages the sibling file under the retained parent — the existing
+    /// path when the leaf's containing directory already exists.
+    fn stage_file(
+        self,
+        writer: impl FnOnce(&mut File) -> io::Result<()>,
+    ) -> io::Result<StagedWrite> {
         let name = OsString::from(format!(".rustx-write-{}", uuid::Uuid::now_v7()));
         let output = File::from(openat(
             self.parent.descriptor(),
@@ -199,10 +422,12 @@ impl WriteTarget {
         )?);
         let mut staged = StagedWrite {
             parent: self.parent,
+            missing: self.missing,
             leaf: self.leaf,
             original: self.original,
             output,
             name,
+            staging: None,
             published: false,
         };
         // The stage stays at the create-time 0600 regardless of the
@@ -216,6 +441,72 @@ impl WriteTarget {
             staged.output.sync_all()
         })();
         result.map(|()| staged)
+    }
+
+    /// Stages the whole missing subtree: `mkdirat` a private
+    /// `.rustx-mkdir-*` sibling — owner-only `0700` — which itself
+    /// *becomes* the first missing component at publish. Only
+    /// `missing[1..]` and the leaf are created inside it, each proven
+    /// from its own descriptor and registered for owned cleanup before
+    /// the next fallible step. Nothing crosses into the retained parent
+    /// before `publish`'s single `NOREPLACE` rename of the staging name
+    /// to the first missing name, and that name must still be absent in
+    /// the parent or staging is refused before anything is created.
+    fn stage_subtree(
+        self,
+        writer: impl FnOnce(&mut File) -> io::Result<()>,
+    ) -> io::Result<StagedWrite> {
+        // The first missing name must still be absent: anything that
+        // claimed it since prepare contradicts the retained expectation.
+        if leaf_metadata(&self.parent, &self.missing[0])?.is_some() {
+            return Err(conflict());
+        }
+        let name = OsString::from(format!(".rustx-mkdir-{}", uuid::Uuid::now_v7()));
+        mkdirat(
+            self.parent.descriptor(),
+            name.as_os_str(),
+            Mode::from_raw_mode(0o700),
+        )?;
+        let mut stage = match openat(
+            self.parent.descriptor(),
+            name.as_os_str(),
+            OFlags::RDONLY
+                .union(OFlags::DIRECTORY)
+                .union(OFlags::NOFOLLOW)
+                .union(OFlags::CLOEXEC),
+            Mode::empty(),
+        ) {
+            Ok(root) => SubtreeStage {
+                root: File::from(root),
+                owned: Vec::new(),
+            },
+            Err(error) => {
+                // The staging directory exists but cannot be proven —
+                // remove only while its name still names it.
+                let _ = unlinkat(
+                    self.parent.descriptor(),
+                    name.as_os_str(),
+                    AtFlags::REMOVEDIR,
+                );
+                return Err(error.into());
+            }
+        };
+        match stage.create_interior(&self.missing[1..], &self.leaf, writer) {
+            Ok(output) => Ok(StagedWrite {
+                parent: self.parent,
+                missing: self.missing,
+                leaf: self.leaf,
+                original: None,
+                output,
+                name,
+                staging: Some(stage),
+                published: false,
+            }),
+            Err(error) => {
+                stage.remove(&self.parent, &name);
+                Err(error)
+            }
+        }
     }
 
     /// Reads the whole retained original descriptor, bounded at `max`
@@ -270,10 +561,17 @@ impl WriteTarget {
 /// never a foreign replacement that took the name.
 pub struct StagedWrite {
     parent: PackageDirectory,
+    missing: Vec<OsString>,
     leaf: OsString,
     original: Option<(File, FileMetadata)>,
     output: File,
+    /// The private sibling name — `.rustx-write-*` for a file stage,
+    /// `.rustx-mkdir-*` for a missing-subtree stage.
     name: OsString,
+    /// The private staging directory and its registered owned subtree
+    /// when `missing` is non-empty: the staging name itself crosses
+    /// whole under the first missing name at publish.
+    staging: Option<SubtreeStage>,
     published: bool,
 }
 
@@ -301,6 +599,9 @@ impl StagedWrite {
             &self.leaf,
             self.original.as_ref().map(|(_, metadata)| metadata),
         )?;
+        if self.staging.is_some() {
+            return self.publish_subtree();
+        }
         let staging = nix::sys::stat::fstatat(
             self.parent.descriptor(),
             self.name.as_os_str(),
@@ -353,6 +654,76 @@ impl StagedWrite {
         }
         Ok(PublishedWrite {
             parent: self.parent.child(OsStr::new(".")).map_err(unknown)?,
+            missing: Vec::new(),
+            leaf: self.leaf.clone(),
+            file: self.output.try_clone().map_err(unknown)?,
+        })
+    }
+
+    /// Publishes a staged missing subtree: the first missing name must
+    /// still be absent, the `.rustx-mkdir-*` staging directory and every
+    /// registered owned entry are re-proven by device:inode, and the
+    /// staging directory itself crosses into the retained parent under
+    /// the first missing name by one `NOREPLACE` `renameat` — the commit
+    /// crossing. The staging guard stays armed until the syscall
+    /// succeeds, so any pre-crossing failure unwinds only proven-owned
+    /// entries.
+    ///
+    /// The device:inode proofs and the `renameat` are not atomic: a
+    /// same-euid writer that replaced the staging name between the
+    /// verify and the syscall could redirect the rename onto a foreign
+    /// directory — the checks narrow that window, they cannot close it
+    /// (documented same-euid limitation, never claimed as a sandbox).
+    /// A `NOREPLACE` failure, a claimed first name, or a substituted
+    /// staged entry is a clean pre-commit conflict. After the crossing
+    /// the published name is re-proven against the staging descriptor —
+    /// a locator that no longer resolves to it reports [`CommitUnknown`],
+    /// never certainty either way.
+    fn publish_subtree(mut self) -> io::Result<PublishedWrite> {
+        let first = self.missing[0].clone();
+        // The staged name must still be absent in the retained parent —
+        // anything that claimed it since staging is a conflict, not a
+        // target for replacement.
+        if leaf_metadata(&self.parent, &first)?.is_some() {
+            return Err(conflict());
+        }
+        self.staging
+            .as_ref()
+            .expect("subtree publish requires its staging directory")
+            .verify(&self.parent, &self.name)?;
+        // One atomic crossing: the staging directory itself becomes
+        // `parent/first` — `NOREPLACE` so a concurrent claim can never be
+        // overwritten. The staged interior is never re-resolved by name.
+        renameat_with(
+            self.parent.descriptor(),
+            self.name.as_os_str(),
+            self.parent.descriptor(),
+            first.as_os_str(),
+            RenameFlags::NOREPLACE,
+        )?;
+        self.published = true;
+        // Receipt revalidation: the published name must now resolve to
+        // the exact staging inode. A same-euid swap across the crossing
+        // leaves the outcome unknowable — never claim certainty.
+        let stage = self
+            .staging
+            .as_ref()
+            .expect("staging retained until the crossing");
+        let published = nix::sys::stat::fstatat(
+            self.parent.descriptor(),
+            first.as_os_str(),
+            nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
+        )
+        .map_err(|error| unknown(error.into()))?;
+        let own = nix::sys::stat::fstat(&stage.root).map_err(|error| unknown(error.into()))?;
+        if (published.st_dev, published.st_ino) != (own.st_dev, own.st_ino) {
+            return Err(unknown(io::Error::other(
+                "published subtree name no longer names the staged directory",
+            )));
+        }
+        Ok(PublishedWrite {
+            parent: self.parent.child(OsStr::new(".")).map_err(unknown)?,
+            missing: self.missing.clone(),
             leaf: self.leaf.clone(),
             file: self.output.try_clone().map_err(unknown)?,
         })
@@ -369,6 +740,10 @@ impl Drop for StagedWrite {
         // name. The proof and the `unlinkat` are not atomic: a concurrent
         // rename can still interleave between them; the check narrows the
         // window, it does not close it.
+        if let Some(staging) = self.staging.take() {
+            staging.remove(&self.parent, &self.name);
+            return;
+        }
         let own = nix::sys::stat::fstat(&self.output);
         let named = nix::sys::stat::fstatat(
             self.parent.descriptor(),
@@ -392,6 +767,9 @@ impl Drop for StagedWrite {
 /// name/descriptor identity proof.
 pub struct PublishedWrite {
     parent: PackageDirectory,
+    /// The subtree names the publish crossed whole — the path from
+    /// `parent` to the leaf's containing directory.
+    missing: Vec<OsString>,
     leaf: OsString,
     file: File,
 }
@@ -426,8 +804,15 @@ impl PublishedWrite {
             let directory = File::from(self.parent.descriptor().try_clone()?);
             sync(&directory)?;
             self.parent.verify()?;
+            // Descend through the published subtree to the leaf's own
+            // containing directory — for `missing` empty that is the
+            // retained parent itself.
+            let mut containing = self.parent.child(OsStr::new("."))?;
+            for component in &self.missing {
+                containing = containing.child(component)?;
+            }
             let named = nix::sys::stat::fstatat(
-                self.parent.descriptor(),
+                containing.descriptor(),
                 self.leaf.as_os_str(),
                 nix::fcntl::AtFlags::AT_SYMLINK_NOFOLLOW,
             )?;
@@ -462,7 +847,10 @@ mod tests {
         let mut names: Vec<OsString> = std::fs::read_dir(path)
             .unwrap()
             .map(|entry| entry.unwrap().file_name())
-            .filter(|name| name.as_bytes().starts_with(b".rustx-write-"))
+            .filter(|name| {
+                name.as_bytes().starts_with(b".rustx-write-")
+                    || name.as_bytes().starts_with(b".rustx-mkdir-")
+            })
             .collect();
         names.sort();
         names
@@ -478,7 +866,13 @@ mod tests {
         let file = temporary.path().join("file");
         std::fs::write(&file, b"original").unwrap();
         let current = revision(&directory, "file");
-        let target = WriteTarget::prepare(directory, OsStr::new("file"), Some(&current)).unwrap();
+        let target = WriteTarget::prepare(
+            directory,
+            OsStr::new("file"),
+            Vec::new(),
+            Expectation::Revision(&current),
+        )
+        .unwrap();
         let moved = temporary.path().join("moved");
         std::fs::rename(&file, &moved).unwrap();
         let outside = tempfile::tempdir().unwrap();
@@ -502,10 +896,15 @@ mod tests {
             .entry_metadata(Path::new("file"))
             .unwrap()
             .revision;
-        let staged = WriteTarget::prepare(directory, OsStr::new("file"), Some(&current))
-            .unwrap()
-            .stage(|output| output.write_all(b"new"))
-            .unwrap();
+        let staged = WriteTarget::prepare(
+            directory,
+            OsStr::new("file"),
+            Vec::new(),
+            Expectation::Revision(&current),
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"new"))
+        .unwrap();
         let moved = temporary.path().join("moved");
         std::fs::rename(&file, &moved).unwrap();
         std::fs::create_dir(&file).unwrap();
@@ -529,7 +928,8 @@ mod tests {
         let target = WriteTarget::prepare(
             directory.child(OsStr::new(".")).unwrap(),
             OsStr::new("file"),
-            Some(&current),
+            Vec::new(),
+            Expectation::Revision(&current),
         )
         .unwrap();
         std::fs::write(&file, b"external").unwrap();
@@ -542,10 +942,15 @@ mod tests {
             io::ErrorKind::AlreadyExists
         );
         // Changed between staging and publishing.
-        let staged = WriteTarget::prepare(directory, OsStr::new("file"), Some(&revision_of(&file)))
-            .unwrap()
-            .stage(|output| output.write_all(b"new"))
-            .unwrap();
+        let staged = WriteTarget::prepare(
+            directory,
+            OsStr::new("file"),
+            Vec::new(),
+            Expectation::Revision(&revision_of(&file)),
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"new"))
+        .unwrap();
         std::fs::write(&file, b"external2").unwrap();
         assert_eq!(
             staged
@@ -571,10 +976,15 @@ mod tests {
         let file = temporary.path().join("file");
         std::fs::write(&file, b"original").unwrap();
         let current = revision(&directory, "file");
-        let staged = WriteTarget::prepare(directory, OsStr::new("file"), Some(&current))
-            .unwrap()
-            .stage(|output| output.write_all(b"new"))
-            .unwrap();
+        let staged = WriteTarget::prepare(
+            directory,
+            OsStr::new("file"),
+            Vec::new(),
+            Expectation::Revision(&current),
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"new"))
+        .unwrap();
         assert_eq!(staging_names(temporary.path()).len(), 1);
         drop(staged);
         assert_eq!(staging_names(temporary.path()), Vec::<OsString>::new());
@@ -589,7 +999,8 @@ mod tests {
         let created = WriteTarget::prepare(
             directory.child(OsStr::new(".")).unwrap(),
             OsStr::new("file"),
-            None,
+            Vec::new(),
+            Expectation::Absent,
         )
         .unwrap()
         .stage(|output| output.write_all(b"created"))
@@ -608,14 +1019,19 @@ mod tests {
         // chmod itself moves the revision, so prepare against a fresh one.
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o750)).unwrap();
         let current = revision(&directory, "file");
-        let replaced = WriteTarget::prepare(directory, OsStr::new("file"), Some(&current))
-            .unwrap()
-            .stage(|output| output.write_all(b"replaced"))
-            .unwrap()
-            .publish()
-            .unwrap()
-            .finish()
-            .unwrap();
+        let replaced = WriteTarget::prepare(
+            directory,
+            OsStr::new("file"),
+            Vec::new(),
+            Expectation::Revision(&current),
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"replaced"))
+        .unwrap()
+        .publish()
+        .unwrap()
+        .finish()
+        .unwrap();
         assert_eq!(std::fs::read(&file).unwrap(), b"replaced");
         assert_eq!(
             std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
@@ -640,10 +1056,15 @@ mod tests {
         // bits may reach the published replacement.
         std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o4764)).unwrap();
         let current = revision(&directory, "file");
-        let staged = WriteTarget::prepare(directory, OsStr::new("file"), Some(&current))
-            .unwrap()
-            .stage(|output| output.write_all(b"new"))
-            .unwrap();
+        let staged = WriteTarget::prepare(
+            directory,
+            OsStr::new("file"),
+            Vec::new(),
+            Expectation::Revision(&current),
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"new"))
+        .unwrap();
         let staging = staging_names(temporary.path());
         assert_eq!(staging.len(), 1);
         assert_eq!(
@@ -669,17 +1090,142 @@ mod tests {
         let file = temporary.path().join("file");
         std::fs::write(&file, b"original").unwrap();
         let current = revision(&directory, "file");
-        let visible = WriteTarget::prepare(directory, OsStr::new("file"), Some(&current))
-            .unwrap()
-            .stage(|output| output.write_all(b"committed"))
-            .unwrap()
-            .publish()
-            .unwrap();
+        let visible = WriteTarget::prepare(
+            directory,
+            OsStr::new("file"),
+            Vec::new(),
+            Expectation::Revision(&current),
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"committed"))
+        .unwrap()
+        .publish()
+        .unwrap();
         let error = visible
             .finish_with(|_| Err(io::Error::other("injected directory sync failure")))
             .expect_err("an injected sync failure must error");
         assert!(error.get_ref().unwrap().is::<CommitUnknown>());
         assert_eq!(std::fs::read(&file).unwrap(), b"committed");
+    }
+
+    #[test]
+    fn a_missing_subtree_publishes_whole_as_one_rename() {
+        let (temporary, directory) = root();
+        let staged = WriteTarget::prepare(
+            directory,
+            OsStr::new("leaf.txt"),
+            vec![OsString::from("deep"), OsString::from("deeper")],
+            Expectation::Absent,
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"subtree"))
+        .unwrap();
+        // Exactly one private staging directory, interior hidden.
+        assert_eq!(staging_names(temporary.path()).len(), 1);
+        assert!(!temporary.path().join("deep").exists());
+        let published = staged.publish().unwrap().finish().unwrap();
+        assert_eq!(
+            std::fs::read(temporary.path().join("deep/deeper/leaf.txt")).unwrap(),
+            b"subtree"
+        );
+        assert_eq!(published.size, 7);
+        assert_eq!(staging_names(temporary.path()), Vec::<OsString>::new());
+    }
+
+    #[test]
+    fn a_writer_failure_mid_subtree_leaves_zero_residue() {
+        let (temporary, directory) = root();
+        let error = WriteTarget::prepare(
+            directory,
+            OsStr::new("leaf.txt"),
+            vec![OsString::from("deep"), OsString::from("deeper")],
+            Expectation::Absent,
+        )
+        .unwrap()
+        .stage(|output| {
+            output.write_all(b"partial").unwrap();
+            Err(io::Error::other("injected writer failure"))
+        })
+        .err()
+        .expect("the writer failure must surface");
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        // Every created interior dir, the staged leaf, and the staging
+        // directory itself are removed — nothing claimed `deep`.
+        assert_eq!(staging_names(temporary.path()), Vec::<OsString>::new());
+        assert!(!temporary.path().join("deep").exists());
+    }
+
+    #[test]
+    fn a_dropped_subtree_stage_removes_only_what_it_created() {
+        let (temporary, directory) = root();
+        let staged = WriteTarget::prepare(
+            directory,
+            OsStr::new("leaf.txt"),
+            vec![OsString::from("deep"), OsString::from("deeper")],
+            Expectation::Absent,
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"subtree"))
+        .unwrap();
+        assert_eq!(staging_names(temporary.path()).len(), 1);
+        drop(staged);
+        assert_eq!(staging_names(temporary.path()), Vec::<OsString>::new());
+        assert!(!temporary.path().join("deep").exists());
+    }
+
+    #[test]
+    fn a_competing_first_missing_name_is_never_modified() {
+        let (temporary, directory) = root();
+        let staged = WriteTarget::prepare(
+            directory,
+            OsStr::new("leaf.txt"),
+            vec![OsString::from("deep"), OsString::from("deeper")],
+            Expectation::Absent,
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"subtree"))
+        .unwrap();
+        // A competitor claims the first missing name with its own data.
+        std::fs::create_dir(temporary.path().join("deep")).unwrap();
+        std::fs::write(temporary.path().join("deep/competitor.txt"), b"mine").unwrap();
+        let error = staged
+            .publish()
+            .err()
+            .expect("a claimed first name must conflict");
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read(temporary.path().join("deep/competitor.txt")).unwrap(),
+            b"mine"
+        );
+        assert_eq!(staging_names(temporary.path()), Vec::<OsString>::new());
+    }
+
+    #[test]
+    fn a_substituted_staged_leaf_is_denied_and_never_deleted() {
+        let (temporary, directory) = root();
+        let staged = WriteTarget::prepare(
+            directory,
+            OsStr::new("leaf.txt"),
+            vec![OsString::from("deep")],
+            Expectation::Absent,
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"subtree"))
+        .unwrap();
+        // Replace the staged leaf inside the private staging directory
+        // with a foreign file — a different inode under the same name.
+        let staging = temporary.path().join(&staging_names(temporary.path())[0]);
+        let foreign = staging.join("leaf.txt");
+        std::fs::remove_file(&foreign).unwrap();
+        std::fs::write(&foreign, b"foreign").unwrap();
+        let error = staged
+            .publish()
+            .err()
+            .expect("a substituted staged entry must be denied");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        // Cleanup re-proves every name: the foreign leaf is never
+        // unlinked and its containing directories stay with it.
+        assert_eq!(std::fs::read(&foreign).unwrap(), b"foreign");
     }
 
     #[test]
@@ -691,12 +1237,17 @@ mod tests {
         let file = parent_path.join("file");
         std::fs::write(&file, b"original").unwrap();
         let current = revision(&parent, "file");
-        let visible = WriteTarget::prepare(parent, OsStr::new("file"), Some(&current))
-            .unwrap()
-            .stage(|output| output.write_all(b"committed"))
-            .unwrap()
-            .publish()
-            .unwrap();
+        let visible = WriteTarget::prepare(
+            parent,
+            OsStr::new("file"),
+            Vec::new(),
+            Expectation::Revision(&current),
+        )
+        .unwrap()
+        .stage(|output| output.write_all(b"committed"))
+        .unwrap()
+        .publish()
+        .unwrap();
         // Move the retained parent away and plant a different directory
         // at its path: the published bytes are unreachable by name, so
         // finish must report the unknown outcome, never success.

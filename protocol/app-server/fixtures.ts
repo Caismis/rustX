@@ -1732,14 +1732,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -1757,14 +1757,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -1778,7 +1778,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -2078,14 +2078,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -2103,14 +2103,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -2124,7 +2124,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -2424,14 +2424,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -2449,14 +2449,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -2470,7 +2470,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -2770,14 +2770,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -2795,14 +2795,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -2816,7 +2816,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -3116,14 +3116,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -3141,14 +3141,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -3162,7 +3162,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -3462,14 +3462,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -3487,14 +3487,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -3508,7 +3508,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },
@@ -3808,14 +3808,14 @@ export const fixtures = [
             },
             {
               "name": "write",
-              "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+              "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "content": {
                     "type": "string",
@@ -3833,14 +3833,14 @@ export const fixtures = [
             },
             {
               "name": "edit",
-              "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+              "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
               "input_schema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
                   "path": {
                     "type": "string",
-                    "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                    "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
                   },
                   "edits": {
                     "type": "array",
@@ -3854,7 +3854,7 @@ export const fixtures = [
                           "minLength": 1
                         },
                         "newText": {
-                          "description": "The replacement text.",
+                          "description": "The replacement text — validated here, planned and applied by the\nadmitted Execution Client from the invocation arguments.",
                           "type": "string"
                         }
                       },

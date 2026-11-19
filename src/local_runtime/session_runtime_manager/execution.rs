@@ -491,6 +491,98 @@ impl LocalExecutionEndpoint {
         })
     }
 
+    /// The admitted prepare half of one Agent write: resolves the
+    /// already-interpreted absolute `path` once through the lexical
+    /// workspace gate, then dispatches `PrepareWrite` — or
+    /// `BeginWrite`/`WriteChunk` for an over-chunk payload — with the
+    /// caller's `WriteExpectation` under the shared deadline and
+    /// per-request `with_active` cancellation grant. The returned
+    /// [`PreparedMutation`] holds no Server-side state: the ticket and
+    /// the retained physical target live on the Client, and the caller
+    /// later commits or aborts it by ticket.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_write_admitted(
+        &self,
+        path: &Path,
+        expectation: &rustx_execution_protocol::WriteExpectation,
+        bytes: &[u8],
+        deadline: Instant,
+        data: OwnedSemaphorePermit,
+        _writer: OwnedSemaphorePermit,
+        admit: impl Fn() -> io::Result<()>,
+        sent: impl Fn(),
+    ) -> io::Result<rustx_execution_server::PreparedMutation> {
+        self.with_connection(Some(data), true, |connection| {
+            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            connection.prepare_write(&relative, expectation, bytes, Some(deadline), &admit, &sent)
+        })
+    }
+
+    /// The admitted prepare half of one Agent edit — the
+    /// [`prepare_write_admitted`](Self::prepare_write_admitted) contract
+    /// for a `PrepareEdit` whose typed refusals surface as
+    /// `rustx_execution_server::RefusedEdit`-downcastable errors.
+    #[allow(clippy::too_many_arguments)]
+    fn prepare_edit_admitted(
+        &self,
+        path: &Path,
+        expectation: &rustx_execution_protocol::WriteExpectation,
+        replacements: &[rustx_execution_protocol::TextReplacement],
+        deadline: Instant,
+        data: OwnedSemaphorePermit,
+        _writer: OwnedSemaphorePermit,
+        admit: impl Fn() -> io::Result<()>,
+        sent: impl Fn(),
+    ) -> io::Result<rustx_execution_server::PreparedMutation> {
+        self.with_connection(Some(data), true, |connection| {
+            let relative = workspace_relative(&connection.admission().workspace, path)?;
+            connection.prepare_edit(
+                &relative,
+                expectation,
+                replacements,
+                Some(deadline),
+                &admit,
+                &sent,
+            )
+        })
+    }
+
+    /// The admitted commit of one ticketed [`PreparedMutation`] — the
+    /// publish crossing itself — under the caller's cancellation grant
+    /// and absolute deadline. The `Written` stamp is projected to the
+    /// Server-facing `FileMetadata`.
+    fn commit_prepared_admitted(
+        &self,
+        prepared: &rustx_execution_server::PreparedMutation,
+        deadline: Instant,
+        data: OwnedSemaphorePermit,
+        _writer: OwnedSemaphorePermit,
+        admit: impl Fn() -> io::Result<()>,
+    ) -> io::Result<rustx_confined_fs::FileMetadata> {
+        self.with_connection(Some(data), true, |connection| {
+            connection
+                .commit_prepared(prepared, Some(deadline), &admit)
+                .map(project_stamp)
+        })
+    }
+
+    /// The admitted abort of one ticketed [`PreparedMutation`]: removes
+    /// the Client-side preparation while the binding still admits the
+    /// frame.
+    fn abort_prepared_admitted(
+        &self,
+        prepared: &rustx_execution_server::PreparedMutation,
+        deadline: Instant,
+        data: OwnedSemaphorePermit,
+        _writer: OwnedSemaphorePermit,
+        admit: impl Fn() -> io::Result<()>,
+        sent: impl Fn(),
+    ) -> io::Result<()> {
+        self.with_connection(Some(data), true, |connection| {
+            connection.abort_prepared(prepared, Some(deadline), &admit, &sent)
+        })
+    }
+
     /// Serializes one synchronous exchange on the admitted connection:
     /// `WouldBlock` while another dispatch holds it or the shared data
     /// budget is spent — a bounded busy signal, never a queue — and
@@ -544,6 +636,83 @@ impl LocalExecutionEndpoint {
     /// methods, never around them.
     fn binding(&self) -> &Binding {
         &self.binding
+    }
+
+    /// Retires the one admitted connection so its Client clears every
+    /// live preparation on drop: the fail-closed answer when a cleanup
+    /// abort cannot be delivered — capacity is never advertised as free
+    /// while a ticket may still be stranded on the Client.
+    fn retire_connection(&self) {
+        let mut guard = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(mut connection) = guard.take() {
+            connection.disconnect();
+        }
+    }
+}
+
+/// The ticketed [`PreparedMutation`](rustx_execution_server::PreparedMutation)
+/// built inside the blocking worker: it owns the validated reply *and*
+/// its cleanup from the instant it exists, so a discarded result — a
+/// waiter cancelled mid-dispatch, a failed handoff — never strands the
+/// ticket. [`take`](OwnedPrepared::take) hands the ticket to the caller
+/// and disarms; any other drop runs the abort on a short-lived detached
+/// thread. When the abort cannot reach the Client — a full budget, a
+/// dead connection — the guard fails closed by retiring the connection
+/// so the Client's drop clears the stranded ticket, instead of
+/// advertising capacity that was never cleaned.
+struct OwnedPrepared {
+    prepared: rustx_execution_server::PreparedMutation,
+    endpoint: Arc<LocalExecutionEndpoint>,
+    live: bool,
+}
+
+impl OwnedPrepared {
+    fn take(mut self) -> rustx_execution_server::PreparedMutation {
+        self.live = false;
+        self.prepared.clone()
+    }
+}
+
+impl Drop for OwnedPrepared {
+    fn drop(&mut self) {
+        if !self.live {
+            return;
+        }
+        let endpoint = self.endpoint.clone();
+        let prepared = self.prepared.clone();
+        std::thread::spawn(move || {
+            let cleanup = || -> io::Result<()> {
+                let data = endpoint
+                    .data_slots
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
+                    })?;
+                let writer = endpoint
+                    .agent_writer
+                    .clone()
+                    .try_acquire_owned()
+                    .map_err(|_| {
+                        io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
+                    })?;
+                let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+                endpoint.abort_prepared_admitted(
+                    &prepared,
+                    deadline,
+                    data,
+                    writer,
+                    || Ok(()),
+                    || (),
+                )
+            };
+            if cleanup().is_err() {
+                endpoint.retire_connection();
+            }
+        });
     }
 }
 
@@ -908,6 +1077,165 @@ impl SessionExecutionScope {
         .await
     }
 
+    /// The prepare half of one Agent write through the Session's
+    /// admitted Client: `path` is the already-interpreted absolute
+    /// target the lexical gate resolves once; `bytes` is the model's
+    /// complete planned payload — over the wire chunk bound it arrives
+    /// as `BeginWrite`/`WriteChunk` exchanges on the same dispatch. The
+    /// Client retains the target and the bounded payload in memory;
+    /// nothing is staged or published before the commit grant.
+    ///
+    /// `expectation` is `Current` for the model write — the
+    /// pre-authorization retain, never a permission to publish.
+    ///
+    /// # Errors
+    ///
+    /// The [`dispatch_data`](Self::dispatch_data) kinds plus the
+    /// connection's own: typed confinement/refusal errors and a retired
+    /// `InvalidData` for a contradictory peer.
+    pub(crate) async fn prepare_write(
+        &self,
+        path: &Path,
+        bytes: Vec<u8>,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_execution_server::PreparedMutation> {
+        let worker_path = path.to_path_buf();
+        self.dispatch_data(
+            cancellation,
+            move |endpoint, data, writer, deadline, worker_cancellation| {
+                let admit = move || {
+                    worker_cancellation
+                        .with_active(|| ())
+                        .ok_or_else(cancelled_before_dispatch)
+                };
+                endpoint
+                    .prepare_write_admitted(
+                        &worker_path,
+                        &rustx_execution_protocol::WriteExpectation::Current,
+                        &bytes,
+                        deadline,
+                        data,
+                        writer,
+                        admit,
+                        || (),
+                    )
+                    .map(|prepared| OwnedPrepared {
+                        prepared,
+                        endpoint,
+                        live: true,
+                    })
+            },
+        )
+        .await
+        .map(OwnedPrepared::take)
+    }
+
+    /// The prepare half of one Agent edit — the
+    /// [`prepare_write`](Self::prepare_write) contract for a
+    /// `PrepareEdit` carrying the model's typed replacements. The
+    /// `RefusedEdit`-downcastable refusal preserves the typed
+    /// [`rustx_execution_protocol::EditRefusal`] the tool renders into
+    /// its stable diagnostic.
+    pub(crate) async fn prepare_edit(
+        &self,
+        path: &Path,
+        replacements: Vec<rustx_execution_protocol::TextReplacement>,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_execution_server::PreparedMutation> {
+        let worker_path = path.to_path_buf();
+        self.dispatch_data(
+            cancellation,
+            move |endpoint, data, writer, deadline, worker_cancellation| {
+                let admit = move || {
+                    worker_cancellation
+                        .with_active(|| ())
+                        .ok_or_else(cancelled_before_dispatch)
+                };
+                endpoint
+                    .prepare_edit_admitted(
+                        &worker_path,
+                        &rustx_execution_protocol::WriteExpectation::Current,
+                        &replacements,
+                        deadline,
+                        data,
+                        writer,
+                        admit,
+                        || (),
+                    )
+                    .map(|prepared| OwnedPrepared {
+                        prepared,
+                        endpoint,
+                        live: true,
+                    })
+            },
+        )
+        .await
+        .map(OwnedPrepared::take)
+    }
+
+    /// The commit of one ticketed preparation — the publish crossing.
+    /// A `WriteOutcomeUnknown`-downcastable error means the outcome
+    /// cannot be known and must be reported honestly, never retried and
+    /// never overridden by a racing cancellation.
+    pub(crate) async fn commit_prepared(
+        &self,
+        prepared: &rustx_execution_server::PreparedMutation,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<rustx_confined_fs::FileMetadata> {
+        let prepared = prepared.clone();
+        self.dispatch_settled(
+            cancellation,
+            move |endpoint, data, writer, deadline, worker_cancellation| {
+                endpoint.commit_prepared_admitted(&prepared, deadline, data, writer, move || {
+                    worker_cancellation
+                        .with_active(|| ())
+                        .ok_or_else(cancelled_before_dispatch)
+                })
+            },
+        )
+        .await
+    }
+
+    /// The abort of one ticketed preparation — removes the Client-side
+    /// preparation. The caller passes the cancellation view it has; a
+    /// detached owner passes a detached one so cleanup is never itself
+    /// canceled away.
+    pub(crate) async fn abort_prepared(
+        &self,
+        prepared: &rustx_execution_server::PreparedMutation,
+        cancellation: &ExecutionCancellation,
+    ) -> io::Result<()> {
+        let prepared = prepared.clone();
+        let result = self
+            .dispatch_data(
+                cancellation,
+                move |endpoint, data, writer, deadline, worker_cancellation| {
+                    endpoint.abort_prepared_admitted(
+                        &prepared,
+                        deadline,
+                        data,
+                        writer,
+                        move || {
+                            worker_cancellation
+                                .with_active(|| ())
+                                .ok_or_else(cancelled_before_dispatch)
+                        },
+                        || (),
+                    )
+                },
+            )
+            .await;
+        if result.is_err()
+            && let Ok(endpoint) = self.endpoint()
+        {
+            // The ticket may still be live on the Client: fail closed
+            // rather than advertising freed capacity that was never
+            // cleaned.
+            endpoint.retire_connection();
+        }
+        result
+    }
+
     /// One admitted data dispatch's shared admission: the endpoint's
     /// non-owning resolution, the bounded data budget, and the single
     /// writer permit awaited on the async side under one absolute
@@ -1001,6 +1329,98 @@ impl SessionExecutionScope {
             // physical settlement before the cancelled result returns.
             let _ = exchange.await;
             return Err(cancelled_before_dispatch());
+        };
+        match joined {
+            Ok(result) => result,
+            Err(error) => Err(io::Error::other(format!(
+                "read exchange task failed: {error}"
+            ))),
+        }
+    }
+}
+
+impl SessionExecutionScope {
+    /// [`dispatch_data`](Self::dispatch_data) with one different settlement
+    /// rule, used only by the mutation commit: when cancellation wins the
+    /// biased race the settled worker outcome still takes precedence —
+    /// a confirmed `Written` stays confirmed, a
+    /// `WriteOutcomeUnknown` stays unknown, and a clean pre-wire refusal
+    /// stays a refusal — a racing cancellation never masks the true
+    /// outcome. `Interrupted` can still surface only from the
+    /// pre-dispatch checks or the worker's own pre-byte admit gate —
+    /// cases where provably nothing crossed.
+    async fn dispatch_settled<T: Send + 'static>(
+        &self,
+        cancel: &ExecutionCancellation,
+        work: impl FnOnce(
+            Arc<LocalExecutionEndpoint>,
+            OwnedSemaphorePermit,
+            OwnedSemaphorePermit,
+            Instant,
+            ExecutionCancellation,
+        ) -> io::Result<T>
+        + Send
+        + 'static,
+    ) -> io::Result<T> {
+        if cancel.is_cancelled() {
+            return Err(cancelled_before_dispatch());
+        }
+        let endpoint = self.endpoint()?;
+        let data = endpoint
+            .data_slots
+            .clone()
+            .try_acquire_owned()
+            .map_err(|_| {
+                io::Error::new(io::ErrorKind::WouldBlock, "execution connection is busy")
+            })?;
+        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        let writer = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(cancelled_before_dispatch()),
+            permit = tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline),
+                endpoint.agent_writer.clone().acquire_owned(),
+            ) => {
+                permit
+                    .map_err(|_| {
+                        io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "execution connection page request timed out",
+                        )
+                    })?
+                    .map_err(|_| io::Error::other("execution writer queue is closed"))?
+            }
+        };
+        let worker_cancellation = cancel.clone();
+        let mut exchange = tokio::task::spawn_blocking(move || {
+            if Instant::now() >= deadline || worker_cancellation.is_cancelled() {
+                return Err(if worker_cancellation.is_cancelled() {
+                    cancelled_before_dispatch()
+                } else {
+                    io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "execution connection page request timed out",
+                    )
+                });
+            }
+            work(endpoint, data, writer, deadline, worker_cancellation)
+        });
+        let settled = tokio::select! {
+            biased;
+            () = cancel.cancelled() => None,
+            joined = &mut exchange => Some(joined),
+        };
+        let Some(joined) = settled else {
+            // The settled worker outcome is authoritative: a racing
+            // cancellation may have lost to a publish that already
+            // crossed, so the worker's own result — success, refusal, or
+            // unknown — is returned, never a masked cancellation.
+            return match exchange.await {
+                Ok(result) => result,
+                Err(error) => Err(io::Error::other(format!(
+                    "read exchange task failed: {error}"
+                ))),
+            };
         };
         match joined {
             Ok(result) => result,

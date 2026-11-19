@@ -492,24 +492,53 @@ impl AgentExecution<'_> {
                             slot.result = Some(cancelled_result(self.cancellation.reason()));
                             continue;
                         }
-                        if let Some(prepared) = slot.prepared.as_mut()
-                            && let Err(error) = Self::bind_prepared_mutation_target(
-                                prepared,
-                                self.tool_runtime.workspace().root(),
-                                self.tool_runtime.tool_output(),
-                            )
-                        {
-                            slot.result = Some(failed_result(&error));
-                            continue;
-                        }
-                        let facts = ParallelAuthFacts::from_execution(slot_index, self, slot);
+                        let mut facts = ParallelAuthFacts::from_execution(slot_index, self, slot);
+                        // The prepared invocation moves into the slot's
+                        // own future: its remote mutation prepare runs
+                        // concurrently with every sibling's bind and
+                        // authorization rather than serially gating the
+                        // whole group on one wire round-trip each.
+                        let mut prepared_opt = slot.prepared.take();
                         let lifecycle = self.lifecycle.clone();
                         let (auth_trigger, cancellation) =
                             self.cancellation.execution_cancellation().child_execution();
                         auth_cancels.insert(slot_index, auth_trigger);
+                        let workspace = self.tool_runtime.workspace();
+                        let tool_output = self.tool_runtime.tool_output();
                         auth_futures.push(Box::pin(async move {
-                            let outcome = authorize_owned(&lifecycle, &cancellation, &facts).await;
-                            (facts.slot_index, outcome)
+                            if let Some(prepared) = prepared_opt.as_mut() {
+                                match crate::tools::native::support::bind_invocation_mutation_target(
+                                    &prepared.origin,
+                                    &prepared.invocation.tool_name,
+                                    &prepared.invocation.arguments,
+                                    workspace,
+                                    tool_output,
+                                    &cancellation,
+                                )
+                                .await
+                                {
+                                    Ok(bound) => {
+                                        facts.mutation_target = bound.as_ref().map(|target| {
+                                            target.path().to_path_buf()
+                                        });
+                                        prepared.mutation_target = bound;
+                                    }
+                                    // A bind failure short-circuits
+                                    // before permission classification —
+                                    // the slot settles failed and is
+                                    // never authorized.
+                                    Err(error) => {
+                                        return (
+                                            facts.slot_index,
+                                            prepared_opt,
+                                            Ok(Some(failed_result(&error))),
+                                        );
+                                    }
+                                }
+                            }
+                            let outcome =
+                                authorize_owned(&lifecycle, &cancellation, &facts).await;
+                            (facts.slot_index, prepared_opt, outcome)
                         }));
                     }
                     let mut futures = futures_util::stream::FuturesUnordered::new();
@@ -522,9 +551,12 @@ impl AgentExecution<'_> {
                         tokio::select! {
                             biased;
                             () = self.cancellation.cancelled() => break,
-                            Some((slot_index, outcome)) = auth_futures.next() => {
+                            Some((slot_index, prepared_back, outcome)) = auth_futures.next() => {
                                 remaining_auth -= 1;
                                 auth_cancels.remove(&slot_index);
+                                if slots[slot_index].prepared.is_none() {
+                                    slots[slot_index].prepared = prepared_back;
+                                }
                                 match outcome {
                                     Ok(Some(result)) => {
                                         slots[slot_index].result = Some(result);
@@ -598,9 +630,14 @@ impl AgentExecution<'_> {
                         for trigger in auth_cancels.values() {
                             trigger.cancel(cause);
                         }
-                        while let Some((slot_index, outcome)) = auth_futures.next().await {
+                        while let Some((slot_index, prepared_back, outcome)) =
+                            auth_futures.next().await
+                        {
                             remaining_auth = remaining_auth.saturating_sub(1);
                             auth_cancels.remove(&slot_index);
+                            if slots[slot_index].prepared.is_none() {
+                                slots[slot_index].prepared = prepared_back;
+                            }
                             if slots[slot_index].result.is_some() {
                                 continue;
                             }
@@ -736,6 +773,19 @@ impl AgentExecution<'_> {
                         "tool authorization aborted after sibling execution started",
                     ));
                 }
+            }
+        }
+        // Denied, cancelled, and pre-commit-failed invocations must not
+        // leave a live ticketed preparation: actively await each bound
+        // target's abort rather than relying on the owner's drop alone.
+        // A committed owner is already consumed and aborts nothing.
+        for slot in &mut slots {
+            if let Some(bound) = slot
+                .prepared
+                .as_mut()
+                .and_then(|prepared| prepared.mutation_target.take())
+            {
+                bound.abort().await;
             }
         }
         // Completion facts and the canonical batch retain the same immutable
@@ -1044,26 +1094,6 @@ impl AgentExecution<'_> {
             ),
         };
         (call_index, result, facts)
-    }
-
-    /// Native mutation owner: prepare and hold the Write/Edit target before
-    /// authorization so classify/execute/commit share one bound path.
-    fn bind_prepared_mutation_target(
-        prepared: &mut PreparedInvocation,
-        workspace_root: &std::path::Path,
-        tool_output: &crate::tools::managed_output::ManagedToolOutput,
-    ) -> Result<(), String> {
-        if prepared.mutation_target.is_some() {
-            return Ok(());
-        }
-        prepared.mutation_target = crate::tools::native::support::bind_invocation_mutation_target(
-            &prepared.origin,
-            &prepared.invocation.tool_name,
-            &prepared.invocation.arguments,
-            workspace_root,
-            tool_output,
-        )?;
-        Ok(())
     }
 
     #[cfg(test)]

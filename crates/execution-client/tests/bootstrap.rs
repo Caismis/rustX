@@ -1431,6 +1431,113 @@ fn a_conditional_edit_commits_bom_crlf_and_multiple_edits() {
     expect_success(&mut child);
 }
 
+/// Two ticketed preparations on one connection decide independently:
+/// committing the write never publishes the aborted edit, and aborting
+/// the edit never disturbs the committed write.
+#[test]
+fn parallel_prepared_mutations_commit_and_abort_independently() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalWrite,
+        Capability::ConditionalEdit,
+    ]));
+    fs::write(
+        rig.workspace_path.join("edit-me"),
+        "before
+",
+    )
+    .unwrap();
+    let stamp = rustx_confined_fs::FileMetadata::of(
+        &std::fs::File::open(rig.workspace_path.join("edit-me")).unwrap(),
+    )
+    .unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+
+    let write = connection
+        .prepare_write(
+            Path::new("new-file"),
+            &rustx_execution_protocol::WriteExpectation::Absent,
+            b"created",
+            Some(deadline),
+            &|| Ok(()),
+            &|| (),
+        )
+        .unwrap();
+    let edit = connection
+        .prepare_edit(
+            Path::new("edit-me"),
+            &rustx_execution_protocol::WriteExpectation::Revision(stamp.revision.clone()),
+            &[TextReplacement {
+                old_text: "before".to_owned(),
+                new_text: "after".to_owned(),
+            }],
+            Some(deadline),
+            &|| Ok(()),
+            &|| (),
+        )
+        .unwrap();
+    assert_ne!(write.ticket, edit.ticket);
+
+    // Commit one, abort the other — neither decision leaks across tickets.
+    let published = connection
+        .commit_prepared(&write, Some(deadline), &|| Ok(()))
+        .unwrap();
+    connection
+        .abort_prepared(&edit, Some(deadline), &|| Ok(()), &|| ())
+        .unwrap();
+
+    drop(connection);
+    expect_success(&mut child);
+    assert_eq!(
+        fs::read(rig.workspace_path.join("new-file")).unwrap(),
+        b"created"
+    );
+    assert_eq!(published.size.get(), 7);
+    // The aborted edit never published — the original is untouched.
+    assert_eq!(
+        fs::read_to_string(rig.workspace_path.join("edit-me")).unwrap(),
+        "before
+"
+    );
+    // No staging residue survives the abort.
+    let staged: Vec<_> = fs::read_dir(&rig.workspace_path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_str().unwrap().starts_with(".rustx-write-"))
+        .collect();
+    assert_eq!(staged, Vec::<std::ffi::OsString>::new());
+}
+
+/// A chunked write over the wire chunk limit transfers deterministically
+/// and the `Written` receipt proves the exact submitted size.
+#[test]
+fn a_write_over_the_chunk_limit_prepares_and_commits() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalWrite,
+    ]));
+    let payload = "chunked-content
+"
+    .repeat(10_000); // ~156 KiB > 64 KiB
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    let published = connection
+        .write_file(Path::new("big"), payload.as_bytes(), None, |_| Ok(()))
+        .unwrap();
+
+    drop(connection);
+    expect_success(&mut child);
+    let on_disk = fs::read(rig.workspace_path.join("big")).unwrap();
+    assert_eq!(on_disk, payload.as_bytes());
+    assert_eq!(published.size.get(), payload.len() as u64);
+}
+
 /// Every semantic `EditRefused` is a typed reason only — the connection
 /// stays live, nothing is staged, and no path or anchor text crosses.
 #[test]
@@ -1664,7 +1771,7 @@ fn a_malformed_edit_request_is_an_error_not_a_stage() {
         &mut peer,
         &ClientRequest::PrepareEdit {
             relative_path: Path::new("file").to_path_buf(),
-            expected_revision: "a".repeat(64),
+            expectation: rustx_execution_protocol::WriteExpectation::Revision("a".repeat(64)),
             replacements: Vec::new(),
         },
     )

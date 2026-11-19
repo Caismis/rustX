@@ -14,8 +14,8 @@ use crate::tools::types::{
 /// This is a syntax-only boundary: it resolves relative paths against `cwd`,
 /// removes `.` and `..` components without consulting the filesystem, and
 /// leaves symlink/effective-target resolution to the mutation layer. Absolute
-/// paths remain ordinary host filesystem paths and no containment policy is
-/// applied.
+/// paths are interpreted verbatim; containment against the admitted Client
+/// workspace is applied by the Execution Client, never locally.
 #[must_use]
 pub fn interpret_path(cwd: &Path, requested: &str) -> PathBuf {
     let path = Path::new(requested);
@@ -58,16 +58,34 @@ fn lexical_normalize(path: &Path) -> PathBuf {
     normalized
 }
 
-pub use super::mutation::{BoundMutationTarget, atomic_commit, bind_mutation_target};
+pub use super::mutation::{BoundMutationTarget, PreparedRemoteMutation};
 
-/// Binds the Write/Edit mutation target for one prepared invocation, or
-/// returns `None` for non-mutation tools.
-pub fn bind_invocation_mutation_target(
+/// Binds the Write/Edit mutation claim for one prepared invocation, or
+/// returns `None` for non-mutation tools and for arguments the tool's
+/// own parser will reject — the parser's canonical wording is
+/// authoritative.
+///
+/// For a builtin `write`/`edit` the binder resolves the logical path
+/// with [`interpret_path`], applies the lexical managed-output guard,
+/// and sends the full planned operation — the write payload or the edit
+/// replacements — to the Session's admitted Client as a `Current`
+/// expectation prepare *before* authorization: the Client retains the
+/// target and the bounded payload in memory, nothing is staged or
+/// published, and the later commit or abort consumes the ticket exactly
+/// once. A prepare failure is deferred into the bound target so the
+/// tool renders it with its own stable wording.
+///
+/// # Errors
+///
+/// Returns `Err` only for a missing `path` argument or a managed-output
+/// guard denial — the failures the caller reports verbatim.
+pub async fn bind_invocation_mutation_target(
     origin: &crate::tools::types::ToolOrigin,
     tool_name: &str,
     arguments: &serde_json::Value,
-    workspace_root: &Path,
+    workspace: &crate::tools::workspace::Workspace,
     tool_output: &ManagedToolOutput,
+    cancellation: &crate::runtime::cancellation::ExecutionCancellation,
 ) -> Result<Option<BoundMutationTarget>, String> {
     if !matches!(origin, crate::tools::types::ToolOrigin::Builtin)
         || !matches!(tool_name, "write" | "edit")
@@ -78,72 +96,107 @@ pub fn bind_invocation_mutation_target(
         .get("path")
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| "write/edit invocation is missing a path".to_owned())?;
-    let interpreted = interpret_path(workspace_root, requested);
-    Ok(Some(bind_mutation_target(&interpreted, tool_output)?))
-}
-
-/// Resolves all existing symlink components and preserves the effective
-/// destination of a dangling final symlink or a not-yet-created descendant.
-///
-/// Permission classification for Write/Edit must use this same resolver so a
-/// dangling `PLAN.md` symlink cannot authorize a different host target than
-/// the mutation commit will write.
-pub(crate) fn resolve_effective_path(target: &Path) -> Result<PathBuf, String> {
-    let mut candidate = lexical_normalize(target);
-    for _ in 0..40 {
-        match std::fs::symlink_metadata(&candidate) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                let link = std::fs::read_link(&candidate)
-                    .map_err(|error| format!("cannot resolve {}: {error}", target.display()))?;
-                let destination = if link.is_absolute() {
-                    link
-                } else {
-                    candidate
-                        .parent()
-                        .ok_or_else(|| format!("{} has no parent directory", target.display()))?
-                        .join(link)
-                };
-                // Symlink targets are still path syntax. Normalize their
-                // lexical `.`/`..` components before checking existence so a
-                // dangling destination has the same deterministic effective
-                // target regardless of whether an intermediate component
-                // happens to exist.
-                candidate = lexical_normalize(&destination);
-            }
-            Ok(_) => {
-                return std::fs::canonicalize(&candidate)
-                    .map_err(|error| format!("cannot resolve {}: {error}", target.display()));
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return canonicalize_deepest_existing(&candidate)
-                    .map_err(|error| format!("cannot resolve {}: {error}", target.display()));
-            }
-            Err(error) => return Err(format!("cannot inspect {}: {error}", target.display())),
-        }
-    }
-    Err(format!(
-        "cannot resolve {}: too many symlink hops",
-        target.display()
-    ))
-}
-
-/// Canonicalizes the deepest existing ancestor and appends the remaining
-/// components. This follows symlinked ancestors without requiring the final
-/// mutation target to exist yet.
-fn canonicalize_deepest_existing(path: &Path) -> std::io::Result<PathBuf> {
-    if path.exists() {
-        return std::fs::canonicalize(path);
-    }
-    let Some(parent) = path.parent() else {
-        return std::fs::canonicalize(path);
+    let interpreted = interpret_path(workspace.root(), requested);
+    tool_output
+        .ensure_model_mutation_allowed(&interpreted)
+        .map_err(|error| error.to_string())?;
+    // No admitted Client means no mutation claim exists at all — the
+    // failure short-circuits here, never a target bound on nothing.
+    let Some(scope) = workspace.execution_scope().cloned() else {
+        return Err(format!(
+            "{} {requested}: Session execution unavailable: no admitted Execution Client",
+            verb(tool_name),
+        ));
     };
-    if parent == path {
-        return std::fs::canonicalize(path);
+    let prepared = match tool_name {
+        "write" => {
+            let Some(content) = arguments.get("content").and_then(serde_json::Value::as_str) else {
+                // The tool's parser owns the canonical argument
+                // error — prepare nothing.
+                return Ok(None);
+            };
+            // Bounded before the payload is copied: the wire cap is the
+            // same constant the Server would refuse at.
+            if content.len() > rustx_execution_protocol::MAX_WRITE_BYTES {
+                return Err(format!(
+                    "cannot persist {requested}: file write exceeds the write cap"
+                ));
+            }
+            scope
+                .prepare_write(&interpreted, content.as_bytes().to_vec(), cancellation)
+                .await
+                .map_err(|error| format!("cannot persist {requested}: {error}"))
+        }
+        "edit" => {
+            // Strict shape: every element must carry both texts — a
+            // partial or malformed array prepares nothing and the tool's
+            // parser produces the canonical rejection.
+            let Some(edits) = arguments.get("edits").and_then(serde_json::Value::as_array) else {
+                return Ok(None);
+            };
+            // The request caps gate the copy itself: an over-cap array
+            // is refused before more old/new texts are cloned, not after.
+            if edits.is_empty() || edits.len() > rustx_execution_protocol::MAX_EDIT_REPLACEMENTS {
+                return Err(format!(
+                    "cannot read {requested}: edit request outside the bounded replacement policy"
+                ));
+            }
+            let mut request_bytes = 0_usize;
+            let mut replacements = Vec::with_capacity(edits.len());
+            for edit in edits {
+                let (Some(old), Some(new)) = (
+                    edit.get("oldText").and_then(serde_json::Value::as_str),
+                    edit.get("newText").and_then(serde_json::Value::as_str),
+                ) else {
+                    return Ok(None);
+                };
+                request_bytes = request_bytes
+                    .saturating_add(old.len())
+                    .saturating_add(new.len());
+                if request_bytes > rustx_execution_protocol::MAX_EDIT_REQUEST_BYTES {
+                    return Err(format!(
+                        "cannot read {requested}: edit request outside the bounded replacement policy"
+                    ));
+                }
+                replacements.push(rustx_execution_protocol::TextReplacement {
+                    old_text: old.to_owned(),
+                    new_text: new.to_owned(),
+                });
+            }
+            scope
+                .prepare_edit(&interpreted, replacements, cancellation)
+                .await
+                .map_err(|error| edit_prepare_error(&error, requested, edits.len()))
+        }
+        _ => unreachable!("tool name gated above"),
+    }?;
+    Ok(Some(BoundMutationTarget::ready(
+        interpreted,
+        std::sync::Arc::new(PreparedRemoteMutation::new(scope, prepared)),
+    )))
+}
+
+/// The historical `cannot persist`/`cannot read` opener each tool uses.
+fn verb(tool_name: &str) -> &'static str {
+    if tool_name == "edit" {
+        "cannot read"
+    } else {
+        "cannot persist"
     }
-    let file_name = path
-        .file_name()
-        .map_or_default(std::ffi::OsStr::to_os_string);
-    Ok(canonicalize_deepest_existing(parent)?.join(file_name))
+}
+
+/// Renders one edit prepare failure with the tool's historical
+/// diagnostics: a `RefusedEdit`-downcastable error renders through the
+/// edit kernel's exact wording — denied edits never expose source
+/// content — and every other failure keeps the `cannot read` prefix.
+fn edit_prepare_error(error: &std::io::Error, requested: &str, total: usize) -> String {
+    if let Some(refused) = error
+        .get_ref()
+        .and_then(|inner| inner.downcast_ref::<rustx_execution_server::RefusedEdit>())
+    {
+        return crate::tools::native::edit::edit_failure(requested, total, refused.0);
+    }
+    format!("cannot read {requested}: {error}")
 }
 
 /// A normalized failed tool result. A business-level failure of a native
@@ -229,18 +282,33 @@ pub fn success_text(
 mod tests {
     use super::*;
     use crate::tools::managed_output::ManagedToolOutput;
+    use crate::tools::workspace::Workspace;
 
-    #[test]
-    fn external_write_and_edit_names_never_bind_local_mutation_targets() {
+    fn workspace() -> (tempfile::TempDir, Workspace) {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = Workspace::new(dir.path()).unwrap();
+        (dir, workspace)
+    }
+
+    fn cancellation() -> crate::runtime::cancellation::ExecutionCancellation {
+        crate::runtime::cancellation::ExecutionCancellation::detached(
+            crate::runtime::cancellation::CancellationSignal::new(),
+            crate::runtime::types::CancellationReason::UserRequested,
+        )
+    }
+
+    #[tokio::test]
+    async fn external_write_and_edit_names_never_bind_mutation_targets() {
         use crate::tools::types::ToolOrigin;
-        let workspace = tempfile::tempdir().unwrap();
+        let (dir, workspace) = workspace();
         let output = ManagedToolOutput::new(
             crate::runtime::identity::ConversationId::new(
                 "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
             ),
-            workspace.path().join("tool-output"),
+            dir.path().join("tool-output"),
         )
         .unwrap();
+        let cancellation = cancellation();
         for origin in [
             ToolOrigin::Mcp {
                 server_id: crate::runtime::identity::McpServerId::new("remote"),
@@ -259,9 +327,11 @@ mod tests {
                         &origin,
                         name,
                         &serde_json::json!({}),
-                        workspace.path(),
-                        &output
+                        &workspace,
+                        &output,
+                        &cancellation,
                     )
+                    .await
                     .unwrap()
                     .is_none()
                 );
@@ -270,9 +340,11 @@ mod tests {
                         &origin,
                         name,
                         &serde_json::json!({"path": output.root().unwrap()}),
-                        workspace.path(),
-                        &output
+                        &workspace,
+                        &output,
+                        &cancellation,
                     )
+                    .await
                     .unwrap()
                     .is_none()
                 );
@@ -283,41 +355,12 @@ mod tests {
                 &ToolOrigin::Builtin,
                 "write",
                 &serde_json::json!({}),
-                workspace.path(),
-                &output
+                &workspace,
+                &output,
+                &cancellation,
             )
+            .await
             .is_err()
         );
-    }
-
-    #[test]
-    fn bound_target_refuses_when_plan_file_is_replaced_with_external_symlink() {
-        let workspace = tempfile::tempdir().expect("workspace");
-        let outside = tempfile::tempdir().expect("outside");
-        let plan = workspace.path().join("PLAN.md");
-        std::fs::write(&plan, "plan").expect("seed plan");
-        let tool_output = ManagedToolOutput::new(
-            crate::runtime::identity::ConversationId::new(
-                "conv_36524fd8-f674-7fc2-8125-06d01fee0e18",
-            ),
-            workspace.path().join("tool-output"),
-        )
-        .expect("managed tool output");
-        let interpreted = interpret_path(workspace.path(), "PLAN.md");
-        let bound = bind_mutation_target(&interpreted, &tool_output).expect("bind");
-        assert_eq!(bound.path(), &plan.canonicalize().expect("canonical plan"));
-
-        std::fs::remove_file(&plan).expect("remove plan");
-        let dangling = outside.path().join("secret.txt");
-        std::os::unix::fs::symlink(&dangling, &plan).expect("replace with symlink");
-
-        let error = bound
-            .ensure_still_authorized(&tool_output)
-            .expect_err("symlink replacement invalidates authorization");
-        assert!(
-            error.contains("mutation target changed since authorization"),
-            "{error}"
-        );
-        assert!(!dangling.exists(), "outside target must stay untouched");
     }
 }

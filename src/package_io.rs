@@ -75,7 +75,11 @@ impl PackageDirectory {
         rustx_confined_fs::WriteTarget::prepare(
             self.inner.child(std::ffi::OsStr::new("."))?,
             leaf,
-            expected,
+            Vec::new(),
+            match expected {
+                Some(revision) => rustx_confined_fs::Expectation::Revision(revision),
+                None => rustx_confined_fs::Expectation::Absent,
+            },
         )
     }
 

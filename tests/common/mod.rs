@@ -919,6 +919,10 @@ pub struct ToolRuntimeFixture {
     /// The conversation tool runtime. Declared FIRST so it — and the file
     /// handles reachable from it — drops before the directory is removed.
     runtime: rustx::tools::runtime::ConversationToolRuntime,
+    /// The admitted Execution Client route, when the fixture was built
+    /// with one: declared after `runtime` so the scope's `Weak` never
+    /// outlives the manager that owns the endpoint.
+    _execution: Option<session_execution::ExecutionFixture>,
     /// The storage-root owner; dropping it removes the whole directory.
     /// Never move this field above `runtime`.
     #[allow(clippy::used_underscore_binding)]
@@ -970,7 +974,11 @@ pub fn tool_runtime_with_store(
         },
     )
     .expect("tool runtime");
-    ToolRuntimeFixture { runtime, temp }
+    ToolRuntimeFixture {
+        runtime,
+        _execution: None,
+        temp,
+    }
 }
 
 /// A conversation tool runtime over a unique temporary workspace whose
@@ -978,6 +986,32 @@ pub fn tool_runtime_with_store(
 #[must_use]
 pub fn tool_runtime(conversation_id: &str) -> ToolRuntimeFixture {
     tool_runtime_with_store(conversation_id, None)
+}
+
+/// [`tool_runtime`] with the Session's real execution route admitted:
+/// the fixture spawns and holds the staged `rustx-execution-client`
+/// bound to its temporary workspace, so builtin Write/Edit invocations
+/// prepare, authorize, and settle through the actual Client. The child
+/// is killed and reaped when the fixture drops.
+#[must_use]
+pub fn tool_runtime_with_execution(conversation_id: &str) -> ToolRuntimeFixture {
+    let mut fixture = tool_runtime(conversation_id);
+    let execution =
+        session_execution::ExecutionFixture::new(&fixture.storage_root().join("workspace"));
+    let runtime = rustx::tools::runtime::ConversationToolRuntime::from_config(
+        fixture.runtime.conversation_id().clone(),
+        rustx::tools::runtime::ConversationRuntimeConfig {
+            execution_scope: Some(execution.scope.clone()),
+            ..rustx::tools::runtime::ConversationRuntimeConfig::new(
+                fixture.storage_root().join("workspace"),
+                fixture.storage_root().join("artifacts"),
+            )
+        },
+    )
+    .expect("tool runtime");
+    fixture.runtime = runtime;
+    fixture._execution = Some(execution);
+    fixture
 }
 
 /// A canonical tool definition with an explicit execution-ownership policy.
@@ -1305,7 +1339,7 @@ pub async fn run_tool_with_cancellation(
         fixture.runtime.tool_output(),
         fixture.runtime.environment(),
     );
-    let context = match context.bind_mutation_target(&prepared) {
+    let context = match context.bind_mutation_target(&prepared).await {
         Ok(context) => context,
         Err(error) => {
             return rustx::tools::types::ToolExecutionResult {

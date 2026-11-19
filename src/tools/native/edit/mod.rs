@@ -13,7 +13,7 @@ use rustx_text_edit::EditFailure;
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{atomic_commit, failed_result, success_text};
+use crate::tools::native::support::{failed_result, success_text};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
@@ -35,7 +35,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<EditInput>(
         TOOL_ID,
         NAME,
-        "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
+        "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.",
         policy,
     )
 }
@@ -56,7 +56,7 @@ impl ToolExecutor for EditTool {
     ) -> ToolExecutionHandle<'a> {
         let cancellation = context.cancellation.clone();
         ToolExecutionHandle::settled_by_operation(
-            Box::pin(async move { run_edit(&invocation, &context) }),
+            Box::pin(async move { run_edit(&invocation, &context).await }),
             cancellation,
         )
     }
@@ -66,7 +66,7 @@ impl ToolExecutor for EditTool {
     }
 }
 
-pub(super) fn run_edit(
+pub(super) async fn run_edit(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
@@ -79,51 +79,15 @@ pub(super) fn run_edit(
             "edit mutation target was not bound at authorization; refusing to resolve independently",
         );
     };
-    if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
-        return failed_result(error);
-    }
-    let target = match bound.commit_target(false) {
-        Ok(target) => target,
-        Err(error) => return failed_result(error),
-    };
-    let bytes = match target.read() {
-        Ok(bytes) => bytes,
-        Err(error) => {
-            return failed_result(format!("cannot read {}: {error}", bound.path().display()));
-        }
-    };
-    let Ok(original_with_bom) = String::from_utf8(bytes) else {
-        return failed_result(format!(
-            "{} is not a UTF-8 text file; Edit never operates on binary content",
-            bound.path().display()
-        ));
-    };
-    // The shared bounded edit kernel: exact anchors first, then the
-    // per-edit NFKC fuzzy fallback, ranges resolved in the original
-    // snapshot, BOM and the dominant line ending preserved, and the
-    // typed failure rendered with this call's path and edit count.
-    let replacements: Vec<rustx_text_edit::Replacement> = input
-        .edits
-        .iter()
-        .map(|edit| rustx_text_edit::Replacement {
-            old_text: edit.old_text.clone(),
-            new_text: edit.new_text.clone(),
-        })
-        .collect();
-    let updated = match rustx_text_edit::apply(&original_with_bom, &replacements) {
-        Ok(updated) => updated,
-        Err(failure) => {
-            return failed_result(edit_failure(&input.path, input.edits.len(), failure));
-        }
-    };
-    if let Some(changes) = &context.workspace_changes {
-        changes.capture(bound.path());
-    }
-    if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
-        return failed_result(error);
-    }
-    if let Err(error) = atomic_commit(&target, updated.as_bytes()) {
-        return failed_result(error);
+    // Every prepare failure short-circuited at bind — a bound target
+    // always holds the live ticketed owner for this exact invocation.
+    let owner = bound.prepared();
+    if let Err(error) = owner.commit(&context.cancellation).await {
+        return crate::tools::native::mutation::commit_error_result(
+            &input.path,
+            &context.cancellation,
+            &error,
+        );
     }
     success_text(
         format!(
@@ -184,7 +148,7 @@ fn unsafe_fuzzy_error(path: &str, index: usize, total: usize) -> String {
 
 /// Renders one typed [`EditFailure`] with this invocation's path and
 /// edit count — the historical wording the model sees, unchanged.
-fn edit_failure(path: &str, total: usize, failure: EditFailure) -> String {
+pub(crate) fn edit_failure(path: &str, total: usize, failure: EditFailure) -> String {
     let index = |index: u32| usize::try_from(index).unwrap_or(usize::MAX);
     match failure {
         EditFailure::EmptyEdits => "edit requires at least one replacement".to_owned(),

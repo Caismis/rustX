@@ -230,6 +230,7 @@ impl ChangeRecording {
     }
 
     /// Resolved, guarded mutation target, captured once before its first edit.
+    #[allow(dead_code)] // callers return with the WorkspaceChanges migration
     pub(crate) fn capture(&self, path: &Path) {
         // Serialize initialization with captures so concurrent tools allocate at most
         // one private directory, and only when a file actually needs capture.
@@ -494,6 +495,7 @@ fn create_snapshot_directory(temporary_root: &Path) -> std::io::Result<SnapshotD
 
 /// Native mutation paths are already resolved. Compare them with the physical
 /// temporary root too (for example macOS /var aliases /private/var).
+#[allow(dead_code)] // used by the unported capture path
 fn is_temporary_path(path: &Path, temporary_root: &Path) -> bool {
     temporary_root
         .canonicalize()

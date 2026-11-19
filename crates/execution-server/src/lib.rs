@@ -22,8 +22,9 @@ use rustx_execution_protocol::{
     Generation, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
     MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES, MAX_EDIT_FILE_BYTES,
     MAX_EDIT_REPLACEMENTS, MAX_EDIT_REQUEST_BYTES, MAX_RAW_CHUNK_BYTES, MAX_SEARCH_CONTEXT_LINES,
-    MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry,
-    ReadError, Reject, SearchSpec, SessionId, TextReplacement, is_normalized_absolute_path,
+    MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, MAX_WRITE_BYTES, PROTOCOL_VERSION,
+    PageEntry, ReadError, Reject, SearchSpec, SessionId, TextReplacement, WriteExpectation,
+    is_normalized_absolute_path,
     transport::{DeadlineStream, PAGE_REQUEST_TIMEOUT, encode_record, read_record, write_record},
 };
 use sha2::{Digest, Sha256};
@@ -604,6 +605,18 @@ impl LocalConnection {
         self.owner.disconnect(&self.connection);
         let _ = self.stream.shutdown(std::net::Shutdown::Both);
         error
+    }
+
+    /// Tears the connection down without a protocol verdict: the binding
+    /// is disconnected and the socket shut, so the Client's drop clears
+    /// every ticketed preparation it still holds. This is the fail-closed
+    /// answer when a cleanup abort cannot reach the peer — the Session
+    /// honestly loses execution rather than stranding bounded
+    /// preparations while advertising a healthy binding.
+    pub fn disconnect(&mut self) {
+        let _ = self.retire(io::Error::other(
+            "connection retired to clear stranded preparations",
+        ));
     }
 
     /// Sends exactly one typed request and consumes its one typed reply.
@@ -1607,10 +1620,29 @@ impl LocalConnection {
     /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
     /// write capability, [`io::ErrorKind::InvalidInput`] for an oversized
     /// payload, the [`ReadError`] the Client reported mapped onto an I/O
-    /// error kind, the `authorize` error verbatim when its gate denies, a
-    /// [`WriteOutcomeUnknown`]-downcastable error once the outcome cannot
-    /// be known, or [`io::ErrorKind::InvalidData`] for a malformed or
-    /// untruthful reply.
+    /// The conditional write through the admitted Client: `path` resolves
+    /// once against the reserved workspace at dispatch, then the whole
+    /// prepare–authorize–commit sequence runs on that same connection.
+    ///
+    /// `path` names the exact file leaf — never the workspace root. The
+    /// relative path the gate produces is sent to the Client; it is never
+    /// re-parsed or re-opened by the Server after approval — the physical
+    /// target the Client retains under its own workspace is the only one
+    /// that exists. `authorize` is invoked by the connection with the
+    /// prepared original — `Some(&stamp)` for a replace, `None` for a
+    /// create-only target — as the caller's last gate before the commit
+    /// frame is written. `expected_revision` maps onto
+    /// [`WriteExpectation`]: `Some` requires that exact revision,
+    /// `None` is create-only.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] without the Client's write
+    /// capability, [`io::ErrorKind::InvalidInput`] for an over-cap
+    /// payload, the `authorize` error verbatim when its gate denies, a
+    /// `rustx_execution_server::WriteOutcomeUnknown`-downcastable error
+    /// once the commit outcome cannot be known, and the typed exchange's
+    /// own errors.
     pub fn write_file(
         &mut self,
         relative_path: &Path,
@@ -1618,34 +1650,220 @@ impl LocalConnection {
         expected_revision: Option<&str>,
         authorize: impl FnOnce(Option<&FileStamp>) -> io::Result<()>,
     ) -> io::Result<FileStamp> {
+        // One absolute deadline covers prepare, the authorization abort,
+        // and commit — it is armed once and never rearmed between phases.
+        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        let expectation = match expected_revision {
+            Some(revision) => WriteExpectation::Revision(revision.to_owned()),
+            None => WriteExpectation::Absent,
+        };
+        let prepared = self.prepare_write(
+            relative_path,
+            &expectation,
+            bytes,
+            Some(deadline),
+            &|| Ok(()),
+            &|| (),
+        )?;
+        if let Err(error) = authorize(prepared.original.as_ref()) {
+            // The gate denied before commit: remove the preparation while
+            // the binding still admits the frame — under the same
+            // absolute deadline — and never commit. The denial is still
+            // what the caller sees.
+            if self.gate().is_ok() {
+                let _ = self.abort_prepared(&prepared, Some(deadline), &|| Ok(()), &|| ());
+            }
+            return Err(error);
+        }
+        self.commit_prepared(&prepared, Some(deadline), &|| Ok(()))
+    }
+
+    /// The prepare half of a conditional write: validates the request,
+    /// dispatches `PrepareWrite` — or `BeginWrite` plus `WriteChunk`
+    /// exchanges for a payload over [`MAX_RAW_CHUNK_BYTES`] — and returns
+    /// the opaque ticketed [`PreparedMutation`] whose `size` is the
+    /// exact byte count the later `Written` receipt must match.
+    ///
+    /// `expectation` decides what the named leaf must be: `Current`
+    /// retains whatever is present — the pre-authorization object an
+    /// Agent prepares before its permission gate and never itself a
+    /// permission to publish — `Absent` is create-only, and `Revision`
+    /// requires the exact current stamp.
+    ///
+    /// `deadline`, when present, is the caller's already-armed absolute
+    /// wire budget — it is never rearmed here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] without the Client's write
+    /// capability, [`io::ErrorKind::InvalidInput`] for an over-cap payload
+    /// or malformed expectation, the [`ReadError`] the Client reported
+    /// mapped onto an I/O error kind, or
+    /// [`io::ErrorKind::InvalidData`] for a malformed or untruthful reply.
+    pub fn prepare_write(
+        &mut self,
+        relative_path: &Path,
+        expectation: &WriteExpectation,
+        bytes: &[u8],
+        deadline: Option<Instant>,
+        admit: &impl Fn() -> io::Result<()>,
+        sent: &impl Fn(),
+    ) -> io::Result<PreparedMutation> {
         if !self.capabilities.contains(&Capability::ConditionalWrite) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "peer admitted no conditional write capability",
             ));
         }
-        if bytes.len() > MAX_RAW_CHUNK_BYTES {
+        if bytes.len() > MAX_WRITE_BYTES {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "file write exceeds chunk limit",
+                "file write exceeds the write cap",
             ));
         }
-        // One absolute deadline covers prepare, the authorization abort,
-        // and commit — it is armed once and never rearmed between phases.
-        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        if let WriteExpectation::Revision(revision) = expectation
+            && !valid_revision(revision)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "expected revision outside the bounded write policy",
+            ));
+        }
+        let reply = if bytes.len() <= MAX_RAW_CHUNK_BYTES {
+            self.exchange_admitted(
+                &ClientRequest::PrepareWrite {
+                    relative_path: relative_path.to_path_buf(),
+                    expectation: expectation.clone(),
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                },
+                deadline,
+                admit,
+                sent,
+            )?
+        } else {
+            return self.prepare_write_chunked(
+                relative_path,
+                expectation,
+                bytes,
+                deadline,
+                admit,
+                sent,
+            );
+        };
+        if let ClientReply::Error { kind } = reply {
+            return Err(read_error(kind));
+        }
+        self.valid_prepared(reply, expectation, bytes.len() as u64)
+    }
+
+    /// The chunked half of [`prepare_write`](Self::prepare_write) for a
+    /// payload over [`MAX_RAW_CHUNK_BYTES`]: `BeginWrite` opens the
+    /// ticketed preparation, then `WriteChunk` records transfer the
+    /// payload at deterministic absolute offsets under the same armed
+    /// deadline. A chunk-exchange failure aborts the opened ticket while
+    /// the binding still admits the frame; a malformed echo retires.
+    fn prepare_write_chunked(
+        &mut self,
+        relative_path: &Path,
+        expectation: &WriteExpectation,
+        bytes: &[u8],
+        deadline: Option<Instant>,
+        admit: &impl Fn() -> io::Result<()>,
+        sent: &impl Fn(),
+    ) -> io::Result<PreparedMutation> {
         let reply = self.exchange_admitted(
-            &ClientRequest::PrepareWrite {
+            &ClientRequest::BeginWrite {
                 relative_path: relative_path.to_path_buf(),
-                expected_revision: expected_revision.map(str::to_owned),
-                data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+                expectation: expectation.clone(),
+                total: DecimalU64::new(bytes.len() as u64),
             },
-            Some(deadline),
-            || Ok(()),
-            || (),
+            deadline,
+            admit,
+            sent,
         )?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
+        let ClientReply::WritePrepared { ticket, .. } = reply else {
+            return Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected reply to write begin",
+            )));
+        };
+        if ticket.get() == 0 {
+            return Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "write reply carries a zero ticket",
+            )));
+        }
+        for (index, chunk) in bytes.chunks(MAX_RAW_CHUNK_BYTES).enumerate() {
+            let offset = (index * MAX_RAW_CHUNK_BYTES) as u64;
+            match self.exchange_admitted(
+                &ClientRequest::WriteChunk {
+                    ticket,
+                    offset: DecimalU64::new(offset),
+                    data_base64: base64::engine::general_purpose::STANDARD.encode(chunk),
+                },
+                deadline,
+                admit,
+                sent,
+            ) {
+                Err(error) => {
+                    if self.gate().is_ok() {
+                        let _ = self.abort_prepared(
+                            &PreparedMutation {
+                                ticket,
+                                original: None,
+                                size: bytes.len() as u64,
+                                connection: self.connection.clone(),
+                            },
+                            deadline,
+                            &|| Ok(()),
+                            &|| (),
+                        );
+                    }
+                    return Err(error);
+                }
+                Ok(ClientReply::WriteChunkReceived {
+                    ticket: echoed_ticket,
+                    offset: echoed,
+                }) if echoed.get() == offset && echoed_ticket == ticket => {}
+                Ok(_) => {
+                    if self.gate().is_ok() {
+                        let _ = self.abort_prepared(
+                            &PreparedMutation {
+                                ticket,
+                                original: None,
+                                size: bytes.len() as u64,
+                                connection: self.connection.clone(),
+                            },
+                            deadline,
+                            &|| Ok(()),
+                            &|| (),
+                        );
+                    }
+                    return Err(self.retire(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "unexpected reply to write chunk",
+                    )));
+                }
+            }
+        }
+        self.valid_prepared(reply, expectation, bytes.len() as u64)
+    }
+
+    /// Validates one `WritePrepared`/`EditPrepared`-shaped reply into the
+    /// opaque [`PreparedMutation`]: the ticket must be nonzero and the
+    /// reported original must satisfy exactly the expectation that was
+    /// sent — a valid stamp matching the revision for `Revision`, any
+    /// valid stamp or `None` for `Current`, and `None` alone for
+    /// `Absent`.
+    fn valid_prepared(
+        &mut self,
+        reply: ClientReply,
+        expectation: &WriteExpectation,
+        size: u64,
+    ) -> io::Result<PreparedMutation> {
         let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
         let ClientReply::WritePrepared { ticket, original } = reply else {
             return Err(self.retire(violation("unexpected reply to write prepare")));
@@ -1653,44 +1871,86 @@ impl LocalConnection {
         if ticket.get() == 0 {
             return Err(self.retire(violation("write reply carries a zero ticket")));
         }
-        // The reported original must satisfy exactly the expectation that
-        // was sent — a valid stamp matching the revision for a replace, or
-        // no original at all for a create-only target.
-        let expectation_holds = match (expected_revision, &original) {
-            (Some(expected), Some(original)) => {
-                original.revision == expected && stamp_violation(original).is_none()
+        let holds = match (expectation, &original) {
+            (WriteExpectation::Revision(expected), Some(original)) => {
+                original.revision == *expected && stamp_violation(original).is_none()
             }
-            (None, None) => true,
-            _ => false,
+            (WriteExpectation::Current, Some(original)) => stamp_violation(original).is_none(),
+            (WriteExpectation::Current | WriteExpectation::Absent, None) => true,
+            (WriteExpectation::Revision(_), None) | (WriteExpectation::Absent, Some(_)) => false,
         };
-        if !expectation_holds {
+        if !holds {
             return Err(self.retire(violation("write reply ignores the expected revision")));
         }
-        if let Err(error) = authorize(original.as_ref()) {
-            // The gate denied before commit: remove the stage while the
-            // binding still admits the frame, and never commit. A
-            // malformed abort reply is a protocol violation like any
-            // other — the original denial is still what the caller sees.
-            if self.gate().is_ok() {
-                match self.exchange_admitted(
-                    &ClientRequest::AbortWrite { ticket },
-                    Some(deadline),
-                    || Ok(()),
-                    || (),
-                ) {
-                    Ok(ClientReply::WriteAborted { ticket: echoed }) if echoed == ticket => {}
-                    Ok(_) => {
-                        self.retire(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "unexpected reply to write abort",
-                        ));
-                    }
-                    Err(_) => {}
-                }
-            }
-            return Err(error);
+        Ok(PreparedMutation {
+            ticket,
+            original,
+            size,
+            connection: self.connection.clone(),
+        })
+    }
+
+    /// The commit half of [`prepare_write`](Self::prepare_write) and
+    /// [`prepare_edit`](Self::prepare_edit): the caller's absolute
+    /// deadline still applies and is never rearmed. `Written` is trusted
+    /// only when its stamp is valid and its size equals `prepared.size`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WriteOutcomeUnknown`]-downcastable error once the
+    /// outcome cannot be known, or the typed exchange's own errors.
+    pub fn commit_prepared(
+        &mut self,
+        prepared: &PreparedMutation,
+        deadline: Option<Instant>,
+        admit: &impl Fn() -> io::Result<()>,
+    ) -> io::Result<FileStamp> {
+        if prepared.connection != self.connection {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "prepared mutation belongs to a different connection",
+            ));
         }
-        self.commit_write(ticket, bytes.len() as u64, Some(deadline))
+        self.commit_write(prepared.ticket, prepared.size, deadline, admit)
+    }
+
+    /// The abort half: removes the ticketed preparation while the binding
+    /// still admits the frame. A malformed abort reply retires the
+    /// connection like any other protocol violation.
+    ///
+    /// # Errors
+    ///
+    /// Returns the typed exchange's own errors, or
+    /// [`io::ErrorKind::InvalidData`] for a malformed reply.
+    pub fn abort_prepared(
+        &mut self,
+        prepared: &PreparedMutation,
+        deadline: Option<Instant>,
+        admit: &impl Fn() -> io::Result<()>,
+        sent: &impl Fn(),
+    ) -> io::Result<()> {
+        if prepared.connection != self.connection {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "prepared mutation belongs to a different connection",
+            ));
+        }
+        match self.exchange_admitted(
+            &ClientRequest::AbortWrite {
+                ticket: prepared.ticket,
+            },
+            deadline,
+            admit,
+            sent,
+        ) {
+            Ok(ClientReply::WriteAborted { ticket: echoed }) if echoed == prepared.ticket => Ok(()),
+            Ok(ClientReply::Error { kind }) => Err(read_error(kind)),
+            Ok(_) => Err(self.retire(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unexpected reply to write abort",
+            ))),
+            Err(error) => Err(error),
+        }
     }
 
     /// One conditional edit: `PrepareEdit` retains the exact named
@@ -1729,6 +1989,67 @@ impl LocalConnection {
         replacements: &[TextReplacement],
         authorize: impl FnOnce(&FileStamp) -> io::Result<()>,
     ) -> io::Result<FileStamp> {
+        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        let expectation = WriteExpectation::Revision(expected_revision.to_owned());
+        let prepared = self.prepare_edit(
+            relative_path,
+            &expectation,
+            replacements,
+            Some(deadline),
+            &|| Ok(()),
+            &|| (),
+        )?;
+        let Some(original) = prepared.original.as_ref() else {
+            // `prepare_edit` always validates `original: Some` — this is
+            // unreachable for a healthy peer and must never panic.
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "edit prepare reported no original",
+            ));
+        };
+        if let Err(error) = authorize(original) {
+            // The gate denied before commit: remove the preparation
+            // while the binding still admits the frame — under the same
+            // absolute deadline — and never commit. The denial is still
+            // what the caller sees.
+            if self.gate().is_ok() {
+                let _ = self.abort_prepared(&prepared, Some(deadline), &|| Ok(()), &|| ());
+            }
+            return Err(error);
+        }
+        self.commit_prepared(&prepared, Some(deadline), &|| Ok(()))
+    }
+
+    /// The prepare half of a conditional edit: validates the request,
+    /// dispatches `PrepareEdit`, and returns the ticketed
+    /// [`PreparedMutation`] whose `size` is the promised published size.
+    /// `expectation` must be `Revision` or `Current` — an edit always
+    /// names an existing original, so `Absent` is malformed. A semantic
+    /// `EditRefused` is shape-checked against the request and surfaces
+    /// as a [`RefusedEdit`]-downcastable error that never retires a
+    /// healthy connection.
+    ///
+    /// `deadline`, when present, is the caller's already-armed absolute
+    /// wire budget — it is never rearmed here.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] without the Client's edit
+    /// capability, [`io::ErrorKind::InvalidInput`] for a request outside
+    /// the bounded replacement policy, a [`RefusedEdit`]-downcastable
+    /// error carrying the typed [`EditRefusal`], the [`ReadError`] the
+    /// Client reported mapped onto an I/O error kind, or
+    /// [`io::ErrorKind::InvalidData`] for a malformed or untruthful
+    /// reply.
+    pub fn prepare_edit(
+        &mut self,
+        relative_path: &Path,
+        expectation: &WriteExpectation,
+        replacements: &[TextReplacement],
+        deadline: Option<Instant>,
+        admit: &impl Fn() -> io::Result<()>,
+        sent: &impl Fn(),
+    ) -> io::Result<PreparedMutation> {
         if !self.capabilities.contains(&Capability::ConditionalEdit) {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -1740,27 +2061,27 @@ impl LocalConnection {
                 .saturating_add(edit.old_text.len())
                 .saturating_add(edit.new_text.len())
         });
-        if replacements.is_empty()
+        if matches!(expectation, WriteExpectation::Absent)
+            || replacements.is_empty()
             || replacements.len() > MAX_EDIT_REPLACEMENTS
             || request_bytes > MAX_EDIT_REQUEST_BYTES
             || replacements.iter().any(|edit| edit.old_text.is_empty())
-            || !valid_revision(expected_revision)
+            || matches!(expectation, WriteExpectation::Revision(revision) if !valid_revision(revision))
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "edit request outside the bounded replacement policy",
             ));
         }
-        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
         let reply = self.exchange_admitted(
             &ClientRequest::PrepareEdit {
                 relative_path: relative_path.to_path_buf(),
-                expected_revision: expected_revision.to_owned(),
+                expectation: expectation.clone(),
                 replacements: replacements.to_vec(),
             },
-            Some(deadline),
-            || Ok(()),
-            || (),
+            deadline,
+            admit,
+            sent,
         )?;
         let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
         match reply {
@@ -1793,9 +2114,13 @@ impl LocalConnection {
             return Err(self.retire(violation("edit reply carries a zero ticket")));
         }
         // An edit always names an existing original: its stamp must be
-        // valid, carry exactly the required revision, and promise a
-        // result within the file cap.
-        if original.revision != expected_revision || stamp_violation(&original).is_some() {
+        // valid and — for `Revision` — carry exactly the required
+        // revision; for `Current` any valid stamp is the original.
+        let revision_holds = match expectation {
+            WriteExpectation::Revision(expected) => original.revision == *expected,
+            _ => true,
+        };
+        if !revision_holds || stamp_violation(&original).is_some() {
             return Err(self.retire(violation("edit reply ignores the expected revision")));
         }
         // The source it claims to have applied is bounded too: a Client
@@ -1806,32 +2131,12 @@ impl LocalConnection {
         {
             return Err(self.retire(violation("edit reply exceeds the file bound")));
         }
-        if let Err(error) = authorize(&original) {
-            // The gate denied before commit: remove the stage while the
-            // binding still admits the frame — under the same absolute
-            // deadline — and never commit. A malformed abort reply is a
-            // protocol violation like any other; the original denial is
-            // still what the caller sees.
-            if self.gate().is_ok() {
-                match self.exchange_admitted(
-                    &ClientRequest::AbortWrite { ticket },
-                    Some(deadline),
-                    || Ok(()),
-                    || (),
-                ) {
-                    Ok(ClientReply::WriteAborted { ticket: echoed }) if echoed == ticket => {}
-                    Ok(_) => {
-                        self.retire(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            "unexpected reply to edit abort",
-                        ));
-                    }
-                    Err(_) => {}
-                }
-            }
-            return Err(error);
-        }
-        self.commit_write(ticket, published_size.get(), Some(deadline))
+        Ok(PreparedMutation {
+            ticket,
+            original: Some(original),
+            size: published_size.get(),
+            connection: self.connection.clone(),
+        })
     }
 
     /// The commit half of [`write_file`](Self::write_file): the request is
@@ -1855,9 +2160,11 @@ impl LocalConnection {
         ticket: DecimalU64,
         expected_size: u64,
         deadline: Option<Instant>,
+        admit: &impl Fn() -> io::Result<()>,
     ) -> io::Result<FileStamp> {
         let encoded = encode_record(&ClientRequest::CommitWrite { ticket })?;
         self.gate()?;
+        admit()?;
         let outcome_unknown =
             |connection: &mut Self| connection.retire(io::Error::other(WriteOutcomeUnknown));
         let result = match deadline {
@@ -1900,6 +2207,29 @@ impl LocalConnection {
             _ => Err(outcome_unknown(self)),
         }
     }
+}
+
+/// One live ticketed mutation preparation on this connection: the
+/// opaque handle [`LocalConnection::prepare_write`] and
+/// [`LocalConnection::prepare_edit`] return, consumable exactly once by
+/// [`commit_prepared`](LocalConnection::commit_prepared) or
+/// [`abort_prepared`](LocalConnection::abort_prepared). `size` is the
+/// byte count the `Written` receipt must match exactly.
+#[derive(Debug, Clone)]
+pub struct PreparedMutation {
+    /// The Client-issued ticket — never zero, never reused.
+    pub ticket: DecimalU64,
+    /// The prepared original: `Some` for a replace, `None` for a
+    /// create-only target.
+    pub original: Option<FileStamp>,
+    /// The exact published byte count the commit receipt must carry.
+    pub size: u64,
+    /// The unique identity of the admitted connection the ticket belongs
+    /// to. Tickets restart at 1 on every connection, so commit and abort
+    /// check this before the wire: a `PreparedMutation` moved to a
+    /// different `LocalConnection` is refused locally and never consumes
+    /// another Session's same-numbered ticket.
+    pub connection: ConnectionId,
 }
 
 /// The peer refused a conditional edit for one stable typed semantic
@@ -2115,6 +2445,7 @@ impl PhysicalError {
             ReadError::SearchBudgetExceeded => "search exceeded a bounded budget",
             ReadError::SearchNeedsDirectory => "search root is not a directory",
             ReadError::Unavailable => "physical operation unavailable",
+            ReadError::Busy => "physical preparation budget is full",
         }
     }
 }
@@ -2143,6 +2474,7 @@ fn read_error(kind: ReadError) -> io::Error {
         ReadError::SearchBudgetExceeded => io::ErrorKind::QuotaExceeded,
         ReadError::Invalid | ReadError::SearchNeedsDirectory => io::ErrorKind::InvalidInput,
         ReadError::Unavailable => io::ErrorKind::Other,
+        ReadError::Busy => io::ErrorKind::ResourceBusy,
     };
     io::Error::new(error_kind, PhysicalError(kind))
 }
@@ -3260,14 +3592,14 @@ mod tests {
             let request: ClientRequest = read_record(&mut peer).unwrap();
             let ClientRequest::PrepareWrite {
                 relative_path,
-                expected_revision,
+                expectation,
                 data_base64,
             } = request
             else {
                 panic!("expected a prepare request");
             };
             assert_eq!(relative_path, PathBuf::from("file"));
-            assert_eq!(expected_revision.as_deref(), Some("a".repeat(64).as_str()));
+            assert_eq!(expectation, WriteExpectation::Revision("a".repeat(64)));
             assert_eq!(
                 base64::engine::general_purpose::STANDARD
                     .decode(&data_base64)
@@ -3543,6 +3875,99 @@ mod tests {
         answer.join().unwrap();
         assert_eq!(binding.status().phase, BindingPhase::Detached);
         assert!(connection.ping().is_err());
+    }
+
+    #[test]
+    fn a_prepared_mutation_never_crosses_to_another_connection() {
+        let (binding_a, hello_a) = write_rig();
+        let (mut connection_a, peer_a) = live(&binding_a, &hello_a);
+        let (binding_b, hello_b) = write_rig();
+        let (mut connection_b, peer_b) = live(&binding_b, &hello_b);
+
+        let script = |mut peer: UnixStream| {
+            thread::spawn(move || {
+                let request: ClientRequest = read_record(&mut peer).unwrap();
+                assert!(matches!(request, ClientRequest::PrepareWrite { .. }));
+                write_record(
+                    &mut peer,
+                    &ClientReply::WritePrepared {
+                        ticket: DecimalU64::new(1),
+                        original: None,
+                    },
+                )
+                .unwrap();
+                // The foreign-ticket refusals place no frame at all: the
+                // one and only request after the prepare is the
+                // connection's own commit — a refused call that still
+                // touched the wire would arrive here first and fail the
+                // shape check, or arrive later and fail the tail check.
+                let request: ClientRequest = read_record(&mut peer).unwrap();
+                let ClientRequest::CommitWrite { ticket } = request else {
+                    panic!("expected a commit request");
+                };
+                assert_eq!(ticket, DecimalU64::new(1));
+                write_record(
+                    &mut peer,
+                    &ClientReply::Written {
+                        ticket,
+                        metadata: write_stamp(&"b".repeat(64)),
+                    },
+                )
+                .unwrap();
+                peer.set_read_timeout(Some(Duration::from_millis(200)))
+                    .unwrap();
+                assert!(read_record::<ClientRequest>(&mut peer).is_err());
+            })
+        };
+        let answer_a = script(peer_a);
+        let answer_b = script(peer_b);
+
+        let admit = || Ok(());
+        let sent = || ();
+        let prepared_a = connection_a
+            .prepare_write(
+                Path::new("file"),
+                &WriteExpectation::Current,
+                b"data",
+                None,
+                &admit,
+                &sent,
+            )
+            .unwrap();
+        let prepared_b = connection_b
+            .prepare_write(
+                Path::new("file"),
+                &WriteExpectation::Current,
+                b"data",
+                None,
+                &admit,
+                &sent,
+            )
+            .unwrap();
+        // Both peers issued ticket 1 — on different connections.
+        assert_eq!(prepared_a.ticket, prepared_b.ticket);
+
+        let error = connection_a
+            .commit_prepared(&prepared_b, None, &admit)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        let error = connection_b
+            .abort_prepared(&prepared_a, None, &admit, &sent)
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+
+        // Neither preparation was spent by the refused cross-connection
+        // calls: each connection still commits its own ticket.
+        connection_a
+            .commit_prepared(&prepared_a, None, &admit)
+            .unwrap();
+        connection_b
+            .commit_prepared(&prepared_b, None, &admit)
+            .unwrap();
+        answer_a.join().unwrap();
+        answer_b.join().unwrap();
+        assert_eq!(binding_a.status().phase, BindingPhase::Live);
+        assert_eq!(binding_b.status().phase, BindingPhase::Live);
     }
 
     #[test]
@@ -4243,14 +4668,14 @@ mod tests {
             let request: ClientRequest = read_record(&mut peer).unwrap();
             let ClientRequest::PrepareEdit {
                 relative_path,
-                expected_revision,
+                expectation,
                 replacements,
             } = request
             else {
                 panic!("expected a prepare-edit request");
             };
             assert_eq!(relative_path, Path::new("file"));
-            assert_eq!(expected_revision, "a".repeat(64));
+            assert_eq!(expectation, WriteExpectation::Revision("a".repeat(64)));
             assert_eq!(replacements.len(), 1);
             write_record(
                 &mut peer,

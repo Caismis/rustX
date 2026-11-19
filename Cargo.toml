@@ -62,7 +62,7 @@ path = "src/bin/workflow_renderer.rs"
 
 [dependencies]
 clap = { version = "4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
-uuid = { version = "1.24", features = ["v7"] }
+uuid = { version = "1.24", features = ["v4", "v7"] }
 serde = { version = "1", features = ["derive", "rc"] }
 # Correctly rounded float parsing: authored request-parameter numbers must read
 # back as exactly the binary64 value that was written (and that JSON clients

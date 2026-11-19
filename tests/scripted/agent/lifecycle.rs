@@ -2139,7 +2139,21 @@ async fn native_mutation_defaults_gate_start_allow_deny_cancel_and_full_access()
                     },
                 },
             ));
-            let tool_runtime = common::tool_runtime("conv_393d0148-e012-70f2-88f3-59c22ab51ae1");
+            // Builtin Write/Edit bind a ticketed Client preparation
+            // before authorization: their runs need the admitted
+            // execution route, and `edit` needs a real original.
+            let tool_runtime = if matches!(name, "write" | "edit") {
+                common::tool_runtime_with_execution("conv_393d0148-e012-70f2-88f3-59c22ab51ae1")
+            } else {
+                common::tool_runtime("conv_393d0148-e012-70f2-88f3-59c22ab51ae1")
+            };
+            if name == "edit" {
+                std::fs::write(
+                    tool_runtime.storage_root().join("workspace/test.txt"),
+                    "old",
+                )
+                .unwrap();
+            }
             let store = tool_runtime.durable_store();
             let capability = common::capability_lease(tools, &tool_runtime).await;
             let task = {

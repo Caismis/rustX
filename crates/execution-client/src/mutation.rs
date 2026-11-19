@@ -14,48 +14,126 @@
 use std::io::Write;
 use std::path::Path;
 
-use rustx_confined_fs::{CommitUnknown, PackageDirectory, StagedWrite, WriteTarget};
+use rustx_confined_fs::{CommitUnknown, Expectation, PackageDirectory, WriteTarget};
 use rustx_execution_protocol::{
     ClientReply, DecimalU64, EditRefusal, MAX_EDIT_FILE_BYTES, MAX_EDIT_REPLACEMENTS,
-    MAX_EDIT_REQUEST_BYTES, MAX_RAW_CHUNK_BYTES, ReadError, TextReplacement,
+    MAX_EDIT_REQUEST_BYTES, MAX_PREPARATIONS_PER_CONNECTION, MAX_RAW_CHUNK_BYTES, MAX_WRITE_BYTES,
+    ReadError, TextReplacement, WriteExpectation,
 };
 
 /// The staged-write state of one authenticated connection.
+///
+/// A preparation retains the verified `WriteTarget` and keeps its
+/// bounded planned bytes in memory — nothing is staged on disk before
+/// the authorization grant, so a preapproval payload is never
+/// enumerable by search, metadata, reads, or another mutation. At most
+/// `MAX_PREPARATIONS_PER_CONNECTION` preparations are live, and their
+/// payloads share one per-connection budget.
 pub(super) struct Writes {
     /// The next ticket to issue; tickets start at 1 and only ever grow.
     next: u64,
-    /// The one live preparation: its ticket and the private staged object.
-    prepared: Option<(DecimalU64, StagedWrite)>,
+    /// The live preparations by ticket.
+    prepared: std::collections::BTreeMap<u64, Preparation>,
+    /// Planned bytes currently held across all live preparations.
+    payload_bytes: usize,
+}
+
+/// One live ticketed preparation: the retained target plus the planned
+/// payload in memory — complete for a `PrepareWrite`/`PrepareEdit`,
+/// accumulating for a `BeginWrite`/`WriteChunk` sequence.
+struct Preparation {
+    target: WriteTarget,
+    payload: Vec<u8>,
+    /// The declared complete payload length.
+    expected: usize,
 }
 
 impl Writes {
     pub(super) fn new() -> Self {
         Self {
             next: 1,
-            prepared: None,
+            prepared: std::collections::BTreeMap::new(),
+            payload_bytes: 0,
         }
     }
 
+    /// Retains the named target under `expectation` — the shared first
+    /// phase of `PrepareWrite`, `BeginWrite`, and `PrepareEdit`. The
+    /// deepest existing ancestor is retained and the still-missing
+    /// interior names are carried for the commit's staged subtree;
+    /// nothing physical is created.
+    fn retain(
+        root: &PackageDirectory,
+        relative_path: &Path,
+        expectation: &WriteExpectation,
+    ) -> Result<WriteTarget, ReadError> {
+        // A write names one file leaf; unlike the query operations an
+        // empty path is invalid — the workspace root is never a target.
+        if relative_path.as_os_str().is_empty() || crate::relative_entry(relative_path).is_err() {
+            return Err(ReadError::Invalid);
+        }
+        let Some(leaf) = relative_path.file_name() else {
+            return Err(ReadError::Invalid);
+        };
+        let (parent, missing) =
+            match root.descend_deepest(relative_path.parent().unwrap_or_else(|| Path::new(""))) {
+                Ok(found) => found,
+                Err(source) => return Err(crate::read_error(&source)),
+            };
+        let expected = match expectation {
+            WriteExpectation::Current => Expectation::Current,
+            WriteExpectation::Absent => Expectation::Absent,
+            WriteExpectation::Revision(revision) => Expectation::Revision(revision),
+        };
+        WriteTarget::prepare(parent, leaf, missing, expected)
+            .map_err(|source| crate::read_error(&source))
+    }
+
+    /// Registers `preparation` under a fresh ticket, refusing when the
+    /// bounded map or the payload budget is full.
+    fn admit(
+        &mut self,
+        target: WriteTarget,
+        payload: Vec<u8>,
+        expected: usize,
+        reply: impl FnOnce(DecimalU64, Option<rustx_execution_protocol::FileStamp>) -> ClientReply,
+    ) -> ClientReply {
+        if self.prepared.len() >= MAX_PREPARATIONS_PER_CONNECTION
+            || self.payload_bytes + expected > MAX_PREPARATIONS_PER_CONNECTION * MAX_WRITE_BYTES
+        {
+            return error(ReadError::Busy);
+        }
+        let Some(ticket) = self.next_ticket() else {
+            return error(ReadError::Unavailable);
+        };
+        let original = target
+            .original()
+            .map(|metadata| crate::stamp(metadata).stamp);
+        self.payload_bytes += expected;
+        self.prepared.insert(
+            ticket.get(),
+            Preparation {
+                target,
+                payload,
+                expected,
+            },
+        );
+        reply(ticket, original)
+    }
+
     /// Handles a `PrepareWrite`: validates the relative leaf, bounds and
-    /// decodes the payload, retains the verified target, and stages the
-    /// bytes privately under it. The named target is not mutated.
+    /// decodes the payload, and retains the verified target with the
+    /// planned bytes held in memory. The named target is not mutated and
+    /// nothing is staged on disk before the commit grant.
     pub(super) fn prepare(
         &mut self,
         root: &PackageDirectory,
         relative_path: &Path,
-        expected_revision: Option<&str>,
+        expectation: &WriteExpectation,
         data_base64: &str,
     ) -> ClientReply {
-        if self.prepared.is_some() {
-            return error(ReadError::Invalid);
-        }
-        // A write names one file leaf; unlike the query operations an
-        // empty path is invalid — the workspace root is never a target.
-        if relative_path.as_os_str().is_empty() || crate::relative_entry(relative_path).is_err() {
-            return error(ReadError::Invalid);
-        }
-        // The encoded length decides before any allocation: a payload that
-        // cannot decode inside the decoded cap is refused up front.
+        // The encoded length decides before any allocation: a payload
+        // that cannot decode inside the chunk cap is refused up front.
         if data_base64.len() > MAX_RAW_CHUNK_BYTES.div_ceil(3) * 4 {
             return error(ReadError::Invalid);
         }
@@ -66,57 +144,94 @@ impl Writes {
             Ok(bytes) if bytes.len() <= MAX_RAW_CHUNK_BYTES => bytes,
             _ => return error(ReadError::Invalid),
         };
-        let Some(leaf) = relative_path.file_name() else {
-            return error(ReadError::Invalid);
-        };
-        let parent = match root.descend(relative_path.parent().unwrap_or_else(|| Path::new(""))) {
-            Ok(parent) => parent,
-            Err(source) => return error(crate::read_error(&source)),
-        };
-        let target = match WriteTarget::prepare(parent, leaf, expected_revision) {
+        let target = match Self::retain(root, relative_path, expectation) {
             Ok(target) => target,
-            Err(source) => return error(crate::read_error(&source)),
+            Err(kind) => return error(kind),
         };
-        let original = target
-            .original()
-            .map(|metadata| crate::stamp(metadata).stamp);
-        let Some(ticket) = self.next_ticket() else {
-            return error(ReadError::Unavailable);
-        };
-        let staged = match target.stage(move |file| file.write_all(&bytes)) {
-            Ok(staged) => staged,
-            Err(source) => return error(crate::read_error(&source)),
-        };
-        self.prepared = Some((ticket, staged));
-        ClientReply::WritePrepared { ticket, original }
+        let expected = bytes.len();
+        self.admit(target, bytes, expected, |ticket, original| {
+            ClientReply::WritePrepared { ticket, original }
+        })
     }
 
-    /// Handles a `PrepareEdit`: retains the named original under the same
-    /// one-ticket budget as `PrepareWrite`, reads it back through the
-    /// retained descriptor — never the name — applies the bounded
-    /// text-edit algorithm, and stages the result privately. A malformed
-    /// request is an `Error`; a semantic `rustx_text_edit` failure is an
-    /// `EditRefused` carrying only the typed reason — no path or anchor
-    /// text. Either way nothing is staged, no ticket is spent, and the
-    /// authorization gate is never reached.
-    #[allow(clippy::too_many_lines)]
+    /// Handles a `BeginWrite`: retains the target and opens a ticket whose
+    /// planned payload — `total` bytes, at most [`MAX_WRITE_BYTES`] —
+    /// then accumulates through `WriteChunk` exchanges at deterministic
+    /// absolute offsets.
+    pub(super) fn begin(
+        &mut self,
+        root: &PackageDirectory,
+        relative_path: &Path,
+        expectation: &WriteExpectation,
+        total: DecimalU64,
+    ) -> ClientReply {
+        let Ok(expected) = usize::try_from(total.get()) else {
+            return error(ReadError::Invalid);
+        };
+        if expected == 0 || expected > MAX_WRITE_BYTES {
+            return error(ReadError::Invalid);
+        }
+        let target = match Self::retain(root, relative_path, expectation) {
+            Ok(target) => target,
+            Err(kind) => return error(kind),
+        };
+        self.admit(target, Vec::new(), expected, |ticket, original| {
+            ClientReply::WritePrepared { ticket, original }
+        })
+    }
+
+    /// Handles a `WriteChunk`: appends the decoded bytes at the ticket's
+    /// next absolute offset. A foreign ticket, a gap, an overrun past
+    /// the declared total, or an undecodable chunk is refused without
+    /// disturbing any other preparation.
+    pub(super) fn chunk(
+        &mut self,
+        ticket: DecimalU64,
+        offset: DecimalU64,
+        data_base64: &str,
+    ) -> ClientReply {
+        if data_base64.len() > MAX_RAW_CHUNK_BYTES.div_ceil(3) * 4 {
+            return error(ReadError::Invalid);
+        }
+        let chunk = match base64::engine::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            data_base64,
+        ) {
+            Ok(chunk) if chunk.len() <= MAX_RAW_CHUNK_BYTES => chunk,
+            _ => return error(ReadError::Invalid),
+        };
+        let Some(preparation) = self.prepared.get_mut(&ticket.get()) else {
+            return error(ReadError::Invalid);
+        };
+        if offset.get() != preparation.payload.len() as u64
+            || preparation.payload.len() + chunk.len() > preparation.expected
+        {
+            return error(ReadError::Invalid);
+        }
+        preparation.payload.extend_from_slice(&chunk);
+        ClientReply::WriteChunkReceived { ticket, offset }
+    }
+
+    /// Handles a `PrepareEdit`: retains the named original, reads it back
+    /// through the retained descriptor — never the name — applies the
+    /// bounded text-edit algorithm, and holds the planned result bytes in
+    /// memory under the ticket. A malformed request is an `Error`; a
+    /// semantic `rustx_text_edit` failure is an `EditRefused` carrying
+    /// only the typed reason — no path or anchor text. Either way no
+    /// ticket is spent and the authorization gate is never reached.
     pub(super) fn prepare_edit(
         &mut self,
         root: &PackageDirectory,
         relative_path: &Path,
-        expected_revision: &str,
+        expectation: &WriteExpectation,
         replacements: &[TextReplacement],
     ) -> ClientReply {
-        if self.prepared.is_some() {
-            return error(ReadError::Invalid);
-        }
         let request_bytes = replacements.iter().fold(0_usize, |total, edit| {
             total
                 .saturating_add(edit.old_text.len())
                 .saturating_add(edit.new_text.len())
         });
-        if relative_path.as_os_str().is_empty()
-            || crate::relative_entry(relative_path).is_err()
+        if matches!(expectation, WriteExpectation::Absent)
             || replacements.is_empty()
             || replacements.len() > MAX_EDIT_REPLACEMENTS
             || request_bytes > MAX_EDIT_REQUEST_BYTES
@@ -124,17 +239,16 @@ impl Writes {
         {
             return error(ReadError::Invalid);
         }
-        let Some(leaf) = relative_path.file_name() else {
-            return error(ReadError::Invalid);
-        };
-        let parent = match root.descend(relative_path.parent().unwrap_or_else(|| Path::new(""))) {
-            Ok(parent) => parent,
-            Err(source) => return error(crate::read_error(&source)),
-        };
-        let target = match WriteTarget::prepare(parent, leaf, Some(expected_revision)) {
+        let target = match Self::retain(root, relative_path, expectation) {
             Ok(target) => target,
-            Err(source) => return error(crate::read_error(&source)),
+            Err(kind) => return error(kind),
         };
+        // An edit always names an existing original: `Current` on an
+        // absent leaf is a not-found, and a leaf below a missing subtree
+        // can never exist.
+        if target.original().is_none() {
+            return error(ReadError::NotFound);
+        }
         let original = crate::stamp(
             target
                 .original()
@@ -162,49 +276,59 @@ impl Writes {
             }
         };
         let published_size = DecimalU64::new(updated.len() as u64);
-        let Some(ticket) = self.next_ticket() else {
-            return error(ReadError::Unavailable);
-        };
-        let staged = match target.stage(move |file| file.write_all(updated.as_bytes())) {
-            Ok(staged) => staged,
-            Err(source) => return error(crate::read_error(&source)),
-        };
-        self.prepared = Some((ticket, staged));
-        ClientReply::EditPrepared {
-            ticket,
-            original,
-            published_size,
-        }
+        let payload = updated.into_bytes();
+        let expected = payload.len();
+        self.admit(target, payload, expected, |ticket, _| {
+            ClientReply::EditPrepared {
+                ticket,
+                original,
+                published_size,
+            }
+        })
     }
 
-    /// Handles a `CommitWrite` for the exact live ticket: publishes the
-    /// staged bytes through the shared kernel and returns the published
-    /// descriptor's stamp. A wrong ticket is refused without disturbing the
-    /// live preparation; a post-crossing failure is `CommitUnknown`.
+    /// Handles a `CommitWrite` for the exact live ticket: the retained
+    /// target stages the planned bytes — only now, under the grant — and
+    /// publishes them through the shared kernel. A wrong or incomplete
+    /// ticket is refused without disturbing any preparation; a
+    /// post-crossing failure is `CommitUnknown`.
     pub(super) fn commit(&mut self, ticket: DecimalU64) -> ClientReply {
-        if self.prepared.as_ref().map(|(live, _)| *live) != Some(ticket) {
+        let Some(preparation) = self.prepared.get(&ticket.get()) else {
+            return error(ReadError::Invalid);
+        };
+        if preparation.payload.len() != preparation.expected {
             return error(ReadError::Invalid);
         }
-        let (ticket, staged) = self.prepared.take().expect("live ticket checked");
-        match staged.publish() {
-            Err(source) => write_failure(ticket, &source),
-            Ok(published) => match published.finish() {
-                Ok(metadata) => ClientReply::Written {
-                    ticket,
-                    metadata: crate::stamp(&metadata).stamp,
-                },
-                Err(source) => write_failure(ticket, &source),
+        let Preparation {
+            target,
+            payload,
+            expected,
+        } = self
+            .prepared
+            .remove(&ticket.get())
+            .expect("live ticket checked");
+        self.payload_bytes = self.payload_bytes.saturating_sub(expected);
+        let result = target
+            .stage(|file| file.write_all(&payload))
+            .and_then(rustx_confined_fs::StagedWrite::publish)
+            .and_then(rustx_confined_fs::PublishedWrite::finish);
+        match result {
+            Ok(metadata) => ClientReply::Written {
+                ticket,
+                metadata: crate::stamp(&metadata).stamp,
             },
+            Err(source) => write_failure(ticket, &source),
         }
     }
 
-    /// Handles an `AbortWrite` for the exact live ticket: the staged object
-    /// is dropped, removing only its own proven private stage.
+    /// Handles an `AbortWrite` for the exact live ticket: the retained
+    /// target and its in-memory payload drop — nothing physical was ever
+    /// staged, so nothing needs cleaning.
     pub(super) fn abort(&mut self, ticket: DecimalU64) -> ClientReply {
-        if self.prepared.as_ref().map(|(live, _)| *live) != Some(ticket) {
+        let Some(preparation) = self.prepared.remove(&ticket.get()) else {
             return error(ReadError::Invalid);
-        }
-        let (ticket, _staged) = self.prepared.take().expect("live ticket checked");
+        };
+        self.payload_bytes = self.payload_bytes.saturating_sub(preparation.expected);
         ClientReply::WriteAborted { ticket }
     }
 
@@ -252,7 +376,10 @@ mod tests {
         fs::read_dir(root)
             .unwrap()
             .map(|entry| entry.unwrap().file_name().into())
-            .filter(|name: &PathBuf| name.to_str().unwrap().starts_with(".rustx-write-"))
+            .filter(|name: &PathBuf| {
+                let name = name.to_str().unwrap();
+                name.starts_with(".rustx-write-") || name.starts_with(".rustx-mkdir-")
+            })
             .collect()
     }
 
@@ -269,7 +396,7 @@ mod tests {
         } = writes.prepare(
             &root,
             std::path::Path::new("file"),
-            Some(&original.revision),
+            &WriteExpectation::Revision(original.revision.clone()),
             &encode(b"after"),
         )
         else {
@@ -306,9 +433,12 @@ mod tests {
     fn a_foreign_or_stale_ticket_leaves_the_live_preparation_intact() {
         let (dir, root) = fixture();
         let mut writes = Writes::new();
-        let ClientReply::WritePrepared { ticket, .. } =
-            writes.prepare(&root, std::path::Path::new("file"), None, &encode(b"data"))
-        else {
+        let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
+            &root,
+            std::path::Path::new("file"),
+            &WriteExpectation::Absent,
+            &encode(b"data"),
+        ) else {
             panic!("expected a prepared write")
         };
 
@@ -338,22 +468,41 @@ mod tests {
     }
 
     #[test]
-    fn one_outstanding_preparation_per_connection() {
+    fn concurrent_approvals_share_the_bounded_ticket_budget() {
         let (_dir, root) = fixture();
         let mut writes = Writes::new();
-        let ClientReply::WritePrepared { ticket, .. } =
-            writes.prepare(&root, std::path::Path::new("one"), None, &encode(b"one"))
-        else {
-            panic!("expected a prepared write")
-        };
-        let reply = writes.prepare(&root, std::path::Path::new("two"), None, &encode(b"two"));
+        // Multiple preparations stay live independently — approvals are
+        // no longer serialized through one outstanding slot.
+        let mut tickets = Vec::new();
+        for index in 0..MAX_PREPARATIONS_PER_CONNECTION {
+            let name = format!("file{index}");
+            let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
+                &root,
+                std::path::Path::new(&name),
+                &WriteExpectation::Absent,
+                &encode(b"data"),
+            ) else {
+                panic!("expected a prepared write")
+            };
+            tickets.push(ticket);
+        }
+        // The ninth is a typed busy refusal, never a silent replacement.
+        let reply = writes.prepare(
+            &root,
+            std::path::Path::new("overflow"),
+            &WriteExpectation::Absent,
+            &encode(b"x"),
+        );
         assert_eq!(
             reply,
             ClientReply::Error {
-                kind: ReadError::Invalid
+                kind: ReadError::Busy
             }
         );
-        assert_eq!(writes.abort(ticket), ClientReply::WriteAborted { ticket });
+        // Each held ticket aborts independently; none disturbs another.
+        for ticket in tickets {
+            assert_eq!(writes.abort(ticket), ClientReply::WriteAborted { ticket });
+        }
     }
 
     #[test]
@@ -365,7 +514,7 @@ mod tests {
         let ClientReply::WritePrepared { ticket, .. } = writes.prepare(
             &root,
             std::path::Path::new("file"),
-            Some(&original.revision),
+            &WriteExpectation::Revision(original.revision.clone()),
             &encode(b"staged"),
         ) else {
             panic!("expected a prepared write")
@@ -387,21 +536,22 @@ mod tests {
     }
 
     #[test]
-    fn dropping_the_owner_cleans_an_unpublished_stage() {
+    fn dropping_the_owner_never_publishes_and_leaves_no_stage() {
         let (dir, root) = fixture();
         {
             let mut writes = Writes::new();
             let ClientReply::WritePrepared { .. } = writes.prepare(
                 &root,
                 std::path::Path::new("file"),
-                None,
+                &WriteExpectation::Absent,
                 &encode(b"orphaned"),
             ) else {
                 panic!("expected a prepared write")
             };
-            assert_eq!(stage_names(dir.path()).len(), 1);
-            // EOF/revoke drops the owner: the staged object's own
-            // dev:inode-proven cleanup removes only its private stage.
+            // The plan is held in memory: nothing is staged on disk
+            // before the commit grant — a dropped owner is the
+            // no-side-effect abort, never an implicit publish.
+            assert_eq!(stage_names(dir.path()), Vec::<PathBuf>::new());
         }
         assert_eq!(stage_names(dir.path()), Vec::<PathBuf>::new());
         assert!(!dir.path().join("file").exists());
@@ -418,7 +568,7 @@ mod tests {
         let reply = writes.prepare(
             &root,
             std::path::Path::new("dir/./file"),
-            None,
+            &WriteExpectation::Absent,
             &encode(b"staged"),
         );
         assert_eq!(
@@ -436,7 +586,12 @@ mod tests {
         // A NUL and an interior `..` fail the same raw-segment gate.
         for path in ["dir/fi\0le", "dir/../dir/file"] {
             assert_eq!(
-                writes.prepare(&root, std::path::Path::new(path), None, &encode(b"x")),
+                writes.prepare(
+                    &root,
+                    std::path::Path::new(path),
+                    &WriteExpectation::Absent,
+                    &encode(b"x")
+                ),
                 ClientReply::Error {
                     kind: ReadError::Invalid
                 },
@@ -457,7 +612,12 @@ mod tests {
             // Not base64 at all.
             String::from("!!!"),
         ] {
-            let reply = writes.prepare(&root, std::path::Path::new("file"), None, &encoded);
+            let reply = writes.prepare(
+                &root,
+                std::path::Path::new("file"),
+                &WriteExpectation::Absent,
+                &encoded,
+            );
             assert_eq!(
                 reply,
                 ClientReply::Error {

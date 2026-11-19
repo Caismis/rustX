@@ -2722,9 +2722,10 @@ Permission admission also owns execution evidence. Git argv alone cannot
 exclude repository-configured clean, diff, textconv, signing or other helpers,
 so Git calls are `Unproven` and follow the permission matrix. Child environment
 defaults preserve ordinary patch output and reject attempts to overwrite
-runtime-owned Git environment keys. Native Write/Edit hold the authorized
-directory handle through reads, temporary-file creation and rename; changing
-an ancestor's pathname after the last check cannot redirect the commit.
+runtime-owned Git environment keys. Native Write/Edit hold the ticketed
+Client-side `WriteTarget` — retained parent, leaf, and original descriptors —
+through authorization and commit; changing an ancestor's pathname after the
+last check cannot redirect the publish.
 
 Automatic review receives bounded native facts: canonical task provenance or
 an admitted scheduled Claim, prepared invocation details, the effective matrix
@@ -2936,16 +2937,18 @@ then requires the interpreted path to stay inside the Session's admitted
 Client workspace, since its physical read crosses the Execution Client
 boundary; Glob and Grep require the interpreted search root to stay inside
 the same admitted Client workspace because their physical traversal crosses
-the Execution Client boundary too. Write and Edit still use absolute paths
-as ordinary host
-filesystem paths and do not impose the locator workspace-containment
-policy. `Workspace` remains the
+the Execution Client boundary too. Write and Edit cross the same
+boundary: the interpreted path must resolve inside the Session's admitted
+Client workspace, the preflight binds a ticketed Client-side mutation
+claim — the logical path plus the `PreparedMutation` owner — *before*
+permission classification, and the executor consumes exactly one commit
+or abort decision on that ticket. `Workspace` remains the
 runtime/Bash cwd authority. `tools/locator.rs` resolves runtime-advertised
 managed-output paths for reads, while `ManagedToolOutput` owns the narrow
 model-mutation rejection; neither is a hidden second policy for ordinary
-native file paths. Final-component symlinks
-are followed for atomic Write/Edit commits so the link itself is not
-replaced.
+native file paths. The Client's no-follow descriptor-relative kernel
+refuses a symlinked final component or ancestor — a link is never
+followed into a mutation target, and a path crossing it is denied.
 
 Adopting those conventions is a *schema* decision only. It does not import
 Pi's runtime, subprocess model, permission system, ignore behavior, result

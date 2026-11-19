@@ -311,19 +311,24 @@ fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String>
             ),
             ClientRequest::PrepareWrite {
                 relative_path,
-                expected_revision,
+                expectation,
                 data_base64,
-            } => writes.prepare(
-                root,
-                &relative_path,
-                expected_revision.as_deref(),
-                &data_base64,
-            ),
+            } => writes.prepare(root, &relative_path, &expectation, &data_base64),
+            ClientRequest::BeginWrite {
+                relative_path,
+                expectation,
+                total,
+            } => writes.begin(root, &relative_path, &expectation, total),
+            ClientRequest::WriteChunk {
+                ticket,
+                offset,
+                data_base64,
+            } => writes.chunk(ticket, offset, &data_base64),
             ClientRequest::PrepareEdit {
                 relative_path,
-                expected_revision,
+                expectation,
                 replacements,
-            } => writes.prepare_edit(root, &relative_path, &expected_revision, &replacements),
+            } => writes.prepare_edit(root, &relative_path, &expectation, &replacements),
             ClientRequest::CommitWrite { ticket } => writes.commit(ticket),
             ClientRequest::AbortWrite { ticket } => writes.abort(ticket),
             ClientRequest::ReadLines {

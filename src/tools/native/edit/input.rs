@@ -10,7 +10,7 @@ use crate::tools::native::input::decode;
 #[serde(deny_unknown_fields)]
 pub(super) struct EditInput {
     /// A relative path resolved against the execution cwd, or an absolute
-    /// host filesystem path.
+    /// path within the Session's admitted Execution Client workspace.
     pub path: String,
     /// Replacements matched against one original file snapshot and committed
     /// together as one change.
@@ -28,9 +28,11 @@ pub(super) struct EditReplacement {
     #[serde(rename = "oldText")]
     #[schemars(rename = "oldText", length(min = 1))]
     pub old_text: String,
-    /// The replacement text.
+    /// The replacement text — validated here, planned and applied by the
+    /// admitted Execution Client from the invocation arguments.
     #[serde(rename = "newText")]
     #[schemars(rename = "newText")]
+    #[allow(dead_code)] // schema shape; the Client consumes the raw args
     pub new_text: String,
 }
 

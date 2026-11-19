@@ -97,6 +97,33 @@ pub const MAX_EDIT_REQUEST_BYTES: usize = 64 * 1024;
 /// The maximum number of replacements in one `PrepareEdit`.
 pub const MAX_EDIT_REPLACEMENTS: usize = 128;
 
+/// The byte cap on a conditional write's planned content — the same
+/// bound a staged result may occupy.
+pub const MAX_WRITE_BYTES: usize = MAX_EDIT_FILE_BYTES;
+
+/// Live ticketed preparations per connection — writes and edits share
+/// this one budget.
+pub const MAX_PREPARATIONS_PER_CONNECTION: usize = 8;
+
+/// What a ticketed write or edit prepare expects at the named leaf.
+///
+/// `Current` retains whatever is present — the pre-authorization
+/// object an Agent prepares before its permission gate; it is never a
+/// permission to publish, and the ticketed commit re-proves the leaf
+/// before crossing. `Absent` is create-only; `Revision` requires the
+/// exact current stamp.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum WriteExpectation {
+    /// Retain whatever the leaf currently is — file present or absent.
+    Current,
+    /// Create-only: the leaf must be absent at prepare and at publish.
+    Absent,
+    /// The leaf must be an existing file stamped with exactly this
+    /// revision.
+    Revision(String),
+}
+
 /// The closed rustX-owned whitelist of structured document formats a
 /// `ReadDocument` may decode.
 ///
@@ -692,12 +719,38 @@ pub enum ClientRequest {
     /// [`MAX_RAW_CHUNK_BYTES`].
     PrepareWrite {
         /// The exact named target: strictly normalized relative path below
-        /// the binding workspace whose leaf is the file to write.
+        /// the binding workspace whose leaf is the file to write. Missing
+        /// parents are created under a private staging subtree at commit.
         relative_path: PathBuf,
-        /// Decimal u64 revision of the required current file. `None`
-        /// requires the target to be absent (create-only).
-        expected_revision: Option<String>,
-        /// The full payload, base64-encoded; never staged raw.
+        /// What the named leaf must be at retain time.
+        expectation: WriteExpectation,
+        /// The full payload, base64-encoded; never staged raw. Payloads
+        /// over [`MAX_RAW_CHUNK_BYTES`] arrive through
+        /// `BeginWrite`/`WriteChunk` instead.
+        data_base64: String,
+    },
+    /// The chunked first phase of one conditional write: retains the
+    /// target and opens a live ticket whose planned bytes then arrive in
+    /// [`MAX_RAW_CHUNK_BYTES`] `WriteChunk` exchanges at deterministic
+    /// absolute offsets. `total` is the declared complete length, at
+    /// most [`MAX_WRITE_BYTES`].
+    BeginWrite {
+        /// The exact named target, as on `PrepareWrite`.
+        relative_path: PathBuf,
+        /// What the named leaf must be at retain time.
+        expectation: WriteExpectation,
+        /// The declared complete payload length in bytes.
+        total: DecimalU64,
+    },
+    /// One bounded payload chunk for the live ticketed `BeginWrite`
+    /// preparation: `offset` must equal the bytes received so far —
+    /// chunks append deterministically, never out of order.
+    WriteChunk {
+        /// The exact ticket the chunk feeds.
+        ticket: DecimalU64,
+        /// The absolute byte offset this chunk lands at.
+        offset: DecimalU64,
+        /// The chunk, base64-encoded; never staged raw.
         data_base64: String,
     },
     /// Second phase: publish the staged payload of the one live
@@ -723,9 +776,9 @@ pub enum ClientRequest {
         /// The exact named target: strictly normalized relative path below
         /// the binding workspace whose leaf is the file to edit.
         relative_path: PathBuf,
-        /// Decimal u64 revision of the required current file. An edit
-        /// always names an existing original, so this is never absent.
-        expected_revision: String,
+        /// What the named leaf must be at retain time. An edit always
+        /// names an existing original: `Absent` is malformed.
+        expectation: WriteExpectation,
         /// At most [`MAX_EDIT_REPLACEMENTS`] replacements whose aggregate
         /// old+new bytes stay under [`MAX_EDIT_REQUEST_BYTES`].
         replacements: Vec<TextReplacement>,
@@ -941,6 +994,11 @@ pub enum ClientReply {
     },
     /// An `AbortWrite` consumed its ticket and removed the private stage.
     WriteAborted { ticket: DecimalU64 },
+    /// A `WriteChunk` landed at the ticket's next absolute offset.
+    WriteChunkReceived {
+        ticket: DecimalU64,
+        offset: DecimalU64,
+    },
     /// The `CommitWrite` publish crossing already happened but a later
     /// stage failed: the named outcome is unknowable and must be reported
     /// as such — never as a pre-commit denial.
@@ -1133,6 +1191,9 @@ pub enum ReadError {
     SearchNeedsDirectory,
     /// The read could not be completed for another reason.
     Unavailable,
+    /// The connection's bounded preparation budget is full — the caller
+    /// may retry after another ticket is consumed.
+    Busy,
 }
 
 /// The server-published bootstrap bundle for one local binding.

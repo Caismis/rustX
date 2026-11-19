@@ -2,8 +2,8 @@
 //!
 //! Write resolves relative paths against the execution cwd, creates missing
 //! parent directories, and commits a complete UTF-8 snapshot atomically.
-//! Absolute paths are ordinary host filesystem paths and are not subject to
-//! the workspace containment policy. Runtime-owned `ManagedToolOutput` paths
+//! Absolute paths must stay within the Session's admitted Client workspace;
+//! managed tool-output roots remain outside it. Runtime-owned `ManagedToolOutput` paths
 //! remain read-only to model-originated mutation.
 
 mod input;
@@ -11,7 +11,7 @@ mod input;
 use crate::tools::deadline::ToolProgressCapability;
 use crate::tools::executor::{ToolExecutionContext, ToolExecutionHandle, ToolExecutor};
 use crate::tools::native::registration::{NativeToolRegistration, native_definition};
-use crate::tools::native::support::{atomic_commit, failed_result, success_text};
+use crate::tools::native::support::{failed_result, success_text};
 use crate::tools::types::ToolInvocationPolicy;
 use crate::tools::types::{ToolExecutionResult, ToolInvocation};
 
@@ -33,7 +33,7 @@ pub(super) fn definition(policy: ToolInvocationPolicy) -> crate::tools::types::T
     native_definition::<WriteInput>(
         TOOL_ID,
         NAME,
-        "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.",
+        "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.",
         policy,
     )
 }
@@ -53,7 +53,7 @@ impl ToolExecutor for WriteTool {
     ) -> ToolExecutionHandle<'a> {
         let cancellation = context.cancellation.clone();
         ToolExecutionHandle::settled_by_operation(
-            Box::pin(async move { run_write(&invocation, &context) }),
+            Box::pin(async move { run_write(&invocation, &context).await }),
             cancellation,
         )
     }
@@ -63,7 +63,7 @@ impl ToolExecutor for WriteTool {
     }
 }
 
-pub(super) fn run_write(
+pub(super) async fn run_write(
     invocation: &ToolInvocation,
     context: &ToolExecutionContext<'_>,
 ) -> ToolExecutionResult {
@@ -76,28 +76,22 @@ pub(super) fn run_write(
             "write mutation target was not bound at authorization; refusing to resolve independently",
         );
     };
-    if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
-        return failed_result(error);
-    }
-    let target = match bound.commit_target(true) {
-        Ok(target) => target,
-        Err(error) => return failed_result(error),
-    };
-    if let Some(changes) = &context.workspace_changes {
-        changes.capture(bound.path());
-    }
-    if let Err(error) = bound.ensure_still_authorized(context.tool_output) {
-        return failed_result(error);
-    }
-    if let Err(error) = atomic_commit(&target, input.content.as_bytes()) {
-        return failed_result(error);
-    }
-    success_text(
-        format!(
-            "Successfully wrote {} bytes to {}",
-            input.content.len(),
-            input.path
+    // Every prepare failure short-circuited at bind — a bound target
+    // always holds the live ticketed owner for this exact invocation.
+    let owner = bound.prepared();
+    match owner.commit(&context.cancellation).await {
+        Ok(_) => success_text(
+            format!(
+                "Successfully wrote {} bytes to {}",
+                input.content.len(),
+                input.path
+            ),
+            None,
         ),
-        None,
-    )
+        Err(error) => crate::tools::native::mutation::commit_error_result(
+            &input.path,
+            &context.cancellation,
+            &error,
+        ),
+    }
 }

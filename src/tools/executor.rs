@@ -242,20 +242,28 @@ impl<'a> ToolExecutionContext<'a> {
         }
     }
 
-    /// Freezes the effective Write/Edit target before direct native dispatch.
-    /// The caller owns permission admission; executors recheck this binding
-    /// before committing and refuse an independently resolved target.
+    /// Binds the remote Write/Edit mutation claim before direct native
+    /// dispatch: the planned operation is prepared on the Session's
+    /// admitted Client and the ticketed owner — or its deferred failure —
+    /// is what executors consume. The caller owns permission admission;
+    /// executors refuse an independently resolved target.
     ///
     /// # Errors
-    /// Returns an error if the path cannot be resolved or names managed output.
-    pub fn bind_mutation_target(mut self, prepared: &PreparedInvocation) -> Result<Self, String> {
+    /// Returns an error if the path argument is missing or names managed
+    /// output — the failures reported verbatim.
+    pub async fn bind_mutation_target(
+        mut self,
+        prepared: &PreparedInvocation,
+    ) -> Result<Self, String> {
         self.bound_mutation = crate::tools::native::support::bind_invocation_mutation_target(
             &prepared.origin,
             &prepared.invocation.tool_name,
             &prepared.invocation.arguments,
-            self.workspace.root(),
+            self.workspace,
             self.tool_output,
-        )?;
+            &self.cancellation,
+        )
+        .await?;
         Ok(self)
     }
 

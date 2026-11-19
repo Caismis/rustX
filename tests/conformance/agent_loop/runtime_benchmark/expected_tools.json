@@ -54,7 +54,7 @@
     "type": "function",
     "function": {
       "name": "write",
-      "description": "Create or replace a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. Missing parent directories are created automatically.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
+      "description": "Create or replace a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. Missing parent directories are created automatically.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "urn:rustx:invocation",
@@ -66,7 +66,7 @@
             "properties": {
               "path": {
                 "type": "string",
-                "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
               },
               "content": {
                 "type": "string",
@@ -98,7 +98,7 @@
     "type": "function",
     "function": {
       "name": "edit",
-      "description": "Apply precise text replacements to a UTF-8 file. Resolve relative paths from the execution cwd; absolute paths are used as host filesystem paths. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
+      "description": "Apply precise text replacements to a UTF-8 file through the Session's admitted Execution Client. Resolve relative paths from the execution cwd; absolute paths must stay within the Session's admitted Client workspace. All oldText values match the same original snapshot. Exact matches are preferred, with a cautious Unicode-normalized fallback; ambiguous, overlapping, missing, or no-op edits fail without changing the file.\n\nPass business tool inputs inside the required arguments object. Runtime permission metadata belongs outside arguments.",
       "parameters": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "urn:rustx:invocation",
@@ -110,7 +110,7 @@
             "properties": {
               "path": {
                 "type": "string",
-                "description": "A relative path resolved against the execution cwd, or an absolute\nhost filesystem path."
+                "description": "A relative path resolved against the execution cwd, or an absolute\npath within the Session's admitted Execution Client workspace."
               },
               "edits": {
                 "type": "array",

@@ -29,7 +29,7 @@
 mod mutation;
 mod text;
 
-pub use mutation::{CommitUnknown, PublishedWrite, StagedWrite, WriteTarget};
+pub use mutation::{CommitUnknown, Expectation, PublishedWrite, StagedWrite, WriteTarget};
 pub use text::{PageEnd, PageLimits, TextPage, validate_utf8};
 
 use std::ffi::OsStr;
@@ -266,6 +266,47 @@ impl PackageDirectory {
             }
         }
         current.map_or_else(|| self.child(OsStr::new(".")), Ok)
+    }
+
+    /// Resolves `relative` like [`descend`](Self::descend) but stops at
+    /// the deepest existing ancestor: the returned names are the
+    /// still-missing components in order. Every name that did open was a
+    /// no-follow directory — a symlink or non-directory component fails
+    /// the walk, never enters `missing`.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same errors as [`descend`](Self::descend) except that
+    /// a missing component collects the remainder instead of failing.
+    pub fn descend_deepest(&self, relative: &Path) -> io::Result<(Self, Vec<std::ffi::OsString>)> {
+        let mut current: Option<Self> = None;
+        let mut missing = Vec::new();
+        for part in relative.components() {
+            match part {
+                Component::CurDir => {}
+                Component::Normal(name) => {
+                    if !missing.is_empty() {
+                        missing.push(name.to_os_string());
+                        continue;
+                    }
+                    match current.as_ref().unwrap_or(self).child(name) {
+                        Ok(next) => current = Some(next),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                            missing.push(name.to_os_string());
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "unsafe package-relative path",
+                    ));
+                }
+            }
+        }
+        let deepest = current.map_or_else(|| self.child(OsStr::new(".")), Ok)?;
+        Ok((deepest, missing))
     }
 
     /// Splits `relative` into its containing directory and leaf name —

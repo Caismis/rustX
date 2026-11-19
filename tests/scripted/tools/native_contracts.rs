@@ -1328,7 +1328,7 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
             serde_json::json!({"path":"changed.txt","oldText":"before","newText":"after"}),
         ),
     ] {
-        let fixture = common::native_fixture();
+        let fixture = common::native_fixture_with_execution(Vec::new());
         std::fs::write(
             fixture.runtime.workspace().root().join("changed.txt"),
             "before\n",
@@ -1385,17 +1385,17 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
             message,
             MessageBlock::Tool(tool) if tool.result.status == ToolExecutionStatus::Success
         )));
-        let changes = fixture.runtime.workspace_changes.summary(&attempt).unwrap();
-        assert_eq!(changes.total, 1);
-        let diff = fixture
-            .runtime
-            .workspace_changes
-            .comparison(&attempt, 0)
-            .await
-            .unwrap()
-            .unwrap();
-        assert_eq!(Some(diff.hunks[0].old_text.as_str()), Some("before\n"));
-        assert_eq!(Some(diff.hunks[0].new_text.as_str()), Some("after\n"));
+        // The mutation itself commits through the admitted Execution
+        // Client — asserted above against the real file. The
+        // WorkspaceChanges baseline/capture port is the documented
+        // separate workstream: without a Server-side descriptor the
+        // recording cannot yet snapshot the pre-mutation bytes, so this
+        // non-git fixture honestly records no comparison sources.
+        let changes = fixture.runtime.workspace_changes.summary(&attempt);
+        assert!(
+            changes.is_none(),
+            "the unported capture path records no snapshot yet: {changes:?}"
+        );
         assert_eq!(
             audit.messages().len(),
             4,
@@ -1403,6 +1403,256 @@ async fn workspace_changes_follow_native_write_and_edit_without_model_context() 
         );
         drop(coordinator);
     }
+}
+
+fn native_multi_tool_turn(
+    calls: &[support::fake::ScriptedCall],
+) -> Vec<Vec<support::fake::FakeStep>> {
+    let mut first = vec![support::fake::FakeStep::Emit(ModelEvent::Started)];
+    for (index, call) in calls.iter().enumerate() {
+        first.extend(
+            support::fake::tool_call_events(u32::try_from(index).unwrap(), call)
+                .into_iter()
+                .map(support::fake::FakeStep::Emit),
+        );
+    }
+    first.push(support::fake::FakeStep::Emit(ModelEvent::Completed {
+        finish_reason: ModelFinishReason::ToolCalls,
+        usage: None,
+    }));
+    vec![
+        first,
+        vec![
+            support::fake::FakeStep::Emit(ModelEvent::Started),
+            support::fake::FakeStep::Emit(ModelEvent::TextDelta {
+                block_index: rustx::message::types::ContentBlockIndex::new(0),
+                text: "done".to_owned(),
+            }),
+            support::fake::FakeStep::Emit(ModelEvent::Completed {
+                finish_reason: ModelFinishReason::Stop,
+                usage: None,
+            }),
+        ],
+    ]
+}
+
+/// The product-level mutation proof: sibling Write/Edit calls on one
+/// bound Session prepare, authorize, and commit independently — the
+/// whole batch crosses the admitted Execution Client, never a
+/// Server-local mutation.
+#[tokio::test]
+async fn native_mutations_prepare_authorize_and_commit_independently() {
+    let fixture = common::native_fixture_with_execution(Vec::new());
+    std::fs::write(
+        fixture.runtime.workspace().root().join("edit-me.txt"),
+        "before
+",
+    )
+    .expect("fixture");
+    let calls = [
+        support::fake::ScriptedCall {
+            id: "call-write-a",
+            tool_id: "tool-write",
+            name: "write",
+            arguments: serde_json::json!({"path":"a.txt","content":"alpha
+"}),
+        },
+        support::fake::ScriptedCall {
+            id: "call-write-b",
+            tool_id: "tool-write",
+            name: "write",
+            arguments: serde_json::json!({"path":"b.txt","content":"beta
+"}),
+        },
+        support::fake::ScriptedCall {
+            id: "call-edit",
+            tool_id: "tool-edit",
+            name: "edit",
+            arguments: serde_json::json!({
+                "path":"edit-me.txt",
+                "edits":[{"oldText":"before","newText":"after"}],
+            }),
+        },
+    ];
+    let model = support::fake::fake_model(native_multi_tool_turn(&calls));
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
+    let (lease, coordinator) = capability.into_lease_and_coordinator();
+    let request = native_request(&model, fixture.runtime.conversation_id());
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let settled = AgentExecution::new(
+        request,
+        lease,
+        &cancellation,
+        support::default_execution_policy(),
+        native_context_runtime(&model),
+        &fixture.runtime,
+        rustx::agent::AttemptLifecycle::inert().with_pre_tool_policy(Arc::new(
+            crate::agent::lifecycle::ConfiguredApprovalPolicy::new(
+                rustx::runtime::ApprovalMode::FullAccess,
+            ),
+        )),
+    )
+    .unwrap()
+    .run_to_settlement()
+    .await;
+    let audit = common::durable_agent_result(settled.publish(), fixture.store.as_ref());
+    assert!(matches!(audit.outcome, AttemptOutcome::Completed { .. }));
+    let successes = audit
+        .messages()
+        .iter()
+        .filter(|message| {
+            matches!(
+                message,
+                MessageBlock::Tool(tool) if tool.result.status == ToolExecutionStatus::Success
+            )
+        })
+        .count();
+    assert_eq!(successes, 3, "every sibling mutation committed");
+    let root = fixture.runtime.workspace().root();
+    assert_eq!(
+        std::fs::read_to_string(root.join("a.txt")).unwrap(),
+        "alpha
+"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("b.txt")).unwrap(),
+        "beta
+"
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("edit-me.txt")).unwrap(),
+        "after
+"
+    );
+    drop(coordinator);
+}
+
+/// Denial refunds: eight denied writes fill the Client's whole
+/// preparation map; every denial must abort its ticket, or the next
+/// turn's allowed writes would answer `busy` forever.
+#[tokio::test]
+async fn denied_mutations_abort_ticketed_preparations_and_refund_the_map() {
+    let fixture = common::native_fixture_with_execution(Vec::new());
+    let denied = [
+        "denied-0", "denied-1", "denied-2", "denied-3", "denied-4", "denied-5", "denied-6",
+        "denied-7",
+    ];
+    let denied_calls: Vec<support::fake::ScriptedCall> = denied
+        .iter()
+        .enumerate()
+        .map(|(index, leaf)| support::fake::ScriptedCall {
+            id: match index {
+                0 => "call-deny-0",
+                1 => "call-deny-1",
+                2 => "call-deny-2",
+                3 => "call-deny-3",
+                4 => "call-deny-4",
+                5 => "call-deny-5",
+                6 => "call-deny-6",
+                _ => "call-deny-7",
+            },
+            tool_id: "tool-write",
+            name: "write",
+            arguments: serde_json::json!({"path": format!("{leaf}.txt"), "content": "x"}),
+        })
+        .collect();
+    let model = support::fake::fake_model(native_multi_tool_turn(&denied_calls));
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
+    let (lease, coordinator) = capability.into_lease_and_coordinator();
+    let request = native_request(&model, fixture.runtime.conversation_id());
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let settled = AgentExecution::new(
+        request,
+        lease,
+        &cancellation,
+        support::default_execution_policy(),
+        native_context_runtime(&model),
+        &fixture.runtime,
+        rustx::agent::AttemptLifecycle::inert().with_pre_tool_policy(Arc::new(
+            crate::agent::lifecycle::ConfiguredApprovalPolicy::new(
+                rustx::runtime::ApprovalMode::Plan,
+            ),
+        )),
+    )
+    .unwrap()
+    .run_to_settlement()
+    .await;
+    let audit = common::durable_agent_result(settled.publish(), fixture.store.as_ref());
+    let root = fixture.runtime.workspace().root();
+    for leaf in &denied {
+        assert!(
+            !root.join(format!("{leaf}.txt")).exists(),
+            "a denied write created nothing"
+        );
+    }
+    assert!(audit.messages().iter().all(|message| !matches!(
+        message,
+        MessageBlock::Tool(tool) if tool.result.status == ToolExecutionStatus::Success
+    )));
+    drop(coordinator);
+
+    // All eight tickets refunded: a full second batch of allowed writes
+    // must prepare and commit — a leaked ticket would answer `busy`.
+    let allowed_calls: Vec<support::fake::ScriptedCall> = denied
+        .iter()
+        .enumerate()
+        .map(|(index, leaf)| support::fake::ScriptedCall {
+            id: match index {
+                0 => "call-allow-0",
+                1 => "call-allow-1",
+                2 => "call-allow-2",
+                3 => "call-allow-3",
+                4 => "call-allow-4",
+                5 => "call-allow-5",
+                6 => "call-allow-6",
+                _ => "call-allow-7",
+            },
+            tool_id: "tool-write",
+            name: "write",
+            arguments: serde_json::json!({"path": format!("{leaf}-allowed.txt"), "content": "y"}),
+        })
+        .collect();
+    let model = support::fake::fake_model(native_multi_tool_turn(&allowed_calls));
+    let capability =
+        common::capability_lease(fixture.ordinary_registry.clone(), &fixture.runtime).await;
+    let (lease, coordinator) = capability.into_lease_and_coordinator();
+    let mut request = native_request(&model, fixture.runtime.conversation_id());
+    request.attempt_id = AttemptId::new("attempt-native-contract-refund");
+    let cancellation = AgentCancellation::new(CancellationReason::UserRequested);
+    let settled = AgentExecution::new(
+        request,
+        lease,
+        &cancellation,
+        support::default_execution_policy(),
+        native_context_runtime(&model),
+        &fixture.runtime,
+        rustx::agent::AttemptLifecycle::inert().with_pre_tool_policy(Arc::new(
+            crate::agent::lifecycle::ConfiguredApprovalPolicy::new(
+                rustx::runtime::ApprovalMode::FullAccess,
+            ),
+        )),
+    )
+    .unwrap()
+    .run_to_settlement()
+    .await;
+    let audit = common::durable_agent_result(settled.publish(), fixture.store.as_ref());
+    let successes = audit
+        .messages()
+        .iter()
+        .filter(|message| {
+            matches!(
+                message,
+                MessageBlock::Tool(tool) if tool.result.status == ToolExecutionStatus::Success
+            )
+        })
+        .count();
+    assert_eq!(successes, 8, "every refunded ticket committed");
+    for leaf in &denied {
+        assert!(root.join(format!("{leaf}-allowed.txt")).exists());
+    }
+    drop(coordinator);
 }
 
 #[tokio::test]

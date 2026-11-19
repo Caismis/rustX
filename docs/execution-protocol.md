@@ -454,17 +454,27 @@ malformed `Range`; a typed semantic refusal never does.
 ### Conditional writes (implemented)
 
 There is no raw write request. `ClientRequest::PrepareWrite {
-relative_path, expected_revision, data_base64 }` carries the strict
-relative path, an optional revision the retained original must equal
-(`None` means create-only), and the whole payload — base64, length
-checked before decode, decoded bound `MAX_RAW_CHUNK_BYTES` — answered
-by `ClientReply::WritePrepared { ticket, original }`. The ticket is a
+relative_path, expectation, data_base64 }` carries the strict
+relative path, a typed `WriteExpectation` — `Current` retains whatever
+the leaf currently is (the pre-authorization object an Agent holds
+across its permission gate, never itself a permission to publish),
+`Absent` is create-only, `Revision` requires the exact current stamp —
+and the whole payload — base64, length checked before decode, decoded
+bound `MAX_RAW_CHUNK_BYTES` — answered by `ClientReply::WritePrepared {
+ticket, original }`. A payload over `MAX_RAW_CHUNK_BYTES` transfers as
+`ClientRequest::BeginWrite { relative_path, expectation, total }`
+followed by `WriteChunk { ticket, offset, data_base64 }` records at
+deterministic absolute offsets — a foreign ticket, gap, or overrun is
+`invalid` — up to `MAX_WRITE_BYTES` total. The ticket is a
 `DecimalU64` the Client issues monotonically from `1` per admitted
-connection, never reused and never issued past `u64::MAX`; exactly one
-preparation may be live per connection. `ClientRequest::CommitWrite {
-ticket }` and `ClientRequest::AbortWrite { ticket }` act only on the
-exact live ticket — a zero, foreign, stale, or repeated ticket is a
-stable `invalid` and leaves the live preparation untouched. A commit
+connection, never reused and never issued past `u64::MAX`; at most
+`MAX_PREPARATIONS_PER_CONNECTION` (8) preparations are live per
+connection and their planned payloads share a `8 × MAX_WRITE_BYTES`
+in-memory budget — a full map or budget is a stable `busy` reply.
+`ClientRequest::CommitWrite { ticket }` and `ClientRequest::AbortWrite
+{ ticket }` act only on the exact live ticket — a zero, foreign,
+stale, or repeated ticket is a stable `invalid` and leaves the live
+preparation untouched. A commit
 answers `ClientReply::Written { ticket, metadata }` carrying the
 published descriptor's stamp, or `ClientReply::CommitUnknown { ticket
 }` when publication may have crossed but the completion is unknowable;
@@ -476,13 +486,25 @@ outcome and retires like any other post-commit violation.
 
 The Client implements the sequence on the shared
 `rustx-confined-fs` kernel: `WriteTarget::prepare` retains the exact
-target descriptor and verified original stamp without mutating the
-named file, `stage` writes the payload into a private `O_EXCL` sibling
-`.rustx-write-{uuid}` under the retained parent, and
-`StagedWrite::publish` re-verifies the chain and the leaf stamp at the
-retained descriptors before `linkat`/`renameat` crosses — the check and
-the publish are honest pre-commit verifications, never a claimed CAS;
-external writers can still rename between them. The Server side keeps
+target descriptor — plus, for a target below missing components, the
+deepest existing ancestor and the missing interior names — and the
+verified original stamp without mutating the named file. The planned
+payload stays in Client memory under the ticket until the commit
+grant: nothing is staged on disk before authorization, so preapproval
+bytes are never enumerable through search or metadata. `stage` writes
+the payload into a private `O_EXCL` `0600` sibling
+`.rustx-write-{uuid}` under the retained parent — or, for a missing
+subtree, builds the interior directories and leaf under a private
+owned sibling staging directory, then `renameat` publishes the whole
+subtree into the first missing name — and `StagedWrite::publish`
+re-verifies the chain and the leaf stamp at the retained descriptors
+before `linkat`/`renameat` crosses — the check and the publish are
+honest pre-commit verifications, never a claimed CAS; external
+writers can still rename between them. The private staging mode is a
+best-effort same-euid privacy measure, not a sandbox: it does not
+protect against an arbitrary malicious process running as the same
+uid. Abort and failure cleanup removes only the owned private stage —
+a foreign replacement under the staging name is never deleted. The Server side keeps
 the same `LocalConnection` locked across prepare, the caller's
 `authorize` gate run on the verified prepared `original`, and the
 commit or abort dispatch — the path is never reparsed or reopened.
@@ -501,18 +523,20 @@ EOF, and its dropped write state cleans the unpublished stage.
 
 ### Conditional edits (implemented)
 
-`ClientRequest::PrepareEdit { relative_path, expected_revision,
+`ClientRequest::PrepareEdit { relative_path, expectation,
 replacements }` reuses the same ticketed publish kernel as a write —
 it is a first phase only, never a second mutation path. The Client
 retains the exact named target with `WriteTarget::prepare` (the
-revision is required: an edit always names an existing original),
-reads it back through `WriteTarget::read_original_bounded` — the
-*retained descriptor*, never the path reopened — capped at
-`MAX_EDIT_FILE_BYTES` (2 MiB) and at the stamped size, applies the
-shared `rustx-text-edit` algorithm (exact anchors first, then the
-per-edit NFKC fuzzy fallback, ranges resolved in the original
-snapshot, BOM and dominant line ending preserved), and stages the
-result through the same private `.rustx-write-{uuid}` stage.
+expectation is `Revision` or `Current`: an edit always names an
+existing original, so `Absent` is malformed), reads it back through
+`WriteTarget::read_original_bounded` — the *retained descriptor*,
+never the path reopened — capped at `MAX_EDIT_FILE_BYTES` (2 MiB) and
+at the stamped size, applies the shared `rustx-text-edit` algorithm
+(exact anchors first, then the per-edit NFKC fuzzy fallback, ranges
+resolved in the original snapshot, BOM and dominant line ending
+preserved), and holds the planned result bytes in memory under the
+ticket — staging happens only under the commit grant, exactly like a
+write.
 `ClientReply::EditPrepared { ticket, original, published_size }`
 reports the verified source stamp and the exact committed byte count;
 `ClientReply::EditRefused { reason }` carries only the stable typed
@@ -537,11 +561,15 @@ shared `CommitWrite`/`AbortWrite` frames, and a correctly-ticketed
 connection with `WriteOutcomeUnknown` — a possibly-crossed publish is
 never an ordinary retryable denial.
 
-The native Edit tool still plans and commits through its existing
-in-process path for now — `run_edit` shares only the pure
-`rustx-text-edit` algorithm so both sides run identical semantics.
-Routing the tool's physical operation through `edit_file` is the
-following step (#576).
+The native Write and Edit tools route their physical operations
+through this path: the Agent binds a `BoundMutationTarget` during
+preflight — the logical interpreted path plus the ticketed
+`PreparedMutation` — classifies permission against the *logical*
+workspace path the Client proved, and the executor commits or aborts
+the exact ticket. A denied or cancelled preflight aborts the ticket
+explicitly; a dropped owner arranges bounded cleanup without blocking
+async code. No Server-local physical mutation remains for these
+tools.
 
 `rustx-execution-client --binding-file PATH --workspace PATH` is the
 physical Client:
