@@ -104,7 +104,7 @@ const REQUIREMENTS: &[Requirement] = &[
         Profile::Full,
         Platform::Linux,
         "doc",
-        "conversation::ConversationState",
+        "ConversationState",
     ),
     Requirement::new(
         Profile::Full,
