@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 
 use rustx_execution_protocol::transport::{read_record, write_record};
 use rustx_execution_protocol::{
-    BindingCredential, Bootstrap, Capability, ClientInstanceId, EntryKind, EnvironmentId,
-    Generation, Hello, HelloReply, LineEnd, Reject, SessionId,
+    BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply, ClientRequest,
+    EditRefusal, EntryKind, EnvironmentId, Generation, Hello, HelloReply, LineEnd,
+    MAX_EDIT_FILE_BYTES, Reject, SessionId, TextReplacement,
 };
-use rustx_execution_server::{Binding, BindingPhase, Reservation};
+use rustx_execution_server::{Binding, BindingPhase, RefusedEdit, Reservation};
 
 const ACCEPT_DEADLINE: Duration = Duration::from_secs(30);
 
@@ -1377,6 +1378,308 @@ fn a_revoked_binding_after_prepare_leaves_no_stage_and_no_commit() {
         fs::read(rig.workspace_path.join("file")).unwrap(),
         b"before"
     );
+}
+
+/// The real Client edits through the same ticketed publish kernel as a
+/// write: `PrepareEdit` retains and reads the original by descriptor,
+/// applies the bounded text-edit algorithm, stages privately, and the
+/// Server's gate authorizes the exact prepared stamp before `CommitWrite`
+/// crosses.
+#[test]
+fn a_conditional_edit_commits_bom_crlf_and_multiple_edits() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalEdit,
+    ]));
+    let original = "\u{FEFF}alpha\r\n'keep'\r\n\u{2018}gamma\u{2019}\r\n";
+    fs::write(rig.workspace_path.join("file"), original).unwrap();
+    let stamp = rustx_confined_fs::FileMetadata::of(
+        &std::fs::File::open(rig.workspace_path.join("file")).unwrap(),
+    )
+    .unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    let published = connection
+        .edit_file(
+            Path::new("file"),
+            &stamp.revision,
+            &[
+                TextReplacement {
+                    old_text: "alpha".to_owned(),
+                    new_text: "A".to_owned(),
+                },
+                // A fuzzy anchor: the curly quotes never appear literally.
+                TextReplacement {
+                    old_text: "'gamma'".to_owned(),
+                    new_text: "G".to_owned(),
+                },
+            ],
+            |prepared| {
+                assert_eq!(prepared.revision, stamp.revision);
+                Ok(())
+            },
+        )
+        .unwrap();
+    let updated = fs::read_to_string(rig.workspace_path.join("file")).unwrap();
+    assert_eq!(updated, "\u{FEFF}A\r\n'keep'\r\nG\r\n");
+    assert_eq!(published.size.get(), updated.len() as u64);
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+/// Every semantic `EditRefused` is a typed reason only — the connection
+/// stays live, nothing is staged, and no path or anchor text crosses.
+#[test]
+fn edit_refusals_are_typed_and_the_connection_stays_live() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalEdit,
+    ]));
+    fs::write(rig.workspace_path.join("file"), "dup dup\n").unwrap();
+    fs::write(
+        rig.workspace_path.join("huge"),
+        "x".repeat(MAX_EDIT_FILE_BYTES + 1),
+    )
+    .unwrap();
+    fs::write(rig.workspace_path.join("binary"), [0xffu8, 0xfe, 0x00]).unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let edit = |old: &str, new: &str| TextReplacement {
+        old_text: old.to_owned(),
+        new_text: new.to_owned(),
+    };
+    let stamp_of = |name: &str| {
+        rustx_confined_fs::FileMetadata::of(
+            &std::fs::File::open(rig.workspace_path.join(name)).unwrap(),
+        )
+        .unwrap()
+    };
+    let refused = |error: io::Error| {
+        error
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<RefusedEdit>()
+            .map(|refused| refused.0)
+    };
+
+    let ambiguous = connection
+        .edit_file(
+            Path::new("file"),
+            &stamp_of("file").revision,
+            &[edit("dup", "x")],
+            |_| panic!("a refusal never reaches the gate"),
+        )
+        .unwrap_err();
+    assert_eq!(
+        refused(ambiguous),
+        Some(EditRefusal::Ambiguous {
+            index: 0,
+            occurrences: 2
+        })
+    );
+
+    let no_change = connection
+        .edit_file(
+            Path::new("file"),
+            &stamp_of("file").revision,
+            &[edit("dup dup", "dup dup")],
+            |_| panic!("a refusal never reaches the gate"),
+        )
+        .unwrap_err();
+    assert_eq!(refused(no_change), Some(EditRefusal::NoChange));
+
+    let oversized = connection
+        .edit_file(
+            Path::new("huge"),
+            &stamp_of("huge").revision,
+            &[edit("x", "y")],
+            |_| panic!("a refusal never reaches the gate"),
+        )
+        .unwrap_err();
+    assert_eq!(refused(oversized), Some(EditRefusal::TooLarge));
+
+    // Non-UTF-8 is a typed error, not an edit refusal.
+    let binary = connection
+        .edit_file(
+            Path::new("binary"),
+            &stamp_of("binary").revision,
+            &[edit("x", "y")],
+            |_| panic!("a refusal never reaches the gate"),
+        )
+        .unwrap_err();
+    assert_eq!(binary.kind(), io::ErrorKind::InvalidData);
+
+    // Nothing was ever staged and the connection is still live.
+    let staged: Vec<_> = fs::read_dir(&rig.workspace_path)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .filter(|name| name.to_str().unwrap().starts_with(".rustx-write-"))
+        .collect();
+    assert_eq!(staged, Vec::<std::ffi::OsString>::new());
+    connection.ping().unwrap();
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+/// A denied authorization aborts the edit's private stage: the target is
+/// untouched and no `.rustx-write-*` sibling survives. A target replaced
+/// between prepare and commit is an honest conflict, never a publish.
+#[test]
+fn a_denied_edit_gate_aborts_and_a_replaced_target_conflicts() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalEdit,
+    ]));
+    fs::create_dir(rig.workspace_path.join("sub")).unwrap();
+    fs::write(rig.workspace_path.join("sub").join("file"), "before").unwrap();
+    let stamp = rustx_confined_fs::FileMetadata::of(
+        &std::fs::File::open(rig.workspace_path.join("sub").join("file")).unwrap(),
+    )
+    .unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    let mut connection = rig.binding.accept_local(stream).unwrap().unwrap();
+    let edit = || TextReplacement {
+        old_text: "before".to_owned(),
+        new_text: "after".to_owned(),
+    };
+
+    // Denied gate: abort removes the stage, file untouched, live on.
+    let denied = connection
+        .edit_file(Path::new("sub/file"), &stamp.revision, &[edit()], |_| {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "gate"))
+        })
+        .unwrap_err();
+    assert_eq!(denied.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(
+        fs::read(rig.workspace_path.join("sub").join("file")).unwrap(),
+        b"before"
+    );
+    connection.ping().unwrap();
+
+    // The leaf replaced between prepare and commit: the publish's
+    // recheck is a conflict and the outside bytes win.
+    let workspace = rig.workspace_path.clone();
+    let conflict = connection
+        .edit_file(Path::new("sub/file"), &stamp.revision, &[edit()], |_| {
+            fs::write(workspace.join("sub").join("file"), "outside").unwrap();
+            Ok(())
+        })
+        .unwrap_err();
+    assert_eq!(conflict.kind(), io::ErrorKind::AlreadyExists);
+    assert_eq!(
+        fs::read(rig.workspace_path.join("sub").join("file")).unwrap(),
+        b"outside"
+    );
+    connection.ping().unwrap();
+
+    // The ancestor swapped between prepare and commit: the retained
+    // parent no longer names the live path, so the publish refuses.
+    let restamped = rustx_confined_fs::FileMetadata::of(
+        &std::fs::File::open(rig.workspace_path.join("sub").join("file")).unwrap(),
+    )
+    .unwrap();
+    let workspace = rig.workspace_path.clone();
+    let swapped = connection
+        .edit_file(
+            Path::new("sub/file"),
+            &restamped.revision,
+            &[TextReplacement {
+                // The anchor must match the current "outside" bytes — a
+                // missing anchor is an honest refusal before the gate.
+                old_text: "outside".to_owned(),
+                new_text: "after".to_owned(),
+            }],
+            |_| {
+                fs::rename(workspace.join("sub"), workspace.join("old-sub")).unwrap();
+                fs::create_dir(workspace.join("sub")).unwrap();
+                Ok(())
+            },
+        )
+        .unwrap_err();
+    // The swapped ancestor is the kernel's explicit "authorized
+    // directory replaced" denial — a pre-commit refusal, never a
+    // publish.
+    assert_eq!(swapped.kind(), io::ErrorKind::PermissionDenied);
+    let sub_entries: Vec<_> = fs::read_dir(rig.workspace_path.join("sub"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(sub_entries, Vec::<std::ffi::OsString>::new());
+    // The live bytes moved with the renamed directory, untouched.
+    assert_eq!(
+        fs::read(rig.workspace_path.join("old-sub").join("file")).unwrap(),
+        b"outside"
+    );
+
+    let staged: Vec<_> = fs::read_dir(&rig.workspace_path)
+        .unwrap()
+        .flat_map(|entry| {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                fs::read_dir(path)
+                    .unwrap()
+                    .map(|inner| inner.unwrap().file_name())
+                    .collect()
+            } else {
+                Vec::<std::ffi::OsString>::new()
+            }
+        })
+        .filter(|name| name.to_str().unwrap_or("").starts_with(".rustx-write-"))
+        .collect();
+    assert_eq!(staged, Vec::<std::ffi::OsString>::new());
+
+    drop(connection);
+    expect_success(&mut child);
+}
+
+/// A malformed `PrepareEdit` on the wire — an empty replacement set the
+/// typed request could still carry — is a stable `Error`, never a stage,
+/// and the connection stays live.
+#[test]
+fn a_malformed_edit_request_is_an_error_not_a_stage() {
+    let rig = rig_with(BTreeSet::from([
+        Capability::Connection,
+        Capability::ConditionalEdit,
+    ]));
+    fs::write(rig.workspace_path.join("file"), "before").unwrap();
+
+    let mut child = spawn_client(&rig);
+    let stream = accept(&rig, &mut child);
+    // A raw sibling handle on the admitted socket: the typed request
+    // reaches the real Client's dispatch without a LocalConnection
+    // framing it.
+    let mut peer = stream.try_clone().unwrap();
+    let connection = rig.binding.accept_local(stream).unwrap().unwrap();
+
+    write_record(
+        &mut peer,
+        &ClientRequest::PrepareEdit {
+            relative_path: Path::new("file").to_path_buf(),
+            expected_revision: "a".repeat(64),
+            replacements: Vec::new(),
+        },
+    )
+    .unwrap();
+    let reply: ClientReply = read_record(&mut peer).unwrap();
+    assert!(matches!(reply, ClientReply::Error { .. }), "{reply:?}");
+    write_record(&mut peer, &ClientRequest::Ping).unwrap();
+    assert_eq!(
+        read_record::<ClientReply>(&mut peer).unwrap(),
+        ClientReply::Pong
+    );
+
+    drop(peer);
+    drop(connection);
+    expect_success(&mut child);
 }
 
 /// The real Client searches one shared file universe for both `Glob` and

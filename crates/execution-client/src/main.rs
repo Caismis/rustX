@@ -9,6 +9,7 @@
 //! revision-checked `ReadRange`, `GetMetadata` stat'ed without following
 //! the leaf, bounded `ReadDirectory` paging, the ticketed
 //! `PrepareWrite`/`CommitWrite`/`AbortWrite` conditional write, the
+//! `PrepareEdit` conditional edit sharing that ticketed kernel, the
 //! `ReadLines` logical-text page, and the `ReadDocument` whitelisted
 //! document page — all executed through `rustx-confined-fs` and
 //! `rustx-document-reader`, the same primitives the Agent Server itself
@@ -159,6 +160,7 @@ fn run(binding_file: &Path, workspace: &Path) -> Result<(), String> {
             Capability::ReadRange,
             Capability::DirectoryMetadata,
             Capability::ConditionalWrite,
+            Capability::ConditionalEdit,
             Capability::ReadLines,
             Capability::DocumentPages,
             Capability::BoundedSearch,
@@ -317,6 +319,11 @@ fn serve(stream: &mut UnixStream, root: &PackageDirectory) -> Result<(), String>
                 expected_revision.as_deref(),
                 &data_base64,
             ),
+            ClientRequest::PrepareEdit {
+                relative_path,
+                expected_revision,
+                replacements,
+            } => writes.prepare_edit(root, &relative_path, &expected_revision, &replacements),
             ClientRequest::CommitWrite { ticket } => writes.commit(ticket),
             ClientRequest::AbortWrite { ticket } => writes.abort(ticket),
             ClientRequest::ReadLines {

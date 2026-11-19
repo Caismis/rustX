@@ -7798,8 +7798,8 @@ current layer status.
   together, prepared exactly once on a blocking task, and fenced on
   Session delete and process drain. The endpoint's typed surface —
   `admit_local_stream` and serialized `read_range`, `entry_metadata`,
-  `directory_page`, `read_lines`, `read_document`, and `write_file`
-  exchanges (busy
+  `directory_page`, `read_lines`, `read_document`, `write_file`, and
+  `edit_file` exchanges (busy
   refusal, lexical workspace
   gate, binding live-check at send time) — is the Session's live
   dispatch owner. The claim is not reachable through
@@ -7826,17 +7826,30 @@ current layer status.
   `FileChunk`, `DirectoryEntry`, `DirectoryPage`, the bounded
   revision-checked `read_range`, the `entry_metadata` /
   `directory_page` queries, the streaming `scan_text` logical-page
-  scanner, and the `WriteTarget`/`StagedWrite` commit kernel. Root
+  scanner, and the `WriteTarget`/`StagedWrite` commit kernel —
+  including `read_original_bounded`, the retained-descriptor source
+  read the conditional edit runs on. Root
   `rustx`
   and the client both depend on it; the server does not.
+- `rustx-text-edit` is the pure multi-edit algorithm — BOM and line-
+  ending preservation, exact-then-NFKC-fuzzy anchors resolved in the
+  original snapshot, disjoint/overlap/no-change semantics, and the
+  typed `EditFailure` bounds (2 MiB source and result, 128
+  replacements, 64 KiB request, capped fuzzy provenance). The root
+  Edit tool and the client's `PrepareEdit` both run it; it depends on
+  neither side.
 - `rustx-document-reader` is the physical structured-document decoder —
   the rustX-owned format whitelist, classification, bounded source
   acquisition, and parser-only xberg decode factored out of the native
   Read tool. The root tool and the client both depend on it for exactly
   one parser policy; it depends on neither side.
-- The boundary currently serves six physical operations: bounded,
+- The boundary currently serves eight physical operations: bounded,
   revision-checked range reads, entry metadata, bounded directory
-  pages, the two-phase conditional write, the bounded
+  pages, the two-phase conditional write, the conditional edit
+  (`PrepareEdit` — a retained-descriptor source read plus the shared
+  text-edit algorithm staged through the same ticketed publish
+  kernel, with the Server's authorize gate between prepare and
+  commit), the bounded
   logical-text page, and the whitelisted structured-document page
   over the isolated Unix socket — `fs/readFile`,
   `fs/getMetadata`, `fs/readDirectory`, and `fs/writeFile` are served

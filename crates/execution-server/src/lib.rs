@@ -18,12 +18,12 @@ use base64::Engine as _;
 use constant_time_eq::constant_time_eq_32;
 use rustx_execution_protocol::{
     Admission, BindingCredential, Bootstrap, Capability, ClientInstanceId, ClientReply,
-    ClientRequest, ConnectionId, DecimalU64, EntryStamp, EnvironmentId, FileStamp, Generation,
-    Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
-    MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES, MAX_RAW_CHUNK_BYTES,
-    MAX_SEARCH_CONTEXT_LINES, MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES,
-    PROTOCOL_VERSION, PageEntry, ReadError, Reject, SearchSpec, SessionId,
-    is_normalized_absolute_path,
+    ClientRequest, ConnectionId, DecimalU64, EditRefusal, EntryStamp, EnvironmentId, FileStamp,
+    Generation, Hello, HelloReply, LineEnd, MAX_DIRECTORY_NAMES, MAX_DIRECTORY_PAGE_ENTRIES,
+    MAX_DOCUMENT_LOGICAL_BYTES, MAX_DOCUMENT_SOURCE_BYTES, MAX_EDIT_FILE_BYTES,
+    MAX_EDIT_REPLACEMENTS, MAX_EDIT_REQUEST_BYTES, MAX_RAW_CHUNK_BYTES, MAX_SEARCH_CONTEXT_LINES,
+    MAX_SEARCH_PATTERN_BYTES, MAX_TEXT_BYTES, MAX_TEXT_LINES, PROTOCOL_VERSION, PageEntry,
+    ReadError, Reject, SearchSpec, SessionId, TextReplacement, is_normalized_absolute_path,
     transport::{DeadlineStream, PAGE_REQUEST_TIMEOUT, encode_record, read_record, write_record},
 };
 use sha2::{Digest, Sha256};
@@ -1630,11 +1630,19 @@ impl LocalConnection {
                 "file write exceeds chunk limit",
             ));
         }
-        let reply = self.exchange(&ClientRequest::PrepareWrite {
-            relative_path: relative_path.to_path_buf(),
-            expected_revision: expected_revision.map(str::to_owned),
-            data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
-        })?;
+        // One absolute deadline covers prepare, the authorization abort,
+        // and commit — it is armed once and never rearmed between phases.
+        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        let reply = self.exchange_admitted(
+            &ClientRequest::PrepareWrite {
+                relative_path: relative_path.to_path_buf(),
+                expected_revision: expected_revision.map(str::to_owned),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
+            },
+            Some(deadline),
+            || Ok(()),
+            || (),
+        )?;
         if let ClientReply::Error { kind } = reply {
             return Err(read_error(kind));
         }
@@ -1664,7 +1672,12 @@ impl LocalConnection {
             // malformed abort reply is a protocol violation like any
             // other — the original denial is still what the caller sees.
             if self.gate().is_ok() {
-                match self.exchange(&ClientRequest::AbortWrite { ticket }) {
+                match self.exchange_admitted(
+                    &ClientRequest::AbortWrite { ticket },
+                    Some(deadline),
+                    || Ok(()),
+                    || (),
+                ) {
                     Ok(ClientReply::WriteAborted { ticket: echoed }) if echoed == ticket => {}
                     Ok(_) => {
                         self.retire(io::Error::new(
@@ -1677,7 +1690,148 @@ impl LocalConnection {
             }
             return Err(error);
         }
-        self.commit_write(ticket, bytes.len() as u64)
+        self.commit_write(ticket, bytes.len() as u64, Some(deadline))
+    }
+
+    /// One conditional edit: `PrepareEdit` retains the exact named
+    /// original, applies the bounded text-edit algorithm on the Client,
+    /// and stages the result privately; `authorize` then gates the
+    /// publish against the verified original stamp before the existing
+    /// `CommitWrite`/`AbortWrite` machinery commits or abandons it.
+    ///
+    /// The whole sequence shares one absolute [`PAGE_REQUEST_TIMEOUT`]
+    /// deadline armed once — it covers the prepare exchange, the
+    /// authorization window, and the commit or abort, and it is never
+    /// rearmed. A safe pre-wire refusal — missing capability, an
+    /// out-of-policy request, an `EditRefused` semantic failure, or the
+    /// `authorize` denial followed by a well-formed abort — never
+    /// retires the connection. Once `CommitWrite`'s first byte is on
+    /// the wire the publish may have crossed: a transport failure, a
+    /// malformed or mismatched receipt, and an explicit
+    /// `CommitUnknown` alike retire the connection and surface
+    /// [`WriteOutcomeUnknown`], never an ordinary retryable denial.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::Unsupported`] when the peer lacks the
+    /// edit capability, [`io::ErrorKind::InvalidInput`] for a request
+    /// outside the bounded replacement policy, a [`RefusedEdit`]
+    /// downcastable error carrying the typed [`EditRefusal`] when the
+    /// Client refused semantically, the `authorize` error verbatim on
+    /// denial, a [`WriteOutcomeUnknown`]-downcastable error once the
+    /// publish outcome cannot be known, or
+    /// [`io::ErrorKind::InvalidData`] for a malformed or untruthful
+    /// reply.
+    pub fn edit_file(
+        &mut self,
+        relative_path: &Path,
+        expected_revision: &str,
+        replacements: &[TextReplacement],
+        authorize: impl FnOnce(&FileStamp) -> io::Result<()>,
+    ) -> io::Result<FileStamp> {
+        if !self.capabilities.contains(&Capability::ConditionalEdit) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "peer admitted no conditional edit capability",
+            ));
+        }
+        let request_bytes = replacements.iter().fold(0_usize, |total, edit| {
+            total
+                .saturating_add(edit.old_text.len())
+                .saturating_add(edit.new_text.len())
+        });
+        if replacements.is_empty()
+            || replacements.len() > MAX_EDIT_REPLACEMENTS
+            || request_bytes > MAX_EDIT_REQUEST_BYTES
+            || replacements.iter().any(|edit| edit.old_text.is_empty())
+            || !valid_revision(expected_revision)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "edit request outside the bounded replacement policy",
+            ));
+        }
+        let deadline = Instant::now() + PAGE_REQUEST_TIMEOUT;
+        let reply = self.exchange_admitted(
+            &ClientRequest::PrepareEdit {
+                relative_path: relative_path.to_path_buf(),
+                expected_revision: expected_revision.to_owned(),
+                replacements: replacements.to_vec(),
+            },
+            Some(deadline),
+            || Ok(()),
+            || (),
+        )?;
+        let violation = |message: &'static str| io::Error::new(io::ErrorKind::InvalidData, message);
+        match reply {
+            ClientReply::Error { kind } => return Err(read_error(kind)),
+            // A semantic refusal is only plausible when its shape could
+            // come from this request: every index names a replacement we
+            // sent, an ambiguity reports at least two occurrences, an
+            // overlap names two distinct edits, and an empty-edits refusal
+            // can never answer a nonempty request.
+            ClientReply::EditRefused { reason } => {
+                if !valid_edit_refusal(&reason, replacements) {
+                    return Err(self.retire(violation("edit refusal contradicts the request")));
+                }
+                return Err(io::Error::new(
+                    edit_refusal_kind(&reason),
+                    RefusedEdit(reason),
+                ));
+            }
+            _ => {}
+        }
+        let ClientReply::EditPrepared {
+            ticket,
+            original,
+            published_size,
+        } = reply
+        else {
+            return Err(self.retire(violation("unexpected reply to edit prepare")));
+        };
+        if ticket.get() == 0 {
+            return Err(self.retire(violation("edit reply carries a zero ticket")));
+        }
+        // An edit always names an existing original: its stamp must be
+        // valid, carry exactly the required revision, and promise a
+        // result within the file cap.
+        if original.revision != expected_revision || stamp_violation(&original).is_some() {
+            return Err(self.retire(violation("edit reply ignores the expected revision")));
+        }
+        // The source it claims to have applied is bounded too: a Client
+        // could never have decoded an over-cap original, and the promised
+        // result must stay within the file cap.
+        if original.size.get() > MAX_EDIT_FILE_BYTES as u64
+            || published_size.get() > MAX_EDIT_FILE_BYTES as u64
+        {
+            return Err(self.retire(violation("edit reply exceeds the file bound")));
+        }
+        if let Err(error) = authorize(&original) {
+            // The gate denied before commit: remove the stage while the
+            // binding still admits the frame — under the same absolute
+            // deadline — and never commit. A malformed abort reply is a
+            // protocol violation like any other; the original denial is
+            // still what the caller sees.
+            if self.gate().is_ok() {
+                match self.exchange_admitted(
+                    &ClientRequest::AbortWrite { ticket },
+                    Some(deadline),
+                    || Ok(()),
+                    || (),
+                ) {
+                    Ok(ClientReply::WriteAborted { ticket: echoed }) if echoed == ticket => {}
+                    Ok(_) => {
+                        self.retire(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "unexpected reply to edit abort",
+                        ));
+                    }
+                    Err(_) => {}
+                }
+            }
+            return Err(error);
+        }
+        self.commit_write(ticket, published_size.get(), Some(deadline))
     }
 
     /// The commit half of [`write_file`](Self::write_file): the request is
@@ -1688,16 +1842,37 @@ impl LocalConnection {
     /// never a retry. A `Written` receipt is trusted only when its stamp
     /// is valid *and* its size equals the exact byte count this connection
     /// submitted: a receipt describing different bytes cannot prove the
-    /// publish, so the outcome stays unknown.
-    fn commit_write(&mut self, ticket: DecimalU64, expected_size: u64) -> io::Result<FileStamp> {
+    /// publish, so the outcome stays unknown. `deadline`, when present,
+    /// is the caller's already-armed absolute wire budget — it is never
+    /// rearmed here.
+    ///
+    /// A correctly-ticketed `CommitUnknown` is valid *syntax* but never a
+    /// safe ordinary outcome: the publish may have crossed, the ticket is
+    /// consumed, and the peer's later accounting cannot be trusted — so
+    /// it retires the connection like every other post-commit failure.
+    fn commit_write(
+        &mut self,
+        ticket: DecimalU64,
+        expected_size: u64,
+        deadline: Option<Instant>,
+    ) -> io::Result<FileStamp> {
         let encoded = encode_record(&ClientRequest::CommitWrite { ticket })?;
         self.gate()?;
         let outcome_unknown =
             |connection: &mut Self| connection.retire(io::Error::other(WriteOutcomeUnknown));
-        let Ok(reply) = encoded
-            .write_to(&mut self.stream)
-            .and_then(|()| read_record(&mut self.stream))
-        else {
+        let result = match deadline {
+            Some(deadline) => (|| -> io::Result<ClientReply> {
+                let mut stream = DeadlineStream::new(&mut self.stream, deadline)?;
+                encoded.write_to(&mut stream)?;
+                let reply = read_record(&mut stream)?;
+                stream.finish()?;
+                Ok(reply)
+            })(),
+            None => encoded
+                .write_to(&mut self.stream)
+                .and_then(|()| read_record(&mut self.stream)),
+        };
+        let Ok(reply) = result else {
             return Err(outcome_unknown(self));
         };
         match reply {
@@ -1705,11 +1880,12 @@ impl LocalConnection {
             // it propagates as an ordinary pre-commit error.
             ClientReply::Error { kind } => Err(read_error(kind)),
             // The Client crossed but its later stages failed — the same
-            // unknowable outcome as a lost acknowledgement. The reply
-            // itself is valid and the ticket is consumed, so the
-            // connection is not retired for this one.
+            // unknowable outcome as a lost acknowledgement. The ticket
+            // is consumed and the publish may be durably visible, so the
+            // connection retires rather than stay live on untrusted
+            // accounting.
             ClientReply::CommitUnknown { ticket: echoed } if echoed == ticket => {
-                Err(io::Error::other(WriteOutcomeUnknown))
+                Err(outcome_unknown(self))
             }
             ClientReply::Written {
                 ticket: echoed,
@@ -1723,6 +1899,54 @@ impl LocalConnection {
             }
             _ => Err(outcome_unknown(self)),
         }
+    }
+}
+
+/// The peer refused a conditional edit for one stable typed semantic
+/// reason. Downcast the `io::Error` to recover the [`EditRefusal`];
+/// nothing was staged and the connection stayed live.
+#[derive(Debug)]
+pub struct RefusedEdit(pub EditRefusal);
+
+impl std::fmt::Display for RefusedEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "edit refused: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for RefusedEdit {}
+
+/// Whether one typed [`EditRefusal`] could honestly answer a request
+/// carrying `replacements` edits — every index must name a sent
+/// replacement and the shape must be plausible. A contradiction is a
+/// protocol violation, not a refusal.
+fn valid_edit_refusal(reason: &EditRefusal, replacements: &[TextReplacement]) -> bool {
+    let in_range = |index: u32| (index as usize) < replacements.len();
+    match *reason {
+        // A pre-checked request is never empty and carries no empty
+        // anchor: either refusal answering one is a contradiction.
+        EditRefusal::EmptyEdits => replacements.is_empty(),
+        EditRefusal::EmptyAnchor { index } => replacements
+            .get(index as usize)
+            .is_some_and(|edit| edit.old_text.is_empty()),
+        EditRefusal::Missing { index } | EditRefusal::UnsafeNormalization { index } => {
+            in_range(index)
+        }
+        EditRefusal::Ambiguous { index, occurrences } => in_range(index) && occurrences >= 2,
+        EditRefusal::Overlap { first, second } => {
+            first != second && in_range(first) && in_range(second)
+        }
+        EditRefusal::NoChange | EditRefusal::TooLarge => true,
+    }
+}
+
+/// The I/O error kind one [`EditRefusal`] maps onto — the typed reason
+/// in [`RefusedEdit`] is authoritative; the kind only classifies.
+fn edit_refusal_kind(reason: &EditRefusal) -> io::ErrorKind {
+    match reason {
+        EditRefusal::Missing { .. } => io::ErrorKind::NotFound,
+        EditRefusal::TooLarge => io::ErrorKind::FileTooLarge,
+        _ => io::ErrorKind::InvalidInput,
     }
 }
 
@@ -2990,6 +3214,20 @@ mod tests {
         ]))
     }
 
+    fn edit_rig() -> (Binding, Hello) {
+        reserved(BTreeSet::from([
+            Capability::Connection,
+            Capability::ConditionalEdit,
+        ]))
+    }
+
+    fn replacement(old_text: &str, new_text: &str) -> TextReplacement {
+        TextReplacement {
+            old_text: old_text.to_owned(),
+            new_text: new_text.to_owned(),
+        }
+    }
+
     fn assert_outcome_unknown(error: &io::Error) {
         let unknown = match error.get_ref() {
             Some(source) => source.is::<WriteOutcomeUnknown>(),
@@ -3211,19 +3449,18 @@ mod tests {
                 },
             )
             .unwrap();
-            let request: ClientRequest = read_record(&mut peer).unwrap();
-            assert_eq!(request, ClientRequest::Ping);
-            write_record(&mut peer, &ClientReply::Pong).unwrap();
         });
         let error = connection
             .write_file(Path::new("file"), b"data", None, |_| Ok(()))
             .unwrap_err();
         assert_outcome_unknown(&error);
-        // The explicit typed reply is a valid answer — the connection is
-        // not retired for it and stays dispatchable.
-        connection.ping().unwrap();
+        // A correctly-ticketed `CommitUnknown` is valid syntax but never
+        // a safe ordinary outcome — the publish may have crossed and the
+        // ticket is consumed, so the connection retires like every other
+        // post-commit failure.
         answer.join().unwrap();
-        assert_eq!(binding.status().phase, BindingPhase::Live);
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
     }
 
     #[test]
@@ -3993,6 +4230,359 @@ mod tests {
         );
         connection.ping().unwrap();
         answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_conditional_edit_prepares_authorizes_and_commits() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let revision = "a".repeat(64);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::PrepareEdit {
+                relative_path,
+                expected_revision,
+                replacements,
+            } = request
+            else {
+                panic!("expected a prepare-edit request");
+            };
+            assert_eq!(relative_path, Path::new("file"));
+            assert_eq!(expected_revision, "a".repeat(64));
+            assert_eq!(replacements.len(), 1);
+            write_record(
+                &mut peer,
+                &ClientReply::EditPrepared {
+                    ticket: DecimalU64::new(1),
+                    original: write_stamp(&"a".repeat(64)),
+                    published_size: DecimalU64::new(5),
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::CommitWrite { ticket } = request else {
+                panic!("expected a commit request");
+            };
+            assert_eq!(ticket, DecimalU64::new(1));
+            write_record(
+                &mut peer,
+                &ClientReply::Written {
+                    ticket,
+                    metadata: FileStamp {
+                        size: DecimalU64::new(5),
+                        revision: "b".repeat(64),
+                        identity: String::from("1:1"),
+                        modified_at_ms: None,
+                    },
+                },
+            )
+            .unwrap();
+        });
+        let published = connection
+            .edit_file(
+                Path::new("file"),
+                &revision,
+                &[replacement("old", "newer")],
+                |original| {
+                    assert_eq!(original.revision, "a".repeat(64));
+                    Ok(())
+                },
+            )
+            .unwrap();
+        assert_eq!(published.size.get(), 5);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn an_edit_refusal_projects_the_typed_reason_and_stays_live() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareEdit { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::EditRefused {
+                    reason: EditRefusal::Ambiguous {
+                        index: 0,
+                        occurrences: 3,
+                    },
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert_eq!(request, ClientRequest::Ping);
+            write_record(&mut peer, &ClientReply::Pong).unwrap();
+        });
+        let error = connection
+            .edit_file(
+                Path::new("file"),
+                &"a".repeat(64),
+                &[replacement("x", "y")],
+                |_| panic!("a semantic refusal never reaches the gate"),
+            )
+            .unwrap_err();
+        let refused = error.get_ref().unwrap().downcast_ref::<RefusedEdit>();
+        assert_eq!(
+            refused.map(|refused| refused.0),
+            Some(EditRefusal::Ambiguous {
+                index: 0,
+                occurrences: 3
+            })
+        );
+        connection.ping().unwrap();
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn a_contradicting_edit_refusal_retires_the_connection() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareEdit { .. }));
+            // Index 4 names a replacement the request never carried.
+            write_record(
+                &mut peer,
+                &ClientReply::EditRefused {
+                    reason: EditRefusal::Missing { index: 4 },
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .edit_file(
+                Path::new("file"),
+                &"a".repeat(64),
+                &[replacement("x", "y")],
+                |_| panic!("a malformed refusal never reaches the gate"),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+    }
+
+    #[test]
+    fn an_edit_prepared_reply_is_validated_before_the_gate() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareEdit { .. }));
+            // A published size above the file cap can never be committed.
+            write_record(
+                &mut peer,
+                &ClientReply::EditPrepared {
+                    ticket: DecimalU64::new(1),
+                    original: write_stamp(&"a".repeat(64)),
+                    published_size: DecimalU64::new(MAX_EDIT_FILE_BYTES as u64 + 1),
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .edit_file(
+                Path::new("file"),
+                &"a".repeat(64),
+                &[replacement("x", "y")],
+                |_| panic!("an oversized prepare never reaches the gate"),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+    }
+
+    #[test]
+    fn a_denied_edit_gate_aborts_under_the_same_deadline() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareEdit { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::EditPrepared {
+                    ticket: DecimalU64::new(1),
+                    original: write_stamp(&"a".repeat(64)),
+                    published_size: DecimalU64::new(5),
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            let ClientRequest::AbortWrite { ticket } = request else {
+                panic!("expected an abort request, never a commit");
+            };
+            write_record(&mut peer, &ClientReply::WriteAborted { ticket }).unwrap();
+        });
+        let error = connection
+            .edit_file(
+                Path::new("file"),
+                &"a".repeat(64),
+                &[replacement("x", "y")],
+                |_| Err(io::Error::new(io::ErrorKind::PermissionDenied, "gate")),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Live);
+    }
+
+    #[test]
+    fn an_edit_commit_unknown_retires_the_connection() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareEdit { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::EditPrepared {
+                    ticket: DecimalU64::new(1),
+                    original: write_stamp(&"a".repeat(64)),
+                    published_size: DecimalU64::new(5),
+                },
+            )
+            .unwrap();
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::CommitWrite { .. }));
+            write_record(
+                &mut peer,
+                &ClientReply::CommitUnknown {
+                    ticket: DecimalU64::new(1),
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .edit_file(
+                Path::new("file"),
+                &"a".repeat(64),
+                &[replacement("x", "y")],
+                |_| Ok(()),
+            )
+            .unwrap_err();
+        assert_outcome_unknown(&error);
+        answer.join().unwrap();
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+        assert!(connection.ping().is_err());
+    }
+    #[test]
+    fn an_over_cap_edit_original_retires_before_the_gate() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let authorized = std::sync::atomic::AtomicUsize::new(0);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareEdit { .. }));
+            // A valid-looking stamp claiming a source the Client could
+            // never have decoded.
+            write_record(
+                &mut peer,
+                &ClientReply::EditPrepared {
+                    ticket: DecimalU64::new(1),
+                    original: FileStamp {
+                        size: DecimalU64::new(MAX_EDIT_FILE_BYTES as u64 + 1),
+                        revision: "a".repeat(64),
+                        identity: String::from("1:1"),
+                        modified_at_ms: None,
+                    },
+                    published_size: DecimalU64::new(4),
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .edit_file(
+                Path::new("file"),
+                &"a".repeat(64),
+                &[replacement("x", "y")],
+                |_| {
+                    authorized.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(authorized.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+    }
+
+    #[test]
+    fn an_empty_anchor_refusal_on_a_nonempty_anchor_retires() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+        let authorized = std::sync::atomic::AtomicUsize::new(0);
+
+        let answer = thread::spawn(move || {
+            let request: ClientRequest = read_record(&mut peer).unwrap();
+            assert!(matches!(request, ClientRequest::PrepareEdit { .. }));
+            // The request's anchor is nonempty — the refusal contradicts
+            // the request it claims to answer.
+            write_record(
+                &mut peer,
+                &ClientReply::EditRefused {
+                    reason: EditRefusal::EmptyAnchor { index: 0 },
+                },
+            )
+            .unwrap();
+        });
+        let error = connection
+            .edit_file(
+                Path::new("file"),
+                &"a".repeat(64),
+                &[replacement("x", "y")],
+                |_| {
+                    authorized.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    Ok(())
+                },
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        answer.join().unwrap();
+        assert_eq!(authorized.load(std::sync::atomic::Ordering::SeqCst), 0);
+        assert_eq!(binding.status().phase, BindingPhase::Detached);
+    }
+
+    #[test]
+    fn an_empty_anchor_in_the_request_never_reaches_the_wire() {
+        let (binding, hello) = edit_rig();
+        let (mut connection, mut peer) = live(&binding, &hello);
+
+        let error = connection
+            .edit_file(
+                Path::new("file"),
+                &"a".repeat(64),
+                &[
+                    replacement("x", "y"),
+                    TextReplacement {
+                        old_text: String::new(),
+                        new_text: "z".to_owned(),
+                    },
+                ],
+                |_| panic!("a malformed request never reaches the gate"),
+            )
+            .unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        // Quiet wire: the peer sees nothing.
+        peer.set_nonblocking(true).unwrap();
+        let mut buffer = [0u8; 16];
+        assert_eq!(
+            peer.read(&mut buffer).unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
         assert_eq!(binding.status().phase, BindingPhase::Live);
     }
 }

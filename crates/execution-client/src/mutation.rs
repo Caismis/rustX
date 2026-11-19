@@ -15,7 +15,10 @@ use std::io::Write;
 use std::path::Path;
 
 use rustx_confined_fs::{CommitUnknown, PackageDirectory, StagedWrite, WriteTarget};
-use rustx_execution_protocol::{ClientReply, DecimalU64, MAX_RAW_CHUNK_BYTES, ReadError};
+use rustx_execution_protocol::{
+    ClientReply, DecimalU64, EditRefusal, MAX_EDIT_FILE_BYTES, MAX_EDIT_REPLACEMENTS,
+    MAX_EDIT_REQUEST_BYTES, MAX_RAW_CHUNK_BYTES, ReadError, TextReplacement,
+};
 
 /// The staged-write state of one authenticated connection.
 pub(super) struct Writes {
@@ -86,6 +89,92 @@ impl Writes {
         };
         self.prepared = Some((ticket, staged));
         ClientReply::WritePrepared { ticket, original }
+    }
+
+    /// Handles a `PrepareEdit`: retains the named original under the same
+    /// one-ticket budget as `PrepareWrite`, reads it back through the
+    /// retained descriptor — never the name — applies the bounded
+    /// text-edit algorithm, and stages the result privately. A malformed
+    /// request is an `Error`; a semantic `rustx_text_edit` failure is an
+    /// `EditRefused` carrying only the typed reason — no path or anchor
+    /// text. Either way nothing is staged, no ticket is spent, and the
+    /// authorization gate is never reached.
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn prepare_edit(
+        &mut self,
+        root: &PackageDirectory,
+        relative_path: &Path,
+        expected_revision: &str,
+        replacements: &[TextReplacement],
+    ) -> ClientReply {
+        if self.prepared.is_some() {
+            return error(ReadError::Invalid);
+        }
+        let request_bytes = replacements.iter().fold(0_usize, |total, edit| {
+            total
+                .saturating_add(edit.old_text.len())
+                .saturating_add(edit.new_text.len())
+        });
+        if relative_path.as_os_str().is_empty()
+            || crate::relative_entry(relative_path).is_err()
+            || replacements.is_empty()
+            || replacements.len() > MAX_EDIT_REPLACEMENTS
+            || request_bytes > MAX_EDIT_REQUEST_BYTES
+            || replacements.iter().any(|edit| edit.old_text.is_empty())
+        {
+            return error(ReadError::Invalid);
+        }
+        let Some(leaf) = relative_path.file_name() else {
+            return error(ReadError::Invalid);
+        };
+        let parent = match root.descend(relative_path.parent().unwrap_or_else(|| Path::new(""))) {
+            Ok(parent) => parent,
+            Err(source) => return error(crate::read_error(&source)),
+        };
+        let target = match WriteTarget::prepare(parent, leaf, Some(expected_revision)) {
+            Ok(target) => target,
+            Err(source) => return error(crate::read_error(&source)),
+        };
+        let original = crate::stamp(
+            target
+                .original()
+                .expect("an edit always requires an existing original"),
+        )
+        .stamp;
+        let bytes = match target.read_original_bounded(MAX_EDIT_FILE_BYTES as u64) {
+            Ok(bytes) => bytes,
+            Err(source) if source.kind() == std::io::ErrorKind::FileTooLarge => {
+                return ClientReply::EditRefused {
+                    reason: EditRefusal::TooLarge,
+                };
+            }
+            Err(source) => return error(crate::read_error(&source)),
+        };
+        let Ok(text) = String::from_utf8(bytes) else {
+            return error(ReadError::InvalidUtf8);
+        };
+        // `TextReplacement`/`EditRefusal` are the kernel's own public
+        // types — the same definitions, never a second shape.
+        let updated = match rustx_text_edit::apply(&text, replacements) {
+            Ok(updated) => updated,
+            Err(failure) => {
+                return ClientReply::EditRefused { reason: failure };
+            }
+        };
+        let published_size = DecimalU64::new(updated.len() as u64);
+        let Some(ticket) = self.next_ticket() else {
+            return error(ReadError::Unavailable);
+        };
+        let staged = match target.stage(move |file| file.write_all(updated.as_bytes())) {
+            Ok(staged) => staged,
+            Err(source) => return error(crate::read_error(&source)),
+        };
+        self.prepared = Some((ticket, staged));
+        ClientReply::EditPrepared {
+            ticket,
+            original,
+            published_size,
+        }
     }
 
     /// Handles a `CommitWrite` for the exact live ticket: publishes the

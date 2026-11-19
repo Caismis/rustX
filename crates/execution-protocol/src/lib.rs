@@ -86,6 +86,17 @@ pub const MAX_SEARCH_ENTRIES: u64 = 65_536;
 /// and the regex compiled/determinization budgets share this wire policy.
 pub const MAX_SEARCH_BUFFER_BYTES: usize = 8 * 1024 * 1024;
 
+/// The byte cap on both the conditional-edit input and its produced
+/// output — the kernel enforces the same constant, so a `PrepareEdit`
+/// can never stage over it.
+pub const MAX_EDIT_FILE_BYTES: usize = 2 * 1024 * 1024;
+
+/// The aggregate old+new byte cap of one `PrepareEdit`'s replacements.
+pub const MAX_EDIT_REQUEST_BYTES: usize = 64 * 1024;
+
+/// The maximum number of replacements in one `PrepareEdit`.
+pub const MAX_EDIT_REPLACEMENTS: usize = 128;
+
 /// The closed rustX-owned whitelist of structured document formats a
 /// `ReadDocument` may decode.
 ///
@@ -400,6 +411,11 @@ pub enum Capability {
     /// ticketed `CommitWrite`/`AbortWrite` per request, carried out by the
     /// private commit kernel under the binding workspace.
     ConditionalWrite,
+    /// The implemented conditional edit: one `PrepareEdit` that reads the
+    /// retained original, applies the bounded text-edit algorithm, and
+    /// stages the result privately, published by the same ticketed
+    /// `CommitWrite`/`AbortWrite` machinery as `ConditionalWrite`.
+    ConditionalEdit,
     /// The implemented logical-text page: a bounded streaming line page
     /// under the binding workspace with whole-source UTF-8 validation.
     ReadLines,
@@ -697,6 +713,23 @@ pub enum ClientRequest {
         /// The exact ticket returned by the live `WritePrepared` reply.
         ticket: DecimalU64,
     },
+    /// First phase of one conditional edit: retain the exact named
+    /// original, verify the required revision, apply the bounded
+    /// text-edit algorithm to it, and stage the result privately.
+    /// Nothing named by `relative_path` mutates until the matching
+    /// `CommitWrite`; the same one-live-ticket budget as `PrepareWrite`
+    /// applies and a semantic failure is `EditRefused`, never a stage.
+    PrepareEdit {
+        /// The exact named target: strictly normalized relative path below
+        /// the binding workspace whose leaf is the file to edit.
+        relative_path: PathBuf,
+        /// Decimal u64 revision of the required current file. An edit
+        /// always names an existing original, so this is never absent.
+        expected_revision: String,
+        /// At most [`MAX_EDIT_REPLACEMENTS`] replacements whose aggregate
+        /// old+new bytes stay under [`MAX_EDIT_REQUEST_BYTES`].
+        replacements: Vec<TextReplacement>,
+    },
     /// One bounded logical-text page of a file under the binding
     /// workspace: the complete-line page contract the native Read tool
     /// projects, carried out by the streaming scanner. The whole source is
@@ -782,6 +815,72 @@ pub enum SearchSpec {
     },
 }
 
+impl std::fmt::Display for EditRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EmptyEdits => f.write_str("empty edits"),
+            Self::EmptyAnchor { index } => write!(f, "empty anchor at index {index}"),
+            Self::Missing { index } => write!(f, "missing anchor at index {index}"),
+            Self::Ambiguous { index, occurrences } => {
+                write!(
+                    f,
+                    "ambiguous anchor at index {index}: {occurrences} occurrences"
+                )
+            }
+            Self::Overlap { first, second } => {
+                write!(f, "overlapping edits {first} and {second}")
+            }
+            Self::UnsafeNormalization { index } => {
+                write!(f, "unsafe fuzzy normalization at index {index}")
+            }
+            Self::NoChange => f.write_str("edits produced identical content"),
+            Self::TooLarge => f.write_str("edit exceeds a bounded resource"),
+        }
+    }
+}
+
+impl std::error::Error for EditRefusal {}
+
+/// One typed `oldText` → `newText` replacement on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub struct TextReplacement {
+    /// The anchor text, matched exactly first and fuzzily on a miss.
+    pub old_text: String,
+    /// The replacement text.
+    pub new_text: String,
+}
+
+/// The stable typed reason an edit failed — the `PrepareEdit` refusal
+/// on the wire and, re-exported as `EditFailure`, the pure kernel's
+/// own public failure type. The Server renders user-facing wording
+/// from the request's path and counts — the refusal itself never
+/// carries a path or anchor text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+pub enum EditRefusal {
+    /// The request carried no replacements.
+    EmptyEdits,
+    /// `replacements[index]` carried an empty `old_text` anchor.
+    EmptyAnchor { index: u32 },
+    /// `replacements[index]`'s anchor matched nowhere in the original.
+    Missing { index: u32 },
+    /// `replacements[index]`'s anchor matched `occurrences` places.
+    Ambiguous { index: u32, occurrences: u32 },
+    /// The planned ranges of `first` and `second` overlap in the
+    /// original snapshot.
+    Overlap { first: u32, second: u32 },
+    /// `replacements[index]`'s fuzzy match cannot map to one safe
+    /// original range.
+    UnsafeNormalization { index: u32 },
+    /// The edits produced byte-identical content.
+    NoChange,
+    /// A bounded resource was exceeded: source or output over
+    /// `MAX_EDIT_FILE_BYTES`, a request over its count or byte cap, or
+    /// a fuzzy projection over its provenance bound.
+    TooLarge,
+}
+
 /// The Client's one typed reply to a [`ClientRequest`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -846,6 +945,21 @@ pub enum ClientReply {
     /// stage failed: the named outcome is unknowable and must be reported
     /// as such — never as a pre-commit denial.
     CommitUnknown { ticket: DecimalU64 },
+    /// A `PrepareEdit` staged privately and verified: `ticket` is a
+    /// Client-assigned nonzero scalar unique to this connection,
+    /// `original` is the retained source's verified stamp (an edit always
+    /// names an existing file), and `published_size` is the exact byte
+    /// length the later `Written` must report. At most one ticket is live
+    /// per connection at a time.
+    EditPrepared {
+        ticket: DecimalU64,
+        original: FileStamp,
+        published_size: DecimalU64,
+    },
+    /// A `PrepareEdit` refused for one stable typed semantic reason —
+    /// the request was well-formed but the edits did not apply. No stage
+    /// exists and the connection stays live.
+    EditRefused { reason: EditRefusal },
     /// The verified logical-text page the Client decoded from a
     /// whitelisted document: `source` stamps the physical document the
     /// page came from, `logical_bytes` is the full decoded Markdown

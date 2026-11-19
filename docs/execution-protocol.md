@@ -258,10 +258,13 @@ publishes the trusted-channel bundle:
   `read_lines(...)` (`ReadLines`/`Lines`),
   `read_document(...)` (`ReadDocument`/`DocumentPage`), and
   `write_file(...)` (the `PrepareWrite`/`CommitWrite`/`AbortWrite`
-  sequence) — never a raw
+  sequence), and
+  `edit_file(...)` (`PrepareEdit` sharing the same ticketed
+  commit/abort) — never a raw
   message path. Each first consults the capabilities the peer actually
   advertised in its Hello: a connection that never claimed `ReadRange`,
-  `DirectoryMetadata`, `ConditionalWrite`, `ReadLines`, or
+  `DirectoryMetadata`, `ConditionalWrite`, `ConditionalEdit`,
+  `ReadLines`, or
   `DocumentPages` gets
   `io::ErrorKind::Unsupported` and
   no request is written. Every exchange serializes the request with
@@ -488,12 +491,57 @@ malformed reply, or mismatched ticket retires the stream and returns
 an `io::Error` wrapping `rustx_execution_server::WriteOutcomeUnknown`
 — the published state is unknowable and the operation is never
 retried; an explicit well-formed `CommitUnknown` for the live ticket
-maps to the same error without retiring, because the reply accounting
-stayed intact. The `WriteOutcomeUnknown` marker downcasts through
+maps to the same error *and* retires the connection: the publish may
+have crossed, the ticket is consumed, and no later accounting from
+that peer can be trusted. The `WriteOutcomeUnknown` marker downcasts through
 `error.get_ref()`. A binding revoked after the prepare but before the
 commit is dispatched gates the commit frame out entirely — the revoke
 shuts the retained duplicate stream down, the idle Client exits on
 EOF, and its dropped write state cleans the unpublished stage.
+
+### Conditional edits (implemented)
+
+`ClientRequest::PrepareEdit { relative_path, expected_revision,
+replacements }` reuses the same ticketed publish kernel as a write —
+it is a first phase only, never a second mutation path. The Client
+retains the exact named target with `WriteTarget::prepare` (the
+revision is required: an edit always names an existing original),
+reads it back through `WriteTarget::read_original_bounded` — the
+*retained descriptor*, never the path reopened — capped at
+`MAX_EDIT_FILE_BYTES` (2 MiB) and at the stamped size, applies the
+shared `rustx-text-edit` algorithm (exact anchors first, then the
+per-edit NFKC fuzzy fallback, ranges resolved in the original
+snapshot, BOM and dominant line ending preserved), and stages the
+result through the same private `.rustx-write-{uuid}` stage.
+`ClientReply::EditPrepared { ticket, original, published_size }`
+reports the verified source stamp and the exact committed byte count;
+`ClientReply::EditRefused { reason }` carries only the stable typed
+`EditRefusal` — no path, no anchor text — and nothing is staged. The
+wire request is bounded: at most `MAX_EDIT_REPLACEMENTS` (128)
+replacements with at most `MAX_EDIT_REQUEST_BYTES` (64 KiB) aggregate
+old+new bytes, and the fuzzy provenance vectors themselves are capped
+(`MAX_FUZZY_PROJECTION_ENTRIES`), so a pathological source refuses
+`TooLarge` rather than growing the mapping without bound.
+
+`LocalConnection::edit_file(relative_path, expected_revision,
+replacements, authorize)` runs the identical shape as `write_file`
+under `Capability::ConditionalEdit`: one absolute deadline armed once
+covers the prepare exchange, the authorization window, and the commit
+or abort — it is never rearmed. The `original` stamp must echo the
+exact expected revision, `published_size` must stay within the file
+cap, and a typed `EditRefused` projects to a `RefusedEdit`-downcastable
+error while the connection stays live; a refusal whose indices or
+shape contradict the request retires it. Commit and abort are the
+shared `CommitWrite`/`AbortWrite` frames, and a correctly-ticketed
+`CommitUnknown` or any malformed postcommit reply retires the
+connection with `WriteOutcomeUnknown` — a possibly-crossed publish is
+never an ordinary retryable denial.
+
+The native Edit tool still plans and commits through its existing
+in-process path for now — `run_edit` shares only the pure
+`rustx-text-edit` algorithm so both sides run identical semantics.
+Routing the tool's physical operation through `edit_file` is the
+following step (#576).
 
 `rustx-execution-client --binding-file PATH --workspace PATH` is the
 physical Client:
@@ -530,7 +578,8 @@ physical Client:
   enters its serving loop — never re-armed on a partial record.
 - The Hello advertises `version: PROTOCOL_VERSION` and the fixed
   capability set `{Connection, ReadRange, DirectoryMetadata,
-  ConditionalWrite, ReadLines, DocumentPages, BoundedSearch}` — the
+  ConditionalWrite, ConditionalEdit, ReadLines, DocumentPages,
+  BoundedSearch}` — the
   operations this build physically implements — constructed by the
   client, never read from the mutable bundle.
 - After sending the Hello it reads one `HelloReply`; a reject is
@@ -651,6 +700,8 @@ no second set may exist.
 | Search traversal depth / visited entries | `MAX_SEARCH_DEPTH` = 64 / `MAX_SEARCH_ENTRIES` = 65,536 |
 | Retained search path bytes | `MAX_SEARCH_PATH_BYTES` = 8 MiB |
 | Grep searcher working buffer | `MAX_SEARCH_BUFFER_BYTES` = 8 MiB |
+| Edit source and result bytes | `MAX_EDIT_FILE_BYTES` = 2 MiB |
+| Edit request: replacements / aggregate bytes | `MAX_EDIT_REPLACEMENTS` = 128 / `MAX_EDIT_REQUEST_BYTES` = 64 KiB |
 
 The encoded-frame bound is enforced on the final serialized bytes —
 envelope, metadata, and escape expansion included — at the read/parse
@@ -753,7 +804,8 @@ envelope.
   WSS/TLS, health budgets, and recovery windows are pending.
 - No spawn, MCP session, Python, managed output, or any file
   operation beyond the range read, the two query operations, the
-  two-phase conditional write, the two logical-text page
+  two-phase conditional write, the conditional edit, the two
+  logical-text page
   operations, and the bounded search exists
   behind `Admission`;
   `Binding::status()` is observation only, and a `Live` phase is a

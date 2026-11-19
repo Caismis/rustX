@@ -4714,6 +4714,7 @@ dependencies = [
  "rustx-document-reader",
  "rustx-execution-protocol",
  "rustx-execution-server",
+ "rustx-text-edit",
  "schemars",
  "serde",
  "serde_json",
@@ -4777,6 +4778,7 @@ dependencies = [
  "rustx-document-reader",
  "rustx-execution-protocol",
  "rustx-execution-server",
+ "rustx-text-edit",
  "serde_json",
  "tempfile",
 ]
@@ -4802,6 +4804,14 @@ dependencies = [
  "rustx-execution-protocol",
  "sha2 0.10.9",
  "tempfile",
+]
+
+[[package]]
+name = "rustx-text-edit"
+version = "0.1.0"
+dependencies = [
+ "rustx-execution-protocol",
+ "unicode-normalization",
 ]
 
 [[package]]

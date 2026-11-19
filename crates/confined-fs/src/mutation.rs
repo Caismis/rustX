@@ -16,7 +16,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io;
+use std::io::{self, Read};
 use std::os::unix::ffi::OsStrExt;
 
 use rustix::fs::{Mode, OFlags, openat};
@@ -160,14 +160,20 @@ impl WriteTarget {
     /// under the retained parent.
     ///
     /// The retained chain and the leaf's revision are re-verified before
-    /// the sibling is `O_EXCL`/`O_NOFOLLOW`-created; an existing target's
-    /// mode is copied from the retained original descriptor onto the
-    /// sibling — the target is never re-opened for it. The sibling's name
+    /// the sibling is `O_EXCL`/`O_NOFOLLOW`-created; the target is never
+    /// re-opened for it. The sibling's name
     /// is unique, not protected: a hostile writer could still replace it
     /// before [`publish`](StagedWrite::publish), whose device:inode proof
     /// refuses that case before the crossing. The sibling is `sync_all`'d
     /// before the [`StagedWrite`] is released, and a [`StagedWrite`]
     /// dropped without publishing removes its own staging name.
+    ///
+    /// The stage stays `0600` while it is staged regardless of the
+    /// original's mode — a private payload is never readable by whoever
+    /// could read the source. [`publish`](StagedWrite::publish) restores
+    /// the original's ordinary permission bits on the published
+    /// descriptor after the rename crossing, so a replacement keeps its
+    /// mode semantics without the stage ever being exposed at them.
     ///
     /// # Errors
     ///
@@ -199,16 +205,62 @@ impl WriteTarget {
             name,
             published: false,
         };
+        // The stage stays at the create-time 0600 regardless of the
+        // original's mode: a staged payload is private until the publish
+        // crossing, never readable by whoever could read the source.
+        // `publish` restores the original's mode on the published
+        // descriptor after the rename so a replacement keeps its
+        // semantics without ever exposing the stage at that mode.
         let result = (|| {
-            if let Some((original, _)) = &staged.original {
-                staged
-                    .output
-                    .set_permissions(original.metadata()?.permissions())?;
-            }
             writer(&mut staged.output)?;
             staged.output.sync_all()
         })();
         result.map(|()| staged)
+    }
+
+    /// Reads the whole retained original descriptor, bounded at `max`
+    /// bytes and at the stamped `before.size` — never the leaf reopened
+    /// by name. The retained parent and the named leaf's identity are
+    /// re-verified after the read, so a replaced ancestor, a swapped
+    /// leaf, or a source whose observed bytes contradict its stamp is a
+    /// conflict, not content.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`io::ErrorKind::FileTooLarge`] when the stamped source
+    /// exceeds `max`, [`io::ErrorKind::InvalidInput`] when no original
+    /// was retained, [`io::ErrorKind::AlreadyExists`] when the source or
+    /// its name binding changed mid-read, and the underlying I/O errors
+    /// otherwise.
+    pub fn read_original_bounded(&self, max: u64) -> io::Result<Vec<u8>> {
+        let Some((file, before)) = &self.original else {
+            return Err(invalid(
+                "read_original_bounded requires a retained original",
+            ));
+        };
+        if before.size > max {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                format!(
+                    "the source is {} bytes, above the {max}-byte cap",
+                    before.size
+                ),
+            ));
+        }
+        self.parent.verify()?;
+        io::Seek::seek(&mut &*file, io::SeekFrom::Start(0))?;
+        let mut bytes = Vec::with_capacity(usize::try_from(before.size).unwrap_or(0));
+        let observed = io::Read::take(file, before.size).read_to_end(&mut bytes)?;
+        if u64::try_from(observed).unwrap_or(u64::MAX) != before.size {
+            return Err(conflict());
+        }
+        // The retained descriptor must still be the stamped source and
+        // the leaf must still name it — the read may have raced a swap.
+        if FileMetadata::of(file)? != *before {
+            return Err(conflict());
+        }
+        recheck(&self.parent, &self.leaf, self.original())?;
+        Ok(bytes)
     }
 }
 
@@ -284,6 +336,20 @@ impl StagedWrite {
                 self.leaf.as_os_str(),
             )?;
             self.published = true;
+            // The private stage was 0600; the published replacement now
+            // takes the verified original's mode on the published
+            // descriptor. Post-crossing, so a failure is an unknown
+            // outcome, never a clean denial.
+            if let Some((original, _)) = &self.original {
+                use std::os::unix::fs::PermissionsExt;
+                // Only the ordinary bits cross: a staged publish is a
+                // newly-owned, newly-written inode — set-ID and sticky
+                // bits are never propagated onto it.
+                let mode = original.metadata().map_err(unknown)?.permissions().mode();
+                self.output
+                    .set_permissions(std::fs::Permissions::from_mode(mode & 0o777))
+                    .map_err(unknown)?;
+            }
         }
         Ok(PublishedWrite {
             parent: self.parent.child(OsStr::new(".")).map_err(unknown)?,
@@ -561,6 +627,39 @@ mod tests {
                 .unwrap()
                 .entry_metadata(Path::new("file"))
                 .unwrap()
+        );
+    }
+
+    #[test]
+    fn a_stage_is_private_and_only_ordinary_bits_reach_the_published_file() {
+        let (temporary, directory) = root();
+        let file = temporary.path().join("file");
+        std::fs::write(&file, b"original").unwrap();
+        // A world-readable, set-ID/sticky-marked original: none of the
+        // exposure may reach the staged bytes, and only the ordinary
+        // bits may reach the published replacement.
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o4764)).unwrap();
+        let current = revision(&directory, "file");
+        let staged = WriteTarget::prepare(directory, OsStr::new("file"), Some(&current))
+            .unwrap()
+            .stage(|output| output.write_all(b"new"))
+            .unwrap();
+        let staging = staging_names(temporary.path());
+        assert_eq!(staging.len(), 1);
+        assert_eq!(
+            std::fs::metadata(temporary.path().join(&staging[0]))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o7777,
+            0o600,
+            "the staged payload never takes the original's mode"
+        );
+        staged.publish().unwrap().finish().unwrap();
+        assert_eq!(
+            std::fs::metadata(&file).unwrap().permissions().mode() & 0o7777,
+            0o764,
+            "the published replacement keeps the ordinary bits, never set-ID/sticky"
         );
     }
 
