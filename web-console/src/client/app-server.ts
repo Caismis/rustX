@@ -393,6 +393,13 @@ export class AppServerClient {
     const allowed = await owner.admit(id, valid);
     return allowed && valid() && { current: () => allowed.current() && valid(), validate: allowed.validate };
   }
+  async recordSubmissionIntent(id: string, node: string, current: () => boolean): Promise<void> {
+    // The receipt can start native loading, so authorize the fixed workspace
+    // before arming the MCP budget for an actual Send.
+    const admitted = await this.admitSessionOperation(id, current);
+    if (!admitted) throw new RequestNotDispatched('Workspace admission changed before submission intent. No operation was sent.');
+    await this.request({ method: 'session/submissionIntent', params: { session_id: id, node_id: node } }, 'submission_intent_accepted', undefined, admitted);
+  }
   restoreViews(ids: readonly string[]) {
     for (const id of ids) if (!this.state.views[id]) this.lifecycles.restore(id);
   }

@@ -250,8 +250,9 @@ bind stdio child or external WebSocket
 
 `/new`, `/resume`, `/clone`, `/fork`, and `/tree` use App Server operations.
 Changing Sessions only changes client focus; other attachments and running
-Sessions remain live in the same server process. Returning to a Session reads an
-bounded authoritative checkpoint and repairs its subscription. The server supports one live
+Sessions remain live in the same server process. Returning to a Session reuses
+its projection when the attachment is still following the selected node. A
+broken observation is repaired from an authoritative checkpoint. The server supports one live
 node per Session: selecting another node uses **Switch to this branch**
 confirmation. Native retirement is internal to that switch. A/B Session focus
 changes never unload either runtime. Fork/branch editor

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { CanonicalContentLocator, SessionMessageVersion, SessionMessageVersionFamily } from '../../../../protocol/app-server/v80';
+import type { CanonicalContentLocator, SessionMessageVersion, SessionMessageVersionFamily, UserContentBlock } from '../../../../protocol/app-server/v80';
 import { canonicalLocatorKey } from '../../../../protocol/app-server/content-identity';
 import { readMessageBlocks } from './message-blocks';
 import { observationSourceIdentity, useObservationSource } from './ObservationSource';
@@ -32,16 +32,16 @@ export function useUserMessageEdit(disabled: boolean) {
   const edit = state?.owner === owner ? state : undefined;
   useEffect(() => () => pending.current?.abort(), [owner]);
 
-  const open = async (locator: CanonicalContentLocator) => {
+  const open = async (locator: CanonicalContentLocator, inline?: readonly UserContentBlock[]) => {
     if (disabled || !source?.owned()) return;
     pending.current?.abort();
     const operation = new AbortController();
     pending.current = operation;
     const key = canonicalLocatorKey(locator);
     const current = () => !operation.signal.aborted && source.owned();
-    setState({ key, owner, phase: 'loading' });
     try {
-      const blocks = await readMessageBlocks(source, { locator, offset: 0 }, current);
+      if (!inline) setState({ key, owner, phase: 'loading' });
+      const blocks = inline ?? await readMessageBlocks(source, { locator, offset: 0 }, current);
       if (!current()) return;
       if (!blocks.length || blocks.some(block => block.type !== 'text' && block.type !== 'uploaded_file')) {
         throw new Error('The original message is outside the editable input types.');

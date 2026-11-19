@@ -516,9 +516,7 @@ export class RustxTuiApp {
    * Moves the terminal's focus to a different Session.
    *
    * Attach is idempotent per Session on one connection, so returning to a
-   * Session reuses the attachment it already has — and its projection is
-   * repaired from authoritative state rather than from whatever this client
-   * last believed.
+   * Session reuses the attachment and its continuously followed projection.
    */
   async #focusSession(
     sessionId: string,
@@ -533,7 +531,7 @@ export class RustxTuiApp {
     if (!this.#isCurrentPresentationLease(lease) || this.#switching) return;
     if (this.#session !== undefined && sessionId === this.#session.sessionId && editorContent === undefined &&
         (nodeId === undefined || nodeId === this.#session.nodeId) && !this.#session.serverClosed) {
-      await this.#session.resync();
+      if (!this.#session.controlReady) await this.#session.resync();
       if (notice !== undefined) this.#showTransient("info", notice);
       return;
     }
@@ -573,19 +571,23 @@ export class RustxTuiApp {
     if (targetConversation === undefined) this.#drafts.set(pendingKey, targetDraft);
     const connection: PendingSessionConnection = { sessionId };
     this.#connecting = connection;
-    const beginConnecting = (nodeId: string) => {
+    const beginConnecting = (nodeId: string, conversationId?: string) => {
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       connection.nodeId = nodeId;
       this.#editor.disableSubmit = false;
       this.#renderConnecting();
       void host.client.call("session/history", { session_id: sessionId, node_id: nodeId, at: { type: "latest" }, limit: 32 }, "session_history").then(result => {
-        if (this.#connecting !== connection || this.#host !== host || this.#finished) return;
+        if (this.#connecting !== connection || this.#host !== host || this.#finished
+          || result.window.cut.conversation_id !== result.conversation_id
+          || conversationId !== undefined && conversationId !== result.conversation_id) return;
         connection.history = historyPresentation(result.conversation_id, result.window.page);
         this.#renderConnecting();
       }).catch(() => {});
     };
     this.#editor.disableSubmit = true;
-    this.#renderConnecting();
+    // A resident focus can keep the current frame until durable selection
+    // confirms which node to show. Its editor has already lost send authority.
+    if (!existing?.controlReady || changingNode) this.#renderConnecting();
     let installed: AppServerSession | undefined;
     try {
       // Resolve cold navigation through durable metadata before any native
@@ -598,10 +600,12 @@ export class RustxTuiApp {
         await host.retryInitialization(sessionId, selectedNode);
         if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       }
-      if (!changingNode) beginConnecting(selectedNode);
-      const next = changingNode
+      const resident = previous === undefined && existing?.controlReady && existing.nodeId === selectedNode
+        && (selectedThread === undefined || selectedThread === existing.target.conversation_id) ? existing : undefined;
+      if (!resident && !changingNode) beginConnecting(selectedNode, selectedThread);
+      const next = resident ?? (changingNode
         ? await host.openNode(sessionId, selectedNode, () => beginConnecting(selectedNode))
-        : await host.attach(sessionId, selectedNode, previous, selectedThread);
+        : await host.attach(sessionId, selectedNode, previous, selectedThread));
       if (!this.#isCurrentPresentationLease(lease) || this.#host !== host) return;
       if (targetConversation !== undefined && next.target.conversation_id !== targetConversation) {
         throw new Error('The attached Conversation changed. Original input remains in its previous Conversation draft; select the current target explicitly.');
@@ -610,7 +614,7 @@ export class RustxTuiApp {
       // Keep cached P separate from the selected draft's queued Q / newer R
       // until every asynchronous repair and intent fence has settled. A refusal
       // or withdrawal therefore restores Q onto R before the one final join.
-      await next.resync();
+      if (!resident || !next.controlReady) await next.resync();
       // The first Send can arm native preparation while attach is pending.
       // Its acknowledgement also fences forwarding the captured input blocks.
       while (connection.intent) {

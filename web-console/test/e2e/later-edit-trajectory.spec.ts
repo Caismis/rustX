@@ -25,7 +25,7 @@ async function monitorEarlierTurn(page: Page, selector: string) {
 }
 
 test('editing the second question retains the first turn and its own version pager in trajectory', async ({ page }) => {
-  const fixture = await startDogfood('web_response_retry', undefined, { imageMcp: true });
+  const fixture = await startDogfood('web_response_retry', undefined, { imageMcp: true, handshakeSeconds: 1 });
   let passed = false;
   try {
     const wire = await wireProbe(page);
@@ -42,11 +42,27 @@ test('editing the second question retains the first turn and its own version pag
       await expect(page.getByText(answer, { exact: true })).toBeVisible();
     }
     const second = page.getByRole('article', { name: 'Your message' }).filter({ hasText: 'Retry this question' });
+    const beforeEdit = wire.requests.length;
     await second.getByRole('button', { name: 'Edit message' }).click();
+    await expect(second.getByRole('textbox')).toHaveValue('Retry this question');
+    expect(wire.requests.slice(beforeEdit).some(request => typeof request.params?.domain === 'string' && request.params.domain.startsWith('messages.'))).toBe(false);
     await second.getByRole('textbox').fill('Retry this question with more detail');
     const finishEdit = await monitorEarlierTurn(page, '[data-conversation-scroll]');
-    await second.getByRole('button', { name: 'Retry', exact: true }).click();
+    const beforeSend = wire.requests.length;
+    wire.holdNext('session/branch');
+    try {
+      await second.getByRole('button', { name: 'Retry', exact: true }).click();
+      await expect.poll(wire.held).toBe(1);
+      await expect(page.getByText('Retry this question with more detail', { exact: true })).toBeVisible();
+      await expect(page.getByText('Old reply to replace.', { exact: true })).toHaveCount(0);
+    } finally {
+      wire.releaseHeld();
+    }
     await fixture.gate('replay-request');
+    const replay = wire.requests.slice(beforeSend).map(request => request.method);
+    expect(replay.indexOf('session/submissionIntent')).toBeGreaterThan(replay.indexOf('session/switchNode'));
+    expect(replay.indexOf('thread/resume')).toBeGreaterThan(replay.indexOf('session/submissionIntent'));
+    expect(replay.filter(method => method === 'inbound/queue')).toHaveLength(1);
     await fixture.release('replay-request');
     await fixture.gate('replay-streaming');
     await fixture.release('replay-streaming');
@@ -70,8 +86,17 @@ test('editing the second question retains the first turn and its own version pag
     const chat = page.getByLabel('Canonical conversation', { exact: true });
     await expect(chat.getByText('Earlier question', { exact: true })).toBeVisible();
     const finishChatSwitch = await monitorEarlierTurn(page, '[data-conversation-scroll]');
-    await chat.getByRole('button', { name: 'Switch to previous message version' }).click();
-    await expect(chat.getByText('Old reply to replace.', { exact: true })).toBeVisible();
+    await expect(chat.getByRole('button', { name: 'Switch to previous message version' })).toBeEnabled();
+    const beforeColdVersion = wire.requests.length;
+    wire.holdNext('thread/resume');
+    try {
+      await chat.getByRole('button', { name: 'Switch to previous message version' }).click();
+      await expect.poll(wire.held).toBe(1);
+      await expect(chat.getByText('Old reply to replace.', { exact: true })).toBeVisible();
+      expect(wire.requests.slice(beforeColdVersion).some(request => request.method === 'session/history')).toBe(true);
+    } finally {
+      wire.releaseHeld();
+    }
     await expect(chat.getByRole('button', { name: 'Switch to next message version' })).toBeEnabled();
     wire.holdNext('thread/resume');
     await chat.getByRole('button', { name: 'Switch to next message version' }).click();

@@ -121,6 +121,11 @@ export class CommandSession {
     const continuing = () => this.navigationCurrent() && this.client.getSnapshot().generation === this.generation;
     const attach = async () => {
       if (action !== 'fork') await this.client.switchNode(this.sessionId, session.active_node, continuing);
+      if (!continuing()) return;
+      if (action === 'retry') {
+        const sameNode = () => continuing() && this.client.getSnapshot().views[session.id]?.nodeId === session.active_node;
+        await this.client.recordSubmissionIntent(session.id, session.active_node, sameNode);
+      }
       if (continuing()) await this.attachForCommand(session.id, session.active_node, continuing);
     };
     // The immutable editor locator belongs to the durable branch result.

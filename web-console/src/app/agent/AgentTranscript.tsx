@@ -97,7 +97,7 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     cancel: tx('agent:message-version.cancel'), input: tx('agent:message-version.input'),
     loading: tx('agent:message-version.loading'),
   };
-  const controls = (locator: CanonicalContentLocator, fallback?: CanonicalContentLocator) => {
+  const controls = (locator: CanonicalContentLocator, fallback?: CanonicalContentLocator, inline?: () => Extract<MessageBlock, { role: 'user' }>['content'] | undefined) => {
     const key = canonicalLocatorKey(locator);
     if (editedMessage && (canonicalLocatorKey(editedMessage.locator) === key
       || editedMessage.messageId != null && (locator.type === 'by_message_id' && locator.message_id === editedMessage.messageId
@@ -116,15 +116,21 @@ export function AgentTranscript({ snapshot, history, accepted = [], publicationH
     return { actions: <>
       <UserMessageVersions labels={versionLabels} family={group}
         disabled={messageControlsDisabled} busy={state?.phase === 'loading'}
-        onEdit={() => { void open(locator); }}
+        onEdit={() => { void open(locator, inline?.()); }}
         onSwitch={userMessageHistory.switchVersion}/>
       {state?.phase === 'failed' && <span role="alert">{tx('agent:message-version.unavailable')}</span>}
     </> };
   };
   const userControls = (message: MessageBlock) => {
     if (!isUser(message)) return {};
+    const inline = () => message.content.length > 0 && !messageContinuation(message, allDescriptors, page)
+      && message.content.every((block, index) => {
+        if (block.type !== 'text') return false;
+        const binding = messageContentBinding(presentation, message.id, index);
+        return !binding || !binding.deferred && new TextEncoder().encode(block.text).length === binding.content_ref.readable_end;
+      }) ? message.content : undefined;
     const control = message.source === 'human' && message.kind === 'message'
-      ? controls({ type: 'by_message_id', message_id: message.id }) : {};
+      ? controls({ type: 'by_message_id', message_id: message.id }, undefined, inline) : {};
     return { editor: control.editor, actions: control.editor != null ? undefined :
       <div className={tailCss.actions} data-clock="start" aria-label={tx('agent:agent-transcript.message-actions')}>
         <MessageTime time={message.timestamp}/>

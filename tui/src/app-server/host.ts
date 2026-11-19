@@ -544,7 +544,12 @@ export class AppServerHost {
   ): Promise<AppServerSession> {
     const existing = this.#sessions.get(sessionId);
     if (existing !== undefined && !existing.released && !existing.serverClosed) {
-      if (nodeId === undefined || nodeId === existing.nodeId) return existing;
+      if (nodeId === undefined || nodeId === existing.nodeId) {
+        if (knownThreadId !== undefined && existing.target.conversation_id !== knownThreadId) {
+          throw new Error("The selected Thread does not match the resident attachment.");
+        }
+        return existing;
+      }
       throw new Error("use branch switching to open a different Session node");
     }
     let session: AppServerSession;

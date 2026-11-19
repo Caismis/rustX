@@ -82,6 +82,10 @@ async function finishFocus(transport: FakeTransport, initial = snapshot(), relea
   // App binding (and its footer metadata read) follows both repair and the
   // explicit intent fence. Tests that hold that fence inspect it here.
   releaseIntent?.();
+  await finishFocusMetadata(transport);
+}
+
+async function finishFocusMetadata(transport: FakeTransport) {
   const read = await transport.nextPending("session/read");
   const sessionId=paramsOf(read,"session/read").session_id;
   const previous=[...transport.results.values()].reverse().find(result=>(result.type==='session'||result.type==='session_transition')&&result.session.id===sessionId);
@@ -195,6 +199,8 @@ async function selectResumeByKeyboard(h: ReturnType<typeof appFor>, transport: F
 }
 
 async function resumeByKeyboard(h: ReturnType<typeof appFor>, host: AppServerHost, transport: FakeTransport, sessionId: string, node: string, attached = false, initial = snapshot()) {
+  const readyResident = host.attachment(sessionId)?.controlReady === true;
+  const beforeFocus = transport.log.requests.length;
   const metadata = await selectResumeByKeyboard(h, transport, sessionId, node, attached);
   const conversationId=sessionId===SESSION_B?'conv_01900000-0000-7000-8000-000000002002':snapshot().conversation_id;
   transport.respond(metadata.id, { type: 'session', session: sessionView({ id: sessionId, active_node: node, active_conversation_id:conversationId }) });
@@ -210,7 +216,14 @@ async function resumeByKeyboard(h: ReturnType<typeof appFor>, host: AppServerHos
     transport.respond(attaching.id, { type: 'attached', target, configuration_revision: '0', attachment_kind: 'writable', observation_source: 'live' });
     await followAttachment(transport, target, {...initial,conversation_id:target.conversation_id}, '0');
   }
-  await finishFocus(transport, {...initial,conversation_id:target.conversation_id});
+  if (readyResident && existing?.nodeId === node && target.conversation_id === conversationId) {
+    await finishFocusMetadata(transport);
+    assert.deepEqual(transport.log.requests.slice(beforeFocus)
+      .filter(request => ["thread/resume", "session/checkpoint", "session/subscribe", "session/history"].includes(request.method)), [],
+    "healthy resident focus must not wait for another history or observation read");
+  } else {
+    await finishFocus(transport, {...initial,conversation_id:target.conversation_id});
+  }
   return target;
 }
 
@@ -1893,12 +1906,15 @@ it('ordinary A to B to A focus restores each cached Session draft without execut
   await finishFocus(transport);
   assert.equal(h.editor.getText(), '', 'a first visit to B cannot borrow A input');
   h.editor.setText(draftB);
+  const beforeReturns = transport.log.requests.length;
   await select(SESSION_A, 2);
-  await finishFocus(transport);
+  await finishFocusMetadata(transport);
   assert.equal(h.editor.getText(), draftA, 'returning to A restores only its cached draft');
   await select(SESSION_B, 3);
-  await finishFocus(transport);
+  await finishFocusMetadata(transport);
   assert.equal(h.editor.getText(), draftB, 'returning to B preserves its independent cached draft too');
+  assert.deepEqual(transport.log.requests.slice(beforeReturns)
+    .filter(request => ["session/checkpoint", "session/subscribe", "session/history"].includes(request.method)), []);
   assert.deepEqual(host.attached.map(session => session.sessionId), [SESSION_A, SESSION_B]);
   assert.equal(transport.log.count('thread/resume'), 2, 'ordinary refocus reuses each confirmed attachment');
   for (const method of ['session/submissionIntent', 'inbound/queue', 'turn/interrupt', 'session/detach', 'session/unload']) {

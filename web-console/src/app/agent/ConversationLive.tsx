@@ -183,29 +183,35 @@ export function ConversationLive({ client, sessionId, mode, disabled, historical
         messageHistory={switchVersion && !view.readingPreview && !view.retrying ? { versions, switchVersion, disabled: view.disabled || !view.safe || historicalPending } : undefined}/> : undefined;
   const owner = JSON.stringify([sessionId, mode, readingOwner.endpoint, readingOwner.authority, readingOwner.authorityRevision, client.getSnapshot().generation]);
   type VersionFrame = { conversation: string; body: ReactNode };
-  const released = useRef<(VersionFrame & { owner: string; alternate?: VersionFrame; destination?: string })>(undefined);
+  const released = useRef<(VersionFrame & { client: AppServerClient; owner: string; alternate?: VersionFrame; destination?: string })>(undefined);
   const last = released.current;
-  const sameReader = last && last.owner === owner && readingOwner.connected;
+  const sameReader = last?.client === client && last.owner === owner && readingOwner.connected;
   if (!sameReader) released.current = undefined;
   const destination = versionDestination ?? (sameReader && messageVersionFocus?.conversationId === last.destination ? last.destination : undefined);
   const liveBody = view?.readable && !view.retrying && !view.readingPreview
     && (mode === 'chat' || !!view.trace && inherited.ready);
+  const cachedDestination = sameReader && last.alternate?.conversation === destination ? last.alternate : undefined;
+  // A selected version has durable text even while its runtime is starting.
+  // Keep that exact frame through the gap between resume and checkpoint.
+  const destinationPreview = mode === 'chat' && !!destination && !cachedDestination && view?.conversation_id === destination
+    && view.readingPreview && !readingPending && !view.history?.error && readingEntries.some(entry => entry.item.type === 'message');
   if (destination && sameReader && sessionId && !client.getSnapshot().views[sessionId]?.error && !view?.trace?.error
-    && (!liveBody || view.conversation_id !== destination)) {
+    && !destinationPreview && (!liveBody || view.conversation_id !== destination)) {
     // Keep the last committed version readable until its successor has rows.
     // The inert subtree has no input or focus authority during the handoff.
     last.destination = destination;
-    const frame = last.alternate?.conversation === destination ? last.alternate : last;
+    const frame = cachedDestination ?? last;
     return wrapCanvas(<div inert style={{ display: 'contents' }}>{frame.body}</div>);
   }
   const present = (body: ReactNode) => {
     // Switching tabs mid-handoff may reveal the old version after its claim
     // was released. Its rows can still bridge the rest of this transition.
     const provisional = !sameReader && view && destination && view.conversation_id !== destination;
-    if (view && (liveBody || provisional)) {
+    if (view && (liveBody || provisional || destinationPreview)) {
       const alternate = sameReader && last.conversation !== view.conversation_id
         ? { conversation: last.conversation, body: last.body } : released.current?.alternate;
-      released.current = { owner, conversation: view.conversation_id, body, alternate, destination: provisional ? destination : undefined };
+      released.current = { client, owner, conversation: view.conversation_id, body, alternate,
+        destination: provisional || destinationPreview ? destination : undefined };
     }
     return wrapCanvas(<div inert={!!provisional} style={{ display: 'contents' }}>{body}</div>);
   };
